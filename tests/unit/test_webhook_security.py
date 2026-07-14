@@ -285,15 +285,61 @@ class TestWebhookAuthenticator:
         assert not is_valid
 
 
-class TestProtocolWebhookOutboundClient:
-    """The protocol webhook outbound POST must not follow redirects (#1512 SSRF).
+class TestPinnedOutboundClient:
+    """The outbound webhook POST is connection-pinned, redirect-disabled, 2xx-only (#1512 SSRF).
 
-    A validated public URL that 302-redirects the POST to a private/metadata
-    address would re-open the SSRF hole after validation; the client must send
-    allow_redirects=False so the redirect is never followed.
+    Pinning lives in ``_PinningHTTPAdapter``, mounted on the service's long-lived pooled
+    session. Tests exercise the real production seam (``get_connection_with_tls_context``),
+    mocking only DNS resolution and pool creation.
     """
 
-    def test_send_notification_disables_redirects(self):
+    def test_pinning_adapter_pins_socket_to_validated_ip_keeping_hostname_sni(self):
+        """The socket connects to the validated IP while SNI + cert stay bound to the hostname."""
+        from unittest.mock import MagicMock, patch
+
+        import requests
+
+        from src.services import protocol_webhook_service as pws
+
+        adapter = pws._PinningHTTPAdapter()
+        request = requests.Request("POST", "https://buyer.example.com:8443/webhook").prepare()
+
+        captured: dict = {}
+
+        def _fake_connection_from_host(**kwargs):
+            captured.update(kwargs)
+            return MagicMock()
+
+        with (
+            patch.object(pws, "resolve_and_validate_target", return_value=("93.184.216.34", "")),
+            patch.object(adapter.poolmanager, "connection_from_host", _fake_connection_from_host),
+        ):
+            adapter.get_connection_with_tls_context(request, verify=True)
+
+        # Socket connects to the validated IP, not a hostname re-resolved at connect time...
+        assert captured["host"] == "93.184.216.34"
+        assert captured["port"] == 8443
+        # ...while SNI and certificate verification stay bound to the ORIGINAL hostname.
+        assert captured["pool_kwargs"]["server_hostname"] == "buyer.example.com"
+        assert captured["pool_kwargs"]["assert_hostname"] == "buyer.example.com"
+
+    def test_pinning_adapter_rejects_ssrf_url(self):
+        """An SSRF-invalid target raises before any connection is created."""
+        from unittest.mock import patch
+
+        import requests
+
+        from src.services import protocol_webhook_service as pws
+
+        adapter = pws._PinningHTTPAdapter()
+        request = requests.Request("POST", "https://evil.example.com/webhook").prepare()
+
+        with patch.object(pws, "resolve_and_validate_target", return_value=(None, "blocked internal target")):
+            with pytest.raises(requests.RequestException, match="SSRF"):
+                adapter.get_connection_with_tls_context(request, verify=True)
+
+    def test_post_disables_redirects_and_preserves_host_header(self):
+        """Delivery POSTs disable redirects and set Host to the original netloc (vhost routing)."""
         import asyncio
         from unittest.mock import MagicMock, patch
 
@@ -301,22 +347,57 @@ class TestProtocolWebhookOutboundClient:
         from src.services.protocol_webhook_service import ProtocolWebhookService
 
         config = PushNotificationConfig(
-            id="pnc-redir",
+            id="pnc-ok",
             tenant_id="t",
             principal_id="p",
-            url="http://93.184.216.34/webhook",
+            url="https://buyer.example.com/webhook",
             authentication_type=None,
             authentication_token=None,
         )
-        service = ProtocolWebhookService()
-        mock_response = MagicMock()
-        mock_response.raise_for_status.return_value = None
-        mock_response.status_code = 200
+        ok_resp = MagicMock()
+        ok_resp.status_code = 200
+        captured: dict = {}
 
-        with patch.object(service._session, "post", return_value=mock_response) as mock_post:
+        def _fake_post(self, url, **kwargs):  # noqa: ANN001 - test stub
+            captured["url"] = url
+            captured["kwargs"] = kwargs
+            return ok_resp
+
+        with patch("requests.sessions.Session.post", _fake_post):
             asyncio.run(
-                service.send_notification(config, {"status": "completed"}, metadata={"task_type": "create_media_buy"})
+                ProtocolWebhookService().send_notification(
+                    config, {"status": "completed"}, metadata={"task_type": "create_media_buy"}
+                )
             )
 
-        assert mock_post.called, "the webhook POST should have been attempted"
-        assert mock_post.call_args.kwargs.get("allow_redirects") is False
+        assert captured["url"] == "https://buyer.example.com/webhook"
+        assert captured["kwargs"]["allow_redirects"] is False
+        assert captured["kwargs"]["headers"]["Host"] == "buyer.example.com"
+
+    def test_send_notification_treats_3xx_as_failed_delivery(self):
+        """A 3xx (refused redirect) must NOT be recorded as a successful delivery."""
+        import asyncio
+        from unittest.mock import MagicMock, patch
+
+        from src.core.database.models import PushNotificationConfig
+        from src.services.protocol_webhook_service import ProtocolWebhookService
+
+        config = PushNotificationConfig(
+            id="pnc-3xx",
+            tenant_id="t",
+            principal_id="p",
+            url="https://buyer.example.com/webhook",
+            authentication_type=None,
+            authentication_token=None,
+        )
+        redirect_resp = MagicMock()
+        redirect_resp.status_code = 302
+
+        with patch("requests.sessions.Session.post", return_value=redirect_resp):
+            delivered = asyncio.run(
+                ProtocolWebhookService().send_notification(
+                    config, {"status": "completed"}, metadata={"task_type": "create_media_buy"}
+                )
+            )
+
+        assert delivered is False, "a 3xx response must be treated as a failed delivery"

@@ -5,9 +5,25 @@ Server-Side Request Forgery (SSRF) attacks where malicious users could
 trick the server into making requests to internal services.
 """
 
+import os
+
 from adcp.types import TaskType
 
 from src.core.security.url_validator import check_url_ssrf
+
+
+def _allow_private_webhook_targets() -> bool:
+    """Whether buyer callbacks to private/loopback targets are permitted.
+
+    A DEDICATED opt-in (``ADCP_ALLOW_PRIVATE_WEBHOOKS``), deliberately NOT tied to
+    ``ENVIRONMENT``: a real staging/dev deployment that serves buyers must still block
+    private/internal targets, so gating on "not production" was too broad (#1512). This
+    flag is set ONLY by the E2E harness, whose webhook receiver lives on the compose
+    network / loopback. Cloud-metadata and link-local targets stay blocked even when it
+    is set.
+    """
+    return os.getenv("ADCP_ALLOW_PRIVATE_WEBHOOKS", "").strip().lower() in ("1", "true", "yes")
+
 
 # Fallback used when an action label is not a member of the SDK's closed
 # TaskType enum. create_mcp_webhook_payload() restricts task_type to that
@@ -87,21 +103,19 @@ class WebhookURLValidator:
     def validate_callback_url(cls, url: str) -> tuple[bool, str]:
         """Env-gated validation for a buyer-supplied push callback URL (#1512).
 
-        The single gate used at callback registration AND delivery. Production
-        requires HTTPS and blocks all internal targets (loopback, RFC-1918,
-        localhost/Docker aliases). Non-production passes ``allow_private=True`` so a
-        trusted test/dev receiver on the local host or a Docker-compose network
-        (e.g. the E2E ``tests`` alias, which resolves to a private 172.x address)
-        is reachable. Cloud-metadata / link-local targets (169.254.x, fe80::,
-        metadata.google.internal) stay blocked in EVERY environment.
+        The single gate used at callback registration AND delivery. By default —
+        production, staging, and ordinary dev — it requires HTTPS and blocks all
+        internal targets (loopback, RFC-1918, localhost/Docker aliases), validating
+        EVERY resolved A/AAAA record. Only the dedicated ``ADCP_ALLOW_PRIVATE_WEBHOOKS``
+        opt-in (set solely by the E2E harness) relaxes this to permit a trusted
+        private/loopback receiver over plain HTTP. Cloud-metadata / link-local targets
+        (169.254.x, fe80::, metadata.google.internal) stay blocked in EVERY environment.
 
-        HTTPS-in-prod plus disabled redirects on the outbound client (see
-        protocol_webhook_service) close the demonstrated redirect-to-metadata and
-        plain-HTTP vectors; connect-time peer pinning against DNS rebinding is a
-        residual tracked separately.
+        Callers connect to the validated address (connection pinning in
+        protocol_webhook_service) so the checked IP is the one actually used;
+        disabled redirects + HTTPS close the redirect-to-metadata and plain-HTTP vectors.
         """
-        from src.core.config import is_production
-
-        if is_production():
-            return check_url_ssrf(url, require_https=True)
-        return check_url_ssrf(url, allow_private=True)
+        allow_private = _allow_private_webhook_targets()
+        # Require HTTPS whenever private targets are NOT permitted (every real
+        # deployment). The E2E opt-in that permits private receivers also permits HTTP.
+        return check_url_ssrf(url, require_https=not allow_private, allow_private=allow_private)

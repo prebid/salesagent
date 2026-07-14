@@ -17,13 +17,13 @@ class TestCheckUrlSsrf:
     """Core validator rejects private/internal targets."""
 
     def test_valid_public_https_url_accepted(self):
-        with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
+        with patch("src.core.security.url_validator._resolve_ips", return_value=["93.184.216.34"]):
             is_safe, error = check_url_ssrf("https://example.com/agent")
         assert is_safe is True
         assert error == ""
 
     def test_valid_public_http_url_accepted(self):
-        with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
+        with patch("src.core.security.url_validator._resolve_ips", return_value=["93.184.216.34"]):
             is_safe, error = check_url_ssrf("http://example.com/agent")
         assert is_safe is True
         assert error == ""
@@ -34,28 +34,28 @@ class TestCheckUrlSsrf:
         assert "blocked" in error.lower() or "private" in error.lower() or "loopback" in error.lower()
 
     def test_loopback_ip_rejected(self):
-        with patch("src.core.security.url_validator.socket.gethostbyname", return_value="127.0.0.1"):
+        with patch("src.core.security.url_validator._resolve_ips", return_value=["127.0.0.1"]):
             is_safe, error = check_url_ssrf("http://127.0.0.1:9999")
         assert is_safe is False
 
     def test_private_rfc1918_10_rejected(self):
-        with patch("src.core.security.url_validator.socket.gethostbyname", return_value="10.0.0.1"):
+        with patch("src.core.security.url_validator._resolve_ips", return_value=["10.0.0.1"]):
             is_safe, error = check_url_ssrf("http://internal-host.example.com")
         assert is_safe is False
         assert "10.0.0.0/8" in error or "private" in error.lower()
 
     def test_private_rfc1918_192168_rejected(self):
-        with patch("src.core.security.url_validator.socket.gethostbyname", return_value="192.168.1.1"):
+        with patch("src.core.security.url_validator._resolve_ips", return_value=["192.168.1.1"]):
             is_safe, error = check_url_ssrf("http://router.local")
         assert is_safe is False
 
     def test_private_rfc1918_172_rejected(self):
-        with patch("src.core.security.url_validator.socket.gethostbyname", return_value="172.16.0.1"):
+        with patch("src.core.security.url_validator._resolve_ips", return_value=["172.16.0.1"]):
             is_safe, error = check_url_ssrf("http://internal.corp")
         assert is_safe is False
 
     def test_link_local_169_254_rejected(self):
-        with patch("src.core.security.url_validator.socket.gethostbyname", return_value="169.254.169.254"):
+        with patch("src.core.security.url_validator._resolve_ips", return_value=["169.254.169.254"]):
             is_safe, error = check_url_ssrf("http://169.254.169.254/metadata")
         assert is_safe is False
 
@@ -88,22 +88,21 @@ class TestCheckUrlSsrf:
         assert is_safe is False
 
     def test_require_https_rejects_http(self):
-        with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
+        with patch("src.core.security.url_validator._resolve_ips", return_value=["93.184.216.34"]):
             is_safe, error = check_url_ssrf("http://example.com/agent", require_https=True)
         assert is_safe is False
         assert "https" in error.lower()
 
     def test_require_https_accepts_https(self):
-        with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
+        with patch("src.core.security.url_validator._resolve_ips", return_value=["93.184.216.34"]):
             is_safe, error = check_url_ssrf("https://example.com/agent", require_https=True)
         assert is_safe is True
 
     def test_unresolvable_hostname_rejected(self):
-        import socket
 
         with patch(
-            "src.core.security.url_validator.socket.gethostbyname",
-            side_effect=socket.gaierror("Name or service not known"),
+            "src.core.security.url_validator._resolve_ips",
+            side_effect=OSError("Name or service not known"),
         ):
             is_safe, error = check_url_ssrf("http://this-hostname-does-not-exist.invalid")
         assert is_safe is False
@@ -111,74 +110,97 @@ class TestCheckUrlSsrf:
 
 
 class TestValidateCallbackUrl:
-    """The env-gated callback gate: strict in prod, localhost-friendly in test (#1512)."""
+    """The callback gate: strict by default (prod/staging/dev); private only via the
+    dedicated ADCP_ALLOW_PRIVATE_WEBHOOKS opt-in (E2E harness) (#1512)."""
 
-    def test_production_requires_https(self):
+    def test_requires_https_by_default(self):
+        """Any real deployment (flag off) requires HTTPS — not just production."""
         from src.core.webhook_validator import WebhookURLValidator
 
         with (
-            patch("src.core.config.is_production", return_value=True),
-            patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"),
+            patch("src.core.webhook_validator._allow_private_webhook_targets", return_value=False),
+            patch("src.core.security.url_validator._resolve_ips", return_value=["93.184.216.34"]),
         ):
             is_valid, error = WebhookURLValidator.validate_callback_url("http://example.com/webhook")
         assert is_valid is False
         assert "https" in error.lower()
 
-    def test_production_accepts_public_https(self):
+    def test_accepts_public_https_by_default(self):
         from src.core.webhook_validator import WebhookURLValidator
 
         with (
-            patch("src.core.config.is_production", return_value=True),
-            patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"),
+            patch("src.core.webhook_validator._allow_private_webhook_targets", return_value=False),
+            patch("src.core.security.url_validator._resolve_ips", return_value=["93.184.216.34"]),
         ):
             is_valid, _ = WebhookURLValidator.validate_callback_url("https://example.com/webhook")
         assert is_valid is True
 
-    def test_production_blocks_localhost(self):
+    def test_blocks_private_target_by_default(self):
+        """A deployed staging/dev instance (flag off) must NOT accept private callbacks."""
         from src.core.webhook_validator import WebhookURLValidator
 
-        with patch("src.core.config.is_production", return_value=True):
-            is_valid, _ = WebhookURLValidator.validate_callback_url("https://localhost:8765/webhook")
+        with (
+            patch("src.core.webhook_validator._allow_private_webhook_targets", return_value=False),
+            patch("src.core.security.url_validator._resolve_ips", return_value=["10.0.0.5"]),
+        ):
+            is_valid, _ = WebhookURLValidator.validate_callback_url("https://internal.example.com/webhook")
         assert is_valid is False
 
-    def test_test_mode_allows_localhost_http(self):
-        """Un-breaks the E2E localhost webhook receiver (round-1 regression)."""
+    def test_flag_allows_localhost_http(self):
+        """The E2E opt-in permits a loopback receiver over HTTP (round-1 regression)."""
         from src.core.webhook_validator import WebhookURLValidator
 
-        with patch("src.core.config.is_production", return_value=False):
+        with patch("src.core.webhook_validator._allow_private_webhook_targets", return_value=True):
             is_valid, _ = WebhookURLValidator.validate_callback_url("http://localhost:8765/webhook")
         assert is_valid is True
 
-    def test_test_mode_allows_private_compose_host(self):
-        """Test mode reaches a Docker-compose receiver on a private (RFC-1918) address.
+    def test_flag_allows_private_compose_host(self):
+        """The E2E opt-in reaches a compose receiver on a private (RFC-1918) address.
 
-        The E2E runner exposes its webhook receiver via the compose alias ``tests``,
-        which resolves to a private 172.x IP. Round-1 blocked it (SSRF range), failing
-        5 E2E webhook tests; allow_private in non-prod reaches it (#1512).
+        The E2E runner exposes its receiver via the compose alias ``tests`` (a private
+        172.x IP). This is permitted ONLY under the dedicated flag, never by default.
         """
         from src.core.webhook_validator import WebhookURLValidator
 
         with (
-            patch("src.core.config.is_production", return_value=False),
-            patch("src.core.security.url_validator.socket.gethostbyname", return_value="172.20.0.5"),
+            patch("src.core.webhook_validator._allow_private_webhook_targets", return_value=True),
+            patch("src.core.security.url_validator._resolve_ips", return_value=["172.20.0.5"]),
         ):
             is_valid, _ = WebhookURLValidator.validate_callback_url("http://tests:8765/webhook")
         assert is_valid is True
 
-    def test_metadata_ip_blocked_even_in_test_mode(self):
-        """Private-target tolerance must NOT extend to link-local/metadata targets."""
+    def test_metadata_ip_blocked_even_with_flag(self):
+        """The private opt-in must NOT extend to link-local/metadata targets."""
         from src.core.webhook_validator import WebhookURLValidator
 
-        with patch("src.core.config.is_production", return_value=False):
+        with patch("src.core.webhook_validator._allow_private_webhook_targets", return_value=True):
             is_valid, _ = WebhookURLValidator.validate_callback_url("http://169.254.169.254/latest/meta-data")
         assert is_valid is False
 
-    def test_metadata_hostname_blocked_even_in_test_mode(self):
-        """The GCP metadata hostname is blocked regardless of allow_private."""
+    def test_metadata_hostname_blocked_even_with_flag(self):
+        """The GCP metadata hostname is blocked regardless of the flag."""
         from src.core.webhook_validator import WebhookURLValidator
 
-        with patch("src.core.config.is_production", return_value=False):
+        with patch("src.core.webhook_validator._allow_private_webhook_targets", return_value=True):
             is_valid, _ = WebhookURLValidator.validate_callback_url("http://metadata.google.internal/computeMetadata")
+        assert is_valid is False
+
+    def test_multi_record_hostname_blocked_if_any_record_is_private(self):
+        """A hostname with one public and one private A record is rejected (#1512).
+
+        Single-record gethostbyname would pass on the public record; validating ALL
+        records catches the private/rebinding one.
+        """
+        from src.core.webhook_validator import WebhookURLValidator
+
+        with (
+            patch("src.core.webhook_validator._allow_private_webhook_targets", return_value=False),
+            patch(
+                "src.core.security.url_validator._resolve_ips",
+                return_value=["93.184.216.34", "10.0.0.5"],
+            ),
+        ):
+            is_valid, _ = WebhookURLValidator.validate_callback_url("https://rebind.example.com/webhook")
         assert is_valid is False
 
 
@@ -310,7 +332,7 @@ class TestSignalsAgentEndpointSSRFWiring:
             # Make session.add() and commit() no-ops
             mock_session.add = MagicMock()
             mock_session.commit = MagicMock()
-            with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
+            with patch("src.core.security.url_validator._resolve_ips", return_value=["93.184.216.34"]):
                 with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                     response = client.post(
                         "/tenant/default/signals-agents/add",

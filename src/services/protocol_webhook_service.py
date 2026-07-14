@@ -27,14 +27,65 @@ from a2a.types import Task, TaskStatusUpdateEvent
 from adcp import extract_webhook_result_data, get_adcp_signed_headers_for_webhook
 from adcp.types import McpWebhookPayload
 from google.protobuf.json_format import MessageToDict
+from requests.adapters import HTTPAdapter
+from requests.utils import select_proxy
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.lifecycle import register_shutdown
+from src.core.security.url_validator import resolve_and_validate_target
+from src.core.webhook_validator import _allow_private_webhook_targets
 
 logger = logging.getLogger(__name__)
+
+
+class _PinningHTTPAdapter(HTTPAdapter):
+    """requests adapter that SSRF-validates each webhook target and pins the TCP
+    connection to the validated IP, keeping TLS SNI + certificate verification bound
+    to the ORIGINAL hostname.
+
+    Mounted ONCE on the service's long-lived pooled ``requests.Session`` — so connection
+    pooling (and any test that patches ``session.post``) is preserved. Overriding the
+    per-request connection seam closes the validate-then-reconnect (DNS-rebinding) gap:
+    the address checked by ``resolve_and_validate_target`` is exactly the address the
+    socket connects to. Every A/AAAA record is validated; redirects are disabled by the
+    caller so a validated URL cannot 302 to a private/metadata target after the check.
+    """
+
+    def get_connection_with_tls_context(
+        self,
+        request: requests.PreparedRequest,
+        verify: bool | str | None,
+        proxies: Mapping[str, str] | None = None,
+        cert: Any = None,
+    ) -> Any:
+        url = request.url or ""
+        allow_private = _allow_private_webhook_targets()
+        pinned_ip, ssrf_error = resolve_and_validate_target(
+            url, require_https=not allow_private, allow_private=allow_private
+        )
+        if pinned_ip is None:
+            raise requests.RequestException(f"Webhook URL failed SSRF validation: {ssrf_error}")
+
+        # An egress proxy performs its own resolution, so host-pinning does not apply —
+        # but the validation above still rejected private/metadata targets first.
+        if select_proxy(url, proxies):
+            return super().get_connection_with_tls_context(request, verify, proxies=proxies, cert=cert)
+
+        # ``verify`` reaches this override typed as Optional to match the base signature;
+        # normalize None -> True (default verification) without collapsing an explicit False.
+        resolved_verify: bool | str = True if verify is None else verify
+        host_params, pool_kwargs = self.build_connection_pool_key_attributes(request, resolved_verify, cert)
+        hostname = host_params["host"]
+        host_params["host"] = pinned_ip  # connect the socket to the validated IP
+        pinned_kwargs: dict[str, Any] = dict(pool_kwargs)
+        if host_params["scheme"] == "https":
+            # Send SNI for, and verify the certificate against, the ORIGINAL hostname — not the IP.
+            pinned_kwargs["server_hostname"] = hostname
+            pinned_kwargs["assert_hostname"] = hostname
+        return self.poolmanager.connection_from_host(**host_params, pool_kwargs=cast(Any, pinned_kwargs))
 
 
 # FIXME(gh-#1299): behaviour-identical backport of adcp 5.4.0
@@ -134,6 +185,12 @@ class ProtocolWebhookService:
 
     def __init__(self):
         self._session = requests.Session()
+        # Pin every webhook delivery to an SSRF-validated IP while preserving the
+        # long-lived pooled session (see _PinningHTTPAdapter). One adapter instance
+        # serves both schemes.
+        pinning_adapter = _PinningHTTPAdapter()
+        self._session.mount("https://", pinning_adapter)
+        self._session.mount("http://", pinning_adapter)
 
     async def send_notification(
         self,
@@ -293,12 +350,28 @@ class ProtocolWebhookService:
                 logger.info(f"Sending webhook for task {task_id} to {url} (attempt {attempt + 1}/{max_attempts})")
 
                 def _post() -> requests.Response:
-                    # allow_redirects=False (#1512 SSRF): a validated public URL must not be
-                    # able to 302 the POST to a private/metadata address after validation.
-                    return self._session.post(url, json=payload, headers=headers, timeout=10.0, allow_redirects=False)
+                    # Redirect-disabled POST over the pooled session whose pinning adapter
+                    # (#1512 SSRF) resolves + validates every A/AAAA record and pins the
+                    # connection to the validated IP — so a validated URL cannot be
+                    # re-resolved (DNS rebinding) or 302-redirected to a private/metadata
+                    # target after validation. Host is set explicitly so vhost routing stays
+                    # correct even though the socket connects by IP.
+                    return self._session.post(
+                        url,
+                        json=payload,
+                        headers={**headers, "Host": urlparse(url).netloc},
+                        timeout=10.0,
+                        allow_redirects=False,
+                    )
 
                 response = await asyncio.to_thread(_post)
-                response.raise_for_status()
+                # Require a 2xx. raise_for_status() does NOT raise for 3xx, and with
+                # redirects disabled a 3xx is a REFUSED redirect — a failed delivery,
+                # not a success. Treat any non-2xx uniformly via the HTTPError path.
+                if not (200 <= response.status_code < 300):
+                    raise requests.HTTPError(
+                        f"Webhook returned non-2xx status {response.status_code}", response=response
+                    )
 
                 # Calculate response time
                 response_time_ms = int((time.time() - start_time) * 1000)
