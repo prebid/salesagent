@@ -29,6 +29,7 @@ from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
     AdCPContextNotFoundError,
+    AdCPCreativeRejectedError,
     AdCPProductNotFoundError,
     AdCPValidationError,
 )
@@ -136,7 +137,6 @@ def _mock_product(product_id: str = "prod_1", currency: str = "USD") -> MagicMoc
 
 def _mock_media_buy(
     media_buy_id: str = "mb_1",
-    buyer_ref: str = "test-buyer",
     start_date: date | None = None,
     end_date: date | None = None,
     budget: Decimal = Decimal("5000.00"),
@@ -145,7 +145,6 @@ def _mock_media_buy(
     """Create a mock MediaBuy ORM object."""
     buy = MagicMock()
     buy.media_buy_id = media_buy_id
-    buy.buyer_ref = None
     buy.tenant_id = "test_tenant"
     buy.principal_id = "test_principal"
     buy.budget = budget
@@ -156,7 +155,7 @@ def _mock_media_buy(
     buy.end_time = None
     buy.created_at = datetime.now(UTC)
     buy.updated_at = datetime.now(UTC)
-    buy.raw_request = {"buyer_ref": buyer_ref, "packages": [{"product_id": "prod_1", "package_id": "pkg_1"}]}
+    buy.raw_request = {"packages": [{"product_id": "prod_1", "package_id": "pkg_1"}]}
     buy.status = "active"
     return buy
 
@@ -184,22 +183,6 @@ class TestCreateMediaBuySchemaCompliance:
                 packages=[{"product_id": "p1", "budget": 1000.0}],
                 idempotency_key="unit-test-key-brand-0001",  # valid — failure stays scoped to brand
                 # brand omitted
-            )
-
-    def test_create_request_buyer_ref_no_longer_accepted(self):
-        """UC-002-S02: buyer_ref removed from AdCP spec in 3.12.
-
-        Spec: UPDATED -- buyer_ref removed from create-media-buy-request.json in adcp 3.12
-        Covers: UC-002-MAIN-02
-        """
-        with pytest.raises(ValidationError, match="buyer_ref"):
-            CreateMediaBuyRequest(
-                buyer_ref="test",
-                brand={"domain": "test.com"},
-                start_time=_future(1),
-                end_time=_future(8),
-                packages=[{"product_id": "p1", "budget": 1000.0, "pricing_option_id": "cpm_usd_fixed"}],
-                idempotency_key="unit-test-key-buyerref-01",  # valid — failure stays scoped to buyer_ref
             )
 
     def test_create_request_accepts_valid_minimal(self):
@@ -626,19 +609,6 @@ class TestCreateMediaBuyValidation:
         req = _make_request(packages=[{"product_id": "prod_1", "budget": 0, "pricing_option_id": "cpm_usd_fixed"}])
         assert req.get_total_budget() == 0
 
-    def test_buyer_ref_no_longer_on_request(self):
-        """UC-002-V09: buyer_ref removed from AdCP spec in 3.12.
-
-        Spec: UPDATED -- buyer_ref removed from create-media-buy-request.json in adcp 3.12.
-        Duplicate buyer_ref validation is no longer applicable at the request level.
-        Priority: P1
-        Type: unit
-        Source: UC-002, BR-RULE-009
-        Covers: UC-002-EXT-E-01
-        """
-        with pytest.raises(ValidationError, match="buyer_ref"):
-            _make_request(buyer_ref="duplicate-ref")
-
     def test_missing_start_time_rejected(self):
         """UC-002-V10: missing start_time rejected.
 
@@ -821,7 +791,7 @@ class TestCreateMediaBuyCreativeValidation:
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative]
 
-            with pytest.raises(AdCPValidationError) as exc_info:
+            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
                 _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
 
             assert "creative_errors" in exc_info.value.details
@@ -851,7 +821,7 @@ class TestCreateMediaBuyCreativeValidation:
         session = MagicMock()
         session.scalars.return_value.all.return_value = [mock_creative]
 
-        with pytest.raises(AdCPValidationError) as exc_info:
+        with pytest.raises(AdCPCreativeRejectedError) as exc_info:
             _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
 
         assert "creative_errors" in exc_info.value.details
@@ -881,7 +851,7 @@ class TestCreateMediaBuyCreativeValidation:
         session = MagicMock()
         session.scalars.return_value.all.return_value = [mock_creative]
 
-        with pytest.raises(AdCPValidationError) as exc_info:
+        with pytest.raises(AdCPCreativeRejectedError) as exc_info:
             _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
 
         assert "creative_errors" in exc_info.value.details
@@ -933,7 +903,7 @@ class TestCreateMediaBuyCreativeValidation:
             product_result.all.return_value = [mock_product]
             session.scalars.side_effect = [creative_result, product_result]
 
-            with pytest.raises(AdCPValidationError) as exc_info:
+            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
                 _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
 
             assert "creative_errors" in exc_info.value.details
@@ -1011,7 +981,7 @@ class TestCreateMediaBuyCreativeValidation:
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative_1, mock_creative_2]
 
-            with pytest.raises(AdCPValidationError) as exc_info:
+            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
                 _validate_creatives_before_adapter_call([package], "test_tenant", session=session)
 
             # Both errors should be accumulated in a single exception
@@ -1603,7 +1573,7 @@ class TestUpdateMediaBuySchemaCompliance:
     def test_update_request_accepts_media_buy_id(self):
         """UC-003-S01: media_buy_id accepted as optional field.
 
-        Spec: CONFIRMED -- update-media-buy-request.json oneOf requires media_buy_id OR buyer_ref
+        Spec: CONFIRMED -- update-media-buy-request.json requires media_buy_id
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-request.json
         Covers: UC-003-MAIN-01
         """
@@ -1707,7 +1677,7 @@ class TestUpdateMediaBuyResponseShapes:
     def test_error_response_atomic(self):
         """UC-003-R02 / BR-RULE-018: error has no success fields.
 
-        Spec: CONFIRMED -- update-media-buy-response.json error: not anyOf [media_buy_id, buyer_ref, affected_packages]
+        Spec: CONFIRMED -- update-media-buy-response.json error: not anyOf [media_buy_id, affected_packages]
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-response.json
         Covers: UC-003-EXT-O-05
         """
@@ -1743,7 +1713,7 @@ class TestUpdateMediaBuyMainFlow:
     def test_package_budget_update_via_media_buy_id(self):
         """UC-003-MF01/MF02: media_buy_id resolves to media buy, update succeeds.
 
-        Spec: UPDATED -- adcp 3.12 requires media_buy_id (buyer_ref identification removed)
+        Spec: media_buy_id is the sole update identifier
         Priority: P0
         Type: unit
         Source: UC-003, BR-RULE-021
@@ -1810,13 +1780,13 @@ class TestUpdateMediaBuyMainFlow:
             adapter.update_media_buy.return_value = adapter_result
             mock_adapter.return_value = adapter
 
-            mock_uow.media_buys.get_by_buyer_ref.return_value = mock_buy
+            mock_uow.media_buys.get_by_id.return_value = mock_buy
             mock_uow.media_buys.get_by_id.return_value = mock_buy
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
-        assert result.media_buy_id == "mb_resolved"
+        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert result.response.media_buy_id == "mb_resolved"
 
     def test_partial_update_omitted_fields_unchanged(self):
         """UC-003-MF03: only specified fields update, rest preserved.
@@ -1919,7 +1889,7 @@ class TestUpdateMediaBuyPauseResume:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
+        assert isinstance(result.response, UpdateMediaBuySuccess)
         # Adapter should be called with pause action
         adapter.update_media_buy.assert_called_once_with(
             media_buy_id=ANY, action="pause_media_buy", package_id=ANY, budget=ANY, today=ANY
@@ -1983,7 +1953,7 @@ class TestUpdateMediaBuyPauseResume:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
+        assert isinstance(result.response, UpdateMediaBuySuccess)
         adapter.update_media_buy.assert_called_once_with(
             media_buy_id=ANY, action="resume_media_buy", package_id=ANY, budget=ANY, today=ANY
         )
@@ -2047,7 +2017,7 @@ class TestUpdateMediaBuyPauseResume:
             # Should succeed without any CurrencyLimit lookups
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
+        assert isinstance(result.response, UpdateMediaBuySuccess)
         # The key assertion: session.scalars should NOT be called for currency limit
         # because pause doesn't change budget or dates
         # (adapter is called directly for pause action)
@@ -2373,24 +2343,23 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow_cls.return_value = mock_uow
 
             # Media buy and package via repo
-            mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = mock_buy
+            mock_uow.media_buys.get_by_id.return_value = mock_buy
             mock_uow.media_buys.get_package.return_value = mock_package
 
-            # Creative, product, assignment queries via session
-            creative_result = MagicMock()
-            creative_result.all.return_value = [mock_c1, mock_c2]
-            prod_result = MagicMock()
-            prod_result.first.return_value = mock_product
+            # Creative existence/status + product format via repositories.
+            mock_uow.creatives.admin_get_by_ids.return_value = [mock_c1, mock_c2]
+            mock_uow.products.get_by_id.return_value = mock_product
+
+            # Existing-assignment lookup still goes through session.scalars.
             assign_result = MagicMock()
             assign_result.all.return_value = [mock_existing_assignment]
-
-            uow_session.scalars.side_effect = [creative_result, prod_result, assign_result]
+            uow_session.scalars.side_effect = [assign_result]
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
-        assert result.affected_packages is not None
-        assert len(result.affected_packages) >= 1
+        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert result.response.affected_packages is not None
+        assert len(result.response.affected_packages) >= 1
         # The old assignment should have been deleted (replacement semantics)
         uow_session.delete.assert_called_with(mock_existing_assignment)
 
@@ -2455,15 +2424,10 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow_cls.return_value = mock_uow
 
             # Media buy via repo
-            mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = mock_buy
+            mock_uow.media_buys.get_by_id.return_value = mock_buy
 
-            # Creative query via session - no creatives found
-            creative_result = MagicMock()
-            creative_result.all.return_value = []
-
-            uow_session.scalars.side_effect = [creative_result]
-
-            from src.core.exceptions import AdCPCreativeRejectedError
+            # No creatives found via repository.
+            mock_uow.creatives.admin_get_by_ids.return_value = []
 
             with pytest.raises(AdCPCreativeRejectedError, match="(?i)not found"):
                 _update_media_buy_impl(req=req, identity=identity)
@@ -2544,18 +2508,14 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow_cls.return_value = mock_uow
 
             # Media buy and package via repo
-            mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = mock_buy
+            mock_uow.media_buys.get_by_id.return_value = mock_buy
             mock_uow.media_buys.get_package.return_value = mock_package
 
-            # Creative and product queries via session
-            creative_result = MagicMock()
-            creative_result.all.return_value = [mock_creative]
-            prod_result = MagicMock()
-            prod_result.first.return_value = mock_product
+            # Creative existence/status + product format via repositories.
+            mock_uow.creatives.admin_get_by_ids.return_value = [mock_creative]
+            mock_uow.products.get_by_id.return_value = mock_product
 
-            uow_session.scalars.side_effect = [creative_result, prod_result]
-
-            with pytest.raises(AdCPValidationError, match="(?i)cannot.*assign|error|invalid"):
+            with pytest.raises(AdCPCreativeRejectedError, match="(?i)cannot.*assign|error|state"):
                 _update_media_buy_impl(req=req, identity=identity)
 
     def test_creative_format_mismatch_rejected(self):
@@ -2634,18 +2594,14 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow_cls.return_value = mock_uow
 
             # Media buy and package via repo
-            mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = mock_buy
+            mock_uow.media_buys.get_by_id.return_value = mock_buy
             mock_uow.media_buys.get_package.return_value = mock_package
 
-            # Creative and product queries via session
-            creative_result = MagicMock()
-            creative_result.all.return_value = [mock_creative]
-            prod_result = MagicMock()
-            prod_result.first.return_value = mock_product
+            # Creative existence/status + product format via repositories.
+            mock_uow.creatives.admin_get_by_ids.return_value = [mock_creative]
+            mock_uow.products.get_by_id.return_value = mock_product
 
-            uow_session.scalars.side_effect = [creative_result, prod_result]
-
-            with pytest.raises(AdCPValidationError, match="(?i)format|not supported"):
+            with pytest.raises(AdCPCreativeRejectedError, match="(?i)format|not supported"):
                 _update_media_buy_impl(req=req, identity=identity)
 
     def test_change_set_computation(self):
@@ -2740,22 +2696,21 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow_cls.return_value = mock_uow
 
             # Media buy and package via repo
-            mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = mock_buy
+            mock_uow.media_buys.get_by_id.return_value = mock_buy
             mock_uow.media_buys.get_package.return_value = mock_package
 
-            # Creative, product, assignment queries via session
-            creative_result = MagicMock()
-            creative_result.all.return_value = [mock_c2, mock_c4]
-            prod_result = MagicMock()
-            prod_result.first.return_value = mock_product
+            # Creative existence/status + product format via repositories.
+            mock_uow.creatives.admin_get_by_ids.return_value = [mock_c2, mock_c4]
+            mock_uow.products.get_by_id.return_value = mock_product
+
+            # Existing-assignment lookup still goes through session.scalars.
             assign_result = MagicMock()
             assign_result.all.return_value = [mock_assign_c1, mock_assign_c2, mock_assign_c3]
-
-            uow_session.scalars.side_effect = [creative_result, prod_result, assign_result]
+            uow_session.scalars.side_effect = [assign_result]
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySuccess)
+        assert isinstance(result.response, UpdateMediaBuySuccess)
         # c1 and c3 should be deleted (removed)
         deleted_ids = {call.args[0].creative_id for call in uow_session.delete.call_args_list}
         assert "c1" in deleted_ids
@@ -2772,7 +2727,7 @@ class TestUpdateMediaBuyIdentification:
     def test_media_buy_id_is_required(self):
         """UC-003-ID01: media_buy_id is required for update.
 
-        Spec: UPDATED -- adcp 3.12 requires media_buy_id (buyer_ref identification removed)
+        Spec: media_buy_id is the sole update identifier
         Priority: P1
         Type: unit
         Source: UC-003 ext-b, BR-RULE-021
@@ -2794,7 +2749,7 @@ class TestUpdateMediaBuyIdentification:
         Source: UC-003 ext-b, BR-RULE-021
         Covers: UC-003-EXT-B-04
         """
-        # Per AdCP spec, providing neither media_buy_id nor buyer_ref is invalid (oneOf)
+        # Per AdCP spec, media_buy_id is required for update
         with pytest.raises(ValidationError):
             UpdateMediaBuyRequest(
                 packages=[],
@@ -2831,7 +2786,7 @@ class TestUpdateMediaBuyIdentification:
             mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
-            mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = None
+            mock_uow.media_buys.get_by_id.return_value = None
             mock_uow.media_buys.get_by_id.return_value = None
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
@@ -2845,17 +2800,15 @@ class TestUpdateMediaBuyIdentification:
             ):
                 _update_media_buy_impl(req=req, identity=identity)
 
-    def test_buyer_ref_no_longer_accepted_on_update(self):
-        """UC-003-ID04: buyer_ref removed from update request in adcp 3.12.
+    def test_update_request_requires_media_buy_id(self):
+        """UC-003-ID04: media_buy_id is the sole identifier for update requests.
 
-        Spec: UPDATED -- buyer_ref identification removed from update-media-buy-request in adcp 3.12.
-        media_buy_id is now the sole identifier.
+        Spec: update-media-buy-request.json requires media_buy_id.
         Priority: P1
         Type: unit
         Source: UC-003 ext-b
         Covers: UC-003-EXT-B-02
         """
-        # buyer_ref is no longer a valid identifier for update requests
         with pytest.raises(ValidationError, match="media_buy_id"):
             UpdateMediaBuyRequest(packages=[])
 
@@ -2901,7 +2854,7 @@ class TestUpdateMediaBuyOwnership:
             mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
-            mock_uow.media_buys.get_by_id_or_buyer_ref.return_value = mock_buy
+            mock_uow.media_buys.get_by_id.return_value = mock_buy
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2970,13 +2923,17 @@ class TestUpdateMediaBuyManualApproval:
             result = _update_media_buy_impl(req=req, identity=identity)
 
         # Spec 3.1.1: a pending-approval update is the SUBMITTED variant (status="submitted"
-        # + task_id), not a completed success. The workflow step is marked requires_approval.
-        assert isinstance(result, UpdateMediaBuySubmitted)
+        # + task_id), not a completed success, carried in the UpdateMediaBuyResult
+        # protocol envelope (#1417). The workflow step is marked requires_approval.
+        assert isinstance(result.response, UpdateMediaBuySubmitted)
         assert result.status == "submitted"
-        assert result.task_id == "step_1"
+        assert result.response.task_id == "step_1"
         ctx_mgr.audit_workflow_step_result.assert_called_once_with(
             ANY, ANY, status="requires_approval", request_obj=ANY, add_comment=ANY
         )
+        # 6.6 reconciliation of main's "affected_packages empty (not yet applied)" check:
+        # the submitted envelope has no affected_packages field — the update is not applied.
+        assert result.model_dump().get("affected_packages") is None
 
     def test_implementation_date_null_when_pending(self):
         """UC-003-MA02: implementation_date is null until approved.
@@ -3034,9 +2991,10 @@ class TestUpdateMediaBuyManualApproval:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        # Spec 3.1.1: a pending-approval update is the SUBMITTED variant. implementation_date
-        # is not part of that envelope (the update is not yet applied), so it is absent/None.
-        assert isinstance(result, UpdateMediaBuySubmitted)
+        # Spec 3.1.1: a pending-approval update is the SUBMITTED variant, carried in the
+        # UpdateMediaBuyResult protocol envelope (#1417). implementation_date is not part
+        # of that envelope (the update is not yet applied), so it is absent/None.
+        assert isinstance(result.response, UpdateMediaBuySubmitted)
         assert result.status == "submitted"
         dumped = result.model_dump()
         # implementation_date should be None when pending approval
@@ -3104,8 +3062,8 @@ class TestUpdateMediaBuyAdapterFailure:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuyError)
-        assert len(result.errors) >= 1
+        assert isinstance(result.response, UpdateMediaBuyError)
+        assert len(result.response.errors) >= 1
 
     def test_no_db_changes_on_adapter_failure(self):
         """UC-003-AF02: adapter failure means no DB records updated.
@@ -3183,7 +3141,7 @@ class TestUpdateMediaBuyAdapterFailure:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuyError)
+        assert isinstance(result.response, UpdateMediaBuyError)
         ctx_mgr.audit_workflow_step_result.assert_called_once_with(
             "step_1", ANY, status="failed", error_message="GAM API timeout"
         )
@@ -3298,7 +3256,7 @@ class TestDeliveryImplSingleBuy:
     def test_fetch_by_media_buy_ids(self):
         """UC-004-D02: media_buy_ids resolution returns delivery data.
 
-        Spec: UPDATED -- buyer_refs removed in adcp 3.12, media_buy_ids is the identifier
+        Spec: media_buy_ids is the delivery identifier
         Priority: P0
         Type: unit
         Source: UC-004 main flow, BR-RULE-030
@@ -3411,7 +3369,7 @@ class TestDeliveryImplSingleBuy:
     def test_no_ids_fetches_all(self):
         """UC-004-D04: no identifiers = all buys for principal.
 
-        Spec: CONFIRMED -- get-media-buy-delivery-request.json: media_buy_ids and buyer_refs both optional
+        Spec: CONFIRMED -- get-media-buy-delivery-request.json: media_buy_ids optional
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/get-media-buy-delivery-request.json
         Priority: P1
         Type: unit
@@ -3467,23 +3425,6 @@ class TestDeliveryImplSingleBuy:
 
             assert isinstance(resp, GetMediaBuyDeliveryResponse)
             assert len(resp.media_buy_deliveries) == 2
-
-    def test_buyer_refs_no_longer_accepted_on_delivery(self):
-        """UC-004-D05: buyer_refs removed from delivery request in adcp 3.12.
-
-        Spec: UPDATED -- buyer_refs removed from get-media-buy-delivery-request in adcp 3.12.
-        media_buy_ids is now the sole identifier for delivery requests.
-        Priority: P1
-        Type: unit
-        Source: UC-004, BR-RULE-030
-        """
-        with pytest.raises(ValidationError, match="buyer_refs"):
-            GetMediaBuyDeliveryRequest(
-                media_buy_ids=["mb_1"],
-                buyer_refs=["ref_other"],
-                start_date="2025-01-01",
-                end_date="2025-06-30",
-            )
 
 
 class TestDeliveryImplStatusFilter:
@@ -4075,118 +4016,6 @@ class TestDeliveryResponseSerialization:
 # ===========================================================================
 # GET MEDIA BUYS (get_media_buys tool)
 # ===========================================================================
-
-
-class TestGetMediaBuysStatusComputation:
-    """get_media_buys: _compute_status logic."""
-
-    def test_pending_start_before_start(self):
-        """GMB-ST01: before start_date -> pending_start.
-
-        Spec: CONFIRMED -- media-buy-status.json: pending_start
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
-        Ported from test_get_media_buys.py::test_pending_start_when_before_start
-        """
-        from adcp.types import MediaBuyStatus
-
-        from src.core.tools.media_buy_list import _compute_status, _MediaBuyData
-
-        buy = _MediaBuyData(
-            media_buy_id="mb_1",
-            currency="USD",
-            budget=Decimal("1000"),
-            start_date=date.today() + timedelta(days=10),
-            end_date=date.today() + timedelta(days=40),
-            start_time=None,
-            end_time=None,
-            raw_request={},
-            created_at=None,
-            updated_at=None,
-            status="active",
-            is_paused=False,
-        )
-        assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_start
-
-    def test_active_when_in_flight(self):
-        """GMB-ST02: within flight dates -> active.
-
-        Spec: CONFIRMED -- media-buy-status.json: active
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
-        Ported from test_get_media_buys.py::test_active_when_in_flight
-        """
-        from adcp.types import MediaBuyStatus
-
-        from src.core.tools.media_buy_list import _compute_status, _MediaBuyData
-
-        buy = _MediaBuyData(
-            media_buy_id="mb_1",
-            currency="USD",
-            budget=Decimal("1000"),
-            start_date=date.today() - timedelta(days=5),
-            end_date=date.today() + timedelta(days=25),
-            start_time=None,
-            end_time=None,
-            raw_request={},
-            created_at=None,
-            updated_at=None,
-            status="active",
-            is_paused=False,
-        )
-        assert _compute_status(buy, date.today()) == MediaBuyStatus.active
-
-    def test_completed_when_past_end(self):
-        """GMB-ST03: past end_date -> completed.
-
-        Spec: CONFIRMED -- media-buy-status.json: completed
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/enums/media-buy-status.json
-        Ported from test_get_media_buys.py::test_completed_when_past_end
-        """
-        from adcp.types import MediaBuyStatus
-
-        from src.core.tools.media_buy_list import _compute_status, _MediaBuyData
-
-        buy = _MediaBuyData(
-            media_buy_id="mb_1",
-            currency="USD",
-            budget=Decimal("1000"),
-            start_date=date.today() - timedelta(days=40),
-            end_date=date.today() - timedelta(days=10),
-            start_time=None,
-            end_time=None,
-            raw_request={},
-            created_at=None,
-            updated_at=None,
-            status="active",
-            is_paused=False,
-        )
-        assert _compute_status(buy, date.today()) == MediaBuyStatus.completed
-
-    def test_prefers_start_time_over_start_date(self):
-        """GMB-ST04: start_time takes precedence over start_date.
-
-        Spec: UNSPECIFIED (implementation-defined start_time vs start_date precedence)
-        Ported from test_get_media_buys.py::test_prefers_start_time_over_start_date
-        """
-        from adcp.types import MediaBuyStatus
-
-        from src.core.tools.media_buy_list import _compute_status, _MediaBuyData
-
-        # start_date is in the past, but start_time is in the future
-        buy = _MediaBuyData(
-            media_buy_id="mb_1",
-            currency="USD",
-            budget=Decimal("1000"),
-            start_date=date.today() - timedelta(days=5),
-            end_date=date.today() + timedelta(days=25),
-            start_time=datetime.now(UTC) + timedelta(days=10),
-            end_time=None,
-            raw_request={},
-            created_at=None,
-            updated_at=None,
-            status="active",
-            is_paused=False,
-        )
-        assert _compute_status(buy, date.today()) == MediaBuyStatus.pending_start
 
 
 class TestGetMediaBuysStatusFilter:

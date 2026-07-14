@@ -18,6 +18,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.tool_context import ToolContext
+from src.core.validation_helpers import adcp_validation_boundary
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ from adcp.types.generated_poc.core.vendor_pricing_option import (
 from src.core.auth import get_principal_object, require_identity, require_principal_id, require_tenant
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
+    ActivateSignalRequest,
     ActivateSignalResponse,
     GetSignalsRequest,
     GetSignalsResponse,
@@ -216,26 +218,52 @@ async def get_signals(req: GetSignalsRequest, context: Context | ToolContext | N
     return ToolResult(content=str(response), structured_content=response)
 
 
-async def _activate_signal_impl(
+def _build_activate_signal_request(
     signal_agent_segment_id: str,
-    campaign_id: str = None,
-    media_buy_id: str = None,
-    context: ContextObject | dict | None = None,  # payload-level context
+    campaign_id: str | None = None,
+    media_buy_id: str | None = None,
+    context: ContextObject | dict | None = None,
+) -> ActivateSignalRequest:
+    """Build an ActivateSignalRequest from individual wire params.
+
+    Translates Pydantic ValidationError into AdCPValidationError. Shared by both
+    transport wrappers so construction lives in one place.
+
+    NOTE: The wrapper layer does not yet surface ``destinations`` / ``idempotency_key``
+    (both REQUIRED on the spec request). The current implementation is a mock that
+    consumes only signal_agent_segment_id / campaign_id / media_buy_id / context, so
+    placeholder values satisfy model construction without affecting observable
+    behavior. Wiring real destinations/idempotency_key from the wire is tracked
+    separately (mock-activation gap), not in this boundary-shape refactor.
+    """
+    with adcp_validation_boundary(context="activate_signal request"):
+        return ActivateSignalRequest(
+            signal_agent_segment_id=signal_agent_segment_id,
+            destinations=[{"type": "platform", "platform": "mock"}],
+            idempotency_key=f"activate-{signal_agent_segment_id}".ljust(16, "0")[:255],
+            campaign_id=campaign_id,
+            media_buy_id=media_buy_id,
+            context=context,
+        )
+
+
+async def _activate_signal_impl(
+    req: ActivateSignalRequest,
     identity: ResolvedIdentity | None = None,
 ) -> ActivateSignalResponse:
     """Shared implementation for activate_signal (used by both MCP and A2A).
 
     Args:
-        signal_agent_segment_id: Universal signal identifier to activate
-        campaign_id: Optional campaign ID to activate signal for
-        media_buy_id: Optional media buy ID to activate signal for
-        context: Application level context per adcp spec
+        req: Typed activate-signal request
         identity: Resolved identity from transport boundary
 
     Returns:
         ActivateSignalResponse with activation status
     """
     start_time = time.time()
+
+    signal_agent_segment_id = req.signal_agent_segment_id
+    context = req.context
 
     identity = require_identity(identity, context=context)
     principal_id = require_principal_id(identity, context=context)
@@ -308,7 +336,8 @@ async def activate_signal(
         ToolResult with ActivateSignalResponse data
     """
     identity = resolve_identity_from_context(ctx)
-    response = await _activate_signal_impl(signal_agent_segment_id, campaign_id, media_buy_id, context, identity)
+    req = _build_activate_signal_request(signal_agent_segment_id, campaign_id, media_buy_id, context)
+    response = await _activate_signal_impl(req=req, identity=identity)
     return ToolResult(content=str(response), structured_content=response)
 
 
@@ -359,4 +388,5 @@ async def activate_signal_raw(
     """
     if identity is None:
         identity = resolve_identity_from_context(ctx)
-    return await _activate_signal_impl(signal_agent_segment_id, campaign_id, media_buy_id, context, identity)
+    req = _build_activate_signal_request(signal_agent_segment_id, campaign_id, media_buy_id, context)
+    return await _activate_signal_impl(req=req, identity=identity)

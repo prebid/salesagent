@@ -31,13 +31,11 @@ Feature: BR-UC-026 Package Media Buy
   Scenario: Create package via MCP -- all required fields provided
     Given a valid create_media_buy MCP tool request with packages array containing:
     | field              | value         |
-    | buyer_ref          | pkg-001       |
     | product_id         | prod-1        |
     | budget             | 5000          |
     | pricing_option_id  | cpm-standard  |
     When the Buyer Agent invokes the create_media_buy MCP tool
     Then the response should contain a package with a seller-assigned package_id
-    And the package should contain buyer_ref "pkg-001"
     And the package should contain budget 5000
     And the package should contain pricing_option_id "cpm-standard"
     And the package should contain format_ids defaulting to all product formats
@@ -53,13 +51,11 @@ Feature: BR-UC-026 Package Media Buy
   Scenario: Create package via REST -- all required fields provided
     Given a valid create_media_buy A2A task request with packages array containing:
     | field              | value         |
-    | buyer_ref          | pkg-002       |
     | product_id         | prod-1        |
     | budget             | 10000         |
     | pricing_option_id  | cpm-standard  |
     When the Buyer Agent sends the create_media_buy A2A task
     Then the response should contain a package with a seller-assigned package_id
-    And the package should contain buyer_ref "pkg-002"
     And the package should contain budget 10000
     And the package should contain pricing_option_id "cpm-standard"
     And the package should contain format_ids defaulting to all product formats
@@ -75,7 +71,6 @@ Feature: BR-UC-026 Package Media Buy
   Scenario: Create package with explicit format_ids
     Given a valid create_media_buy request with a package containing:
     | field              | value                                |
-    | buyer_ref          | pkg-fmt-1                            |
     | product_id         | prod-1                               |
     | budget             | 3000                                 |
     | pricing_option_id  | cpm-standard                         |
@@ -90,7 +85,6 @@ Feature: BR-UC-026 Package Media Buy
   Scenario: Create package with all optional fields populated
     Given a valid create_media_buy request with a package containing:
     | field                 | value                                |
-    | buyer_ref             | pkg-full                             |
     | product_id            | prod-1                               |
     | budget                | 8000                                 |
     | pricing_option_id     | cpm-auction                          |
@@ -257,7 +251,6 @@ Feature: BR-UC-026 Package Media Buy
   Scenario: Package references unknown product_id -- PRODUCT_NOT_FOUND
     Given a valid create_media_buy request with a package containing:
     | field              | value             |
-    | buyer_ref          | pkg-bad-prod      |
     | product_id         | nonexistent-prod  |
     | budget             | 5000              |
     | pricing_option_id  | cpm-standard      |
@@ -281,7 +274,7 @@ Feature: BR-UC-026 Package Media Buy
     And the error code should be "INVALID_REQUEST"
     And the error message should contain "<missing_field>"
     And the error should include "suggestion" field
-    And the suggestion should contain "buyer_ref, product_id, budget, pricing_option_id"
+    And the suggestion should contain "product_id, budget, pricing_option_id"
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error identifies the specific missing field
@@ -289,7 +282,6 @@ Feature: BR-UC-026 Package Media Buy
 
     Examples: Missing individual required fields
       | missing_field      |
-      | buyer_ref          |
       | product_id         |
       | budget             |
       | pricing_option_id  |
@@ -298,7 +290,6 @@ Feature: BR-UC-026 Package Media Buy
   Scenario: Pricing option not found in product -- INVALID_REQUEST
     Given a valid create_media_buy request with a package containing:
     | field              | value                |
-    | buyer_ref          | pkg-bad-price        |
     | product_id         | prod-1               |
     | budget             | 5000                 |
     | pricing_option_id  | nonexistent-option   |
@@ -319,7 +310,6 @@ Feature: BR-UC-026 Package Media Buy
     Given the product "prod-1" has a minimum spend requirement of 1000
     And a valid create_media_buy request with a package containing:
     | field              | value        |
-    | buyer_ref          | pkg-low-bud  |
     | product_id         | prod-1       |
     | budget             | 500          |
     | pricing_option_id  | cpm-standard |
@@ -338,7 +328,6 @@ Feature: BR-UC-026 Package Media Buy
   Scenario: Format_ids not supported by product -- INVALID_REQUEST
     Given a valid create_media_buy request with a package containing:
     | field              | value                 |
-    | buyer_ref          | pkg-bad-fmt           |
     | product_id         | prod-1                |
     | budget             | 5000                  |
     | pricing_option_id  | cpm-standard          |
@@ -359,7 +348,6 @@ Feature: BR-UC-026 Package Media Buy
   Scenario: Duplicate catalog types within package -- INVALID_REQUEST
     Given a valid create_media_buy request with a package containing:
     | field              | value                                                             |
-    | buyer_ref          | pkg-dup-cat                                                       |
     | product_id         | prod-1                                                            |
     | budget             | 5000                                                              |
     | pricing_option_id  | cpm-standard                                                      |
@@ -499,22 +487,21 @@ Feature: BR-UC-026 Package Media Buy
     # BR-RULE-083 INV-4: Cross-dimension reverse mixing is valid
 
   @T-UC-026-ext-i @extension @ext-i @error @post-f1 @post-f2 @post-f3 @invariant @BR-RULE-021
-  Scenario: Package update with neither package_id nor buyer_ref -- INVALID_REQUEST (INV-3 at package level)
+  Scenario: Package update without package_id -- INVALID_REQUEST (INV-3 at package level)
     Given a valid update_media_buy request with package update:
     | field  | value |
     | budget | 7000  |
-    And the package update contains neither package_id nor buyer_ref
+    And the package update contains no package_id
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error message should contain "package_id"
-    And the error message should contain "buyer_ref"
     And the error should include "suggestion" field
-    And the suggestion should contain "package_id or buyer_ref"
+    And the suggestion should contain "package_id"
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains that a package identifier is required
-    # POST-F3: Suggestion advises providing package_id or buyer_ref
+    # POST-F3: Suggestion advises providing package_id
 
   @T-UC-026-inv-195-1 @invariant @BR-RULE-195
   Scenario: INV-1 holds -- valid pricing_option_id resolves successfully

@@ -18,23 +18,43 @@ from tests.bdd.steps.generic._auth import authenticate_env_as
 
 
 def _inject_privilege_error(ctx: dict) -> None:
-    """Inject INSUFFICIENT_PRIVILEGES error into the mock adapter.
+    """Arm the adapter to refuse an admin-only update with PERMISSION_DENIED.
 
-    Called when both 'Buyer does not have admin privileges' and
-    'the update operation requires admin privileges' are active, regardless
-    of step ordering.
+    Storyboard BR-UC-003-ext-n grounds the privilege check at the ADAPTER
+    (step 9b: "Adapter checks admin privilege requirement — operation requires
+    admin, principal is not admin"), not at a Principal/buyer role in our DB
+    (the AdCP buyer protocol has no principal-role concept — roles belong to the
+    admin-UI ``User`` model). The pinned error-code enum @04f59d2d5 has no
+    ``INSUFFICIENT_PRIVILEGES``; the canonical reconciliation is
+    ``PERMISSION_DENIED`` (adcp-req BR-UC-003 impl-coverage), recovery
+    correctable, with a buyer-facing "privileges" suggestion.
+
+    So we arm the method production actually calls during update
+    (``adapter.update_media_buy``) with the canonical rejection. This makes the
+    test wire-ready: the instant production gates admin-only actions and lets
+    the adapter rejection surface on the wire, the strict xfail in conftest
+    (T-UC-003-ext-n) flips to a real PERMISSION_DENIED pass. Today production
+    short-circuits the fields-less ext-n request through the empty-update path
+    and never reaches the adapter — hence the documented production gap.
     """
     from src.core.exceptions import AdCPError
 
     env = ctx["env"]
-    mock_adapter = env.mock["adapter"].return_value
-    error = AdCPError(
-        error_code="INSUFFICIENT_PRIVILEGES",
-        message="This operation requires admin privileges",
-        recovery="contact_admin",
-        details={"suggestion": "Request admin privileges or contact an administrator"},
+    # MediaBuyDualEnv keys the UPDATE adapter under "update_adapter" (the create
+    # adapter is "adapter" and is never used by the update path). Inject into the
+    # update adapter's update_media_buy — the method production invokes during
+    # the adapter execution step (media_buy_update.py:628/692/760) — NOT
+    # validate_media_buy_request, which the update path never calls.
+    mock_adapter = env.mock["update_adapter"].return_value
+    # PERMISSION_DENIED is canonical (pinned enum @04f59d2d5, recovery
+    # correctable) but no typed subclass models it, so synthesize the code.
+    error = AdCPError.synthesize(
+        "This operation requires admin privileges",
+        error_code="PERMISSION_DENIED",
+        recovery="correctable",
+        details={"suggestion": "Request admin privileges or contact an administrator to perform this action"},
     )
-    mock_adapter.validate_media_buy_request.side_effect = error
+    mock_adapter.update_media_buy.side_effect = error
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -224,9 +244,9 @@ def given_media_buy_flight_days(ctx: dict, days: int) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given("the request includes 1 package update without package_id or buyer_ref")
+@given("the request includes 1 package update without package_id")
 def given_package_update_no_id(ctx: dict) -> None:
-    """Add a package update with no package_id and no buyer_ref to trigger ext-h."""
+    """Add a package update with no package_id to trigger ext-h (missing identifier)."""
     kwargs = _ensure_update_defaults(ctx)
     kwargs["packages"] = [{"budget": 5000.0}]
 
@@ -364,7 +384,16 @@ def given_creative_format_incompatible(ctx: dict, creative_id: str) -> None:
 
 @given("the request includes 1 package update with inline creatives")
 def given_package_update_inline_creatives_bare(ctx: dict) -> None:
-    """Add a package update with inline creative content (ext-k scenario)."""
+    """Add a package update with a VALID inline creative (ext-k scenario).
+
+    Uses the canonical AssetSpec factory (``build_assets`` / ``image_spec``) so the
+    asset carries its ``asset_type`` discriminator and the request parses cleanly —
+    the scenario must reach the adapter creative-sync step (where the upload is
+    configured to fail), NOT be rejected at request-validation time for a malformed
+    asset map.
+    """
+    from tests.factories.creative_asset import build_assets, image_spec
+
     kwargs = _ensure_update_defaults(ctx)
     if not kwargs.get("packages"):
         kwargs["packages"] = [{"package_id": "pkg_001"}]
@@ -376,13 +405,7 @@ def given_package_update_inline_creatives_bare(ctx: dict) -> None:
                 "agent_url": "https://creative.adcontextprotocol.org",
                 "id": "display_300x250",
             },
-            "assets": {
-                "primary": {
-                    "url": "https://example.com/banner.png",
-                    "width": 300,
-                    "height": 250,
-                }
-            },
+            "assets": build_assets(image_spec("primary")),
         }
     ]
 
@@ -419,19 +442,80 @@ def _get_product(ctx: dict) -> Any:
     return product
 
 
+def _ensure_referenced_creatives_valid(ctx: dict) -> None:
+    """Create valid (approved, format-compatible) creatives for any referenced_creative_ids
+    not already in the DB.
+
+    Placement scenarios reference a creative (e.g. cr_001) but the generated feature
+    does not include a creative-setup Given. Creative validation now runs before
+    placement validation in the creative_assignments handler (CREATIVE_REJECTED), so
+    without a valid creative the placement check is never reached. This seeds the
+    referenced creatives with a format matching the package product so the scenario
+    exercises placement validation as intended.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import Creative as CreativeModel
+    from tests.factories.creative import CreativeFactory
+
+    creative_ids = ctx.get("referenced_creative_ids") or []
+    if not creative_ids:
+        return
+    product = _get_product(ctx)
+    fmt = "display_300x250"
+    if product is not None and product.format_ids:
+        first = product.format_ids[0]
+        fmt = (first.get("id") or first.get("format_id") or fmt) if isinstance(first, dict) else fmt
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
+    with db_session(ctx) as session:
+        existing = {
+            c.creative_id
+            for c in session.scalars(
+                select(CreativeModel)
+                .filter_by(tenant_id=tenant.tenant_id)
+                .where(CreativeModel.creative_id.in_(creative_ids))
+            ).all()
+        }
+    for cid in creative_ids:
+        if cid in existing:
+            continue
+        CreativeFactory(
+            creative_id=cid,
+            tenant=tenant,
+            principal=principal,
+            format=fmt,
+            approved=True,
+            status="approved",
+            data={"assets": {"primary": {"url": "https://example.com/banner.png", "width": 300, "height": 250}}},
+        )
+    ctx["env"]._commit_factory_data()
+
+
 @given(parsers.parse('placement "{placement_id}" is not valid for the package product'))
 def given_placement_invalid_for_product(ctx: dict, placement_id: str) -> None:
     """Declare that the placement_id is NOT valid for the product.
 
-    The product setup by the harness has placements plc_a and plc_b.
-    Any other placement_id is invalid. This step verifies the placement
-    is indeed not in the valid set.
+    Ensures the product defines placements plc_a and plc_b; any other
+    placement_id is invalid. This step verifies the placement is indeed
+    not in the valid set.
     """
     product = _get_product(ctx)
     assert product is not None, "No product in ctx or DB"
-    # Verify the placement is genuinely not in the product's valid placements
-    placements = getattr(product, "placement_configs", None) or []
-    valid_ids = {p.get("placement_id") if isinstance(p, dict) else getattr(p, "placement_id", None) for p in placements}
+    # Ensure the product supports placement targeting with a known valid set, so the
+    # requested placement_id exercises production's invalid-id branch
+    # (media_buy_update.py:944) rather than the no-placements branch (:958). The model
+    # column is `placements` (list of dicts with placement_id), not `placement_configs`.
+    if not product.placements:
+        product.placements = [
+            {"placement_id": "plc_a", "name": "Placement A"},
+            {"placement_id": "plc_b", "name": "Placement B"},
+        ]
+        ctx["env"]._commit_factory_data()
+        product = _get_product(ctx)
+    # Seed valid creatives so creative validation passes and placement validation is reached.
+    _ensure_referenced_creatives_valid(ctx)
+    valid_ids = {p.get("placement_id") for p in (product.placements or []) if isinstance(p, dict)}
     assert placement_id not in valid_ids, (
         f"Placement '{placement_id}' IS valid for product — step claims it should not be. Valid: {valid_ids}"
     )
@@ -446,19 +530,19 @@ def given_product_no_placement_targeting(ctx: dict) -> None:
     """
     product = _get_product(ctx)
     assert product is not None, "No product in ctx or DB"
-    # Assert product has the placement_configs attribute — if absent, the step
-    # cannot guarantee the product is configured as "no placement targeting".
-    assert hasattr(product, "placement_configs"), (
-        f"Product {type(product).__name__} has no 'placement_configs' attribute — "
-        "cannot clear placements to disable placement-level targeting"
-    )
-    product.placement_configs = []
+    # The model column is `placements`; clearing it (None) means the product defines no
+    # placements, so production treats placement-level targeting as unsupported
+    # (media_buy_update.py:958 -> UNSUPPORTED_FEATURE).
+    product.placements = None
     env = ctx["env"]
     env._commit_factory_data()
+    # Seed valid creatives so creative validation passes and the unsupported-placement
+    # check is reached.
+    _ensure_referenced_creatives_valid(ctx)
     # Post-condition: verify placements were actually cleared
     reloaded = _get_product(ctx)
-    cleared = getattr(reloaded, "placement_configs", None) or []
-    assert len(cleared) == 0, f"placement_configs not cleared after commit — still has {len(cleared)} entries"
+    cleared = reloaded.placements or []
+    assert len(cleared) == 0, f"placements not cleared after commit — still has {len(cleared)} entries"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -468,20 +552,20 @@ def given_product_no_placement_targeting(ctx: dict) -> None:
 
 @given("the Buyer does not have admin privileges")
 def given_buyer_no_admin(ctx: dict) -> None:
-    """Mark the buyer as non-admin and set role on the principal object."""
-    ctx["buyer_is_admin"] = False
-    principal = ctx.get("principal")
-    # Principal may not exist yet if this step runs before env setup —
-    # that's OK because the scenario's When step creates the identity.
-    # But if a principal IS present, it must have the role attribute set.
-    if principal is not None:
-        assert hasattr(principal, "role"), (
-            f"Principal {type(principal).__name__} has no 'role' attribute — cannot mark buyer as non-admin"
-        )
-        principal.role = "buyer"
-        assert principal.role == "buyer", f"Failed to set principal.role to 'buyer', got {principal.role!r}"
+    """Mark the buyer as non-admin.
 
-    # If update already requires admin, inject the privilege error now
+    The AdCP buyer protocol has NO principal-role concept: the ``Principal``
+    ORM model (src/core/database/models.py:536) carries no ``role`` column —
+    roles (admin/manager/viewer) belong to the admin-UI ``User`` model. The
+    storyboard BR-UC-003-ext-n places the admin gate at the ADAPTER (e.g.
+    activating guaranteed items in GAM requires an admin account), not on the
+    buyer principal. So "non-admin buyer" is recorded as scenario intent in ctx
+    and enforced via the adapter rejection (``_inject_privilege_error``), not by
+    mutating a non-existent ``principal.role`` attribute.
+    """
+    ctx["buyer_is_admin"] = False
+
+    # If update already requires admin, arm the adapter privilege error now
     if ctx.get("update_requires_admin"):
         _inject_privilege_error(ctx)
 
@@ -504,12 +588,101 @@ def given_update_requires_admin(ctx: dict) -> None:
     # This catches the case where step ordering left the env unconfigured.
     if ctx.get("update_requires_admin") and not ctx.get("buyer_is_admin", True):
         env = ctx["env"]
-        mock_adapter = env.mock["adapter"].return_value
-        assert mock_adapter.validate_media_buy_request.side_effect is not None, (
+        mock_adapter = env.mock["update_adapter"].return_value
+        assert mock_adapter.update_media_buy.side_effect is not None, (
             "Both 'update_requires_admin' and 'buyer_is_admin=False' are set, "
-            "but validate_media_buy_request.side_effect was not injected — "
+            "but update_adapter.update_media_buy.side_effect was not injected — "
             "the privilege error will not fire during the When step"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GIVEN steps — mid-flight package addition (ext-u) + cancellation (ext-v)
+#   #1417. Both are production gaps: update_media_buy never reads
+#   new_packages or canceled, and has_updatable_fields() (schemas/_base.py)
+#   omits both — so a request carrying only media_buy_id + one of them trips the
+#   empty-update VALIDATION_ERROR path instead of UNSUPPORTED_FEATURE /
+#   NOT_CANCELLABLE. These steps build the real request and dispatch it on the
+#   wire; the strict xfail markers in conftest flip to passes when production
+#   implements the mid-flight capability gate and state-based cancellation.
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse('the media buy "{mb_label}" is in "{status}" status'))
+def given_named_media_buy_status(ctx: dict, mb_label: str, status: str) -> None:
+    """Set the existing media buy (referenced by Gherkin label) to a status.
+
+    Alias of the unquoted-label status step for scenarios that name the media
+    buy explicitly (e.g. ext-v 'the media buy "mb_existing" is in "active"
+    status'). The conftest Background already created the existing media buy;
+    we mutate its status precondition.
+    """
+    mb = ctx.get("existing_media_buy")
+    assert mb is not None, (
+        f"No existing_media_buy in ctx — step names '{mb_label}' in '{status}' status "
+        "but no media buy exists to set status on"
+    )
+    mb.status = status
+    ctx["env"]._commit_factory_data()
+
+
+@given("the request includes new_packages with one complete package-request")
+def given_request_new_packages_one(ctx: dict) -> None:
+    """Add one complete package-request to the update's new_packages list.
+
+    new_packages IS a valid UpdateMediaBuyRequest field, but production never
+    reads it and has_updatable_fields() omits it (production gap, ext-u).
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    product = ctx.get("default_product")
+    product_id = product.product_id if product else "guaranteed_display"
+    kwargs["new_packages"] = [
+        {
+            "product_id": product_id,
+            "budget": 5000.0,
+            "pricing_option_id": "cpm_usd_fixed",
+        }
+    ]
+
+
+@given(parsers.parse('the media buy\'s valid_actions does NOT advertise "{action}"'))
+def given_valid_actions_excludes(ctx: dict, action: str) -> None:
+    """Record that the media buy's valid_actions does NOT advertise an action.
+
+    BR-RULE-217 INV-1: new_packages on a seller not advertising add_packages
+    must be rejected with UNSUPPORTED_FEATURE. Production has no such capability
+    gate (it never reads new_packages), so this precondition is recorded for the
+    wire-ready strict xfail. We assert the precondition is meaningful: the action
+    must be a real valid-action name the gate would consult.
+    """
+    assert action, "valid_actions exclusion step requires a non-empty action name"
+    ctx.setdefault("excluded_valid_actions", set()).add(action)
+
+
+@given("the media buy has committed delivery that the seller cannot cancel mid-flight")
+def given_media_buy_uncancellable(ctx: dict) -> None:
+    """Mark the active media buy as carrying committed delivery + request cancel.
+
+    BR-RULE-216 INV-4: a buy not cancellable in its current state must reject a
+    cancel with NOT_CANCELLABLE. Production never reads canceled and has no
+    state-based cancellation check (gap, ext-v). We arm the update adapter to
+    refuse the cancel (the seller-side gate) and set canceled=true so the real
+    cancellation path is exercised on the wire.
+    """
+    from src.core.exceptions import AdCPError
+
+    kwargs = _ensure_update_defaults(ctx)
+    kwargs["canceled"] = True
+    ctx["uncancellable"] = True
+    # Arm the seller-side refusal at the update adapter with the canonical code.
+    env = ctx["env"]
+    mock_adapter = env.mock["update_adapter"].return_value
+    mock_adapter.update_media_buy.side_effect = AdCPError.synthesize(
+        "Media buy cannot be canceled in its current state with committed delivery",
+        error_code="NOT_CANCELLABLE",
+        recovery="correctable",
+        details={"suggestion": "Pause the buy instead (paused: true) or contact the seller to arrange cancellation"},
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -699,15 +872,50 @@ def then_no_db_records_modified(ctx: dict) -> None:
                 )
 
 
+@given(parsers.parse("the seller's minimum budget for this media buy is {amount:d} {currency}"))
+def given_seller_minimum_budget(ctx: dict, amount: int, currency: str) -> None:
+    """Configure the seller's minimum budget for the media buy under update.
+
+    SPEC-PRODUCTION GAP: Production does not carry per-media-buy minimum
+    budget metadata on the seller side. The v3.1 spec expects BUDGET_TOO_LOW
+    errors to include structured details (minimum_budget, currency), but
+    production validation uses CurrencyLimit.min_package_budget which does
+    not populate error details with those fields.
+
+    This step stores the expected values in ctx so downstream Then steps
+    can assert on error details shape when the gap is closed.
+
+    FIXME(salesagent-9vgz.1): Wire seller minimum budget to production
+    validation and error details.
+    """
+    import pytest
+
+    ctx["expected_min_budget"] = amount
+    ctx["expected_min_budget_currency"] = currency
+    pytest.xfail(
+        f"SPEC-PRODUCTION GAP: Seller minimum budget ({amount} {currency}) "
+        "not carried in production. v3.1 BUDGET_TOO_LOW error details "
+        "(minimum_budget, currency) not populated. FIXME(salesagent-9vgz.1)"
+    )
+
+
 @then(parsers.parse('the suggestion should contain "{text1}" or "{text2}"'))
 def then_suggestion_contains_either(ctx: dict, text1: str, text2: str) -> None:
-    """Assert error suggestion contains either text1 or text2 (case-insensitive)."""
-    from tests.bdd.steps.generic.then_error import _get_error_dict
+    """Assert error suggestion contains either text1 or text2 (case-insensitive).
 
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    d = _get_error_dict(error)
-    suggestion = (d.get("suggestion") or "").lower()
+    Wire-first (ztl6.6/ztl6.8): read the buyer-facing suggestion from the real
+    wire envelope when the scenario dispatched through a transport, falling back
+    to the reconstructed ``ctx['error']`` only for IMPL/no-wire — matching its
+    wire-first sibling ``then_suggestion_contains``.
+    """
+    from tests.bdd.steps.generic.then_error import _get_error_dict, _wire_suggestion
+
+    suggestion = _wire_suggestion(ctx)
+    if suggestion is None:
+        error = ctx.get("error")
+        assert error is not None, "No error recorded in ctx"
+        suggestion = _get_error_dict(error).get("suggestion") or ""
+    suggestion = suggestion.lower()
     assert text1.lower() in suggestion or text2.lower() in suggestion, (
-        f"Expected suggestion to contain '{text1}' or '{text2}', got: {d.get('suggestion')}"
+        f"Expected suggestion to contain '{text1}' or '{text2}', got: {suggestion}"
     )

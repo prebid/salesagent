@@ -133,8 +133,7 @@ _KNOWN_BAD_SNIPPETS = {
         "CreateMediaBuyResult(response=CreateMediaBuySuccess.sync_success(media_buy_id='x'), status='submitted')"
     ),
     "success-under-submitted-enum-value": (
-        "CreateMediaBuyResult(response=CreateMediaBuySuccess(media_buy_id='x'), "
-        "status=AdcpTaskStatus.submitted.value)"
+        "CreateMediaBuyResult(response=CreateMediaBuySuccess(media_buy_id='x'), status=AdcpTaskStatus.submitted.value)"
     ),
     "success-under-submitted-bare-enum": (
         "CreateMediaBuyResult(response=CreateMediaBuySuccess(media_buy_id='x'), status=AdcpTaskStatus.submitted)"

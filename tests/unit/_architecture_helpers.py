@@ -219,7 +219,8 @@ def iter_workflow_files(repo: Path) -> Iterator[Path]:
 
 # Dirs the filesystem fallback prunes — VCS internals plus build/cache artifacts
 # that ``git ls-files`` never reports. In a clean checkout this mirrors the ignored
-# set closely enough that the fallback matches the tracked set.
+# set closely enough that the fallback matches the tracked set. ``.github`` is
+# intentionally NOT excluded: the version-anchor guards scan ``.github/workflows/``.
 _FALLBACK_PRUNE_DIRS = frozenset(
     {
         ".claude",
@@ -236,6 +237,10 @@ _FALLBACK_PRUNE_DIRS = frozenset(
         "test-results",
         ".agent-index",
         ".beads",
+        "audit_logs",
+        "logs",
+        ".cache",
+        ".eggs",
         "build",
         "dist",
         ".idea",
@@ -249,12 +254,14 @@ def iter_git_tracked_files(repo: Path) -> Iterator[Path]:
 
     Falls back to a filesystem walk when ``git ls-files`` cannot run — notably when a
     git worktree is bind-mounted into a container at a path that breaks the worktree's
-    absolute ``.git`` back-references (``run_all_tests.sh`` mounts ``.:/app``, so
-    ``/app/.git`` is a pointer to an unreachable host gitdir). The source files are all
-    present in the bind mount; only git's metadata is unreachable. The fallback prunes
-    the usual VCS/build/cache dirs so, in a clean checkout, it matches the tracked set.
-    On any host with a working git the fallback never triggers — hermetic behavior there
-    is unchanged.
+    absolute ``.git`` back-references (``run_all_tests.sh`` mounts ``.:/app``; in a
+    worktree ``/app/.git`` is a pointer FILE to a gitdir outside the mount, so git
+    errors with "not a git repository"). The source files are all present in the bind
+    mount; only git's metadata is unreachable. Without the fallback every git-dependent
+    architecture guard hard-errors in that runner (and is silently never exercised
+    there). The fallback prunes the usual VCS/build/cache dirs so, in a clean checkout,
+    it matches the tracked set. On any host with a working git the fallback never
+    triggers — hermetic behavior there is unchanged.
     """
     try:
         output = subprocess.check_output(["git", "ls-files"], cwd=repo, text=True, stderr=subprocess.DEVNULL)
@@ -282,8 +289,13 @@ def _iter_files_fallback(repo: Path) -> Iterator[Path]:
     """Deterministic filesystem walk mirroring git-tracked enumeration when git is unavailable."""
     for dirpath, dirnames, filenames in os.walk(repo):
         dirnames[:] = sorted(d for d in dirnames if d not in _FALLBACK_PRUNE_DIRS)
+        base = Path(dirpath)
         for name in sorted(filenames):
-            path = Path(dirpath) / name
+            # In a worktree ``.git`` is a pointer FILE (not a dir), so the dir
+            # filter above misses it; skip it (and any prune-named file) here.
+            if name in _FALLBACK_PRUNE_DIRS:
+                continue
+            path = base / name
             if path.is_file():
                 yield path
 

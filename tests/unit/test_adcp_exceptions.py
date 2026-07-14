@@ -44,7 +44,7 @@ class TestExceptionHierarchy:
         exc = AdCPAuthenticationError("bad token")
         assert isinstance(exc, AdCPError)
         assert exc.status_code == 401
-        assert exc.error_code == "AUTH_TOKEN_INVALID"
+        assert exc.error_code == "AUTH_REQUIRED"
 
     def test_authorization_error(self):
         """AdCPAuthorizationError must have status_code=403."""
@@ -216,20 +216,6 @@ class TestRecoveryClassification:
         exc = AdCPValidationError("invalid field")
         assert exc.recovery == "correctable"
 
-    def test_authentication_error_defaults_to_terminal(self):
-        """AdCPAuthenticationError defaults to recovery='terminal'."""
-        from src.core.exceptions import AdCPAuthenticationError
-
-        exc = AdCPAuthenticationError("bad token")
-        assert exc.recovery == "terminal"
-
-    def test_authorization_error_defaults_to_terminal(self):
-        """AdCPAuthorizationError defaults to recovery='terminal'."""
-        from src.core.exceptions import AdCPAuthorizationError
-
-        exc = AdCPAuthorizationError("forbidden")
-        assert exc.recovery == "terminal"
-
     def test_not_found_error_defaults_to_terminal(self):
         """AdCPNotFoundError (the *base*) defaults to recovery='terminal'.
 
@@ -284,12 +270,12 @@ class TestRecoveryClassification:
         exc = AdCPAdapterError("GAM unavailable")
         assert exc.recovery == "transient"
 
-    def test_conflict_error_defaults_to_correctable(self):
-        """AdCPConflictError defaults to recovery='correctable'."""
+    def test_conflict_error_defaults_to_transient(self):
+        """AdCPConflictError defaults to recovery='transient' (CONFLICT per the pinned enum, #1417)."""
         from src.core.exceptions import AdCPConflictError
 
         exc = AdCPConflictError("duplicate idempotency key")
-        assert exc.recovery == "correctable"
+        assert exc.recovery == "transient"
 
     def test_idempotency_conflict_defaults_to_correctable(self):
         """AdCPIdempotencyConflictError is recovery='correctable'.
@@ -327,16 +313,18 @@ class TestRecoveryClassification:
         exc = AdCPAccountPaymentRequiredError("invoice overdue")
         assert exc.recovery == "terminal"
 
-    def test_budget_exhausted_error_defaults_to_correctable(self):
-        """AdCPBudgetExhaustedError defaults to recovery='correctable'.
+    def test_budget_exhausted_error_defaults_to_terminal(self):
+        """AdCPBudgetExhaustedError defaults to recovery='terminal'.
 
-        Buyer can fix by increasing budget or adjusting spend caps.
+        BUDGET_EXHAUSTED is terminal per the pinned error-code.json enumMetadata
+        (#1417): an exhausted budget cannot be recovered autonomously —
+        an operator must add budget — so the buyer agent must not retry.
         Covers: salesagent-u60m (PR #1083 review)
         """
         from src.core.exceptions import AdCPBudgetExhaustedError
 
         exc = AdCPBudgetExhaustedError("budget limit reached")
-        assert exc.recovery == "correctable"
+        assert exc.recovery == "terminal"
 
     def test_service_unavailable_error_defaults_to_transient(self):
         """AdCPServiceUnavailableError defaults to recovery='transient'."""
@@ -499,16 +487,6 @@ class TestFastAPIExceptionHandlers:
             response.json(), "VALIDATION_ERROR", recovery="correctable", message_substr="test validation error"
         )
 
-    def test_authentication_error_returns_401(self, exc_handler_test_app):
-        """AdCPAuthenticationError raised in a route must return 401."""
-        client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
-        response = client.get("/test-exc/auth")
-        assert response.status_code == 401
-        # AdCPAuthenticationError.error_code = "AUTH_TOKEN_INVALID" (spec STANDARD code,
-        # passthrough — not in ERROR_CODE_MAPPING). Wire emits AUTH_TOKEN_INVALID, not
-        # AUTH_REQUIRED (which is for AdCPAuthorizationError).
-        assert_envelope_shape(response.json(), "AUTH_TOKEN_INVALID", recovery="terminal")
-
     def test_not_found_error_returns_404(self, exc_handler_test_app):
         """AdCPNotFoundError raised in a route must return 404 with INVALID_REQUEST wire code.
 
@@ -580,7 +558,8 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/conflict")
         assert response.status_code == 409
-        assert_envelope_shape(response.json(), "CONFLICT", recovery="correctable")
+        # CONFLICT recovery is transient per the pinned enum (#1417).
+        assert_envelope_shape(response.json(), "CONFLICT", recovery="transient")
 
     def test_gone_error_returns_410(self, exc_handler_test_app):
         """AdCPGoneError raised in a route must return 410."""
@@ -594,7 +573,8 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/budget")
         assert response.status_code == 422
-        assert_envelope_shape(response.json(), "BUDGET_EXHAUSTED", recovery="correctable")
+        # BUDGET_EXHAUSTED recovery is terminal per the pinned enum (#1417).
+        assert_envelope_shape(response.json(), "BUDGET_EXHAUSTED", recovery="terminal")
 
     def test_service_unavailable_error_returns_503(self, exc_handler_test_app):
         """AdCPServiceUnavailableError raised in a route must return 503."""
@@ -675,8 +655,8 @@ class TestErrorCodeWireTranslation:
     def test_translate_mapped_code(self):
         from src.core.exceptions import translate_error_code
 
-        # AUTH_TOKEN_INVALID passes through (spec error code for auth)
-        assert translate_error_code("AUTH_TOKEN_INVALID") == "AUTH_TOKEN_INVALID"
+        # AUTH_REQUIRED passes through (spec error code for auth)
+        assert translate_error_code("AUTH_REQUIRED") == "AUTH_REQUIRED"
         # BUDGET_CEILING_EXCEEDED is mapped to BUDGET_EXCEEDED
         assert translate_error_code("BUDGET_CEILING_EXCEEDED") == "BUDGET_EXCEEDED"
         # RATE_LIMIT_EXCEEDED is mapped to RATE_LIMITED

@@ -1,6 +1,7 @@
 """Factory_boy factories for core tenant-related models.
 
 Factories: TenantFactory, CurrencyLimitFactory, PropertyTagFactory, PublisherPartnerFactory
+Helpers: set_adapter_test_behavior (persist adapter test-behavior to AdapterConfig)
 """
 
 from __future__ import annotations
@@ -195,5 +196,10 @@ def set_adapter_test_behavior(env: Any, tenant_id: str, **behavior: Any) -> Adap
     test_behavior.update(behavior)
     config["test_behavior"] = test_behavior
     row.config_json = config
+    if "manual_approval_required" in behavior:
+        # Mirror to the typed column — adapter_helpers reads
+        # AdapterConfig.mock_manual_approval_required when constructing the
+        # real mock adapter from config (the E2E manual-approval read path).
+        row.mock_manual_approval_required = bool(behavior["manual_approval_required"])
     env._commit_factory_data()
     return row

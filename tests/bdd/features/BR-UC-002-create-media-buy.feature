@@ -36,7 +36,6 @@ Feature: BR-UC-002 Create Media Buy
     Given the tenant is configured for auto-approval
     And a valid create_media_buy request with:
     | field          | value                        |
-    | buyer_ref      | campaign-2026-q1             |
     | account        | account_id "acc-001"         |
     | brand          | domain "acme.com"            |
     | start_time     | 2026-04-01T00:00:00Z         |
@@ -51,11 +50,10 @@ Feature: BR-UC-002 Create Media Buy
     Then the response should succeed
     And the response status should be "completed"
     And the response should include a "media_buy_id"
-    And the response should include "buyer_ref" matching "campaign-2026-q1"
     And the response should include packages with allocations
     And each package should include product_id, budget, and pricing details
     # POST-S1: Buyer knows their media buy has been created and is activating
-    # POST-S2: Buyer can track the media buy via media_buy_id and buyer_ref
+    # POST-S2: Buyer can track the media buy via media_buy_id
     # POST-S3: Buyer knows each package's allocation, product, and pricing
     # POST-S4: Buyer's advertising campaign is live (or activating) on the ad server
     # POST-S5: Buyer receives an unambiguous success confirmation
@@ -126,7 +124,6 @@ Feature: BR-UC-002 Create Media Buy
     | field          | value                        |
     | proposal_id    | prop-2026-001                |
     | total_budget   | amount 5000, currency "USD"  |
-    | buyer_ref      | campaign-2026-q1             |
     | account        | account_id "acc-001"         |
     | brand          | domain "acme.com"            |
     | start_time     | 2026-04-01T00:00:00Z         |
@@ -139,7 +136,7 @@ Feature: BR-UC-002 Create Media Buy
     And the total_budget should be distributed per allocation percentages
     And the response should include the created media buy with derived packages
     # POST-S1: Buyer knows their media buy has been created and is activating
-    # POST-S2: Buyer can track the media buy via media_buy_id and buyer_ref
+    # POST-S2: Buyer can track the media buy via media_buy_id
     # POST-S3: Buyer knows each package's allocation, product, and pricing
     # POST-S11: Buyer knows the proposal was successfully executed with their total budget
 
@@ -405,7 +402,7 @@ Feature: BR-UC-002 Create Media Buy
     But a package references pricing_option_id "po-nonexistent" not found on the product
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error code should be "PRICING_ERROR"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
@@ -418,7 +415,7 @@ Feature: BR-UC-002 Create Media Buy
     And a package selects an auction pricing option but provides no bid_price
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error code should be "PRICING_ERROR"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
 
   @T-UC-002-ext-n-floor @extension @ext-n @error
@@ -428,7 +425,7 @@ Feature: BR-UC-002 Create Media Buy
     And a package has bid_price 0.50 but floor_price is 1.00
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error code should be "PRICING_ERROR"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     # --- ext-o: Creative Not Found in Library ---
 
@@ -439,7 +436,7 @@ Feature: BR-UC-002 Create Media Buy
     But a package creative_assignment references creative_id "cr-nonexistent"
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error code should be "CREATIVES_NOT_FOUND"
+    And the error code should be "CREATIVE_REJECTED"
     And the error message should contain "cr-nonexistent"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
@@ -454,7 +451,7 @@ Feature: BR-UC-002 Create Media Buy
     But a creative's format_id does not match any of the product's supported format_ids
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error code should be "CREATIVE_FORMAT_MISMATCH"
+    And the error code should be "CREATIVE_REJECTED"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
@@ -468,7 +465,7 @@ Feature: BR-UC-002 Create Media Buy
     But the ad server rejects the creative upload
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error code should be "CREATIVE_UPLOAD_FAILED"
+    And the error code should be "SERVICE_UNAVAILABLE"
     And the error should include "suggestion" field
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
@@ -1163,11 +1160,13 @@ Feature: BR-UC-002 Create Media Buy
       | explicit_account_id          | account resolution succeeds           |
       | natural_key_unambiguous      | account resolution succeeds           |
       | natural_key_sandbox          | account resolution succeeds           |
+      # account is OPTIONAL on CreateMediaBuyRequest (account-management mid-spec):
+      # an omitted account field is accepted and the buy is created.
+      | missing_account              | account resolution succeeds           |
 
     Examples: Invalid partitions
       | partition                    | outcome                                         |
-      | missing_account              | error INVALID_REQUEST with suggestion             |
-      | invalid_oneOf_both           | error INVALID_REQUEST with suggestion             |
+      | invalid_oneOf_both           | error VALIDATION_ERROR                             |
       | explicit_not_found           | error ACCOUNT_NOT_FOUND terminal                  |
       | natural_key_not_found        | error ACCOUNT_NOT_FOUND terminal                  |
       | natural_key_ambiguous        | error ACCOUNT_AMBIGUOUS correctable               |
@@ -1626,8 +1625,8 @@ Feature: BR-UC-002 Create Media Buy
       | account resolved + setup incomplete                  | acc setup-needed         | error ACCOUNT_SETUP_REQUIRED correctable          |
       | account resolved + payment due                       | acc payment-due          | error ACCOUNT_PAYMENT_REQUIRED terminal           |
       | account resolved + suspended                         | acc suspended            | error ACCOUNT_SUSPENDED terminal                 |
-      | account field absent                                 | no account               | error INVALID_REQUEST with suggestion             |
-      | both account_id and brand/operator present           | both fields              | error INVALID_REQUEST with suggestion             |
+      | account field absent                                 | no account               | account resolution succeeds                      |
+      | both account_id and brand/operator present           | both fields              | error VALIDATION_ERROR                            |
       | brand + operator + sandbox:true present + sandbox account exists + active | brand+op+sandbox active | account resolution succeeds                      |
 
   @T-UC-002-boundary-optimization-goals @boundary @optimization-goals
@@ -2686,11 +2685,11 @@ Feature: BR-UC-002 Create Media Buy
     And one of the following two outcomes should be observed:
     | outcome              | required behavior                                                                       |
     | zero_forecast_accept | buy accepted with packages reporting zero deliverable inventory and a mismatch message  |
-    | informative_error    | error code "INSUFFICIENT_INVENTORY" or "INVALID_TARGETING" with findings identifying lists |
+    | informative_error    | error code "PRODUCT_UNAVAILABLE" or "INVALID_REQUEST" with findings identifying lists |
     # inventory_list_no_match storyboard: the buyer references a PropertyListReference
     # and CollectionListReference that resolve to nothing in the seller's catalog.
     # The seller MUST either (a) accept the buy with zero-forecast reporting OR
-    # (b) reject with INSUFFICIENT_INVENTORY/INVALID_TARGETING carrying findings
+    # (b) reject with PRODUCT_UNAVAILABLE/INVALID_REQUEST carrying findings
     # identifying which list matched nothing. Silently-successful buys with normal
     # forecast numbers, crashes, or non-AdCP error shapes are compliance failures.
     # inventory_list_no_match: empty intersection MUST be surfaced truthfully

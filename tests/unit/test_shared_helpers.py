@@ -259,20 +259,16 @@ class TestBuildAgentConfig:
 
 def _make_media_package(
     package_id: str = "pkg-1",
-    buyer_ref: str | None = "buyer-ref-1",
 ) -> MagicMock:
     """Create a minimal MediaPackage-like object for testing response builders."""
     pkg = MagicMock()
     pkg.package_id = package_id
-    pkg.buyer_ref = buyer_ref
     return pkg
 
 
-def _make_create_request(buyer_ref: str | None = "order-ref-1") -> MagicMock:
+def _make_create_request() -> MagicMock:
     """Create a minimal CreateMediaBuyRequest-like object."""
-    req = MagicMock()
-    req.buyer_ref = buyer_ref
-    return req
+    return MagicMock()
 
 
 def _make_adapter_instance() -> Any:
@@ -327,14 +323,6 @@ class TestBuildPackageResponses:
         result = adapter._build_package_responses(packages, paused=True)
 
         assert result[0].paused is True
-
-    def test_none_buyer_ref_package_still_valid(self):
-        """Package without buyer_ref is still valid (buyer_ref removed in adcp 3.12)."""
-        adapter = _make_adapter_instance()
-        packages = [_make_media_package(buyer_ref=None)]
-        result = adapter._build_package_responses(packages)
-
-        assert result[0].package_id == "pkg-1"
 
     def test_empty_packages_list(self):
         """Empty packages list produces empty result."""

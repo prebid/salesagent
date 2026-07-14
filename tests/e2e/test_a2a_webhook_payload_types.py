@@ -185,62 +185,51 @@ def webhook_capture_server():
         yield info
 
 
+def _set_mock_manual_approval(live_server, required: bool) -> None:
+    """Upsert the ci-test tenant's mock-adapter manual-approval flag.
+
+    adapter_config is SHARED tenant state on the live stack. Any test that
+    enables manual approval MUST restore auto-approval in a ``finally`` —
+    leaking it turns every later e2e create on ci-test into a spec-3.1.1
+    submitted envelope with no media_buy_id (see PR #1567 full-suite failure).
+    """
+    try:
+        conn = psycopg2.connect(live_server["postgres"])
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT tenant_id FROM tenants WHERE subdomain = 'ci-test'")
+        tenant_row = cursor.fetchone()
+        if tenant_row:
+            tenant_id = tenant_row[0]
+            cursor.execute(
+                """
+                INSERT INTO adapter_config (tenant_id, adapter_type, mock_manual_approval_required)
+                VALUES (%s, 'mock', %s)
+                ON CONFLICT (tenant_id)
+                DO UPDATE SET mock_manual_approval_required = EXCLUDED.mock_manual_approval_required,
+                              adapter_type = 'mock'
+                """,
+                (tenant_id, required),
+            )
+            conn.commit()
+            print(f"Updated adapter config for tenant {tenant_id}: manual_approval_required={required}")
+
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"Failed to update adapter config: {e}")
+
+
 class TestA2AWebhookPayloadTypes:
     """Test A2A webhook payload type compliance with AdCP spec."""
 
     def setup_auto_approval(self, live_server):
         """Configure adapter for auto-approval to get completed webhooks."""
-        try:
-            conn = psycopg2.connect(live_server["postgres"])
-            cursor = conn.cursor()
-
-            cursor.execute("SELECT tenant_id FROM tenants WHERE subdomain = 'ci-test'")
-            tenant_row = cursor.fetchone()
-            if tenant_row:
-                tenant_id = tenant_row[0]
-                cursor.execute(
-                    """
-                    INSERT INTO adapter_config (tenant_id, adapter_type, mock_manual_approval_required)
-                    VALUES (%s, 'mock', false)
-                    ON CONFLICT (tenant_id)
-                    DO UPDATE SET mock_manual_approval_required = false, adapter_type = 'mock'
-                    """,
-                    (tenant_id,),
-                )
-                conn.commit()
-                print(f"Updated adapter config for tenant {tenant_id}: auto-approval enabled")
-
-            cursor.close()
-            conn.close()
-        except Exception as e:
-            print(f"Failed to update adapter config: {e}")
+        _set_mock_manual_approval(live_server, required=False)
 
     def setup_manual_approval(self, live_server):
         """Configure adapter for manual approval to get submitted webhooks."""
-        try:
-            conn = psycopg2.connect(live_server["postgres"])
-            cursor = conn.cursor()
-
-            cursor.execute("SELECT tenant_id FROM tenants WHERE subdomain = 'ci-test'")
-            tenant_row = cursor.fetchone()
-            if tenant_row:
-                tenant_id = tenant_row[0]
-                cursor.execute(
-                    """
-                    INSERT INTO adapter_config (tenant_id, adapter_type, mock_manual_approval_required)
-                    VALUES (%s, 'mock', true)
-                    ON CONFLICT (tenant_id)
-                    DO UPDATE SET mock_manual_approval_required = true, adapter_type = 'mock'
-                    """,
-                    (tenant_id,),
-                )
-                conn.commit()
-                print(f"Updated adapter config for tenant {tenant_id}: manual approval required")
-
-            cursor.close()
-            conn.close()
-        except Exception as e:
-            print(f"Failed to update adapter config: {e}")
+        _set_mock_manual_approval(live_server, required=True)
 
     @pytest.mark.asyncio
     async def test_completed_status_sends_task_payload(
@@ -607,29 +596,7 @@ class TestWebhookPayloadStructure:
 
     def setup_auto_approval(self, live_server):
         """Configure adapter for auto-approval."""
-        try:
-            conn = psycopg2.connect(live_server["postgres"])
-            cursor = conn.cursor()
-
-            cursor.execute("SELECT tenant_id FROM tenants WHERE subdomain = 'ci-test'")
-            tenant_row = cursor.fetchone()
-            if tenant_row:
-                tenant_id = tenant_row[0]
-                cursor.execute(
-                    """
-                    INSERT INTO adapter_config (tenant_id, adapter_type, mock_manual_approval_required)
-                    VALUES (%s, 'mock', false)
-                    ON CONFLICT (tenant_id)
-                    DO UPDATE SET mock_manual_approval_required = false, adapter_type = 'mock'
-                    """,
-                    (tenant_id,),
-                )
-                conn.commit()
-
-            cursor.close()
-            conn.close()
-        except Exception as e:
-            print(f"Failed to update adapter config: {e}")
+        _set_mock_manual_approval(live_server, required=False)
 
     @pytest.mark.asyncio
     async def test_task_payload_has_required_fields(
@@ -730,104 +697,89 @@ class TestWebhookPayloadStructure:
         webhook_capture_server,
     ):
         """Test that TaskStatusUpdateEvent payload has all required A2A fields."""
-        # Enable manual approval to get submitted status
+        # Enable manual approval to get submitted status. adapter_config is
+        # SHARED ci-test tenant state — restored in the finally below so later
+        # e2e creates don't silently route to the manual-approval submitted path.
+        _set_mock_manual_approval(live_server, required=True)
         try:
-            conn = psycopg2.connect(live_server["postgres"])
-            cursor = conn.cursor()
-            cursor.execute("SELECT tenant_id FROM tenants WHERE subdomain = 'ci-test'")
-            tenant_row = cursor.fetchone()
-            if tenant_row:
-                tenant_id = tenant_row[0]
-                cursor.execute(
-                    """
-                    INSERT INTO adapter_config (tenant_id, adapter_type, mock_manual_approval_required)
-                    VALUES (%s, 'mock', true)
-                    ON CONFLICT (tenant_id)
-                    DO UPDATE SET mock_manual_approval_required = true, adapter_type = 'mock'
-                    """,
-                    (tenant_id,),
-                )
-                conn.commit()
-            cursor.close()
-            conn.close()
-        except Exception as e:
-            print(f"Failed to update adapter config: {e}")
+            a2a_url = f"{live_server['a2a']}/a2a"
 
-        a2a_url = f"{live_server['a2a']}/a2a"
+            # AdCP-spec packages[] format (legacy product_ids/total_budget is
+            # rejected before the manual-approval path → no submitted webhook).
+            product_id, pricing_option_id = await _discover_product_and_pricing(live_server, test_auth_token)
+            start_time, end_time = get_test_date_range(days_from_now=1, duration_days=30)
+            media_buy_params = build_adcp_media_buy_request(
+                product_ids=[product_id],
+                total_budget=10000.0,
+                start_time=start_time,
+                end_time=end_time,
+                brand={"domain": "testbrand.com"},
+                pricing_option_id=pricing_option_id,
+                context={"e2e": "webhook_tsue_required_fields"},
+            )
 
-        # AdCP-spec packages[] format (legacy product_ids/total_budget is
-        # rejected before the manual-approval path → no submitted webhook).
-        product_id, pricing_option_id = await _discover_product_and_pricing(live_server, test_auth_token)
-        start_time, end_time = get_test_date_range(days_from_now=1, duration_days=30)
-        media_buy_params = build_adcp_media_buy_request(
-            product_ids=[product_id],
-            total_budget=10000.0,
-            start_time=start_time,
-            end_time=end_time,
-            brand={"domain": "testbrand.com"},
-            pricing_option_id=pricing_option_id,
-            context={"e2e": "webhook_tsue_required_fields"},
-        )
-
-        # Trigger an async operation that sends intermediate status
-        message = {
-            "jsonrpc": "2.0",
-            "id": str(uuid.uuid4()),
-            "method": "message/send",
-            "params": {
-                "message": {
-                    "messageId": str(uuid.uuid4()),
-                    "contextId": str(uuid.uuid4()),
-                    "role": "user",  # Required by A2A spec
-                    "parts": [
-                        {
-                            "data": {
-                                "skill": "create_media_buy",
-                                "parameters": media_buy_params,
+            # Trigger an async operation that sends intermediate status
+            message = {
+                "jsonrpc": "2.0",
+                "id": str(uuid.uuid4()),
+                "method": "message/send",
+                "params": {
+                    "message": {
+                        "messageId": str(uuid.uuid4()),
+                        "contextId": str(uuid.uuid4()),
+                        "role": "user",  # Required by A2A spec
+                        "parts": [
+                            {
+                                "data": {
+                                    "skill": "create_media_buy",
+                                    "parameters": media_buy_params,
+                                }
                             }
-                        }
-                    ],
+                        ],
+                    },
+                    "configuration": {"pushNotificationConfig": {"url": webhook_capture_server["url"]}},
                 },
-                "configuration": {"pushNotificationConfig": {"url": webhook_capture_server["url"]}},
-            },
-        }
+            }
 
-        headers = {
-            "Authorization": f"Bearer {test_auth_token}",
-            "Content-Type": "application/json",
-            "x-adcp-tenant": "ci-test",
-        }
+            headers = {
+                "Authorization": f"Bearer {test_auth_token}",
+                "Content-Type": "application/json",
+                "x-adcp-tenant": "ci-test",
+            }
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            await client.post(a2a_url, json=message, headers=headers)
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                await client.post(a2a_url, json=message, headers=headers)
 
-        # Wait for webhook
-        timeout_seconds = 15
-        elapsed = 0
-        while elapsed < timeout_seconds and not webhook_capture_server["received"]:
-            sleep(0.5)
-            elapsed += 0.5
+            # Wait for webhook
+            timeout_seconds = 15
+            elapsed = 0
+            while elapsed < timeout_seconds and not webhook_capture_server["received"]:
+                sleep(0.5)
+                elapsed += 0.5
 
-        received = webhook_capture_server["received"]
-        assert received, "Expected at least one webhook delivery"
-        assert_no_classification_errors(received)
+            received = webhook_capture_server["received"]
+            assert received, "Expected at least one webhook delivery"
+            assert_no_classification_errors(received)
 
-        event_webhooks = [w for w in received if w["payload_type"] == "TaskStatusUpdateEvent"]
-        assert event_webhooks, (
-            f"Expected at least one TaskStatusUpdateEvent webhook. Received payload "
-            f"types: {[w['payload_type'] for w in received]}"
-        )
+            event_webhooks = [w for w in received if w["payload_type"] == "TaskStatusUpdateEvent"]
+            assert event_webhooks, (
+                f"Expected at least one TaskStatusUpdateEvent webhook. Received payload "
+                f"types: {[w['payload_type'] for w in received]}"
+            )
 
-        for webhook in event_webhooks:
-            payload = webhook["payload"]
+            for webhook in event_webhooks:
+                payload = webhook["payload"]
 
-            # Required TaskStatusUpdateEvent fields per A2A spec (camelCase wire contract)
-            assert "taskId" in payload, "TaskStatusUpdateEvent must have 'taskId' field"
-            assert "task_id" not in payload, "TaskStatusUpdateEvent must NOT use snake_case 'task_id'"
-            assert "status" in payload, "TaskStatusUpdateEvent must have 'status' field"
+                # Required TaskStatusUpdateEvent fields per A2A spec (camelCase wire contract)
+                assert "taskId" in payload, "TaskStatusUpdateEvent must have 'taskId' field"
+                assert "task_id" not in payload, "TaskStatusUpdateEvent must NOT use snake_case 'task_id'"
+                assert "status" in payload, "TaskStatusUpdateEvent must have 'status' field"
 
-            status = payload["status"]
-            assert "state" in status, "TaskStatusUpdateEvent.status must have 'state' field"
+                status = payload["status"]
+                assert "state" in status, "TaskStatusUpdateEvent.status must have 'state' field"
+        finally:
+            # Restore shared tenant state for subsequent e2e tests.
+            _set_mock_manual_approval(live_server, required=False)
 
 
 class TestProtocolWebhookWireFormat:

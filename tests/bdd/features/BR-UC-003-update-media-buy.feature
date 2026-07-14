@@ -464,9 +464,10 @@ Feature: BR-UC-003 Update Media Buy
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
+    | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "authentication_error"
+    And the error code should be "AUTH_REQUIRED"
     And the error message should contain "authentication"
     And the error should include "suggestion" field
     And the suggestion should contain "valid credentials"
@@ -481,9 +482,10 @@ Feature: BR-UC-003 Update Media Buy
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
+    | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "authentication_error"
+    And the error code should be "AUTH_REQUIRED"
     And the error should include "suggestion" field
     # POST-F1: System state unchanged
     # POST-F2: Error explains principal not found
@@ -492,12 +494,13 @@ Feature: BR-UC-003 Update Media Buy
   @T-UC-003-ext-b @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Media buy not found -- by media_buy_id
     Given a valid update_media_buy request with:
-    | field        | value         |
+    | field        | value          |
     | media_buy_id | mb_nonexistent |
+    | paused       | true           |
     And no media buy exists with media_buy_id "mb_nonexistent"
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "PRODUCT_NOT_FOUND"
+    And the error code should be "MEDIA_BUY_NOT_FOUND"
     And the error should include "suggestion" field
     And the suggestion should contain "verify"
     # POST-F1: System state unchanged
@@ -626,7 +629,7 @@ Feature: BR-UC-003 Update Media Buy
     Given a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    And the request includes 1 package update without package_id or buyer_ref
+    And the request includes 1 package update without package_id
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
@@ -746,7 +749,7 @@ Feature: BR-UC-003 Update Media Buy
     And package "pkg_nonexistent" does not exist in the media buy
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "INVALID_REQUEST"
+    And the error code should be "PACKAGE_NOT_FOUND"
     And the error should include "suggestion" field
     And the suggestion should contain "package"
     # POST-F1: System state unchanged
@@ -768,7 +771,7 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "invalid_placement_ids"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     # BR-RULE-028 INV-2: invalid placement_id → rejected
     # POST-F1: System state unchanged
@@ -789,7 +792,7 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "invalid_placement_ids"
+    And the error code should be "UNSUPPORTED_FEATURE"
     And the error should include "suggestion" field
     # BR-RULE-028 INV-3: product doesn't support placement targeting → rejected
     # POST-F3: Suggestion for recovery
@@ -810,17 +813,17 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F3: Suggestion for recovery
 
   @T-UC-003-ext-p-short @extension @ext-p @error @post-f1 @post-f2 @post-f3
-  Scenario: Idempotency key too short -- below 8 characters
+  Scenario: Idempotency key too short -- below 16 characters
     Given a valid update_media_buy request with:
     | field           | value       |
     | media_buy_id    | mb_existing |
     | idempotency_key | abc1234     |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "INVALID_REQUEST"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
-    And the suggestion should contain "at least 8 characters"
-    # BR-RULE-081 INV-3: key < 8 chars → rejected
+    And the suggestion should contain "at least 16 characters"
+    # BR-RULE-081 INV-3: key < 16 chars → rejected (schema minLength 16; value/format → VALIDATION_ERROR)
     # POST-F1: System state unchanged
     # POST-F2: Error explains key too short
     # POST-F3: Suggestion for recovery
@@ -833,10 +836,10 @@ Feature: BR-UC-003 Update Media Buy
     | idempotency_key | <256 character string>   |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "INVALID_REQUEST"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     And the suggestion should contain "255 characters"
-    # BR-RULE-081 INV-4: key > 255 chars → rejected
+    # BR-RULE-081 INV-4: key > 255 chars → rejected (schema maxLength 255; value/format → VALIDATION_ERROR)
     # POST-F1: System state unchanged
     # POST-F3: Suggestion for recovery
 
@@ -926,15 +929,15 @@ Feature: BR-UC-003 Update Media Buy
       | partition      | value                                  | outcome |
       | absent         | <not provided>                         | success |
       | typical_valid  | abc12345-retry-001                     | success |
-      | boundary_min   | 12345678                               | success |
+      | boundary_min   | 1234567890123456                       | success |
       | boundary_max   | <255 character string>                 | success |
       | uuid_format    | 550e8400-e29b-41d4-a716-446655440000   | success |
 
     Examples: Invalid partitions
       | partition      | value          | outcome                                              |
-      | empty_string   |                | error "INVALID_REQUEST" with suggestion               |
-      | too_short      | abc1234        | error "INVALID_REQUEST" with suggestion               |
-      | too_long       | <256 chars>    | error "INVALID_REQUEST" with suggestion               |
+      | empty_string   |                | error "VALIDATION_ERROR" with suggestion              |
+      | too_short      | abc1234        | error "VALIDATION_ERROR" with suggestion              |
+      | too_long       | <256 character string> | error "VALIDATION_ERROR" with suggestion      |
 
   @T-UC-003-boundary-idempotency-key @boundary @idempotency_key
   Scenario Outline: Idempotency key boundary validation - <boundary_point>
@@ -954,13 +957,13 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Boundary values
       | boundary_point                  | value               | outcome                                |
       | absent (field not provided)     | <not provided>      | success                                |
-      | empty string (length 0)         |                     | error "INVALID_REQUEST" with suggestion |
-      | length 7 (min - 1)             | abc1234             | error "INVALID_REQUEST" with suggestion |
-      | length 8 (min, inclusive)       | 12345678            | success                                |
-      | length 9 (min + 1)             | 123456789           | success                                |
+      | empty string (length 0)         |                     | error "VALIDATION_ERROR" with suggestion |
+      | length 15 (min - 1)            | <15 char string>    | error "VALIDATION_ERROR" with suggestion |
+      | length 16 (min, inclusive)      | <16 char string>    | success                                |
+      | length 17 (min + 1)            | <17 char string>    | success                                |
       | length 254 (max - 1)           | <254 char string>   | success                                |
       | length 255 (max, inclusive)     | <255 char string>   | success                                |
-      | length 256 (max + 1)           | <256 char string>   | error "INVALID_REQUEST" with suggestion |
+      | length 256 (max + 1)           | <256 char string>   | error "VALIDATION_ERROR" with suggestion |
 
   @T-UC-003-partition-media-buy-status @partition @media_buy_status
   Scenario Outline: Media buy status partition validation - <partition>
@@ -981,13 +984,13 @@ Feature: BR-UC-003 Update Media Buy
       | partition                  | status               | outcome |
       | status_pending_activation  | pending_activation   | success |
       | status_active              | active               | success |
-      | status_paused              | paused               | success |
 
     Examples: Invalid partitions
-      | partition            | status     | outcome                                      |
-      | terminal_rejected    | rejected   | error "INVALID_STATUS" with suggestion        |
-      | terminal_canceled    | canceled   | error "INVALID_STATUS" with suggestion        |
-      | terminal_completed   | completed  | error "INVALID_STATUS" with suggestion        |
+      | partition              | status     | outcome                                      |
+      | paused_packages_locked | paused     | error "INVALID_STATE" with suggestion        |
+      | terminal_rejected      | rejected   | error "INVALID_STATE" with suggestion        |
+      | terminal_canceled    | canceled   | error "INVALID_STATE" with suggestion        |
+      | terminal_completed   | completed  | error "INVALID_STATE" with suggestion        |
 
   @T-UC-003-boundary-media-buy-status @boundary @media_buy_status
   Scenario Outline: Media buy status boundary validation - <boundary_point>
@@ -1008,10 +1011,10 @@ Feature: BR-UC-003 Update Media Buy
       | boundary_point                            | status               | outcome                                  |
       | pending_activation (non-terminal, updatable) | pending_activation | success                                  |
       | active (non-terminal, updatable)          | active               | success                                  |
-      | paused (non-terminal, updatable)          | paused               | success                                  |
-      | rejected (terminal, update blocked)       | rejected             | error "INVALID_STATUS" with suggestion   |
-      | canceled (terminal, update blocked)       | canceled             | error "INVALID_STATUS" with suggestion   |
-      | completed (terminal, update blocked)      | completed            | error "INVALID_STATUS" with suggestion   |
+      | paused (packages locked, budget/dates ok) | paused               | error "INVALID_STATE" with suggestion    |
+      | rejected (terminal, update blocked)       | rejected             | error "INVALID_STATE" with suggestion   |
+      | canceled (terminal, update blocked)       | canceled             | error "INVALID_STATE" with suggestion   |
+      | completed (terminal, update blocked)      | completed            | error "INVALID_STATE" with suggestion   |
 
   @T-UC-003-partition-budget-amount @partition @budget_amount
   Scenario Outline: Budget amount partition validation - <partition>
@@ -1121,11 +1124,9 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Valid partitions
       | partition          | id_config                        | outcome |
       | media_buy_id_only  | media_buy_id=mb_existing         | success |
-      | buyer_ref_only     | buyer_ref=my_ref_01              | success |
 
     Examples: Invalid partitions
       | partition       | id_config                                   | outcome                                      |
-      | both_provided   | media_buy_id=mb_existing,buyer_ref=my_ref_01 | error "INVALID_REQUEST" with suggestion       |
       | neither_provided | <none>                                      | error "INVALID_REQUEST" with suggestion       |
 
   @T-UC-003-boundary-media-buy-identification @boundary @media_buy_identification
@@ -1143,8 +1144,6 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Boundary values
       | boundary_point                       | id_config                                   | outcome                                  |
       | media_buy_id only (primary path)     | media_buy_id=mb_existing                    | success                                  |
-      | buyer_ref only (fallback path)       | buyer_ref=my_ref_01                         | success                                  |
-      | both identifiers (ambiguous)         | media_buy_id=mb_existing,buyer_ref=my_ref_01 | error "INVALID_REQUEST" with suggestion  |
       | neither identifier (missing)         | <none>                                       | error "INVALID_REQUEST" with suggestion  |
 
   @T-UC-003-partition-frequency-cap-suppress @partition @frequency_cap_suppress
@@ -1855,8 +1854,8 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Invalid partitions
       | partition                    | placement_config                              | outcome                                          |
-      | invalid_placement_id         | placement_ids=[plc_invalid] (not in product)  | error "invalid_placement_ids" with suggestion     |
-      | product_no_placement_support | placement_ids=[plc_a] (product unsupported)   | error "invalid_placement_ids" with suggestion     |
+      | invalid_placement_id         | placement_ids=[plc_invalid] (not in product)  | error "VALIDATION_ERROR" with suggestion     |
+      | product_no_placement_support | placement_ids=[plc_a] (product unsupported)   | error "UNSUPPORTED_FEATURE" with suggestion     |
 
   @T-UC-003-boundary-placement-id @boundary @placement_id_validation
   Scenario Outline: Placement ID validation boundary - <boundary_point>
@@ -1876,7 +1875,7 @@ Feature: BR-UC-003 Update Media Buy
       | boundary_point                       | placement_config                              | outcome                                      |
       | all placement IDs valid              | placement_ids=[plc_a, plc_b] (valid)          | success                                      |
       | no placement IDs (untargeted)        | no placement_ids specified                    | success                                      |
-      | product without placement support    | placement_ids=[plc_a] (product unsupported)   | error "invalid_placement_ids" with suggestion |
+      | product without placement support    | placement_ids=[plc_a] (product unsupported)   | error "UNSUPPORTED_FEATURE" with suggestion |
 
   @T-UC-003-partition-adapter-dispatch @partition @adapter_dispatch
   Scenario Outline: Adapter dispatch partition validation - <partition>
@@ -1896,7 +1895,7 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Invalid partitions
       | partition     | update_fields                    | outcome                                 |
-      | empty_update  | no updatable fields in request   | error "EMPTY_UPDATE" with suggestion    |
+      | empty_update  | no updatable fields in request   | error "INVALID_REQUEST" with suggestion    |
 
   @T-UC-003-boundary-adapter-dispatch @boundary @adapter_dispatch
   Scenario Outline: Adapter dispatch boundary validation - <boundary_point>
@@ -1913,7 +1912,7 @@ Feature: BR-UC-003 Update Media Buy
       | boundary_point                              | update_config                          | outcome                                 |
       | request with exactly one updatable field    | 1 package with budget update only      | success                                 |
       | request with all updatable fields           | packages with all updatable fields     | success                                 |
-      | request with zero updatable fields          | no updatable fields in request         | error "EMPTY_UPDATE" with suggestion    |
+      | request with zero updatable fields          | no updatable fields in request         | error "INVALID_REQUEST" with suggestion    |
 
   @T-UC-003-partition-persistence-timing @partition @persistence_timing
   Scenario Outline: Persistence timing partition validation - <partition>
@@ -1934,7 +1933,7 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Invalid partitions
       | partition                       | approval_mode  | adapter_result   | outcome                          |
-      | auto_approve_adapter_failure    | auto-approval  | returns error    | error "ADAPTER_ERROR" — no records persisted |
+      | auto_approve_adapter_failure    | auto-approval  | returns error    | error "SERVICE_UNAVAILABLE" — no records persisted |
 
   @T-UC-003-boundary-persistence-timing @boundary @persistence_timing
   Scenario Outline: Persistence timing boundary validation - <boundary_point>
@@ -1951,7 +1950,7 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Boundary values
       | boundary_point                              | approval_mode  | adapter_result   | outcome                                       |
       | adapter returns success (auto-approval)     | auto-approval  | returns success  | success with persisted records                |
-      | adapter returns error (auto-approval)       | auto-approval  | returns error    | error "ADAPTER_ERROR" — no records persisted  |
+      | adapter returns error (auto-approval)       | auto-approval  | returns error    | error "SERVICE_UNAVAILABLE" — no records persisted  |
       | manual approval detected (pending state)    | manual         | not yet called   | success with pending status                   |
 
   @T-UC-003-partition-principal-ownership @partition @principal_ownership

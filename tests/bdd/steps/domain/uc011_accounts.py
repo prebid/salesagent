@@ -2181,10 +2181,14 @@ def then_response_includes_context(ctx: dict, ctx_json: str) -> None:
             actual = dict(error_context)
         assert actual == expected, f"Error context mismatch: expected {expected}, got {actual}"
         return
-    # Production error objects (AdCPError) do not carry a context field yet
+    # Production error objects (AdCPError) do not carry a context field yet, and
+    # the wire error envelope (a2a/mcp/rest) does not echo context on the error
+    # path — only impl carries context=req.context on the AdCPError. Tracked by
+    # #1417 (D2: envelope status/context on the wire error path).
     pytest.xfail(
-        "SPEC-PRODUCTION GAP: error variant does not echo context — "
-        "AdCPError has no context field, expected context echo on error responses"
+        "SPEC-PRODUCTION GAP (salesagent-egnl / D2): context not echoed on the wire "
+        "error envelope — AdCPError carries no context field on a2a/mcp/rest, "
+        "expected context echo on error responses"
     )
 
 

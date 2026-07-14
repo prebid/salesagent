@@ -10,6 +10,54 @@ the repository owns the query, the helper owns the assertion.
 
 from __future__ import annotations
 
+from typing import Any
+
+from tests.harness.transport import Transport
+
+
+def wire_field(ctx: dict, field: str) -> Any:
+    """Return a top-level success-response field as the buyer sees it on the wire.
+
+    REST/A2A/MCP expose the real success-path wire dict via ``ctx["wire_response"]``.
+    IMPL has no wire, so serialize the typed payload through the production
+    serializer — the same path that produces wire bytes for the other transports.
+
+    Loud guard: a real-wire transport (REST/A2A/MCP) that didn't stash
+    ``wire_response`` would otherwise fall through to the ``model_dump`` path and
+    assert nothing on the wire — a silent tautology. A sibling wired against a
+    non-stashing env trips this instead of passing green. IMPL (and the
+    non-parametrized ``None`` default) legitimately have no wire.
+    """
+    wire = ctx.get("wire_response")
+    transport = ctx.get("transport")
+    if wire is None and transport not in (None, Transport.IMPL):
+        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
+    if wire is not None:
+        return wire[field]
+    # IMPL has no wire — serialize the typed payload through the production
+    # serializer. _require_response preserves the diagnostic if a (reused) sibling
+    # scenario hit an error path, instead of a bare ctx["response"] KeyError.
+    return _require_response(ctx).model_dump(mode="json")[field]
+
+
+def wire_dict(ctx: dict) -> dict:
+    """Return the full success-path wire body as the buyer sees it on the wire.
+
+    The dict analogue of :func:`wire_field` — use when an oracle must test key
+    PRESENCE/ABSENCE (e.g. an optional field) rather than read one known field.
+    Shares the same loud guard: a real-wire transport (REST/A2A/MCP) that did not
+    stash ``wire_response`` raises instead of silently asserting nothing. IMPL (and
+    the non-parametrized ``None`` default) serialize the typed payload through the
+    production serializer.
+    """
+    wire = ctx.get("wire_response")
+    transport = ctx.get("transport")
+    if wire is None and transport not in (None, Transport.IMPL):
+        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
+    if wire is not None:
+        return wire
+    return _require_response(ctx).model_dump(mode="json")
+
 
 def _require(ctx: dict, key: str, *, hint: str | None = None) -> object:
     """Return ``ctx[key]``, failing with a diagnostic if it is absent.

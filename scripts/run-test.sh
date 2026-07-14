@@ -33,6 +33,17 @@ AGENT_DB="$PROJECT_DIR/.claude/skills/agent-db/agent-db.sh"
 TEST_STACK="$PROJECT_DIR/scripts/test-stack.sh"
 STACK_ENV="$PROJECT_DIR/.test-stack.env"
 
+# Optional local test hook: drop a script at the path below to customize or
+# redirect test execution for your own setup (e.g. offload slices to a remote
+# machine). Sourced with the original args; it may `exec` (taking over) or
+# `return` (falling through to normal local execution). Completely inert if the
+# file does not exist. Set REMOTE_TEST_ACTIVE=1 to bypass it.
+_local_hook="${SA_RUN_TEST_HOOK:-$HOME/.config/salesagent/run-test-hook.sh}"
+if [[ -z "${REMOTE_TEST_ACTIVE:-}" && -f "$_local_hook" ]]; then
+    # shellcheck disable=SC1090
+    source "$_local_hook"
+fi
+
 usage() {
     echo "Usage: scripts/run-test.sh [--unit|--db|--stack] <test-path> [pytest-args...]" >&2
     echo "" >&2

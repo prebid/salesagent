@@ -48,7 +48,16 @@ def resolve_account(
         AdCPAccountSetupRequiredError: Account requires setup before use.
         AdCPAccountSuspendedError: Account is suspended.
         AdCPAccountPaymentRequiredError: Account has outstanding payment.
+        AdCPAuthenticationError: No authenticated principal_id in the identity.
     """
+    # Self-defending entry guard: reject a falsy principal_id up front so neither
+    # variant runs a scoped query before rejection. The natural-key path skips the
+    # access-scope join on a None principal and could otherwise disclose a
+    # tenant-wide match count; require_principal_id raises AUTH_REQUIRED first (#1417).
+    from src.core.auth import require_principal_id
+
+    require_principal_id(identity)
+
     inner = account_ref.root
 
     if isinstance(inner, AccountReferenceById):
@@ -66,19 +75,40 @@ def resolve_account(
 def _check_account_status(account_id: str, status: str | None) -> None:
     """Raise if account status blocks operations."""
     if status == "pending_approval":
+        # BR-UC-002 ext-s grades BOTH the top-level suggestion (POST-F3) and a
+        # details payload carrying the setup instructions (POST-F2).
+        setup_instructions = "Complete billing configuration before use."
         raise AdCPAccountSetupRequiredError(
             f"Account '{account_id}' requires setup.",
-            details={"suggestion": "Complete billing configuration before use."},
+            suggestion=setup_instructions,
+            details={"setup_instructions": setup_instructions},
         )
     if status == "suspended":
         raise AdCPAccountSuspendedError(
             f"Account '{account_id}' is suspended.",
-            details={"suggestion": "Contact your account manager."},
+            suggestion="Contact your account manager.",
         )
     if status == "payment_required":
         raise AdCPAccountPaymentRequiredError(
             f"Account '{account_id}' has outstanding payment.",
-            details={"suggestion": "Resolve payment before use."},
+            suggestion="Resolve payment before use.",
+        )
+
+
+def _require_account_access(identity: ResolvedIdentity, account_id: str, repo: AccountRepository) -> None:
+    """Raise if the agent's principal lacks access to the account.
+
+    Self-defending: a falsy principal_id is rejected as AUTH_REQUIRED via
+    require_principal_id, independent of any caller-side guard, so the access
+    check can never be silently skipped by an empty/None principal (#1417).
+    """
+    from src.core.auth import require_principal_id
+
+    principal_id = require_principal_id(identity)
+    if not repo.has_access(principal_id, account_id):
+        raise AdCPAuthorizationError(
+            f"Agent '{principal_id}' does not have access to account '{account_id}'.",
+            suggestion="Use list_accounts to find accounts accessible to this agent.",
         )
 
 
@@ -92,15 +122,10 @@ def _resolve_by_id(
     if account is None:
         raise AdCPAccountNotFoundError(
             f"Account '{account_id}' not found.",
-            details={"suggestion": "Use list_accounts to find valid account IDs."},
+            suggestion="Use list_accounts to find valid account IDs.",
         )
 
-    principal_id = identity.principal_id
-    if principal_id and not repo.has_access(principal_id, account_id):
-        raise AdCPAuthorizationError(
-            f"Agent '{principal_id}' does not have access to account '{account_id}'.",
-            details={"suggestion": "Use list_accounts to find accounts accessible to this agent."},
-        )
+    _require_account_access(identity, account_id, repo)
 
     _check_account_status(account_id, account.status)
 
@@ -118,34 +143,43 @@ def _resolve_by_natural_key(
     if ref.brand.brand_id is not None:
         brand_id = str(ref.brand.brand_id.root)
 
-    # Single query: fetch up to 2 matches for ambiguity detection
+    # Single query: fetch up to 2 matches for ambiguity detection, scoped to the
+    # agent's accessible accounts (#1417) so detection — and the count
+    # disclosed below — never observe accounts outside this agent's access.
+    principal_id = identity.principal_id
     matches = repo.list_by_natural_key(
         operator=ref.operator,
         brand_domain=brand_domain,
         brand_id=brand_id,
         sandbox=ref.sandbox,
         limit=2,
+        principal_id=principal_id,
     )
     if len(matches) > 1:
+        # Ambiguity is already established by the limit=2 fast path. Only now —
+        # on the rare error path — pay for an exact COUNT so the buyer learns how
+        # many accounts collide (the happy path never runs this query). Scoped to
+        # the same accessible set as detection.
+        total = repo.count_by_natural_key(
+            operator=ref.operator,
+            brand_domain=brand_domain,
+            brand_id=brand_id,
+            sandbox=ref.sandbox,
+            principal_id=principal_id,
+        )
         raise AdCPAccountAmbiguousError(
-            f"Natural key matches multiple accounts for brand '{brand_domain}', operator '{ref.operator}'.",
-            details={"suggestion": "Use explicit account_id instead of brand+operator to avoid ambiguity."},
+            f"Natural key matches {total} accounts for brand '{brand_domain}', operator '{ref.operator}'.",
+            suggestion="Use explicit account_id instead of brand+operator to avoid ambiguity.",
         )
 
     account = matches[0] if matches else None
     if account is None:
         raise AdCPAccountNotFoundError(
             f"Account not found for brand '{brand_domain}', operator '{ref.operator}'.",
-            details={"suggestion": "Use list_accounts to find valid accounts."},
+            suggestion="Use list_accounts to find valid accounts.",
         )
 
-    # Access check — parity with _resolve_by_id (lines 100-102)
-    principal_id = identity.principal_id
-    if principal_id and not repo.has_access(principal_id, account.account_id):
-        raise AdCPAuthorizationError(
-            f"Agent '{principal_id}' does not have access to account '{account.account_id}'.",
-            details={"suggestion": "Use list_accounts to find accounts accessible to this agent."},
-        )
+    _require_account_access(identity, account.account_id, repo)
 
     _check_account_status(account.account_id, account.status)
 

@@ -29,16 +29,10 @@ _DUPLICATE_THRESHOLD = 3
 # Allowlist can only shrink — remove entries when the duplicate cluster is gone.
 # Non-load-bearing entries removed per #1560 review; audit tracked in #1561.
 _ALLOWED_DUPLICATES: set[str] = {
-    # FIXME(#1561): pass-body / duplicate-body stubs in uc019/uc026 pending implementation
-    "when_query_by_refs",
-    "given_request_with_buyer_ref",
-    "given_resubmit_buyer_ref",
-    "given_buyer_owns_mb_with_ref_and_id",
-    "given_buyer_owns_mb_with_buyer_ref",
-    "given_cross_buy_request",
-    "given_buyer_owns_pkg_by_buyer_ref",
-    "given_partition_buyer_ref",
-    "given_boundary_buyer_ref",
+    # Empty: the uc019/uc026 buyer_ref pass-body/duplicate stubs that #1561 tracked
+    # were removed on this branch when top-level buyer_ref was stripped from the
+    # media-buy request contract (pinned 04f59d2d5), so the duplicate clusters they
+    # suppressed no longer exist. The forward guard passes with an empty allowlist.
 }
 
 

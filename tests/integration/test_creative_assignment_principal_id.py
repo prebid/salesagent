@@ -353,7 +353,6 @@ class TestCreativeAssignmentPrincipalIdUpdate:
             package_id = packages[0].package_id
 
         # Step 2: Update the media buy to add creative_ids
-        # Note: AdCP oneOf constraint — provide media_buy_id OR buyer_ref, not both
         update_req = UpdateMediaBuyRequest(
             media_buy_id=media_buy_id,
             packages=[
@@ -369,7 +368,7 @@ class TestCreativeAssignmentPrincipalIdUpdate:
         # Update should succeed (not return error)
         from src.core.schemas import UpdateMediaBuyError
 
-        assert not isinstance(update_result, UpdateMediaBuyError), f"Update failed: {update_result}"
+        assert not isinstance(update_result.response, UpdateMediaBuyError), f"Update failed: {update_result}"
 
         # Verify creative_assignment rows have principal_id populated
         assignments = _query_assignments(ca_tenant["tenant_id"], media_buy_id)

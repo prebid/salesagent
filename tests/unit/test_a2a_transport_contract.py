@@ -289,7 +289,7 @@ class TestA2AResponseShape:
     @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.core.tools.media_buy_create._create_media_buy_impl")
     def test_create_media_buy_response_shape(self, mock_impl, mock_resolve, client, auth_headers):
-        """create_media_buy response must have media_buy_id and buyer_ref."""
+        """create_media_buy response must have media_buy_id."""
         from adcp.types.aliases import CreateMediaBuySuccessResponse
 
         mock_impl.return_value = CreateMediaBuySuccessResponse(
@@ -317,7 +317,6 @@ class TestA2AResponseShape:
         if "result" in body:
             data = _extract_artifact_data(body["result"])
             assert "media_buy_id" in data, "create_media_buy response must have 'media_buy_id'"
-            # buyer_ref removed from CreateMediaBuySuccess in adcp 3.12
 
     def test_error_format_is_jsonrpc(self, client, auth_headers):
         """Error responses must use JSON-RPC error envelope, not {success: false}."""

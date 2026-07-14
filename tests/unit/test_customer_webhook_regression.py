@@ -29,7 +29,6 @@ def test_create_media_buy_response_message_access():
     """
     # Create a response like the one from create_media_buy
     response = CreateMediaBuySuccess(
-        buyer_ref="test-webhook-mb-001",
         media_buy_id="mb-12345",
         packages=[],
     )

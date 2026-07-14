@@ -15,7 +15,7 @@ import pytest
 from adcp.types import CreativeAction, CreativeAsset
 from adcp.types import FormatId as AdcpFormatId
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPCreativeRejectedError, AdCPNotFoundError
 from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.factories.creative_asset import build_assets, image_spec, make_creative_asset_minimal
 from tests.harness import CreativeSyncEnv, make_identity
@@ -922,7 +922,7 @@ class TestSyncExtensions:
                 )
 
     def test_format_mismatch_strict_raises(self, integration_db):
-        """Covers: UC-006-EXT-K-01 — strict: format mismatch → AdCPValidationError."""
+        """Covers: UC-006-EXT-K-01 — strict: format mismatch → CREATIVE_REJECTED (#1417)."""
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
@@ -940,7 +940,7 @@ class TestSyncExtensions:
             pkg_id = pkg.package_id
 
             # Creative uses video_30s format (different from product's display)
-            with pytest.raises(AdCPValidationError, match="not supported"):
+            with pytest.raises(AdCPCreativeRejectedError, match="not supported"):
                 env.call_impl(
                     creatives=[
                         _make_creative_asset(

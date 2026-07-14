@@ -658,11 +658,15 @@ class TestListingEdgeCases:
     """Lines 184-185, 271, 274 in listing.py."""
 
     def test_validation_error_in_list_creatives_request(self, identity):
-        """Lines 184-185: ValidationError from ListCreativesRequest raises AdCPValidationError."""
+        """ValidationError from ListCreativesRequest construction raises AdCPValidationError.
+
+        Request construction (and its ValidationError translation) now lives in
+        _build_list_creatives_request, so patch the name the builder resolves.
+        """
         from pydantic import ValidationError
 
         from src.core.exceptions import AdCPValidationError
-        from src.core.tools.creatives.listing import _list_creatives_impl
+        from src.core.tools.creatives.listing import _build_list_creatives_request
 
         ve = ValidationError.from_exception_data(
             title="ListCreativesRequest",
@@ -677,10 +681,10 @@ class TestListingEdgeCases:
         )
 
         with (
-            patch("src.core.schemas.ListCreativesRequest", side_effect=ve),
+            patch("src.core.tools.creatives.listing.ListCreativesRequest", side_effect=ve),
             pytest.raises(AdCPValidationError),
         ):
-            _list_creatives_impl(identity=identity)
+            _build_list_creatives_request()
 
 
 # ===========================================================================

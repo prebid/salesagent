@@ -50,6 +50,15 @@ def _resolve_package_id(ctx: dict, label: str) -> str:
     return ctx.get("package_labels", {}).get(label, label)
 
 
+def _resolve_media_buy_id(ctx: dict, label: str) -> str:
+    """Resolve a Gherkin media buy label to the real media_buy_id.
+
+    Falls back to returning the label itself for scenarios where the label
+    matches the real ID (e.g. when the conftest doesn't set media_buy_labels).
+    """
+    return ctx.get("media_buy_labels", {}).get(label, label)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — Background + request construction
 # ═══════════════════════════════════════════════════════════════════════
@@ -63,6 +72,29 @@ def given_buyer_owns_media_buy(ctx: dict) -> None:
     AND database persistence to prevent phantom media buys that exist only in
     test state.  Uses MediaBuyRepository (not raw select) per repository pattern.
     """
+    _verify_existing_media_buy(ctx)
+
+
+@given(parsers.parse('the Buyer owns an existing media buy with media_buy_id "{media_buy_id}"'))
+def given_buyer_owns_media_buy_by_id(ctx: dict, media_buy_id: str) -> None:
+    """Verify the existing media buy is in ctx, persisted in DB, and register its label.
+
+    The media_buy_id from Gherkin (e.g. "mb_existing") is a label — the actual
+    factory-generated ID may differ (label mechanism), or the UC-003 harness may
+    seed the literal id (PR #1567 MediaBuyDualEnv), in which case the label maps
+    to itself. This step registers the label mapping so subsequent steps
+    (update_kwargs, assertions) can use the Gherkin label, and the shared verify
+    checks DB persistence by the real id so a mis-seeded / phantom media buy
+    fails loudly here rather than deep in the update path.
+    """
+    _verify_existing_media_buy(ctx)
+    mb = ctx["existing_media_buy"]
+    # Register the Gherkin label → real media_buy_id mapping
+    ctx.setdefault("media_buy_labels", {})[media_buy_id] = mb.media_buy_id
+
+
+def _verify_existing_media_buy(ctx: dict) -> None:
+    """Shared verification: existing_media_buy is in ctx and persisted in DB."""
     from src.core.database.repositories.media_buy import MediaBuyRepository
 
     mb = ctx.get("existing_media_buy")
@@ -80,33 +112,51 @@ def given_buyer_owns_media_buy(ctx: dict) -> None:
     )
 
 
-@given(parsers.parse('the Buyer owns an existing media buy with media_buy_id "{media_buy_id}"'))
-def given_buyer_owns_media_buy_with_id(ctx: dict, media_buy_id: str) -> None:
-    """Verify the seeded existing media buy carries the exact id AND is persisted.
+def _assert_wire_field_equals(ctx: dict, field: str, expected: str) -> None:
+    """Assert a REAL wire field equals the expected value (strict equality).
 
-    The Background table pins the id literally ("mb_existing") — the conftest
-    UC-003 harness seeds a MediaBuy with that id. Verify both the ctx state and
-    DB persistence (same verify logic as given_buyer_owns_media_buy) so a
-    mis-seeded / phantom media buy fails loudly here rather than deep in the
-    update path. Uses MediaBuyRepository (not raw select) per repository pattern.
-    """
-    from src.core.database.repositories.media_buy import MediaBuyRepository
+    Reads ctx['wire_response'] (the buyer-facing body), not the reconstructed
+    payload. Shared dumb value comparator for the wire value-pin steps."""
+    from tests.bdd.steps._outcome_helpers import wire_dict
 
-    mb = ctx.get("existing_media_buy")
-    assert mb is not None, "No existing_media_buy in ctx — conftest UC-003 harness setup failed"
-    assert mb.media_buy_id == media_buy_id, (
-        f"Seeded media buy id '{mb.media_buy_id}' does not match the Background id '{media_buy_id}'"
-    )
-    env = ctx["env"]
-    env._commit_factory_data()
-    tenant = ctx.get("tenant")
-    assert tenant is not None, "No tenant in ctx — cannot verify media buy ownership"
-    repo = MediaBuyRepository(env._session, tenant.tenant_id)
-    db_mb = repo.get_by_id(media_buy_id)
-    assert db_mb is not None, (
-        f"Media buy '{media_buy_id}' not found in DB for tenant '{tenant.tenant_id}' — "
-        "Background claims 'the Buyer owns an existing media buy' but it is not persisted"
-    )
+    wire = wire_dict(ctx)
+    actual = wire.get(field)
+    assert actual == expected, f"Expected wire {field} '{expected}', got {actual!r} (wire keys: {sorted(wire)})"
+
+
+@then(parsers.parse('the wire media_buy_status should be "{status}"'))
+def then_wire_media_buy_status_value(ctx: dict, status: str) -> None:
+    """Assert the REAL wire ``media_buy_status`` equals the expected DOMAIN status.
+
+    Used to pin that a persisted status whose name differs from its AdCP
+    value (e.g. 'scheduled') is normalized to the correct domain MediaBuyStatus on
+    the update response (#1417)."""
+    _assert_wire_field_equals(ctx, "media_buy_status", status)
+
+
+@then(parsers.parse('the wire status should be "{status}"'))
+def then_wire_status_value(ctx: dict, status: str) -> None:
+    """Assert the REAL wire top-level ``status`` equals the expected PROTOCOL TaskStatus.
+
+    The GA 3.1.0 storyboard pending_creatives_to_start.yaml grades top-level
+    ``status`` = field_value 'completed' on synchronous create/update success
+    (protocol-envelope.json required: [status]) — a different namespace from
+    the domain ``media_buy_status``."""
+    _assert_wire_field_equals(ctx, "status", status)
+
+
+@then(parsers.parse('the wire valid_actions should include "{action}"'))
+def then_wire_valid_actions_include(ctx: dict, action: str) -> None:
+    """Assert the REAL wire ``valid_actions`` list contains the expected action.
+
+    valid_actions must be derived from the NORMALIZED AdCP status, so a persisted
+    'scheduled' buy reports pending_start's actions (not [] from the raw string)
+    (#1417)."""
+    from tests.bdd.steps._outcome_helpers import wire_dict
+
+    wire = wire_dict(ctx)
+    actions = wire.get("valid_actions") or []
+    assert action in actions, f"Expected '{action}' in wire valid_actions, got {actions!r}"
 
 
 @given(parsers.parse('the media buy is in "{status}" status'))
@@ -189,6 +239,7 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
         "packages",
         "budget",
         "idempotency_key",
+        "invoice_recipient",
     }
     kwargs = _ensure_update_defaults(ctx)
     clock = ctx["env"].clock
@@ -204,7 +255,8 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
             f"Add handling for '{field}' if it's a valid UpdateMediaBuyRequest field."
         )
         if field == "media_buy_id":
-            kwargs["media_buy_id"] = value
+            # Resolve Gherkin label (e.g. "mb_existing") to real factory ID
+            kwargs["media_buy_id"] = _resolve_media_buy_id(ctx, value)
         elif field == "paused":
             kwargs["paused"] = value.lower() == "true"
         elif field == "start_time":
@@ -219,6 +271,26 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
             # Expand <N character string> placeholders (e.g. "<256 character string>")
             length_match = re.match(r"<(\d+)\s*char(?:acter)?\s*string>", value)
             kwargs["idempotency_key"] = "x" * int(length_match.group(1)) if length_match else value
+        elif field == "invoice_recipient":
+            # BusinessEntity requires legal_name; the override is rejected by production
+            # only when authorized — that authorization check is a production gap
+            # (#1417), so the scenario is xfailed (T-UC-003-ext-t).
+            kwargs["invoice_recipient"] = {"legal_name": value}
+
+
+@given(parsers.parse('the invoice_recipient "{recipient}" is not authorized for this account'))
+def given_invoice_recipient_not_authorized(ctx: dict, recipient: str) -> None:
+    """Precondition: the invoice_recipient is not authorized for the account.
+
+    No authorization record links this recipient to the account, so an
+    authorized-invoice-recipient check would reject the update. Production does
+    not yet implement that check (BR-RULE-214, #1417), so the scenario
+    is xfailed (T-UC-003-ext-t) until production catches up. Assert the request
+    carries the override so the resolution path is exercised when implemented.
+    """
+    assert ctx.get("update_kwargs", {}).get("invoice_recipient") is not None, (
+        "update_kwargs must carry invoice_recipient for the authorization check"
+    )
 
 
 @given("the request does NOT include start_time, end_time, or paused fields")
@@ -233,11 +305,12 @@ def given_request_omits_start_end_paused(ctx: dict) -> None:
         kwargs.pop(field, None)
 
 
-# "the request does NOT include an idempotency_key" is owned by
-# uc002_create_media_buy (canonical) to avoid a cross-module shadow now that this
-# module is registered. No graded UC-003 scenario uses that text; when the dormant
-# UC-003 idempotency scenarios graduate (PR #1567 follow-up) they need an update-kwargs
-# strip under a distinct step text (create/update behaviours genuinely differ).
+# Step "the request does NOT include an idempotency_key" is defined in
+# tests/bdd/steps/domain/uc002_create_media_buy.py (canonical, shared across
+# UC-002/003) to avoid a cross-module shadow now that this module is registered.
+# No graded UC-003 scenario uses that text; when the dormant UC-003 idempotency
+# scenarios graduate (PR #1567 follow-up) they need an update-kwargs strip under
+# a distinct step text (create/update behaviours genuinely differ).
 
 
 @given("the request does not include any updatable fields")
@@ -259,7 +332,11 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
     """Add a package update to the request from a data table."""
     import json
 
-    _supported_pkg_fields = {"package_id", "budget", "paused", "targeting_overlay"}
+    # product_id is intentionally accepted here so the immutable-field override
+    # reaches production. AdCPPackageUpdate forbids it (extra=forbid), so it is
+    # rejected — currently as VALIDATION_ERROR rather than the spec-expected
+    # INVALID_REQUEST (BR-RULE-198), so T-UC-003-ext-w is xfailed (#1417).
+    _supported_pkg_fields = {"package_id", "budget", "paused", "targeting_overlay", "product_id"}
     kwargs = _ensure_update_defaults(ctx)
     pkg_update: dict[str, Any] = {}
     # Skip header row if present (pytest-bdd datatables include header as first row)
@@ -279,6 +356,8 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
             pkg_update["paused"] = value.lower() == "true"
         elif field == "targeting_overlay":
             pkg_update["targeting_overlay"] = json.loads(value)
+        elif field == "product_id":
+            pkg_update["product_id"] = value
     assert pkg_update, "Datatable produced empty package update — check table format"
     kwargs["packages"] = [pkg_update]
 
@@ -372,12 +451,6 @@ def given_daily_spend_ok(ctx: dict) -> None:
                         "but existing packages violate the constraint"
                     )
     ctx.setdefault("daily_spend_validated", True)
-
-
-@given(parsers.parse('the buyer_ref "{buyer_ref}" resolves to the existing media buy'))
-def given_buyer_ref_resolves(ctx: dict, buyer_ref: str) -> None:
-    """buyer_ref removed in adcp 3.12. Verify media buy exists."""
-    assert ctx.get("existing_media_buy") is not None, "No existing_media_buy in ctx"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -488,15 +561,18 @@ def given_placement_ids_valid(ctx: dict) -> None:
         "No product in ctx (neither 'default_product' nor 'existing_product') — "
         "step claims placements are 'valid for the product' but no product exists to validate against"
     )
-    # Verify product does not have restrictive placement config that would reject these
-    allowed = getattr(product, "allowed_placement_ids", None)
+    # Verify product does not have restrictive placement config that would reject these.
+    # The model column is `placements` (list of dicts with placement_id); when set it
+    # restricts the valid placement ids, when None/empty all placements are allowed.
+    placements = getattr(product, "placements", None)
+    allowed = {p.get("placement_id") for p in placements if isinstance(p, dict)} if placements else None
     if allowed is not None:
         invalid = [p for p in pids if p not in allowed]
         assert not invalid, (
             f"Placement IDs {invalid} are not in product's allowed placements {allowed} — "
             "step claims 'all placement_ids are valid for the product'"
         )
-    # When product has no allowed_placement_ids restriction, all placements are
+    # When product has no placements restriction, all placements are
     # valid by definition — this is correct AdCP semantics (no restriction = all allowed).
     # Log which path was taken for debugging.
     ctx.setdefault("placement_validation_path", "unrestricted" if allowed is None else "restricted")
@@ -700,6 +776,7 @@ def when_send_update_request(ctx: dict) -> None:
     """Build UpdateMediaBuyRequest and dispatch through harness."""
     from pydantic import ValidationError
 
+    from src.core.exceptions import AdCPError
     from src.core.schemas import UpdateMediaBuyRequest
 
     update_kwargs = ctx.get("update_kwargs", {})
@@ -716,6 +793,12 @@ def when_send_update_request(ctx: dict) -> None:
     except ValidationError as e:
         # Schema validation rejects the request before production code runs.
         # Store as ctx["error"] so Then steps can assert on it.
+        ctx["error"] = e
+        return
+    except AdCPError as e:
+        # A schema-level validator raised a typed AdCP error (e.g. the immutable
+        # package-field guard → INVALID_REQUEST). It propagates as-is (not wrapped
+        # in ValidationError), so capture it the same way for the Then steps.
         ctx["error"] = e
         return
 
@@ -1331,8 +1414,6 @@ def given_update_request_with_identification(ctx: dict, id_config: str) -> None:
 
     id_config formats:
     - 'media_buy_id=<existing>' — use the existing media buy's ID
-    - 'buyer_ref=my_ref_01' — set buyer_ref only (ensure mb has this ref)
-    - 'media_buy_id=<existing>,buyer_ref=Y' — set both (ambiguous — expect error)
     - '<none>' — set neither (expect error)
     """
     kwargs: dict[str, Any] = {}
@@ -1879,7 +1960,8 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
             "Scenario requires '(product unsupported)' but no product found in ctx or DB — "
             "ensure a Given step sets ctx['default_product'] or the harness creates a product"
         )
-        product.supports_placement_targeting = False
+        # The model column is `placements`; clearing it disables placement-level targeting.
+        product.placements = None
         env._commit_factory_data()
 
     pkg["creative_assignments"] = [assignment]
@@ -1936,6 +2018,18 @@ def given_request_includes_fields(ctx: dict, update_fields: str) -> None:
         kwargs["paused"] = False
         kwargs["start_time"] = "2026-05-01T00:00:00Z"
         kwargs["end_time"] = "2026-07-01T00:00:00Z"
+    elif "new_packages" in stripped:
+        # A complete package-request added mid-flight. Production has no
+        # midflight-additions capability check (BR-RULE-217 -> UNSUPPORTED_FEATURE),
+        # so it accepts new_packages unhandled instead of rejecting — T-UC-003-ext-u
+        # is xfailed (#1417).
+        kwargs["new_packages"] = [
+            {
+                "product_id": "guaranteed_display",
+                "budget": 5000.0,
+                "pricing_option_id": "cpm_usd_fixed",
+            }
+        ]
     else:
         raise ValueError(f"Unknown update_fields pattern: {stripped}")
 
