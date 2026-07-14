@@ -1,6 +1,6 @@
 """Guard: test infra must never read the error ``suggestion`` out of ``details``.
 
-Regression for salesagent-9val: harness/step code satisfied suggestion
+Regression for #1417: harness/step code satisfied suggestion
 assertions from ``details['suggestion']`` (a hand-buried copy in the free-form
 dict) instead of the error.json TOP-LEVEL position, masking every emitter that
 buried or omitted the protocol field. This guard AST-scans the test-infra
@@ -80,7 +80,7 @@ def test_no_details_suggestion_reads_in_test_infra():
     assert not violations, (
         "error.json places `suggestion` at the TOP LEVEL of the error object; "
         "reading it out of the free-form `details` dict masks non-conformant "
-        "emitters (salesagent-9val). Read `error.suggestion` / the envelope's "
+        "emitters (#1417). Read `error.suggestion` / the envelope's "
         "top-level key instead. Violations:\n  " + "\n  ".join(violations)
     )
 

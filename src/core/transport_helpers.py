@@ -125,7 +125,7 @@ def enrich_identity_with_account(
     if identity is None or account_ref is None:
         return identity
 
-    # Require an authenticated principal BEFORE resolving the account (salesagent-fb2l).
+    # Require an authenticated principal BEFORE resolving the account (#1417).
     # Account resolution runs at the transport boundary ahead of the _impl auth gate;
     # without this guard an unauthenticated caller (tenant resolved, principal_id=None)
     # reaches natural-key resolution, which skips the access-scope join and discloses the

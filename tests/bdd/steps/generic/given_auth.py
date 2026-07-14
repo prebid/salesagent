@@ -39,7 +39,7 @@ def given_buyer_no_auth(ctx: dict) -> None:
     ``identity=None`` plumbs through every dispatcher as a token-less request,
     so the REAL transport auth gates run (A2A ``on_message_send`` no-token
     gate, REST ``_require_auth_dep``, MCP boundary) — nothing is simulated
-    (salesagent-b0kx). ``dispatch_identity`` is the key the uc002 full-create
+    (#1417). ``dispatch_identity`` is the key the uc002 full-create
     dispatch reads to override its default authenticated identity.
     """
     ctx["has_auth"] = False

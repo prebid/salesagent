@@ -108,7 +108,7 @@ class TestResolveAccountByNaturalKey:
         """Account exists but agent has no access → AdCPAccountNotFoundError.
 
         The natural-key lookup is scoped to the agent's accessible accounts
-        (salesagent-ym1c), so an inaccessible account is never disclosed — it
+        (#1417), so an inaccessible account is never disclosed — it
         resolves as not-found, NOT as an authorization error. The explicit
         _require_account_access afterwards is defense-in-depth for the by-id
         parity path.
@@ -124,15 +124,13 @@ class TestResolveAccountByNaturalKey:
             )
             env._commit_factory_data()
 
-            from src.core.database.database_session import get_db_session
-            from src.core.database.repositories.account import AccountRepository
+            from src.core.database.repositories.uow import AccountUoW
             from src.core.helpers.account_helpers import resolve_account
 
             ref = AccountReference(AccountReferenceByNaturalKey(brand={"domain": "hidden.com"}, operator="hidden.com"))
-            with get_db_session() as session:
-                repo = AccountRepository(session, tenant.tenant_id)
+            with AccountUoW(tenant.tenant_id) as uow:
                 with pytest.raises(AdCPAccountNotFoundError):
-                    resolve_account(ref, env.identity, repo)
+                    resolve_account(ref, env.identity, uow.accounts)
 
     def test_natural_key_not_found_raises(self, integration_db):
         """Non-existent brand+operator → AdCPAccountNotFoundError."""

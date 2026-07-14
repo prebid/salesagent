@@ -1,6 +1,6 @@
 """Guard: no two registered BDD step defs may share one parse literal.
 
-Regression for salesagent-fvva: two ``@given`` defs registered the identical
+Regression for #1417: two ``@given`` defs registered the identical
 parse expression ``the Buyer owns an existing media buy with media_buy_id
 "..."`` (the ``{media_buy_id}`` vs ``{mb_id}`` param name is irrelevant to
 pytest-bdd matching — the literal collides). First registration wins, so the
@@ -13,6 +13,16 @@ the same kind (given/when/then) normalize to the same parse literal.
 Complements ``test_architecture_bdd_no_duplicate_steps`` (identical BODIES);
 this one catches identical LITERALS with different bodies — the shadowing
 case, which is strictly more dangerous because one body silently never runs.
+
+Scope (#1417 round-8 review item 8): registered modules are checked for collisions
+ACROSS the whole registered set (they all load into one global namespace).
+Step modules OUTSIDE ``pytest_plugins`` — the intentionally-local
+``import *`` modules (uc019) and the allowlisted-unregistered
+dead-pending-harness modules (uc026) — are checked for collisions WITHIN
+each module only: their cross-module duplicates of generic literals are
+intentional scoped overrides (uc019) or tracked wiring debt
+(``test_architecture_bdd_step_module_reachability``), but two identical
+literals INSIDE one module are always a first-wins dead step.
 """
 
 from __future__ import annotations
@@ -33,6 +43,22 @@ def registered_step_modules() -> list[Path]:
     """Step-definition modules listed in the BDD conftest's pytest_plugins."""
     mods = re.findall(r'"(tests\.bdd\.steps\.[\w.]+)"', CONFTEST.read_text())
     return [REPO_ROOT / (mod.replace(".", "/") + ".py") for mod in mods]
+
+
+def unregistered_step_modules() -> list[Path]:
+    """Step modules under tests/bdd/steps/ NOT listed in pytest_plugins.
+
+    Covers the two loading paths the registered scan misses: intentionally-local
+    ``import *`` modules (uc019) and allowlisted-unregistered modules pending a
+    harness (uc026). Both are checked for WITHIN-module collisions only.
+    """
+    registered = set(registered_step_modules())
+    steps_dir = REPO_ROOT / "tests" / "bdd" / "steps"
+    return [
+        path
+        for path in sorted(steps_dir.rglob("*.py"))
+        if path.name != "__init__.py" and not path.name.startswith("_") and path not in registered
+    ]
 
 
 def _step_literal(dec: ast.expr) -> tuple[str, str] | None:
@@ -66,16 +92,39 @@ def collect_literal_collisions(paths: list[Path]) -> dict[tuple[str, str], list[
     return {key: sites for key, sites in seen.items() if len(sites) > 1}
 
 
+def _format_collisions(collisions: dict[tuple[str, str], list[str]]) -> str:
+    return "\n".join(
+        f"{kind} {literal!r}:\n    " + "\n    ".join(sites) for (kind, literal), sites in sorted(collisions.items())
+    )
+
+
 def test_no_duplicate_step_literals_in_registered_modules():
     collisions = collect_literal_collisions(registered_step_modules())
-    lines = [
-        f"{kind} {literal!r}:\n    " + "\n    ".join(sites) for (kind, literal), sites in sorted(collisions.items())
-    ]
     assert not collisions, (
         "Duplicate BDD step parse literals across registered step modules — "
         "pytest-bdd resolves first-registered-wins, so the later def is dead "
         "code that can silently take over on a resolution-order change "
-        "(salesagent-fvva). Merge or delete the shadowed defs:\n" + "\n".join(lines)
+        "(#1417). Merge or delete the shadowed defs:\n" + _format_collisions(collisions)
+    )
+
+
+def test_no_duplicate_step_literals_within_unregistered_modules():
+    """import*-loaded and allowlisted-unregistered step modules: no internal dups.
+
+    These modules escape the registered scan (#1417 round-8 review item 8): uc019 loads via
+    a test-module ``import *`` and uc026 is dead pending its harness. Their
+    cross-module duplicates of generic literals are intentional/tracked, but two
+    identical literals INSIDE one module mean the later def is dead the moment
+    the module loads (first-wins) — with a DIFFERENT body, a silent shadow.
+    """
+    collisions: dict[tuple[str, str], list[str]] = {}
+    for path in unregistered_step_modules():
+        collisions.update(collect_literal_collisions([path]))
+    assert not collisions, (
+        "Duplicate BDD step parse literals WITHIN an unregistered/import*-loaded "
+        "step module — first-wins makes the later def dead code, and differing "
+        "bodies make it a silent shadow (#1417 round-8 review item 8). Merge or delete the "
+        "shadowed defs:\n" + _format_collisions(collisions)
     )
 
 

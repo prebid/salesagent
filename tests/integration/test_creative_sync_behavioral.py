@@ -1345,7 +1345,7 @@ class TestSyncExtensions:
                 )
 
     def test_format_mismatch_strict_raises(self, integration_db):
-        """Covers: UC-006-EXT-K-01 — strict: format mismatch → CREATIVE_REJECTED (salesagent-8j5r)."""
+        """Covers: UC-006-EXT-K-01 — strict: format mismatch → CREATIVE_REJECTED (#1417)."""
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")

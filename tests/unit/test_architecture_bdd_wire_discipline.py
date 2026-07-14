@@ -48,10 +48,9 @@ _ERROR_CONSTRUCTION_ALLOWLIST: set[str] = {
     # string — production emits unstructured per-creative errors (no machine code). Remove
     # when sync_creatives emits structured per-creative codes.
     "bdd/steps/domain/uc006_sync_creatives.py _promote_creative_errors_to_ctx _SyntheticError",
-    # Production gap: null-date state is UNREACHABLE through the wire (DB NOT-NULL);
-    # _compute_status has no null guard. Remove when a guard is added so the scenario can
-    # dispatch a real request.
-    "bdd/steps/domain/uc019_query_media_buys.py _create_media_buy_with_null_dates AdCPValidationError",
+    # (Retired) The null-date phantom (uc019 _create_media_buy_with_null_dates) is gone:
+    # the scenario was retired (schema-impossible + not spec-graded) and resolve_canonical_status
+    # now guards the null edge, so no test-side error construction remains here.
 }
 
 # -- Check B: reconstructed-only error assertions -----------------------------

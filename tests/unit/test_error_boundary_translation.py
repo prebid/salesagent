@@ -79,7 +79,7 @@ class TestExtractErrorInfoAdCPError:
 
     # AdCPConflictError recovery (CONFLICT → transient) and AdCPBudgetExhaustedError
     # recovery (BUDGET_EXHAUSTED → terminal) are graded against the pinned enum by the
-    # recovery-conformance oracle (salesagent-xds6). The prior per-class literal methods
+    # recovery-conformance oracle (#1417). The prior per-class literal methods
     # asserted the old correctable values and are removed.
 
     def test_adcp_gone_error_extracts_code_and_message(self):
@@ -558,7 +558,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 409
-            # CONFLICT recovery is transient per the pinned enum (salesagent-xds6).
+            # CONFLICT recovery is transient per the pinned enum (#1417).
             assert_envelope_shape(response.json(), "CONFLICT", recovery="transient")
 
     def test_adcp_service_unavailable_from_impl_returns_503(self):

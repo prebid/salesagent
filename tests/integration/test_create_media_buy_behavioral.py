@@ -1558,7 +1558,7 @@ class TestExtensionObligations:
                 gam_secondary_currencies=None,
             )
             # Currency unsupported by the GAM network is a seller-capability gap:
-            # UNSUPPORTED_FEATURE, not VALIDATION_ERROR (salesagent-gh8p.3).
+            # UNSUPPORTED_FEATURE, not VALIDATION_ERROR (#1417).
             with pytest.raises(AdCPCapabilityNotSupportedError) as excinfo:
                 env.call_impl(req=req)
 

@@ -61,60 +61,6 @@ def _resolve_media_buy_ids(ctx: dict, labels: list[str]) -> list[str]:
     return [_resolve_media_buy_id(ctx, label) for label in labels]
 
 
-def _create_media_buy_with_null_dates(
-    ctx: dict, principal_id: str, mb_id: str, *, null_start: bool, null_end: bool
-) -> None:
-    """Create a media buy with null date fields, handling the NOT NULL constraint.
-
-    MediaBuy.start_date and end_date are NOT NULL in the DB schema. When the
-    scenario requires null dates (BR-RULE-150 missing-date edge case), the
-    factory commit raises IntegrityError. We catch it, rollback, and store a
-    structured AdCPValidationError in ctx["error"] representing the constraint
-    violation — this is what production _should_ return per BR-RULE-150.
-    """
-    from sqlalchemy.exc import IntegrityError
-
-    from src.core.exceptions import AdCPValidationError
-
-    _register_principal(ctx, principal_id)
-    env = ctx["env"]
-    real_id = _generate_unique_id(mb_id)
-
-    factory_kwargs: dict[str, Any] = {
-        "tenant": ctx["tenant"],
-        "principal": ctx["principal"],
-        "media_buy_id": real_id,
-        "status": "active",
-    }
-    if null_start:
-        factory_kwargs["start_date"] = None
-        factory_kwargs["start_time"] = None
-    if null_end:
-        factory_kwargs["end_date"] = None
-        factory_kwargs["end_time"] = None
-
-    try:
-        mb = MediaBuyFactory(**factory_kwargs)
-        env._commit_factory_data()
-        _register_media_buy(ctx, mb_id, mb)
-    except IntegrityError:
-        env._session.rollback()
-        missing = []
-        if null_start:
-            missing.extend(["start_date", "start_time"])
-        if null_end:
-            missing.extend(["end_date", "end_time"])
-        # First-class suggestion= (not details["suggestion"]): error.json declares
-        # suggestion top-level, and the strict Then step (#1417 suggestion parity)
-        # asserts the top-level attribute.
-        ctx["error"] = AdCPValidationError(
-            f"Cannot compute status: missing {', '.join(missing)}",
-            suggestion=f"Provide {' or '.join(missing)} to enable status computation",
-            recovery="correctable",
-        )
-        ctx.setdefault("media_buy_labels", {})[mb_id] = real_id
-
-
 def _register_principal(ctx: dict, label: str) -> None:
     """Register the ctx principal under a Gherkin label.
 
@@ -974,16 +920,11 @@ def given_principal_owns_mb_simple(ctx: dict, principal_id: str, mb_id: str) -> 
     _seed_simple_media_buy(ctx, principal_id, mb_id)
 
 
-@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with no start_time and no start_date'))
-def given_principal_owns_mb_no_start(ctx: dict, principal_id: str, mb_id: str) -> None:
-    """Create media buy with no start_time and no start_date."""
-    _create_media_buy_with_null_dates(ctx, principal_id, mb_id, null_start=True, null_end=False)
-
-
-@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with no end_time and no end_date'))
-def given_principal_owns_mb_no_end(ctx: dict, principal_id: str, mb_id: str) -> None:
-    """Create media buy with no end_time and no end_date."""
-    _create_media_buy_with_null_dates(ctx, principal_id, mb_id, null_start=False, null_end=True)
+# RETIRED with T-UC-019-partition-status-invalid: the "no start_time and no
+# start_date" / "no end_time and no end_date" given steps seeded a schema-impossible
+# null-date buy (MediaBuy dates are NOT NULL). See the feature file for the spec
+# rationale. Their helper _create_media_buy_with_null_dates and the paired
+# then_status_handles_missing_date are removed with them.
 
 
 @given(parsers.parse("the request targets a sandbox account"))
@@ -1627,7 +1568,7 @@ def then_suggestion_contains_either(ctx: dict, text1: str, text2: str) -> None:
     from src.core.exceptions import AdCPError
 
     assert isinstance(error, AdCPError), f"Expected AdCPError, got {type(error).__name__}: {error}"
-    # STRICT error.json conformance: top-level attribute only (salesagent-9val).
+    # STRICT error.json conformance: top-level attribute only (#1417).
     suggestion = str(error.suggestion or "").lower()
     assert text1.lower() in suggestion or text2.lower() in suggestion, (
         f"Expected '{text1}' or '{text2}' in suggestion: {error.suggestion}"
@@ -1642,7 +1583,7 @@ def then_suggestion_contains_any_of_three(ctx: dict, text1: str, text2: str, tex
     from src.core.exceptions import AdCPError
 
     assert isinstance(error, AdCPError), f"Expected AdCPError, got {type(error).__name__}: {error}"
-    # STRICT error.json conformance: top-level attribute only (salesagent-9val).
+    # STRICT error.json conformance: top-level attribute only (#1417).
     suggestion = str(error.suggestion or "").lower()
     assert any(t.lower() in suggestion for t in [text1, text2, text3]), (
         f"Expected one of '{text1}', '{text2}', '{text3}' in suggestion: {error.suggestion}"
@@ -1662,29 +1603,6 @@ def then_media_buy_has_status(ctx: dict, mb_id: str, expected_status: str) -> No
     actual = getattr(matching[0], "status", None)
     actual_str = actual.value if hasattr(actual, "value") else str(actual)
     assert actual_str == expected_status, f"Expected status '{expected_status}' for '{mb_id}', got '{actual_str}'"
-
-
-@then(parsers.parse('the media buy "{mb_id}" status computation should handle the missing date gracefully'))
-def then_status_handles_missing_date(ctx: dict, mb_id: str) -> None:
-    """Assert that a media buy with missing dates raises a structured error.
-
-    This step is used in @error-tagged scenarios where missing dates should
-    cause a graceful failure (structured AdCPError), not a silent success.
-    The scenario's follow-up steps check for suggestion fields, confirming
-    an error is the expected outcome.
-    """
-    from src.core.exceptions import AdCPError
-
-    error = ctx.get("error")
-    assert error is not None, (
-        f"Expected a structured error for media buy '{mb_id}' with missing dates, "
-        f"but no error was raised — production returned a response instead. "
-        f"Missing dates should cause a validation/computation error, not succeed silently."
-    )
-    assert isinstance(error, (AdCPError, ValueError, TypeError)), (
-        f"Expected graceful error handling (AdCPError/ValueError/TypeError) "
-        f"for missing date, got unhandled {type(error).__name__}: {error}"
-    )
 
 
 @then(parsers.parse("the error message should include field-level validation details"))
@@ -1740,7 +1658,7 @@ def then_error_has_suggestion(ctx: dict) -> None:
     assert isinstance(error, AdCPError), (
         f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
     )
-    # STRICT error.json conformance: top-level attribute only (salesagent-9val).
+    # STRICT error.json conformance: top-level attribute only (#1417).
     suggestion = error.suggestion
     assert isinstance(suggestion, str) and suggestion.strip(), (
         f"Expected non-empty top-level suggestion string, got {suggestion!r}"
@@ -2238,7 +2156,7 @@ def then_error_suggestion_for_fix(ctx: dict) -> None:
     assert isinstance(error, AdCPError), (
         f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
     )
-    # STRICT error.json conformance: top-level attribute only (salesagent-9val).
+    # STRICT error.json conformance: top-level attribute only (#1417).
     suggestion = error.suggestion
     assert isinstance(suggestion, str) and len(suggestion.strip()) >= 5, (
         f"Expected actionable top-level suggestion string (>= 5 chars), "
@@ -2359,7 +2277,7 @@ def then_error_code_with_suggestion(ctx: dict, code: str) -> None:
     assert isinstance(error, AdCPError), f"Expected AdCPError with code '{code}', got {type(error).__name__}: {error}"
     assert error.error_code == code, f"Expected error code '{code}', got '{error.error_code}'"
     # STRICT error.json conformance: suggestion is a top-level error attribute,
-    # never read from the free-form details dict (salesagent-9val).
+    # never read from the free-form details dict (#1417).
     suggestion = error.suggestion
     assert isinstance(suggestion, str) and suggestion.strip(), (
         f"Expected non-empty top-level suggestion string for error code '{code}', got {suggestion!r}"

@@ -5,7 +5,7 @@ top-level sibling of code/message/field/retry_after/recovery. ``details`` is a
 free-form dict — a suggestion buried there is NOT at the protocol position and
 must not satisfy a conformance assertion. These tests pin the strict contract
 so the harness red-flags every emitter that buries (or omits) the suggestion
-instead of masking the drift (salesagent-9val).
+instead of masking the drift (#1417).
 """
 
 from tests.harness.transport import extract_wire_suggestion

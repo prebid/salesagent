@@ -1915,6 +1915,12 @@ mappings:
       upstream_refs: []
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-003-ext-status-date-refine"
+      adcp_feature: "BR-UC-002-media-buy-status-dual-emit.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-003-main"
       adcp_feature: "BR-UC-003-update-media-buy.feature"
       obligation_id: null
@@ -10626,12 +10632,6 @@ mappings:
       business_rules: []
       status: new
     - adcp_scenario_id: "T-UC-019-partition-status"
-      adcp_feature: "BR-UC-019-query-media-buys.feature"
-      obligation_id: null
-      upstream_refs: ["BR-RULE-150"]
-      business_rules: []
-      status: new
-    - adcp_scenario_id: "T-UC-019-partition-status-invalid"
       adcp_feature: "BR-UC-019-query-media-buys.feature"
       obligation_id: null
       upstream_refs: ["BR-RULE-150"]

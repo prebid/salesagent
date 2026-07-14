@@ -690,7 +690,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | sort_by=unsupported_metric (seller falls back to spend) | {"placement": {"sort_by": "conversions"}} | valid |
       | limit negative | {"device_type": {"limit": -1}} | invalid |
 
-  @T-UC-004-partition-attribution @partition @attribution_window @BR-RULE-092
+  @T-UC-004-partition-attribution @partition @attribution_window @BR-RULE-092 @schema-v3.1
   Scenario Outline: Attribution window partition - <partition>
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
@@ -846,18 +846,18 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | failed (not in AdCP enum, only internal) | failed | invalid |
       | [] (empty array, violates minItems) | [] | invalid |
 
-  @T-UC-004-partition-date-range @partition @delivery_date_range @BR-RULE-013
+  @T-UC-004-partition-date-range @partition @delivery_date_range @BR-RULE-013 @schema-v3.1
   Scenario Outline: Delivery date range partition - <partition>
     Given a media buy "mb-001" owned by "buyer-001"
     When the Buyer Agent requests delivery metrics with date range "<partition>"
     Then the date range validation should result in <expected>
 
     Examples:
-      | partition          | expected |
-      | start_before_end   | valid    |
-      | dates_omitted      | valid    |
-      | start_equals_end   | invalid  |
-      | start_after_end    | invalid  |
+      | partition          | expected                                    |
+      | start_before_end   | valid                                       |
+      | dates_omitted      | valid                                       |
+      | start_equals_end   | error "VALIDATION_ERROR" with suggestion    |
+      | start_after_end    | error "VALIDATION_ERROR" with suggestion    |
 
   @T-UC-004-boundary-date-range @boundary @delivery_date_range @BR-RULE-013
   Scenario Outline: Delivery date range boundary - <boundary_point>
@@ -900,20 +900,20 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | credentials = 31 chars (rejected)           | invalid  |
       | Unknown auth scheme not in enum             | invalid  |
 
-  @T-UC-004-partition-resolution @partition @media_buy_resolution @BR-RULE-030
+  @T-UC-004-partition-resolution @partition @media_buy_resolution @BR-RULE-030 @schema-v3.1
   Scenario Outline: Media buy resolution partition - <partition>
     Given media buys owned by "buyer-001"
     When the Buyer Agent requests delivery metrics with resolution "<partition>"
     Then the resolution should result in <expected>
 
     Examples:
-      | partition            | expected |
-      | media_buy_ids_only   | valid    |
-      | both_provided        | valid    |
-      | neither_provided     | valid    |
-      | partial_resolution   | valid    |
-      | zero_resolution      | valid    |
-      | empty_array          | invalid  |
+      | partition            | expected                                 |
+      | media_buy_ids_only   | valid                                    |
+      | both_provided        | valid                                    |
+      | neither_provided     | valid                                    |
+      | partial_resolution   | valid                                    |
+      | zero_resolution      | valid                                    |
+      | empty_array          | error "VALIDATION_ERROR" with suggestion |
 
   @T-UC-004-boundary-resolution @boundary @media_buy_resolution @BR-RULE-030
   Scenario Outline: Media buy resolution boundary - <boundary_point>

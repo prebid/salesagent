@@ -973,7 +973,7 @@ class TestA2AErrorResponseStructure:
             assert "tenant scope mismatch" in str(exc_info.value)
             assert exc_info.value.error_code == "AUTH_REQUIRED"
             # AdCPAuthorizationError default recovery is correctable per the pinned AUTH_REQUIRED
-            # enum (salesagent-xc2j), preserved through the PermissionError wrap.
+            # enum (#1417), preserved through the PermissionError wrap.
             assert exc_info.value.recovery == "correctable"
             assert isinstance(exc_info.value.__cause__, PermissionError)
 

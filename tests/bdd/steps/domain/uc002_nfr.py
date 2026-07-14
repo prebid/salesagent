@@ -176,7 +176,7 @@ def then_auth_before_business_logic(ctx: dict) -> None:
     result = auth_ctx.get("result")
     assert result is not None, "dispatch_request did not produce a TransportResult for the invalid-identity request"
     # recovery omitted -> defaults to the pinned AUTH_REQUIRED enum (correctable). Do not
-    # pass an explicit recovery= that shadows the pinned enum (salesagent-xc2j: superseded
+    # pass an explicit recovery= that shadows the pinned enum (#1417: superseded
     # the earlier terminal override; the pinned enum is the single source of truth).
     result.assert_wire_error("AUTH_REQUIRED", message_substr="Principal ID not found")
 
@@ -476,7 +476,7 @@ def then_budget_validated_against_min_order(ctx: dict) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# nfr-highvalue: >$10k high-value Seller alert (salesagent-wvry)
+# nfr-highvalue: >$10k high-value Seller alert (#1417)
 # ═══════════════════════════════════════════════════════════════════════
 
 

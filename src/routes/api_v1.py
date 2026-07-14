@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
 
+from adcp.types import BrandReference
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     AttributionWindow,
     ReportingDimensions,
@@ -73,8 +74,9 @@ class GetProductsBody(SalesAgentBaseModel):
 
 
 class CreateMediaBuyBody(SalesAgentBaseModel):
-    # dict BrandReference or string domain/URL shorthand (#1324)
-    brand: dict[str, Any] | str | None = None
+    # dict BrandReference or string domain/URL shorthand (#1324); coerced to
+    # BrandReference at the boundary via to_brand_reference.
+    brand: BrandReference | dict[str, Any] | str | None = None  # adcp 3.6.0: BrandReference with domain field
     packages: list[dict[str, Any]] = []  # Validated downstream by CreateMediaBuyRequest
     start_time: str | None = None
     end_time: str | None = None
@@ -100,7 +102,7 @@ class UpdateMediaBuyBody(SalesAgentBaseModel):
     # are coerced downstream (Pattern #7 extra policy inherited from SalesAgentBaseModel).
     # NOTE: top-level targeting_overlay/creatives are intentionally omitted — the raw
     # wrapper accepts them in its signature but drops them before _build_update_request,
-    # so declaring them here would be a silent no-op (see salesagent-tayq).
+    # so declaring them here would be a silent no-op (see #1417).
     packages: list[dict[str, Any]] | None = None
     pacing: str | None = None
     daily_budget: float | None = None
@@ -308,6 +310,8 @@ async def create_media_buy(
     # Coerce wire dicts to the SDK types the raw wrapper declares, inside the
     # shared boundary so a malformed object rejects with the two-layer envelope
     # (top-level suggestion + field) instead of a raw-ValidationError leak.
+    # The string/dict brand shorthand (#1324/#1537) is coerced here too, so an
+    # invalid brand yields the same boundary-translated envelope.
     with adcp_validation_boundary(context="create_media_buy request"):
         account_ref = to_account_reference(body.account)
         brand_ref = to_brand_reference(body.brand)
@@ -318,7 +322,7 @@ async def create_media_buy(
         brand=brand_ref,
         # packages stay wire dicts: CreateMediaBuyRequest validates them as the
         # request's packages[] field, preserving full-request error field paths.
-        packages=body.packages,  # type: ignore[arg-type]
+        packages=body.packages,
         start_time=body.start_time,
         end_time=body.end_time,
         po_number=body.po_number,
@@ -356,7 +360,7 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         daily_budget=body.daily_budget,
         # packages stay wire dicts: UpdateMediaBuyRequest validates them as the
         # request's packages[] field, preserving full-request error field paths.
-        packages=body.packages,  # type: ignore[arg-type]
+        packages=body.packages,
         push_notification_config=push_notification_config,
         context=context,
         reporting_webhook=reporting_webhook,
@@ -398,7 +402,7 @@ async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = r
     """Sync creatives (auth required)."""
     # Coerce the raw account dict into an AccountReference so sync_creatives_raw
     # resolves it at the transport boundary (mirror create_media_buy / the sibling
-    # handlers above — salesagent-hseb).
+    # handlers above — #1417).
     with adcp_validation_boundary(context="sync_creatives request"):
         account_ref = to_account_reference(body.account)
         push_notification_config = to_push_notification_config(body.push_notification_config)
@@ -407,7 +411,7 @@ async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = r
     response = creatives_sync_module.sync_creatives_raw(
         # creatives stay wire dicts: _sync_creatives_impl validates each entry
         # individually (partial-success semantics with per-creative results).
-        creatives=body.creatives,  # type: ignore[arg-type]
+        creatives=body.creatives,
         assignments=body.assignments,
         creative_ids=body.creative_ids,
         delete_missing=body.delete_missing,

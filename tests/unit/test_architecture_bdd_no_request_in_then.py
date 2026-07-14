@@ -75,7 +75,7 @@ _DISPATCH_IN_THEN_ALLOWLIST: set[str] = {
     # replaced by BR-UC-002-nfr-enforcement.feature. The second-request dispatch
     # was migrated from env.call_impl to the shared wire dispatcher
     # (dispatch_request) so that, when these scenarios are wired, they exercise
-    # the parametrized transport on the wire (salesagent-osrl). Rate limiting and
+    # the parametrized transport on the wire (#1417). Rate limiting and
     # payload size remain spec-production gaps (FIXME salesagent-9vgz.92).
     "bdd/steps/domain/uc002_nfr.py:126 then_auth_before_business_logic",
     "bdd/steps/domain/uc002_nfr.py:190 then_rate_limiting_enforced",

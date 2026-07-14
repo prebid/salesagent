@@ -20,8 +20,8 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps._outcome_helpers import is_e2e
+from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal, seed_account_with_access
 from tests.bdd.steps.generic._dispatch import dispatch_request
-from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 from tests.factories.creative_asset import (
     assert_assets,
     build_assets,
@@ -183,14 +183,9 @@ def _setup_account_by_id(account_id: str, tenant: object, principal: object) -> 
         # Account exists but the test principal has no access — triggers AUTHORIZATION_ERROR
         domain = account_id.replace("_", "-") + ".com"
         other_principal = PrincipalFactory(tenant=tenant)
-        account = AccountFactory(
-            tenant=tenant,
-            account_id=account_id,
-            status="active",
-            brand={"domain": domain},
-            operator=domain,
+        seed_account_with_access(
+            tenant, other_principal, account_id=account_id, status="active", brand_domain=domain, operator=domain
         )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
         return
 
     if status is None:
@@ -200,14 +195,9 @@ def _setup_account_by_id(account_id: str, tenant: object, principal: object) -> 
     # BrandReference domain must match ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]...)$
     # Replace underscores with hyphens for valid domains
     domain = account_id.replace("_", "-") + ".com"
-    account = AccountFactory(
-        tenant=tenant,
-        account_id=account_id,
-        status=status,
-        brand={"domain": domain},
-        operator=domain,
+    seed_account_with_access(
+        tenant, principal, account_id=account_id, status=status, brand_domain=domain, operator=domain
     )
-    AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
 
 
 def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: object, principal: object) -> None:
@@ -218,40 +208,40 @@ def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: obje
     if brand_domain == "multi.com":
         # Ambiguous: create 3 accounts with same natural key, all accessible to the
         # requesting agent so ambiguity is genuine FOR THIS AGENT — natural-key
-        # resolution is access-scoped (salesagent-ym1c).
+        # resolution is access-scoped (#1417).
         for i in range(3):
-            account = AccountFactory(
-                tenant=tenant,
+            seed_account_with_access(
+                tenant,
+                principal,
                 account_id=f"acc-multi-{i}",
                 status="active",
-                brand={"domain": brand_domain},
+                brand_domain=brand_domain,
                 operator=operator,
             )
-            AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
     elif brand_domain in ("unknown.com",):
         # Not found — don't create anything
         pass
     elif brand_domain in access_denied_domains:
         # Account exists but the test principal has no access — triggers AUTHORIZATION_ERROR
         other_principal = PrincipalFactory(tenant=tenant)
-        account = AccountFactory(
-            tenant=tenant,
+        seed_account_with_access(
+            tenant,
+            other_principal,
             account_id=f"acc-{brand_domain.replace('.', '-')}",
             status="active",
-            brand={"domain": brand_domain},
+            brand_domain=brand_domain,
             operator=operator,
         )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
     else:
         # Single match — create one active account
-        account = AccountFactory(
-            tenant=tenant,
+        seed_account_with_access(
+            tenant,
+            principal,
             account_id=f"acc-{brand_domain.replace('.', '-')}",
             status="active",
-            brand={"domain": brand_domain},
+            brand_domain=brand_domain,
             operator=operator,
         )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -295,8 +285,6 @@ def when_sync_creative(ctx: dict) -> None:
 
 def _ensure_tenant_principal(ctx: dict, env: object) -> None:
     """Create tenant + principal if not already created by a Given step."""
-    from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
-
     ensure_tenant_principal(ctx, env)
 
 
@@ -432,7 +420,7 @@ def _extract_error_code_and_suggestion(error: object) -> tuple[str | None, str |
 
     STRICT error.json conformance: ``suggestion`` is a top-level attribute on
     both shapes — a copy buried in the free-form ``details`` dict is a
-    conformance bug and deliberately does not count (salesagent-9val).
+    conformance bug and deliberately does not count (#1417).
     """
     from src.core.exceptions import AdCPError
 
@@ -456,7 +444,7 @@ def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
         "ASSIGNMENT_WEIGHT_BELOW_MINIMUM",
         "ASSIGNMENT_WEIGHT_ABOVE_MAXIMUM",
         # Idempotency-key length codes — merged from the shadowed duplicate step
-        # def this literal used to have (salesagent-fvva): production does not
+        # def this literal used to have (#1417): production does not
         # validate idempotency_key length yet.
         "IDEMPOTENCY_KEY_TOO_SHORT",
         "IDEMPOTENCY_KEY_TOO_LONG",
@@ -2131,7 +2119,7 @@ def _promote_creative_errors_to_ctx(ctx: dict, errs: list) -> None:
             self.message = message
             # STRICT error.json conformance: suggestion is top-level ONLY —
             # synthesizing a details copy would feed the exact non-conformant
-            # position the harness must reject (salesagent-9val).
+            # position the harness must reject (#1417).
             self.suggestion = suggestion
             self.details: dict = {}
 

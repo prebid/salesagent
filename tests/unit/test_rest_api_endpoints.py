@@ -53,7 +53,7 @@ class TestCreateMediaBuyEndpoint:
 
 
 # ---------------------------------------------------------------------------
-# Runtime scalar-forwarding oracles (salesagent-e9kw)
+# Runtime scalar-forwarding oracles (#1417)
 #
 # The body-completeness guard proves each REST scalar is DECLARED on the *_raw
 # wrapper signature; it does NOT prove the route actually forwards the request
@@ -62,7 +62,7 @@ class TestCreateMediaBuyEndpoint:
 # ---------------------------------------------------------------------------
 
 # field -> (wire value, value the route must forward to the raw wrapper).
-# Object params are coerced to SDK types at the route (salesagent-1hcg), so the
+# Object params are coerced to SDK types at the route (#1417), so the
 # forwarded value is the typed model, not the wire dict; ext stays a raw dict.
 _CREATE_WEBHOOK_WIRE = {
     "url": "https://example.com/hook",

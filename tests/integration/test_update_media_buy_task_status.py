@@ -1,6 +1,6 @@
 """Integration tests: update_media_buy wire transports surface TaskStatus.
 
-Before salesagent-egnl, _update_media_buy_impl returns UpdateMediaBuySuccess
+Before #1417, _update_media_buy_impl returns UpdateMediaBuySuccess
 directly (domain object). Wire transports (MCP/A2A/REST) expose the domain
 object as result.payload, so result.payload.status is the domain MediaBuyStatus
 ("active", "approved", etc.) — NOT the ProtocolEnvelope TaskStatus ("completed").

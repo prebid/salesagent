@@ -171,9 +171,9 @@ class RestDispatcher:
 
             body = response.json()
             # Parse a COPY: env parsers strip envelope keys in place (e.g.
-            # _parse_update_rest_response pops "status", salesagent-d45l), which
+            # _parse_update_rest_response pops "status", #1417), which
             # would silently delete fields from the stashed wire capture — the
-            # dispatcher owns the pristine-wire guarantee (salesagent-zsdt).
+            # dispatcher owns the pristine-wire guarantee (#1417).
             payload = env.parse_rest_response(copy.deepcopy(body))
             # Real REST wire: the HTTP JSON body dict.
             return TransportResult(payload=payload, envelope=envelope, raw_response=response, wire_response=body)
@@ -314,7 +314,7 @@ class RestE2EDispatcher:
         try:
             wire_response = response.json()
             # Parse a COPY — same pristine-wire guarantee as the in-process
-            # RestDispatcher (parsers strip envelope keys in place, salesagent-zsdt).
+            # RestDispatcher (parsers strip envelope keys in place, #1417).
             payload = env.parse_rest_response(copy.deepcopy(wire_response))
         except Exception as exc:
             return TransportResult(payload=None, envelope=envelope, error=exc, raw_response=response)

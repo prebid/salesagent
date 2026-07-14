@@ -26,7 +26,7 @@ DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 def _call(ctx: dict, req: ListCreativeFormatsRequest | None = None) -> None:
     """Dispatch through ctx['transport'] (a wire transport: a2a/mcp/rest).
 
-    IMPL was dropped from the BDD default parametrization (salesagent-5yst), so a
+    IMPL was dropped from the BDD default parametrization (#1417), so a
     missing transport is a wiring bug — fail loudly rather than bypassing the wire.
     """
     transport = ctx.get("transport")
@@ -768,7 +768,7 @@ def _partition_agent_type(ctx: dict, partition: str) -> None:
     constructed a test-side ``ValueError`` to fake a rejection production never
     performs. Per the schema hierarchy (3.12 authoritative), these reconcile to
     SUCCESS: dispatch unfiltered via the wire (_call) and let production emit the
-    real result. salesagent-33r0.
+    real result. #1417.
     """
     ctx["filter_under_test"] = "creative_agent_format_type"
     _call(ctx)

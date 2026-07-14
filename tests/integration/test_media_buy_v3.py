@@ -227,7 +227,7 @@ class TestCreateMediaBuyCurrencyValidation:
         )
 
         # Currency support is a seller capability, not a malformed request:
-        # unsupported currency -> UNSUPPORTED_FEATURE (salesagent-gh8p.3).
+        # unsupported currency -> UNSUPPORTED_FEATURE (#1417).
         with pytest.raises(AdCPCapabilityNotSupportedError) as excinfo:
             await _create_media_buy_impl(req=req, identity=identity)
 
@@ -925,12 +925,14 @@ class TestUpdateMediaBuyAdapterError:
         # Move the buy to 'active' so 'pause' passes the state-machine gate and
         # actually reaches the adapter — a pending_creatives buy (no creatives)
         # rejects 'pause' with AdCPGoneError BEFORE any adapter call, so the
-        # network-failure path would never be exercised (salesagent-clsi).
-        with get_db_session() as session:
-            buy = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
+        # network-failure path would never be exercised (#1417).
+        from src.core.database.repositories.uow import MediaBuyUoW
+
+        with MediaBuyUoW(mb_tenant["tenant_id"]) as uow:
+            buy = uow.media_buys.get_by_id(media_buy_id)
             assert buy is not None
             buy.status = "active"
-            session.commit()
+            # MediaBuyUoW auto-commits on clean exit
 
         # Mock adapter to simulate network failure
         with patch("src.core.tools.media_buy_update.get_adapter") as mock_get_adapter:
@@ -947,7 +949,7 @@ class TestUpdateMediaBuyAdapterError:
             # The pause path calls adapter.update_media_buy() with no local try/except
             # and _update_media_buy_impl has no outer handler, so the adapter's
             # ConnectionError propagates to the caller. Assert that deterministically
-            # OUTSIDE any catch-all (salesagent-clsi: the prior try/except swallowed
+            # OUTSIDE any catch-all (#1417: the prior try/except swallowed
             # both the propagated error and the unreachable assert, making this vacuous).
             with pytest.raises(ConnectionError, match="Simulated network failure"):
                 _update_media_buy_impl(req=update_req, identity=mb_identity)
@@ -1007,14 +1009,17 @@ class TestUpdateMediaBuyMissingPackageId:
             UpdateMediaBuyRequest(media_buy_id="mb_x", packages=[{"buyer_ref": "pkg_ref_1", "budget": 5000.0}])
 
 
-class TestGetMediaBuysStatusIsPersistedAuthoritative:
-    """get_media_buys status follows the shared flight-refined taxonomy (#1545).
+class TestGetMediaBuysStatusIsDateRefined:
+    """get_media_buys date-refines the generic serving state against the flight window (AdCP 3.1 GA).
 
-    A generic 'active'-persisted buy past its end date is date-refined to
-    'completed' by the shared resolve_canonical_status — the SAME answer the
-    update response now gives (both delegate to _compute_status), so the read
-    and write paths agree. Terminal persisted states are never date-derived
-    (#1417's core, preserved by the shared resolver).
+    Core invariant (GA protocol lifecycle, docs/media-buy/media-buys/lifecycle.mdx):
+    the serving-state transitions are flight-date-driven — `pending_start` before the
+    flight starts, `active` within the window, `completed` after it ends. A past-end
+    'active'-persisted buy reports 'completed' at read time; only terminal/explicit
+    states (paused/rejected/canceled) are returned verbatim. Shared with
+    get_media_buy_delivery via resolve_canonical_status (#1545 supersedes the earlier
+    #1417 persisted-authoritative read; the GA state machine defines active->completed
+    at flight end).
     """
 
     def test_past_end_active_buy_reports_completed(self, integration_db):
@@ -1047,6 +1052,6 @@ class TestGetMediaBuysStatusIsPersistedAuthoritative:
 
         assert len(response.media_buys) == 1, f"Expected the buy; errors: {response.errors}"
         assert response.media_buys[0].status == MediaBuyStatus.completed, (
-            "past-end generic 'active'-persisted buy must be date-refined to 'completed' by the "
-            "shared resolver (agreeing with delivery and the update path)"
+            "past-end 'active'-persisted buy must date-refine to 'completed' per the GA state "
+            "machine (active->completed at flight end), NOT report persisted 'active'"
         )

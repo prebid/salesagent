@@ -240,6 +240,11 @@ class AdCPError(Exception):
     _default_status_code: ClassVar[int] = 500
     _default_error_code: ClassVar[str] = "INTERNAL_ERROR"
     _default_recovery: ClassVar[RecoveryHint] = "transient"
+    # Optional class-level suggestion default (#1417 round-8 review item 4): a subclass
+    # whose every rejection shares one buyer fix hint (e.g. AUTH_REQUIRED →
+    # "provide valid credentials") sets this so no raise site can forget the
+    # graded top-level ``suggestion``. Per-raise ``suggestion=`` overrides.
+    _default_suggestion: ClassVar[str | None] = None
 
     # Instance attributes — set in __init__ from _default_* unless overridden.
     error_code: str
@@ -267,7 +272,7 @@ class AdCPError(Exception):
         self.message = message
         self.details = details
         self.field = field
-        self.suggestion = suggestion
+        self.suggestion = suggestion if suggestion is not None else type(self)._default_suggestion
         self.retry_after = retry_after
         self.context = context
         self.error_code = error_code if error_code is not None else type(self)._default_error_code
@@ -433,6 +438,9 @@ class AdCPInvalidRequestError(AdCPValidationError):
     _default_error_code: ClassVar[str] = "INVALID_REQUEST"
 
 
+AUTH_REQUIRED_SUGGESTION = "Provide valid credentials (x-adcp-auth token)."
+
+
 class AdCPAuthenticationError(AdCPError):
     """Missing or invalid authentication credentials (401).
 
@@ -447,12 +455,17 @@ class AdCPAuthenticationError(AdCPError):
     not the ``terminal`` base default. The enum carries operationally distinct
     sub-cases (missing credentials → retry; presented-but-rejected → escalate),
     but its single canonical ``recovery`` classification is ``correctable``,
-    and the wire contract is graded against that enum (#1430, superseding the earlier "storyboards grade only the code" judgment).
+    and the wire contract is graded against that enum (#1417,
+    superseding the earlier "storyboards grade only the code" judgment).
     """
 
     _default_status_code: ClassVar[int] = 401
     _default_error_code: ClassVar[str] = "AUTH_REQUIRED"
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
+    # Every authentication rejection shares one buyer fix hint, so the graded
+    # top-level suggestion (error.json) can never be forgotten at a raise site
+    # (#1417 round-8 review item 4: 11 of 12 raise sites emitted an empty suggestion).
+    _default_suggestion: ClassVar[str | None] = AUTH_REQUIRED_SUGGESTION
 
 
 class AdCPAuthRequiredError(AdCPAuthenticationError):
@@ -467,7 +480,7 @@ class AdCPAuthorizationError(AdCPError):
     """Authenticated but not authorized for this resource (403).
 
     Emits ``AUTH_REQUIRED`` with ``correctable`` recovery, matching the pinned
-    AdCP error-code enum and ``AdCPAuthenticationError``.
+    AdCP error-code enum and ``AdCPAuthenticationError`` (#1417).
     """
 
     _default_status_code: ClassVar[int] = 403
@@ -556,7 +569,7 @@ class AdCPConflictError(AdCPError):
     a generic resource conflict (e.g. concurrent modification) is resolved by
     retrying with backoff. Subclasses whose specific code the enum classifies as
     correctable (ACCOUNT_AMBIGUOUS, IDEMPOTENCY_CONFLICT, IDEMPOTENCY_EXPIRED)
-    override this.
+    override this (#1417).
     """
 
     _default_status_code: ClassVar[int] = 409
@@ -569,7 +582,7 @@ class AdCPAccountAmbiguousError(AdCPConflictError):
 
     _default_error_code: ClassVar[str] = "ACCOUNT_AMBIGUOUS"
     # ACCOUNT_AMBIGUOUS is correctable per the enum (the buyer disambiguates with
-    # an explicit account_id) — override the transient CONFLICT parent.
+    # an explicit account_id) — override the transient CONFLICT parent (#1417).
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -591,7 +604,7 @@ class AdCPBudgetExhaustedError(AdCPError):
 
     Recovery=terminal per the pinned error-code.json enumMetadata (BUDGET_EXHAUSTED):
     an exhausted budget cannot be recovered autonomously — an operator must add
-    budget — so the buyer agent must not retry.
+    budget — so the buyer agent must not retry (#1417).
     """
 
     _default_status_code: ClassVar[int] = 422

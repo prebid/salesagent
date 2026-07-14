@@ -30,21 +30,21 @@
 # Fixed by mapping FastAPI 422 -> AdCPValidationError in parse_rest_error
 # (tests/harness/_base.py); the 6 entries now xpass in-network (innet_120626_1848).
 
-# --- uc004 invalid-input validation — accepted by live server (7) ---
+# --- uc004 invalid-input validation — accepted by live server (5) ---
 # GENUINE GAP: the live server accepts these inputs that the spec marks invalid
-# (start==end / start>end date ranges, owner-mismatch principal, out-of-enum sampling,
-# string "true" daily-breakdown, geo metro without system).
+# (owner-mismatch principal, out-of-enum sampling, string "true" daily-breakdown,
+# geo metro without system).
 # Production does not validate them — a real spec-production gap, tracked for src/ fix.
 # (campaign-unit interval!=1 GRADUATED at the main merge: upstream regenerated the
 # scenario's expected cell `invalid` -> `error "VALIDATION_ERROR" with suggestion`,
 # the old `-invalid]` nodeid no longer collects, and the renamed scenario passes
 # in-network on main — absent from main's ledger.)
-# date-range BOUNDARY rows GRADUATED (first in-network CI run 2026-07-09): the
-# #1270 strict tripwires FIRED — the live server now validates start>=end (the
-# merged #1417 validation embed). The partition twins below stay pending their
-# own positive evidence on the next in-network run.
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_partition__partition[e2e_rest-start_after_end-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_delivery_date_range_partition__partition[e2e_rest-start_equals_end-invalid]
+# date-range rows GRADUATED on both sides: the BOUNDARY rows on this branch's
+# first in-network CI run 2026-07-09 (the #1270 strict tripwires FIRED — the
+# live server validates start>=end, the merged #1417 validation embed); the
+# partition twins (start_after_end / start_equals_end) on origin/pr-1417 itself
+# (d4af23095, strict-xfail XPASS in-network) — that is the positive evidence the
+# twins were waiting for, so all four date-range rows are off the ledger.
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-string 'true' (non-boolean type)-"true"-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_boundary__boundary_point[e2e_rest-principal differs from owner-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_partition__partition[e2e_rest-owner_mismatch-invalid]

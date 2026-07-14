@@ -15,11 +15,17 @@ from adcp.types import (
 )
 
 from src.core.database.repositories.uow import AccountUoW
-from src.core.exceptions import AdCPAccountNotFoundError, AdCPNotFoundError
-from src.core.helpers.account_helpers import resolve_account
+from src.core.exceptions import (
+    AdCPAccountNotFoundError,
+    AdCPError,
+    AdCPNotFoundError,
+    build_two_layer_error_envelope,
+)
+from src.core.helpers.account_helpers import _require_account_access, resolve_account
 from src.core.resolved_identity import ResolvedIdentity
 from tests.harness._base import IntegrationEnv
 from tests.harness.transport import Transport
+from tests.helpers import assert_envelope_shape
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -87,6 +93,95 @@ class TestAccountResolutionErrorCodes:
             assert exc_info.value.error_code == "ACCOUNT_NOT_FOUND"
 
 
+class TestRequireAccountAccessFalsyPrincipal:
+    """_require_account_access must fail CLOSED on a falsy principal_id (hl35).
+
+    The helper is an access-authorization decision. It must reject a missing
+    principal (AUTH_REQUIRED) on its own, independent of any caller-side guard —
+    never fall through and grant access because the truthiness check short-circuits.
+
+    This drives the helper DIRECTLY (not via resolve_account) so it grades the
+    helper's own self-defense, not the entry-level guard that sits above it.
+    """
+
+    @pytest.mark.parametrize("falsy_principal", ["", None], ids=["empty_string", "none"])
+    def test_helper_rejects_falsy_principal_on_wire(self, integration_db, falsy_principal):
+        """_require_account_access('' / None) → AUTH_REQUIRED/correctable on the wire."""
+        from tests.factories import AgentAccountAccessFactory, PrincipalFactory, TenantFactory
+
+        with _AccountResolutionEnv() as env:
+            tenant = TenantFactory()
+            # A real account WITH access for a good principal: has_access() would
+            # return True for that principal, so the ONLY reason to reject here is
+            # the falsy principal on the driving identity.
+            access = AgentAccountAccessFactory(tenant=tenant)
+            account_id = access.account_id
+            good_principal_id = access.principal_id
+            env.get_session()  # commit factory data
+
+            identity = PrincipalFactory.make_identity(principal_id=falsy_principal, tenant_id=tenant.tenant_id)
+
+            with AccountUoW(tenant.tenant_id) as uow:
+                # Sanity: the access grant is real — a valid principal HAS access.
+                assert uow.accounts.has_access(good_principal_id, account_id) is True
+
+                with pytest.raises(AdCPError) as exc_info:
+                    _require_account_access(identity, account_id, uow.accounts)
+
+            assert_envelope_shape(
+                build_two_layer_error_envelope(exc_info.value),
+                "AUTH_REQUIRED",
+                recovery="correctable",
+            )
+
+
+class TestResolveAccountFalsyPrincipalEntryGuard:
+    """resolve_account must reject a falsy principal BEFORE any scoped query (hl35).
+
+    Grades the entry-level guard: with a falsy (esp. None) principal, the
+    natural-key path must not run its scoped list/count query and disclose a
+    tenant-wide match/ambiguity count before rejecting. resolve_account must fail
+    CLOSED with AUTH_REQUIRED/correctable up front.
+    """
+
+    @pytest.mark.parametrize("falsy_principal", ["", None], ids=["empty_string", "none"])
+    def test_resolve_account_rejects_falsy_principal_on_wire(self, integration_db, falsy_principal):
+        """resolve_account(natural_key, '' / None) → AUTH_REQUIRED/correctable on the wire."""
+        from tests.factories import AccountFactory, AgentAccountAccessFactory, PrincipalFactory, TenantFactory
+
+        with _AccountResolutionEnv() as env:
+            tenant = TenantFactory()
+            # A real account that MATCHES the natural key below, with access for a
+            # good principal. A None principal would otherwise skip the access join
+            # and match this account tenant-wide (fail-open); '' would fail-closed
+            # to ACCOUNT_NOT_FOUND — neither is the AUTH_REQUIRED the buyer must see.
+            account = AccountFactory(
+                tenant=tenant,
+                brand=BrandReference(domain="acme.example"),
+                operator="ssp.example",
+            )
+            AgentAccountAccessFactory(tenant=tenant, account=account)
+            env.get_session()  # commit factory data
+
+            identity = PrincipalFactory.make_identity(principal_id=falsy_principal, tenant_id=tenant.tenant_id)
+            ref = AccountReference(
+                root=AccountReferenceByNaturalKey(
+                    brand=BrandReference(domain="acme.example"),
+                    operator="ssp.example",
+                )
+            )
+
+            with AccountUoW(tenant.tenant_id) as uow:
+                with pytest.raises(AdCPError) as exc_info:
+                    resolve_account(ref, identity, uow.accounts)
+
+            assert_envelope_shape(
+                build_two_layer_error_envelope(exc_info.value),
+                "AUTH_REQUIRED",
+                recovery="correctable",
+            )
+
+
 class TestAccountNotFoundViaTransports:
     """ACCOUNT_NOT_FOUND error surfaces through transport wrappers (l9wn regression).
 
@@ -126,7 +221,7 @@ class TestAccountNotFoundViaTransports:
     def test_account_not_found_via_a2a(self, env_with_data):
         """ACCOUNT_NOT_FOUND surfaces through A2A transport (not stripped by harness).
 
-        Covers: salesagent-l9wn regression test
+        Covers: #1417 regression test
         """
         result = env_with_data.call_via(Transport.A2A, req=self._nonexistent_account_req())
         assert result.is_error, f"Expected ACCOUNT_NOT_FOUND error, got success: {result.payload}"
@@ -142,7 +237,7 @@ class TestAccountNotFoundViaTransports:
         call_mcp calls the tool function directly (not through FastMCP server),
         so the error surfaces as a raw AdCPError on result.error.
 
-        Covers: salesagent-l9wn regression test
+        Covers: #1417 regression test
         """
         result = env_with_data.call_via(Transport.MCP, req=self._nonexistent_account_req())
         assert result.is_error, f"Expected ACCOUNT_NOT_FOUND error, got success: {result.payload}"

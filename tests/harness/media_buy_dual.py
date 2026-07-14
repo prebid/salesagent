@@ -221,12 +221,12 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         # On error this translates the raised AdCPError into an AdCPToolError
         # carrying the two-layer wire envelope, which McpDispatcher captures as
         # wire_error_envelope — calling the raw wrapper would let the bare
-        # exception escape with no wire envelope (salesagent-ihwl).
+        # exception escape with no wire envelope (#1417).
         wrapped_update_media_buy = with_error_logging(update_media_buy)
         tool_result = asyncio.run(wrapped_update_media_buy(ctx=mock_ctx, **kwargs))
         data = dict(tool_result.structured_content)
         # structured_content IS the real MCP wire body — stash it before
-        # _parse_update_rest_response mutates it (.pop("status")) (salesagent-d45l).
+        # _parse_update_rest_response mutates it (.pop("status")) (#1417).
         self._last_wire_response = dict(data)
         return self._parse_update_rest_response(data)
 

@@ -7,10 +7,10 @@ e2e_rest (the IMPL fallback was removed; see ``tests/bdd/steps/generic/
 _dispatch.py``). Therefore any BDD ``pytest.mark.xfail(reason=...)`` that blames
 #1462 is necessarily MIS-ATTRIBUTED: the real cause is something the wire
 transports actually exercise (e.g. the generic ``with {request_params}`` step
-shadowing a specific partition step and dropping the window — salesagent-50hl).
+shadowing a specific partition step and dropping the window — #1417).
 
 This guard exists because exactly that mis-attribution accreted across five
-marker sites in ``tests/bdd/conftest.py`` and was corrected in salesagent-rlgl.2.
+marker sites in ``tests/bdd/conftest.py`` and was corrected in #1417.
 The disease's recurrence is also caught at runtime by ``strict=True`` (a stale
 marker that starts passing becomes an XPASS->FAILED in the full in-network run),
 but this static guard stops the mis-attributed *reason string* from being
@@ -21,7 +21,7 @@ Scanning approach: AST — find ``pytest.mark.xfail(...)`` calls under
 *comments* that mention #1462 to explain it is the IMPL path are fine — only the
 marker reason strings are scanned.)
 
-GH: salesagent-rlgl.2 (disease), salesagent-50hl (the real partition cause)
+GH: #1417 (disease), #1417 (the real partition cause)
 """
 
 from __future__ import annotations
@@ -120,7 +120,7 @@ def test_meta_positive_catches_multiline_concatenated_reason() -> None:
 
 
 def test_meta_negative_allows_corrected_reason() -> None:
-    """Negative: the corrected salesagent-50hl reason is NOT flagged."""
+    """Negative: the corrected #1417 reason is NOT flagged."""
     src = 'import pytest\npytest.mark.xfail(reason="window dropped by step shadowing (salesagent-50hl)", strict=True)\n'
     assert not _scan_source(src), "guard must tolerate a non-#1462 reason"
 

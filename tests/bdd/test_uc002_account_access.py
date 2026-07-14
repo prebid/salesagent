@@ -1,4 +1,4 @@
-"""BDD scenario binding for UC-002 account-access scoping (salesagent-ym1c).
+"""BDD scenario binding for UC-002 account-access scoping (#1417).
 
 Natural-key account resolution must be scoped to the requesting agent's
 accessible accounts. See the feature file header for rationale.

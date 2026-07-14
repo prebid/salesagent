@@ -1,6 +1,6 @@
 """Integration test: MCP update error path surfaces the wire error envelope.
 
-Before salesagent-ihwl, MediaBuyDualEnv._call_update_mcp invokes the raw
+Before #1417, MediaBuyDualEnv._call_update_mcp invokes the raw
 ``update_media_buy`` tool function directly (asyncio.run), bypassing the
 production ``with_error_logging`` decorator that real MCP registration applies
 (src/core/main.py). On error the raw AdCPError propagates instead of becoming an
@@ -34,7 +34,7 @@ _WIRE_TRANSPORTS = [Transport.A2A, Transport.MCP, Transport.REST]
 class TestUC003McpUpdateErrorCapture:
     """Wire transports must surface the two-layer error envelope on update errors.
 
-    Core Invariant (salesagent-ihwl): the harness MCP update path must exercise
+    Core Invariant (#1417): the harness MCP update path must exercise
     the same production boundary error-translation (with_error_logging ->
     AdCPToolError) that real MCP registration applies, so a raised AdCPError
     surfaces as the wire ToolError envelope captured on

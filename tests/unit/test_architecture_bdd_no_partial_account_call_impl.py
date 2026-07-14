@@ -7,7 +7,7 @@ full-create env (MediaBuyCreateEnv / MediaBuyDualEnv) the same call builds a
 (the schema field is ``account``) AND a partial request missing required fields
 — so it crashes with a ValidationError before the scenario's When step runs.
 
-This was the salesagent-rkb9 bug: account-not-found Given steps used
+This was the #1417 bug: account-not-found Given steps used
 ``call_impl(account_ref=...)`` as a precondition and crashed. The fix routes
 account-not-found scenarios through the full create flow with a complete request
 carrying the ``account`` field.
@@ -26,7 +26,7 @@ _STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 _NEEDLE = "call_impl(account_ref"
 
 # Allowlist is empty: account-resolution scenarios now dispatch a full
-# create_media_buy through the wire (salesagent-zh85), so no step builds a
+# create_media_buy through the wire (#1417), so no step builds a
 # request via env.call_impl(account_ref=...) anymore. Allowlist only shrinks.
 _ALLOWLIST: set[str] = set()
 

@@ -8,7 +8,7 @@ fail. Because `make quality` does not run BDD, the regression was invisible to
 the normal gate.
 
   - UC-002: fixed in commit 655ba1f56
-  - UC-003: fixed in salesagent-j4bo (this guard's motivating bug)
+  - UC-003: fixed in #1417 (this guard's motivating bug)
 
 The disease pattern (SYNTACTIC, AST-detectable): a UC branch that splits on an
 extension marker via `any(t.startswith("T-UC-XXX-ext-") ...)` must guard the

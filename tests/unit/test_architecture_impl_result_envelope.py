@@ -23,7 +23,7 @@ _TOOLS_DIR = Path(__file__).resolve().parents[2] / "src" / "core" / "tools"
 # Every *_impl that must return its ProtocolEnvelope wrapper (so wire transports
 # can surface TaskStatus) instead of a bare domain success|error union.
 # (file, impl_func, expected_result_type, {bare_domain_return_types})
-# salesagent-b983: extended from update-only to also pin the create path.
+# #1417: extended from update-only to also pin the create path.
 _IMPLS = [
     (
         "media_buy_update.py",

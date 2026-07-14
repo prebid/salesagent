@@ -333,7 +333,7 @@ class MockAdServer(AdServerAdapter):
         The buyer suggestion rides the first-class ``suggestion=`` param —
         error.json places it at the top level of the error object, so a copy
         buried in ``details`` never reaches the protocol position
-        (salesagent-wwyx, same disease as cx41/58hl). ``error_details`` from
+        (#1417, same disease as cx41/58hl). ``error_details`` from
         test behavior stays in ``details`` for any other injected keys.
         """
         test_behavior = self._read_test_behavior()

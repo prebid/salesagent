@@ -28,8 +28,10 @@ _DUPLICATE_THRESHOLD = 3
 # cluster that would otherwise fail test_no_excessive_duplicate_step_bodies).
 # Allowlist can only shrink — remove entries when the duplicate cluster is gone.
 # Non-load-bearing entries removed per #1560 review; audit tracked in #1561.
-# The uc019/uc026 stub entries were retired when those steps were implemented
-# (no pass-body stubs remain), leaving the allowlist empty.
+# Empty: the uc019/uc026 stub entries that #1561 tracked are gone on both sides —
+# implemented as real steps on one branch, removed on the other when top-level
+# buyer_ref was stripped from the media-buy request contract (pinned 04f59d2d5).
+# No duplicate clusters remain; the forward guard passes with an empty allowlist.
 _ALLOWED_DUPLICATES: set[str] = set()
 
 
