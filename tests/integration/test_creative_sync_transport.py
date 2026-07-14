@@ -721,32 +721,45 @@ class TestFormatValidationAdapter:
 
 @pytest.mark.requires_db
 class TestFormatValidationUnreachable:
-    """Unreachable creative agent → per-creative failure.
+    """Unreachable creative agent → request-level TRANSIENT failure.
+
+    Production-grounded (salesagent-mpo1): the registry types every network
+    failure (connect/timeout -> AdCPServiceUnavailableError), and typed
+    transient errors PROPAGATE out of sync_creatives with their recovery
+    semantics on every transport — a down agent is not a creative problem.
 
     Covers: UC-006-CREATIVE-FORMAT-VALIDATION-03
     """
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_unreachable_agent_fails_creative(self, integration_db, transport):
-        """Network error from registry.get_format → action=failed with 'unreachable'."""
+        """Typed transient from registry.get_format → SERVICE_UNAVAILABLE, recovery=transient."""
+        from src.core.exceptions import AdCPServiceUnavailableError
+        from tests.helpers import assert_envelope_shape
+
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
-            # Override: get_format raises a network error
-            registry_mock = env.mock["registry"].return_value
-            registry_mock.get_format = AsyncMock(side_effect=ConnectionError("Agent unreachable"))
+            # Override: get_format raises the typed error the registry actually
+            # raises for network failures (side_effect on the env's existing
+            # AsyncMock — mock-cap guard).
+            env.mock["registry"].return_value.get_format.side_effect = AdCPServiceUnavailableError(
+                "Connection failed: agent unreachable"
+            )
 
             result = env.call_via(
                 transport,
                 creatives=[_creative(creative_id="c_unreach", name="Unreachable Test")],
             )
 
-        assert result.is_success  # sync succeeds, individual creative fails
-        assert_envelope(result, transport)
-        assert len(result.payload.creatives) == 1
-        creative_result = result.payload.creatives[0]
-        assert creative_result.action == "failed"
-        assert any("unreachable" in e.lower() for e in _error_messages(creative_result.errors))
+            assert result.is_error, f"[{transport.value}] transient agent failure must fail the request"
+            envelope = result.wire_error_envelope or result.synthesized_error_envelope
+            assert_envelope_shape(
+                envelope,
+                "SERVICE_UNAVAILABLE",
+                recovery="transient",
+                message_substr="unreachable",
+            )
 
 
 # ---------------------------------------------------------------------------

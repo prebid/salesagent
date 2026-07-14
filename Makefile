@@ -1,9 +1,16 @@
 .PHONY: setup quality quality-ci quality-full pre-pr lint-fix lint typecheck test-fast test-full
 .PHONY: test-stack-up test-stack-down test-all test-cov test-entity
-.PHONY: test-int test-bdd test-e2e
+.PHONY: test-int test-bdd test-e2e creative-formats-refresh
 
 setup:
 	uv run python scripts/setup-dev.py
+
+# Recapture the reference format fixture from the pinned creative agent. Run only when
+# the pin or the agent's catalog changes; the reviewed fixture diff is the drift gate.
+# Brings up the pinned agent if needed (idempotent). See issue #1418.
+creative-formats-refresh:
+	@./scripts/creative-agent-stack.sh up
+	uv run python scripts/refresh-reference-formats.py --url $$(./scripts/creative-agent-stack.sh url)
 
 quality-ci:
 	uv run ruff format --check .

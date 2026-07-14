@@ -16,9 +16,9 @@ from pytest_bdd import given, then, when
 from tests.bdd.steps.domain.uc005_format_id_shape import _serialized_formats
 from tests.helpers.format_assertions import assert_wire_format_id_is_object
 
-# Shared by ProductFactory defaults and mock creative registry (_get_mock_formats).
+# Shared by ProductFactory defaults and the reference-format registry (_get_reference_formats).
 _AGENT_URL = "https://creative.adcontextprotocol.org"
-# Must match a format_id.id in _get_mock_formats() so the filter returns a result.
+# Must match a format_id.id in _get_reference_formats() so the filter returns a result.
 # Production filters list_creative_formats on the (agent_url, id) pair via
 # format_id_identity (creative_formats.py:279-280), so the returned formats[]
 # contains only the single matching entry regardless of catalog order --
@@ -37,9 +37,11 @@ def given_captured_format_id_from_get_products(ctx: dict) -> None:
     disabled), no dynamic templates (variants return []), and no product_ranking_prompt
     (AI ranking skipped).
     """
+    from src.core.database.models import Tenant
     from src.core.schemas import GetProductsRequest
     from src.core.tools.products import _get_products_impl
     from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
+    from tests.factories.core import get_or_create
 
     env = ctx["env"]
 
@@ -49,7 +51,13 @@ def given_captured_format_id_from_get_products(ctx: dict) -> None:
     # subsequent list_creative_formats call in the When step.
 
     # Create Tenant + Product in DB bound to the outer CreativeFormatsEnv session.
-    tenant = TenantFactory(tenant_id=env._tenant_id, ad_server="mock")
+    # Idempotent over the shared e2e_rest server DB (jdy1-M3, #1418): see get_or_create.
+    tenant = get_or_create(
+        env,
+        Tenant,
+        {"tenant_id": env._tenant_id},
+        lambda: TenantFactory(tenant_id=env._tenant_id, ad_server="mock"),
+    )
     product = ProductFactory(
         tenant=tenant,
         format_ids=[{"agent_url": _AGENT_URL, "id": _FORMAT_ID}],

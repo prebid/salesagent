@@ -242,7 +242,7 @@ class TestCreativeAssignmentRepositoryGetExisting:
         session.scalars.return_value.first.return_value = fake_assignment
 
         repo = CreativeAssignmentRepository(session, "t1")
-        result = repo.get_existing("mb1", "pkg1", "c1")
+        result = repo.get_existing("mb1", "pkg1", "c1", "p1")
 
         assert result is fake_assignment
 
@@ -252,7 +252,7 @@ class TestCreativeAssignmentRepositoryGetExisting:
         session.scalars.return_value.first.return_value = None
 
         repo = CreativeAssignmentRepository(session, "t1")
-        result = repo.get_existing("mb1", "pkg1", "nonexistent")
+        result = repo.get_existing("mb1", "pkg1", "nonexistent", "p1")
 
         assert result is None
 
@@ -290,6 +290,7 @@ class TestCreativeAssignmentRepositoryCreate:
             media_buy_id="mb1",
             package_id="pkg1",
             creative_id="c1",
+            principal_id="p1",
         )
 
         db_obj = session.add.call_args[0][0]

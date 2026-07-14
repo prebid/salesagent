@@ -226,3 +226,14 @@ def setup_oauth_logging() -> None:
         oauth_logger.addHandler(handler)
 
     oauth_logger.info("OAuth structured logging initialized")
+
+
+def log_safe(value: object) -> str:
+    """Neutralize CR/LF in request-provided values before logging.
+
+    Buyer-supplied ids (creative_id, package_id) flow into log lines; a
+    newline embedded in one would forge log entries (CodeQL py/log-injection).
+    Response payloads and exception messages are NOT sanitized — buyers
+    correlate on exact ids.
+    """
+    return str(value).replace("\r", "").replace("\n", "")
