@@ -54,12 +54,14 @@ from google.protobuf import json_format, struct_pb2
 from pydantic import BaseModel
 
 from src.core.audit_logger import get_audit_logger
+from src.core.auth import AUTH_REQUIRED_SUGGESTION
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.repositories import PushNotificationConfigUoW
 from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import (
     AdCPAuthenticationError,
+    AdCPAuthRequiredError,
     AdCPCapabilityNotSupportedError,
     AdCPError,
     AdCPValidationError,
@@ -106,7 +108,9 @@ from src.core.tools import (
 from src.core.tools import (
     update_performance_index_raw as core_update_performance_index_tool,
 )
-from src.core.validation_helpers import adcp_validation_boundary
+from src.core.validation_helpers import (
+    adcp_validation_boundary,
+)
 from src.core.version import get_version
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -596,10 +600,21 @@ class AdCPRequestHandler(RequestHandler):
                 if non_discovery_skills:
                     requires_auth = True
 
-            # Require authentication for non-public skills
+            # Require authentication for non-public skills. Stay a JSON-RPC
+            # InvalidRequestError (protocol-level rejection, top-level error), but
+            # carry the two-layer envelope in ``data`` so the buyer-facing
+            # AUTH_REQUIRED code + AUTH_REQUIRED_SUGGESTION reach the A2A wire —
+            # matching REST's no-identity envelope (auth_context.py), which the
+            # bare A2AError previously dropped. (#1417)
             if requires_auth and not auth_token:
                 raise InvalidRequestError(
-                    message="Missing authentication token - Bearer token required in Authorization header"
+                    message="Missing authentication token - Bearer token required in Authorization header",
+                    data=build_two_layer_error_envelope(
+                        AdCPAuthRequiredError(
+                            "Authentication required - Bearer token required in Authorization header",
+                            suggestion=AUTH_REQUIRED_SUGGESTION,
+                        )
+                    ),
                 )
 
             # ── Transport boundary: resolve identity ONCE ──
@@ -1576,6 +1591,10 @@ class AdCPRequestHandler(RequestHandler):
                 suggestion=f"Required: {required_params}",
             )
 
+        # Validate via the shared boundary so every A2A handler emits the same
+        # field + message + buyer-facing suggestion (AdCP POST-F3, #1417):
+        # idempotency_key_missing / duplicate_product_id rejections include a
+        # non-empty suggestion derived by adcp_validation_boundary.
         with adcp_validation_boundary():
             req = CreateMediaBuyRequest.model_validate(params)
 
@@ -1591,7 +1610,11 @@ class AdCPRequestHandler(RequestHandler):
             push_notification_config=push_notification_config,
             reporting_webhook=params.get("reporting_webhook"),
             context=params.get("context"),
-            account=params.get("account"),
+            # Wrap for boundary-pattern consistency with delivery/sync_creatives. A crash is
+            # structurally impossible here (create_media_buy_raw re-coerces via
+            # CreateMediaBuyRequest), and to_account_reference is idempotent on an already
+            # typed/dict account — but resolving at the boundary keeps all three handlers uniform.
+            account=to_account_reference(params.get("account")),
             idempotency_key=params.get("idempotency_key"),
             identity=identity,
             # The DataPart params AS SENT (pre-normalization, pre-mutation) are
@@ -1624,14 +1647,15 @@ class AdCPRequestHandler(RequestHandler):
         # Pre-process format_id: upgrade legacy strings to FormatId models.
         from src.core.format_cache import upgrade_legacy_format_id
 
-        creatives = []
-        for c in parameters["creatives"]:
-            if isinstance(c, dict) and "format_id" in c:
-                c = {**c, "format_id": upgrade_legacy_format_id(c["format_id"])}
-            creatives.append(CreativeAsset(**c) if isinstance(c, dict) else c)
+        with adcp_validation_boundary(context="sync_creatives request"):
+            creatives = []
+            for c in parameters["creatives"]:
+                if isinstance(c, dict) and "format_id" in c:
+                    c = {**c, "format_id": upgrade_legacy_format_id(c["format_id"])}
+                creatives.append(CreativeAsset(**c) if isinstance(c, dict) else c)
 
-        ctx_param = parameters.get("context")
-        context = ContextObject(**ctx_param) if isinstance(ctx_param, dict) else ctx_param
+            ctx_param = parameters.get("context")
+            context = ContextObject(**ctx_param) if isinstance(ctx_param, dict) else ctx_param
 
         # Call core function with spec-compliant parameters (AdCP v2.5)
         response = core_sync_creatives_tool(
@@ -1789,20 +1813,23 @@ class AdCPRequestHandler(RequestHandler):
         # Build request from parameters (all optional).
         from src.core.tools.creative_formats import build_list_creative_formats_request
 
-        req = build_list_creative_formats_request(
-            format_ids=parameters.get("format_ids"),
-            output_format_ids=parameters.get("output_format_ids"),
-            input_format_ids=parameters.get("input_format_ids"),
-            is_responsive=parameters.get("is_responsive"),
-            name_search=parameters.get("name_search"),
-            asset_types=parameters.get("asset_types"),
-            wcag_level=parameters.get("wcag_level"),
-            min_width=parameters.get("min_width"),
-            max_width=parameters.get("max_width"),
-            min_height=parameters.get("min_height"),
-            max_height=parameters.get("max_height"),
-            context=parameters.get("context"),
-        )
+        # Same context string as the REST route's boundary so buyer-invalid
+        # input produces a byte-identical envelope on every transport (klkg).
+        with adcp_validation_boundary(context="list_creative_formats request"):
+            req = build_list_creative_formats_request(
+                format_ids=parameters.get("format_ids"),
+                output_format_ids=parameters.get("output_format_ids"),
+                input_format_ids=parameters.get("input_format_ids"),
+                is_responsive=parameters.get("is_responsive"),
+                name_search=parameters.get("name_search"),
+                asset_types=parameters.get("asset_types"),
+                wcag_level=parameters.get("wcag_level"),
+                min_width=parameters.get("min_width"),
+                max_width=parameters.get("max_width"),
+                min_height=parameters.get("min_height"),
+                max_height=parameters.get("max_height"),
+                context=parameters.get("context"),
+            )
 
         # Call core function with identity
         response = core_list_creative_formats_tool(req=req, identity=identity)
@@ -1817,12 +1844,14 @@ class AdCPRequestHandler(RequestHandler):
         """
         from src.core.schemas.account import ListAccountsRequest
 
-        request = ListAccountsRequest(
-            status=parameters.get("status"),
-            pagination=parameters.get("pagination"),
-            sandbox=parameters.get("sandbox"),
-            context=parameters.get("context"),
-        )
+        # Same context string as the REST route's boundary (klkg parity).
+        with adcp_validation_boundary(context="list_accounts request"):
+            request = ListAccountsRequest(
+                status=parameters.get("status"),
+                pagination=parameters.get("pagination"),
+                sandbox=parameters.get("sandbox"),
+                context=parameters.get("context"),
+            )
         return core_list_accounts_tool(req=request, identity=identity)
 
     async def _handle_sync_accounts_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
@@ -1832,12 +1861,14 @@ class AdCPRequestHandler(RequestHandler):
         """
         from src.core.schemas.account import SyncAccountsRequest
 
-        request = SyncAccountsRequest(
-            accounts=parameters.get("accounts", []),
-            delete_missing=parameters.get("delete_missing", False),
-            dry_run=parameters.get("dry_run", False),
-            context=parameters.get("context"),
-        )
+        # Same context string as the REST route's boundary (klkg parity).
+        with adcp_validation_boundary(context="sync_accounts request"):
+            request = SyncAccountsRequest(
+                accounts=parameters.get("accounts", []),
+                delete_missing=parameters.get("delete_missing", False),
+                dry_run=parameters.get("dry_run", False),
+                context=parameters.get("context"),
+            )
         return await core_sync_accounts_tool(req=request, identity=identity)
 
     async def _handle_list_authorized_properties_skill(
@@ -1863,7 +1894,9 @@ class AdCPRequestHandler(RequestHandler):
                 "This parameter was removed in AdCP 2.5 and will be ignored."
             )
 
-        request = ListAuthorizedPropertiesRequest(context=parameters.get("context"))
+        # Same context string as the REST route's boundary (klkg parity).
+        with adcp_validation_boundary(context="list_authorized_properties request"):
+            request = ListAuthorizedPropertiesRequest(context=parameters.get("context"))
 
         # Call core function with identity
         response = core_list_authorized_properties_tool(req=request, identity=identity)
@@ -1925,7 +1958,10 @@ class AdCPRequestHandler(RequestHandler):
 
         params = {**parameters}
         include_snapshot = params.pop("include_snapshot", False)
-        req = GetMediaBuysRequest.model_validate(params)
+        # No REST route exists for get_media_buys; context string follows the
+        # same "<tool> request" convention as the sibling boundaries (klkg).
+        with adcp_validation_boundary(context="get_media_buys request"):
+            req = GetMediaBuysRequest.model_validate(params)
         response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
 
         return response
@@ -1971,6 +2007,8 @@ class AdCPRequestHandler(RequestHandler):
             reporting_dimensions=req.reporting_dimensions,
             attribution_window=req.attribution_window,
             include_package_daily_breakdown=req.include_package_daily_breakdown,
+            # account is a typed AccountReference on GetMediaBuyDeliveryRequest (adcp SDK 5.7);
+            # forward the validated model field rather than re-coercing the raw dict (#1438).
             account=req.account,
             context=params.get("context"),
             identity=identity,

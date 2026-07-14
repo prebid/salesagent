@@ -19,21 +19,36 @@ logger = logging.getLogger(__name__)
 
 
 @contextmanager
-def adcp_validation_boundary() -> Iterator[None]:
+def adcp_validation_boundary(context: str = "parameters", field: str | None = None) -> Iterator[None]:
     """Translate a Pydantic ``ValidationError`` into a typed ``AdCPValidationError``.
 
-    A2A skill handlers validate buyer parameters at the transport boundary. A raw
-    ``ValidationError`` leaking from ``model_validate`` (or a typed-model constructor)
-    would surface as an untyped error — and the outer dispatcher only builds the
-    two-layer error envelope for ``AdCPError`` subclasses, so the buyer would lose
-    the real code/recovery. Wrapping the construction in this boundary gives every
-    handler the same ``Invalid parameters: ...`` message plus a structured ``field``
-    path, instead of a hand-copied try/except per handler.
+    Transport wrappers and skill handlers validate buyer parameters at the
+    boundary. A raw ``ValidationError`` leaking from ``model_validate`` (or a
+    typed-model constructor) would surface as an untyped error — and the outer
+    dispatcher only builds the two-layer error envelope for ``AdCPError``
+    subclasses, so the buyer would lose the real code/recovery. This boundary is
+    the SINGLE translation point (#1417): every rejection carries the
+    buyer-friendly ``format_validation_error`` message, the structured ``field``
+    path, and error.json's top-level ``suggestion`` — no tool hand-rolls its own
+    try/except copy.
+
+    ``context`` names what was invalid in the message (e.g. ``"get_products
+    request"``); the default renders the ``Invalid parameters`` prefix existing
+    wire assertions rely on.
+
+    ``field`` pins the reported request field when the failing model is nested
+    under a named request field: coercing a ``BrandReference`` reports
+    ``field="brand"``, not the nested pydantic location (e.g. ``industries``).
+    When ``None`` (default) the field is derived from the validation error.
     """
     try:
         yield
     except ValidationError as e:
-        raise AdCPValidationError(f"Invalid parameters: {e}", field=first_validation_error_field(e)) from e
+        raise AdCPValidationError(
+            format_validation_error(e, context=context),
+            field=field if field is not None else first_validation_error_field(e),
+            suggestion=suggest_validation_fix(e),
+        ) from e
 
 
 def run_async_in_sync_context(coroutine):
@@ -211,3 +226,34 @@ def format_validation_error(validation_error: ValidationError, context: str = "r
     )
 
     return error_msg
+
+
+def suggest_validation_fix(validation_error: ValidationError) -> str:
+    """Derive a single buyer-facing correction hint from a Pydantic ValidationError.
+
+    Produces the actionable ``suggestion`` companion to
+    ``format_validation_error``'s diagnostic message, so request-validation
+    rejections carry a non-empty wire ``suggestion`` (AdCP POST-F3: the buyer
+    must learn how to fix the request). The hint names the offending field(s)
+    and the corrective action, keyed off the Pydantic error ``type``:
+
+    * ``missing``        → provide the required field
+    * ``string_pattern_mismatch`` / ``string_too_short`` / ``string_too_long`` → fix the value to satisfy the constraint
+    * ``extra_forbidden`` → remove the unrecognized field
+    * anything else      → correct the field per the AdCP spec
+    """
+    errors = validation_error.errors()
+    if not errors:
+        return "Correct the request to match the AdCP specification and resend."
+
+    first = errors[0]
+    field_path = ".".join(str(loc) for loc in first.get("loc", ())) or "request"
+    error_type = first.get("type", "")
+
+    if "missing" in error_type:
+        return f"Provide the required '{field_path}' field and resend the request."
+    if "extra_forbidden" in error_type:
+        return f"Remove the unrecognized '{field_path}' field; it is not part of the AdCP request schema."
+    if error_type.startswith("string_pattern_mismatch") or "too_short" in error_type or "too_long" in error_type:
+        return f"Provide a valid '{field_path}' value that satisfies the AdCP field constraints and resend."
+    return f"Correct the '{field_path}' field to match the AdCP specification and resend."

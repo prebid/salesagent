@@ -98,12 +98,12 @@ def test_validation_error_formatting_missing_field():
     try:
         raise ValidationError.from_exception_data(
             "CreateMediaBuyRequest",
-            [{"type": "missing", "loc": ("buyer_ref",), "msg": "Field required", "input": {}}],
+            [{"type": "missing", "loc": ("brand",), "msg": "Field required", "input": {}}],
         )
     except ValidationError as e:
         error_msg = format_validation_error(e)
 
-        assert "buyer_ref: Required field is missing" in error_msg
+        assert "brand: Required field is missing" in error_msg
         assert "Invalid request:" in error_msg
 
 

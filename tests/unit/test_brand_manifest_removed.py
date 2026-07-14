@@ -29,7 +29,6 @@ def _make_request(domain: str = "nike.com", brand_id: str | None = None):
     if brand_id:
         brand["brand_id"] = brand_id
     return LibraryCreateMediaBuyRequest(
-        buyer_ref="TEST-001",
         idempotency_key="test-idempotency-key-0001",
         account={"account_id": "acc_test"},
         brand=brand,
@@ -38,7 +37,6 @@ def _make_request(domain: str = "nike.com", brand_id: str | None = None):
                 product_id="prod_1",
                 budget=5000,
                 pricing_option_id="cpm-fixed",
-                buyer_ref="pkg-1",
             )
         ],
         start_time="2025-06-01T00:00:00Z",

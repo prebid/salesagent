@@ -71,14 +71,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     Then the response includes pagination with limit, offset, has_more, and optional total
     And the creatives array contains at most 10 entries
 
-  @T-UC-022-main-delivery-buyer-ref @main-flow @get-delivery @happy-path @post-s1 @deprecated
-  Scenario: Get creative delivery -- scoped by buyer reference
-    Given media buy with buyer_ref "campaign-spring-2026" exists with creative delivery data
-    When the Buyer Agent invokes get_creative_delivery with media_buy_buyer_refs ["campaign-spring-2026"]
-    Then the response contains creative delivery data for the matching media buy
-    # POST-S1: Buyer knows delivery performance
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/get-creative-delivery-request.json
-
   @T-UC-022-main-delivery-creative-ids @main-flow @get-delivery @happy-path @post-s1
   Scenario: Get creative delivery -- scoped by creative IDs
     Given creative "cr-005" exists across multiple media buys
@@ -204,20 +196,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows which media buy identifiers could not be resolved
     # POST-F3: Buyer knows to verify media buy IDs
-
-  @T-UC-022-ext-b-ref @extension @ext-b @error @get-delivery @post-f1 @post-f2 @post-f3 @deprecated
-  Scenario: Creative delivery fails -- media buy not found by buyer reference
-    Given buyer reference "ref-nonexistent" does not resolve to any media buy
-    When the Buyer Agent invokes get_creative_delivery with media_buy_buyer_refs ["ref-nonexistent"]
-    Then the operation should fail
-    And the error code should be "MEDIA_BUY_NOT_FOUND"
-    And the error message should contain "media buy"
-    And the error recovery should be "correctable"
-    And the error should include "suggestion" field
-    And the suggestion should contain "verify"
-    # POST-F1: System state unchanged
-    # POST-F2: Buyer knows which buyer references could not be resolved
-    # POST-F3: Buyer knows to verify buyer references
 
   @T-UC-022-ext-c @extension @ext-c @error @get-delivery @post-f1 @post-f2 @post-f3
   Scenario: Creative delivery fails -- creative not found

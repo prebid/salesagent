@@ -742,7 +742,7 @@ class TestErrorPropagation:
         middleware = RequestCompatMiddleware()
 
         call_next = AsyncMock(side_effect=AdCPValidationError("budget must be positive"))
-        ctx = _make_mcp_context("create_media_buy", {"buyer_ref": "ref-1"})
+        ctx = _make_mcp_context("create_media_buy", {"po_number": "ref-1"})
 
         async def _call():
             with pytest.raises(AdCPValidationError, match="budget must be positive"):

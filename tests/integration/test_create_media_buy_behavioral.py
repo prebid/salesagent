@@ -50,7 +50,8 @@ from src.core.exceptions import (
     AdCPAdapterError,
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
-    AdCPCreativeNotFoundError,
+    AdCPCapabilityNotSupportedError,
+    AdCPCreativeRejectedError,
     AdCPFormatNotFoundError,
     AdCPNotFoundError,
     AdCPProductNotFoundError,
@@ -329,11 +330,12 @@ class TestCreativeMissingUrl:
             # URL extraction returns None (missing)
             mock_extract.return_value = (None, None, None)
 
-            with pytest.raises(AdCPValidationError) as exc_info:
+            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
                 _validate_creatives_before_adapter_call([mock_package], "test_tenant", session=session)
 
             assert "creative_errors" in exc_info.value.details
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            assert exc_info.value.suggestion
 
     def test_creative_missing_dimensions_raises_invalid_creatives(self):
         """When creative has URL but missing dimensions, raise INVALID_CREATIVES.
@@ -365,11 +367,12 @@ class TestCreativeMissingUrl:
             # Has URL but no dimensions
             mock_extract.return_value = ("https://example.com/ad.jpg", None, None)
 
-            with pytest.raises(AdCPValidationError) as exc_info:
+            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
                 _validate_creatives_before_adapter_call([mock_package], "test_tenant", session=session)
 
             assert "creative_errors" in exc_info.value.details
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            assert exc_info.value.suggestion
 
 
 class TestCreativeUploadFailure:
@@ -537,7 +540,7 @@ class TestMultipleInvalidCreativesAccumulated:
             # All creatives missing URL and dimensions
             mock_extract.return_value = (None, None, None)
 
-            with pytest.raises(AdCPValidationError) as exc_info:
+            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
                 _validate_creatives_before_adapter_call([mock_package], "test_tenant", session=session)
 
             error_message = str(exc_info.value)
@@ -546,7 +549,8 @@ class TestMultipleInvalidCreativesAccumulated:
             assert "creative_1" in error_message
             assert "creative_2" in error_message
             assert "creative_3" in error_message
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            assert exc_info.value.suggestion
 
 
 class TestPricingOptionXOR:
@@ -641,12 +645,13 @@ class TestCreativeIdsNotFound:
                 data={"url": "https://example.com/ad.jpg", "width": 300, "height": 250},
             )
 
-            with pytest.raises(AdCPCreativeNotFoundError) as exc_info:
+            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
                 env.call_impl(req=req)
 
             assert "creative_missing_1" in str(exc_info.value)
             assert "creative_missing_2" in str(exc_info.value)
-            assert exc_info.value.error_code == "CREATIVE_NOT_FOUND"
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            assert exc_info.value.suggestion
 
     def test_set_difference_logic_detects_missing_creative_ids(self):
         """The set-difference logic (requested - found) correctly identifies missing IDs.
@@ -666,13 +671,13 @@ class TestCreativeIdsNotFound:
 
         assert missing_ids == {"creative_missing_1", "creative_missing_2"}
 
-        # Verify the AdCPNotFoundError would be raised with the correct error code
+        # Verify the rejection would be raised with the correct error code
         if missing_ids:
             error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
-            with pytest.raises(AdCPCreativeNotFoundError) as exc_info:
-                raise AdCPCreativeNotFoundError(error_msg)
+            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+                raise AdCPCreativeRejectedError(error_msg)
 
-            assert exc_info.value.error_code == "CREATIVE_NOT_FOUND"
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
             assert "creative_missing_1" in str(exc_info.value)
             assert "creative_missing_2" in str(exc_info.value)
 
@@ -783,7 +788,7 @@ class TestMainFlowObligations:
         with pytest.raises(AdCPAuthenticationError, match="Principal ID not found") as exc_info:
             await _create_media_buy_impl(req=req, identity=identity)
 
-        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
 
     @pytest.mark.asyncio
     async def test_tenant_setup_validation(self):
@@ -967,10 +972,10 @@ class TestPreconditionObligations:
         req = _make_request()
 
         # None identity -> should raise
-        with pytest.raises(AdCPAuthenticationError, match="Identity is required") as exc_info:
+        with pytest.raises(AdCPAuthenticationError, match="Authentication required") as exc_info:
             await _create_media_buy_impl(req=req, identity=None)
 
-        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
 
 
 class TestAsapStartTimingObligations:
@@ -1447,11 +1452,13 @@ class TestExtensionObligations:
                 gam_network_currency="USD",
                 gam_secondary_currencies=None,
             )
-            with pytest.raises(AdCPValidationError) as excinfo:
+            # Currency unsupported by the GAM network is a seller-capability gap:
+            # UNSUPPORTED_FEATURE, not VALIDATION_ERROR (#1417).
+            with pytest.raises(AdCPCapabilityNotSupportedError) as excinfo:
                 env.call_impl(req=req)
 
         exc = excinfo.value
-        assert exc.error_code == "VALIDATION_ERROR"
+        assert exc.error_code == "UNSUPPORTED_FEATURE"
         error_msg = exc.message.lower()
         assert "not supported" in error_msg
         assert "gam" in error_msg
@@ -1559,10 +1566,10 @@ class TestExtensionObligations:
         req = _make_request()
 
         # None identity -> requires authentication
-        with pytest.raises(AdCPAuthenticationError, match="Identity is required") as exc_info:
+        with pytest.raises(AdCPAuthenticationError, match="Authentication required") as exc_info:
             await _create_media_buy_impl(req=req, identity=None)
 
-        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
 
         # Identity with no principal_id -> requires authentication
 
@@ -1576,7 +1583,7 @@ class TestExtensionObligations:
         with pytest.raises(AdCPAuthenticationError, match="Principal ID not found") as exc_info:
             await _create_media_buy_impl(req=req, identity=identity_no_principal)
 
-        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
 
     def test_no_database_record_on_adapter_failure(self, integration_db):
         """When adapter fails, no database records are created.
@@ -1720,9 +1727,10 @@ class TestExtensionObligations:
         Covers: UC-002-EXT-O-01
         """
         # This is covered by TestCreativeIdsNotFound above.
-        # Verify the error code pattern.
-        error = AdCPCreativeNotFoundError("Creative IDs not found: creative_missing")
-        assert error.error_code == "CREATIVE_NOT_FOUND"
+        # Verify the error code pattern: the create path now emits CREATIVE_REJECTED
+        # for missing creative_ids (unified with the update path).
+        error = AdCPCreativeRejectedError("Creative IDs not found: creative_missing")
+        assert error.error_code == "CREATIVE_REJECTED"
 
     def test_creative_upload_failed_error_code(self):
         """Creative upload failures raise AdCPAdapterError (wire code SERVICE_UNAVAILABLE).

@@ -69,7 +69,6 @@ class TestCreateMediaBuyRequestRejectsBrandManifest:
         with pytest.raises(ValidationError):
             CreateMediaBuyRequest(
                 brand_manifest={"name": "Adidas UltraBoost 2025 running shoes"},
-                buyer_ref="custom_ref_123",
                 po_number="PO-V24-67890",
                 packages=[],
                 start_time="2026-03-01T00:00:00Z",
@@ -115,7 +114,7 @@ class TestA2AHandlerBrandParameterLookup:
         """
         parameters = {
             "brand_manifest": {"name": "Test Campaign"},
-            "packages": [{"buyer_ref": "pkg_1", "product_id": "test"}],
+            "packages": [{"product_id": "test"}],
             "start_time": "2026-03-01T00:00:00Z",
             "end_time": "2026-04-01T00:00:00Z",
         }

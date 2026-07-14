@@ -122,11 +122,18 @@ def normalize_request_params(
 
     # --- Tool-scoped translations ---
 
-    # campaign_ref → buyer_campaign_ref (create_media_buy only)
+    # campaign_ref → ext.buyer_campaign_ref (create_media_buy only)
+    # AdCP 3.12 removed the top-level buyer_campaign_ref field from
+    # create-media-buy-request; the migration path is the ext extension object.
     if "campaign_ref" in result:
-        if tool_name == "create_media_buy" and "buyer_campaign_ref" not in result:
-            result["buyer_campaign_ref"] = result["campaign_ref"]
-            translations.append("campaign_ref → buyer_campaign_ref")
+        if tool_name == "create_media_buy":
+            ext = result.get("ext")
+            if ext is None:
+                ext = {}
+                result["ext"] = ext
+            if isinstance(ext, dict) and "buyer_campaign_ref" not in ext:
+                ext["buyer_campaign_ref"] = result["campaign_ref"]
+                translations.append("campaign_ref → ext.buyer_campaign_ref")
         del result["campaign_ref"]
 
     # brand_manifest → brand (get_products, create_media_buy only)

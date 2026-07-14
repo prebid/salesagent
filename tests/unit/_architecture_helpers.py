@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ast
 import functools
+import os
 import re
 import subprocess
 from collections.abc import Callable, Iterable, Iterator
@@ -215,18 +216,72 @@ def iter_workflow_files(repo: Path) -> Iterator[Path]:
     yield from sorted([*wf_dir.glob("*.yml"), *wf_dir.glob("*.yaml")])
 
 
+# Directories that are never source-tracked — skipped by the filesystem-walk
+# fallback so it stays close to ``git ls-files``. ``.github`` is intentionally
+# NOT excluded: the version-anchor guards scan ``.github/workflows/``.
+_FS_WALK_SKIP_DIRS = frozenset(
+    {
+        ".git",
+        ".venv",
+        ".tox",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".claude",
+        "node_modules",
+        "htmlcov",
+        "test-results",
+        ".agent-index",
+        "audit_logs",
+        "logs",
+        ".idea",
+        ".vscode",
+        ".cache",
+        "dist",
+        "build",
+        ".eggs",
+    }
+)
+
+
 def iter_git_tracked_files(repo: Path) -> Iterator[Path]:
-    """Yield git-tracked files that exist on disk (hermetic; ignores untracked local files)."""
+    """Yield git-tracked files that exist on disk (hermetic; ignores untracked local files).
+
+    Falls back to a hermetic filesystem walk when ``git ls-files`` can't run. The
+    in-network Docker runner bind-mounts only the working directory (``.:/app``);
+    when that working tree is a git *worktree*, its ``.git`` is a pointer FILE to
+    metadata that lives outside the mount, so ``git ls-files`` errors with
+    "not a git repository". Without the fallback every git-dependent architecture
+    guard hard-errors in that runner (and is silently never exercised there). The
+    walk lets the guards run regardless of git availability.
+    """
     try:
-        output = subprocess.check_output(["git", "ls-files"], cwd=repo, text=True)
-    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-        raise RuntimeError(f"git ls-files failed in {repo}") from exc
+        output = subprocess.check_output(["git", "ls-files"], cwd=repo, text=True, stderr=subprocess.DEVNULL)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        yield from _iter_filesystem_files(repo)
+        return
     for line in output.splitlines():
         if not line.strip():
             continue
         path = repo / line
         if path.is_file():
             yield path
+
+
+def _iter_filesystem_files(repo: Path) -> Iterator[Path]:
+    """git-unavailable fallback: walk ``repo``, skipping known-untracked directories."""
+    for dirpath, dirnames, filenames in os.walk(repo):
+        dirnames[:] = [d for d in dirnames if d not in _FS_WALK_SKIP_DIRS]
+        base = Path(dirpath)
+        for name in filenames:
+            # In a worktree ``.git`` is a pointer FILE (not a dir), so the dir
+            # filter above misses it; skip it (and any skip-named file) here.
+            if name in _FS_WALK_SKIP_DIRS:
+                continue
+            path = base / name
+            if path.is_file():
+                yield path
 
 
 # ---------------------------------------------------------------------------

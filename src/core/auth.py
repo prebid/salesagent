@@ -28,15 +28,20 @@ from src.core.config_loader import (
 )
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as ModelPrincipal
+
+# Single buyer-facing correction hint for every AUTH_REQUIRED rejection (missing
+# identity in an _impl, or a missing/invalid token at the REST auth boundary), so
+# all AUTH_REQUIRED envelopes carry the same actionable suggestion (AdCP POST-F3).
+# Canonical hint owned by exceptions.py (it is AdCPAuthenticationError's
+# class-level default suggestion); re-exported here for existing importers.
+from src.core.exceptions import AUTH_REQUIRED_SUGGESTION
+from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 from src.core.schemas import Principal
 
 logger = logging.getLogger(__name__)
 
 # Enable verbose auth logging only in development
 _VERBOSE_AUTH_LOG = not (os.environ.get("FLY_APP_NAME") or os.environ.get("PRODUCTION"))
-
-
-from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 
 
 def get_push_notification_config_from_headers(headers: dict[str, str] | None) -> dict[str, Any] | None:
@@ -391,9 +396,9 @@ def require_identity(
 
     if identity is None:
         raise AdCPAuthRequiredError(
-            "Identity is required",
+            "Authentication required: no identity in request.",
             context=context,
-            details={"suggestion": "Provide a valid authentication token"},
+            suggestion=AUTH_REQUIRED_SUGGESTION,
         )
     return identity
 

@@ -1,0 +1,369 @@
+# BDD Harness: Exercising Transport-Boundary Logic ("True E2E")
+
+> Status: **in progress** — UC-003 update dispatch foundation landed (commit
+> `c8849dd8a`); remaining work tracked under the BDD-harness-boundary epic.
+> This document is the **source of truth for the decisions** below; beads
+> reference it and carry only an actionable scope + a short copy of the decision.
+
+## Summary
+
+The `tests/bdd/` harness parametrizes every scenario across four transports
+(`impl`, `a2a`, `mcp`, `rest`) but dispatches most of them by calling the
+`_impl` function (or a transport wrapper) **directly** from a per-use-case
+`Env`. Several AdCP behaviors do **not** live in `_impl` — they live at the
+**transport boundary** (the MCP/A2A/REST wrappers) or in the **protocol
+envelope**. When the harness calls `_impl` directly, or when its transport
+methods drop/transform fields, those behaviors are never exercised, so the
+scenarios that assert them cannot pass on any transport.
+
+This is the structural reason a family of UC-002 and UC-003 BDD scenarios were
+"0 passing" despite having correct step definitions.
+
+## Problem
+
+Boundary/resolution logic that the scenarios assert but the harness bypasses:
+
+| Behavior | Where it actually runs | Why the harness misses it |
+|----------|------------------------|---------------------------|
+| **Account resolution** (`ACCOUNT_NOT_FOUND`) | Transport wrappers: `create_media_buy_raw` (`src/core/tools/media_buy_create.py:3927`) and the MCP wrapper (`:4004`) call `enrich_identity_with_account` → `resolve_account` (`src/core/transport_helpers.py:106`). | `_create_media_buy_impl` does **not** resolve/enrich (`src/core/tools/media_buy_create.py:1533+` has no `enrich`/`resolve_account`). `MediaBuyCreateEnv.call_impl` calls `_impl` directly; `call_a2a`/`call_mcp` **strip** the `account` field (`flat.pop("account")`) because the flat `*_raw` wrappers don't accept it. So no transport surfaces account-not-found — the request proceeds to product validation and returns `SERVICE_UNAVAILABLE`. |
+| **Update dispatch** | `_update_media_buy_impl` / `update_media_buy_raw` / MCP / REST update endpoint. | The UC-003 extension conftest branch ran scenarios through `MediaBuyCreateEnv`, whose `call_*` dispatch to the **create** path. An `UpdateMediaBuyRequest` hit `_create_media_buy_impl` → `AttributeError: 'UpdateMediaBuyRequest' object has no attribute 'get_total_budget'`. **(FIXED — see below.)** |
+| **Protocol status** (`TaskStatus="completed"` on success) | `ProtocolEnvelope.wrap(payload, status=...)` (`src/core/protocol_envelope.py:113`), added by MCP/A2A/REST. | The harness captures the **domain** response (`UpdateMediaBuySuccess`, whose `status` is `None` at impl; create carries `MediaBuyStatus`, a *different* notion). `_update_media_buy_impl` never sets `status` on its success responses (`media_buy_update.py:359/383/532/1229`). `then_success.py:then_response_status` sees `status` in `model_fields` and asserts `None == "completed"`. |
+| **REST update body** | `PUT /api/v1/media-buys/{id}`. | `MediaBuyDualEnv._build_update_rest_body` drops `packages`, so production returns `VALIDATION_ERROR: must include at least one updatable field`. |
+
+### Concrete impact (at investigation time)
+
+- `tests/bdd/test_uc003_update_media_buy.py`: **0** passing before the fix
+  (all 30 baseline passers were UC-002); the 30 UC-002 passers were all error
+  scenarios that don't need boundary resolution.
+- `tests/bdd/test_uc002_create_media_buy.py`: `account_not_found` scenarios
+  (rkb9) produce `SERVICE_UNAVAILABLE`, never `ACCOUNT_NOT_FOUND`.
+
+## What landed (commit `c8849dd8a`)
+
+UC-003 **update dispatch** is now wired:
+
+- The UC-003 extension conftest branch (`tests/bdd/conftest.py`) uses
+  `MediaBuyDualEnv` (`tests/harness/media_buy_dual.py`) instead of
+  `MediaBuyCreateEnv`. `MediaBuyDualEnv` detects `UpdateMediaBuyRequest` and
+  routes through the update wrappers across all four transports, against the
+  real DB.
+- `tests/factories/core.py::set_adapter_test_behavior(env, tenant_id, **behavior)`
+  added (was imported by steps but never written → `ImportError`). Upserts
+  `AdapterConfig.config_json["test_behavior"]` (read by
+  `mock_ad_server._read_test_behavior`, `src/adapters/mock_ad_server.py:270`)
+  and `mock_manual_approval_required`.
+- `MediaBuyCreateEnv._build_mock_context_manager` (`tests/harness/media_buy_create.py`)
+  now stubs `get_or_create_context` (used by the async update path) delegating
+  to the real manager, so the persisted `context_id` is a real string
+  (was: `psycopg2 can't adapt MagicMock` on the `workflow_steps` insert).
+- `MediaBuyDualEnv._call_update_mcp` makes the mock `ctx.get_state` key-aware so
+  `get_state("context_id")` returns `None` rather than the `ResolvedIdentity`
+  (was: `psycopg2 can't adapt ResolvedIdentity`).
+
+Result: `uc003` 0 → 4 passing, **0 regressions**, `make quality` green.
+
+## Solution architecture (remaining work)
+
+The guiding principle: **the harness must exercise the same boundary/resolution
+path a real client would**, per transport — not call `_impl` directly when the
+behavior under test lives at the boundary. Two complementary mechanisms:
+
+1. **Env-level transport methods that mirror the boundary.** This is the
+   `MediaBuyDualEnv` pattern: each `call_*` method runs the real wrapper /
+   resolution for that transport. Extend the same pattern to account
+   resolution in the create envs.
+2. **Capture the protocol envelope, not just the domain payload.** Transports
+   that wrap (`a2a`/`mcp`/`rest`) must surface `ProtocolEnvelope.status` so
+   success scenarios can assert `TaskStatus`. `impl` has no envelope by
+   definition (see Decision D2).
+
+### Work areas
+
+- **A. UC-003 success protocol-status semantics** (cross-cutting; shared with
+  create). Decide where success `TaskStatus="completed"` is observed and make
+  the harness/step honor it across transports. See Decision **D2**.
+- **B. UC-003 REST update body** — fix `MediaBuyDualEnv._build_update_rest_body`
+  so package updates survive to `PUT /api/v1/media-buys/{id}`.
+- **C. UC-003 mcp/rest update error-path capture** — error scenarios pass on
+  `impl`/`a2a` but still fail on `mcp`/`rest` (e.g. `budget_validation`), so the
+  update error envelope isn't captured on those transports yet.
+- **D. UC-002 create account-resolution across transports** (rkb9's real fix) —
+  make the create envs exercise `enrich_identity_with_account`/`resolve_account`
+  for each transport. Requires the flat `*_raw`/MCP wrappers to accept an
+  `account` reference (today they don't), then un-strip it in
+  `MediaBuyCreateEnv.call_a2a`/`call_mcp` and enrich in `call_impl`.
+- **E. Parser/leaf fixes** (necessary but not sufficient on their own):
+  - et3g: accept `invoice_recipient` in the update-field datatable parser
+    (`tests/bdd/steps/domain/uc003_update_media_buy.py:235`).
+  - 18eq: accept `product_id` in the package datatable parser (`:301`).
+  - d61o: handle the `new_packages` `update_fields` pattern (`:1905`).
+  Each then asserts a production rejection
+  (`VALIDATION_ERROR`/`INVALID_REQUEST`/`UNSUPPORTED_FEATURE` + `suggestion`)
+  across all four transports — which depends on C.
+
+## Decisions
+
+### D1 — Wire UC-003 update dispatch via `MediaBuyDualEnv` (DECIDED, landed)
+
+The UC-003 extension scenarios run on `MediaBuyDualEnv`, which routes
+`UpdateMediaBuyRequest` through the update wrappers per transport against the
+real DB. Rationale: the env already existed for UC-026 (create-then-update) and
+keeps update routing in one place instead of duplicating dispatch logic in the
+When step. Consequence: all UC-003 ext scenarios now execute the update flow;
+the dead duplicate `elif uc == "UC-003"` branches were removed.
+
+### D2 — Success status is the protocol-envelope `TaskStatus`, REQUIRED on every response (RESOLVED via spec)
+
+**Authoritative ref:** the pinned 3.1 derivation commit `04f59d2d5`
+(tag `v3.1-04f59d2d5`, 2026-05-13) — the same commit the BR feature files stamp
+in their `@source` lines. **Not** `v3.1.0-beta.3`, which is 226 commits *ahead*
+and contains late-3.1 changes our derivation does not (see "Ref hazard" below).
+
+**Spec findings (verified at `04f59d2d5`):**
+- `core/protocol-envelope.json` declares `status` (`$ref enums/task-status.json`)
+  and lists it in `required` (`["status", "payload"]`). Examples show
+  `status: "completed"` (sync) / `"submitted"` / `"input-required"`. So the
+  envelope `status` (TaskStatus) is REQUIRED on every response already at our pin.
+- `enums/task-status.json`: `submitted | working | input-required | completed |
+  canceled | failed | rejected | auth-required | unknown`.
+- `media-buy/{create,update}-media-buy-response.json` success branch (`*Success`)
+  carries `status: $ref media-buy-status.json` — i.e. a **MediaBuyStatus**
+  (`pending_creatives | pending_start | active | paused | completed | …`). There
+  is **no `media_buy_status` field** at this commit. The async/submitted branch's
+  `status` is the TaskStatus discriminator.
+
+**Decision:**
+1. `the response status should be "completed"` asserts the **envelope
+   `TaskStatus`** (REQUIRED protocol-layer field), value `completed` for a
+   synchronous success. `completed` is also a *MediaBuyStatus* value, but it
+   means "flight over" — impossible for a just-updated active buy — so the
+   scenario can only mean the TaskStatus.
+2. The harness must observe responses **with their envelope**. On the wire
+   transports the envelope `status` is part of the response (MCP: sibling of
+   payload at root; A2A: in the artifact DataPart; REST: JSON body root). The
+   `then_response_status` step asserts the envelope `status`, not a probed
+   domain `model_fields["status"]`.
+
+**Known collision at `04f59d2d5` (do NOT "fix" by adopting newer schema).** Because
+the success body still carries `status: MediaBuyStatus` while the envelope
+carries `status: TaskStatus`, the two collide on the root `status` key under MCP
+flat-on-the-wire serialization. Upstream resolves this *after* our pin
+(changeset `4895`, beta.2/.3: add `media_buy_status`, deprecate the body
+`status`, remove in 3.2). Per the source-of-truth hierarchy we reconcile this
+**upstream at the next derivation bump**, not by editing local generated
+features or unilaterally adding `media_buy_status` against a 04f59d2d5-derived
+suite. Tracked as a reconciliation note, not an immediate production change.
+
+**Ref hazard (learned here).** `04f59d2d5` is an *ancestor* of every `v3.1.0-beta.*`
+tag (226 commits behind beta.3). Reading a beta tag surfaces changes
+(`envelope-status-required` formalization, `media_buy_status`) and forward 3.2
+notes that are **not** in our derivation. Always `git show 04f59d2d5:<path>` for
+BR-feature semantics. Note the separate divergence: the Python SDK `adcp==5.7`
+targets `3.1.0-beta.3`, so runtime types may differ from the 04f59d2d5 features —
+this is the "SDK is not authoritative; scenario drives" case.
+
+**Consequence — this reframes the harness problem (see D4).** `_impl` returns
+only the payload; it has **no envelope**, so by the spec's own words it is a
+non-conformant response. A status assertion can never be satisfied on a raw
+`_impl` call — not because the harness is wrong, but because `_impl` is not an
+AdCP response surface.
+
+### D4 — `_impl` is not an AdCP response surface; BDD conformance runs on the wire transports (PROPOSED)
+
+**Problem (raised in review).** The BDD harness parametrizes every scenario over
+four transports including `impl`, which calls `_impl` directly. But `_impl`
+deliberately implements **only** transport-agnostic business logic. Everything
+the wire contract requires is added at the boundary, *above* `_impl`:
+
+| Boundary behavior | Lives in | `_impl` has it? |
+|-------------------|----------|------------------|
+| Envelope `status` (TaskStatus, REQUIRED — D2) | `ProtocolEnvelope` / transport wrappers | No |
+| Two-layer error envelope (`adcp_error`, error code, recovery) | wrappers (`_handle_tool_exception`, `build_two_layer_error_envelope`) | No (raises `AdCPError`) |
+| Account resolution → `ACCOUNT_NOT_FOUND` | `enrich_identity_with_account` in wrappers (`media_buy_create.py:3927/4004`) | No |
+| Identity/auth resolution, `context_id`, `replayed`/idempotency | wrappers / middleware | No |
+
+A large fraction of UC scenarios assert exactly these boundary behaviors. On
+`impl` they are **unsatisfiable by construction**, which is the real reason the
+UC-002 account-not-found and UC-003 success/status families could not go green
+on `impl`. `impl`'s only legitimate BDD value is the narrow set of purely
+transport-agnostic business-logic outcomes — which are better covered by unit /
+integration tests that call the harness or `_impl` directly.
+
+**Proposed decision.** Treat AdCP conformance as a **wire** property and run BDD
+scenarios on the wire transports (`mcp`, `a2a`, `rest`). Remove `impl` from the
+**default** BDD transport parametrization. Keep transport-agnostic business-logic
+coverage in unit/integration tests (harness `call_impl` is still available
+there). This (a) aligns the BDD suite with the spec's definition of conformance,
+(b) deletes an entire class of by-construction-impossible `impl` failures
+(unblocking the `l9wn`/`egnl`/parser families without per-`impl` workarounds),
+and (c) cuts ~25% of BDD test instances.
+
+**Alternatives considered:**
+- *Redefine `impl` as in-process-through-boundary* — run identity-resolve →
+  account-enrich → `_impl` → envelope-build in-process (no HTTP), so `impl`
+  becomes a fast, conformant transport. Preserves a fast path and matches the
+  "harness → true E2E" direction, but `impl` then largely duplicates `mcp`/`a2a`
+  minus serialization, for marginal extra value over running the three wire
+  transports.
+- *Scope `impl`* — keep `impl` only for scenarios explicitly tagged
+  transport-agnostic; exclude it from boundary/conformance scenarios. Lowest
+  blast radius but adds a per-scenario tagging burden and leaves the conceptual
+  confusion ("why does this scenario skip impl?") in place.
+
+**Open / gating before adopting:** audit which scenarios currently pass
+**only** on `impl` (e.g. `MediaBuyAccountEnv` is `impl`-only today) so their
+coverage is preserved on the wire transports or re-homed to unit tests before
+`impl` is dropped. Owner decision required — see report.
+
+Do **not** hack `then_response_status` to probe `model_fields` for branching
+(memory `feedback_sdk_not_authoritative`: the SDK/model is not authoritative for
+shape decisions).
+
+### D3 — Account resolution belongs at the boundary, mirrored by the harness (DECIDED-direction)
+
+Account resolution stays at the transport boundary (it is identity-shaping,
+not business logic — consistent with the transport-boundary architecture in
+`CLAUDE.md` Pattern #5). The harness, not `_impl`, must mirror it. This means
+the create envs gain per-transport account enrichment rather than pushing
+resolution into `_create_media_buy_impl`.
+
+### D5 — `egnl` collision: local override via an `UpdateMediaBuyResult` task-status wrapper (DECIDED — no derivation bump)
+
+Owner decision: do **not** bump the pinned derivation; resolve the
+envelope-vs-body `status` collision with a **surgical local override in prod
+source**. The precedent already exists for create and is the template:
+
+`CreateMediaBuyResult` (`src/core/schemas/_base.py:296`) wraps
+`{status: <TaskStatus str>, response: CreateMediaBuySuccess|CreateMediaBuyError}`
+and defines `@model_serializer(mode="wrap")` that dumps the response, then
+**overwrites** the root `status` with the TaskStatus:
+
+```python
+@model_serializer(mode="wrap")
+def _serialize(self, serializer, info):
+    result = self.response.model_dump(mode=info.mode, context=info.context)
+    result["status"] = self.status      # envelope TaskStatus wins the root key
+    return result
+```
+
+So on the wire (flat MCP / REST / A2A DataPart) the root `status` is the
+TaskStatus (`completed`), and the body `MediaBuyStatus` is overwritten — exactly
+the conformant behavior, done locally, today. `_create_media_buy_impl` already
+returns a `CreateMediaBuyResult` (e.g. `media_buy_create.py:1521` with
+`status=AdcpTaskStatus.completed.value`).
+
+**Update has no equivalent.** `_update_media_buy_impl` returns
+`UpdateMediaBuySuccess | UpdateMediaBuyError` directly (`media_buy_update.py:167`),
+so no TaskStatus reaches the wire root and the success scenarios see the body
+`MediaBuyStatus` (or `None`).
+
+**Decision — mirror the create pattern for update:**
+1. Add `UpdateMediaBuyResult` wrapping
+   `{status: <TaskStatus>, response: UpdateMediaBuySuccess|UpdateMediaBuyError}`
+   with the same `model_serializer` that overwrites root `status` with the
+   TaskStatus. **DRY:** extract the shared wrap-serializer/`__iter__`/`__str__`
+   behavior into a small shared base (e.g. `TaskResultEnvelope`) and have both
+   `CreateMediaBuyResult` and `UpdateMediaBuyResult` extend it — per the DRY
+   invariant, do not copy-paste the serializer.
+2. `_update_media_buy_impl` returns `UpdateMediaBuyResult` with the correct
+   TaskStatus per path: `completed` (sync success), `submitted` (async/queued),
+   `input-required` (manual approval) — matching create's `AdcpTaskStatus` usage.
+3. Update the update transport wrappers (`update_media_buy_raw`, MCP, REST) and
+   the harness `MediaBuyDualEnv` update methods to pass through / read the
+   wrapper, and `then_response_status` to assert the wire root `status`.
+
+**Why this is the right "local override":** it is surgical (one wrapper +
+return-site change, mirroring an existing, reviewed pattern), functional (emits
+the spec-required envelope `TaskStatus` at the wire root across all transports),
+documented (this decision + the `CreateMediaBuyResult` precedent), and it does
+**not** adopt the post-pin `media_buy_status` field — the body `MediaBuyStatus`
+is overwritten on the wire exactly as create already does. Consequence: like
+create today, update will not expose `MediaBuyStatus` separately on the wire
+until the upstream `media_buy_status` split is pulled at a future derivation bump
+(tracked in `8cni`). That parity is acceptable and explicitly chosen over a bump.
+
+## Test execution topology and the two-DB question
+
+**Question:** why do integration and e2e use separate Postgres databases; what
+prevents one shared DB?
+
+**Finding — it is not a Postgres limitation; it is two execution topologies:**
+
+- **Integration / BDD(`impl`)** run *on the host*: test code in-process, or the
+  server as a **host subprocess** (`tests/integration/conftest.py:530` —
+  `subprocess.Popen([... "mcp.run(transport='http' ...)"])` with
+  `env["DATABASE_URL"]` pointing at a **host-reachable** Postgres,
+  `localhost:<port>`). DB connection originates on the host.
+- **E2E** runs the *full containerized stack* (`docker-compose.e2e.yml`): the app
+  container connects to Postgres via the **docker network service name**
+  (`DATABASE_URL=…@postgres:5432/adcp`). Tests reach the app via a host-published
+  HTTP port; the stack is torn down with `down -v` (fresh volume) per run.
+
+The app container resolves `postgres` on the compose network and cannot reach a
+host-only `agent-db` (`localhost:5XXXX`, separate network namespace). The e2e
+Postgres *is* host-published (`127.0.0.1:5435`), so a host process could connect
+— but the e2e stack owns that DB's lifecycle (volume wipe per run) and its
+migrations run from the app container. So each suite provisions the Postgres
+reachable from, and lifecycle-owned by, its own topology. Integration
+deliberately uses a lightweight host Postgres so it needs **no** app/nginx
+containers (faster, isolated).
+
+**This is the same root as D4.** "Two DBs" is a symptom of "two execution
+models": in-process/host (integration + BDD-`impl`) vs containerized-wire (e2e).
+
+**Unification direction (not a task yet — recorded for the true-E2E arc):**
+converge on one topology. The integration `mcp_server` fixture already proves the
+*host-subprocess-over-HTTP against a shared host Postgres* model. Extending that
+to BDD (true E2E over the wire) and folding e2e onto the same host server + host
+Postgres yields a **single DB** for integration + BDD + e2e; the
+compose-network DB then only matters for container/deployment smoke tests.
+Alternatively run integration inside the container network (heavier). Either way,
+unifying the transport model (D4) and the execution topology (this section) are
+the same move.
+
+## D4 audit — scenarios/fixtures that depend on `impl` (gating "drop impl")
+
+Before removing `impl` from the default BDD parametrization (D4), preserve any
+coverage that exists *only* on `impl`.
+
+**Impl-only fixtures/envs (static analysis):**
+- `MediaBuyAccountEnv` (`tests/harness/media_buy_account.py`) — defines **only**
+  `call_impl` (calls `resolve_account` directly; `EXTERNAL_PATCHES={}`). Used by
+  the UC-002 `account`-marker and UC-006 account scenarios. Wire account
+  resolution is `l9wn` — but it is **orthogonal** to the drop (on drop these rows
+  become wire `xfail`+note; `l9wn` graduates them later).
+- Unit envs (`*_unit.py`) run mocked-DB; verify their wire coverage.
+- All other domain envs inherit the four transports from `BaseTestEnv`.
+
+**Impl-only passing scenarios (empirical — RE-VERIFIED, outline-aware parser).**
+The first pass under-counted (its regex matched only bare `[impl]`, skipping
+scenario-outline rows like `[impl-random-random]`). Re-run over the same
+`/tmp/bdd_full.json`, keying by `(scenario, example)`:
+
+- distinct (scenario, example) rows: **3079**.
+- **passing per transport: impl 402 / a2a 375 / mcp 377 / rest 358** (the wire
+  transports closely match `impl`).
+- **impl-only-passing (wire variant present but not passing): 2** — UC-011
+  context-echo, UC-004 delivery-account sandbox natural-key.
+- **impl-EXCLUSIVE passing (no wire variant at all): 32** — almost all UC-004 /
+  UC-005 / UC-019 **request-validation** boundary/partition rows.
+- impl-EXCLUSIVE xfailed: **375** (no coverage; lose the impl variant).
+
+**So `impl` uniquely contributes a PASS in ~34 rows (32 + 2), not 1.** Root
+cause: they pass on `impl` because `_impl` gets the full typed request; the wire
+harness paths drop/transform the param before validation (same class as the REST
+body bug), so the wire variant was deselected/xfailed.
+
+**Conclusion: dropping `impl` is safe but requires per-row disposition of the 34.**
+Each becomes a passing full BDD-wire scenario (fix the wire path so it carries the
+request) or an honest `xfail`+note ("not wired / unreachable on wire"). **No unit
+tests** — coverage stays in BDD. The 375 impl-exclusive-xfailed rows just lose the
+impl variant. `rest` (358) trails `a2a`/`mcp` (~375) — a separate wiring gap. Full
+design + per-row plan: [bdd-drop-impl.md](bdd-drop-impl.md).
+
+## References
+
+- Architecture pattern: `CLAUDE.md` §"Transport Boundary: Layer Separation" (Pattern #5)
+- Harness guide: `tests/CLAUDE.md` §"The Harness System", §"Transport dispatching"
+- Foundation commit: `c8849dd8a`
+- Pinned AdCP spec: `~/projects/adcp` tag `v3.1.0-beta.3` (target for D2)

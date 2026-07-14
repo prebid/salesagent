@@ -32,6 +32,22 @@ def raise_if_validation_failed(
         raise exc_type(message, context=context)
 
 
+def validate_budget_positive(
+    budget: Decimal,
+    field: str = "budget",
+) -> str | None:
+    """Check that a budget value is strictly positive.
+
+    Returns an error message if budget <= 0, or None if valid.
+    Used by both create_media_buy and update_media_buy paths.
+    """
+    if budget <= 0:
+        return (
+            f"Budget must be a positive amount (got {budget} on {field}). Set each package budget to a positive amount."
+        )
+    return None
+
+
 def validate_max_campaign_budget(
     *,
     campaign_budget: Decimal,
