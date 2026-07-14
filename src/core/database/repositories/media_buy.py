@@ -1029,3 +1029,26 @@ class MediaBuyRepository:
             return new_status
 
         return MediaBuyRepository.apply_computed_status_transition(media_buy, _compute)
+
+    @staticmethod
+    def apply_revision_bump(media_buy: MediaBuy) -> MediaBuy:
+        """Advance the revision of an already-loaded buy WITHOUT a status change.
+
+        The seam for a non-status mutation that still materially changes the buy —
+        a creative assignment created, or an assignment weight actually changed, on
+        the creative-sync pass (rows loaded inside ``CreativeUoW``). Bumps the AdCP
+        3.1.0-beta.3 ``revision`` optimistic-concurrency token so a buyer's next
+        update observes a fresh token, WITHOUT writing ``status`` or stamping
+        ``confirmed_at`` (the buy's lifecycle state is unchanged). Uses the same
+        server-side ``coalesce(revision, 0) + 1`` expression as every other seam,
+        so it is concurrency-safe on the unlocked ``CreativeUoW`` row and never
+        collapses two bumps onto one value.
+
+        The CALLER filters idempotent no-op assignments (existing assignment, weight
+        already at target) — this method ALWAYS bumps, and must not be called for a
+        buy that also transitions status this pass (``apply_status_transition``
+        already bumps once; calling both would double-count). Returns the same
+        (mutated) row. See #1544 (B3).
+        """
+        MediaBuyRepository._bump_revision(media_buy)
+        return media_buy

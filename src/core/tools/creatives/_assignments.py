@@ -35,6 +35,10 @@ def _process_assignments(
     assignments_by_creative: dict[str, list[str]] = {}  # creative_id -> [package_ids]
     assignment_errors_by_creative: dict[str, dict[str, str]] = {}  # creative_id -> {package_id: error}
     media_buys_with_new_assignments: dict[str, Any] = {}  # media_buy_id -> MediaBuy object
+    # Buys whose creative set ACTUALLY changed this pass (new assignment created OR a
+    # weight actually changed) — excludes idempotent no-op re-assigns. Each gets a
+    # single revision bump below. #1544 (B3).
+    media_buys_actually_mutated: set[str] = set()
 
     # AdCP v3 spec defines assignments as list[{creative_id, package_id, ...}];
     # normalise to dict form {creative_id: [package_ids]} for internal processing.
@@ -165,19 +169,25 @@ def _process_assignments(
                         # Assignment already exists - update weight if needed
                         if existing_assignment.weight != 100:
                             existing_assignment.weight = 100
+                            # Weight actually changed → a real mutation of the buy.
+                            if media_buy_id:
+                                media_buys_actually_mutated.add(media_buy_id)
                             logger.info(
                                 f"Updated existing assignment: creative={creative_id}, "
                                 f"package={actual_package_id}, media_buy={media_buy_id}"
                             )
+                        # else: weight already 100 → idempotent no-op, not a mutation.
                         assignment = existing_assignment
                     else:
-                        # Create new assignment
+                        # Create new assignment → a real mutation of the buy.
                         assignment = assignment_repo.create(
                             media_buy_id=media_buy_id,
                             package_id=actual_package_id,
                             creative_id=creative_id,
                             principal_id=principal_id,
                         )
+                        if media_buy_id:
+                            media_buys_actually_mutated.add(media_buy_id)
                         logger.info(
                             f"Created new assignment: creative={creative_id}, "
                             f"package={actual_package_id}, media_buy={media_buy_id}"
@@ -201,13 +211,23 @@ def _process_assignments(
                     if actual_package_id is not None:
                         assignments_by_creative[creative_id].append(actual_package_id)
 
-            # Update media buy status if needed (draft -> pending_creatives).
-            # Route through the repository seam so the persisted revision bumps
-            # on this state change (AdCP 3.1.0-beta.3 revision) — see #1544.
+            # Persist the buy-level effect of this assignment pass through the repo
+            # seam so the AdCP 3.1.0-beta.3 revision advances EXACTLY ONCE per buy —
+            # never zero (a silent creative change), never twice (a double-count):
+            #   * A buy that transitions draft -> pending_creatives bumps via
+            #     apply_status_transition (that IS its one bump this pass).
+            #   * A buy that did NOT transition but whose creative set actually
+            #     changed (new assignment or a real weight change) bumps via
+            #     apply_revision_bump. Idempotent no-op re-assigns are excluded, so
+            #     they leave the revision untouched.
+            # See #1544 (B3).
             for mb_id, mb_obj in media_buys_with_new_assignments.items():
                 if mb_obj.status == "draft" and mb_obj.approved_at is not None:
                     MediaBuyRepository.apply_status_transition(mb_obj, "pending_creatives")
                     logger.info(f"[SYNC_CREATIVES] Media buy {mb_id} transitioned from draft to pending_creatives")
+                elif mb_id in media_buys_actually_mutated:
+                    MediaBuyRepository.apply_revision_bump(mb_obj)
+                    logger.info(f"[SYNC_CREATIVES] Media buy {mb_id} revision bumped on creative assignment")
 
             # UoW auto-commits on clean exit
 
