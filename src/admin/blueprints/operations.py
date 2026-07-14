@@ -339,7 +339,11 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
             media_buy = media_buy_repo.get_by_id(media_buy_id)
 
             if action == "approve":
-                step.status = "approved"
+                # Do NOT pre-write step.status = "approved" — the workflow step is a
+                # decision record OWNED by the single-winner claim below (terminalized to
+                # "completed" only by the claim winner's finalizer). The step query above
+                # already excludes terminal steps, so a replay after completion/rejection
+                # finds nothing rather than reverting a decided step. #1544.
                 step.updated_at = datetime.now(UTC)
 
                 if not step.comments:
@@ -440,7 +444,9 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # Atomic, single-winner reject: CLAIM buy → rejected (+revision bump),
                     # workflow step terminalized with the rejection artifact, then the
                     # rejection webhook carrying rejection_reason (a pinned-beta.3 MUST).
-                    # Same finalizer the workflow reject route uses. See #1544.
+                    # expected_status is the OBSERVED buy status, so a reject that raced an
+                    # approve-hold and observed pending_approval loses (rather than also
+                    # succeeding). Same finalizer the workflow reject route uses. #1544.
                     outcome = finalize_media_buy_rejection(
                         db_session,
                         tenant_id,
@@ -448,18 +454,18 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         step_id=step.step_id,
                         step_data=step_data,
                         reason=reason_text,
+                        expected_status=media_buy.status,
                     )
                     if outcome is FinalizeOutcome.NOT_CLAIMED:
                         flash("This media buy was already decided by another request", "warning")
                     else:
                         flash("Media buy rejected", "info")
                 else:
-                    # No mapped buy awaiting a decision — record the step rejection only;
-                    # a buy that is not pending must not be force-rejected.
-                    step.status = "rejected"
-                    step.error_message = reason_text
-                    db_session.commit()
-                    flash("Media buy rejected", "info")
+                    # The mapped buy is already decided / not rejectable — do NOT force the
+                    # step to rejected (that would pair an active/decided buy with a
+                    # rejected task). Discard the pending comment and surface a conflict.
+                    db_session.rollback()
+                    flash("This media buy was already decided by another request", "warning")
 
             return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 

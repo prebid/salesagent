@@ -179,3 +179,36 @@ class TestApprovalFinalizerRace:
             buy = MediaBuyRepository(session, tenant_id).get_by_id("mb_race2")
             assert buy is not None
             assert buy.status in ("active", "rejected")  # a single terminal decision, never both
+
+    def test_reject_that_observed_pending_approval_loses_to_a_hold(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """A reject that OBSERVED pending_approval but whose buy already moved to
+        pending_creatives (an approve-HOLD won first) must lose the claim — passing the
+        observed status as expected_status, NOT a fixed set that also accepts
+        pending_creatives. #1544."""
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending_buy_and_step(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_hold_then_reject"
+        )
+        # The approve-HOLD already won: buy is now pending_creatives.
+        with get_db_session() as session:
+            MediaBuyRepository(session, tenant_id).update_status("mb_hold_then_reject", "pending_creatives")
+            session.commit()
+
+        # A reject that observed pending_approval (its pre-claim read) loses.
+        with get_db_session() as session:
+            outcome = finalize_media_buy_rejection(
+                session,
+                tenant_id,
+                media_buy_id="mb_hold_then_reject",
+                step_id=step_id,
+                step_data=step_data,
+                reason="raced the hold",
+                expected_status="pending_approval",
+            )
+        assert outcome is FinalizeOutcome.NOT_CLAIMED
+
+        with get_db_session() as session:
+            buy = MediaBuyRepository(session, tenant_id).get_by_id("mb_hold_then_reject")
+            assert buy is not None and buy.status == "pending_creatives"  # hold's decision stands

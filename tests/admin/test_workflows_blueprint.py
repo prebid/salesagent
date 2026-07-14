@@ -293,3 +293,208 @@ class TestWorkflowRejection:
             json={"reason": "test"},
         )
         assert response.status_code == 404
+
+
+def _setup_mapped_media_buy_step(
+    factory_session,
+    tenant_id,
+    *,
+    buy_status="pending_approval",
+    step_status="pending_approval",
+    external_task_id=None,
+):
+    """Create a media buy + an approved creative assignment + a workflow step mapped to
+    the buy. Returns (media_buy_id, context_id, step_id)."""
+    from src.core.database.models import Principal as P
+    from src.core.database.models import Tenant as T
+    from src.core.database.repositories import WorkflowRepository
+    from tests.factories import CreativeAssignmentFactory, CreativeFactory, MediaBuyFactory
+
+    tenant_obj = factory_session.get(T, tenant_id)
+    principal_obj = factory_session.get(P, (tenant_id, "wf_test_principal"))
+    buy = MediaBuyFactory(tenant=tenant_obj, principal=principal_obj, status=buy_status)
+    creative = CreativeFactory(tenant=tenant_obj, principal=principal_obj, status="approved")
+    CreativeAssignmentFactory(creative=creative, media_buy=buy)
+
+    context_id = f"ctx_{uuid.uuid4().hex[:12]}"
+    step_id = f"step_{uuid.uuid4().hex[:12]}"
+    now = datetime.now(UTC)
+    is_terminal = step_status in ("completed", "rejected", "failed")
+    factory_session.add(
+        Context(
+            context_id=context_id,
+            tenant_id=tenant_id,
+            principal_id="wf_test_principal",
+            conversation_history=[],
+            created_at=now,
+            last_activity_at=now,
+        )
+    )
+    factory_session.add(
+        WorkflowStep(
+            step_id=step_id,
+            context_id=context_id,
+            step_type="approval",
+            tool_name="create_media_buy",
+            status=step_status,
+            owner="principal",
+            request_data={"external_task_id": external_task_id} if external_task_id else {},
+            response_data={"media_buy_id": buy.media_buy_id, "revision": 2} if is_terminal else None,
+            created_at=now,
+        )
+    )
+    WorkflowRepository(factory_session, tenant_id).add_mapping(
+        step_id=step_id, object_type="media_buy", object_id=buy.media_buy_id, action="create"
+    )
+    factory_session.commit()
+    return buy.media_buy_id, context_id, step_id
+
+
+def _buy_status(tenant_id, media_buy_id):
+    from src.core.database.repositories import MediaBuyRepository
+
+    with get_db_session() as session:
+        buy = MediaBuyRepository(session, tenant_id).get_by_id(media_buy_id)
+        return buy.status if buy else None
+
+
+def _step_status(step_id):
+    with get_db_session() as session:
+        step = session.get(WorkflowStep, step_id)
+        return step.status if step else None
+
+
+class TestWorkflowDecisionOwnership:
+    """The media-buy workflow decision is single-winner; a terminal step is immutable.
+
+    Replays and ineligible actions return 409 WITHOUT reverting the step, so an
+    active/decided buy is never paired with a stale/mismatched task. #1544.
+    """
+
+    def test_approve_on_terminal_step_returns_409_no_revert(self, client, test_tenant, factory_session):
+        """Replaying approve on a completed step → 409; the step is NOT reverted to 'approved'."""
+        _auth_session(client, test_tenant)
+        _, context_id, step_id = _setup_mapped_media_buy_step(
+            factory_session, test_tenant, buy_status="active", step_status="completed"
+        )
+        r = client.post(
+            f"/tenant/{test_tenant}/workflows/{context_id}/steps/{step_id}/approve",
+            content_type="application/json",
+            json={},
+        )
+        assert r.status_code == 409
+        assert _step_status(step_id) == "completed"
+
+    def test_reject_on_terminal_step_returns_409(self, client, test_tenant, factory_session):
+        """Replaying reject on a rejected step → 409; the step stays rejected."""
+        _auth_session(client, test_tenant)
+        _, context_id, step_id = _setup_mapped_media_buy_step(
+            factory_session, test_tenant, buy_status="rejected", step_status="rejected"
+        )
+        r = client.post(
+            f"/tenant/{test_tenant}/workflows/{context_id}/steps/{step_id}/reject",
+            content_type="application/json",
+            json={"reason": "again"},
+        )
+        assert r.status_code == 409
+        assert _step_status(step_id) == "rejected"
+
+    def test_reject_when_mapped_buy_active_returns_409_no_step_change(self, client, test_tenant, factory_session):
+        """Reject with the mapped buy already active → 409; the step is NOT force-rejected
+        (no active-buy + rejected-task mismatch)."""
+        _auth_session(client, test_tenant)
+        mbid, context_id, step_id = _setup_mapped_media_buy_step(
+            factory_session, test_tenant, buy_status="active", step_status="in_progress"
+        )
+        r = client.post(
+            f"/tenant/{test_tenant}/workflows/{context_id}/steps/{step_id}/reject",
+            content_type="application/json",
+            json={"reason": "late"},
+        )
+        assert r.status_code == 409
+        assert _step_status(step_id) == "in_progress"
+        assert _buy_status(test_tenant, mbid) == "active"
+
+    def test_reject_of_held_buy_succeeds(self, client, test_tenant, factory_session):
+        """A sequential reject of a genuinely held (pending_creatives) buy still succeeds."""
+        _auth_session(client, test_tenant)
+        mbid, context_id, step_id = _setup_mapped_media_buy_step(
+            factory_session, test_tenant, buy_status="pending_creatives", step_status="in_progress"
+        )
+        r = client.post(
+            f"/tenant/{test_tenant}/workflows/{context_id}/steps/{step_id}/reject",
+            content_type="application/json",
+            json={"reason": "changed mind"},
+        )
+        assert r.status_code == 200
+        assert _step_status(step_id) == "rejected"
+        assert _buy_status(test_tenant, mbid) == "rejected"
+
+    def test_replay_approve_keeps_tasks_get_completed(self, client, test_tenant, factory_session):
+        """After a replay-approve is rejected (409), durable tasks/get still reports
+        COMPLETED — the step was never reverted to a WORKING-mapped status."""
+        import asyncio
+        from unittest.mock import patch
+
+        from a2a.types import GetTaskRequest, TaskState
+
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+        from tests.factories import PrincipalFactory
+
+        _auth_session(client, test_tenant)
+        task_id = "task_replay_own"
+        _, context_id, step_id = _setup_mapped_media_buy_step(
+            factory_session, test_tenant, buy_status="active", step_status="completed", external_task_id=task_id
+        )
+        r = client.post(
+            f"/tenant/{test_tenant}/workflows/{context_id}/steps/{step_id}/approve",
+            content_type="application/json",
+            json={},
+        )
+        assert r.status_code == 409
+
+        handler = AdCPRequestHandler.__new__(AdCPRequestHandler)
+        handler.tasks = {}
+        identity = PrincipalFactory.make_identity(
+            tenant_id=test_tenant, principal_id="wf_test_principal", protocol="a2a"
+        )
+        with (
+            patch.object(handler, "_get_auth_token", return_value="tok"),
+            patch.object(handler, "_resolve_a2a_identity", return_value=identity),
+        ):
+            task = asyncio.run(handler.on_get_task(GetTaskRequest(id=task_id), context=None))
+        assert task is not None
+        assert task.status.state == TaskState.TASK_STATE_COMPLETED
+
+
+class TestOperationsDecisionOwnership:
+    """The operations media-buy approve/reject route (form POST → 302) shares the invariant."""
+
+    def test_operations_reject_when_buy_active_no_step_revert(self, client, test_tenant, factory_session):
+        """Operations reject with the mapped buy already active → 302 conflict flash; the
+        step is NOT force-rejected and the buy stays active."""
+        _auth_session(client, test_tenant)
+        mbid, _context_id, step_id = _setup_mapped_media_buy_step(
+            factory_session, test_tenant, buy_status="active", step_status="pending_approval"
+        )
+        r = client.post(
+            f"/tenant/{test_tenant}/media-buy/{mbid}/approve",
+            data={"action": "reject", "reason": "late"},
+        )
+        assert r.status_code == 302
+        assert _step_status(step_id) == "pending_approval"
+        assert _buy_status(test_tenant, mbid) == "active"
+
+    def test_operations_approve_on_completed_step_no_revert(self, client, test_tenant, factory_session):
+        """Operations approve when the step is already completed → 302 (no pending step
+        found); the completed step is not reverted."""
+        _auth_session(client, test_tenant)
+        mbid, _context_id, step_id = _setup_mapped_media_buy_step(
+            factory_session, test_tenant, buy_status="active", step_status="completed"
+        )
+        r = client.post(
+            f"/tenant/{test_tenant}/media-buy/{mbid}/approve",
+            data={"action": "approve"},
+        )
+        assert r.status_code == 302
+        assert _step_status(step_id) == "completed"

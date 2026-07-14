@@ -15,7 +15,7 @@ from src.admin.services.media_buy_completion import (
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Context
+from src.core.database.models import WORKFLOW_STEP_TERMINAL_STATUSES, Context
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.workflow import WorkflowRepository
@@ -167,13 +167,19 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
             user_info = session.get("user", {})
             user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
 
-            step = workflow_repo.update_status(
-                step_id,
-                status="approved",
-            )
-
+            # Read-only fetch — do NOT pre-write status="approved". The workflow step is
+            # a decision record owned by the single-winner claim: for a media-buy step it
+            # is terminalized to "completed" ONLY by the claim winner (finalizer). A
+            # premature "approved" write would revert a step already decided by a
+            # competing approve/reject and make durable tasks/get report WORKING. #1544.
+            step = workflow_repo.get_by_step_id(step_id)
             if not step:
                 return jsonify({"error": "Workflow step not found"}), 404
+
+            # A DECIDED (terminal) step is immutable — a replayed approve after a prior
+            # rejection/completion must not revert it. #1544.
+            if step.status in WORKFLOW_STEP_TERMINAL_STATUSES:
+                return jsonify({"success": False, "error": "This workflow step was already decided"}), 409
 
             # Snapshot step fields to a dict before commit (the ORM instance may
             # expire after commit/nested sessions). Used for the completion webhook.
@@ -183,8 +189,6 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                 "tool_name": step.tool_name,
                 "request_data": step.request_data or {},
             }
-
-            db.commit()
 
             # Check if this is a media buy creation workflow step
             mappings = workflow_repo.get_mappings_for_step(step_id)
@@ -278,11 +282,18 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                     logger.info(f"[APPROVAL] Media buy {media_buy_id} successfully created in adapter")
                     flash("Workflow step approved and media buy created successfully", "success")
                 else:
+                    # The mapped buy is no longer pending_approval (already decided, or
+                    # gone). Do NOT write the step — the step follows the buy decision and
+                    # must not be reverted. Idempotent success. #1544.
                     logger.warning(
                         f"[APPROVAL] Media buy not executed: media_buy={media_buy is not None}, status={media_buy.status if media_buy else 'N/A'}"
                     )
                     flash("Workflow step approved successfully", "success")
             else:
+                # Plain (non-media-buy) workflow step — no buy decision to own, so mark the
+                # step approved directly.
+                workflow_repo.update_status(step_id, status="approved")
+                db.commit()
                 flash("Workflow step approved successfully", "success")
 
             return jsonify({"success": True}), 200
@@ -309,6 +320,11 @@ def reject_workflow_step(tenant_id, workflow_id, step_id):
             if not step:
                 return jsonify({"error": "Workflow step not found"}), 404
 
+            # A DECIDED (terminal) step is immutable — a replayed reject after a prior
+            # completion/rejection must not overwrite it. #1544.
+            if step.status in WORKFLOW_STEP_TERMINAL_STATUSES:
+                return jsonify({"success": False, "error": "This workflow step was already decided"}), 409
+
             # Snapshot step fields to a dict before commit (the rejection webhook
             # reads them post-commit, when the ORM instance may have expired).
             step_data = {
@@ -318,17 +334,20 @@ def reject_workflow_step(tenant_id, workflow_id, step_id):
                 "request_data": step.request_data or {},
             }
 
-            # If the step maps to a media buy awaiting a decision, reject it
-            # atomically: buy → rejected (+revision bump), step terminal + rejection
-            # artifact, then the rejection webhook carrying rejection_reason (a
-            # pinned-beta.3 MUST). Previously the reject route only touched the step,
-            # leaving the mapped buy stranded at pending_approval with no artifact and
-            # no buyer notification. See #1544.
             mappings = workflow_repo.get_mappings_for_step(step_id)
             mapping = next((m for m in mappings if m.object_type == "media_buy"), None)
-            media_buy = MediaBuyRepository(db, tenant_id).get_by_id(mapping.object_id) if mapping else None
 
-            if mapping and media_buy is not None and media_buy.status in ("pending_approval", "pending_creatives"):
+            if mapping is not None:
+                # The step OWNS a media-buy decision — the reject must go through the
+                # single-winner claim, asserting the OBSERVED source status. If the buy
+                # is no longer in a rejectable state (a concurrent approve won, or it was
+                # already decided) the claim loses → 409 and the step is left untouched,
+                # so we never pair an active/decided buy with a rejected task. #1544.
+                media_buy = MediaBuyRepository(db, tenant_id).get_by_id(mapping.object_id)
+                if media_buy is None or media_buy.status not in ("pending_approval", "pending_creatives"):
+                    return jsonify(
+                        {"success": False, "error": "This media buy was already decided by another request"}
+                    ), 409
                 outcome = finalize_media_buy_rejection(
                     db,
                     tenant_id,
@@ -336,13 +355,14 @@ def reject_workflow_step(tenant_id, workflow_id, step_id):
                     step_id=step_id,
                     step_data=step_data,
                     reason=reason,
+                    expected_status=media_buy.status,
                 )
                 if outcome is FinalizeOutcome.NOT_CLAIMED:
                     return jsonify(
                         {"success": False, "error": "This media buy was already decided by another request"}
                     ), 409
             else:
-                # No mapped buy awaiting a decision — record the step rejection only.
+                # No mapped media buy — a plain workflow step; record the rejection only.
                 workflow_repo.update_status(step_id, status="rejected", error_message=reason)
                 db.commit()
 

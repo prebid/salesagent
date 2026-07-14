@@ -410,20 +410,21 @@ def finalize_media_buy_rejection(
     step_id: str,
     step_data: dict[str, Any],
     reason: str,
+    expected_status: str | tuple[str, ...] = ("pending_approval", "pending_creatives"),
 ) -> FinalizeOutcome:
     """Atomic, single-winner reject finalizer (operations + workflow reject routes).
 
     CLAIMS the decision under the row lock: transitions the buy to ``rejected`` ONLY if
-    it is still ``pending_approval``/``pending_creatives`` (revision bump via the repo
-    seam), so a reject that lost to a concurrent approve (or vice-versa) is a
-    ``NOT_CLAIMED`` no-op instead of overwriting the winner. On a won claim, stores the
-    rejection artifact on the workflow step, commits, and emits the rejection webhook
-    carrying ``rejection_reason`` (a pinned-beta.3 MUST). #1544.
+    the committed status is in ``expected_status`` (revision bump via the repo seam), so
+    a reject that lost to a concurrent approve (or vice-versa) is a ``NOT_CLAIMED`` no-op
+    instead of overwriting the winner. Callers pass the OBSERVED buy status so a reject
+    that raced an approve-HOLD (``pending_approval`` → ``pending_creatives``) and observed
+    ``pending_approval`` loses the claim rather than also succeeding. On a won claim,
+    stores the rejection artifact on the workflow step, commits, and emits the rejection
+    webhook carrying ``rejection_reason`` (a pinned-beta.3 MUST). #1544.
     """
     repo = MediaBuyRepository(session, tenant_id)
-    claimed = repo.update_status_computed(
-        media_buy_id, lambda _mb: "rejected", expected_status=("pending_approval", "pending_creatives")
-    )
+    claimed = repo.update_status_computed(media_buy_id, lambda _mb: "rejected", expected_status=expected_status)
     if claimed is None:
         session.rollback()
         return FinalizeOutcome.NOT_CLAIMED

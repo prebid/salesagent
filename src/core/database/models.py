@@ -1833,6 +1833,13 @@ class Context(Base):
     )
 
 
+# A workflow step in one of these statuses is DECIDED — the decision is durable and must
+# not be reverted or re-decided (a replayed approve/reject on such a step is a 409). These
+# are exactly the statuses the A2A durable poll maps to a terminal TaskState
+# (adcp_a2a_server._STEP_STATUS_TO_TASK_STATE); every other status reads as in-progress. #1544.
+WORKFLOW_STEP_TERMINAL_STATUSES: frozenset[str] = frozenset({"completed", "rejected", "failed"})
+
+
 class WorkflowStep(Base, JSONValidatorMixin):
     """Represents an individual step/task in a workflow.
 
