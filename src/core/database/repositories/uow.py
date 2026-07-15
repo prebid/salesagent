@@ -234,6 +234,29 @@ class AccountUoW(BaseUoW):
         self.accounts = None
 
 
+class IdempotencyUoW(BaseUoW):
+    """Unit of Work for standalone idempotency-cache access.
+
+    Wraps a database session and provides only a tenant-scoped
+    ``IdempotencyAttemptRepository``. Used by tools whose verbatim-replay
+    plumbing needs the cache but not a full domain UoW (e.g. sync_accounts,
+    via :mod:`src.services.idempotency_replay`). Auto-commits on clean exit,
+    rolls back on exception.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+    """
+
+    idempotency_attempts: IdempotencyAttemptRepository | None
+
+    def _init_repos(self) -> None:
+        assert self._session is not None
+        self.idempotency_attempts = IdempotencyAttemptRepository(self._session, self._tenant_id)
+
+    def _clear_repos(self) -> None:
+        self.idempotency_attempts = None
+
+
 class PushNotificationConfigUoW(BaseUoW):
     """Unit of Work for PushNotificationConfig operations.
 
