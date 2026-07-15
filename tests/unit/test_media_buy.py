@@ -1711,6 +1711,7 @@ class TestUpdateMediaBuySchemaCompliance:
             media_buy_id="mb_1",
             buyer_campaign_ref="camp-ref-123",
             status=MediaBuyStatus.active,
+            revision=1,
             currency="USD",
             total_budget=5000.0,
             packages=[],
@@ -4131,6 +4132,7 @@ class TestGetMediaBuysStatusComputation:
             updated_at=None,
             status=status,
             is_paused=is_paused,
+            revision=1,
         )
 
     def test_active_persisted_before_flight_refines_to_pending_start(self):
@@ -4244,7 +4246,8 @@ class TestGetMediaBuysResponseShape:
         resp = GetMediaBuysResponse(
             media_buys=[
                 GetMediaBuysMediaBuy(
-                    media_buy_id="mb_1",
+                    media_buy_id="mb_serializable",
+                    revision=3,
                     status=MediaBuyStatus.active,
                     currency="USD",
                     total_budget=5000.0,
@@ -4256,7 +4259,8 @@ class TestGetMediaBuysResponseShape:
         )
         dumped = resp.model_dump()
         assert len(dumped["media_buys"]) == 1
-        assert dumped["media_buys"][0]["media_buy_id"] == "mb_1"
+        assert dumped["media_buys"][0]["media_buy_id"] == "mb_serializable"
+        assert dumped["media_buys"][0]["revision"] == 3
 
     def test_nested_packages_serialized(self):
         """GMB-RS02: packages within media_buys correctly serialized.
@@ -4270,7 +4274,8 @@ class TestGetMediaBuysResponseShape:
         resp = GetMediaBuysResponse(
             media_buys=[
                 GetMediaBuysMediaBuy(
-                    media_buy_id="mb_1",
+                    media_buy_id="mb_nested",
+                    revision=2,
                     status=MediaBuyStatus.active,
                     currency="USD",
                     total_budget=5000.0,

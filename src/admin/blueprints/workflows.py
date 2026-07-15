@@ -222,7 +222,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                                 f"Media buy approved! Waiting for {len(unapproved_creatives)} creative(s) to be approved before creating in GAM.",
                                 "info",
                             )
-                            media_buy.status = "pending_creatives"
+                            media_buy_repo.apply_status_transition(media_buy, "pending_creatives")
                             db.commit()
                             return jsonify({"success": True}), 200
 
@@ -238,7 +238,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                         return jsonify({"success": False, "error": error_msg}), 500
 
                     # Update media buy status
-                    media_buy.status = "scheduled"
+                    media_buy_repo.apply_status_transition(media_buy, "scheduled")
                     media_buy.approved_at = datetime.now(UTC)
                     media_buy.approved_by = user_email
                     db.commit()

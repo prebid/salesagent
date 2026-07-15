@@ -512,6 +512,12 @@ class MediaBuyRepository:
                 MediaBuy.media_buy_id == media_buy_id,
             )
             .with_for_update()
+            # populate_existing() forces the locked row to be refreshed from the
+            # database even if it is already in the identity map. Without it, an
+            # already-loaded MediaBuy would compare its STALE cached ``.revision``
+            # instead of the value we just locked FOR UPDATE — defeating the
+            # optimistic-concurrency check.
+            .execution_options(populate_existing=True)
         ).first()
         if media_buy is None:
             from src.core.exceptions import AdCPMediaBuyNotFoundError
@@ -546,6 +552,21 @@ class MediaBuyRepository:
         media_buy.revision += 1
         self._session.flush()
         return media_buy.revision
+
+    def apply_status_transition(self, media_buy: MediaBuy, new_status: str) -> int:
+        """Atomically set a media buy's status AND bump its revision; return it.
+
+        Every status transition — the buyer-facing update tool and every
+        out-of-band writer (the status scheduler, admin approve/reject flows) —
+        MUST route through here (or through ``increment_revision``) so the AdCP
+        optimistic-concurrency ``revision`` advances on every change. Without
+        this, an out-of-band transition (e.g. the scheduler flipping
+        active->completed) would leave the revision untouched, letting a buyer
+        holding a now-stale revision pass the concurrency check on a later
+        update they should have been forced to re-read for.
+        """
+        media_buy.status = new_status
+        return self.increment_revision(media_buy)
 
     # ------------------------------------------------------------------
     # MediaPackage writes

@@ -121,13 +121,15 @@ def seed_media_buy(
     idempotency_key: str | None = None,
     account_id: str | None = None,
     status: str = "active",
+    revision: int = 1,
 ) -> None:
     """Commit a tenant + principal + MediaBuy (the dup-booking backstop) via factories.
 
     The committed MediaBuy carries the ``idempotency_key`` backstop without a
     verbatim cache row — the state the degraded post-race path and the
-    account-scoped key lookup are tested against. One home so the seed block
-    does not duplicate across the repository and race test modules.
+    account-scoped key lookup are tested against. ``revision`` seeds the
+    optimistic-concurrency token for revision-lock tests. One home so the seed
+    block does not duplicate across the repository and race test modules.
     """
     from tests.factories import AccountFactory, MediaBuyFactory, PrincipalFactory, TenantFactory
     from tests.harness._base import BareIntegrationEnv
@@ -145,5 +147,6 @@ def seed_media_buy(
             idempotency_key=idempotency_key,
             account_id=account_id,
             status=status,
+            revision=revision,
         )
         env.get_session()

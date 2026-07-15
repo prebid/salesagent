@@ -2807,6 +2807,15 @@ class GetMediaBuysMediaBuy(SalesAgentBaseModel):
     media_buy_id: str = Field(..., description="Publisher media buy identifier")
     buyer_campaign_ref: str | None = Field(default=None, description="Buyer campaign reference")
     status: MediaBuyStatus = Field(..., description="Current media buy status")
+    revision: int = Field(
+        ...,
+        ge=1,
+        description=(
+            "Current optimistic concurrency token. Pass this in update_media_buy requests "
+            "intended to change state. Sellers increment it on mutating state changes and "
+            "reject stale tokens with CONFLICT when a revision token is provided."
+        ),
+    )
     valid_actions: list[MediaBuyValidAction] | None = Field(
         default=None, description="Actions available for this media buy given its current status"
     )

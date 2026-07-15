@@ -429,18 +429,18 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
 
                             now = datetime.now(UTC)
                             if now < start_time:
-                                media_buy.status = "scheduled"
+                                approve_repo.apply_status_transition(media_buy, "scheduled")
                             elif now > end_time:
-                                media_buy.status = "completed"
+                                approve_repo.apply_status_transition(media_buy, "completed")
                             else:
-                                media_buy.status = "active"
+                                approve_repo.apply_status_transition(media_buy, "active")
                         else:
                             # No start or end time - set to active
-                            media_buy.status = "active"
+                            approve_repo.apply_status_transition(media_buy, "active")
                     else:
                         # Keep it in a state that shows it needs creative approval
                         # Use "draft" which will be displayed as "needs_approval" or "needs_creatives" by readiness service
-                        media_buy.status = "draft"
+                        approve_repo.apply_status_transition(media_buy, "draft")
 
                     media_buy.approved_at = datetime.now(UTC)
                     media_buy.approved_by = user_email
@@ -562,7 +562,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 attributes.flag_modified(step, "comments")
 
                 if media_buy and media_buy.status == "pending_approval":
-                    media_buy.status = "rejected"
+                    approve_repo.apply_status_transition(media_buy, "rejected")
 
                 db_session.commit()
 
