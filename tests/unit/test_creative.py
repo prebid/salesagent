@@ -4530,11 +4530,18 @@ class TestA2ATransportGaps:
             mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
 
-            result = sync_creatives_raw(
-                creatives=[_make_creative_asset()],
-                idempotency_key="idem-key-test-0001",
-                identity=identity,
-            )
+            # Phase 3 wired the idempotency key to a reservation that opens a real DB
+            # transaction; mock it out for this transport-gap unit test (reservation
+            # behavior is covered by tests/integration/test_sync_creatives_idempotency.py).
+            with patch(
+                "src.core.tools.creatives._sync.reserve_idempotent",
+                return_value=MagicMock(replay=None, attempt_id=None),
+            ):
+                result = sync_creatives_raw(
+                    creatives=[_make_creative_asset()],
+                    idempotency_key="idem-key-test-0001",
+                    identity=identity,
+                )
 
             assert isinstance(result, SyncCreativesResponse)
             assert len(result.creatives) == 1
