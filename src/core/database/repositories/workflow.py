@@ -29,12 +29,18 @@ from src.core.database.models import ObjectWorkflowMapping, Principal, WorkflowS
 # repository's atomic terminal-transition guard and the A2A boundary's step→TaskState map.
 TERMINAL_STEP_STATUSES = frozenset({"completed", "rejected", "failed", "canceled"})
 
-# Statuses from which a buyer cancel is still safe. Deliberately EXCLUDES ``approved``:
-# an approved step is the point where irreversible ad-server order creation begins
-# (admin approve commits ``approved`` BEFORE execute_approved_media_buy), so cancelling
-# it would leave a real order behind a canceled task. Cancel is only accepted before
-# that claim. Terminal statuses are (trivially) excluded too.
-CANCELLABLE_STEP_STATUSES = frozenset({"pending", "in_progress", "requires_approval", "pending_approval"})
+# Statuses from which a buyer cancel is still safe — i.e. states where NO irreversible
+# external (ad-server) work has begun. Deliberately EXCLUDES both ``approved`` and
+# ``in_progress``:
+#   * ``approved`` — the admin-approve path commits it BEFORE execute_approved_media_buy,
+#     so cancelling it would leave a real order behind a canceled task.
+#   * ``in_progress`` — the create/update execution paths set it BEFORE running their
+#     adapter/business side-effects (media_buy_create.py, media_buy_update.py), so it marks
+#     that irreversible work is already underway; cancelling then would strand external
+#     state behind a canceled task.
+# Terminal statuses are (trivially) excluded too. A cancel is only accepted while the step is
+# still purely pending human/forecasting action, before any side-effects have run.
+CANCELLABLE_STEP_STATUSES = frozenset({"pending", "requires_approval", "pending_approval"})
 
 
 class WorkflowRepository:
@@ -440,12 +446,13 @@ class WorkflowRepository:
         """Atomically cancel a step IFF it is in a CANCELLABLE status.
 
         The buyer-facing cancel primitive (A2A ``tasks/cancel``). Unlike
-        ``cancel_if_nonterminal``, this refuses to cancel an ``approved`` step —
-        the point where irreversible ad-server order creation has begun — so a
-        cancel can never strand a real order behind a canceled task
-        (CANCELLABLE_STEP_STATUSES excludes ``approved`` and all terminal states).
-        Returns True when canceled, False when the step is absent or not in a
-        cancellable status. Does NOT commit.
+        ``cancel_if_nonterminal``, this refuses to cancel a step once irreversible
+        external work has begun — CANCELLABLE_STEP_STATUSES excludes both
+        ``approved`` (admin-approve commits it before order creation) and
+        ``in_progress`` (the create/update paths persist it before their adapter
+        side-effects), as well as all terminal states — so a cancel can never strand
+        a real order behind a canceled task. Returns True when canceled, False when
+        the step is absent or not in a cancellable status. Does NOT commit.
         """
         return (
             self._atomic_transition(

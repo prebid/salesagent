@@ -10,28 +10,12 @@ import logging
 import threading
 import time
 from datetime import UTC, datetime
-from enum import Enum
 
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories import MediaBuyUoW, WorkflowUoW
 from src.core.thread_registry import ThreadRegistry
 
 logger = logging.getLogger(__name__)
-
-
-class ApprovalPersistOutcome(Enum):
-    """Discriminated outcome of persisting an approval terminal transition.
-
-    Distinguishing these three is required so a transient DB failure is not
-    mistaken for a cancellation-race loss (which was the round-14 bug: both
-    returned ``False``, the loop broke, and an approved order was stranded
-    non-terminal with no retry).
-    """
-
-    APPLIED = "applied"  # transition committed → emit webhook
-    RACE_LOST = "race_lost"  # step already terminal (buyer canceled) → suppress, done
-    PERSIST_ERROR = "persist_error"  # DB/persistence failure → retry (do NOT suppress permanently)
-
 
 # Global registry of running approval polling threads. ThreadRegistry reaps
 # dead threads on every read — same defensive cleanup as the sync registry
@@ -164,22 +148,10 @@ def _run_approval_polling_thread(
 
                 if approval_success:
                     logger.info(f"[{workflow_step_id}] Order {order_id} approved successfully")
-                    outcome = _mark_approval_complete(tenant_id, workflow_step_id, order_id, attempt, elapsed_seconds)
-                    if outcome is ApprovalPersistOutcome.PERSIST_ERROR:
-                        # DB failure while persisting completion — do NOT break. Keep
-                        # polling so the completion is retried (approve_order is
-                        # idempotent); bounded by the max-duration timeout above, so a
-                        # transient error recovers and a persistent one eventually times
-                        # out into the failed path rather than stranding the order.
-                        logger.warning(
-                            f"[{workflow_step_id}] Order {order_id} approved but persisting completion failed; "
-                            f"retrying persistence on next poll."
-                        )
-                        time.sleep(polling_interval_seconds)
-                        continue
-                    # APPLIED → emit webhook. RACE_LOST → suppress (buyer canceled).
-                    if outcome is ApprovalPersistOutcome.APPLIED:
-                        _send_approval_webhook(tenant_id, order_id, workflow_step_id, "completed")
+                    _mark_approval_complete(tenant_id, workflow_step_id, order_id, attempt, elapsed_seconds)
+
+                    # Send webhook notification
+                    _send_approval_webhook(tenant_id, order_id, workflow_step_id, "completed")
                     break
                 else:
                     # Still not ready - continue polling
@@ -197,11 +169,8 @@ def _run_approval_polling_thread(
 
     except Exception as e:
         logger.error(f"[{workflow_step_id}] Approval polling failed: {e}", exc_info=True)
-        # Emit the failed webhook only when the failure transition actually APPLIED.
-        # RACE_LOST (buyer canceled) and PERSIST_ERROR both suppress a contradictory
-        # failed webhook here — see _mark_approval_failed.
-        if _mark_approval_failed(tenant_id, workflow_step_id, str(e)) is ApprovalPersistOutcome.APPLIED:
-            _send_approval_webhook(tenant_id, order_id, workflow_step_id, "failed")
+        _mark_approval_failed(tenant_id, workflow_step_id, str(e))
+        _send_approval_webhook(tenant_id, order_id, workflow_step_id, "failed")
 
     finally:
         # Remove from active tasks
@@ -225,21 +194,8 @@ def _update_approval_progress(tenant_id: str, workflow_step_id: str, progress_da
 
 def _mark_approval_complete(
     tenant_id: str, workflow_step_id: str, order_id: str, attempts: int, elapsed_seconds: float
-) -> ApprovalPersistOutcome:
-    """Persist the completed transition. Returns a discriminated outcome.
-
-    ``update_status`` is an atomic conditional transition (WHERE status NOT IN
-    terminal): it returns None when the step was concurrently terminalized (e.g. a
-    buyer cancel committed while GAM approval was in flight) → ``RACE_LOST`` (the
-    completion legitimately lost; suppress the webhook). A DB/persistence exception →
-    ``PERSIST_ERROR`` (NOT a race loss — the caller must retry, not silently strand
-    the approved order). Success → ``APPLIED``.
-
-    NB: the GAM order was already approved by the time we get here; a step that was
-    canceled meanwhile leaves an approved-order-behind-a-canceled-task orphan — the
-    cancellable-state policy prevents new occurrences (approved is no longer
-    cancellable), but this method only reports the persistence outcome.
-    """
+) -> None:
+    """Mark approval as completed in workflow step via WorkflowUoW."""
     try:
         with WorkflowUoW(tenant_id) as uow:
             assert uow.workflows is not None
@@ -253,33 +209,21 @@ def _mark_approval_complete(
                     "message": f"Order approved successfully after {attempts} attempts ({int(elapsed_seconds)}s)",
                 },
             )
-            if step is None:
-                logger.warning(
-                    f"Approval completion for step {workflow_step_id} refused — step already terminal "
-                    f"(likely canceled); GAM order {order_id} was approved. Suppressing completed webhook."
-                )
-                return ApprovalPersistOutcome.RACE_LOST
-            step.transaction_details = {
-                "approval_status": "approved",
-                "gam_order_status": "APPROVED",
-                "attempts": attempts,
-                "elapsed_seconds": int(elapsed_seconds),
-                "completed_at": datetime.now(UTC).isoformat(),
-            }
+            if step:
+                step.transaction_details = {
+                    "approval_status": "approved",
+                    "gam_order_status": "APPROVED",
+                    "attempts": attempts,
+                    "elapsed_seconds": int(elapsed_seconds),
+                    "completed_at": datetime.now(UTC).isoformat(),
+                }
             logger.info(f"Marked workflow step {workflow_step_id} as completed")
-            return ApprovalPersistOutcome.APPLIED
     except Exception as e:
-        logger.error(f"Failed to persist approval completion for step {workflow_step_id}: {e}")
-        return ApprovalPersistOutcome.PERSIST_ERROR
+        logger.error(f"Failed to mark approval complete: {e}")
 
 
-def _mark_approval_failed(tenant_id: str, workflow_step_id: str, error_message: str) -> ApprovalPersistOutcome:
-    """Persist the failed transition. Returns a discriminated outcome.
-
-    Same three-way discrimination as ``_mark_approval_complete``: ``RACE_LOST`` when
-    the step was concurrently terminalized (suppress the failed webhook),
-    ``PERSIST_ERROR`` on a DB exception (caller may retry), ``APPLIED`` on success.
-    """
+def _mark_approval_failed(tenant_id: str, workflow_step_id: str, error_message: str) -> None:
+    """Mark approval as failed in workflow step via WorkflowUoW."""
     try:
         with WorkflowUoW(tenant_id) as uow:
             assert uow.workflows is not None
@@ -289,18 +233,11 @@ def _mark_approval_failed(tenant_id: str, workflow_step_id: str, error_message: 
                 error_message=error_message,
                 response_data={"status": "failed", "error": error_message},
             )
-            if step is None:
-                logger.warning(
-                    f"Approval failure for step {workflow_step_id} refused — step already terminal "
-                    f"(likely canceled). Suppressing failed webhook."
-                )
-                return ApprovalPersistOutcome.RACE_LOST
-            step.transaction_details = {"approval_status": "failed", "failure_reason": error_message}
+            if step:
+                step.transaction_details = {"approval_status": "failed", "failure_reason": error_message}
             logger.info(f"Marked workflow step {workflow_step_id} as failed")
-            return ApprovalPersistOutcome.APPLIED
     except Exception as e:
-        logger.error(f"Failed to persist approval failure for step {workflow_step_id}: {e}")
-        return ApprovalPersistOutcome.PERSIST_ERROR
+        logger.error(f"Failed to mark approval failed: {e}")
 
 
 def _send_approval_webhook(tenant_id: str, order_id: str, workflow_step_id: str, status: str) -> None:

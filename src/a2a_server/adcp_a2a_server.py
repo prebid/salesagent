@@ -1395,15 +1395,15 @@ class AdCPRequestHandler(RequestHandler):
         Tenant- AND principal-scoped via ``identity`` (see ``_durable_lookup_identity``).
         Returns None when identity is unresolved/non-owning or no persisted step
         matches. Raises ``TaskNotCancelableError`` when the step is not in a
-        CANCELLABLE status — i.e. already terminal OR ``approved`` (irreversible
-        ad-server order creation has begun): an approved/completed media buy cannot
-        be canceled.
+        CANCELLABLE status — i.e. already terminal, ``approved``, OR ``in_progress``
+        (irreversible ad-server work has begun or is underway): an approved or
+        executing media buy cannot be canceled.
 
         The transition itself is a single conditional UPDATE
         (``cancel_if_cancellable`` — ``WHERE status IN cancellable``) so a concurrent
-        approval that commits ``approved``/``completed`` after our read cannot be
-        overwritten — the zero-row outcome is reported as ``TaskNotCancelableError``
-        with the fresh status, and the decision stands.
+        approval/execution that commits ``approved``/``in_progress``/``completed`` after
+        our read cannot be overwritten — the zero-row outcome is reported as
+        ``TaskNotCancelableError`` with the fresh status, and the decision stands.
         """
         if identity is None or identity.tenant_id is None or identity.principal_id is None:
             return None
@@ -1417,8 +1417,9 @@ class AdCPRequestHandler(RequestHandler):
             if step is None:
                 return None
             # cancel_if_cancellable (NOT cancel_if_nonterminal) refuses to cancel an
-            # ``approved`` step: once approved, irreversible ad-server order creation
-            # has begun, so a cancel must not strand a real order behind a canceled task.
+            # ``approved`` OR ``in_progress`` step: once approved (or once execution has
+            # started its adapter side-effects), irreversible ad-server work is underway,
+            # so a cancel must not strand a real order behind a canceled task.
             if not repo.cancel_if_cancellable(step.step_id, completed_at=datetime.now(UTC)):
                 session.rollback()
                 fresh = repo.get_by_step_id(step.step_id)
