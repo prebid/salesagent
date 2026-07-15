@@ -7,7 +7,9 @@ review on [#1579](https://github.com/prebid/salesagent/pull/1579) (aligns with
 [@KonstantinMirin](https://github.com/KonstantinMirin) preference for ratchet over permanent amnesty);
 **honesty fix 2026-07-14** (C901 table entry now defers to the baseline file;
 drop inline stale counts from ratchet comments);
-**vocabulary align 2026-07-14** (quote shipped `pyproject.toml` comment strings).
+**vocabulary align 2026-07-14** (quote shipped `pyproject.toml` comment strings);
+**residual honesty 2026-07-15** (quote shipped `mypy.ini` F2 wording; align
+boy-scout section header with `(not gated; …)`).
 Awaiting re-Accept on this PR.
 
 ## Context
@@ -65,10 +67,14 @@ Same pattern: policy text may live in the section header
 (`--- Permanently accepted (low-signal style; ADR-009) ---`); per-line comments
 only need the rule meaning (e.g. `guard-clause returns; low signal`).
 
-**Justified keep / boy-scout debt** (not a ratchet; clean up when touching):
+**Justified keep / boy-scout debt** (not gated; clean up when touching):
 
 - `E501`, `E402`, `E741`, `B027`, `F841`, `F821`, `F405`
 - `B904`, `F403`, `E722`
+
+Policy text for this bucket lives in the section header
+(`--- Justified keep / boy-scout debt (not gated; clean up when touching) ---`);
+per-rule comments keep the justification, not a second policy phrase.
 
 **Ratchet guardrail:** a baseline going **up** requires review justification. The
 `--update-baseline` path rewrites a tracked file — increases must be contested in
@@ -87,8 +93,16 @@ Keep current defaults **for now** (`check_untyped_defs` / `disallow_incomplete_d
 - Until that lands, day-to-day type-safety progress remains
   `.type-ignore-baseline` + current Quality Gate mypy config.
 
-Comments in `mypy.ini` must say **follow-up ratchet (ADR-009)**, not "permanently
-deferred" or "enable incrementally" without a ceiling.
+Comments in `mypy.ini` must keep the shipped two-part form (same ownership
+pattern as F1 section headers — do not invent a contiguous grep target the file
+does not contain):
+
+```
+# Strictness settings — left off for now (ADR-009 / #1228 F2).
+# NOT permanently deferred: check_untyped_defs error count is a follow-up ratchet
+```
+
+Forbidden: "permanently deferred" or "enable incrementally" without a ceiling.
 
 ### G2 — Obligation allowlist: document the existing exact-match ratchet
 
