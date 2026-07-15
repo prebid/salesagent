@@ -1020,6 +1020,18 @@ class MediaBuy(Base):
     # finalize_adapter_invoked_at = NULL WHERE ... — or, preferred, RE-APPROVE the
     # buy (claim_finalizing resets the whole operation state).
     finalize_recovery_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Ownership-INDEPENDENT possible-duplicate-remote-order marker (#1637 Hole A). Set when
+    # a worker's adapter RAN but the worker could not durably assert single ownership of the
+    # finalization — it lost the lease to a NEWER owner mid-run, or a post-mutation ambiguity
+    # (AdapterPostMutationIncomplete) left a partial/duplicate remote graph. Recorded WITHOUT
+    # a lease CAS so the LOSING worker (which owns no lease) can still leave a durable trace,
+    # instead of silently swallowing the possible duplicate. Keep-first: the earliest incident
+    # instant/reason wins; a later incident never overwrites it. Deliberately NOT cleared by a
+    # successful publish (unlike the lease/recovery fields) — the winning owner's clean publish
+    # leaves it set so an operator still discovers the possible duplicate even though the buy
+    # shows serving. Surfaced on the admin media-buy detail page.
+    finalize_reconcile_incident_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finalize_reconcile_incident_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Relationships
     tenant = relationship("Tenant", back_populates="media_buys", overlaps="media_buys")

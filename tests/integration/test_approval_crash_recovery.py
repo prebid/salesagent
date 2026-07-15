@@ -12,9 +12,11 @@ Protocol under test (media_buy_completion.py + MediaBuyRepository lease seams):
   real adapters are flagged ``manual_required`` once — never a blind re-create, never
   a hot loop).
 - ``AdapterPostMutationIncomplete`` (remote mutations exist, workflow incomplete)
-  parks the buy manual with the owner's lease RELEASED; re-approval of a manual buy
-  is fenced against a possibly-still-alive prior owner (lease absent, or expired
-  beyond the abandonment grace).
+  parks the buy manual; the owner RETAINS its lease with a cool-down expiry (#1637
+  Hole B) so re-approval is fenced until a committed-but-invisible first remote order
+  becomes visible, and a durable OWNERSHIP-INDEPENDENT reconcile incident is recorded
+  (#1637 Hole A) — a losing worker (which owns no lease after a real takeover) still
+  leaves the trace, and it survives the winning owner's clean publish.
 
 DB access is consolidated in the module helpers below, which go through the production
 lease API / repositories over independent ``MediaBuyUoW`` sessions — no raw
@@ -153,6 +155,8 @@ def _buy_snapshot(tenant_id: str, media_buy_id: str) -> SimpleNamespace:
             finalize_lease_expires_at=buy.finalize_lease_expires_at,
             finalize_adapter_invoked_at=buy.finalize_adapter_invoked_at,
             finalize_recovery_mode=buy.finalize_recovery_mode,
+            finalize_reconcile_incident_at=buy.finalize_reconcile_incident_at,
+            finalize_reconcile_incident_reason=buy.finalize_reconcile_incident_reason,
         )
 
 
@@ -230,6 +234,47 @@ def _package_configs(tenant_id: str, media_buy_id: str) -> list[dict]:
     with MediaBuyUoW(tenant_id) as uow:
         assert uow.media_buys is not None
         return [dict(p.package_config or {}) for p in uow.media_buys.get_packages(media_buy_id)]
+
+
+def _install_takeover_lease(tenant_id: str, media_buy_id: str, lease_id: str) -> None:
+    """Model a competing owner (W2) installing a NEW finalize lease — a real takeover — while
+    the buy is still ``finalizing``, so a returning original worker's owner-CAS on its OWN
+    lease id FAILS. Uses the same UoW row-edit seam ``_claim_expired`` uses to age a lease."""
+    from src.core.database.models import MEDIA_BUY_FINALIZING_STATUS
+
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        buy = uow.media_buys.get_by_id(media_buy_id)
+        assert buy is not None and buy.status == MEDIA_BUY_FINALIZING_STATUS
+        buy.finalize_lease_id = lease_id
+        buy.finalize_lease_expires_at = datetime.datetime.now(UTC) + datetime.timedelta(seconds=3600)
+
+
+def _clean_publish_as(tenant_id: str, media_buy_id: str, lease_id: str) -> None:
+    """The new owner's clean serving publish through the production seam: clears the finalize
+    state (lease/marker/recovery_mode) but must LEAVE the reconcile-incident marker."""
+    from src.core.database.models import MEDIA_BUY_FINALIZING_STATUS
+
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        published = uow.media_buys.update_status_computed(
+            media_buy_id,
+            lambda _mb: "active",
+            expected_status=MEDIA_BUY_FINALIZING_STATUS,
+            expected_lease_id=lease_id,
+            clear_finalize_state=True,
+            bump=False,
+        )
+        assert published is not None
+
+
+def _finalize_incident_audit_count(tenant_id: str, media_buy_id: str) -> int:
+    """Count durable ownership-independent AuditLog incident rows for this buy."""
+    from src.core.database.repositories.audit_log import AuditLogRepository
+
+    with MediaBuyUoW(tenant_id) as uow:
+        logs = AuditLogRepository(uow.session, tenant_id).find_by_operation("finalize_reconcile_incident")
+        return sum(1 for log in logs if (log.details or {}).get("media_buy_id") == media_buy_id)
 
 
 def _start_approval_worker(
@@ -739,8 +784,13 @@ class TestApprovalCrashRecovery:
         """A handled failure AFTER the remote order was created (creative upload /
         order approval — ``AdapterPostMutationIncomplete``) must NOT become a
         terminal ``failed`` that erases the finalization state: the buy stays
-        ``finalizing`` with the invoked marker INTACT, flagged ``manual_required``
-        (lease released), the step stays non-terminal, and the reconciler skips it."""
+        ``finalizing`` with the invoked marker INTACT, flagged ``manual_required``,
+        the step stays non-terminal, and the reconciler skips it.
+
+        AMBIGUOUS-path fixes (#1637 Holes A/B): the owner RETAINS its lease with a
+        cool-down expiry (not released) so re-approval is fenced until a
+        committed-but-invisible first remote order becomes visible, and a durable
+        ownership-independent reconcile incident is recorded (buy column + AuditLog)."""
         tenant_id = sample_tenant["tenant_id"]
         step_id, step_data = self._seed_pending(
             context_manager, tenant_id, sample_principal["principal_id"], "mb_partial"
@@ -756,7 +806,13 @@ class TestApprovalCrashRecovery:
         assert buy.status == "finalizing"  # NOT terminal failed
         assert buy.finalize_recovery_mode == MEDIA_BUY_RECOVERY_MANUAL
         assert buy.finalize_adapter_invoked_at is not None  # signal preserved
-        assert buy.finalize_lease_id is None  # lease released by the owner itself
+        # Hole B: lease RETAINED (cool-down), not released, so re-approval is fenced.
+        assert buy.finalize_lease_id is not None
+        assert buy.finalize_lease_expires_at is not None
+        # Hole A: durable ownership-independent incident recorded (buy column + AuditLog).
+        assert buy.finalize_reconcile_incident_at is not None
+        assert "creative upload failed" in (buy.finalize_reconcile_incident_reason or "")
+        assert _finalize_incident_audit_count(tenant_id, "mb_partial") == 1
         assert _step_snapshot(tenant_id, step_id).status == "in_progress"  # not failed/terminal
         # Reconciler never re-touches it (manual_required excluded from the scan).
         assert "mb_partial" not in _recoverable_ids(tenant_id)
@@ -789,7 +845,10 @@ class TestApprovalCrashRecovery:
         # true crash, not a fast-forwarded dead timestamp) is pinned by
         # test_heartbeat_fences_reapproval_of_live_worker_until_it_crashes below.
 
-        # (b) owner-flagged manual (post-mutation failure; lease RELEASED) → immediate.
+        # (b) owner-flagged manual via the AMBIGUOUS post-mutation path RETAINS the lease with
+        # a cool-down (#1637 Hole B), so re-approval is FENCED — not immediate — until the
+        # cool-down + abandoned-owner grace elapses (the fenced→permitted transition on an
+        # injected clock is pinned by test_ambiguous_post_mutation_cooldown_fences_reapproval).
         step2_id, step2_data = self._seed_pending(
             context_manager, tenant_id, sample_principal["principal_id"], "mb_owner_manual"
         )
@@ -801,19 +860,11 @@ class TestApprovalCrashRecovery:
             tenant_id, "mb_owner_manual", step2_id, step2_data, post_mutation_failing_adapter
         )
         assert outcome_b is FinalizeOutcome.RETRYING
-        assert _buy_snapshot(tenant_id, "mb_owner_manual").finalize_lease_id is None
-        outcome_b2, _ = _finalize_approval(
-            tenant_id,
-            "mb_owner_manual",
-            step2_id,
-            step2_data,
-            lambda: (True, None),
-            expected_status=("pending_approval", "finalizing"),
-        )
-        assert outcome_b2 is FinalizeOutcome.APPLIED
         buy_b = _buy_snapshot(tenant_id, "mb_owner_manual")
-        assert buy_b.status == "active"
-        assert buy_b.finalize_recovery_mode is None and buy_b.finalize_adapter_invoked_at is None
+        assert buy_b.finalize_lease_id is not None  # lease retained for the cool-down fence
+        assert not _reapproval_would_claim(tenant_id, "mb_owner_manual"), (
+            "the ambiguous post-mutation cool-down must fence re-approval until it elapses"
+        )
 
         # (c) a plain in-flight finalizing buy (no manual flag) is never re-claimable.
         self._seed_pending(context_manager, tenant_id, sample_principal["principal_id"], "mb_inflight")
@@ -898,6 +949,113 @@ class TestApprovalCrashRecovery:
         assert outcome is FinalizeOutcome.APPLIED
         buy = _buy_snapshot(tenant_id, "mb_nostep")
         assert buy.status == "active" and buy.finalize_lease_id is None
+
+    # ── Fix A: real takeover records a durable ownership-independent incident ──
+
+    def test_real_takeover_records_incident_that_survives_winner_publish(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """Hole A (the reviewer-named gap): a worker (W1) loses its lease to a NEWER owner
+        (W2) WHILE its adapter is still running. When W1's adapter returns, its owner-CAS to
+        ``manual_required`` FAILS (W2 owns a different lease). W1 must NOT silently return
+        NOT_CLAIMED and touch nothing — TWO remote adapter invocations may have occurred with
+        no durable trace. Instead W1 records a durable, OWNERSHIP-INDEPENDENT reconcile incident
+        (buy column + AuditLog). The incident SURVIVES W2's subsequent clean publish: the buy
+        shows serving AND the incident marker is still set.
+
+        Unlike the earlier ownership-loss test, this installs a REAL replacement lease (W2's),
+        so W1's manual CAS genuinely fails — exercising the takeover path, not the still-own-
+        the-lease path whose CAS succeeds.
+        """
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_takeover"
+        )
+
+        adapter_entered = threading.Event()
+        adapter_release = threading.Event()
+
+        def w1_adapter():
+            adapter_entered.set()
+            assert adapter_release.wait(timeout=30), "test deadlock: adapter never released"
+            # W1's post-mutation ambiguity: its remote order may exist.
+            raise AdapterPostMutationIncomplete("W1 order created; approval failed")
+
+        t, worker_result = _start_approval_worker(tenant_id, "mb_takeover", step_id, step_data, w1_adapter)
+        try:
+            assert adapter_entered.wait(timeout=30), "worker never reached the adapter"
+            # W2 takes over with a NEW lease while W1 is mid-adapter (status stays finalizing).
+            _install_takeover_lease(tenant_id, "mb_takeover", "lease_w2_takeover")
+        finally:
+            adapter_release.set()
+            t.join(timeout=60)
+
+        assert not t.is_alive(), "worker hung"
+        assert "error" not in worker_result, f"worker failed: {worker_result.get('error')}"
+        # W1 lost the owner-CAS to W2's lease → NOT_CLAIMED, but NOT silent.
+        assert worker_result["outcome"] is FinalizeOutcome.NOT_CLAIMED
+        mid = _buy_snapshot(tenant_id, "mb_takeover")
+        assert mid.finalize_reconcile_incident_at is not None  # durable marker despite no ownership
+        assert "W1 order created" in (mid.finalize_reconcile_incident_reason or "")
+        assert _finalize_incident_audit_count(tenant_id, "mb_takeover") == 1  # durable audit row
+        # W1 did NOT steal W2's finalize state.
+        assert mid.finalize_lease_id == "lease_w2_takeover"
+        assert mid.status == "finalizing"
+
+        # W2 (the new owner) now publishes cleanly — clears finalize state but MUST leave the incident.
+        _clean_publish_as(tenant_id, "mb_takeover", "lease_w2_takeover")
+        final = _buy_snapshot(tenant_id, "mb_takeover")
+        assert final.status == "active"  # winner's clean publish
+        assert final.finalize_lease_id is None and final.finalize_recovery_mode is None  # finalize state cleared
+        assert (
+            final.finalize_reconcile_incident_at == mid.finalize_reconcile_incident_at
+        )  # ...but the incident SURVIVES
+        assert final.finalize_reconcile_incident_reason == mid.finalize_reconcile_incident_reason
+
+    # ── Fix B: cool-down fences re-approval on the ambiguous path ──
+
+    def test_ambiguous_post_mutation_cooldown_fences_reapproval_until_elapsed(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """Hole B: an ambiguous ``AdapterPostMutationIncomplete`` manual transition must NOT
+        leave the buy immediately re-approvable — a committed-but-invisible first remote order
+        needs time to become visible to ``create_order``'s lookup-before-create dedup. The
+        owner RETAINS its lease with a cool-down expiry, so re-approval is fenced until the
+        cool-down PLUS the abandoned-owner grace elapses on the injected clock, then permitted.
+        """
+        from src.admin.services.media_buy_completion import FINALIZE_AMBIGUOUS_COOLDOWN_SECONDS
+
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_cooldown"
+        )
+        clock = _FakeClock(datetime.datetime.now(UTC))
+
+        def post_mutation_failing_adapter():
+            raise AdapterPostMutationIncomplete("order created; approval failed")
+
+        outcome, _ = _finalize_approval(
+            tenant_id, "mb_cooldown", step_id, step_data, post_mutation_failing_adapter, now_fn=clock.now
+        )
+        assert outcome is FinalizeOutcome.RETRYING
+        buy = _buy_snapshot(tenant_id, "mb_cooldown")
+        assert buy.status == "finalizing"
+        assert buy.finalize_recovery_mode == MEDIA_BUY_RECOVERY_MANUAL
+        assert buy.finalize_lease_id is not None  # retained (not released)
+
+        # Immediately fenced: the cool-down has not elapsed.
+        assert not _reapproval_would_claim(tenant_id, "mb_cooldown", clock.now), (
+            "re-approval must be fenced during the ambiguous cool-down"
+        )
+        # Still fenced partway through the cool-down.
+        clock.advance(FINALIZE_AMBIGUOUS_COOLDOWN_SECONDS // 2)
+        assert not _reapproval_would_claim(tenant_id, "mb_cooldown", clock.now)
+
+        # Past cool-down + the abandoned-owner grace (3600s default) → permitted.
+        clock.advance(FINALIZE_AMBIGUOUS_COOLDOWN_SECONDS + 3600 + 10)
+        assert _reapproval_would_claim(tenant_id, "mb_cooldown", clock.now), (
+            "re-approval must be permitted once the cool-down and grace elapse"
+        )
 
     def test_happy_path_bumps_revision_once_and_stamps_confirmed_at(
         self, integration_db, sample_tenant, sample_principal, context_manager

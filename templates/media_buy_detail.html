@@ -38,6 +38,24 @@
 </div>
 {% endif %}
 
+<!-- Possible-duplicate remote-order incident (#1637). Ownership-independent marker that
+     survives a clean publish, so it must show even when the buy is serving. -->
+{% if media_buy.finalize_reconcile_incident_at %}
+<div class="alert alert-warning">
+    <strong>⚠️ Possible duplicate remote order — reconcile</strong>
+    <p style="margin: 0.5rem 0 0 0;">
+        A finalization worker's ad-server call ran but could not confirm single ownership, so a
+        duplicate or partial remote order may exist. Verify the ad server and remove any duplicate.
+    </p>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9em;">
+        {% if media_buy.finalize_reconcile_incident_reason %}
+        Reason: {{ media_buy.finalize_reconcile_incident_reason }}<br>
+        {% endif %}
+        Recorded: {{ media_buy.finalize_reconcile_incident_at.strftime('%Y-%m-%d %H:%M:%S %Z') }}
+    </p>
+</div>
+{% endif %}
+
 <div class="custom-card">
     <h2>Media Buy Information</h2>
     <div class="detail-rows">

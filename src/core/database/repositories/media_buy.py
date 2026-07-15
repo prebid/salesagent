@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session, joinedload, object_session
 from src.core.database.models import (
     MEDIA_BUY_FINALIZING_STATUS,
     MEDIA_BUY_RECOVERY_MANUAL,
+    AuditLog,
     MediaBuy,
     MediaPackage,
     is_media_buy_seller_confirmed,
@@ -910,7 +911,9 @@ class MediaBuyRepository:
                 attributes.flag_modified(pkg, "package_config")
         self._session.flush()
 
-    def set_finalize_recovery_manual(self, media_buy_id: str, *, lease_id: str | None = None) -> bool:
+    def set_finalize_recovery_manual(
+        self, media_buy_id: str, *, lease_id: str | None = None, cooldown_seconds: int | None = None
+    ) -> bool:
         """Mark a ``finalizing`` buy ``manual_required`` (fail-closed disposition). #1637.
 
         Two callers, one invariant (the buy stays ``finalizing`` with the invoked
@@ -921,15 +924,32 @@ class MediaBuyRepository:
           already-flagged buy is left alone. Does NOT take the lease, so a
           slow-but-alive worker's eventual publish CAS still succeeds (self-heal).
         - **Owner mode** (``lease_id`` given — the post-mutation handled-failure
-          path): CAS on the caller's own lease; sets the flag AND releases the
-          lease in the same mutate (the operation is over until an operator acts).
+          path): CAS on the caller's own lease; sets the flag in the same mutate.
+          Lease disposition depends on ``cooldown_seconds``:
+
+          * ``None`` (default): RELEASES the lease — the operation is over until an
+            operator acts (owner is provably done, e.g. ownership was already lost).
+          * given (the AMBIGUOUS ``AdapterPostMutationIncomplete`` path, #1637 Hole B):
+            RETAINS the lease and resets its expiry to ``now + cooldown_seconds`` so
+            :meth:`claim_finalizing`'s re-approval guard ("manual_required + lease
+            expired beyond the abandoned-owner grace") WITHHOLDS re-approval until a
+            committed-but-invisible first remote order becomes visible to the
+            adapter's lookup-before-create dedup. Releasing immediately would let an
+            operator re-approve before that first order is visible, risking a SECOND
+            remote CREATE.
         """
         if lease_id is not None:
 
             def _apply(media_buy: MediaBuy) -> None:
                 media_buy.finalize_recovery_mode = MEDIA_BUY_RECOVERY_MANUAL
-                media_buy.finalize_lease_id = None
-                media_buy.finalize_lease_expires_at = None
+                if cooldown_seconds is not None:
+                    # Ambiguous post-mutation path: RETAIN the lease, push its expiry out by
+                    # the cool-down so re-approval is fenced by the guard's expired-beyond-grace
+                    # rule (an immediate release would bypass the fence entirely).
+                    media_buy.finalize_lease_expires_at = self._now() + datetime.timedelta(seconds=cooldown_seconds)
+                else:
+                    media_buy.finalize_lease_id = None
+                    media_buy.finalize_lease_expires_at = None
 
             flagged = self._locked_mutate_and_bump(
                 media_buy_id,
@@ -949,6 +969,45 @@ class MediaBuyRepository:
         if media_buy.finalize_lease_expires_at is not None and media_buy.finalize_lease_expires_at > now:
             return False
         media_buy.finalize_recovery_mode = MEDIA_BUY_RECOVERY_MANUAL
+        self._session.flush()
+        return True
+
+    def record_finalize_reconcile_incident(self, media_buy_id: str, reason: str) -> bool:
+        """Durably record a POSSIBLE-DUPLICATE remote-order incident, WITHOUT lease ownership. #1637.
+
+        The crux of the ownership-independent fail-safe (#1637 Hole A): a worker whose adapter
+        RAN but which cannot assert it still owns the finalization — it lost the lease to a
+        newer owner mid-run, or a post-mutation ambiguity left a partial/duplicate remote graph
+        — must still leave a durable trace, so the possible duplicate is never silently
+        swallowed. Unlike every finalize-state mutator this is UNCONDITIONAL: it does NOT gate
+        on the lease and never bumps the revision, so the LOSING worker (which owns no lease)
+        can record it. Writes both a persistent buy-column marker AND an append-only
+        :class:`AuditLog` row (ownership-independent, discoverable by operators).
+
+        Keep-first: the earliest incident instant/reason is preserved on the buy (a later
+        incident never overwrites it) — but the AuditLog append ALWAYS fires, so every
+        occurrence is durably traced. The buy-column marker is deliberately NOT cleared by a
+        successful publish, so the winning owner's clean publish leaves it set. Returns ``False``
+        if the buy is not found in this tenant.
+        """
+        media_buy = self.get_by_id(media_buy_id, for_update=True, populate_existing=True)
+        if media_buy is None:
+            return False
+        if media_buy.finalize_reconcile_incident_at is None:
+            media_buy.finalize_reconcile_incident_at = self._now()
+            media_buy.finalize_reconcile_incident_reason = reason
+        self._session.add(
+            AuditLog(
+                tenant_id=self._tenant_id,
+                operation="finalize_reconcile_incident",
+                principal_id=media_buy.principal_id,
+                principal_name=None,
+                adapter_id=None,
+                success=False,
+                error_message=reason,
+                details={"media_buy_id": media_buy_id, "reason": reason},
+            )
+        )
         self._session.flush()
         return True
 
