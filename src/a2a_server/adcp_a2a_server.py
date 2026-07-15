@@ -1033,51 +1033,46 @@ class AdCPRequestHandler(RequestHandler):
         # result is already Task | Message — yield it directly
         yield result
 
+    def _get_task_or_raise(self, task_id: str) -> Task:
+        """Return the in-memory task, or raise ``TaskNotFoundError`` (JSON-RPC -32001).
+
+        A bare ``None`` return makes the SDK emit a generic internal error; the
+        A2A spec defines ``TaskNotFoundError`` for an unknown task id, which A2A
+        clients can react to precisely. The requested id rides both the message
+        and structured ``data`` so clients can read it programmatically. Shared
+        by ``on_get_task`` and ``on_cancel_task`` so both surface the same code.
+        """
+        task = self.tasks.get(task_id)
+        if task is None:
+            raise TaskNotFoundError(message=f"Task not found: {task_id}", data={"task_id": task_id})
+        return task
+
     async def on_get_task(
         self,
         params: GetTaskRequest,
         context: ServerCallContext,
-    ) -> Task | None:
+    ) -> Task:
         """Handle 'tasks/get' method to retrieve task status.
 
-        Args:
-            params: Parameters specifying the task ID
-            context: Server call context
-
-        Returns:
-            Task object if found.
-
-        Raises:
-            TaskNotFoundError: if no task with ``task_id`` exists. Returning
-                ``None`` here makes the SDK emit a generic internal error; the
-                A2A spec defines ``TaskNotFoundError`` (JSON-RPC -32001) for an
-                unknown task id, which A2A clients can react to precisely.
+        Raises ``TaskNotFoundError`` (-32001) for an unknown task id — see
+        ``_get_task_or_raise``.
         """
-        task_id = params.id
-        task = self.tasks.get(task_id)
-        if task is None:
-            raise TaskNotFoundError(message=f"Task not found: {task_id}")
-        return task
+        return self._get_task_or_raise(params.id)
 
     async def on_cancel_task(
         self,
         params: CancelTaskRequest,
         context: ServerCallContext,
-    ) -> Task | None:
+    ) -> Task:
         """Handle 'tasks/cancel' method to cancel a task.
 
-        Args:
-            params: Parameters specifying the task ID
-            context: Server call context
-
-        Returns:
-            Task object with canceled status, or None if not found
+        Raises ``TaskNotFoundError`` (-32001) for an unknown task id — cancelling
+        a task that does not exist is the same not-found condition as get, not a
+        silent no-op.
         """
-        task_id = params.id
-        task = self.tasks.get(task_id)
-        if task:
-            task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_CANCELED))
-            self.tasks[task_id] = task
+        task = self._get_task_or_raise(params.id)
+        task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_CANCELED))
+        self.tasks[params.id] = task
         return task
 
     async def on_list_tasks(

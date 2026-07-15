@@ -303,13 +303,27 @@ class TestA2ARequestHandler:
     @pytest.mark.asyncio
     async def test_on_get_task_unknown_id_raises_task_not_found(self):
         """tasks/get for an unknown task id raises TaskNotFoundError (A2A -32001),
-        not the generic internal error a bare None return produces."""
+        not the generic internal error a bare None return produces. (Assert on
+        str(exc) / the wire error code, not exc.code — the exception has none.)"""
         from unittest.mock import MagicMock
 
         from a2a.types import GetTaskRequest, TaskNotFoundError
 
-        with pytest.raises(TaskNotFoundError):
+        with pytest.raises(TaskNotFoundError) as exc:
             await self.handler.on_get_task(GetTaskRequest(id="task_does_not_exist"), MagicMock())
+        assert "task_does_not_exist" in str(exc.value)  # the requested id is surfaced
+
+    @pytest.mark.asyncio
+    async def test_on_cancel_task_unknown_id_raises_task_not_found(self):
+        """tasks/cancel for an unknown task id is the same not-found condition as
+        get — it must raise TaskNotFoundError, not silently no-op to None."""
+        from unittest.mock import MagicMock
+
+        from a2a.types import CancelTaskRequest, TaskNotFoundError
+
+        with pytest.raises(TaskNotFoundError) as exc:
+            await self.handler.on_cancel_task(CancelTaskRequest(id="task_does_not_exist"), MagicMock())
+        assert "task_does_not_exist" in str(exc.value)
 
     def test_handler_has_skill_methods(self):
         """Test that handler has skill-specific methods."""
