@@ -48,6 +48,8 @@ def make_pending_media_buy(integration_db):
     from src.core.database.database_session import get_engine
     from tests.factories import (
         ALL_FACTORIES,
+        CreativeAssignmentFactory,
+        CreativeFactory,
         MediaBuyFactory,
         MediaPackageFactory,
         PricingOptionFactory,
@@ -103,6 +105,27 @@ def make_pending_media_buy(integration_db):
                 "budget": 5000.0,
                 "pricing_option_id": "cpm_usd_fixed",
             },
+        )
+        # An APPROVED creative assigned to the buy so the approve path treats the buy
+        # as creative-ready and finalizes it (all_creatives_approved -> the shared
+        # finalizer commits + emits the completion webhook). Without an approved
+        # creative the #1544 approve path holds at pending_creatives and emits nothing
+        # (the reject path is unaffected — it never gates on creatives).
+        approved_creative = CreativeFactory(
+            tenant=tenant,
+            principal=principal,
+            creative_id="creative_reject_wh",
+            status="approved",
+            # Root-level url + dimensions (the format-spec-free extraction fallback in
+            # creative_helpers.extract_media_url_and_dimensions) so the approve path's
+            # creative validation passes and the buy finalizes to a completion — the
+            # network format-spec fetch is unavailable in-test.
+            data={"url": "https://example.com/ad.jpg", "width": 300, "height": 250},
+        )
+        CreativeAssignmentFactory(
+            creative=approved_creative,
+            media_buy=media_buy,
+            package_id="pkg_reject_wh_1",
         )
         PushNotificationConfigFactory(
             tenant=tenant,
@@ -180,7 +203,7 @@ def webhook_capture():
     mock_service.send_notification = AsyncMock(side_effect=_capture)
     captured["service"] = mock_service
     with patch(
-        "src.admin.blueprints.operations.get_protocol_webhook_service",
+        "src.admin.services.media_buy_completion.get_protocol_webhook_service",
         return_value=mock_service,
     ):
         yield captured
@@ -299,11 +322,12 @@ class TestAdminMediaBuyRejectWebhook:
 
         Pin for PR #1567 round-2 cleanup (approve site routed through the sync_success()
         factory): the buy IS committed at approval time, so the embedded result
-        must keep asserting completion — status="completed", confirmed_at and
-        revision from the subclass defaults, the media_buy_id, and NO leaked
-        internal fields. Guards the factory switch against any wire drift and
-        pins that approve stays a Success (never the Submitted variant the
-        pending-approval CREATE path now emits — PR #1567 round-2 item 2).
+        must keep asserting completion — status="completed", the PERSISTED confirmed_at
+        and revision (echoed from the finalized MediaBuy, not hardcoded — the #1544
+        real-revision model), the media_buy_id, and NO leaked internal fields. Guards the
+        factory switch against any wire drift and pins that approve stays a Success (never
+        the Submitted variant the pending-approval CREATE path now emits — PR #1567 round-2
+        item 2).
         """
         tenant_id = pending_reject_media_buy["tenant_id"]
         media_buy_id = pending_reject_media_buy["media_buy_id"]
@@ -318,7 +342,11 @@ class TestAdminMediaBuyRejectWebhook:
             f"approved webhook must embed a completed Success, got status={embedded.get('status')!r}"
         )
         assert embedded.get("confirmed_at"), "approved (committed) buy must carry confirmed_at"
-        assert embedded.get("revision") == 1, "approved buy must carry the initial revision"
+        # The webhook echoes the PERSISTED optimistic-concurrency counter (#1544), not a
+        # hardcoded default: create is revision 1 and the seller approval's single-winner
+        # claim (MediaBuyRepository.claim_finalizing) advances the token once, so the
+        # committed buy is revision 2. Pinned by test_media_buy_revision.py.
+        assert embedded.get("revision") == 2, "approved buy must carry the persisted revision (create 1 -> approve 2)"
         assert "workflow_step_id" not in embedded, "internal workflow_step_id must not leak onto the wire"
         # Absent-context branch pin (PR #1567 round-3): with no "context" key in
         # the workflow step's request_data, the echo path stays dormant and the

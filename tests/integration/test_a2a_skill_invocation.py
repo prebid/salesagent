@@ -770,7 +770,12 @@ class TestA2ASkillInvocation:
             assert result.artifacts, "update_media_buy skill returned no artifacts"
             payload = validator.extract_adcp_payload_from_a2a_artifact(result.artifacts[0])
             assert payload["status"] == "completed", f"missing/incorrect status on wire: {payload!r}"
-            assert payload["revision"] == 1, f"missing/incorrect revision on wire: {payload!r}"
+            # The wire carries the PERSISTED revision (#1544 real-revision model), not the
+            # subclass default: the buy is seeded at the model default (revision 1) and this
+            # update bumps the optimistic-concurrency counter once, so the response is
+            # revision 2 (pinned by test_media_buy_revision.py). Doubles on the A2A
+            # protobuf-Struct transport, so 2 arrives as 2.0 — assert on value.
+            assert payload["revision"] == 2, f"missing/incorrect revision on wire: {payload!r}"
 
     @pytest.mark.asyncio
     async def test_list_creative_formats_skill(

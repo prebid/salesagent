@@ -24,6 +24,7 @@ from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from sqlalchemy.orm import Session
 
 from src.adapters.base import AdapterIdempotencyUncertain, AdapterPostMutationIncomplete
+from src.admin.utils.helpers import echo_context
 from src.core.database.models import MEDIA_BUY_FINALIZING_STATUS
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
@@ -135,6 +136,7 @@ def build_media_buy_result(
     packages: list[MediaPackage],
     *,
     rejection_reason: str | None = None,
+    context: Any = None,
 ) -> CreateMediaBuySuccess | CreateMediaBuyError:
     """Build the internal artifact the completion/rejection webhook carries.
 
@@ -155,7 +157,8 @@ def build_media_buy_result(
     return CreateMediaBuySuccess.sync_success(
         media_buy_id=media_buy.media_buy_id,
         packages=[Package(package_id=p.package_id) for p in packages],
-        context={},
+        # Echo the buyer's request context verbatim (None -> omitted by exclude_none).
+        context=context,
         confirmed_at=media_buy.confirmed_at,
         revision=media_buy.revision,
     )
@@ -257,7 +260,12 @@ def emit_media_buy_completion(
     emit_media_buy_webhook(
         step_data,
         webhook_config,
-        build_media_buy_result(media_buy, packages, rejection_reason=rejection_reason),
+        build_media_buy_result(
+            media_buy,
+            packages,
+            rejection_reason=rejection_reason,
+            context=echo_context(step_data.get("request_data") or {}),
+        ),
         status,
         metadata,
     )
@@ -286,7 +294,12 @@ def _terminalize_step_and_emit(
     decision). The workflow + creative-unblock routes previously left the step
     non-terminal with no artifact; centralising it here fixes both. #1544.
     """
-    result = build_media_buy_result(media_buy, packages, rejection_reason=rejection_reason)
+    result = build_media_buy_result(
+        media_buy,
+        packages,
+        rejection_reason=rejection_reason,
+        context=echo_context(step_data.get("request_data") or {}),
+    )
     WorkflowRepository(session, tenant_id).update_status(
         step_id,
         status=step_status,
