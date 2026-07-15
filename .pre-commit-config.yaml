@@ -57,11 +57,14 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
+      # Count ratchets also read configs / lock / baselines / hooks — widen so a
+      # push that only bumps tooling still runs the pre-push guard (CI remains
+      # authoritative). Keep all four sibling patterns uniform.
       - id: type-ignore-no-regression
         name: "Check type: ignore count (no regression)"
         entry: uv run python .pre-commit-hooks/check_type_ignore_count.py
         language: system
-        files: '^src/.*\.py$'
+        files: '^(src/.*\.py|pyproject\.toml|mypy\.ini|uv\.lock|\.pre-commit-config\.yaml|\.pre-commit-hooks/.*|\.type-ignore-baseline)$'
         pass_filenames: false
         stages: [pre-push]
 
@@ -69,7 +72,15 @@ repos:
         name: "Check ruff complexity counts C901/PLR0912/PLR0915 (no regression)"
         entry: uv run python .pre-commit-hooks/check_ruff_complexity_count.py
         language: system
-        files: '^src/.*\.py$'
+        files: '^(src/.*\.py|pyproject\.toml|mypy\.ini|uv\.lock|\.pre-commit-config\.yaml|\.pre-commit-hooks/.*|\.ruff-complexity-baseline)$'
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: mypy-untyped-defs-no-regression
+        name: "Check mypy --check-untyped-defs error count (no regression)"
+        entry: uv run python .pre-commit-hooks/check_mypy_untyped_defs_count.py
+        language: system
+        files: '^(src/.*\.py|pyproject\.toml|mypy\.ini|uv\.lock|\.pre-commit-config\.yaml|\.pre-commit-hooks/.*|\.mypy-untyped-defs-baseline)$'
         pass_filenames: false
         stages: [pre-push]
 
@@ -124,6 +135,7 @@ repos:
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
+        exclude: ^\.claude/
       - id: check-yaml
       - id: check-added-large-files
         args: ['--maxkb=1000']

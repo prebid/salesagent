@@ -30,6 +30,7 @@ def _load(name: str):
 count_ratchet = _load("count_ratchet")
 check_type_ignore_count = _load("check_type_ignore_count")
 check_ruff_complexity_count = _load("check_ruff_complexity_count")
+check_mypy_untyped_defs_count = _load("check_mypy_untyped_defs_count")
 
 
 def _cp(stdout: str = "", stderr: str = "", returncode: int = 0) -> subprocess.CompletedProcess[str]:
@@ -266,6 +267,80 @@ def test_count_rule_violations_empty_findings_exits_2(monkeypatch: pytest.Monkey
     with pytest.raises(SystemExit) as exc:
         check_ruff_complexity_count.count_rule_violations(_REPO, _REPO / "src")
     assert exc.value.code == 2
+
+
+def test_count_untyped_defs_errors_tallies_sentinel(monkeypatch: pytest.MonkeyPatch) -> None:
+    stdout = "\n".join(
+        [
+            "a.py:1: error: x",
+            "noise without sentinel",
+            "b.py:2: error: y",
+            "c.py:3: note: not an error",
+            "d.py:4: error: z",
+        ]
+    )
+    monkeypatch.setattr(
+        count_ratchet.subprocess,
+        "run",
+        lambda *_a, **_k: _cp(stdout=stdout, returncode=1),
+    )
+    assert check_mypy_untyped_defs_count.count_untyped_defs_errors(_REPO) == 3
+
+
+def test_count_untyped_defs_errors_zero_on_clean(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(count_ratchet.subprocess, "run", lambda *_a, **_k: _cp(stdout="", returncode=0))
+    assert check_mypy_untyped_defs_count.count_untyped_defs_errors(_REPO) == 0
+
+
+def test_count_untyped_defs_errors_rc1_without_sentinel_exits_2(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        count_ratchet.subprocess,
+        "run",
+        lambda *_a, **_k: _cp(stdout="error: crash without sentinel", returncode=1),
+    )
+    with pytest.raises(SystemExit) as exc:
+        check_mypy_untyped_defs_count.count_untyped_defs_errors(_REPO)
+    assert exc.value.code == 2
+
+
+def test_count_untyped_defs_errors_rc2_exits_2(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        count_ratchet.subprocess,
+        "run",
+        lambda *_a, **_k: _cp(stdout="a.py:1: error: x", returncode=2),
+    )
+    with pytest.raises(SystemExit) as exc:
+        check_mypy_untyped_defs_count.count_untyped_defs_errors(_REPO)
+    assert exc.value.code == 2
+
+
+def test_mypy_main_tooling_failure_does_not_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path
+    (repo / "src").mkdir()
+    baseline = repo / ".mypy-untyped-defs-baseline"
+    baseline.write_text("227\n", encoding="utf-8")
+    before = baseline.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(
+        check_mypy_untyped_defs_count,
+        "resolve_ratchet_paths",
+        lambda **_kwargs: (repo, repo / "src", baseline),
+    )
+    monkeypatch.setattr(
+        check_mypy_untyped_defs_count,
+        "parse_ratchet_args",
+        lambda _description: type("Args", (), {"update_baseline": False})(),
+    )
+    monkeypatch.setattr(
+        check_mypy_untyped_defs_count,
+        "count_untyped_defs_errors",
+        lambda _repo: (_ for _ in ()).throw(SystemExit(2)),
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        check_mypy_untyped_defs_count.main()
+    assert exc.value.code == 2
+    assert baseline.read_text(encoding="utf-8") == before
 
 
 def test_ruff_complexity_rules_match_pyproject_ratchet_bucket() -> None:

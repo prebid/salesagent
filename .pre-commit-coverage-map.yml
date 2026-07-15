@@ -51,6 +51,9 @@ type-ignore-no-regression:
 ruff-complexity-no-regression:
   enforced_by: pre-push + ci-step
   location: stages_prepush + Makefile::quality-ci
+mypy-untyped-defs-no-regression:
+  enforced_by: pre-push + ci-step
+  location: stages_prepush + Makefile::quality-ci
 no-hardcoded-urls:
   enforced_by: pre-push + ci-step
   location: stages_prepush + Makefile::quality-ci

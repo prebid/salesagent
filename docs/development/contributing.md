@@ -452,14 +452,15 @@ errors with a version-too-old `FatalError`, run `uv tool install pre-commit` (pr
 | Layer | When | What |
 |-------|------|------|
 | Commit (~12 hooks, <2s warm) | Every commit | ruff format/check, hygiene, gitleaks, repo-invariants |
-| Pre-push (~11 hooks) | Every push | docs links, route conflicts, type-ignore ratchet, contract tests, mypy |
+| Pre-push (~12 hooks) | Every push | docs links, route conflicts, type-ignore / ruff-complexity / mypy-untyped-defs ratchets, contract tests, mypy |
 | pytest `arch_guard` | `make quality` | AST structural guards in `tests/unit/test_architecture_*.py` |
 | CI (`make quality-ci` + jobs) | PR / push to main | Authoritative enforcement for duplication, GAM auth, roundtrip tests, full suites |
 
 Manual/on-demand: `pre-commit run smoke-tests --hook-stage manual`
 
 Running `make quality` or `make quality-ci` may update tracked ratchet baselines
-(`.duplication-baseline`, `.type-ignore-baseline`, `.ruff-complexity-baseline`) when counts decrease. Commit those
+(`.duplication-baseline`, `.type-ignore-baseline`, `.ruff-complexity-baseline`,
+`.mypy-untyped-defs-baseline`) when counts decrease. Commit those
 updates intentionally; CI runs are ephemeral and do not persist baseline writes.
 
 **Contract Validation Prevention:**
