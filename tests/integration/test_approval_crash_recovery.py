@@ -1022,6 +1022,63 @@ class TestApprovalCrashRecovery:
         )  # ...but the incident SURVIVES
         assert final.finalize_reconcile_incident_reason == mid.finalize_reconcile_incident_reason
 
+    def test_handled_adapter_failure_that_lost_the_failed_transition_records_incident(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """Hole A, the HANDLED-FAILURE branch: W1's adapter returns a handled failure
+        ``(False, msg)`` (not a raise), but while it ran a NEWER owner (W2) took the row
+        over. W1's ``failed``-status transition is a lease-CAS on its OWN lease id, so it
+        LOSES (``failed is None``). W1 must NOT silently return NOT_CLAIMED touching
+        nothing — its adapter provably RAN (the invoked marker was committed before it),
+        so a duplicate/partial remote graph may exist once W2 also runs. It records the
+        durable ownership-independent reconcile incident (buy column + AuditLog) and
+        returns NOT_CLAIMED without marking the buy failed or stealing W2's finalize state.
+
+        Mirrors ``test_real_takeover_records_incident_that_survives_winner_publish`` (real
+        W2 takeover lease) but exercises the ``if not success:`` → ``if failed is None:``
+        path, whose incident recording only the success-publish CAS-loss sibling covered.
+        """
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_fail_takeover"
+        )
+
+        adapter_entered = threading.Event()
+        adapter_release = threading.Event()
+
+        def w1_failing_adapter():
+            adapter_entered.set()
+            assert adapter_release.wait(timeout=30), "test deadlock: adapter never released"
+            # A HANDLED failure return (the (False, msg) contract), NOT a raise — after the
+            # remote order may already have been created.
+            return False, "GAM order creation failed after the remote order was created"
+
+        t, worker_result = _start_approval_worker(tenant_id, "mb_fail_takeover", step_id, step_data, w1_failing_adapter)
+        try:
+            assert adapter_entered.wait(timeout=30), "worker never reached the adapter"
+            # W2 takes over with a NEW lease while W1 is mid-adapter (status stays finalizing),
+            # so W1's failed-status CAS on its own lease id fails.
+            _install_takeover_lease(tenant_id, "mb_fail_takeover", "lease_w2_fail_takeover")
+        finally:
+            adapter_release.set()
+            t.join(timeout=60)
+
+        assert not t.is_alive(), "worker hung"
+        assert "error" not in worker_result, f"worker failed: {worker_result.get('error')}"
+        # W1 lost the failed-transition CAS to W2's lease → NOT_CLAIMED, but NOT silent.
+        assert worker_result["outcome"] is FinalizeOutcome.NOT_CLAIMED
+        buy = _buy_snapshot(tenant_id, "mb_fail_takeover")
+        # The buy is NOT marked failed (W1 lost the CAS); W2 still owns the finalize lease.
+        assert buy.status == "finalizing"
+        assert buy.finalize_lease_id == "lease_w2_fail_takeover"  # W1 did not steal W2's state
+        # The durable ownership-independent incident IS recorded (buy column + AuditLog).
+        assert buy.finalize_reconcile_incident_at is not None
+        assert "adapter ran" in (buy.finalize_reconcile_incident_reason or "")
+        assert "reported failure" in (buy.finalize_reconcile_incident_reason or "")
+        assert _finalize_incident_audit_count(tenant_id, "mb_fail_takeover") == 1
+        # The step was not terminalized as failed — W2 owns the decision.
+        assert _step_snapshot(tenant_id, step_id).status != "failed"
+
     # ── Fix B: cool-down fences re-approval on the ambiguous path ──
 
     def test_ambiguous_post_mutation_cooldown_fences_reapproval_until_elapsed(
