@@ -2303,6 +2303,103 @@ def given_package_update_with_content(ctx: dict, update_content: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# GIVEN/THEN steps — optimistic-concurrency revision (AdCP 3.1.1)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _set_existing_revision(ctx: dict, n: int) -> None:
+    """Precondition: set the persisted revision of the existing media buy.
+
+    Mutates the seeded MediaBuy ORM row (the revision branch in conftest seeds
+    the literal id "mb_existing") and commits, so the update path's
+    ``lock_for_revision_check`` reads the scenario's stated current revision.
+    """
+    mb = ctx.get("existing_media_buy")
+    assert mb is not None, "No existing_media_buy in ctx — cannot set the revision precondition"
+    mb.revision = n
+    ctx["env"]._commit_factory_data()
+
+
+@given(parsers.parse('the media buy "{mb}" is at revision {n:d}'))
+def given_media_buy_at_revision(ctx: dict, mb: str, n: int) -> None:
+    """Set the persisted revision of the existing media buy to N."""
+    _set_existing_revision(ctx, n)
+
+
+@given(parsers.parse('the media buy "{mb}" is at version {n:d}'))
+def given_media_buy_at_version(ctx: dict, mb: str, n: int) -> None:
+    """Set the persisted revision of the existing media buy to N (``version`` alias).
+
+    The CONFLICT-version scenario phrases the current revision as ``version``;
+    revision and version are the same optimistic-concurrency token.
+    """
+    _set_existing_revision(ctx, n)
+
+
+@given(parsers.parse('the Buyer Agent\'s last-read version of "{mb}" is {n:d}'))
+def given_last_read_version(ctx: dict, mb: str, n: int) -> None:
+    """Set the request's ``revision`` to the buyer's last-read version N.
+
+    The buyer sends the revision it last observed; when it lags the persisted
+    revision the update must fail with CONFLICT (the compare is atomic under the
+    FOR UPDATE lock).
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    kwargs["revision"] = n
+
+
+@given(parsers.parse("the request revision is set to {value}"))
+def given_request_revision_set(ctx: dict, value: str) -> None:
+    """Set the request ``revision`` from a Scenario-Outline value token.
+
+    Encodes the partition/boundary conventions:
+    - ``<not provided>`` → omit revision (last-write-wins)
+    - a QUOTED value (e.g. ``"7"``) → keep the raw STRING so ``_check_revision``
+      rejects the wrong type as INVALID_REQUEST (a bare int would coerce)
+    - anything else → an integer (``0`` exercises the below-minimum rejection)
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    token = value.strip()
+    if token == "<not provided>":
+        kwargs.pop("revision", None)
+        return
+    if len(token) >= 2 and token[0] == '"' and token[-1] == '"':
+        kwargs["revision"] = token[1:-1]
+    else:
+        kwargs["revision"] = int(token)
+
+
+@then(parsers.parse("the response should contain a revision with value {expected:d}"))
+def then_response_revision_value(ctx: dict, expected: int) -> None:
+    """Assert the success wire carries ``revision`` == expected (post-increment).
+
+    Graded on the REAL serialized wire (``ctx["wire_response"]`` via wire_field);
+    A2A represents the integer as a protobuf double, so compare numerically.
+    """
+    from tests.bdd.steps._outcome_helpers import wire_field
+
+    actual = wire_field(ctx, "revision")
+    assert actual is not None, "revision missing on the success wire"
+    assert int(actual) == expected, f"Expected revision {expected} on the wire, got {actual!r}"
+
+
+@then("the response should contain a valid_actions array")
+def then_response_has_valid_actions_array(ctx: dict) -> None:
+    """Assert the success wire carries a non-empty ``valid_actions`` array (INT-002).
+
+    A successful update returns the actions the buyer can take next so it can plan
+    the following call without a get_media_buys round-trip. Graded on the REAL
+    serialized wire (``ctx["wire_response"]`` via wire_field).
+    """
+    from tests.bdd.steps._outcome_helpers import wire_field
+
+    actions = wire_field(ctx, "valid_actions")
+    assert isinstance(actions, list) and len(actions) > 0, (
+        f"Expected a non-empty valid_actions array on the wire, got {actions!r}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════
 

@@ -274,6 +274,10 @@ class UpdateMediaBuyBody(_VersionedBody):
     reporting_webhook: dict[str, Any] | None = None
     ext: dict[str, Any] | None = None
     idempotency_key: str | None = None
+    # Optimistic-concurrency revision (AdCP 3.1.1). Typed ``int | str`` so a
+    # wrong-type value survives to _check_revision → INVALID_REQUEST rather than
+    # a bare pydantic 422 at the REST body.
+    revision: int | str | None = None
 
 
 class GetMediaBuyDeliveryBody(_VersionedBody):
@@ -549,6 +553,7 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         reporting_webhook=reporting_webhook,
         ext=body.ext,
         idempotency_key=body.idempotency_key,
+        revision=body.revision,
         identity=identity,
     )
     return response.model_dump(mode="json")

@@ -1326,12 +1326,16 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
         assert error.suggestion, f"Expected top-level suggestion on the error, got: {error.suggestion!r}"
         return
 
-    # Check if first word is a structured error code (UPPER_CASE with _).
+    # Check if first word is a structured error code (UPPER_CASE).
     # Strip surrounding quotes: the partition/boundary outlines write the code
-    # quoted (e.g. error "INVALID_REQUEST" with suggestion).
+    # quoted (e.g. error "INVALID_REQUEST" with suggestion). A single-word code
+    # (e.g. CONFLICT) has no underscore, so treat a QUOTED all-caps first word as
+    # structured too — otherwise it falls through to the descriptive branch and
+    # asserts on the message text instead of the wire code.
     parts = remainder.split()
+    was_quoted = bool(parts) and parts[0].startswith('"')
     first_word = parts[0].strip('"') if parts else ""
-    is_structured = bool(first_word) and first_word == first_word.upper() and "_" in first_word
+    is_structured = bool(first_word) and first_word == first_word.upper() and ("_" in first_word or was_quoted)
 
     if is_structured:
         expected_code = first_word

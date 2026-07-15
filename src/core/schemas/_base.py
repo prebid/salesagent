@@ -559,10 +559,12 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
     """
 
     # adcp 6.6 (spec 3.1.1) made status/revision required on the update success envelope.
-    # Invariant for a synchronous applied update, so declare spec-correct defaults here
-    # rather than threading identical literals through every constructor (see the twin
-    # note on CreateMediaBuySuccess). revision defaults to 1; real per-buy revision
-    # tracking is separate media-buy lifecycle work.
+    # status is invariant for a synchronous applied update, so it is declared spec-correct
+    # here. revision carries a default of 1 only to satisfy the required field for
+    # constructors that don't apply a mutation (dry_run echo, LWW fallback); every real
+    # applied update in ``_update_media_buy_impl`` threads the POST-increment value
+    # explicitly (persisted per-buy revision — MediaBuy.revision, incremented atomically
+    # under the FOR UPDATE lock).
     status: Literal["completed"] = "completed"
     revision: int = 1
 
@@ -2067,6 +2069,56 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
                 values["end_time"] = datetime.fromisoformat(end_time)
 
         return values
+
+    @model_validator(mode="before")
+    @classmethod
+    def _check_revision(cls, data):
+        """Reject a malformed RAW ``revision`` with INVALID_REQUEST (spec 3.1.1).
+
+        The AdCP 3.1.1 update-media-buy-request.json declares ``revision`` as an
+        optional integer with minimum 1 (optimistic concurrency). Pydantic's lax
+        coercion would silently turn a string ``"7"`` into ``7`` and would map a
+        bare ``ge=1`` violation to VALIDATION_ERROR — but the graded UC-003
+        revision partitions expect INVALID_REQUEST for a wrong-type or below-min
+        value. Running ``mode="before"`` sees the buyer's RAW value (the wrapper
+        types it ``int | str | None`` so a wrong-type reaches here) and raises a
+        typed AdCPInvalidRequestError that propagates uncaught with a buyer-facing
+        suggestion. Precedent: ``_check_idempotency_key`` / the package-update
+        immutable-field guard.
+
+        A2A carries request params over a protobuf ``Struct``, which encodes every
+        number as a double (``5`` -> ``5.0``); an integral float is normalized to
+        the integer it represents so that transport detail is not read as a wrong
+        type. A fractional float or a string is a genuine wrong type and rejected.
+        """
+        if isinstance(data, dict) and data.get("revision") is not None:
+            raw = data["revision"]
+            # A2A carries params over a protobuf Struct, encoding every number as a
+            # double (5 -> 5.0); an integral float IS the integer it represents, so
+            # normalize it. A fractional float or a string is a genuine wrong type.
+            if isinstance(raw, float) and raw.is_integer():
+                raw = int(raw)
+                data["revision"] = raw
+            # bool is a subclass of int — True/False are not valid revisions.
+            if isinstance(raw, bool) or not isinstance(raw, int):
+                raise AdCPInvalidRequestError(
+                    f"revision must be an integer (minimum 1), got {raw!r}.",
+                    field="revision",
+                    suggestion=(
+                        "Provide the integer revision from the most recent "
+                        "create/update response, or omit it for last-write-wins."
+                    ),
+                )
+            if raw < 1:
+                raise AdCPInvalidRequestError(
+                    f"revision must be at least 1, got {raw}.",
+                    field="revision",
+                    suggestion=(
+                        "Provide the integer revision (minimum 1) from the most "
+                        "recent create/update response, or omit it for last-write-wins."
+                    ),
+                )
+        return data
 
     @model_validator(mode="after")
     def _check_idempotency_key(self):

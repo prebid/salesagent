@@ -199,13 +199,14 @@ ADCP_ENVELOPE_FIELDS: frozenset[str] = frozenset(
         # (not universal envelope), tolerated on the same basis. Tools that declare
         # these (e.g. create_media_buy's idempotency_key) still receive them.
         "idempotency_key",
-        # NOTE: `revision` is deliberately NOT tolerated. update-media-buy-request.json
-        # (v3.1.1) says a supplied revision mismatch MUST return CONFLICT — a
-        # behavior no tool implements yet (there is no MediaBuy.revision column). Tolerating
-        # it silently dropped the buyer's concurrency guard and performed a STALE update. Until
-        # optimistic concurrency lands (#1607), leaving revision out of this set makes a pinned
-        # revision fail loudly under strict validation instead of silently succeeding.
-        # (Production `extra="ignore"` still drops it — full cross-env CONFLICT is part of #1607.)
+        # NOTE: `revision` is deliberately NOT in the UNIVERSAL tolerated set. It is
+        # now a DECLARED field on update_media_buy (UpdateMediaBuyRequest + all three
+        # wrappers), and update_media_buy implements the 3.1.1 optimistic-concurrency
+        # contract atomically: MediaBuy.revision is persisted and a supplied-revision
+        # mismatch returns CONFLICT under a FOR UPDATE lock. Because revision is
+        # update-specific framing (not universal like context/idempotency_key), a stray
+        # `revision` on an UNRELATED tool must still fail loudly under strict validation
+        # rather than being silently dropped — so it stays out of this universal set.
     }
 )
 

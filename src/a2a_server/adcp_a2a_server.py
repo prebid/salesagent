@@ -2127,6 +2127,9 @@ class AdCPRequestHandler(RequestHandler):
             packages=params.get("packages"),
             push_notification_config=params.get("push_notification_config"),
             context=params.get("context"),
+            # Optimistic-concurrency revision (AdCP 3.1.1). Forwarded RAW so a
+            # wrong-type value reaches _check_revision → INVALID_REQUEST.
+            revision=params.get("revision"),
             identity=identity,
         )
 
