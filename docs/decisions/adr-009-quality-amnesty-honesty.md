@@ -2,15 +2,14 @@
 
 ## Status
 
-Proposed 2026-07-09; **revised 2026-07-13** per [@ChrisHuie](https://github.com/ChrisHuie)
-review on [#1579](https://github.com/prebid/salesagent/pull/1579) (aligns with
-[@KonstantinMirin](https://github.com/KonstantinMirin) preference for ratchet over permanent amnesty);
-**honesty fix 2026-07-14** (C901 table entry now defers to the baseline file;
-drop inline stale counts from ratchet comments);
-**vocabulary align 2026-07-14** (quote shipped `pyproject.toml` comment strings);
-**residual honesty 2026-07-15** (quote shipped `mypy.ini` F2 wording; align
-boy-scout section header with `(not gated; …)`).
-Awaiting re-Accept on this PR.
+**Accepted** 2026-07-15 via [#1579](https://github.com/prebid/salesagent/pull/1579).
+
+History: Proposed 2026-07-09; **revised 2026-07-13** per [@ChrisHuie](https://github.com/ChrisHuie)
+review (aligns with [@KonstantinMirin](https://github.com/KonstantinMirin) preference for
+ratchet over permanent amnesty); **honesty fix 2026-07-14** (C901 table defers to
+baseline file; drop inline stale counts); **vocabulary align 2026-07-14** (quote
+shipped `pyproject.toml` comment strings); **residual honesty 2026-07-15** (quote
+shipped `mypy.ini` F2 wording; align boy-scout header with `(not gated; …)`).
 
 ## Context
 
