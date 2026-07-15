@@ -1604,23 +1604,33 @@ def then_notification_type(ctx: dict, ntype: str) -> None:
     )
 
 
+def _assert_next_expected_presence(payload: dict, phrase: str, *, context: str) -> None:
+    """Assert ``next_expected_at`` presence/absence per a 'should'/'should not' phrase.
+
+    A "final" notification must OMIT ``next_expected_at`` entirely — the schema types
+    it as a non-nullable date-time "only present ... when notification_type is not
+    'final'" (get-media-buy-delivery-response.json @ v3.1-04f59d2d5), so an explicit
+    null is non-conforming (UC-004-SERIAL-01). Single source of truth for the rule,
+    shared by the WebhookDeliveryService-path step (``env.mock["post"]`` payload) and
+    the real-scheduler-path step (scheduler wire ``result``) — the two differ only in
+    where the payload comes from, never in the rule.
+    """
+    has_key = "next_expected_at" in payload
+    if "should not" in phrase:
+        assert not has_key, (
+            f"{context}: expected 'next_expected_at' absent for a final notification, "
+            f"got {payload.get('next_expected_at')!r} (explicit null is non-conforming)"
+        )
+    else:
+        assert has_key, (
+            f"{context}: a non-final notification must include 'next_expected_at'; keys={list(payload.keys())}"
+        )
+
+
 @then(parsers.re(r"the payload (?P<next_expected>.+) include next_expected_at"))
 def then_next_expected(ctx: dict, next_expected: str) -> None:
     """Assert next_expected_at is present or absent based on 'should'/'should not'."""
-    payload = _get_last_webhook_payload(ctx)
-    should_include = "should not" not in next_expected
-    has_key = "next_expected_at" in payload
-    if should_include:
-        assert has_key, f"Expected 'next_expected_at' in webhook payload but was absent: {list(payload.keys())}"
-    else:
-        # A "final" webhook must OMIT the field entirely: the schema types
-        # next_expected_at as a non-nullable date-time "only present ... when
-        # notification_type is not 'final'" (get-media-buy-delivery-response.json
-        # @ v3.1-04f59d2d5), so an explicit null is non-conforming — UC-004-SERIAL-01.
-        assert not has_key, (
-            f"Expected 'next_expected_at' to be absent for a final notification, "
-            f"got {payload.get('next_expected_at')!r} (explicit null is non-conforming)"
-        )
+    _assert_next_expected_presence(_get_last_webhook_payload(ctx), next_expected, context="webhook payload")
 
 
 @then("each report should have a higher sequence_number than the previous")
@@ -1740,20 +1750,11 @@ def then_scheduler_sequence_number(ctx: dict, n: int) -> None:
 def then_scheduler_next_expected(ctx: dict, next_expected: str) -> None:
     """Assert next_expected_at presence on the real scheduler wire (under ``result``).
 
-    A "final" notification must OMIT next_expected_at — the schema types it as a
-    non-nullable date-time "only present ... when notification_type is not
-    'final'" (get-media-buy-delivery-response.json @ v3.1-04f59d2d5). Mirrors
-    ``then_next_expected`` but reads the scheduler wire, not env.mock["post"].
+    Same presence/absence rule as ``then_next_expected`` via the shared
+    ``_assert_next_expected_presence`` helper; this step reads the real scheduler
+    wire ``result``, not ``env.mock["post"]``.
     """
-    result = _scheduler_result(ctx)
-    has_key = "next_expected_at" in result
-    if "should not" in next_expected:
-        assert not has_key, (
-            f"Expected 'next_expected_at' to be absent for a final notification, "
-            f"got {result.get('next_expected_at')!r} (explicit null is non-conforming)"
-        )
-    else:
-        assert has_key, f"a non-final notification must include next_expected_at; keys={list(result.keys())}"
+    _assert_next_expected_presence(_scheduler_result(ctx), next_expected, context="scheduler wire result")
 
 
 @then("the response omits notification_type, sequence_number, and next_expected_at")
