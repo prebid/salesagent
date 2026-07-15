@@ -574,7 +574,7 @@ class AdCPConflictError(AdCPError):
 
     _default_status_code: ClassVar[int] = 409
     _default_error_code: ClassVar[str] = "CONFLICT"
-    # Pinned AdCP 3.1.0-beta.3 error-code.json enumMetadata classifies CONFLICT as
+    # Pinned AdCP 3.1.1 error-code.json enumMetadata classifies CONFLICT as
     # ``transient`` ("re-read the resource and retry with current state"). The
     # installed SDK's STANDARD_ERROR_CODES table says ``correctable``, but the SDK
     # is a cross-check, not the authority, and diverges here. Subclasses whose
@@ -683,7 +683,7 @@ def media_buy_revision_conflict(
 ) -> AdCPConflictError:
     """CONFLICT for an optimistic-concurrency revision mismatch.
 
-    AdCP 3.1.0-beta.3 update-media-buy-request.json ``properties.revision``:
+    AdCP 3.1.1 update-media-buy-request.json ``properties.revision``:
     "When provided, sellers MUST reject the update with CONFLICT if the media
     buy's current revision does not match." One definition of the error shape,
     shared by the fast pre-adapter gate in ``_update_media_buy_impl`` and the
@@ -694,7 +694,7 @@ def media_buy_revision_conflict(
     # resource_id / expected_version / current_version) so optimistic-
     # concurrency clients can re-read and retry generically.
     #
-    # recovery=transient per the pinned AdCP 3.1.0-beta.3 error-code.json
+    # recovery=transient per the pinned AdCP 3.1.1 error-code.json
     # enumMetadata for CONFLICT ("re-read the resource and retry with current
     # state"). Equals AdCPConflictError's default; passed explicitly so the
     # wire value is pinned at the raise site. The suggestion carries the

@@ -102,7 +102,7 @@ class MediaBuyStatusScheduler:
                     # callback on the committed row. That closes the lost-update
                     # race where a concurrent end_time extension (status still
                     # active) would let a pre-lock "completed" decision win. The
-                    # seam bumps the AdCP 3.1.0-beta.3 revision + stamps
+                    # seam bumps the AdCP 3.1.1 revision + stamps
                     # confirmed_at on any real transition. #1544.
                     MediaBuyRepository.apply_computed_status_transition(
                         media_buy, lambda mb: self._compute_new_status(mb, now, session)

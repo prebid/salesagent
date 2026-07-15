@@ -521,7 +521,7 @@ class MediaBuyRepository:
 
         Single shared bump used by every mutation path (update_status,
         update_fields, bump_revision, apply_status_transition). The counter is
-        the AdCP 3.1.0-beta.3 ``revision`` optimistic-concurrency token: it
+        the AdCP 3.1.1 ``revision`` optimistic-concurrency token: it
         starts at 1 on create and MUST strictly increase on every successful
         mutation — never derived from timestamps.
 
@@ -542,7 +542,7 @@ class MediaBuyRepository:
     def _stamp_confirmation_if_needed(media_buy: MediaBuy) -> bool:
         """Write-once seller-confirmation stamp, shared by every mutation seam.
 
-        The AdCP 3.1.0-beta.3 ``confirmed_at`` field records the instant the
+        The AdCP 3.1.1 ``confirmed_at`` field records the instant the
         seller committed to running the buy: it is set exactly once — the first
         time the buy enters a seller-confirmed status
         (:func:`is_media_buy_seller_confirmed`) — and stays stable across later
@@ -596,7 +596,7 @@ class MediaBuyRepository:
         stamp, the bump, and the flush live in exactly one place.
 
         ``expected_revision`` is the buyer's optimistic-concurrency token
-        (AdCP 3.1.0-beta.3 update-media-buy-request ``revision``): when
+        (AdCP 3.1.1 update-media-buy-request ``revision``): when
         provided, the check happens HERE, under the held row lock. The update
         tool also gates on the token before dispatching to the adapter, but that
         gate and this mutation run in the same UoW under the same lock; this
@@ -1271,7 +1271,7 @@ class MediaBuyRepository:
         :meth:`update_status`: the cross-tenant scheduler sweep (rows from
         :meth:`get_all_by_statuses`) and the creative-sync assignment pass
         (rows loaded inside ``CreativeUoW``). The caller owns the
-        session/transaction and commits. Bumps the AdCP 3.1.0-beta.3
+        session/transaction and commits. Bumps the AdCP 3.1.1
         ``revision`` counter so seller-initiated lifecycle transitions
         (``pending_start`` → ``active``, ``active`` → ``completed``,
         ``draft`` → ``pending_creatives``) advance the optimistic-concurrency
@@ -1338,7 +1338,7 @@ class MediaBuyRepository:
         The seam for a non-status mutation that still materially changes the buy —
         a creative assignment created, or an assignment weight actually changed, on
         the creative-sync pass (rows loaded inside ``CreativeUoW``). Bumps the AdCP
-        3.1.0-beta.3 ``revision`` optimistic-concurrency token so a buyer's next
+        3.1.1 ``revision`` optimistic-concurrency token so a buyer's next
         update observes a fresh token, WITHOUT writing ``status`` or stamping
         ``confirmed_at`` (the buy's lifecycle state is unchanged). Uses the same
         server-side ``coalesce(revision, 0) + 1`` expression as every other seam,

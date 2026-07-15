@@ -117,7 +117,7 @@ class AdCPTestContext(BaseModel):
         # Proprietary X-* test headers (X-Dry-Run, X-Mock-Time, X-Force-Error,
         # X-Simulated-Spend, …) are INTERNAL tooling, not an AdCP concept. The
         # pinned sandbox guidance
-        # (dist/docs/3.1.0-beta.3/media-buy/advanced-topics/sandbox.mdx) is explicit
+        # (dist/docs/3.1.0/media-buy/advanced-topics/sandbox.mdx) is explicit
         # that sellers MUST NOT alter behavior based on these headers — the
         # sanctioned test mode is the account-level ``sandbox``. So they are honored
         # ONLY outside production: a production deployment (ENVIRONMENT=production)

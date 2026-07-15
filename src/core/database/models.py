@@ -895,7 +895,7 @@ class AgentAccountAccess(Base):
 
 
 # Statuses in which the seller has NOT yet committed to running the buy. The
-# AdCP 3.1.0-beta.3 `confirmed_at` field ("when the seller committed to this
+# AdCP 3.1.1 `confirmed_at` field ("when the seller committed to this
 # media buy") MUST be absent for these. This is the SINGLE source of truth for
 # "seller committed", consulted by both create_media_buy (which omits
 # confirmed_at on its not-yet-committed arms) and the repository's write-once
@@ -972,7 +972,7 @@ class MediaBuy(Base):
     start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
-    # Monotonic optimistic-concurrency counter (AdCP 3.1.0-beta.3 `revision`).
+    # Monotonic optimistic-concurrency counter (AdCP 3.1.1 `revision`).
     # Starts at 1 on create; bumped by MediaBuyRepository on every successful
     # mutation. Never derived from timestamps — two updates within one second
     # must still yield strictly increasing revisions.

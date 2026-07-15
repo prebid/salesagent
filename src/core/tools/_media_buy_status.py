@@ -13,7 +13,7 @@ delivery-only terminal ``failed``::
     pending_creatives, pending_start, active, paused, completed,
     rejected, canceled, failed
 
-(``get-media-buy-delivery-response.json`` status enum; AdCP spec 3.1.0-beta.3.)
+(``get-media-buy-delivery-response.json`` status enum; AdCP spec 3.1.1.)
 The two callers adapt this single result to their own surface:
 
 - ``get_media_buy_delivery`` uses the canonical string directly and overlays

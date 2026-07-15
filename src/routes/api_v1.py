@@ -102,7 +102,7 @@ class UpdateMediaBuyBody(SalesAgentBaseModel):
     currency: str | None = None
     start_time: str | None = None
     end_time: str | None = None
-    # AdCP 3.1.0-beta.3 optimistic-concurrency token; mismatch -> CONFLICT
+    # AdCP 3.1.1 optimistic-concurrency token; mismatch -> CONFLICT
     revision: int | None = None
     # Fields update_media_buy_raw plumbs through to UpdateMediaBuyRequest. Raw dicts
     # are coerced downstream (Pattern #7 extra policy inherited from SalesAgentBaseModel).

@@ -290,7 +290,7 @@ def _process_assignments(
                         assignments_by_creative[creative_id].append(actual_package_id)
 
             # Persist the buy-level effect of this assignment pass through the repo
-            # seam so the AdCP 3.1.0-beta.3 revision advances EXACTLY ONCE per buy —
+            # seam so the AdCP 3.1.1 revision advances EXACTLY ONCE per buy —
             # never zero (a silent creative change), never twice (a double-count):
             #   * A buy that transitions draft -> pending_creatives bumps via
             #     apply_status_transition (that IS its one bump this pass).

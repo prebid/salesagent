@@ -422,7 +422,7 @@ def _update_media_buy_impl(
             # ``AdCPGoneError`` carries the spec-mandated ``INVALID_STATE`` code
             # for both terminal states and disallowed actions — see
             # ``adcp.server.helpers.MEDIA_BUY_STATE_MACHINE`` for the source of truth.
-            # Optimistic-concurrency gate — AdCP 3.1.0-beta.3
+            # Optimistic-concurrency gate — AdCP 3.1.1
             # update-media-buy-request.json properties.revision: "When
             # provided, sellers MUST reject the update with CONFLICT if the
             # media buy's current revision does not match." (Schema-optional
@@ -815,7 +815,7 @@ def _update_media_buy_impl(
 
             # Every column mutation from this update is staged here and applied
             # with a SINGLE update_fields() call at the end of the flow, so one
-            # accepted update bumps the persisted revision exactly once (AdCP 3.1.0-beta.3
+            # accepted update bumps the persisted revision exactly once (AdCP 3.1.1
             # revision is a per-resource version token). Intra-update status
             # transitions (draft → pending_creatives on creative assignment)
             # stage into this dict rather than writing ``.status`` directly —

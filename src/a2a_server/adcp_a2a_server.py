@@ -2230,7 +2230,7 @@ class AdCPRequestHandler(RequestHandler):
 
 
 # Agent-card AdCP extension: grounded in the pinned A2A guide
-# (dist/docs/3.1.0-beta.3/building/by-layer/L0/a2a-guide.mdx § "AdCP Extension"),
+# (dist/docs/3.1.0/building/by-layer/L0/a2a-guide.mdx § "AdCP Extension"),
 # NOT the v3 version-envelope contract. Two facts from that guide drive the shape:
 #   * The extension URI is the STABLE ``https://adcontextprotocol.org/extensions/adcp``
 #     — the versioned ``adcp-extension.json`` schema was a v2 artifact and was
@@ -2238,11 +2238,11 @@ class AdCPRequestHandler(RequestHandler):
 #     addresses nothing.
 #   * The card's ``adcp_version`` is a v2 static-metadata CONVENTION (for agent
 #     registries), explicitly "not part of the v3 spec". It is therefore emitted
-#     at full patch precision (e.g. "3.1.0-beta.3"), NOT run through the v3
+#     at full patch precision (e.g. "3.1.1"), NOT run through the v3
 #     envelope release-precision rule — that rule governs the envelope-root
 #     ``adcp_version`` on request/response wire (handled by version_compat), not
-#     this card. Release-precision here ("3.1-beta.3") would also fail the
-#     retained deprecated three-component version pattern.
+#     this card. Release-precision here (normalize_to_release_precision("3.1.1")
+#     == "3.1") drops the patch component that registries key on.
 # Normative v3 version negotiation/discovery is get_adcp_capabilities +
 # envelope-root ``adcp_version`` — not this card. See #1544 review.
 
