@@ -191,7 +191,7 @@ ADCP_ENVELOPE_FIELDS: frozenset[str] = frozenset(
         "context",
         "ext",
         "push_notification_config",
-        # Concurrency/idempotency framing. Tolerance grounding (3.1.0-beta.3):
+        # Concurrency/idempotency framing. Tolerance grounding (3.1.1):
         # every AdCP request schema carries additionalProperties: true, and
         # building/by-layer/L1/security.mdx § Idempotency requires sellers to
         # accept requests carrying idempotency_key ("no rejecting on undeclared
@@ -200,7 +200,7 @@ ADCP_ENVELOPE_FIELDS: frozenset[str] = frozenset(
         # these (e.g. create_media_buy's idempotency_key) still receive them.
         "idempotency_key",
         # NOTE: `revision` is deliberately NOT tolerated. update-media-buy-request.json
-        # (v3.1.0-beta.3) says a supplied revision mismatch MUST return CONFLICT — a
+        # (v3.1.1) says a supplied revision mismatch MUST return CONFLICT — a
         # behavior no tool implements yet (there is no MediaBuy.revision column). Tolerating
         # it silently dropped the buyer's concurrency guard and performed a STALE update. Until
         # optimistic concurrency lands (#1607), leaving revision out of this set makes a pinned

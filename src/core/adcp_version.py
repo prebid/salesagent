@@ -6,7 +6,7 @@ propagates automatically to everything that advertises or negotiates the
 protocol version. A cross-major bump is guarded by
 ``tests/unit/test_adcp_spec_version.py``.
 
-Spec grounding (v3.1.0-beta.3):
+Spec grounding (v3.1.1):
     - ``static/schemas/source/core/version-envelope.json`` — buyers pin either
       ``adcp_version`` (release-precision string, e.g. ``"4.0"``) or the
       deprecated ``adcp_major_version`` (int). The seller "validates against
@@ -95,9 +95,9 @@ def _spec_release_components() -> tuple[int, int, str | None]:
     this single parse, while ``adcp_build_version()`` uses the same complete
     semantic-version validator, so all advertised forms fail consistently.
     The prerelease is retained so the advertised release-precision wire value
-    preserves it (``"3.1.0-beta.3"`` -> ``"3.1-beta.3"``); only PATCH is dropped.
-    The pin (``adcp.get_adcp_spec_version()``, e.g. ``"3.1.0-beta.3"``) is a
-    deploy-time constant, but this runs on the buyer request path
+    preserves it (a prerelease pin such as ``"4.2.0-rc.1"`` -> ``"4.2-rc.1"``);
+    only PATCH is dropped. The pin (``adcp.get_adcp_spec_version()``, e.g.
+    ``"3.1.1"``) is a deploy-time constant, but this runs on the buyer request path
     (``validate_adcp_version_pins`` -> ``_supported_majors`` ->
     ``supported_adcp_versions``). A malformed pin is a broken *seller*
     deployment, not a buyer version mismatch: surface it as a typed
@@ -114,8 +114,9 @@ def _validate_sdk_build_version(raw: Any) -> tuple[str, int, int, str | None]:
 
     Returns ``(raw, major, minor, prerelease)``. The prerelease segment is
     carried through because the release-precision wire value PRESERVES it
-    (``"3.1.0-beta.3"`` -> ``"3.1-beta.3"``) per ``core/version-envelope.json``:
-    only the PATCH component is dropped for the wire; the prerelease is not.
+    (a prerelease pin such as ``"4.2.0-rc.1"`` -> ``"4.2-rc.1"``) per
+    ``core/version-envelope.json``: only the PATCH component is dropped for the
+    wire; the prerelease is not.
     """
     try:
         if not isinstance(raw, str):
@@ -133,9 +134,9 @@ def _validate_sdk_build_version(raw: Any) -> tuple[str, int, int, str | None]:
 def _release_precision_wire_value(major: int, minor: int, prerelease: str | None) -> str:
     """Convert a full-semver release to its release-precision wire value.
 
-    Per ``core/version-envelope.json`` (v3.1.0-beta.3): the wire value is
+    Per ``core/version-envelope.json`` (v3.1.1): the wire value is
     ``MAJOR.MINOR`` with the PATCH component dropped but any prerelease segment
-    PRESERVED — ``"3.1.0-beta.3"`` normalizes to ``"3.1-beta.3"``, NOT ``"3.1"``.
+    PRESERVED — a prerelease pin ``"4.2.0-rc.1"`` normalizes to ``"4.2-rc.1"``, NOT ``"4.2"``.
     The spec is explicit that full-semver meta-field values are "NOT valid wire
     values". This is the single shared conversion behind ``supported_adcp_versions()``,
     from which advertisement, request validation, capabilities, and the
@@ -149,7 +150,7 @@ def adcp_major_version() -> int:
     """AdCP major version this build speaks, from the SDK spec pin.
 
     The major is the leading component of the SDK's spec version string
-    (e.g. ``"3.1.0-beta.3"`` -> ``3``), so a spec bump is reflected here with
+    (e.g. ``"3.1.1"`` -> ``3``), so a spec bump is reflected here with
     no code change.
     """
     return _spec_release_components()[0]
@@ -160,8 +161,8 @@ def supported_adcp_versions() -> tuple[str, ...]:
 
     The wire value is release precision per ``core/version-envelope.json``,
     derived from the SDK's full-semver spec pin by dropping the PATCH component
-    but PRESERVING any prerelease segment (e.g. ``"3.1.0-beta.3"`` ->
-    ``("3.1-beta.3",)``). The spec is explicit that full-semver meta-field
+    but PRESERVING any prerelease segment (a prerelease pin ``"4.2.0-rc.1"`` ->
+    ``("4.2-rc.1",)``). The spec is explicit that full-semver meta-field
     values are "NOT valid wire values", and that the prerelease must be kept —
     dropping it to a bare ``"3.1"`` made this seller reject a correct
     ``"3.1-beta.3"`` buyer pin with VERSION_UNSUPPORTED. Only the PATCH digit,

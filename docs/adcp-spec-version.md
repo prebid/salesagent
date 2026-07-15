@@ -43,10 +43,12 @@ this document.
 
 ## Behavior target vs SDK pin
 
-The SDK **pin** (3.1.0-beta.3) fixes the request/response *type shapes* we
+The SDK **pin** (3.1.1, GA) fixes the request/response *type shapes* we
 build against. It does **not** always fix the graded *behavior*. One field
 diverges deliberately: the `media_buy_status` dual-emit on
-create-/update-media-buy responses.
+create-/update-media-buy responses. (The pin is now the 3.1.1 GA release; the
+beta.3-vs-GA history below is retained as the rationale for the wire we ship —
+under the GA pin our wire and the graded GA behavior already agree.)
 
 - **beta.3 storyboard** (`dist/compliance/3.1.0-beta.3/.../pending_creatives_to_start.yaml`,
   ~L131-134) grades the body `status` as `field_value_or_absent` that MUST equal
