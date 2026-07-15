@@ -285,6 +285,45 @@ def media_buy_detail(tenant_id, media_buy_id):
         return "Error loading media buy", 500
 
 
+def _select_actionable_create_step(db_session, tenant_id: str, media_buy_id: str):
+    """Return the newest actionable media-buy CREATION approval step, or ``None`` (#1637).
+
+    The approve/reject route finalizes a CREATE (it runs ``execute_approved_media_buy`` /
+    the create-reject cascade), so it must act on the create-approval step —
+    ``tool_name="create_media_buy"`` (set in ``media_buy_create.py``). Constraining to that
+    tool_name is what makes the selection authoritative: "newest actionable" ALONE does not
+    establish the step is the creation, so an unrelated in_progress step mapped to the same
+    buy (e.g. an ``update_media_buy`` step) must never be picked and finalized as if it were
+    the create.
+
+    Tenant-scoped via the Context join. ``in_progress`` is included because a post-mutation
+    partial failure deliberately leaves the create step ``in_progress`` while the buy is
+    parked ``manual_required`` (so the detail-page RE-APPROVAL can find it); terminal steps
+    stay excluded (immutable). Among matching create steps the NEWEST wins (a re-approval
+    history can leave several), and more than one actionable is logged as an anomaly.
+    """
+    from src.core.database.repositories.workflow import WorkflowRepository
+
+    # Fetch a small window (not just the newest) to DETECT — and warn on — multiple
+    # actionable create steps for the same media buy; act on the newest.
+    actionable_steps = WorkflowRepository(db_session, tenant_id).list_actionable_steps_for_object(
+        "media_buy",
+        media_buy_id,
+        tool_name="create_media_buy",
+        statuses=("requires_approval", "pending_approval", "in_progress"),
+    )
+    if len(actionable_steps) > 1:
+        logger.warning(
+            "Media buy %s (tenant %s) has %d actionable create workflow steps %s; acting on the newest (%s).",
+            media_buy_id,
+            tenant_id,
+            len(actionable_steps),
+            [s.step_id for s in actionable_steps],
+            actionable_steps[0].step_id,
+        )
+    return actionable_steps[0] if actionable_steps else None
+
+
 @operations_bp.route("/media-buy/<media_buy_id>/approve", methods=["POST"])
 @require_tenant_access()
 def approve_media_buy(tenant_id, media_buy_id, **kwargs):
@@ -295,48 +334,13 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
     from sqlalchemy.orm import attributes
 
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import Context as DBContext
-    from src.core.database.models import ObjectWorkflowMapping, WorkflowStep
 
     try:
         action = request.form.get("action")  # "approve" or "reject"
         reason = request.form.get("reason", "")
 
         with get_db_session() as db_session:
-            # Find the pending approval workflow step for this media buy (tenant-scoped via Context join)
-            stmt = (
-                select(WorkflowStep)
-                .join(ObjectWorkflowMapping, WorkflowStep.step_id == ObjectWorkflowMapping.step_id)
-                .join(DBContext)
-                .filter(
-                    DBContext.tenant_id == tenant_id,
-                    ObjectWorkflowMapping.object_type == "media_buy",
-                    ObjectWorkflowMapping.object_id == media_buy_id,
-                    # in_progress included (#1637): a post-mutation partial failure
-                    # deliberately leaves the step in_progress while the buy is parked
-                    # manual_required — without it the detail-page RE-APPROVAL could
-                    # never find the step. Terminal steps stay excluded (immutable).
-                    WorkflowStep.status.in_(["requires_approval", "pending_approval", "in_progress"]),
-                )
-                # Newest actionable step wins. With in_progress included (#1637), several
-                # steps can match the same media buy; an unordered .first() would act on
-                # an arbitrary one. Order by created_at desc so re-approval targets the
-                # latest, and warn (below) when more than one is actionable.
-                .order_by(WorkflowStep.created_at.desc())
-            )
-            # Fetch a small window (not just .first()) to DETECT — and warn on — multiple
-            # actionable steps for the same media buy; act on the newest.
-            actionable_steps = db_session.scalars(stmt.limit(5)).all()
-            if len(actionable_steps) > 1:
-                logger.warning(
-                    "Media buy %s (tenant %s) has %d actionable workflow steps %s; acting on the newest (%s).",
-                    media_buy_id,
-                    tenant_id,
-                    len(actionable_steps),
-                    [s.step_id for s in actionable_steps],
-                    actionable_steps[0].step_id,
-                )
-            step = actionable_steps[0] if actionable_steps else None
+            step = _select_actionable_create_step(db_session, tenant_id, media_buy_id)
 
             if not step:
                 flash("No pending approval found for this media buy", "warning")

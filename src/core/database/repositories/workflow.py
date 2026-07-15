@@ -190,6 +190,40 @@ class WorkflowRepository:
             .order_by(ObjectWorkflowMapping.created_at.desc())
         ).first()
 
+    def list_actionable_steps_for_object(
+        self,
+        object_type: str,
+        object_id: str,
+        *,
+        tool_name: str,
+        statuses: tuple[str, ...],
+        limit: int = 5,
+    ) -> list[WorkflowStep]:
+        """Non-terminal steps of ``tool_name`` mapped to an object, NEWEST first (#1637).
+
+        Tenant-scoped via the Context join. Constraining to ``tool_name`` is what makes the
+        approve/reject route's step selection authoritative — it must act on the media-buy
+        CREATION step (``create_media_buy``), never an unrelated actionable step (e.g. an
+        ``update_media_buy`` step) mapped to the same buy. A small window is returned (not
+        just the newest) so the caller can warn when more than one is actionable.
+        """
+        return list(
+            self._session.scalars(
+                select(WorkflowStep)
+                .join(ObjectWorkflowMapping, WorkflowStep.step_id == ObjectWorkflowMapping.step_id)
+                .join(DBContext, WorkflowStep.context_id == DBContext.context_id)
+                .where(
+                    DBContext.tenant_id == self._tenant_id,
+                    ObjectWorkflowMapping.object_type == object_type,
+                    ObjectWorkflowMapping.object_id == object_id,
+                    WorkflowStep.tool_name == tool_name,
+                    WorkflowStep.status.in_(list(statuses)),
+                )
+                .order_by(WorkflowStep.created_at.desc())
+                .limit(limit)
+            ).all()
+        )
+
     def get_step_by_id(self, step_id: str) -> WorkflowStep | None:
         """Alias of :meth:`get_by_step_id` (identical tenant-scoped lookup).
 
