@@ -452,6 +452,56 @@ class TestGAMAdapterErrorTaxonomy:
         assert isinstance(exc_info.value.__cause__, AdCPLineItemError)
         assert exc_info.value.__cause__.error_code == "LINE_ITEM_CREATION_FAILED"
 
+    def test_line_item_creation_failure_raises_adcplineitemerror_at_its_site(self, mock_principal, sample_packages):
+        """Drive the ACTUAL ``raise AdCPLineItemError`` site (google_ad_manager.py:887).
+
+        ``_finish_create_media_buy`` is the post-order stage that runs the line-item
+        create and converts any failure to ``AdCPLineItemError`` (LINE_ITEM_CREATION_FAILED)
+        at THIS site. Its caller ``create_media_buy`` then re-wraps it into
+        ``AdapterPostMutationIncomplete`` for the mutation-boundary contract (pinned by the
+        test above), so the raw typed error is only observable by calling the site method
+        directly. This ``pytest.raises(AdCPLineItemError)`` pins the class at the raise site
+        — a class-swap here (e.g. to a bare ``AdCPError``) would erase LINE_ITEM_CREATION_FAILED
+        and reddens this test."""
+        from src.core.exceptions import AdCPLineItemError
+
+        adapter = _build_gam_adapter(mock_principal)
+
+        with patch.object(adapter.orders_manager, "create_line_items", side_effect=Exception("GAM API error")):
+            start_time = datetime.now(UTC)
+            end_time = start_time + timedelta(days=30)
+            with pytest.raises(AdCPLineItemError) as exc_info:
+                adapter._finish_create_media_buy(
+                    request=sample_request_stub(),
+                    packages=sample_packages,
+                    start_time=start_time,
+                    end_time=end_time,
+                    products_map={},
+                    order_id="order_123",
+                    order_name="Test Order",
+                    package_pricing_info=None,
+                )
+
+        assert exc_info.value.error_code == "LINE_ITEM_CREATION_FAILED"
+        assert "failed to create line items" in str(exc_info.value)  # the site's own message
+
+
+def sample_request_stub():
+    """Minimal CreateMediaBuyRequest for the _finish_create_media_buy site test.
+
+    ``_finish_create_media_buy`` only reads ``request.push_notification_config`` (via
+    getattr) on the failure path — line-item creation raises first — so a bare valid
+    request suffices; declared as a helper (not a fixture) to keep the raise-site call
+    self-contained."""
+    start_time = datetime.now(UTC)
+    return CreateMediaBuyRequest(
+        brand={"domain": "testbrand.com"},
+        idempotency_key="unit-test-key-gamwf-lineitem",
+        packages=[PackageRequest(product_id="prod_123", budget=5000.0, pricing_option_id="test_pricing")],
+        start_time=start_time,
+        end_time=start_time + timedelta(days=30),
+    )
+
 
 class TestGAMProductUnavailableRaiseSites:
     """Drive both AdCPProductUnavailableError raise sites in GAM create_media_buy.
