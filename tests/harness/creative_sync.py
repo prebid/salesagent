@@ -48,11 +48,23 @@ Available mocks via env.mock:
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from src.core.schemas import SyncCreativesResponse
 from tests.harness._base import IntegrationEnv
+
+
+def _harness_idempotency_key() -> str:
+    """A fresh pattern-valid idempotency_key for wire dispatches.
+
+    AdCP 3.1.1 makes idempotency_key REQUIRED on the sync_creatives request, enforced at
+    the transport wrappers. Wire dispatches (A2A/MCP/REST) that don't care about the key
+    itself get a fresh valid one so the sync proceeds; callers exercising the missing-key
+    VALIDATION_ERROR path pass ``idempotency_key=None`` explicitly (setdefault preserves it).
+    """
+    return f"harness-idem-{uuid.uuid4().hex}"
 
 
 class CreativeSyncEnv(IntegrationEnv):
@@ -202,6 +214,7 @@ class CreativeSyncEnv(IntegrationEnv):
         self._commit_factory_data()
         kwargs.setdefault("identity", self.identity)
         kwargs.setdefault("creatives", [])
+        kwargs.setdefault("idempotency_key", _harness_idempotency_key())
         return sync_creatives_raw(**kwargs)
 
     def call_mcp(self, **kwargs: Any) -> SyncCreativesResponse:
@@ -210,11 +223,13 @@ class CreativeSyncEnv(IntegrationEnv):
         No enum coercion needed — FastMCP's TypeAdapter handles it automatically.
         """
         kwargs.setdefault("creatives", [])
+        kwargs.setdefault("idempotency_key", _harness_idempotency_key())
         return self._run_mcp_client("sync_creatives", SyncCreativesResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to SyncCreativesBody shape for REST POST."""
         # The REST body expects 'creatives' as list[dict], matching SyncCreativesBody
+        kwargs.setdefault("idempotency_key", _harness_idempotency_key())
         body: dict[str, Any] = {}
         if "creatives" in kwargs:
             creatives = kwargs["creatives"]
@@ -233,6 +248,8 @@ class CreativeSyncEnv(IntegrationEnv):
         if "account" in kwargs and kwargs["account"] is not None:
             account = kwargs["account"]
             body["account"] = account.model_dump(mode="json") if hasattr(account, "model_dump") else account
+        if "idempotency_key" in kwargs and kwargs["idempotency_key"] is not None:
+            body["idempotency_key"] = kwargs["idempotency_key"]
         return body
 
     def parse_rest_response(self, data: dict[str, Any]) -> SyncCreativesResponse:

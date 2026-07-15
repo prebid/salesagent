@@ -1007,7 +1007,9 @@ def _update_media_buy_impl(
                                 context=req.context,
                             )
 
-                        # Sync creatives (upload/update)
+                        # Sync creatives (upload/update). Internal programmatic call — not
+                        # the sync_creatives protocol endpoint — so no idempotency_key is
+                        # required (required-ness is enforced at the protocol boundary).
                         sync_response = _sync_creatives_impl(
                             creatives=pkg_update.creatives,
                             assignments={

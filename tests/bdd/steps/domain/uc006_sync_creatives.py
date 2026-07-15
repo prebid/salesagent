@@ -13,6 +13,7 @@ beads: salesagent-71q, salesagent-99w
 from __future__ import annotations
 
 import json
+from typing import Any
 from unittest.mock import ANY
 
 import pytest
@@ -22,6 +23,32 @@ from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps._outcome_helpers import is_e2e
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal, seed_account_with_access
 from tests.bdd.steps.generic._dispatch import dispatch_request
+
+_SYNC_DISPATCH_SENTINEL = object()
+
+
+def _dispatch_sync(ctx: dict, *, identity: Any = _SYNC_DISPATCH_SENTINEL, **kwargs: Any) -> None:
+    """Dispatch a sync_creatives request, honouring the idempotency_key partition.
+
+    AdCP 3.1.1 makes idempotency_key REQUIRED on sync_creatives (16-255,
+    ^[A-Za-z0-9_.:-]{16,255}$), enforced at the transport wrappers. Scenarios that are not
+    about the key leave it unset here — the CreativeSyncEnv wire methods default a fresh
+    valid one so the sync proceeds. The dedicated absent-partition
+    (``ctx['idempotency_key_absent']``) passes ``idempotency_key=None`` EXPLICITLY so the
+    env's setdefault preserves it and the wrapper rejects with VALIDATION_ERROR. An explicit
+    ``ctx['idempotency_key']`` (the key-validation scenario) always wins.
+    """
+    if "idempotency_key" not in kwargs:
+        if "idempotency_key" in ctx:
+            kwargs["idempotency_key"] = ctx["idempotency_key"]
+        elif ctx.get("idempotency_key_absent"):
+            kwargs["idempotency_key"] = None
+    if identity is not _SYNC_DISPATCH_SENTINEL:
+        dispatch_request(ctx, identity=identity, **kwargs)
+    else:
+        dispatch_request(ctx, **kwargs)
+
+
 from tests.factories.creative_asset import (
     assert_assets,
     build_assets,
@@ -275,12 +302,10 @@ def when_sync_creative(ctx: dict) -> None:
         kwargs["assignments"] = ctx["assignments"]
     if "validation_mode" in ctx:
         kwargs["validation_mode"] = ctx["validation_mode"]
-    if "idempotency_key" in ctx:
-        kwargs["idempotency_key"] = ctx["idempotency_key"]
     if ctx.get("has_auth") is False:
-        dispatch_request(ctx, identity=ctx.get("identity"), **kwargs)
+        _dispatch_sync(ctx, identity=ctx.get("identity"), **kwargs)
     else:
-        dispatch_request(ctx, **kwargs)
+        _dispatch_sync(ctx, **kwargs)
 
 
 def _ensure_tenant_principal(ctx: dict, env: object) -> None:
@@ -443,11 +468,6 @@ def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
         "ASSIGNMENT_PACKAGE_ID_REQUIRED",
         "ASSIGNMENT_WEIGHT_BELOW_MINIMUM",
         "ASSIGNMENT_WEIGHT_ABOVE_MAXIMUM",
-        # Idempotency-key length codes — merged from the shadowed duplicate step
-        # def this literal used to have (#1417): production does not
-        # validate idempotency_key length yet.
-        "IDEMPOTENCY_KEY_TOO_SHORT",
-        "IDEMPOTENCY_KEY_TOO_LONG",
     }
 
     error = ctx.get("error")
@@ -3099,7 +3119,7 @@ def when_sync_creative_with_assignments(ctx: dict) -> None:
         kwargs["assignments"] = ctx["assignments"]
     if "validation_mode" in ctx:
         kwargs["validation_mode"] = ctx["validation_mode"]
-    dispatch_request(ctx, **kwargs)
+    _dispatch_sync(ctx, **kwargs)
 
 
 def _get_media_buy_status_from_db(ctx: dict) -> str:
@@ -3626,7 +3646,7 @@ def when_format_compatibility_checked(ctx: dict) -> None:
         kwargs["assignments"] = ctx["assignments"]
     if "validation_mode" in ctx:
         kwargs["validation_mode"] = ctx["validation_mode"]
-    dispatch_request(ctx, **kwargs)
+    _dispatch_sync(ctx, **kwargs)
 
 
 @then('the formats should match using the "format_id" key')
@@ -3969,7 +3989,7 @@ def when_sync_specific_creative(ctx: dict, creative_id: str) -> None:
         "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
-    dispatch_request(ctx, creatives=ctx["creatives"])
+    _dispatch_sync(ctx, creatives=ctx["creatives"])
 
 
 @then("the existing creative should be updated (matched by triple key)")
@@ -4043,7 +4063,7 @@ def given_two_creatives_one_valid_one_empty_name(ctx: dict) -> None:
 @when("the Buyer Agent syncs both creatives")
 def when_sync_both_creatives(ctx: dict) -> None:
     """Send sync_creatives with both creative payloads."""
-    dispatch_request(ctx, creatives=ctx["creatives"])
+    _dispatch_sync(ctx, creatives=ctx["creatives"])
 
 
 def _get_creative_result_by_id(ctx: dict, creative_id: str) -> object | None:
@@ -4423,32 +4443,6 @@ def _expand_length_notation(value: str) -> str:
         length = int(match.group(2))
         return char * length
     return value
-
-
-@then("the request should proceed without idempotency check")
-def then_proceed_without_idempotency(ctx: dict) -> None:
-    """Assert request completed as a fresh sync (no idempotency short-circuit).
-
-    When idempotency_key is absent, the request must proceed as a normal
-    first-time sync: no error, and the response carries synced creative results.
-    """
-    error = ctx.get("error")
-    assert error is None, (
-        f"Expected request to proceed without idempotency check, but production raised {type(error).__name__}: {error}"
-    )
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response when idempotency_key is absent"
-    # Verify the response represents a successful sync, not an error envelope
-    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
-    assert results, (
-        "Expected at least one creative result from a fresh sync without idempotency key, "
-        f"but got empty results from {type(resp).__name__}"
-    )
-    # Verify at least one creative was actually processed (created/updated)
-    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
-    assert any(a in ("created", "updated") for a in actions), (
-        f"Expected a fresh sync action (created/updated), got {actions}"
-    )
 
 
 @then("the request should proceed normally")
@@ -5607,7 +5601,7 @@ def when_sync_creative_as_principal(ctx: dict, creative_id: str, principal_id: s
         "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
-    dispatch_request(ctx, creatives=ctx["creatives"])
+    _dispatch_sync(ctx, creatives=ctx["creatives"])
 
 
 @when('the Buyer Agent syncs an assignment of creative "creative-xp" to a package owned by the authenticated principal')
@@ -5632,7 +5626,7 @@ def when_sync_cross_principal_assignment(ctx: dict) -> None:
     pkg = MediaPackageFactory(media_buy=media_buy)
     env._commit_factory_data()
     ctx["xp_package_id"] = pkg.package_id
-    dispatch_request(ctx, creatives=[], assignments={"creative-xp": [pkg.package_id]}, validation_mode="lenient")
+    _dispatch_sync(ctx, creatives=[], assignments={"creative-xp": [pkg.package_id]}, validation_mode="lenient")
 
 
 @then("the sync operation should not fail")

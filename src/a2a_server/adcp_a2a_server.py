@@ -1834,6 +1834,9 @@ class AdCPRequestHandler(RequestHandler):
             push_notification_config=parameters.get("push_notification_config"),
             context=context,
             account=to_account_reference(parameters.get("account")),
+            # AdCP 3.1.1 REQUIRED — forwarded verbatim (never fabricated); a missing/
+            # malformed key rejects as VALIDATION_ERROR in the shared impl.
+            idempotency_key=parameters.get("idempotency_key"),
             identity=identity,
         )
 

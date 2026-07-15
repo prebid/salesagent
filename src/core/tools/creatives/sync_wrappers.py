@@ -28,6 +28,9 @@ async def sync_creatives(
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     account: LibraryAccountReference | None = None,
+    idempotency_key: Annotated[
+        str | None, Field(description="Client-generated idempotency key (AdCP 3.1.1 REQUIRED, 16-255 chars)")
+    ] = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Sync creative assets to centralized library (AdCP v2.5 spec compliant endpoint).
@@ -44,11 +47,21 @@ async def sync_creatives(
         validation_mode: Validation strictness (strict or lenient)
         push_notification_config: Push notification config for async notifications (AdCP spec, optional)
         context: Application level context per adcp spec
+        idempotency_key: Client-generated idempotency key (AdCP 3.1.1 REQUIRED, 16-255 chars).
+            Declared here so the envelope-tolerance middleware does not strip it, and
+            forwarded verbatim — a missing/malformed key rejects as VALIDATION_ERROR.
         ctx: FastMCP context (automatically provided)
 
     Returns:
         ToolResult with SyncCreativesResponse data
     """
+    # AdCP 3.1.1 makes idempotency_key REQUIRED on the sync_creatives request. Enforce
+    # required-ness + shape at the protocol boundary where the wire key arrives (never
+    # fabricated); the shared impl keeps only a None-tolerant shape check for internal callers.
+    from src.core.schemas._base import require_idempotency_key
+
+    require_idempotency_key(idempotency_key)
+
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
     # Resolve account at transport boundary (before _impl)
@@ -68,6 +81,7 @@ async def sync_creatives(
         validation_mode=validation_mode_str,
         push_notification_config=push_notification_config,
         context=context,
+        idempotency_key=idempotency_key,
         identity=identity,
     )
     return ToolResult(content=str(response), structured_content=response)
@@ -85,6 +99,7 @@ def sync_creatives_raw(
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,
     account: LibraryAccountReference | None = None,
+    idempotency_key: str | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -101,12 +116,21 @@ def sync_creatives_raw(
         validation_mode: Validation strictness (strict or lenient)
         push_notification_config: Push notification config for status updates
         context: Application level context per adcp spec
+        idempotency_key: Client-generated idempotency key (AdCP 3.1.1 REQUIRED, 16-255 chars);
+            forwarded verbatim so a missing/malformed key rejects as VALIDATION_ERROR
         ctx: FastMCP context (automatically provided)
         identity: ResolvedIdentity (transport-agnostic, preferred over ctx)
 
     Returns:
         SyncCreativesResponse with synced creatives and assignments
     """
+    # AdCP 3.1.1 makes idempotency_key REQUIRED on the sync_creatives request. Both the
+    # A2A handler and the REST route funnel through this raw wrapper, so enforce required-ness
+    # + shape here at the protocol boundary (never fabricated).
+    from src.core.schemas._base import require_idempotency_key
+
+    require_idempotency_key(idempotency_key)
+
     if identity is None:
         from src.core.transport_helpers import resolve_identity_from_context
 
@@ -126,5 +150,6 @@ def sync_creatives_raw(
         validation_mode=validation_mode,
         push_notification_config=push_notification_config,
         context=context,
+        idempotency_key=idempotency_key,
         identity=identity,
     )

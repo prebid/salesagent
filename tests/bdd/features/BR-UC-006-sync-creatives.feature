@@ -959,6 +959,11 @@ Feature: BR-UC-006 Sync Creative Assets
       | account_payment_required   | {"account_id": "acc_overdue"}                                               | the error should be ACCOUNT_PAYMENT_REQUIRED with suggestion  |
       | account_suspended          | {"account_id": "acc_suspended"}                                             | the error should be ACCOUNT_SUSPENDED with suggestion         |
 
+  # AdCP 3.1.1 (sync-creatives-request.json) makes idempotency_key REQUIRED,
+  # minLength 16, maxLength 255, pattern ^[A-Za-z0-9_.:-]{16,255}$. A missing key is a
+  # MISSING required field and any length/charset violation is a value/format error —
+  # both graded VALIDATION_ERROR (the pre-3.1.1 "absent -> proceed" contract and the
+  # never-defined IDEMPOTENCY_KEY_TOO_SHORT/TOO_LONG codes are retired here).
   @T-UC-006-partition-idempotency-key @partition @idempotency-key
   Scenario Outline: Idempotency key validation — <partition>
     Given the Buyer is authenticated with a valid principal_id
@@ -968,17 +973,17 @@ Feature: BR-UC-006 Sync Creative Assets
     Then <expected>
 
     Examples: Valid keys
-      | partition      | key_value                                | expected                                              |
-      | absent         |                                          | the request should proceed without idempotency check  |
-      | typical_valid  | "abc12345-retry-001"                     | the request should proceed normally                   |
-      | boundary_min   | "12345678"                               | the request should proceed normally                   |
-      | uuid_format    | "550e8400-e29b-41d4-a716-446655440000"   | the request should proceed normally                   |
+      | partition      | key_value                                | expected                            |
+      | typical_valid  | "abc12345-retry-001"                     | the request should proceed normally |
+      | boundary_min   | "a]x16"                                  | the request should proceed normally |
+      | uuid_format    | "550e8400-e29b-41d4-a716-446655440000"   | the request should proceed normally |
 
     Examples: Invalid keys
-      | partition      | key_value  | expected                                                      |
-      | empty_string   | ""         | the error should be IDEMPOTENCY_KEY_TOO_SHORT with suggestion |
-      | too_short      | "abc1234"  | the error should be IDEMPOTENCY_KEY_TOO_SHORT with suggestion |
-      | too_long       | "a]x256"   | the error should be IDEMPOTENCY_KEY_TOO_LONG with suggestion  |
+      | partition      | key_value  | expected                                             |
+      | absent         |            | the error should be VALIDATION_ERROR with suggestion |
+      | empty_string   | ""         | the error should be VALIDATION_ERROR with suggestion |
+      | too_short      | "abc1234"  | the error should be VALIDATION_ERROR with suggestion |
+      | too_long       | "a]x256"   | the error should be VALIDATION_ERROR with suggestion |
 
   @T-UC-006-boundary-approval @boundary @approval-mode
   Scenario Outline: Approval mode boundary — <boundary_point>

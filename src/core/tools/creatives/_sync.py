@@ -15,6 +15,7 @@ from src.core.exceptions import AdCPError
 from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
+from src.core.schemas._base import validate_idempotency_key_shape
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
 
 from ._assignments import _process_assignments
@@ -44,6 +45,7 @@ def _sync_creatives_impl(
     validation_mode: str = "strict",
     push_notification_config: PushNotificationConfig | dict | None = None,
     context: ContextObject | dict | None = None,
+    idempotency_key: str | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> SyncCreativesResponse:
     """Sync creative assets to centralized library (AdCP v2.5 spec compliant endpoint).
@@ -66,12 +68,25 @@ def _sync_creatives_impl(
         validation_mode: Validation strictness (strict or lenient)
         push_notification_config: Push notification config for status updates (AdCP spec, optional)
         context: Application level context per adcp spec
+        idempotency_key: Client-generated idempotency key (AdCP 3.1.1 REQUIRED on the
+            sync_creatives request, 16-255 chars, ``^[A-Za-z0-9_.:-]{16,255}$``). REQUIRED-ness
+            is enforced at the protocol boundary (the ``sync_creatives`` / ``sync_creatives_raw``
+            wrappers, via ``require_idempotency_key``) where the wire key first arrives — a
+            missing/malformed key rejects there as VALIDATION_ERROR, never fabricated. Here we
+            keep only a None-tolerant shape check as defense-in-depth so non-protocol internal
+            callers may invoke the shared impl without a key. Replay is not yet wired for
+            sync_creatives (tracked follow-up), so the value is currently inert.
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
 
     Returns:
         SyncCreativesResponse with synced creatives and assignments
     """
     from pydantic import ValidationError
+
+    # Defense-in-depth shape check (None-tolerant): required-ness is enforced at the
+    # transport boundary (require_idempotency_key in the wrappers). Internal (non-protocol)
+    # callers may pass None here.
+    validate_idempotency_key_shape(idempotency_key)
 
     # Phase 1a: Models flow through to helpers (which convert via isinstance guard).
     # No model_dump at orchestrator level — helpers handle dict conversion transitionally.

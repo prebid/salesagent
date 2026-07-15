@@ -1989,6 +1989,29 @@ def validate_idempotency_key_shape(key: str | None) -> None:
         )
 
 
+def require_idempotency_key(key: str | None) -> None:
+    """Enforce a REQUIRED, shape-valid idempotency_key at a transport boundary.
+
+    AdCP 3.1.1 makes idempotency_key REQUIRED on the sync_creatives request (and
+    sync_accounts). ``None`` is a MISSING required field → VALIDATION_ERROR; a present
+    key is then length/charset-checked. Used by the sync_creatives wrappers (the protocol
+    boundary), which is where the flat-param impl's key first arrives from the wire — the
+    key is never fabricated. The shared ``_sync_creatives_impl`` keeps only
+    ``validate_idempotency_key_shape`` (None-tolerant defense-in-depth) so non-protocol
+    internal callers may invoke it without a key.
+    """
+    if key is None:
+        raise AdCPValidationError(
+            "idempotency_key is required.",
+            field="idempotency_key",
+            suggestion=(
+                "Provide a client-generated idempotency_key (16-255 characters, "
+                "using only [A-Za-z0-9_.:-]) so retries are safe."
+            ),
+        )
+    validate_idempotency_key_shape(key)
+
+
 class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     """Update media buy request extending library type.
 

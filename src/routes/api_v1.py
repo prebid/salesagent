@@ -302,6 +302,9 @@ class SyncCreativesBody(_VersionedBody):
     push_notification_config: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
     account: dict[str, Any] | None = None  # AccountReference; resolved at the transport boundary
+    # AdCP 3.1.1 REQUIRED (16-255, ^[A-Za-z0-9_.:-]{16,255}$); forwarded verbatim so a
+    # missing/malformed key rejects as VALIDATION_ERROR in the shared impl.
+    idempotency_key: str | None = None
 
 
 class ListCreativesBody(_VersionedBody):
@@ -608,6 +611,7 @@ async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = r
         push_notification_config=push_notification_config,
         context=context,
         account=account_ref,
+        idempotency_key=body.idempotency_key,
         identity=identity,
     )
     return response.model_dump(mode="json")
