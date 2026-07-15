@@ -1,7 +1,8 @@
 """FastMCP middleware for AdCP backward-compatibility normalization.
 
-Translates deprecated field names, strips unknown fields, and provides
-a production-mode fallback for TypeAdapter structural validation errors.
+Translates deprecated field names, strips unknown fields, and converts FastMCP
+TypeAdapter validation failures into AdCP envelopes in every environment. In
+production, it first retries structural failures after schema-aware deep stripping.
 Runs after MCPAuthMiddleware.
 """
 
@@ -28,10 +29,11 @@ class RequestCompatMiddleware(Middleware):
     Three-stage pipeline:
     1. Translate deprecated field names via normalize_request_params()
     2. Strip fields not in the tool's JSON Schema via strip_unknown_params()
-    3. (Production only) If TypeAdapter rejects the arguments with a structural
-       validation error, erase complex types to raw dicts via JSON round-trip
-       and retry. This lets our Pydantic models (with extra='ignore') be the
-       sole validation gate — matching A2A and REST behavior.
+    3. If TypeAdapter rejects the arguments, always translate and record the
+       failure as an AdCP validation envelope. In production only, first deep-
+       strip schema-unknown nested fields and retry when that changes the input.
+       This lets our Pydantic models (with extra='ignore') remain the validation
+       gate for forward-compatible fields while preserving typed failures in dev.
 
     The fallback only catches TypeAdapter ValidationErrors (structural type
     mismatches). Business logic errors from the tool function propagate normally.
@@ -116,6 +118,9 @@ class RequestCompatMiddleware(Middleware):
                                 raise
                             exc = retry_exc
 
+            # Normalize once for the audit record, then pass the raw exception to
+            # _translate_to_tool_error so the emitted AdCPToolError keeps it as
+            # __cause__. The translator intentionally normalizes it a second time.
             typed = normalize_to_adcp_error(exc)
             tenant_id = None
             principal_id = None

@@ -411,33 +411,37 @@ class TestDeepStripRetryE2E:
 
         asyncio.run(_call())
 
-    def test_stripping_no_change_does_not_retry(self):
-        """If deep-strip doesn't change args, middleware raises original error (no infinite loop)."""
-        from fastmcp import Client
+    def test_stripping_no_change_becomes_validation_envelope(self):
+        """An unstrippable type mismatch is translated without a retry or raw leak."""
+        from pydantic import ValidationError
 
-        from src.core.main import mcp
+        from src.core.mcp_compat_middleware import RequestCompatMiddleware
+        from src.core.tool_error_logging import AdCPToolError
 
-        # Send a field with wrong TYPE (int where string expected) — deep-strip
-        # can't fix type mismatches, only unknown fields. Must propagate error.
+        middleware = RequestCompatMiddleware()
+        error = ValidationError.from_exception_data(
+            title="call[get_products]",
+            line_errors=[
+                {
+                    "type": "string_type",
+                    "loc": ("brief",),
+                    "input": 12345,
+                }
+            ],
+        )
+        call_next = AsyncMock(side_effect=error)
+        ctx = _make_mcp_context("get_products", {"brief": 12345})
+
         async def _call():
-            patches = _get_products_patches()
-            with patch.dict(os.environ, {"ENVIRONMENT": "production"}):
-                for p in patches:
-                    p.start()
-                try:
-                    async with Client(mcp) as client:
-                        result = await client.call_tool(
-                            "get_products",
-                            {"brief": 12345},  # Wrong type: int instead of str
-                            raise_on_error=False,
-                        )
-                        # This should either succeed (TypeAdapter coerces int→str)
-                        # or fail with a type error — but must NOT hang in a retry loop.
-                        # Either outcome is acceptable; the test verifies no hang.
-                        assert result is not None
-                finally:
-                    for p in patches:
-                        p.stop()
+            with (
+                patch.dict(os.environ, {"ENVIRONMENT": "production"}),
+                patch.object(middleware, "_get_tool_schema", return_value=_simple_tool_schema()),
+            ):
+                with pytest.raises(AdCPToolError) as exc_info:
+                    await middleware.on_call_tool(ctx, call_next)
+                assert_envelope_shape(exc_info.value, "VALIDATION_ERROR", recovery="correctable")
+                assert exc_info.value.__cause__ is error
+                assert call_next.call_count == 1
 
         asyncio.run(_call())
 

@@ -17,7 +17,7 @@ from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
 from pydantic import BaseModel, ValidationError
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+    from collections.abc import Iterator, Mapping, Sequence
 
     from adcp.types import ContextObject
 
@@ -1030,7 +1030,12 @@ VALIDATION_ERROR_SUGGESTION = "check request parameters and fix"
 
 
 def first_validation_error_field(validation_error: ValidationError) -> str | None:
-    """Return the bracket-notation path of the first Pydantic error."""
+    """Return the bracket-notation path of the first Pydantic error.
+
+    List indices render as ``[i]`` so boundary-derived paths such as
+    ``packages[0].budget`` align with the ``packages[].budget`` field strings
+    raised by the implementation layer.
+    """
     errors = validation_error.errors()
     if not errors:
         return None
@@ -1045,7 +1050,7 @@ def first_validation_error_field(validation_error: ValidationError) -> str | Non
     return "".join(parts)
 
 
-def build_validation_error_details(errors: Sequence[Any]) -> dict[str, Any]:
+def build_validation_error_details(errors: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Project Pydantic errors into the buyer-safe structured detail shape."""
     return {
         "validation_errors": [

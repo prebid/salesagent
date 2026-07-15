@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from src.core.exceptions import (
     AdCPValidationError,
+    build_validation_error_details,
 )
 from src.core.exceptions import (
     first_validation_error_field as first_validation_error_field,
@@ -49,10 +50,12 @@ def adcp_validation_boundary(context: str = "parameters", field: str | None = No
     try:
         yield
     except ValidationError as e:
+        errors = e.errors()
         raise AdCPValidationError(
             format_validation_error(e, context=context),
             field=field if field is not None else first_validation_error_field(e),
             suggestion=suggest_validation_fix(e),
+            details=build_validation_error_details(errors),
         ) from e
 
 

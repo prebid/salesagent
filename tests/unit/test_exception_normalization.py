@@ -3,6 +3,7 @@ from pydantic import ValidationError
 
 from src.core.exceptions import AdCPValidationError, normalize_to_adcp_error
 from src.core.validation_helpers import adcp_validation_boundary
+from tests.helpers import assert_no_raw_validation_leak
 
 
 def test_pydantic_validation_error_normalization_is_structured_and_sanitized():
@@ -32,7 +33,7 @@ def test_pydantic_validation_error_normalization_is_structured_and_sanitized():
         ]
     }
     assert "buyer-input" not in normalized.message
-    assert "errors.pydantic.dev" not in normalized.message
+    assert_no_raw_validation_leak(normalized.message)
 
 
 def test_a2a_validation_boundary_preserves_contextual_error_format():
@@ -55,6 +56,14 @@ def test_a2a_validation_boundary_preserves_contextual_error_format():
     assert "packages.0.product_id: Required field is missing" in exc_info.value.message
     assert exc_info.value.field == "packages[0].product_id"
     assert exc_info.value.suggestion == ("Provide the required 'packages.0.product_id' field and resend the request.")
-    assert exc_info.value.details is None
+    assert exc_info.value.details == {
+        "validation_errors": [
+            {
+                "loc": ["packages", 0, "product_id"],
+                "msg": "Field required",
+                "type": "missing",
+            }
+        ]
+    }
     assert "buyer-input" not in exc_info.value.message
-    assert "errors.pydantic.dev" not in exc_info.value.message
+    assert_no_raw_validation_leak(exc_info.value.message)

@@ -20,7 +20,7 @@ from a2a.types import Message, SendMessageRequest, Task
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from tests.factories.principal import PrincipalFactory
-from tests.helpers import assert_envelope_shape
+from tests.helpers import assert_envelope_shape, assert_no_raw_validation_leak
 from tests.helpers.adcp_factories import create_test_package_request_dict
 from tests.integration.conftest import seed_error_test_tenant
 from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
@@ -283,8 +283,7 @@ class TestA2AErrorPropagation:
             recovery="correctable",
             message_substr="Required field is missing",
         )
-        assert "input_value" not in artifact_data["errors"][0]["message"]
-        assert "errors.pydantic.dev" not in artifact_data["errors"][0]["message"]
+        assert_no_raw_validation_leak(artifact_data["errors"][0]["message"])
         assert "account" in (artifact_data["errors"][0].get("field") or "")
 
     async def test_create_media_buy_negative_budget_wire_envelope(self, handler, test_tenant, test_principal):
@@ -338,8 +337,7 @@ class TestA2AErrorPropagation:
             message_substr="greater than or equal to 0",
             recovery="correctable",
         )
-        assert "input_value" not in artifact_data["errors"][0]["message"]
-        assert "errors.pydantic.dev" not in artifact_data["errors"][0]["message"]
+        assert_no_raw_validation_leak(artifact_data["errors"][0]["message"])
         # The structured field path is propagated from the Pydantic error (drift-proof
         # vs the rendered message substring) — both envelope layers carry it.
         wire_field = artifact_data["errors"][0].get("field") or ""

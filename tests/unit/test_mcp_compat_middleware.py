@@ -8,10 +8,11 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.core.exceptions import AdCPValidationError
 from src.core.mcp_compat_middleware import RequestCompatMiddleware
 from src.core.request_compat import NormalizationResult
 from src.core.tool_error_logging import AdCPToolError
-from tests.helpers import assert_envelope_shape
+from tests.helpers import assert_envelope_shape, assert_no_raw_validation_leak
 
 
 @pytest.fixture()
@@ -49,6 +50,16 @@ def _typeadapter_validation_error(tool_name: str, line_error: dict):
         title=f"call[{tool_name}]",
         line_errors=[line_error],
     )
+
+
+class _ValidationErrorRecord:
+    """Matcher that pins the typed boundary error passed to the recorder."""
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, AdCPValidationError) and other.error_code == "VALIDATION_ERROR"
+
+    def __repr__(self) -> str:
+        return "AdCPValidationError(error_code='VALIDATION_ERROR')"
 
 
 class TestMiddlewareCallsNormalizer:
@@ -190,14 +201,14 @@ class TestTypeAdapterValidationEnvelope:
                 "List should have at least 1 item",
             ),
             (
-                "create_media_buy",
-                {"packages": [{}]},
+                "list_creatives",
+                {"filters": {"format_ids": [{}]}},
                 {
                     "type": "missing",
-                    "loc": ("packages", 0, "product_id"),
+                    "loc": ("filters", "format_ids", 0, "agent_url"),
                     "input": {},
                 },
-                "packages[0].product_id",
+                "filters.format_ids[0].agent_url",
                 "Field required",
             ),
         ],
@@ -222,8 +233,7 @@ class TestTypeAdapterValidationEnvelope:
         )
         assert exc_info.value.envelope["errors"][0]["field"] == field
         wire_message = exc_info.value.envelope["errors"][0]["message"]
-        assert "input_value" not in wire_message
-        assert "errors.pydantic.dev" not in wire_message
+        assert_no_raw_validation_leak(wire_message)
 
     @pytest.mark.asyncio
     async def test_typeadapter_validation_errors_are_recorded_at_mcp_boundary(self, middleware):
@@ -248,10 +258,11 @@ class TestTypeAdapterValidationEnvelope:
         ):
             await middleware.on_call_tool(ctx, AsyncMock(side_effect=validation_error))
 
+        ctx.fastmcp_context.get_state.assert_awaited_once_with("identity")
         record_error.assert_called_once_with(
             "mcp",
             "list_creatives",
-            ANY,
+            _ValidationErrorRecord(),
             tenant_id="tenant-1",
             principal_id="buyer-1",
         )

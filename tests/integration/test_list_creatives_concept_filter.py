@@ -30,7 +30,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # Wire transports only — IMPL has no wire envelope (and the dict→CreativeFilters
 # coercion under test happens at the transport boundary, not in _impl).
 _ALL_WIRE = [Transport.A2A, Transport.MCP, Transport.REST]
-_ENVELOPE_WIRE = _ALL_WIRE
 
 
 def _seed_authenticated_principal(env: CreativeListEnv):
@@ -59,7 +58,7 @@ class TestConceptIdsFilterValidation:
                 f"got payload {result.payload!r}"
             )
 
-    @pytest.mark.parametrize("transport", _ENVELOPE_WIRE)
+    @pytest.mark.parametrize("transport", _ALL_WIRE)
     def test_empty_concept_ids_emits_validation_envelope(self, integration_db, transport):
         """Wire transports surface the two-layer VALIDATION_ERROR envelope with a suggestion."""
         with CreativeListEnv() as env:

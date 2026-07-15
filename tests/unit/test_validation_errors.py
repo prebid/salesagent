@@ -50,6 +50,7 @@ def test_create_media_buy_boundary_validation_preserves_field_suggestion():
             ext=None,
             account=None,
             idempotency_key=None,
+            paused=None,
         )
 
     error = exc_info.value

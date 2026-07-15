@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.helpers import assert_envelope_shape
+from tests.helpers import assert_envelope_shape, assert_no_raw_validation_leak
 from tests.helpers.adcp_factories import create_test_package_request_dict
 from tests.helpers.mcp_envelope_capture import call_mcp_tool_capturing_envelope
 
@@ -32,8 +32,7 @@ def test_typeadapter_validation_error_emits_adcp_envelope_on_mcp_wire():
     assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable", message_substr="List should have")
     assert envelope["errors"][0].get("suggestion"), f"{tool_name}: envelope must include a recovery suggestion"
     assert envelope["errors"][0].get("field") == "filters.concept_ids"
-    assert "input_value" not in envelope["errors"][0]["message"]
-    assert "errors.pydantic.dev" not in envelope["errors"][0]["message"]
+    assert_no_raw_validation_leak(envelope["errors"][0]["message"])
 
 
 def test_create_media_buy_missing_key_preserves_field_on_mcp_wire():
@@ -64,8 +63,7 @@ def test_create_media_buy_missing_key_preserves_field_on_mcp_wire():
         message_substr="Required field is missing",
     )
     assert envelope["errors"][0].get("field") == "idempotency_key"
-    assert "input_value" not in envelope["errors"][0]["message"]
-    assert "errors.pydantic.dev" not in envelope["errors"][0]["message"]
+    assert_no_raw_validation_leak(envelope["errors"][0]["message"])
 
 
 @pytest.mark.xfail(
