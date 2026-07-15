@@ -316,7 +316,10 @@ async def get_adcp_capabilities(
     MCP tool wrapper aligned with adcp v3.x spec.
 
     Args:
-        protocols: Specific protocols to query (optional, currently ignored)
+        protocols: Specific protocols to query (optional). Forwarded into the
+            request; the impl does not yet filter supported_protocols by it
+            (documented @known-gap ext-d), but the value now reaches the impl
+            instead of being dropped at the boundary (#1546).
         context: AdCP request context echoed unchanged on the response. Declared
             here so the envelope-tolerance middleware does not strip it before it
             reaches the request (#1512).
@@ -327,8 +330,10 @@ async def get_adcp_capabilities(
     """
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
-    # Build request object, forwarding the buyer's context so it is echoed back.
-    req = GetAdcpCapabilitiesRequest(context=context)
+    # Build request object, forwarding the buyer's context (echoed back) and the
+    # requested protocols so the impl receives them instead of silently dropping
+    # the buyer's selection (#1546).
+    req = GetAdcpCapabilitiesRequest(protocols=protocols, context=context)
 
     # Call shared implementation
     response = _get_adcp_capabilities_impl(req, identity)
@@ -365,7 +370,9 @@ async def get_adcp_capabilities_raw(
     Raw function without @mcp.tool decorator for A2A server use.
 
     Args:
-        protocols: Specific protocols to query (optional, currently ignored)
+        protocols: Specific protocols to query (optional). Forwarded into the
+            request; filtering is a documented @known-gap (ext-d), but the value
+            now reaches the impl instead of being dropped (#1546).
         context: AdCP request context echoed unchanged on the response (#1512).
         ctx: FastMCP context (automatically provided)
         identity: Pre-resolved identity (preferred over ctx)
@@ -377,5 +384,7 @@ async def get_adcp_capabilities_raw(
         from src.core.transport_helpers import resolve_identity_from_context
 
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
-    req = GetAdcpCapabilitiesRequest(context=context)
+    # Forward protocols alongside context so the impl receives the buyer's
+    # selection instead of dropping it (#1546).
+    req = GetAdcpCapabilitiesRequest(protocols=protocols, context=context)
     return _get_adcp_capabilities_impl(req, identity)

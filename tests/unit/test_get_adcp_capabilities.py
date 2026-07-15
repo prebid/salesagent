@@ -217,6 +217,58 @@ class TestGetAdcpCapabilitiesImpl:
         assert response.context == request_ctx
 
 
+def _minimal_capabilities_response() -> GetAdcpCapabilitiesResponse:
+    """A minimal valid response, enough for the MCP wrapper's summary builder."""
+    from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+        Adcp,
+        Idempotency,
+        MajorVersion,
+    )
+
+    return GetAdcpCapabilitiesResponse(
+        adcp=Adcp(
+            major_versions=[MajorVersion(root=3)],
+            idempotency=Idempotency(supported=True, replay_ttl_seconds=86400),
+        ),
+        supported_protocols=[SupportedProtocol.media_buy],
+    )
+
+
+class TestGetAdcpCapabilitiesProtocolsThreading:
+    """The buyer's ``protocols`` selection must reach the impl request.
+
+    Both transport wrappers previously constructed the request with only
+    ``context`` — the ``protocols`` parameter was accepted at the boundary and
+    then dropped, so the impl never saw it (#1546). The impl does not yet
+    *filter* on protocols (documented @known-gap ext-d), but the threading is a
+    prerequisite: the value must reach the request or no filter can ever act on
+    it. These tests pin the threading, not filter behavior.
+    """
+
+    async def test_raw_wrapper_forwards_protocols_into_request(self):
+        """get_adcp_capabilities_raw passes protocols into GetAdcpCapabilitiesRequest."""
+        from src.core.tools.capabilities import get_adcp_capabilities_raw
+
+        identity = _make_capabilities_identity()
+        with patch("src.core.tools.capabilities._get_adcp_capabilities_impl") as mock_impl:
+            mock_impl.return_value = MagicMock()
+            await get_adcp_capabilities_raw(protocols=["media_buy"], context=None, identity=identity)
+
+        req = mock_impl.call_args.args[0]
+        assert req.protocols == ["media_buy"], "raw wrapper must thread protocols into the request, not drop it"
+
+    async def test_mcp_wrapper_forwards_protocols_into_request(self):
+        """get_adcp_capabilities (MCP wrapper) passes protocols into the request."""
+        from src.core.tools.capabilities import get_adcp_capabilities
+
+        with patch("src.core.tools.capabilities._get_adcp_capabilities_impl") as mock_impl:
+            mock_impl.return_value = _minimal_capabilities_response()
+            await get_adcp_capabilities(protocols=["media_buy"], context=None, ctx=None)
+
+        req = mock_impl.call_args.args[0]
+        assert req.protocols == ["media_buy"], "MCP wrapper must thread protocols into the request, not drop it"
+
+
 class TestGetAdcpCapabilitiesWithTenant:
     """Test get_adcp_capabilities with mocked tenant context."""
 
