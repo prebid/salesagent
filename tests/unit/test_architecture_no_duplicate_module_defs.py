@@ -16,7 +16,11 @@ convention marks *intentionally* unused bindings (~208 such bindings in this
 tree). So the narrow structural guard is the right instrument.
 
 Scanning approach: AST — collect the names bound by ``def``/``async def``/``class``
-in each *namespace* (module body, class body) and flag any name bound twice.
+in each *namespace* (module body, class body, and function/async-function body)
+and flag any name bound twice within one namespace. A name reused across
+DIFFERENT namespaces (e.g. a module helper and an unrelated function-local of the
+same name) is legal and never flagged — each namespace scans only its own direct
+body statements.
 
 Legitimate redefinitions are exempted structurally, not allowlisted:
   - ``@overload`` stubs (see src/core/enum_helpers.py)
@@ -30,17 +34,21 @@ Pydantic v2 does not error on two same-named validators in a class body — it
 warns and silently DROPS the first. That is this exact disease, so the guard
 reports it.
 
+Function-local shadowing IS scanned (a name bound twice in one function body —
+e.g. the ``_get_or_create_context`` duplicate that once lived in
+tests/harness/media_buy_create.py, removed in the evb4 dedup). A function-local
+duplicate is labeled ``<function>.<name>`` — the same single-segment convention
+as class methods. That key is not globally unique across nested scopes, so it can
+under-report (collapse two distinct violations to one entry), but it can never
+produce a false green: any real violation still leaves the found-set non-empty and
+fails against the empty allowlist. A globally-unique recursive qualname is
+unwarranted at the current zero-violation count.
+
 Out of scope:
   - Conditional definitions (inside ``if TYPE_CHECKING:`` / ``try: ... except
-    ImportError:``) — not direct namespace-body statements.
-  - Function-LOCAL shadowing. Not a closed decision — DEFERRED. Exactly one
-    instance exists (tests/harness/media_buy_create.py::_build_mock_context_manager
-    binds ``_get_or_create_context`` twice) and it is owned by an in-flight
-    ticket, salesagent-evb4. Widening this guard to nested scopes is tracked by
-    salesagent-ihd4, which is blocked on evb4 — deferred rather than
-    allowlisted, so this guard's allowlist stays empty.
+    ImportError:``) — not direct namespace-body statements, at any scope.
 
-GitHub: #1619
+GitHub: #1619 (module/class scopes), salesagent-ihd4 (function-local scopes)
 """
 
 from __future__ import annotations
@@ -70,7 +78,7 @@ _SCAN_DIRS = [
 _ALLOWED_DUPLICATES: set[tuple[str, str]] = set()
 
 _Def = ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
-_Namespace = ast.Module | ast.ClassDef
+_Namespace = ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
 
 # Decorators under which a name may legally be bound more than once in a namespace.
 _OVERLOAD = "overload"
@@ -125,8 +133,8 @@ def _is_legal_redefinition_group(nodes: list[_Def]) -> bool:
 def _duplicate_defs(source: str, filename: str = "<test>") -> dict[str, list[int]]:
     """Return {qualified_name: [linenos]} for names bound 2+ times in one namespace.
 
-    Namespaces scanned: the module body and every class body. Function-local
-    scopes are deferred — see the module docstring (salesagent-ihd4).
+    Namespaces scanned: the module body, every class body, and every function
+    body (see the module docstring for what function-LOCAL shadowing looks like).
     """
     return _duplicate_defs_in_tree(ast.parse(source, filename=filename))
 
@@ -135,7 +143,9 @@ def _duplicate_defs_in_tree(tree: ast.Module) -> dict[str, list[int]]:
     duplicates: dict[str, list[int]] = {}
 
     namespaces: list[_Namespace] = [tree]
-    namespaces.extend(node for node in ast.walk(tree) if isinstance(node, ast.ClassDef))
+    namespaces.extend(
+        node for node in ast.walk(tree) if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    )
 
     for namespace in namespaces:
         bindings: dict[str, list[_Def]] = {}
@@ -198,6 +208,49 @@ class TestNoDuplicateModuleDefs:
         """A method bound twice in one class body is the same disease, one namespace down."""
         source = "class Repo:\n    def get(self, x):\n        return 1\n\n    def get(self, x):\n        return 2\n"
         assert _duplicate_defs(source) == {"Repo.get": [2, 5]}
+
+    @pytest.mark.arch_guard
+    def test_guard_detects_shadowed_local_helper(self) -> None:
+        """A nested `_helper` bound twice in one function body is the same disease, one scope deeper.
+
+        FAILS against the un-widened helper: function bodies are not yet a scanned
+        namespace, so the shadow is invisible (returns {}). Pins that widening to
+        function-local scopes catches it. salesagent-ihd4 / #1619.
+        """
+        source = (
+            "def outer():\n"
+            "    def _helper():\n"
+            "        return 1\n"
+            "    def _helper():\n"
+            "        return 2\n"
+            "    return _helper()\n"
+        )
+        assert _duplicate_defs(source) == {"outer._helper": [2, 4]}
+
+    @pytest.mark.arch_guard
+    def test_guard_detects_shadowed_class_in_function(self) -> None:
+        """A `class C` bound twice inside a function body — a ClassDef-in-FunctionDef namespace path.
+
+        Reachable only after widening (a class nested in a function body is not a
+        module- or class-body statement today), so it FAILS against the un-widened
+        helper. salesagent-ihd4 / #1619.
+        """
+        source = "def f():\n    class C:\n        pass\n    class C:\n        pass\n    return C\n"
+        assert _duplicate_defs(source) == {"f.C": [2, 4]}
+
+    @pytest.mark.arch_guard
+    def test_guard_ignores_cross_namespace_reuse(self) -> None:
+        """Core Invariant: a name at module scope and the SAME name inside a function are legal.
+
+        Different namespaces => not a shadow. The only thing that could wrongly
+        trip this is a cross-namespace collision, so it guards the per-namespace
+        `.body` grouping against regression. Passes both before AND after widening
+        (invariant guard, not a red test). salesagent-ihd4 / #1619.
+        """
+        source = (
+            "def helper():\n    return 1\n\ndef other():\n    def helper():\n        return 2\n    return helper()\n"
+        )
+        assert _duplicate_defs(source) == {}
 
     @pytest.mark.arch_guard
     def test_guard_detects_duplicate_pydantic_validator(self) -> None:
