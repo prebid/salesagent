@@ -91,10 +91,12 @@ class TestPolicyReviewAtomicity:
 
 
 class TestOperationsApproveAtomicity:
-    def test_media_buy_approve_refused_transition_skips_adapter(self, client, sample_tenant, sample_principal):
-        """[Round-15 B1] When the atomic transition is refused (a buyer cancel won the race),
-        the media-buy approve route must NOT run the irreversible execute_approved_media_buy
-        and must surface a conflict (redirect) — the step is not overwritten."""
+    def test_media_buy_approve_refused_claim_skips_adapter(self, client, sample_tenant, sample_principal):
+        """[Round-19] When the approval claim is refused (a concurrent approve/cancel won the
+        race), the media-buy approve route must NOT run the irreversible execute_approved_media_buy
+        and must surface a conflict (redirect) — the step is not overwritten. The route uses the
+        source-state-guarded ``claim_approval`` (NOT the broad transition_if_nonterminal, which
+        would let approved→approved slip through)."""
         tenant_id = sample_tenant["tenant_id"]
         _auth(client, tenant_id)
         media_buy_id = f"mb_{uuid.uuid4().hex[:8]}"
@@ -104,9 +106,9 @@ class TestOperationsApproveAtomicity:
 
         with (
             patch(
-                "src.admin.blueprints.operations.WorkflowRepository.transition_if_nonterminal",
+                "src.admin.blueprints.operations.WorkflowRepository.claim_approval",
                 return_value=None,
-            ) as mock_transition,
+            ) as mock_claim,
             patch("src.core.tools.media_buy_create.execute_approved_media_buy") as mock_execute,
         ):
             resp = client.post(
@@ -115,7 +117,117 @@ class TestOperationsApproveAtomicity:
                 follow_redirects=False,
             )
 
-        mock_transition.assert_called_once_with(ANY, status="approved")
+        mock_claim.assert_called_once_with(ANY)
         mock_execute.assert_not_called()
-        assert _status(tenant_id, step_id) == "requires_approval", "refused transition must not overwrite the step"
+        assert _status(tenant_id, step_id) == "requires_approval", "refused claim must not overwrite the step"
         assert resp.status_code in (302, 303)
+
+
+class TestApprovalClaimCompareAndSet:
+    """[Round-19] claim_approval / reject_if_approvable are source-state-guarded compare-and-sets.
+
+    Because ``approved`` is (deliberately) non-terminal, the broad ``transition_if_nonterminal``
+    guard would admit an ``approved → approved`` no-op — a second concurrent approver that also
+    runs execute_approved_media_buy (duplicate order). These pin the narrower guard.
+    """
+
+    def test_claim_approval_admits_exactly_one_approver(self, sample_tenant, sample_principal):
+        tenant_id = sample_tenant["tenant_id"]
+        step_id = _make_step(tenant_id, sample_principal["principal_id"], "requires_approval")
+
+        with WorkflowUoW(tenant_id) as uow:
+            first = uow.workflows.claim_approval(step_id)
+            assert first is not None and first.status == "approved"
+        with WorkflowUoW(tenant_id) as uow:
+            second = uow.workflows.claim_approval(step_id)
+            assert second is None, "a second approver must not re-claim an already-approved step"
+        assert _status(tenant_id, step_id) == "approved"
+
+    def test_claim_approval_refuses_non_approvable_statuses(self, sample_tenant, sample_principal):
+        tenant_id = sample_tenant["tenant_id"]
+        principal_id = sample_principal["principal_id"]
+        for status in ("pending", "in_progress", "approved", "completed", "rejected", "canceled"):
+            step_id = _make_step(tenant_id, principal_id, status)
+            with WorkflowUoW(tenant_id) as uow:
+                assert uow.workflows.claim_approval(step_id) is None, f"{status} must not be claimable"
+            assert _status(tenant_id, step_id) == status, f"{status} must be left unchanged"
+        # Positive control: pending_approval is claimable.
+        ok = _make_step(tenant_id, principal_id, "pending_approval")
+        with WorkflowUoW(tenant_id) as uow:
+            assert uow.workflows.claim_approval(ok) is not None
+        assert _status(tenant_id, ok) == "approved"
+
+    def test_reject_if_approvable_refuses_approved_step(self, sample_tenant, sample_principal):
+        tenant_id = sample_tenant["tenant_id"]
+        principal_id = sample_principal["principal_id"]
+        approved = _make_step(tenant_id, principal_id, "approved")
+        with WorkflowUoW(tenant_id) as uow:
+            assert uow.workflows.reject_if_approvable(approved, error_message="no") is None
+        assert _status(tenant_id, approved) == "approved", "an approved step must not be rejectable"
+        # Positive control: a step still awaiting a decision rejects.
+        pending = _make_step(tenant_id, principal_id, "requires_approval")
+        with WorkflowUoW(tenant_id) as uow:
+            assert uow.workflows.reject_if_approvable(pending, error_message="bad") is not None
+        assert _status(tenant_id, pending) == "rejected"
+
+    def test_legacy_approval_status_is_claimable_and_rejectable(self, sample_tenant, sample_principal):
+        """[Round-20] Regression guard: the legacy adapter-emitted ``approval`` status (GAM /
+        Broadstreet / base_workflow default) is awaiting-decision and MUST be approvable and
+        rejectable — the round-19 guard wrongly excluded it, 409-ing live human workflows."""
+        tenant_id = sample_tenant["tenant_id"]
+        principal_id = sample_principal["principal_id"]
+
+        to_approve = _make_step(tenant_id, principal_id, "approval")
+        with WorkflowUoW(tenant_id) as uow:
+            assert uow.workflows.claim_approval(to_approve) is not None
+        assert _status(tenant_id, to_approve) == "approved"
+
+        to_reject = _make_step(tenant_id, principal_id, "approval")
+        with WorkflowUoW(tenant_id) as uow:
+            assert uow.workflows.reject_if_approvable(to_reject, error_message="no") is not None
+        assert _status(tenant_id, to_reject) == "rejected"
+
+
+class TestWorkflowsRouteConflict:
+    """[Round-19] The generic workflow approve/reject JSON route distinguishes a genuine
+    concurrency conflict (409) from a missing step (404), and never double-executes."""
+
+    def test_approve_of_already_approved_step_returns_409(self, client, sample_tenant, sample_principal):
+        tenant_id = sample_tenant["tenant_id"]
+        _auth(client, tenant_id)
+        step_id = _make_step(tenant_id, sample_principal["principal_id"], "approved")
+
+        with patch("src.core.tools.media_buy_create.execute_approved_media_buy") as mock_execute:
+            resp = client.post(f"/tenant/{tenant_id}/workflows/wf_x/steps/{step_id}/approve")
+
+        assert resp.status_code == 409, "a second approve of an approved step is a conflict, not 404"
+        mock_execute.assert_not_called()
+        assert _status(tenant_id, step_id) == "approved"
+
+    def test_approve_of_nonexistent_step_returns_404(self, client, sample_tenant):
+        tenant_id = sample_tenant["tenant_id"]
+        _auth(client, tenant_id)
+        resp = client.post(f"/tenant/{tenant_id}/workflows/wf_x/steps/step_missing/approve")
+        assert resp.status_code == 404
+
+    def test_reject_of_approved_step_returns_409(self, client, sample_tenant, sample_principal):
+        tenant_id = sample_tenant["tenant_id"]
+        _auth(client, tenant_id)
+        step_id = _make_step(tenant_id, sample_principal["principal_id"], "approved")
+
+        resp = client.post(f"/tenant/{tenant_id}/workflows/wf_x/steps/{step_id}/reject", json={"reason": "x"})
+
+        assert resp.status_code == 409, "rejecting an approved step is a conflict — no rejecting a live order"
+        assert _status(tenant_id, step_id) == "approved"
+
+    def test_route_approves_legacy_approval_status_step(self, client, sample_tenant, sample_principal):
+        """[Round-20] The generic approve route actions a legacy ``approval``-status step (200),
+        not a spurious 409 — the round-19 regression."""
+        tenant_id = sample_tenant["tenant_id"]
+        _auth(client, tenant_id)
+        step_id = _make_step(tenant_id, sample_principal["principal_id"], "approval")
+
+        resp = client.post(f"/tenant/{tenant_id}/workflows/wf_x/steps/{step_id}/approve")
+
+        assert resp.status_code == 200, "a legacy approval-status step must be approvable, not 409"
+        assert _status(tenant_id, step_id) == "approved"

@@ -370,15 +370,15 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 }
 
             if action == "approve":
-                # Atomic terminal-safe claim: transition requires_approval → approved
-                # via the shared conditional-UPDATE primitive. If a buyer cancel (or any
-                # terminal decision) committed in between, this returns None → refuse the
-                # approval and DO NOT run the irreversible adapter creation below.
-                if (
-                    WorkflowRepository(db_session, tenant_id).transition_if_nonterminal(step.step_id, status="approved")
-                    is None
-                ):
-                    flash("This step was already finalized (e.g. canceled) and can no longer be approved.", "error")
+                # Atomic compare-and-set claim: requires_approval/pending_approval → approved
+                # via the source-state-guarded primitive. Because ``approved`` is non-terminal,
+                # a broad terminal-guard would let a second concurrent approver win an
+                # approved→approved no-op and ALSO run the irreversible adapter creation below
+                # (duplicate order). claim_approval admits exactly one approver; a loser (already
+                # approved, canceled, or otherwise not awaiting approval) returns None → refuse
+                # and DO NOT run the irreversible adapter creation.
+                if WorkflowRepository(db_session, tenant_id).claim_approval(step.step_id) is None:
+                    flash("This step is no longer awaiting approval (already approved or finalized).", "error")
                     return redirect(
                         url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
                     )
@@ -558,15 +558,17 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     flash("Media buy approved successfully", "success")
 
             elif action == "reject":
-                # Atomic terminal-safe transition (mirror of approve): a concurrent
-                # cancel/terminal decision makes this return None → refuse the reject.
+                # Atomic compare-and-set with the SAME source-state guard as approve (mirror):
+                # a step already approved (execution underway), canceled, or otherwise not
+                # awaiting a decision returns None → refuse the reject. This prevents rejecting
+                # an approved step and stranding a live ad-server order behind a rejected workflow.
                 if (
-                    WorkflowRepository(db_session, tenant_id).transition_if_nonterminal(
-                        step.step_id, status="rejected", error_message=reason or "Rejected by administrator"
+                    WorkflowRepository(db_session, tenant_id).reject_if_approvable(
+                        step.step_id, error_message=reason or "Rejected by administrator"
                     )
                     is None
                 ):
-                    flash("This step was already finalized (e.g. canceled) and can no longer be rejected.", "error")
+                    flash("This step is no longer awaiting a decision (already approved or finalized).", "error")
                     return redirect(
                         url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
                     )

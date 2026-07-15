@@ -42,6 +42,23 @@ TERMINAL_STEP_STATUSES = frozenset({"completed", "rejected", "failed", "canceled
 # still purely pending human/forecasting action, before any side-effects have run.
 CANCELLABLE_STEP_STATUSES = frozenset({"pending", "requires_approval", "pending_approval"})
 
+# Statuses a step can be approved or rejected FROM — i.e. it is still awaiting a human
+# decision and no irreversible execution has started. Approval/rejection is a compare-and-set
+# from one of these to a decided status. Because ``approved`` is (deliberately) NON-terminal,
+# a broad "not terminal" guard would let a SECOND concurrent approver win an ``approved →
+# approved`` no-op and also run the irreversible adapter creation (duplicate order), and would
+# let a reject run ``approved → rejected`` (stranding a live order behind a rejected workflow).
+# Restricting the source states to this set makes exactly one decider win.
+#
+# ``approval`` is the LEGACY awaiting-decision status emitted by the adapter workflow managers
+# (base_workflow.py default; GAM order-activation / manual-order / creative-approval steps;
+# Broadstreet via the base manager). It is semantically identical to ``requires_approval`` —
+# a step a publisher must approve/reject — so it MUST be approvable, otherwise those live human
+# workflows can never be actioned. Normalizing every producer to the canonical
+# ``requires_approval`` (+ a migration for existing ``approval`` rows) is tracked in #1659;
+# until then this set carries the legacy alias.
+APPROVABLE_STEP_STATUSES = frozenset({"requires_approval", "pending_approval", "approval"})
+
 
 class WorkflowRepository:
     """Tenant-scoped data access for WorkflowStep and ObjectWorkflowMapping.
@@ -440,6 +457,47 @@ class WorkflowRepository:
             completed_at=completed_at,
             response_data=response_data,
             error_message=error_message,
+        )
+
+    def claim_approval(self, step_id: str) -> WorkflowStep | None:
+        """Atomically claim a step for approval: requires_approval/pending_approval → approved.
+
+        A compare-and-set restricted to APPROVABLE_STEP_STATUSES. Because ``approved`` is
+        (deliberately) NON-terminal, the broad ``transition_if_nonterminal`` guard would let a
+        SECOND concurrent approver win an ``approved → approved`` no-op and also run
+        ``execute_approved_media_buy`` — duplicating irreversible adapter work. This narrower
+        source-state guard makes exactly ONE approver win; a later approver sees ``approved``
+        (not in the source set) and gets None. Returns the updated step, or None when the step
+        is absent OR not in an approvable status (already approved/executing/terminal). Does
+        NOT commit.
+        """
+        return self._atomic_transition(
+            step_id,
+            status="approved",
+            status_guard=WorkflowStep.status.in_(APPROVABLE_STEP_STATUSES),
+        )
+
+    def reject_if_approvable(
+        self,
+        step_id: str,
+        *,
+        error_message: str | None = None,
+        response_data: dict[str, Any] | None = None,
+    ) -> WorkflowStep | None:
+        """Atomically reject a step awaiting a decision: requires_approval/pending_approval → rejected.
+
+        Mirror of ``claim_approval`` with the SAME source-state guard, so a step that has
+        already been ``approved`` (irreversible execution underway) cannot be rejected — which
+        would otherwise strand a live ad-server order behind a rejected workflow. Returns the
+        updated step, or None when the step is absent OR not in an approvable status. Does NOT
+        commit.
+        """
+        return self._atomic_transition(
+            step_id,
+            status="rejected",
+            status_guard=WorkflowStep.status.in_(APPROVABLE_STEP_STATUSES),
+            error_message=error_message,
+            response_data=response_data,
         )
 
     def cancel_if_cancellable(self, step_id: str, *, completed_at: datetime) -> bool:
