@@ -543,6 +543,7 @@ def _execute_adapter_media_buy_creation(
     principal: Principal,
     testing_ctx: TestingContext | None = None,
     tenant: Any = None,
+    idempotency_key: str | None = None,
 ) -> schemas.CreateMediaBuyResponse:
     """Execute adapter's create_media_buy call.
 
@@ -557,6 +558,10 @@ def _execute_adapter_media_buy_creation(
         package_pricing_info: Pricing model info per package
         principal: The Principal object (buyer/advertiser)
         testing_ctx: Optional testing context for dry-run mode
+        idempotency_key: Stable key forwarded to the adapter so it can derive a
+            deterministic remote resource name and make a retry reuse (not duplicate)
+            an already-created remote object (#1637). The approval-replay path passes
+            the persisted ``media_buy_id``; the initial-create path passes None.
 
     Returns:
         CreateMediaBuyResponse from the adapter
@@ -570,7 +575,9 @@ def _execute_adapter_media_buy_creation(
 
     # Call adapter with detailed error logging
     try:
-        response = adapter.create_media_buy(request, packages, start_time, end_time, package_pricing_info)
+        response = adapter.create_media_buy(
+            request, packages, start_time, end_time, package_pricing_info, idempotency_key=idempotency_key
+        )
 
         # Log based on response type
         if isinstance(response, CreateMediaBuyError):
@@ -1073,7 +1080,10 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
             _validate_creatives_before_adapter_call(packages, tenant_id, buy_principal_id, session=session)
 
-        # Execute adapter creation (outside session to avoid conflicts)
+        # Execute adapter creation (outside session to avoid conflicts).
+        # Forward the persisted media_buy_id as the idempotency key so the adapter derives
+        # a deterministic remote order name — a re-approval/retry then reuses the existing
+        # remote order instead of minting a duplicate (#1637).
         response = _execute_adapter_media_buy_creation(
             request,
             packages,
@@ -1083,6 +1093,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             principal,
             testing_ctx,
             tenant=tenant_obj,
+            idempotency_key=media_buy_id,
         )
 
         # Check if adapter returned an error response

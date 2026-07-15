@@ -442,6 +442,7 @@ class AdServerAdapter(ABC):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        idempotency_key: str | None = None,
     ) -> CreateMediaBuyResponse:
         """Creates a new media buy on the ad server from selected packages.
 
@@ -452,6 +453,11 @@ class AdServerAdapter(ABC):
             end_time: Campaign end time
             package_pricing_info: Optional validated pricing information per package (AdCP PR #88)
                 Maps package_id → {pricing_model, rate, currency, is_fixed, bid_price}
+            idempotency_key: Optional stable key that lets an adapter derive a
+                deterministic remote resource name so a retry reuses (rather than
+                duplicates) an already-created remote object (#1637). Callers pass
+                the persisted ``media_buy_id`` on the approval-replay path; adapters
+                that do not need it may ignore it.
 
         Returns:
             CreateMediaBuyResponse with media buy details

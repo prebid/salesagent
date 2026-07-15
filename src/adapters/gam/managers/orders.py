@@ -135,16 +135,12 @@ class GAMOrdersManager:
             else:
                 raise Exception("Failed to create order - no orders returned")
 
-    def _find_existing_order_id(self, order_service, order_name: str) -> str | None:
-        """Return the id of an existing non-archived order with this exact name for
-        this advertiser, or None if verifiably absent.
+    def _query_order_id_by_name(self, order_service, order_name: str) -> str | None:
+        """Raw lookup: id of the non-archived order with this exact name for this
+        advertiser, or None if verifiably absent.
 
-        FAIL CLOSED (#1637): a lookup failure raises ``AdapterIdempotencyUncertain``
-        — creation must NOT proceed when we cannot verify whether the order already
-        exists, or a transient GAM error could mint a duplicate remote order. The
-        exception's contract holds here: it is raised strictly BEFORE any remote
-        mutation, so the approval stays in the automatic-retry path (the buy remains
-        ``finalizing``; the reconciler re-attempts later).
+        Raises the underlying exception on RPC failure — callers decide how to
+        classify an uncertain lookup (pre-mutation vs post-mutation, #1637).
         """
         if not self.advertiser_id:
             return None
@@ -153,26 +149,55 @@ class GAMOrdersManager:
         except ValueError:
             # A non-numeric advertiser id is a LOCAL configuration artifact (real GAM
             # advertiser ids are numeric) — no remote order can exist under it, so the
-            # lookup is skipped rather than classified as remote uncertainty;
-            # createOrders itself will surface the real configuration error.
+            # lookup is skipped rather than treated as an RPC uncertainty; createOrders
+            # itself will surface the real configuration error.
             return None
+        statement_builder = ad_manager.StatementBuilder()
+        statement_builder.Where("name = :name AND advertiserId = :advertiserId")
+        statement_builder.WithBindVariable("name", order_name)
+        statement_builder.WithBindVariable("advertiserId", advertiser_id_num)
+        statement = statement_builder.ToStatement()
+        result = order_service.getOrdersByStatement(statement)
+        for existing in (result or {}).get("results", []) or []:
+            if not existing.get("isArchived", False):
+                return str(existing["id"])
+        return None
+
+    def _find_existing_order_id(self, order_service, order_name: str) -> str | None:
+        """PRE-create lookup. Return the id of an existing non-archived order with this
+        exact name, or None if verifiably absent.
+
+        FAIL CLOSED (#1637): a lookup failure raises ``AdapterIdempotencyUncertain``
+        — creation must NOT proceed when we cannot verify whether the order already
+        exists, or a transient GAM error could mint a duplicate remote order. The
+        exception's contract holds here: it is raised strictly BEFORE any remote
+        mutation, so the approval stays in the automatic-retry path (the buy remains
+        ``finalizing``; the reconciler re-attempts later).
+        """
         try:
-            statement_builder = ad_manager.StatementBuilder()
-            statement_builder.Where("name = :name AND advertiserId = :advertiserId")
-            statement_builder.WithBindVariable("name", order_name)
-            statement_builder.WithBindVariable("advertiserId", advertiser_id_num)
-            statement = statement_builder.ToStatement()
-            result = order_service.getOrdersByStatement(statement)
+            return self._query_order_id_by_name(order_service, order_name)
         except Exception as e:
             from src.adapters.base import AdapterIdempotencyUncertain
 
             raise AdapterIdempotencyUncertain(
                 f"GAM order-existence lookup for '{order_name}' failed; refusing to create blindly: {e}"
             ) from e
-        for existing in (result or {}).get("results", []) or []:
-            if not existing.get("isArchived", False):
-                return str(existing["id"])
-        return None
+
+    def find_order_by_name(self, order_name: str) -> str | None:
+        """POST-failure recovery lookup by deterministic order name (#1637).
+
+        Used AFTER a create_order() failure to disambiguate whether createOrders
+        actually committed remotely. Unlike :meth:`_find_existing_order_id`, an RPC
+        failure PROPAGATES to the caller — because a mutation may already have
+        occurred, the caller converts a failed lookup to ``AdapterPostMutationIncomplete``
+        (ambiguous), never ``AdapterIdempotencyUncertain`` (asserts no mutation).
+
+        Returns the recovered order id, or None if the order verifiably does not exist.
+        """
+        if self.dry_run:
+            return None
+        order_service = self.client_manager.get_service("OrderService")
+        return self._query_order_id_by_name(order_service, order_name)
 
     @timeout(seconds=30)  # 30 seconds timeout for status check
     def get_order_status(self, order_id: str) -> str:

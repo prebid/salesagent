@@ -12,6 +12,7 @@ __all__ = [
     "NON_GUARANTEED_LINE_ITEM_TYPES",
 ]
 
+import hashlib
 import logging
 import uuid
 from datetime import datetime
@@ -24,7 +25,13 @@ if TYPE_CHECKING:
 
 from flask import Flask
 
-from src.adapters.base import AdapterCapabilities, AdapterPostMutationIncomplete, AdServerAdapter, TargetingCapabilities
+from src.adapters.base import (
+    AdapterCapabilities,
+    AdapterIdempotencyUncertain,
+    AdapterPostMutationIncomplete,
+    AdServerAdapter,
+    TargetingCapabilities,
+)
 
 # Import modular components
 from src.adapters.gam.client import GAMClientManager
@@ -397,6 +404,7 @@ class GoogleAdManager(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        idempotency_key: str | None = None,
     ) -> CreateMediaBuyResponse:
         """Create a new media buy (order) in GAM - main orchestration method.
 
@@ -407,6 +415,11 @@ class GoogleAdManager(AdServerAdapter):
             end_time: Campaign end time
             package_pricing_info: Optional validated pricing info (AdCP PR #88)
                 Maps package_id → {pricing_model, rate, currency, is_fixed, bid_price}
+            idempotency_key: Stable key used to derive a DETERMINISTIC GAM order name
+                so a retry searches for and reuses the same order rather than minting a
+                duplicate (#1637). The approval-replay path passes the persisted
+                ``media_buy_id``; the initial-create path passes None and the name is
+                derived from a stable hash of ``(tenant_id, request.idempotency_key)``.
 
         Returns:
             CreateMediaBuyResponse with GAM order details
@@ -646,15 +659,28 @@ class GoogleAdManager(AdServerAdapter):
         except sqlalchemy.exc.SQLAlchemyError as e:
             logger.warning(f"Could not load tenant Gemini key: {e}")
 
-        # Generate a pre-order media_buy_id for naming (GAM order_id replaces this in the response)
-        pre_order_id = f"gam_{uuid.uuid4().hex[:8]}"
+        # Derive a DETERMINISTIC id for the order name (#1637). The order name is the
+        # idempotency anchor: create_order looks it up before creating, so a retry MUST
+        # produce the byte-identical name to reuse the existing order instead of minting
+        # a second one. A per-invocation uuid would defeat that — every attempt would
+        # search for a different name. When the caller supplies an idempotency_key (the
+        # persisted media_buy_id on the approval-replay path) use it directly; otherwise
+        # (initial create, no persisted id yet) hash the client-stable AdCP anchor
+        # (tenant_id, request.idempotency_key — the per-request idempotency key REQUIRED
+        # by AdCP 3.0.1) so the same request yields the same name every attempt.
+        if idempotency_key:
+            stable_order_id = idempotency_key
+        else:
+            stable_seed = f"{self.tenant_id}:{request.idempotency_key}"
+            stable_order_id = f"gam_{hashlib.sha256(stable_seed.encode()).hexdigest()[:8]}"
+
         context = build_order_name_context(
-            request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key, media_buy_id=pre_order_id
+            request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key, media_buy_id=stable_order_id
         )
         base_order_name = apply_naming_template(order_name_template, context)
 
-        # Add unique identifier to prevent duplicate order names
-        unique_suffix = f"mb_{pre_order_id}"
+        # Add deterministic identifier to prevent duplicate order names across retries
+        unique_suffix = f"mb_{stable_order_id}"
         full_order_name = f"{base_order_name} [{unique_suffix}]"
 
         # Truncate to GAM's 255-character limit while preserving the unique suffix
@@ -663,13 +689,46 @@ class GoogleAdManager(AdServerAdapter):
         # Calculate total budget from package budgets (AdCP v2.2.0)
         total_budget_amount = request.get_total_budget()
 
-        order_id = self.orders_manager.create_order(
-            order_name=order_name,
-            total_budget=total_budget_amount,
-            start_time=start_time,
-            end_time=end_time,
-            currency=order_currency,
-        )
+        # ── GAM MUTATION BOUNDARY starts AT create_order (#1637) ──────────────
+        # create_order() is the actual remote-mutation point. A failure raised from
+        # it is ambiguous: createOrders may have COMMITTED remotely before a timeout
+        # severed the response. Wrapping it here (not only the later stages) is what
+        # makes the retry protection real.
+        try:
+            order_id = self.orders_manager.create_order(
+                order_name=order_name,
+                total_budget=total_budget_amount,
+                start_time=start_time,
+                end_time=end_time,
+                currency=order_currency,
+            )
+        except AdapterIdempotencyUncertain:
+            # The PRE-create existence lookup inside create_order failed → the strict
+            # contract guarantees NO remote mutation happened yet. Re-raise unchanged so
+            # the buy stays in the automatic-retry path (finalizing; reconciler retries).
+            raise
+        except Exception as create_error:
+            # create_order raised AFTER possibly committing createOrders. Attempt a
+            # recovery lookup by the DETERMINISTIC name to disambiguate.
+            try:
+                recovered_order_id = self.orders_manager.find_order_by_name(order_name)
+            except Exception as lookup_error:
+                # Lookup itself failed → we cannot prove the order's absence, and a remote
+                # order MAY exist. Surface AdapterPostMutationIncomplete (NOT
+                # AdapterIdempotencyUncertain, whose contract falsely asserts no mutation).
+                raise AdapterPostMutationIncomplete(
+                    f"GAM order create for '{order_name}' failed ({create_error}) and the "
+                    f"recovery lookup also failed ({lookup_error}); remote state is unknown."
+                ) from create_error
+            if recovered_order_id is not None:
+                # The order exists → createOrders DID commit before the failure. Recover
+                # its id and continue into the post-mutation finalizer.
+                order_id = recovered_order_id
+                self.log(f"✓ Recovered GAM Order ID after create failure: {order_id}")
+            else:
+                # Lookup succeeded and found nothing → provably pre-mutation. Re-raise the
+                # original error so it becomes a plain, retryable failure.
+                raise
 
         self.log(f"✓ Created GAM Order ID: {order_id}")
 

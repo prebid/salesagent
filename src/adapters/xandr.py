@@ -479,6 +479,7 @@ class XandrAdapter(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        idempotency_key: str | None = None,
     ) -> CreateMediaBuyResponse:
         """Create insertion order and line items in Xandr."""
         if self._requires_manual_approval("create_media_buy"):

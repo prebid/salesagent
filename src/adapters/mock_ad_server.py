@@ -524,6 +524,7 @@ class MockAdServer(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        idempotency_key: str | None = None,
     ) -> CreateMediaBuyResponse:
         """Simulates the creation of a media buy using GAM-like templates.
 

@@ -133,6 +133,7 @@ class TritonDigital(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict[str, Any]] | None = None,
+        idempotency_key: str | None = None,
     ) -> CreateMediaBuyResponse:
         """Creates a new Campaign and Flights in the Triton TAP API."""
         # Log operation
