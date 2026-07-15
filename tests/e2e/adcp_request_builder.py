@@ -184,6 +184,10 @@ def build_sync_creatives_request(
         "dry_run": dry_run,
         "validation_mode": validation_mode,
         "delete_missing": delete_missing,
+        # AdCP 3.1.1 makes idempotency_key REQUIRED on the sync_creatives request.
+        # Mint a fresh pattern-valid key (16-255 chars, [A-Za-z0-9_.:-]) per call so
+        # distinct syncs never replay onto each other.
+        "idempotency_key": f"e2e-key-{uuid.uuid4().hex}",
     }
 
     if assignments:

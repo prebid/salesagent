@@ -200,7 +200,8 @@ class TestMCPToolRoundtripMinimal:
                         },
                         "assets": build_assets(image_spec("image", url="https://example.com/preview.jpg")),
                     }
-                ]
+                ],
+                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
             },
         )
 

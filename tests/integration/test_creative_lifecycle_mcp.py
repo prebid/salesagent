@@ -280,7 +280,9 @@ class TestCreativeLifecycleMCP:
         identity = self._make_identity(tenant_overrides={"approval_mode": "auto-approve"})
 
         # Call sync_creatives tool (uses default patch=False for full upsert)
-        response = core_sync_creatives_tool(creatives=sample_creatives, identity=identity)
+        response = core_sync_creatives_tool(
+            creatives=sample_creatives, idempotency_key=f"int-key-{uuid.uuid4().hex}", identity=identity
+        )
 
         # Verify response structure (AdCP-compliant domain response)
         assert isinstance(response, SyncCreativesResponse)
@@ -355,7 +357,9 @@ class TestCreativeLifecycleMCP:
         identity = self._make_identity()
 
         # Upsert with patch=False (default): full replacement
-        response = core_sync_creatives_tool(creatives=updated_creative_data, identity=identity)
+        response = core_sync_creatives_tool(
+            creatives=updated_creative_data, idempotency_key=f"int-key-{uuid.uuid4().hex}", identity=identity
+        )
 
         # Verify response (domain response has creatives list, not summary/results)
         assert len(response.creatives) == 1
@@ -391,6 +395,7 @@ class TestCreativeLifecycleMCP:
         response = core_sync_creatives_tool(
             creatives=creative_data,
             assignments={creative_id: ["package_1", "package_2"]},
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
             identity=identity,
         )
 
@@ -423,6 +428,7 @@ class TestCreativeLifecycleMCP:
         response = core_sync_creatives_tool(
             creatives=creative_data,
             assignments={creative_id: ["package_buyer_ref"]},
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
             identity=identity,
         )
 
@@ -459,7 +465,9 @@ class TestCreativeLifecycleMCP:
 
         identity = self._make_identity()
 
-        response = core_sync_creatives_tool(creatives=invalid_creatives, identity=identity)
+        response = core_sync_creatives_tool(
+            creatives=invalid_creatives, idempotency_key=f"int-key-{uuid.uuid4().hex}", identity=identity
+        )
 
         # Should sync valid creative but fail on invalid one
         # Domain response has creatives list with action field
@@ -886,8 +894,12 @@ class TestCreativeLifecycleMCP:
 
         from src.core.exceptions import AdCPAuthenticationError
 
+        # Supply a valid idempotency_key so the call exercises the auth path, not the
+        # 3.1.1 required-key validation that now precedes it.
         with pytest.raises((ToolError, ValueError, RuntimeError, AdCPAuthenticationError)):
-            core_sync_creatives_tool(creatives=sample_creatives, ctx=mock_context)
+            core_sync_creatives_tool(
+                creatives=sample_creatives, idempotency_key=f"int-key-{uuid.uuid4().hex}", ctx=mock_context
+            )
 
     def test_list_creatives_authentication_optional(self, mock_context):
         """Test list_creatives authentication behavior."""
@@ -918,7 +930,9 @@ class TestCreativeLifecycleMCP:
         identity = self._make_identity(tenant_overrides={"approval_mode": "auto-approve"})
 
         # The function works with tenant_id and approval_mode
-        response = core_sync_creatives_tool(creatives=sample_creatives, identity=identity)
+        response = core_sync_creatives_tool(
+            creatives=sample_creatives, idempotency_key=f"int-key-{uuid.uuid4().hex}", identity=identity
+        )
         assert isinstance(response, SyncCreativesResponse)
 
     def test_list_creatives_empty_results(self):
@@ -992,7 +1006,9 @@ class TestCreativeLifecycleMCP:
         core_sync_creatives_tool, _ = self._import_mcp_tools()
 
         identity = self._make_identity(tenant_overrides={"approval_mode": "require-human"})
-        sync_response = core_sync_creatives_tool(creatives=sample_creatives, identity=identity)
+        sync_response = core_sync_creatives_tool(
+            creatives=sample_creatives, idempotency_key=f"int-key-{uuid.uuid4().hex}", identity=identity
+        )
         assert len(sync_response.creatives) == 3
 
         # Update creatives in database to have platform_creative_id

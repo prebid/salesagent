@@ -168,13 +168,17 @@ class TestMCPContextDirectCalls:
 
             mcp_identity = env.identity_for(Transport.MCP)
             mock_ctx = MagicMock(spec=Context)
-            mock_ctx.get_state = AsyncMock(return_value=mcp_identity)
+            # sync_accounts reads two ctx state keys: "identity" and (for the 3.1.1
+            # idempotency payload-hash) "raw_wire_payload". Mock per key so the replay
+            # probe receives None (no wire payload) rather than the identity object.
+            mock_ctx.get_state = AsyncMock(side_effect=lambda key: mcp_identity if key == "identity" else None)
 
             tool_result = asyncio.run(
                 sync_accounts(
                     accounts=[{"brand": {"domain": "ctx-sync.com"}, "operator": "ctx-sync.com", "billing": "operator"}],
                     ctx=mock_ctx,
                     context=context_obj,
+                    idempotency_key="test-key-sync-accounts-mcp-01",
                 )
             )
             response = SyncAccountsResponse(**tool_result.structured_content)

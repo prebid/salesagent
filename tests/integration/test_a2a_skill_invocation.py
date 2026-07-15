@@ -943,7 +943,8 @@ class TestA2ASkillInvocation:
                         "format_id": "display_300x250",
                         "assets": build_assets(image_spec("asset_1", url="https://example.com/creative.jpg")),
                     }
-                ]
+                ],
+                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
             }
             message = create_a2a_message_with_skill("sync_creatives", skill_params)
             params = SendMessageRequest(message=message)

@@ -665,6 +665,7 @@ class TestGetMediaBuysResponseFields:
                     }
                 ],
                 assignments={"c_approval_test": [package_id]},
+                idempotency_key=f"int-key-{uuid.uuid4().hex}",
                 identity=mb_identity,
             )
 
