@@ -1050,6 +1050,19 @@ class IdempotencyAttempt(Base):
         comment="Tool that produced the cached success (observability only — NOT part of the unique scope)",
     )
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Two-phase reservation lifecycle: a row is INSERTed 'in_flight' (envelope
+    # NULL) in its own committed transaction BEFORE any side effect — the unique
+    # index makes that INSERT first-insert-wins — then flipped to 'completed'
+    # (envelope populated) in the SAME transaction as the guarded write. The read
+    # path (find_by_key) filters status='completed', so an in-flight reservation
+    # never replays; a handler failure releases (DELETEs) the row so errors are
+    # never cached.
+    status: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        server_default="completed",
+        comment="Reservation lifecycle: 'in_flight' (reserved, no response yet) or 'completed' (verbatim success cached)",
+    )
     payload_hash: Mapped[str | None] = mapped_column(
         String(64),
         nullable=True,
@@ -1058,14 +1071,15 @@ class IdempotencyAttempt(Base):
     # Bare JSONType (no model=) is deliberate: the envelope must replay
     # byte-for-byte, and typed coercion on read could rewrite it. The
     # {"status", "response"} shape is written by
-    # IdempotencyAttemptRepository.record_success and read by
+    # IdempotencyAttemptRepository.complete and read by
     # _replay_cached_success — do not migrate to a typed model in a
     # "legacy JSONType" sweep without confirming coercion preserves
-    # verbatim fidelity.
-    response_envelope: Mapped[dict] = mapped_column(
+    # verbatim fidelity. NULLABLE: an in-flight reservation has no response
+    # envelope yet; it is populated when the reservation flips to 'completed'.
+    response_envelope: Mapped[dict | None] = mapped_column(
         JSONType,
-        nullable=False,
-        comment="Verbatim original success response envelope; returned unchanged on replay (marked replayed=true)",
+        nullable=True,
+        comment="Verbatim original success response envelope; NULL while in_flight, populated on completion; returned unchanged on replay (marked replayed=true)",
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

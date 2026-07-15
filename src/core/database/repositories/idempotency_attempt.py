@@ -16,16 +16,51 @@ get_adcp_capabilities.adcp.idempotency.replay_ttl_seconds = 86400).
 
 from __future__ import annotations
 
+import math
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel
-from sqlalchemy import ColumnElement, delete, func, select
+from sqlalchemy import ColumnElement, delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import InstrumentedAttribute, Session
 
 from src.core.database.models import IdempotencyAttempt
 
 # Matches GetAdcpCapabilitiesResponse.adcp.idempotency.replay_ttl_seconds (86400 = 24h).
 DEFAULT_REPLAY_TTL = timedelta(seconds=86400)
+
+# Reservation lifecycle states (IdempotencyAttempt.status).
+_STATUS_IN_FLIGHT = "in_flight"
+_STATUS_COMPLETED = "completed"
+
+# ReservationOutcome.kind values.
+RESERVED = "reserved"  # this caller won the reservation; proceed and complete()
+COMPLETED = "completed"  # a completed row already exists (replay or conflict — caller conflict-checks the hash)
+IN_FLIGHT = "in_flight"  # a live in-flight reservation holds the key; caller returns IDEMPOTENCY_IN_FLIGHT
+
+
+@dataclass(frozen=True)
+class ReservationOutcome:
+    """Result of a :meth:`IdempotencyAttemptRepository.reserve` attempt.
+
+    ``kind`` is one of :data:`RESERVED`, :data:`COMPLETED`, :data:`IN_FLIGHT`:
+
+    - ``RESERVED`` — the unique index accepted our in_flight INSERT (or we stole
+      an expired reservation). ``attempt_id`` identifies the row to
+      :meth:`complete` (on success) or :meth:`release` (on failure).
+    - ``COMPLETED`` — a completed row already holds the key. ``response_envelope``
+      + ``stored_hash`` let the caller distinguish a verbatim REPLAY (same hash)
+      from an ``IDEMPOTENCY_CONFLICT`` (different hash).
+    - ``IN_FLIGHT`` — a live (non-expired) in-flight reservation holds the key.
+      ``retry_after`` is the whole-second wait hint until the lease expires.
+    """
+
+    kind: str
+    attempt_id: str | None = None
+    response_envelope: dict | None = None
+    stored_hash: str | None = None
+    retry_after: int | None = None
 
 
 class IdempotencyAttemptRepository:
@@ -121,6 +156,9 @@ class IdempotencyAttemptRepository:
             select(IdempotencyAttempt)
             .where(
                 *self._scope_filter(principal_id, account_id, idempotency_key),
+                # Only COMPLETED reservations replay — an in_flight row carries a
+                # NULL envelope and is a live attempt, never a cached success.
+                IdempotencyAttempt.status == _STATUS_COMPLETED,
                 IdempotencyAttempt.expires_at > current,
             )
             .limit(1)
@@ -190,6 +228,10 @@ class IdempotencyAttemptRepository:
             account_id=account_id,
             tool_name=tool_name,
             idempotency_key=idempotency_key,
+            # Best-effort single-phase write (create_media_buy path): the row is
+            # inserted already COMPLETED. The two-phase reserve()/complete() path
+            # (sync_accounts) inserts in_flight first, then flips to completed.
+            status=_STATUS_COMPLETED,
             response_envelope={"status": protocol_status, "response": response_model.model_dump(mode="json")},
             payload_hash=payload_hash,
             expires_at=current + ttl,
@@ -197,6 +239,199 @@ class IdempotencyAttemptRepository:
         self._session.add(attempt)
         self._session.flush()
         return attempt
+
+    # ------------------------------------------------------------------
+    # Two-phase reservation (durable, first-insert-wins)
+    # ------------------------------------------------------------------
+
+    def reserve(
+        self,
+        *,
+        principal_id: str,
+        account_id: str | None,
+        tool_name: str,
+        idempotency_key: str,
+        payload_hash: str,
+        lease: timedelta,
+        now: datetime | None = None,
+    ) -> ReservationOutcome:
+        """Attempt to reserve the idempotency key by INSERTing an in_flight row.
+
+        The unique index on ``(tenant, principal, account, key)`` is the
+        first-insert-wins enforcer: the racer whose INSERT lands gets
+        :data:`RESERVED`; every other racer collides (``IntegrityError``) and is
+        classified against the row that won:
+
+        - completed row → :data:`COMPLETED` (caller conflict-checks ``stored_hash``
+          vs ``payload_hash`` to split a verbatim REPLAY from an
+          ``IDEMPOTENCY_CONFLICT``);
+        - live in_flight row → :data:`IN_FLIGHT` with a ``retry_after`` hint;
+        - EXPIRED in_flight row → a conditional UPDATE *steals* the lease
+          (``WHERE status='in_flight' AND expires_at<=now``); exactly one racer's
+          UPDATE matches and gets :data:`RESERVED`, the loser re-reads and
+          re-classifies.
+
+        The INSERT is wrapped in a SAVEPOINT so a collision rolls back only the
+        failed INSERT, leaving the session usable for the re-read. The CALLER is
+        responsible for committing the surrounding transaction so a
+        :data:`RESERVED` row is durable BEFORE any side effect (see
+        :func:`src.services.idempotency_replay.reserve_idempotent`).
+        """
+        current = now or datetime.now(UTC)
+        attempt = IdempotencyAttempt(
+            tenant_id=self._tenant_id,
+            principal_id=principal_id,
+            account_id=account_id,
+            tool_name=tool_name,
+            idempotency_key=idempotency_key,
+            status=_STATUS_IN_FLIGHT,
+            response_envelope=None,
+            payload_hash=payload_hash,
+            expires_at=current + lease,
+        )
+        try:
+            with self._session.begin_nested():
+                self._session.add(attempt)
+                self._session.flush()
+        except IntegrityError:
+            return self._classify_collision(
+                principal_id=principal_id,
+                account_id=account_id,
+                idempotency_key=idempotency_key,
+                payload_hash=payload_hash,
+                lease=lease,
+                now=current,
+            )
+        return ReservationOutcome(kind=RESERVED, attempt_id=attempt.attempt_id)
+
+    def _classify_collision(
+        self,
+        *,
+        principal_id: str,
+        account_id: str | None,
+        idempotency_key: str,
+        payload_hash: str,
+        lease: timedelta,
+        now: datetime,
+    ) -> ReservationOutcome:
+        """Classify a losing reserve() INSERT against the row that already holds the key."""
+        existing = self.find_including_expired(
+            principal_id=principal_id,
+            account_id=account_id,
+            idempotency_key=idempotency_key,
+        )
+        if existing is None:
+            # The winner's row vanished between our failed INSERT and this read
+            # (evicted / released). Retry the reservation once — the key is free.
+            return self.reserve(
+                principal_id=principal_id,
+                account_id=account_id,
+                tool_name=existing.tool_name if existing else idempotency_key,
+                idempotency_key=idempotency_key,
+                payload_hash=payload_hash,
+                lease=lease,
+                now=now,
+            )
+        if existing.status == _STATUS_COMPLETED:
+            return ReservationOutcome(
+                kind=COMPLETED,
+                attempt_id=existing.attempt_id,
+                response_envelope=existing.response_envelope,
+                stored_hash=existing.payload_hash,
+            )
+        # in_flight row: live → IN_FLIGHT; expired → attempt to steal the lease.
+        if existing.expires_at > now:
+            retry_after = max(1, math.ceil((existing.expires_at - now).total_seconds()))
+            return ReservationOutcome(kind=IN_FLIGHT, attempt_id=existing.attempt_id, retry_after=retry_after)
+        return self._steal_expired(existing.attempt_id, payload_hash=payload_hash, lease=lease, now=now)
+
+    def _steal_expired(
+        self,
+        attempt_id: str,
+        *,
+        payload_hash: str,
+        lease: timedelta,
+        now: datetime,
+    ) -> ReservationOutcome:
+        """Conditionally take over an EXPIRED in_flight reservation. Only one racer wins."""
+        stmt = (
+            update(IdempotencyAttempt)
+            .where(
+                IdempotencyAttempt.attempt_id == attempt_id,
+                IdempotencyAttempt.status == _STATUS_IN_FLIGHT,
+                IdempotencyAttempt.expires_at <= now,
+            )
+            .values(
+                status=_STATUS_IN_FLIGHT,
+                payload_hash=payload_hash,
+                response_envelope=None,
+                expires_at=now + lease,
+            )
+        )
+        result = self._session.execute(stmt)
+        if (getattr(result, "rowcount", 0) or 0) == 1:
+            # We stole the expired lease — reuse its row id for completion.
+            return ReservationOutcome(kind=RESERVED, attempt_id=attempt_id)
+        # Another racer stole it first (or it completed). Re-read + re-classify;
+        # the row is now a fresh in_flight owned by the winner (→ IN_FLIGHT) or
+        # completed (→ COMPLETED). It is no longer expired, so no infinite steal.
+        self._session.expire_all()
+        refreshed = self._session.get(IdempotencyAttempt, attempt_id)
+        if refreshed is None:
+            return ReservationOutcome(
+                kind=IN_FLIGHT, attempt_id=attempt_id, retry_after=max(1, math.ceil(lease.total_seconds()))
+            )
+        if refreshed.status == _STATUS_COMPLETED:
+            return ReservationOutcome(
+                kind=COMPLETED,
+                attempt_id=refreshed.attempt_id,
+                response_envelope=refreshed.response_envelope,
+                stored_hash=refreshed.payload_hash,
+            )
+        retry_after = max(1, math.ceil((refreshed.expires_at - now).total_seconds()))
+        return ReservationOutcome(kind=IN_FLIGHT, attempt_id=refreshed.attempt_id, retry_after=retry_after)
+
+    def complete(
+        self,
+        attempt_id: str,
+        *,
+        response_model: BaseModel,
+        protocol_status: str,
+        replay_ttl: timedelta = DEFAULT_REPLAY_TTL,
+        now: datetime | None = None,
+    ) -> None:
+        """Flip an owned in_flight reservation to completed, caching the verbatim response.
+
+        Serializes the model HERE (never in ``_impl`` — the no-model-dump-in-impl
+        guard). The UPDATE is gated ``status='in_flight'`` so a released/stolen
+        reservation is never resurrected. The CALLER runs this inside the SAME
+        transaction as the guarded side effect (e.g. the account write) so the
+        cached success and the side effect commit atomically.
+        """
+        current = now or datetime.now(UTC)
+        envelope = {"status": protocol_status, "response": response_model.model_dump(mode="json")}
+        stmt = (
+            update(IdempotencyAttempt)
+            .where(
+                IdempotencyAttempt.attempt_id == attempt_id,
+                IdempotencyAttempt.status == _STATUS_IN_FLIGHT,
+            )
+            .values(status=_STATUS_COMPLETED, response_envelope=envelope, expires_at=current + replay_ttl)
+        )
+        self._session.execute(stmt)
+
+    def release(self, attempt_id: str, *, now: datetime | None = None) -> None:
+        """Delete an owned in_flight reservation (handler failed — errors are NEVER cached).
+
+        Gated ``status='in_flight'`` so a row that raced to completion is never
+        deleted. A retry after release re-executes from scratch (correct: the
+        failed attempt produced no cached success).
+        """
+        stmt = delete(IdempotencyAttempt).where(
+            IdempotencyAttempt.attempt_id == attempt_id,
+            IdempotencyAttempt.status == _STATUS_IN_FLIGHT,
+        )
+        self._session.execute(stmt)
 
     def count_inserts_since(
         self,

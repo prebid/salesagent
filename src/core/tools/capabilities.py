@@ -91,6 +91,17 @@ def _filter_supported_protocols(req: GetAdcpCapabilitiesRequest | None) -> list[
 
 _DEFAULT_SPECIALISMS: tuple[AdcpSpecialism, ...] = (AdcpSpecialism.sales_non_guaranteed,)
 
+# Maximum lifetime of an in-flight idempotency reservation before it is
+# considered failed and stealable (L1/security.mdx rule 9). Advertised via
+# get_adcp_capabilities.adcp.idempotency.in_flight_max_seconds so buyer SDKs cap
+# their IDEMPOTENCY_IN_FLIGHT retry budget at this value rather than the far
+# wider replay_ttl. MUST be <= replay_ttl_seconds (a bound larger than the replay
+# window is vacuous) and > the slowest handler (else a live attempt is stolen).
+# 300s comfortably exceeds sync_accounts/create_media_buy handler latency and is
+# far below the 24h replay TTL.
+IN_FLIGHT_MAX_SECONDS = 300
+assert IN_FLIGHT_MAX_SECONDS <= int(DEFAULT_REPLAY_TTL.total_seconds()), "in_flight bound must not exceed replay TTL"
+
 
 def _build_adcp_block() -> Adcp:
     """Build the ``adcp`` version/idempotency envelope block for the response.
@@ -104,7 +115,14 @@ def _build_adcp_block() -> Adcp:
         major_versions=[MajorVersion(root=adcp_version.adcp_major_version())],
         supported_versions=[SupportedVersion(root=v) for v in adcp_version.supported_adcp_versions()],
         build_version=adcp_version.adcp_build_version(),
-        idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
+        idempotency=Idempotency(
+            supported=True,
+            replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds()),
+            # in_flight_max_seconds bounds the IDEMPOTENCY_IN_FLIGHT retry budget
+            # (mutation-only dedup: idempotency.supported=true covers mutating
+            # tools; read tools are not keyed).
+            in_flight_max_seconds=IN_FLIGHT_MAX_SECONDS,
+        ),
     )
 
 

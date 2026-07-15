@@ -31,13 +31,17 @@ from __future__ import annotations
 
 import logging
 import random
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from sqlalchemy.exc import IntegrityError
 
+from src.core.database.repositories.idempotency_attempt import COMPLETED, IN_FLIGHT, RESERVED
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractContextManager
+    from datetime import timedelta
 
     from pydantic import BaseModel
 
@@ -126,6 +130,11 @@ def lookup_cached_replay[T](
                 )
             return None
         raise_on_payload_conflict(cached.payload_hash, request_hash, details=conflict_details)
+        # An in-flight reservation carries a NULL envelope and is not replayable —
+        # treat it as a miss (the caller falls through to fresh execution or the
+        # degraded fallback). Completed rows always carry an envelope.
+        if cached.response_envelope is None:
+            return None
         return decode(cached.response_envelope)
 
 
@@ -205,3 +214,141 @@ def maybe_evict_expired(
             uow.idempotency_attempts.expire_old()
     except Exception:
         logger.warning("Best-effort idempotency cache eviction failed for tenant %s", tenant_id, exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# Durable two-phase reservation façade (reserve -> work -> complete/release)
+# ---------------------------------------------------------------------------
+# The reservation model replaces the best-effort probe/record split for tools
+# that need first-insert-wins durability (sync_accounts has no dup-booking
+# backstop, so a concurrent same-key pair must be arbitrated by the reservation
+# row itself, not by an idempotent side effect). create_media_buy keeps the
+# best-effort lookup/record primitives above — its media_buys.idempotency_key
+# partial unique index is the real dup-booking enforcer.
+
+
+@dataclass(frozen=True)
+class ReservationResult[T]:
+    """Outcome of :func:`reserve_idempotent`.
+
+    Exactly one field is set:
+
+    - ``replay`` — the decoded verbatim success of a prior completed attempt;
+      the caller returns it and does NO work.
+    - ``attempt_id`` — this caller won the reservation; it must do the work and
+      then :func:`complete_idempotent` (success) or :func:`release_idempotent`
+      (failure) the row.
+
+    A CONFLICT or IN_FLIGHT outcome does not reach here — it is raised as a typed
+    ``AdCPIdempotencyConflictError`` / ``AdCPIdempotencyInFlightError``.
+    """
+
+    replay: T | None = None
+    attempt_id: str | None = None
+
+
+def reserve_idempotent[T](
+    uow_factory: Callable[[str], AbstractContextManager[_IdempotencyUoWLike]],
+    tenant_id: str,
+    *,
+    principal_id: str,
+    account_id: str | None,
+    tool_name: str,
+    idempotency_key: str,
+    request_hash: str,
+    lease: timedelta,
+    decode: Callable[[dict[str, Any]], T | None],
+    conflict_details: dict[str, Any] | None = None,
+) -> ReservationResult[T]:
+    """Reserve the idempotency key in its OWN committed transaction, or replay/raise.
+
+    Runs :meth:`IdempotencyAttemptRepository.reserve` and commits the surrounding
+    UoW so a RESERVED in_flight row is DURABLE before the caller performs any side
+    effect — the durability the best-effort ``record_replayable_success`` path
+    cannot give. Outcomes:
+
+    - RESERVED → returns ``ReservationResult(attempt_id=...)`` (row committed).
+    - COMPLETED, same payload hash → decodes and returns
+      ``ReservationResult(replay=...)``.
+    - COMPLETED, different payload hash → raises ``AdCPIdempotencyConflictError``.
+    - IN_FLIGHT (a live same-key reservation) → raises
+      ``AdCPIdempotencyInFlightError`` with the lease-derived ``retry_after``.
+    """
+    with uow_factory(tenant_id) as uow:
+        assert uow.idempotency_attempts is not None
+        outcome = uow.idempotency_attempts.reserve(
+            principal_id=principal_id,
+            account_id=account_id,
+            tool_name=tool_name,
+            idempotency_key=idempotency_key,
+            payload_hash=request_hash,
+            lease=lease,
+        )
+        if outcome.kind == IN_FLIGHT:
+            from src.core.exceptions import AdCPIdempotencyInFlightError
+
+            raise AdCPIdempotencyInFlightError(
+                "A prior request with the same idempotency_key is still being processed",
+                retry_after=outcome.retry_after or 1,
+            )
+        if outcome.kind == COMPLETED:
+            # Same key, different canonical payload → CONFLICT (checked before decode).
+            raise_on_payload_conflict(outcome.stored_hash, request_hash, details=conflict_details)
+            decoded = decode(outcome.response_envelope) if outcome.response_envelope is not None else None
+            return ReservationResult(replay=decoded, attempt_id=None)
+        # RESERVED (fresh INSERT or stolen expired lease). Fall through so the UoW
+        # commits the in_flight row (and any steal UPDATE) on clean exit — the
+        # reservation is durable only after this commit.
+        assert outcome.kind == RESERVED
+        reserved_attempt_id = outcome.attempt_id
+    return ReservationResult(replay=None, attempt_id=reserved_attempt_id)
+
+
+def complete_idempotent(
+    uow: _IdempotencyUoWLike,
+    *,
+    attempt_id: str,
+    response_model: BaseModel,
+    protocol_status: str,
+) -> None:
+    """Flip the reserved row to completed on the SHARED work UoW (strict, atomic).
+
+    Called INSIDE the caller's work transaction (e.g. ``SyncAccountsUoW``) so the
+    cached success and the guarded side effect commit as one unit — unlike the
+    best-effort ``record_replayable_success``, a completion failure rolls the
+    whole atomic unit back. The model is serialized inside the repository
+    (no-model-dump-in-impl).
+    """
+    assert uow.idempotency_attempts is not None
+    uow.idempotency_attempts.complete(
+        attempt_id,
+        response_model=response_model,
+        protocol_status=protocol_status,
+    )
+
+
+def release_idempotent(
+    uow_factory: Callable[[str], AbstractContextManager[_IdempotencyUoWLike]],
+    tenant_id: str,
+    *,
+    attempt_id: str,
+) -> None:
+    """Delete the reserved in_flight row in its OWN transaction (handler failed).
+
+    Runs after the work transaction has rolled back, so it needs a fresh session.
+    Best-effort: a release failure only leaves an in_flight row that expires and
+    becomes stealable after its lease — it never caches an error. Errors are
+    never cached, so a retry after release re-executes.
+    """
+    try:
+        with uow_factory(tenant_id) as uow:
+            assert uow.idempotency_attempts is not None
+            uow.idempotency_attempts.release(attempt_id)
+    except Exception:
+        logger.warning(
+            "Best-effort idempotency reservation release failed for attempt %s (tenant %s) — "
+            "the in_flight row will expire and become stealable",
+            attempt_id,
+            tenant_id,
+            exc_info=True,
+        )
