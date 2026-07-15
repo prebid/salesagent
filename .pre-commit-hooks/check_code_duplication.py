@@ -11,19 +11,17 @@ Uses pylint R0801 (duplicate-code) with these filters:
 - Ignores imports, docstrings, comments, and function signatures
 - Minimum 6 similar lines to trigger (catches copy-paste-modify patterns)
 
-Uses shared ``count_ratchet.run_count_ratchet`` for the create/compare/auto-lower
-skeleton; this module owns the pylint count method + JSON baseline path only.
+Uses shared ``count_ratchet`` for the create/compare/auto-lower skeleton, CLI
+prelude, and JSON baseline codec; this module owns the pylint count method only.
 """
 
 from __future__ import annotations
 
-import argparse
 import subprocess
 import sys
-from collections.abc import Mapping
 from pathlib import Path
 
-from count_ratchet import read_json_baseline, run_count_ratchet, write_json_baseline
+from count_ratchet import json_baseline_io, parse_ratchet_args, resolve_ratchet_paths, run_count_ratchet
 
 BASELINE_FILE = ".duplication-baseline"
 SCOPES = ("src", "tests", "scripts")
@@ -56,21 +54,10 @@ def count_duplications(directory: str) -> int:
     return count
 
 
-def _read_baseline(baseline_file: Path) -> dict[str, int] | None:
-    return read_json_baseline(baseline_file, SCOPES)
-
-
-def _write_baseline(baseline_file: Path, counts: Mapping[str, int]) -> None:
-    write_json_baseline(baseline_file, counts, SCOPES)
-
-
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Check that code duplication count doesn't increase")
-    parser.add_argument("--update-baseline", action="store_true", help="Force update baseline to current counts")
-    args = parser.parse_args()
-
-    repo_root = Path(__file__).parent.parent
-    baseline_file = repo_root / BASELINE_FILE
+    args = parse_ratchet_args("Check that code duplication count doesn't increase")
+    _repo_root, _src_path, baseline_file = resolve_ratchet_paths(baseline_name=BASELINE_FILE)
+    read_baseline, write_baseline = json_baseline_io(SCOPES)
 
     print("Scanning for code duplication (pylint R0801)...")
     current = {
@@ -84,8 +71,8 @@ def main() -> int:
         current=current,
         baseline_file=baseline_file,
         update_baseline=args.update_baseline,
-        read_baseline=_read_baseline,
-        write_baseline=_write_baseline,
+        read_baseline=read_baseline,
+        write_baseline=write_baseline,
         increase_header="Code duplication increased! DRY is a non-negotiable invariant.",
         increase_hints=(
             "Extract repeated logic into shared helper functions.",

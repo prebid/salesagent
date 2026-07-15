@@ -11,21 +11,25 @@ This hook enforces a ratcheting approach to type checking:
   is blind to it)
 - Encourages gradual improvement of type safety
 
-Uses shared ``count_ratchet.run_count_ratchet`` for the create/compare/auto-lower
-skeleton; the origin/main raise guard stays here (baseline-file integrity, not
-a count method).
+Uses shared ``count_ratchet`` for the create/compare/auto-lower skeleton, CLI
+prelude, and int baseline codec; the origin/main raise guard stays here
+(baseline-file integrity, not a count method).
 """
 
 from __future__ import annotations
 
-import argparse
 import re
 import subprocess
 import sys
-from collections.abc import Mapping
 from pathlib import Path
 
-from count_ratchet import read_int_baseline, run_count_ratchet, write_int_baseline
+from count_ratchet import (
+    int_baseline_io,
+    parse_ratchet_args,
+    read_int_baseline,
+    resolve_ratchet_paths,
+    run_count_ratchet,
+)
 
 BASELINE_FILE = ".type-ignore-baseline"
 SRC_DIR = "src"
@@ -48,14 +52,14 @@ def read_main_baseline(repo_root: Path) -> int:
         text=True,
     )
     if result.returncode != 0:
-        print(f"❌ Cannot resolve {MAIN_REF}:{BASELINE_FILE}", file=sys.stderr)
-        print(f"   {result.stderr.strip()}", file=sys.stderr)
-        print("   Run: git fetch origin main", file=sys.stderr)
+        print(f"Cannot resolve {MAIN_REF}:{BASELINE_FILE}", file=sys.stderr)
+        print(f"  {result.stderr.strip()}", file=sys.stderr)
+        print("  Run: git fetch origin main", file=sys.stderr)
         raise SystemExit(1)
     try:
         return int(result.stdout.strip())
     except ValueError:
-        print(f"❌ {MAIN_REF}:{BASELINE_FILE} is not an integer: {result.stdout!r}", file=sys.stderr)
+        print(f"{MAIN_REF}:{BASELINE_FILE} is not an integer: {result.stdout!r}", file=sys.stderr)
         raise SystemExit(1) from None
 
 
@@ -67,14 +71,26 @@ def check_baseline_not_raised(repo_root: Path, local_baseline: int) -> int:
     """
     main_baseline = read_main_baseline(repo_root)
     if local_baseline > main_baseline:
-        print("❌ Baseline value raised vs origin/main!", file=sys.stderr)
-        print(f"   {MAIN_REF}: {main_baseline}", file=sys.stderr)
-        print(f"   Local:       {local_baseline} (+{local_baseline - main_baseline})", file=sys.stderr)
+        print("Baseline value raised vs origin/main!", file=sys.stderr)
+        print(f"  {MAIN_REF}: {main_baseline}", file=sys.stderr)
+        print(f"  Local:       {local_baseline} (+{local_baseline - main_baseline})", file=sys.stderr)
         print("", file=sys.stderr)
-        print("   The type-ignore baseline may only shrink. Remove the new", file=sys.stderr)
-        print("   # type: ignore comments instead of raising the baseline.", file=sys.stderr)
+        print("  The type-ignore baseline may only shrink. Remove the new", file=sys.stderr)
+        print("  # type: ignore comments instead of raising the baseline.", file=sys.stderr)
         return 1
     return 0
+
+
+def raise_probe_value(*, baseline_count: int | None, current_count: int, update_baseline: bool) -> int:
+    """Value probed against origin/main before any baseline write.
+
+    Create / ``--update-baseline`` probe the post-write value (``current``).
+    Normal compare probes ``min(baseline, current)`` so an auto-lower cannot
+    mask a committed raise, and a failed probe never writes.
+    """
+    if baseline_count is None or update_baseline:
+        return current_count
+    return min(baseline_count, current_count)
 
 
 def count_type_ignores(src_path: Path) -> int:
@@ -92,41 +108,28 @@ def count_type_ignores(src_path: Path) -> int:
     return count
 
 
-def _read_baseline(baseline_file: Path) -> dict[str, int] | None:
-    value = read_int_baseline(baseline_file)
-    if value is None:
-        return None
-    return {KEY: value}
-
-
-def _write_baseline(baseline_file: Path, counts: Mapping[str, int]) -> None:
-    write_int_baseline(baseline_file, int(counts[KEY]))
-
-
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Check that # type: ignore count doesn't increase")
-    parser.add_argument("--update-baseline", action="store_true", help="Force update baseline to current count")
-    args = parser.parse_args()
-
-    repo_root = Path(__file__).parent.parent
-    src_path = repo_root / SRC_DIR
-    baseline_file = repo_root / BASELINE_FILE
-
-    if not src_path.exists():
-        print(f"Error: {SRC_DIR}/ directory not found", file=sys.stderr)
-        return 1
+    args = parse_ratchet_args("Check that # type: ignore count doesn't increase")
+    repo_root, src_path, baseline_file = resolve_ratchet_paths(baseline_name=BASELINE_FILE)
+    read_baseline, write_baseline = int_baseline_io(KEY)
 
     current_count = count_type_ignores(src_path)
     baseline_count = read_int_baseline(baseline_file)
 
     # The committed baseline VALUE may only shrink relative to origin/main —
     # checked on every run so a raised baseline can never ride through green.
-    # When creating/updating, use the post-write value; otherwise the lesser of
-    # committed baseline and live count (auto-lower path).
-    raise_probe = (
-        current_count if baseline_count is None or args.update_baseline else min(baseline_count, current_count)
-    )
-    if check_baseline_not_raised(repo_root, raise_probe) != 0:
+    # Runs *before* any write (create / --update-baseline / auto-lower).
+    if (
+        check_baseline_not_raised(
+            repo_root,
+            raise_probe_value(
+                baseline_count=baseline_count,
+                current_count=current_count,
+                update_baseline=args.update_baseline,
+            ),
+        )
+        != 0
+    ):
         return 1
 
     return run_count_ratchet(
@@ -134,12 +137,12 @@ def main() -> int:
         current={KEY: current_count},
         baseline_file=baseline_file,
         update_baseline=args.update_baseline,
-        read_baseline=_read_baseline,
-        write_baseline=_write_baseline,
-        increase_header="❌ Type ignore count increased!",
+        read_baseline=read_baseline,
+        write_baseline=write_baseline,
+        increase_header="Type ignore count increased!",
         increase_hints=(
-            "   Fix the type errors instead of adding # type: ignore comments.",
-            "   Run: mypy src/your_file.py --config-file=mypy.ini",
+            "Fix the type errors instead of adding # type: ignore comments.",
+            "Run: mypy src/your_file.py --config-file=mypy.ini",
         ),
         format_key=lambda _key: "type: ignore",
     )
