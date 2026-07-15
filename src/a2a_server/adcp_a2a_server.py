@@ -1815,9 +1815,17 @@ class AdCPRequestHandler(RequestHandler):
         with adcp_validation_boundary(context="sync_creatives request"):
             creatives = []
             for c in parameters["creatives"]:
-                if isinstance(c, dict) and "format_id" in c:
-                    c = {**c, "format_id": upgrade_legacy_format_id(c["format_id"])}
-                creatives.append(CreativeAsset(**c) if isinstance(c, dict) else c)
+                if isinstance(c, dict):
+                    # Mirror the impl's normalization (_sync.py ~L172): `assets` is a
+                    # REQUIRED CreativeAsset field, but a static creative may legitimately
+                    # omit it — the impl defaults it to {}. Do the same here so the A2A
+                    # boundary does not reject creatives the impl would have accepted.
+                    c = {**c, "assets": c.get("assets", {})}
+                    if "format_id" in c:
+                        c = {**c, "format_id": upgrade_legacy_format_id(c["format_id"])}
+                    creatives.append(CreativeAsset(**c))
+                else:
+                    creatives.append(c)
 
             ctx_param = parameters.get("context")
             context = ContextObject(**ctx_param) if isinstance(ctx_param, dict) else ctx_param

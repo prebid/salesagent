@@ -204,10 +204,15 @@ class CreativeSyncEnv(IntegrationEnv):
     def call_a2a(self, **kwargs: Any) -> SyncCreativesResponse:
         """Call sync_creatives_raw (A2A wrapper) with real DB.
 
-        Note: uses _raw() path instead of _run_a2a_handler because the real
-        A2A handler's _handle_sync_creatives_skill constructs CreativeAsset
-        from raw dicts, which fails validation (assets field required).
-        That handler bug needs a separate fix.
+        Note: uses the _raw() path instead of _run_a2a_handler. Routing through the real
+        A2A handler surfaces a genuine, broad divergence between the A2A boundary and the
+        shared impl — the handler constructs CreativeAsset UPFRONT (whole-request
+        VALIDATION_ERROR with spec-formatted messages), whereas the impl validates
+        per-creative (lenient, raw pydantic messages), and the generative build/preview
+        wire round-trip diverges (build_creative not invoked; the no-url/no-preview path
+        yields 'created' instead of 'failed'). Reconciling those is out of scope here and
+        is reported as a follow-up (#1546); the raw path keeps A2A behaviorally aligned
+        with the impl in the meantime.
         """
         from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
 
