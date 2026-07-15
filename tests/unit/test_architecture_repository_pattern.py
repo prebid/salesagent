@@ -499,9 +499,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     # tests/admin/test_workflows_blueprint.py
     ("tests/admin/test_workflows_blueprint.py", "test_tenant"),
     ("tests/admin/test_workflows_blueprint.py", "_create_context_and_step"),
-    # #1637 exactly-once tests: ONE session-owning seeding helper (crash-artifact
-    # platform ids); tests themselves never touch sessions. FIXME(#1637): factory.
-    ("tests/integration/test_approval_crash_recovery.py", "_seed_platform_order_id"),
     # ── tests/e2e/ — pre-existing violations from e2e lifecycle test ──
     # FIXME(salesagent-e2e-admin-factories): migrate e2e seed helpers to factories.
     ("tests/e2e/test_gam_lifecycle.py", "_seed_lifecycle_test_data"),
@@ -738,21 +735,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
         "test_two_concurrent_updates_same_token_one_wins_one_conflicts",
     ),
     ("tests/integration/test_media_buy_status_scheduler.py", "_get_media_buy_revision"),
-    # #1637 exactly-once lease-protocol suite: DB access is consolidated into these
-    # session-owning module helpers (crash windows / ownership races need INDEPENDENT
-    # sessions the single-session harness cannot provide); the tests themselves never
-    # open sessions. One entry per helper, not per test. FIXME(#1637).
-    ("tests/integration/test_approval_crash_recovery.py", "_resume"),
-    ("tests/integration/test_approval_crash_recovery.py", "_finalize_approval"),
-    ("tests/integration/test_approval_crash_recovery.py", "_buy_snapshot"),
-    ("tests/integration/test_approval_crash_recovery.py", "_step_snapshot"),
-    ("tests/integration/test_approval_crash_recovery.py", "_recoverable_ids"),
-    ("tests/integration/test_approval_crash_recovery.py", "_claim_expired"),
-    ("tests/integration/test_approval_crash_recovery.py", "_expire_lease_now"),
-    ("tests/integration/test_approval_crash_recovery.py", "_clear_recovery_and_marker"),
-    ("tests/integration/test_approval_crash_recovery.py", "_seed_platform_order_id"),
-    ("tests/integration/test_approval_crash_recovery.py", "_package_configs"),
-    ("tests/integration/test_approval_crash_recovery.py", "_try_reapproval_claim"),
     ("tests/e2e/test_gam_lifecycle.py", "_persist_media_buy"),
     ("tests/e2e/test_gam_lifecycle.py", "_seed_lifecycle_test_data"),
     ("tests/helpers/creative_test_helpers.py", "assert_stored_creative_assets"),

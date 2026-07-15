@@ -16,8 +16,9 @@ Protocol under test (media_buy_completion.py + MediaBuyRepository lease seams):
   is fenced against a possibly-still-alive prior owner (lease absent, or expired
   beyond the abandonment grace).
 
-DB access is consolidated in the module helpers below (one guard-allowlist entry per
-helper instead of one per test) — tests themselves never open sessions.
+DB access is consolidated in the module helpers below, which go through the production
+lease API / repositories over independent ``MediaBuyUoW`` sessions — no raw
+``get_db_session``/``session.add``, so none carries a repository-guard allowlist entry.
 """
 
 import datetime
@@ -36,8 +37,7 @@ from src.admin.services.media_buy_completion import (
     resume_finalizing_media_buy,
 )
 from src.core.context_manager import ContextManager
-from src.core.database.database_session import get_db_session
-from src.core.database.models import MEDIA_BUY_RECOVERY_MANUAL, MediaPackage
+from src.core.database.models import MEDIA_BUY_RECOVERY_MANUAL
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.database.repositories.workflow import WorkflowRepository
 from tests.integration.conftest import seed_pending_buy_and_step
@@ -73,8 +73,9 @@ def _lease_expires_at(tenant_id: str, media_buy_id: str) -> datetime.datetime | 
         return buy.finalize_lease_expires_at
 
 
-def _reapproval_would_claim(tenant_id: str, media_buy_id: str, now_fn) -> bool:
-    """Probe the widened re-approval claim on the injected clock, rolled back either way."""
+def _reapproval_would_claim(tenant_id: str, media_buy_id: str, now_fn=None) -> bool:
+    """Probe the widened re-approval claim (optionally on an injected clock), rolled back
+    either way. ``now_fn=None`` uses wall-clock UTC."""
     captured: dict[str, bool] = {}
 
     class _Rollback(Exception):
@@ -95,28 +96,35 @@ def _reapproval_would_claim(tenant_id: str, media_buy_id: str, now_fn) -> bool:
     return captured["claimed"]
 
 
-# ── Session-owning module helpers (each carries ONE guard-allowlist entry) ──
+# ── UoW-owning module helpers — each opens an INDEPENDENT MediaBuyUoW session (what the
+# crash/ownership tests need) and goes through the production lease API / repositories.
+# No raw get_db_session, no session.add — so none carries a guard-allowlist entry. ──
 
 
-def _resume(tenant_id, media_buy_id, step_id, step_data, run_adapter, *, replayable=False, replay_probe=None):
-    """Drive the reconciler entry on a fresh session; returns (outcome, msg)."""
-    with get_db_session() as session:
+def _resume(
+    tenant_id, media_buy_id, step_id, step_data, run_adapter, *, replayable=False, replay_probe=None, now_fn=None
+):
+    """Drive the reconciler entry on its own UoW session; returns (outcome, msg)."""
+    with MediaBuyUoW(tenant_id) as uow:
         return resume_finalizing_media_buy(
-            session,
+            uow.session,
             tenant_id,
             media_buy_id=media_buy_id,
             step_id=step_id,
             step_data=step_data,
             run_adapter=run_adapter,
             adapter_supports_replay=replay_probe if replay_probe is not None else (lambda: replayable),
+            now_fn=now_fn,
         )
 
 
-def _finalize_approval(tenant_id, media_buy_id, step_id, step_data, run_adapter, *, expected_status="pending_approval"):
-    """Drive the real approval finalizer on a fresh session; returns (outcome, msg)."""
-    with get_db_session() as session:
+def _finalize_approval(
+    tenant_id, media_buy_id, step_id, step_data, run_adapter, *, expected_status="pending_approval", now_fn=None
+):
+    """Drive the real approval finalizer on its own UoW session; returns (outcome, msg)."""
+    with MediaBuyUoW(tenant_id) as uow:
         return finalize_media_buy_approval(
-            session,
+            uow.session,
             tenant_id,
             media_buy_id=media_buy_id,
             step_id=step_id,
@@ -126,13 +134,15 @@ def _finalize_approval(tenant_id, media_buy_id, step_id, step_data, run_adapter,
             expected_status=expected_status,
             approved_by="admin",
             approved_at=datetime.datetime.now(UTC),
+            now_fn=now_fn,
         )
 
 
 def _buy_snapshot(tenant_id: str, media_buy_id: str) -> SimpleNamespace:
     """Committed-state snapshot of the fields these tests assert on."""
-    with get_db_session() as session:
-        buy = MediaBuyRepository(session, tenant_id).get_by_id(media_buy_id)
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        buy = uow.media_buys.get_by_id(media_buy_id)
         assert buy is not None
         return SimpleNamespace(
             status=buy.status,
@@ -147,17 +157,18 @@ def _buy_snapshot(tenant_id: str, media_buy_id: str) -> SimpleNamespace:
 
 
 def _step_snapshot(tenant_id: str, step_id: str) -> SimpleNamespace:
-    with get_db_session() as session:
-        step = WorkflowRepository(session, tenant_id).get_by_step_id(step_id)
+    with MediaBuyUoW(tenant_id) as uow:
+        step = WorkflowRepository(uow.session, tenant_id).get_by_step_id(step_id)
         assert step is not None
         return SimpleNamespace(status=step.status, response_data=step.response_data)
 
 
-def _recoverable_ids() -> set[str]:
+def _recoverable_ids(tenant_id: str) -> set[str]:
     """The media_buy_ids the scheduler's reconciler scan would pick up right now."""
-    with get_db_session() as session:
+    with MediaBuyUoW(tenant_id) as uow:
         return {
-            b.media_buy_id for b in MediaBuyRepository.get_finalizing_recoverable(session, datetime.datetime.now(UTC))
+            b.media_buy_id
+            for b in MediaBuyRepository.get_finalizing_recoverable(uow.session, datetime.datetime.now(UTC))
         }
 
 
@@ -169,11 +180,14 @@ def _claim_expired(
     expired_by_seconds: int = 1,
     expected_status: str = "pending_approval",
 ) -> str:
-    """Model a crashed worker: claimed ``finalizing`` with an already-expired lease,
-    optionally past the adapter-invoked marker. ``expired_by_seconds`` controls HOW
-    long ago the lease expired (the abandonment-grace fencing pins need old leases)."""
-    with get_db_session() as session:
-        repo = MediaBuyRepository(session, tenant_id)
+    """Model a CRASHED worker: claimed ``finalizing`` with an already-expired lease,
+    optionally past the adapter-invoked marker, via the real production lease API. Only
+    the aging of the DEAD worker's lease is seeded directly (``expired_by_seconds`` back).
+    A LIVE worker is fenced GENUINELY — by a running heartbeat on an injected clock — in
+    ``test_heartbeat_fences_reapproval_of_live_worker_until_it_crashes``, not here."""
+    with MediaBuyUoW(tenant_id) as uow:
+        repo = uow.media_buys
+        assert repo is not None
         # Model the real approve claim: phase 1 always stamps the approval instant.
         claim = repo.claim_finalizing(
             media_buy_id,
@@ -187,71 +201,54 @@ def _claim_expired(
         if mark_invoked:
             assert repo.set_finalize_adapter_invoked(media_buy_id, lease_id)
         buy.finalize_lease_expires_at = datetime.datetime.now(UTC) - datetime.timedelta(seconds=expired_by_seconds)
-        session.commit()
     return lease_id
-
-
-def _expire_lease_now(tenant_id: str, media_buy_id: str, *, expired_by_seconds: int = 1) -> None:
-    """Force the buy's phase-2 lease to read as expired (models a slow/stale owner)."""
-    with get_db_session() as session:
-        buy = MediaBuyRepository(session, tenant_id).get_by_id(media_buy_id)
-        assert buy is not None
-        buy.finalize_lease_expires_at = datetime.datetime.now(UTC) - datetime.timedelta(seconds=expired_by_seconds)
-        session.commit()
 
 
 def _clear_recovery_and_marker(tenant_id: str, media_buy_id: str) -> None:
     """The documented operator remediation: clear BOTH flags after remote reconciliation."""
-    with get_db_session() as session:
-        buy = MediaBuyRepository(session, tenant_id).get_by_id(media_buy_id)
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        buy = uow.media_buys.get_by_id(media_buy_id)
         assert buy is not None
         buy.finalize_recovery_mode = None
         buy.finalize_adapter_invoked_at = None
-        session.commit()
 
 
 def _seed_platform_order_id(tenant_id: str, media_buy_id: str, package_id: str) -> None:
-    """Persist a stale platform order/line-item id pair on a package (crash artifact)."""
-    with get_db_session() as session:
-        session.add(
-            MediaPackage(
-                media_buy_id=media_buy_id,
-                package_id=package_id,
-                package_config={"platform_order_id": "stale_order", "platform_line_item_id": "stale_li"},
-            )
+    """Persist a stale platform order/line-item id pair on a package (crash artifact),
+    through the production ``create_package`` repository method (not raw session.add)."""
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        uow.media_buys.create_package(
+            media_buy_id,
+            package_id,
+            {"platform_order_id": "stale_order", "platform_line_item_id": "stale_li"},
         )
-        session.commit()
 
 
 def _package_configs(tenant_id: str, media_buy_id: str) -> list[dict]:
-    with get_db_session() as session:
-        return [dict(p.package_config or {}) for p in MediaBuyRepository(session, tenant_id).get_packages(media_buy_id)]
-
-
-def _try_reapproval_claim(tenant_id: str, media_buy_id: str) -> bool:
-    """Attempt the widened re-approval claim shape (rolled back either way)."""
-    with get_db_session() as session:
-        claim = MediaBuyRepository(session, tenant_id).claim_finalizing(
-            media_buy_id, expected_status=("pending_approval", "finalizing"), lease_ttl_seconds=3600
-        )
-        session.rollback()
-        return claim is not None
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        return [dict(p.package_config or {}) for p in uow.media_buys.get_packages(media_buy_id)]
 
 
 def _start_approval_worker(
-    tenant_id: str, media_buy_id: str, step_id: str, step_data: dict, run_adapter
+    tenant_id: str, media_buy_id: str, step_id: str, step_data: dict, run_adapter, *, now_fn=None
 ) -> tuple[threading.Thread, dict]:
     """Start a background thread driving the REAL approval finalizer on its own session.
 
     Shared by the ownership-race tests (blocked-worker / stale-worker / self-heal) so
-    the finalize call site lives once (DRY). Returns ``(thread, result)`` where
-    ``result`` receives ``outcome`` (or ``error``) when the worker finishes.
+    the finalize call site lives once (DRY). ``now_fn`` injects the fake clock the
+    stale-worker/self-heal tests advance to expire the lease (instead of row surgery).
+    Returns ``(thread, result)`` where ``result`` receives ``outcome`` (or ``error``).
     """
     result: dict = {}
 
     def worker() -> None:
         try:
-            result["outcome"] = _finalize_approval(tenant_id, media_buy_id, step_id, step_data, run_adapter)[0]
+            result["outcome"] = _finalize_approval(
+                tenant_id, media_buy_id, step_id, step_data, run_adapter, now_fn=now_fn
+            )[0]
         except BaseException as exc:  # noqa: BLE001 - surfaced to the main thread
             result["error"] = exc
 
@@ -336,7 +333,7 @@ class TestApprovalCrashRecovery:
         assert buy.status == "finalizing"
         assert buy.finalize_recovery_mode == MEDIA_BUY_RECOVERY_MANUAL
         # The scan the scheduler uses excludes flagged buys — no hot loop.
-        assert "mb_manual" not in _recoverable_ids()
+        assert "mb_manual" not in _recoverable_ids(tenant_id)
 
         # A second reconciler pass must not touch it (NOT_CLAIMED, still no adapter call).
         outcome2, _ = _resume(tenant_id, "mb_manual", step_id, step_data, adapter, replayable=False)
@@ -420,6 +417,7 @@ class TestApprovalCrashRecovery:
         step_id, step_data = self._seed_pending(
             context_manager, tenant_id, sample_principal["principal_id"], "mb_stale"
         )
+        clock = _FakeClock(datetime.datetime.now(UTC))
 
         adapter_entered = threading.Event()
         adapter_release = threading.Event()
@@ -429,13 +427,18 @@ class TestApprovalCrashRecovery:
             assert adapter_release.wait(timeout=30), "test deadlock: adapter never released"
             return True, None
 
-        t, worker_result = _start_approval_worker(tenant_id, "mb_stale", step_id, step_data, slow_adapter)
+        t, worker_result = _start_approval_worker(
+            tenant_id, "mb_stale", step_id, step_data, slow_adapter, now_fn=clock.now
+        )
         try:
             assert adapter_entered.wait(timeout=30)
-            # Force the worker's lease to expire while it is inside the adapter.
-            _expire_lease_now(tenant_id, "mb_stale")
+            # Advance the shared clock past the lease TTL so the worker's lease reads
+            # expired (its dormant heartbeat has not renewed) — no row surgery.
+            clock.advance(3601)
             # Reconciler takes over (marker is set; use a replay-capable adapter) and completes.
-            outcome, _ = _resume(tenant_id, "mb_stale", step_id, step_data, lambda: (True, None), replayable=True)
+            outcome, _ = _resume(
+                tenant_id, "mb_stale", step_id, step_data, lambda: (True, None), replayable=True, now_fn=clock.now
+            )
             assert outcome is FinalizeOutcome.APPLIED
             step_after = _step_snapshot(tenant_id, step_id)
             assert step_after.status == "completed"
@@ -492,6 +495,7 @@ class TestApprovalCrashRecovery:
         never stolen — clears the flag (self-heal)."""
         tenant_id = sample_tenant["tenant_id"]
         step_id, step_data = self._seed_pending(context_manager, tenant_id, sample_principal["principal_id"], "mb_heal")
+        clock = _FakeClock(datetime.datetime.now(UTC))
 
         adapter_entered = threading.Event()
         adapter_release = threading.Event()
@@ -501,13 +505,17 @@ class TestApprovalCrashRecovery:
             assert adapter_release.wait(timeout=30)
             return True, None
 
-        t, worker_result = _start_approval_worker(tenant_id, "mb_heal", step_id, step_data, slow_adapter)
+        t, worker_result = _start_approval_worker(
+            tenant_id, "mb_heal", step_id, step_data, slow_adapter, now_fn=clock.now
+        )
         try:
             assert adapter_entered.wait(timeout=30)
-            _expire_lease_now(tenant_id, "mb_heal")
+            clock.advance(3601)  # worker's lease reads expired (dormant heartbeat has not renewed)
             # Reconciler (non-replayable adapter, marker set) flags manual — WITHOUT
             # stealing the worker's lease id.
-            outcome, _ = _resume(tenant_id, "mb_heal", step_id, step_data, lambda: (True, None), replayable=False)
+            outcome, _ = _resume(
+                tenant_id, "mb_heal", step_id, step_data, lambda: (True, None), replayable=False, now_fn=clock.now
+            )
             assert outcome is FinalizeOutcome.RETRYING
             assert _buy_snapshot(tenant_id, "mb_heal").finalize_recovery_mode == MEDIA_BUY_RECOVERY_MANUAL
         finally:
@@ -531,6 +539,7 @@ class TestApprovalCrashRecovery:
         step_id, step_data = self._seed_pending(
             context_manager, tenant_id, sample_principal["principal_id"], "mb_unmanual"
         )
+        clock = _FakeClock(datetime.datetime.now(UTC))
 
         adapter_entered = threading.Event()
         adapter_release = threading.Event()
@@ -540,12 +549,16 @@ class TestApprovalCrashRecovery:
             assert adapter_release.wait(timeout=30)
             raise AdapterIdempotencyUncertain("lookup failed mid-flight")
 
-        t, worker_result = _start_approval_worker(tenant_id, "mb_unmanual", step_id, step_data, uncertain_after_release)
+        t, worker_result = _start_approval_worker(
+            tenant_id, "mb_unmanual", step_id, step_data, uncertain_after_release, now_fn=clock.now
+        )
         try:
             assert adapter_entered.wait(timeout=30)
-            _expire_lease_now(tenant_id, "mb_unmanual")
+            clock.advance(3601)  # worker's lease reads expired (dormant heartbeat has not renewed)
             # Reconciler flags manual (marker set, real adapter, expired lease).
-            outcome, _ = _resume(tenant_id, "mb_unmanual", step_id, step_data, lambda: (True, None), replayable=False)
+            outcome, _ = _resume(
+                tenant_id, "mb_unmanual", step_id, step_data, lambda: (True, None), replayable=False, now_fn=clock.now
+            )
             assert outcome is FinalizeOutcome.RETRYING
             assert _buy_snapshot(tenant_id, "mb_unmanual").finalize_recovery_mode == MEDIA_BUY_RECOVERY_MANUAL
         finally:
@@ -682,7 +695,7 @@ class TestApprovalCrashRecovery:
         assert buy.finalize_lease_id is None  # lease released by the owner itself
         assert _step_snapshot(tenant_id, step_id).status == "in_progress"  # not failed/terminal
         # Reconciler never re-touches it (manual_required excluded from the scan).
-        assert "mb_partial" not in _recoverable_ids()
+        assert "mb_partial" not in _recoverable_ids(tenant_id)
 
     def test_operator_reapproval_is_fenced_against_maybe_alive_workers(
         self, integration_db, sample_tenant, sample_principal, context_manager
@@ -705,7 +718,7 @@ class TestApprovalCrashRecovery:
         _claim_expired(tenant_id, "mb_fenced", mark_invoked=True, expired_by_seconds=1)
         outcome, _ = _resume(tenant_id, "mb_fenced", step_id, step_data, lambda: (True, None))
         assert outcome is FinalizeOutcome.RETRYING  # manual_required set, lease left in place
-        assert not _try_reapproval_claim(tenant_id, "mb_fenced"), (
+        assert not _reapproval_would_claim(tenant_id, "mb_fenced"), (
             "a freshly-expired lease may belong to a still-running worker — re-approval must be fenced"
         )
         # Re-approvability once the prior owner is GENUINELY gone (a live heartbeat vs a
@@ -741,7 +754,7 @@ class TestApprovalCrashRecovery:
         # (c) a plain in-flight finalizing buy (no manual flag) is never re-claimable.
         self._seed_pending(context_manager, tenant_id, sample_principal["principal_id"], "mb_inflight")
         _claim_expired(tenant_id, "mb_inflight", mark_invoked=False, expired_by_seconds=-3600)  # unexpired
-        assert not _try_reapproval_claim(tenant_id, "mb_inflight")
+        assert not _reapproval_would_claim(tenant_id, "mb_inflight")
 
     def test_heartbeat_fences_reapproval_of_live_worker_until_it_crashes(
         self, integration_db, sample_tenant, sample_principal, context_manager
