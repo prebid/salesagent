@@ -775,6 +775,8 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_approval_crash_recovery.py", "test_uncertain_clears_a_concurrent_manual_flag"),
     ("tests/integration/test_approval_crash_recovery.py", "test_documented_operator_remediation_recovers"),
     ("tests/integration/test_approval_crash_recovery.py", "test_capability_probe_failure_goes_manual_once"),
+    ("tests/integration/test_approval_crash_recovery.py", "test_post_mutation_failure_preserves_reconciliation_signal"),
+    ("tests/integration/test_approval_crash_recovery.py", "test_operator_reapproval_of_manual_required_buy"),
     ("tests/e2e/test_gam_lifecycle.py", "_persist_media_buy"),
     ("tests/e2e/test_gam_lifecycle.py", "_seed_lifecycle_test_data"),
     ("tests/helpers/creative_test_helpers.py", "assert_stored_creative_assets"),

@@ -567,6 +567,7 @@ class MediaBuyRepository:
         expected_revision: int | None = None,
         expected_status: str | tuple[str, ...] | None = None,
         expected_lease_id: str | None = None,
+        claim_guard: Callable[[MediaBuy], bool] | None = None,
         context: ContextObject | dict[str, Any] | None = None,
         bump: bool = True,
     ) -> MediaBuy | None:
@@ -608,6 +609,11 @@ class MediaBuyRepository:
         # normal race outcome — a reconciler (or a competing worker) took over the
         # finalization, so this caller must do NOTHING (no publish/fail/terminalize).
         if expected_lease_id is not None and media_buy.finalize_lease_id != expected_lease_id:
+            return None
+        # Post-lock predicate for claims whose eligibility depends on more than the
+        # status (e.g. re-approving a ``finalizing`` buy only when it is flagged
+        # manual_required). A failed guard is a lost claim, not an error. #1637.
+        if claim_guard is not None and not claim_guard(media_buy):
             return None
         if expected_revision is not None:
             from src.core.exceptions import media_buy_revision_conflict
@@ -766,7 +772,17 @@ class MediaBuyRepository:
             if approved_by is not None:
                 media_buy.approved_by = approved_by
 
-        claimed = self._locked_mutate_and_bump(media_buy_id, _apply, expected_status=expected_status)
+        claimed = self._locked_mutate_and_bump(
+            media_buy_id,
+            _apply,
+            expected_status=expected_status,
+            # Operator RE-APPROVAL gate (#1637): a buy already in ``finalizing`` may
+            # be re-claimed ONLY when it is parked manual_required (no live owner
+            # exists — the reconciler never touches flagged buys). An in-flight
+            # finalizing buy must never be re-claimed out from under its owner.
+            claim_guard=lambda mb: mb.status != MEDIA_BUY_FINALIZING_STATUS
+            or mb.finalize_recovery_mode == "manual_required",
+        )
         return (claimed, lease_id) if claimed is not None else None
 
     def acquire_finalize_lease(self, media_buy_id: str, *, lease_ttl_seconds: int) -> str | None:
@@ -835,14 +851,36 @@ class MediaBuyRepository:
                 attributes.flag_modified(pkg, "package_config")
         self._session.flush()
 
-    def set_finalize_recovery_manual(self, media_buy_id: str) -> bool:
-        """Mark a stranded buy ``manual_required`` (fail-closed disposition). #1637.
+    def set_finalize_recovery_manual(self, media_buy_id: str, *, lease_id: str | None = None) -> bool:
+        """Mark a ``finalizing`` buy ``manual_required`` (fail-closed disposition). #1637.
 
-        CAS: only while still ``finalizing`` with an EXPIRED/absent lease and an
-        automatic disposition — a live owner or an already-flagged buy is left
-        alone. Does NOT take the lease, so a slow-but-alive worker's eventual
-        publish CAS (which checks its own lease) still succeeds and self-heals.
+        Two callers, one invariant (the buy stays ``finalizing`` with the invoked
+        marker intact so the partial remote graph keeps its reconciliation signal):
+
+        - **Reconciler mode** (``lease_id=None``): only while the lease is
+          EXPIRED/absent and the disposition is automatic — a live owner or an
+          already-flagged buy is left alone. Does NOT take the lease, so a
+          slow-but-alive worker's eventual publish CAS still succeeds (self-heal).
+        - **Owner mode** (``lease_id`` given — the post-mutation handled-failure
+          path): CAS on the caller's own lease; sets the flag AND releases the
+          lease in the same mutate (the operation is over until an operator acts).
         """
+        if lease_id is not None:
+
+            def _apply(media_buy: MediaBuy) -> None:
+                media_buy.finalize_recovery_mode = "manual_required"
+                media_buy.finalize_lease_id = None
+                media_buy.finalize_lease_expires_at = None
+
+            flagged = self._locked_mutate_and_bump(
+                media_buy_id,
+                _apply,
+                expected_status=MEDIA_BUY_FINALIZING_STATUS,
+                expected_lease_id=lease_id,
+                bump=False,
+            )
+            return flagged is not None
+
         now = datetime.datetime.now(datetime.UTC)
         media_buy = self.get_by_id(media_buy_id, for_update=True, populate_existing=True)
         if media_buy is None or media_buy.status != MEDIA_BUY_FINALIZING_STATUS:

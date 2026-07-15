@@ -920,6 +920,22 @@ MEDIA_BUY_UNCONFIRMED_STATUSES: frozenset[str] = frozenset(
 MEDIA_BUY_FINALIZING_STATUS: str = "finalizing"
 
 
+def is_media_buy_approvable(media_buy: "MediaBuy") -> bool:
+    """True when an admin approve action may (re)claim this buy (#1637).
+
+    Two eligible shapes:
+    - ``pending_approval`` — the normal manual-approval queue.
+    - ``finalizing`` parked ``manual_required`` — operator RE-APPROVAL after
+      reconciling a partial remote graph. A plain in-flight ``finalizing`` buy is
+      NOT approvable (an owner holds its lease); ``claim_finalizing``'s guard
+      enforces the same invariant under the row lock, so this unlocked check is
+      UX-only (the CAS is authoritative).
+    """
+    return media_buy.status == "pending_approval" or (
+        media_buy.status == MEDIA_BUY_FINALIZING_STATUS and media_buy.finalize_recovery_mode == "manual_required"
+    )
+
+
 def is_media_buy_seller_confirmed(status: str | None) -> bool:
     """True once the seller has committed to running the buy (confirmed_at is set).
 

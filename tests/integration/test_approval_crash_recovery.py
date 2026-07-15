@@ -626,6 +626,111 @@ class TestApprovalCrashRecovery:
         assert outcome2 is FinalizeOutcome.NOT_CLAIMED
         assert adapter_calls == []
 
+    def test_post_mutation_failure_preserves_reconciliation_signal(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """A handled failure AFTER the remote order was created (creative upload /
+        order approval — ``AdapterPostMutationIncomplete``) must NOT become a
+        terminal ``failed`` that erases the finalization state: the buy stays
+        ``finalizing`` with the invoked marker INTACT, flagged ``manual_required``
+        (lease released), the step stays non-terminal, and the reconciler skips it."""
+        from src.adapters.base import AdapterPostMutationIncomplete
+
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_partial"
+        )
+
+        def post_mutation_failing_adapter():
+            raise AdapterPostMutationIncomplete("order created; creative upload failed")
+
+        with get_db_session() as session:
+            outcome, msg = finalize_media_buy_approval(
+                session,
+                tenant_id,
+                media_buy_id="mb_partial",
+                step_id=step_id,
+                step_data=step_data,
+                compute_target=lambda _mb: "active",
+                run_adapter=post_mutation_failing_adapter,
+                expected_status="pending_approval",
+                approved_by="admin",
+                approved_at=datetime.datetime.now(UTC),
+            )
+
+        assert outcome is FinalizeOutcome.RETRYING and "manual" in (msg or "")
+        with get_db_session() as session:
+            buy = MediaBuyRepository(session, tenant_id).get_by_id("mb_partial")
+            assert buy is not None and buy.status == "finalizing"  # NOT terminal failed
+            assert buy.finalize_recovery_mode == "manual_required"
+            assert buy.finalize_adapter_invoked_at is not None  # signal preserved
+            assert buy.finalize_lease_id is None  # lease released
+            step = WorkflowRepository(session, tenant_id).get_by_step_id(step_id)
+            assert step is not None and step.status == "in_progress"  # not failed/terminal
+            # Reconciler never re-touches it (manual_required excluded from the scan).
+            recoverable = MediaBuyRepository.get_finalizing_recoverable(session, datetime.datetime.now(UTC))
+            assert all(b.media_buy_id != "mb_partial" for b in recoverable)
+
+    def test_operator_reapproval_of_manual_required_buy(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """The PREFERRED remediation: re-approving a ``manual_required`` buy claims it
+        back (fresh lease, clean operation state) and completes — while a plain
+        in-flight ``finalizing`` buy can never be re-claimed (guard pin)."""
+
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_reapprove"
+        )
+        # Strand it manual: crashed post-marker on a real adapter.
+        self._claim_expired(tenant_id, "mb_reapprove", mark_invoked=True)
+        with get_db_session() as session:
+            outcome, _ = _resume(session, tenant_id, "mb_reapprove", step_id, step_data, lambda: (True, None))
+        assert outcome is FinalizeOutcome.RETRYING  # manual_required set
+
+        # Guard pin: a plain in-flight finalizing buy is NOT re-claimable.
+        step2_id, _ = self._seed_pending(context_manager, tenant_id, sample_principal["principal_id"], "mb_inflight")
+        with get_db_session() as session:
+            repo = MediaBuyRepository(session, tenant_id)
+            assert (
+                repo.claim_finalizing("mb_inflight", expected_status="pending_approval", lease_ttl_seconds=3600)
+                is not None
+            )
+            session.commit()
+        with get_db_session() as session:
+            repo = MediaBuyRepository(session, tenant_id)
+            assert (
+                repo.claim_finalizing(
+                    "mb_inflight",
+                    expected_status=("pending_approval", "finalizing"),
+                    lease_ttl_seconds=3600,
+                )
+                is None
+            ), "an in-flight finalizing buy (no manual flag) must never be re-claimed"
+
+        # The re-approval itself: the widened claim shape the approve routes use
+        # (finalize_pending_media_buy_approval passes exactly this expected_status)
+        # with a stub adapter — the seeded raw_request is too minimal for the real
+        # execute_approved_media_buy reconstruction, which is not what this pins.
+        with get_db_session() as session:
+            outcome2, _ = finalize_media_buy_approval(
+                session,
+                tenant_id,
+                media_buy_id="mb_reapprove",
+                step_id=step_id,
+                step_data=step_data,
+                compute_target=lambda _mb: "active",
+                run_adapter=lambda: (True, None),
+                expected_status=("pending_approval", "finalizing"),
+                approved_by="operator",
+                approved_at=datetime.datetime.now(UTC),
+            )
+        assert outcome2 is FinalizeOutcome.APPLIED
+        with get_db_session() as session:
+            buy = MediaBuyRepository(session, tenant_id).get_by_id("mb_reapprove")
+            assert buy is not None and buy.status == "active"
+            assert buy.finalize_recovery_mode is None and buy.finalize_adapter_invoked_at is None
+
     def test_happy_path_bumps_revision_once_and_stamps_confirmed_at(
         self, integration_db, sample_tenant, sample_principal, context_manager
     ):

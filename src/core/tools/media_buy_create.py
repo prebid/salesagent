@@ -100,7 +100,7 @@ def validate_agent_url(url: str | None) -> bool:
 
 
 # Tool-specific imports
-from src.adapters.base import AdapterIdempotencyUncertain
+from src.adapters.base import AdapterIdempotencyUncertain, AdapterPostMutationIncomplete
 from src.core import schemas
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
@@ -752,6 +752,12 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
     from src.core.config_loader import set_current_tenant
     from src.core.database.models import Tenant
 
+    # True once adapter.create_media_buy has SUCCEEDED — from that point every
+    # failure must surface as AdapterPostMutationIncomplete (a partial remote
+    # graph exists), never a plain (False, msg) that the finalizer would map to a
+    # terminal ``failed`` erasing the reconciliation signal. #1637.
+    remote_mutated = False
+
     try:
         # Load tenant and set context — single UoW for all reads
         with MediaBuyUoW(tenant_id) as uow:
@@ -1059,6 +1065,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             return False, error_msg
 
         logger.info(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}: {response.media_buy_id}")
+        remote_mutated = True
 
         # Persist adapter IDs to package_config.
         # platform_order_id is per-buy — always write to all packages so retroactive creative
@@ -1157,7 +1164,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         + "\n\nAll creatives must have dimensions (width/height) and a content URL."
                     )
                     logger.error(f"[APPROVAL] {error_msg}")
-                    return False, error_msg
+                    raise AdapterPostMutationIncomplete(error_msg)
 
                 if assets:
                     logger.info(f"[APPROVAL] Uploading {len(assets)} creatives to adapter")
@@ -1201,10 +1208,11 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         else:
                             logger.warning("[APPROVAL] Adapter does not support creative upload, skipping")
                     except Exception as creative_error:
-                        # Creative upload failed - this is critical for GAM orders
+                        # Creative upload failed AFTER the remote order was created —
+                        # a partial graph exists; must not become terminal failed. #1637.
                         error_msg = f"Failed to upload creatives to adapter: {str(creative_error)}"
                         logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
-                        return False, error_msg
+                        raise AdapterPostMutationIncomplete(error_msg) from creative_error
             else:
                 logger.info(f"[APPROVAL] No creative assignments found for {media_buy_id}, skipping creative upload")
 
@@ -1227,14 +1235,16 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         f"GAM still processing inventory forecasts."
                     )
                     logger.warning(f"[APPROVAL] {error_msg}")
-                    return False, error_msg
+                    raise AdapterPostMutationIncomplete(error_msg)
             else:
                 logger.info("[APPROVAL] Adapter does not support order approval, skipping")
+        except AdapterPostMutationIncomplete:
+            raise
         except Exception as approval_error:
-            # Approval exception - return failure
+            # Approval failed AFTER the remote order was created — partial graph. #1637.
             error_msg = f"Failed to approve order {response.media_buy_id}: {str(approval_error)}"
             logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
-            return False, error_msg
+            raise AdapterPostMutationIncomplete(error_msg) from approval_error
 
         # Adapter execution succeeded. Status finalization is the CALLER's job, not
         # this function's: the approval routes stamp approved_at/approved_by and set
@@ -1251,12 +1261,20 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
         # failure below — that would mark the buy permanently ``failed``. Re-raise so
         # the finalizer keeps the claim in ``finalizing`` for automatic retry.
         raise
+    except AdapterPostMutationIncomplete:
+        # #1637: remote mutations exist but the workflow did not complete — the
+        # finalizer preserves the manual-reconciliation state instead of failing.
+        raise
     except Exception as e:
         import traceback
 
         error_traceback = traceback.format_exc()
         error_msg = f"Adapter creation failed: {str(e)}"
         logger.error(f"[APPROVAL] {error_msg}\n{error_traceback}")
+        if remote_mutated:
+            # The remote order was already created (e.g. id persistence or a later
+            # stage blew up unexpectedly) — same partial-graph situation. #1637.
+            raise AdapterPostMutationIncomplete(error_msg) from e
         return False, error_msg
 
 

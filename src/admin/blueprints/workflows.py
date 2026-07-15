@@ -15,7 +15,7 @@ from src.admin.services.media_buy_completion import (
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
-from src.core.database.models import WORKFLOW_STEP_TERMINAL_STATUSES, Context
+from src.core.database.models import WORKFLOW_STEP_TERMINAL_STATUSES, Context, is_media_buy_approvable
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.workflow import WorkflowRepository
@@ -214,7 +214,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                     f"[APPROVAL] Media buy lookup: found={media_buy is not None}, status={media_buy.status if media_buy else 'N/A'}"
                 )
 
-                if media_buy and media_buy.status == "pending_approval":
+                if media_buy and is_media_buy_approvable(media_buy):
                     # Check if all required creatives are approved before executing adapter creation
                     from src.core.database.models import Creative as CreativeModel
                     from src.core.database.models import CreativeAssignment

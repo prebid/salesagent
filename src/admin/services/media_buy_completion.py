@@ -21,7 +21,7 @@ from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from sqlalchemy.orm import Session
 
-from src.adapters.base import AdapterIdempotencyUncertain
+from src.adapters.base import AdapterIdempotencyUncertain, AdapterPostMutationIncomplete
 from src.core.database.models import MEDIA_BUY_FINALIZING_STATUS
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
@@ -367,6 +367,26 @@ def _run_adapter_and_finalize(
         )
         session.commit()
         return FinalizeOutcome.RETRYING, str(exc)
+    except AdapterPostMutationIncomplete as exc:
+        # Remote mutations EXIST but the workflow did not complete (creative upload /
+        # order approval / id persistence failed after the order was created). This
+        # must NOT become a terminal ``failed`` that erases the finalization state —
+        # that would leave a dangling partial remote graph with no reconciliation
+        # signal. Keep the buy ``finalizing`` with the invoked marker intact and flag
+        # manual_required (owner CAS; releases the lease). #1637.
+        flagged = repo.set_finalize_recovery_manual(media_buy_id, lease_id=lease_id)
+        if not flagged:
+            session.rollback()
+            return FinalizeOutcome.NOT_CLAIMED, str(exc)
+        session.commit()
+        logger.error(
+            f"Media buy {media_buy_id} (tenant {tenant_id}, step {step_id}) created its remote order but a "
+            f"later stage failed: {exc}. Marked finalize_recovery_mode=manual_required — reconcile the remote "
+            f"state, then RE-APPROVE the buy (preferred) or clear BOTH flags to let the reconciler retry: "
+            f"UPDATE media_buys SET finalize_recovery_mode = NULL, finalize_adapter_invoked_at = NULL "
+            f"WHERE media_buy_id = '{media_buy_id}'."
+        )
+        return FinalizeOutcome.RETRYING, f"manual reconciliation required: {exc}"
     if not success:
         failed = repo.update_status_computed(
             media_buy_id,
@@ -571,7 +591,11 @@ def finalize_pending_media_buy_approval(
         step_data=step_data,
         compute_target=_flight_derived_status,
         run_adapter=lambda: execute_approved_media_buy(media_buy_id, tenant_id),
-        expected_status="pending_approval",
+        # pending_approval is the normal path; ``finalizing`` admits the operator
+        # RE-APPROVAL of a manual_required buy — claim_finalizing's guard rejects
+        # any finalizing buy that is NOT flagged manual, so an in-flight
+        # finalization can never be stolen. #1637.
+        expected_status=("pending_approval", MEDIA_BUY_FINALIZING_STATUS),
         approved_by=approved_by,
         approved_at=datetime.datetime.now(datetime.UTC),
     )

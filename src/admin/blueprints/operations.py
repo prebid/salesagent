@@ -357,7 +357,9 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 )
                 attributes.flag_modified(step, "comments")
 
-                if media_buy and media_buy.status == "pending_approval":
+                from src.core.database.models import is_media_buy_approvable
+
+                if media_buy and is_media_buy_approvable(media_buy):
                     # Check if all creatives are approved before moving to scheduled
                     from src.core.database.models import Creative, CreativeAssignment
 

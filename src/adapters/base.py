@@ -177,6 +177,20 @@ class AdapterIdempotencyUncertain(Exception):
     """
 
 
+class AdapterPostMutationIncomplete(Exception):
+    """Remote mutations HAVE occurred but the create workflow did not complete (#1637).
+
+    The inverse contract of :class:`AdapterIdempotencyUncertain`: raised when the
+    remote order was created (and possibly persisted) but a LATER stage failed —
+    creative upload, order approval, id persistence. The approval finalizer must
+    NOT map this to a terminal ``failed`` that erases the finalization state (that
+    would leave a dangling partial remote graph with no reconciliation signal):
+    instead the buy stays ``finalizing`` with the adapter-invoked marker intact and
+    ``finalize_recovery_mode='manual_required'``, surfacing the partial graph to an
+    operator exactly like a crash-after-marker stranding.
+    """
+
+
 class BaseConnectionConfig(BaseModel):
     """Base schema for adapter connection configuration."""
 
