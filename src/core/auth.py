@@ -261,12 +261,12 @@ def get_principal_from_context(
     # This distinguishes between "no auth" (OK) and "bad auth" (error or warning)
     if principal_id is None:
         if require_valid_token:
-            from src.core.exceptions import AdCPAuthenticationError
+            from src.core.exceptions import INVALID_TOKEN_MESSAGE, AdCPAuthenticationError
 
-            raise AdCPAuthenticationError(
-                f"Authentication token is invalid for tenant '{requested_tenant_id or 'any'}'. "
-                f"The token may be expired, revoked, or associated with a different tenant.",
-            )
+            # Redact the resolved tenant from the caller-facing message (it is an
+            # internal identifier); keep it in the server log only.
+            logger.warning("Invalid token presented for tenant '%s'", requested_tenant_id or "any")
+            raise AdCPAuthenticationError(INVALID_TOKEN_MESSAGE)
         else:
             # For discovery endpoints, treat invalid token like missing token
             logger.debug(

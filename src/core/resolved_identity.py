@@ -171,15 +171,13 @@ def resolve_identity(
 
         if principal_id is None:
             if require_valid_token:
-                from src.core.exceptions import AdCPAuthenticationError
+                from src.core.exceptions import INVALID_TOKEN_MESSAGE, AdCPAuthenticationError
 
                 # Keep the resolved tenant in server logs only — echoing it back to
                 # an unauthenticated (invalid-token) caller discloses an internal
                 # identifier (the tenant id/UUID in a host-routed deploy).
                 logger.warning("Invalid token presented for tenant %r", tenant_id or "any")
-                raise AdCPAuthenticationError(
-                    "Authentication token is invalid, expired, revoked, or not valid for this tenant.",
-                )
+                raise AdCPAuthenticationError(INVALID_TOKEN_MESSAGE)
             # For discovery endpoints, continue without auth
         elif not tenant_context and token_tenant:
             # Tenant discovered from token lookup (no headers matched)

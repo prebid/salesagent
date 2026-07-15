@@ -158,19 +158,25 @@ class TestResolveIdentity:
     @patch("src.core.resolved_identity.get_tenant_by_virtual_host", return_value=None)
     @patch("src.core.resolved_identity.get_tenant_by_subdomain")
     def test_invalid_token_error_does_not_disclose_tenant_id(
-        self, mock_get_subdomain, mock_get_vhost, mock_get_principal
+        self, mock_get_subdomain, mock_get_vhost, mock_get_principal, caplog
     ):
         """An invalid-token rejection must not echo the resolved tenant id back to
         the (unauthenticated) caller — the tenant is resolved from headers before
         the token is validated, so leaking it discloses an internal identifier
-        (the tenant UUID in a host-routed deploy)."""
-        from src.core.exceptions import AdCPAuthenticationError
+        (the tenant UUID in a host-routed deploy). The tenant is still captured
+        server-side (the compensating control), so add the WARNING assertion too."""
+        import logging
+
+        from src.core.exceptions import INVALID_TOKEN_MESSAGE, AdCPAuthenticationError
 
         tenant_uuid = "902c0725-ca84-44ca-be0b-c81d6f0f8689"
         mock_get_subdomain.return_value = {"tenant_id": tenant_uuid, "name": "Secret Tenant"}
         mock_get_principal.return_value = (None, None)  # token does not resolve
 
-        with pytest.raises(AdCPAuthenticationError) as exc:
+        with (
+            caplog.at_level(logging.WARNING, logger="src.core.resolved_identity"),
+            pytest.raises(AdCPAuthenticationError) as exc,
+        ):
             resolve_identity(
                 headers={"x-adcp-tenant": tenant_uuid, "x-adcp-auth": "wrong-token"},
                 auth_token="wrong-token",
@@ -180,8 +186,11 @@ class TestResolveIdentity:
 
         message = str(exc.value)
         assert tenant_uuid not in message, f"auth error leaked the tenant id: {message!r}"
-        # Still actionable, just not disclosing.
-        assert "invalid" in message.lower()
+        assert message == INVALID_TOKEN_MESSAGE  # the shared constant — one wording, no drift
+        # Compensating control: the tenant is still recorded in a server-side log.
+        assert any(tenant_uuid in r.getMessage() for r in caplog.records), (
+            "the rejected tenant should be logged server-side"
+        )
 
 
 class TestAuthConsolidation:

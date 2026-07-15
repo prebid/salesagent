@@ -440,6 +440,12 @@ class AdCPInvalidRequestError(AdCPValidationError):
 
 AUTH_REQUIRED_SUGGESTION = "Provide valid credentials (x-adcp-auth token)."
 
+# Buyer-facing message for a present-but-invalid token. Deliberately generic —
+# never interpolate the resolved tenant id (it discloses an internal identifier
+# to an unauthenticated caller); log the tenant server-side instead. Shared by
+# every raise site so the wording cannot drift.
+INVALID_TOKEN_MESSAGE = "Authentication token is invalid, expired, revoked, or not valid for this tenant."
+
 
 class AdCPAuthenticationError(AdCPError):
     """Missing or invalid authentication credentials (401).

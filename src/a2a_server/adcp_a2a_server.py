@@ -60,6 +60,7 @@ from src.core.database.models import PushNotificationConfig as DBPushNotificatio
 from src.core.database.repositories import PushNotificationConfigUoW
 from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import (
+    INVALID_TOKEN_MESSAGE,
     AdCPAuthenticationError,
     AdCPAuthRequiredError,
     AdCPCapabilityNotSupportedError,
@@ -284,7 +285,7 @@ class AdCPRequestHandler(RequestHandler):
 
         if require_valid_token:
             if not identity.principal_id:
-                raise InvalidRequestError(message="Authentication token is invalid or expired.")
+                raise InvalidRequestError(message=INVALID_TOKEN_MESSAGE)
 
             if not identity.tenant:
                 raise InvalidRequestError(
