@@ -14,7 +14,8 @@ import os
 import socket
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from threading import Thread
+from threading import Lock, Thread
+from typing import Any
 
 
 class WebhookCaptureHandler(BaseHTTPRequestHandler):
@@ -33,7 +34,14 @@ class WebhookCaptureHandler(BaseHTTPRequestHandler):
     # a client that opens a socket and then stalls mid-request cannot wedge the
     # serve_forever loop past teardown's bounded join. This is the idiomatic stdlib
     # lever — NOT HTTPServer.timeout, which only governs handle_request() polling.
-    timeout = 30
+    #
+    # MUST stay STRICTLY BELOW the teardown join budget (see run_webhook_capture_server:
+    # shutdown_signal.join(10) + serve_thread.join(10) = 20s). A handler stalled in a
+    # partial-body read aborts at this deadline — well inside that window — so it can
+    # never outlive the context and later append into the next test's shared list.
+    # (Teardown also force-closes accepted sockets, which unblocks such a read
+    # immediately; this timeout is the belt-and-suspenders fallback.)
+    timeout = 5
 
     def do_POST(self):
         """Handle POST requests (webhook notifications)."""
@@ -55,6 +63,45 @@ class WebhookCaptureHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         """Suppress HTTP server logs during tests."""
         pass
+
+
+class _ConnectionTrackingHTTPServer(HTTPServer):
+    """HTTPServer that remembers every accepted connection so teardown can force it
+    closed. Closing a stalled handler's socket from the teardown thread unblocks a
+    handler wedged in a partial-body ``rfile.read`` IMMEDIATELY, so no handler can
+    outlive the context and later mutate the shared capture list (the cross-test
+    contamination the bounded join alone could not prevent)."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._active_conns: set[socket.socket] = set()
+        self._conns_lock = Lock()
+
+    def get_request(self) -> tuple[socket.socket, Any]:
+        conn, addr = super().get_request()
+        with self._conns_lock:
+            self._active_conns.add(conn)
+        return conn, addr
+
+    def shutdown_request(self, request: Any) -> None:
+        with self._conns_lock:
+            self._active_conns.discard(request)
+        super().shutdown_request(request)
+
+    def close_active_connections(self) -> None:
+        """Shut down + close every still-open accepted connection.
+
+        ``shutdown(SHUT_RDWR)`` (not merely ``close``) is what forces a peer thread
+        blocked in ``recv`` to return, aborting a stalled handler at once.
+        """
+        with self._conns_lock:
+            conns = list(self._active_conns)
+            self._active_conns.clear()
+        for conn in conns:
+            with contextlib.suppress(OSError):
+                conn.shutdown(socket.SHUT_RDWR)
+            with contextlib.suppress(OSError):
+                conn.close()
 
 
 @contextlib.contextmanager
@@ -82,18 +129,19 @@ def run_webhook_capture_server(
     # of which handler subclass is used. Only set it when unset — never override an
     # explicit choice.
     if getattr(handler_class, "timeout", None) is None:
-        handler_class.timeout = 30  # type: ignore[attr-defined]
+        handler_class.timeout = 5  # type: ignore[attr-defined]
 
     # Bind 0.0.0.0 (all interfaces), not 127.0.0.1: the in-network runner reaches
     # this receiver by its compose network alias, so a loopback-only bind would be
     # unreachable from the server container. The callback host (below) is what
     # narrows reachability for loopback-only callers, not the listen address.
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(("0.0.0.0", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-
-    server = HTTPServer(("0.0.0.0", port), handler_class)
+    #
+    # Bind port 0 DIRECTLY on the server and read back the kernel-assigned port from
+    # server.server_address — no probe-socket close/rebind dance (which had a TOCTOU
+    # window where another process could grab the port between the probe close and the
+    # server bind).
+    server = _ConnectionTrackingHTTPServer(("0.0.0.0", 0), handler_class)
+    port = server.server_address[1]
     serve_thread = Thread(target=server.serve_forever, daemon=True)
     serve_thread.start()
 
@@ -113,6 +161,10 @@ def run_webhook_capture_server(
         # regardless — the daemon thread cannot outlive the test process.
         shutdown_signal = Thread(target=server.shutdown, daemon=True)
         shutdown_signal.start()
+        # Force-close any accepted connection so a handler stalled in a partial-body
+        # read aborts NOW (rather than waiting out its per-connection timeout), letting
+        # serve_forever observe the shutdown flag and exit inside the join window below.
+        server.close_active_connections()
         shutdown_signal.join(timeout=10)
         serve_thread.join(timeout=10)
         server.server_close()
