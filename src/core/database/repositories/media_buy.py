@@ -476,6 +476,78 @@ class MediaBuyRepository:
         return media_buy
 
     # ------------------------------------------------------------------
+    # Optional-concurrency revision (AdCP 3.1.1)
+    # ------------------------------------------------------------------
+
+    def lock_for_revision_check(
+        self,
+        media_buy_id: str,
+        *,
+        expected_revision: int | None,
+        context: ContextObject | dict[str, Any] | None = None,
+    ) -> MediaBuy:
+        """Lock a media buy FOR UPDATE and compare its revision atomically.
+
+        Issues ``SELECT ... FOR UPDATE`` inside the caller's transaction. The
+        row lock is held until the enclosing UoW commits, so the compare is
+        atomic with every subsequent write in the same transaction — no other
+        transaction can slip an increment in between. This is why we lock-then-
+        compare rather than a raw ``UPDATE ... WHERE revision = :expected``:
+        later re-fetches in the update path would otherwise read a stale value
+        from the identity map.
+
+        ``expected_revision=None`` is last-write-wins: the row is locked but the
+        revision is not compared (the buyer opted out of concurrency control).
+
+        Raises:
+            AdCPMediaBuyNotFoundError: media buy not found in this tenant.
+            AdCPConflictError: ``expected_revision`` does not match the stored
+                revision (concurrent modification). The envelope carries
+                ``details={"resource_id", "expected_version", "current_version"}``.
+        """
+        media_buy = self._session.scalars(
+            select(MediaBuy)
+            .where(
+                MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.media_buy_id == media_buy_id,
+            )
+            .with_for_update()
+        ).first()
+        if media_buy is None:
+            from src.core.exceptions import AdCPMediaBuyNotFoundError
+
+            raise AdCPMediaBuyNotFoundError(
+                f"Media buy '{media_buy_id}' not found",
+                suggestion="Verify the media_buy_id is correct and belongs to your account.",
+                context=context,
+            )
+        if expected_revision is not None and media_buy.revision != expected_revision:
+            from src.core.exceptions import AdCPConflictError
+
+            raise AdCPConflictError(
+                f"Media buy '{media_buy_id}' was modified concurrently: "
+                f"expected revision {expected_revision}, current revision {media_buy.revision}",
+                details={
+                    "resource_id": media_buy_id,
+                    "expected_version": expected_revision,
+                    "current_version": media_buy.revision,
+                },
+                suggestion="Re-read the media buy to get the current revision, then retry the update.",
+                context=context,
+            )
+        return media_buy
+
+    def increment_revision(self, media_buy: MediaBuy) -> int:
+        """Increment a locked media buy's revision and return the new value.
+
+        Must be called on a row previously locked via ``lock_for_revision_check``
+        in the same transaction, so the read-modify-write is race-free.
+        """
+        media_buy.revision += 1
+        self._session.flush()
+        return media_buy.revision
+
+    # ------------------------------------------------------------------
     # MediaPackage writes
     # ------------------------------------------------------------------
 

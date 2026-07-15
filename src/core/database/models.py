@@ -924,6 +924,11 @@ class MediaBuy(Base):
     is_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     account_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # AdCP 3.1.1 optional-concurrency counter. Starts at 1 on creation; every
+    # successful mutating update-media-buy increments it. The buyer echoes the
+    # last-read value on update and the server compares-and-increments under a
+    # row lock — a mismatch is an atomic CONFLICT (see MediaBuyRepository).
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     # Canonical hash of the request as hashed by the idempotency probe (see
     # src.core.idempotency_canonical). raw_request is NOT canonicalizable —
     # it carries injected package_ids and alias-dependent field names — so the
