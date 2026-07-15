@@ -6314,12 +6314,6 @@ mappings:
       upstream_refs: ["BR-UC-010-ext-e", "BR-RULE-043"]
       business_rules: []
       status: new
-    - adcp_scenario_id: "T-UC-010-ext-e-gap"
-      adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-010-ext-e", "BR-RULE-043"]
-      business_rules: []
-      status: new
     - adcp_scenario_id: "T-UC-010-channel-mapping"
       adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
       obligation_id: null

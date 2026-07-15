@@ -21,11 +21,34 @@ per the Error Verification Policy.
 
 from __future__ import annotations
 
+import json
 import re
 
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.generic._dispatch import dispatch_request
+
+# ── context echo helpers (BR-RULE-043 / POST-S9) ─────────────────────
+
+
+def _response_context(ctx: dict) -> object:
+    """The echoed context as a plain JSON value, read from the REAL wire body.
+
+    Prefers ``ctx['wire_response']`` (the serialized success body actually sent to
+    the buyer on MCP/A2A/REST) so the assertion catches a serialization regression,
+    not just the typed payload. Falls back to serializing the typed payload's
+    ``context`` when the transport did not stash a wire body.
+    """
+    wire = ctx.get("wire_response")
+    if isinstance(wire, dict) and "context" in wire:
+        return wire["context"]
+    resp = ctx.get("response")
+    assert resp is not None, f"Expected a capabilities response, got error: {ctx.get('error')!r}"
+    context = getattr(resp, "context", None)
+    if context is None:
+        return None
+    return context.model_dump(mode="json") if hasattr(context, "model_dump") else context
+
 
 # Release-precision wire pattern for negotiation pins (version-envelope.json).
 _RELEASE_PIN_PATTERN = r"^\d+\.\d+(-[a-zA-Z0-9.-]+)?$"
@@ -125,6 +148,59 @@ def when_call_capabilities_with_version_pin(ctx: dict, version: str) -> None:
 def when_call_capabilities_with_major_pin(ctx: dict, major: int) -> None:
     ctx["pinned_major"] = major
     dispatch_request(ctx, adcp_major_version=major)
+
+
+@given("the tenant has full capabilities configured")
+def given_tenant_full_capabilities(ctx: dict) -> None:
+    """The resolvable tenant exposes its full capabilities surface.
+
+    CapabilitiesEnv.setup_default_data() already seeds a tenant with an adapter,
+    so the capabilities response is fully populated. The @context scenarios only
+    grade context echo (opaque, capability-independent), so this records the intent
+    without further configuration.
+    """
+    ctx["tenant_full_capabilities"] = True
+
+
+def _dispatch_context(ctx: dict, ctx_json: str, default_transport: object) -> None:
+    """Dispatch get_adcp_capabilities with a context object.
+
+    Untagged @context scenarios (absent/nested/empty) are parametrized across the
+    wire transports, so ``ctx['transport']`` is already set and wins. The
+    transport-tagged scenarios (@mcp / @a2a) are NOT parametrized (pytest_generate_tests
+    skips them), so this fixes the transport from the step phrasing.
+    """
+    ctx.setdefault("transport", default_transport)
+    context = json.loads(ctx_json)
+    ctx["sent_context"] = context
+    dispatch_request(ctx, context=context)
+
+
+@when(parsers.re(r"the Buyer Agent calls get_adcp_capabilities MCP tool with context (?P<ctx_json>\{.*\})$"))
+def when_call_capabilities_with_context_mcp(ctx: dict, ctx_json: str) -> None:
+    from tests.harness.transport import Transport
+
+    _dispatch_context(ctx, ctx_json, Transport.MCP)
+
+
+@when(
+    parsers.re(
+        r"the Buyer Agent sends a get_adcp_capabilities skill request via A2A with context (?P<ctx_json>\{.*\})$"
+    )
+)
+def when_call_capabilities_with_context_a2a(ctx: dict, ctx_json: str) -> None:
+    from tests.harness.transport import Transport
+
+    _dispatch_context(ctx, ctx_json, Transport.A2A)
+
+
+@when("the Buyer Agent calls get_adcp_capabilities MCP tool without context")
+def when_call_capabilities_without_context(ctx: dict) -> None:
+    """Dispatch get_adcp_capabilities with NO context (absence must be echoed as absence)."""
+    # Record the omission so the paired Then step grades "absence echoed as absence",
+    # and forward no context kwarg — the request carries none.
+    ctx["sent_context"] = None
+    dispatch_request(ctx)
 
 
 @when("the Buyer Agent inspects the error details")
@@ -293,3 +369,26 @@ def then_details_verdict(ctx: dict, expected: str) -> None:
     assert ctx["details_verdict"] == expected, (
         f"Details at {ctx['boundary_point']!r} graded {ctx['details_verdict']!r}, expected {expected!r}"
     )
+
+
+# ── Then: context echo (BR-RULE-043 / POST-S9) ───────────────────────
+
+
+@then(parsers.re(r"the response context should equal (?P<ctx_json>\{.*\})$"))
+def then_response_context_equals(ctx: dict, ctx_json: str) -> None:
+    """The echoed context must equal the request context VERBATIM (opaque round-trip).
+
+    Graded on the real wire body so a serialization drop/mutation fails the scenario.
+    """
+    assert ctx.get("response") is not None, f"Expected a success response, got error: {ctx.get('error')!r}"
+    expected = json.loads(ctx_json)
+    actual = _response_context(ctx)
+    assert actual == expected, f"Echoed context {actual!r} != request context {expected!r}"
+
+
+@then("the response should not contain a context field")
+def then_response_no_context(ctx: dict) -> None:
+    """Context absence in the request must be echoed as absence (INV-2)."""
+    assert ctx.get("response") is not None, f"Expected a success response, got error: {ctx.get('error')!r}"
+    actual = _response_context(ctx)
+    assert actual is None, f"Expected no context on the response, got {actual!r}"

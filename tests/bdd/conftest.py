@@ -3459,7 +3459,11 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         # Remaining UC-010 scenarios (capabilities payload shape,
         # signing/idempotency bounds, ...) xfail fast here until wired.
         marker_names = {m.name for m in request.node.iter_markers()}
-        if marker_names & _UC010_VERSION_NEGOTIATION_WIRED:
+        # @context scenarios (BR-RULE-043 / POST-S9): the impl already echoes
+        # req.context unchanged and the MCP/A2A wrappers + the REST GET context=
+        # query param all forward it — CapabilitiesEnv grades the round-trip on
+        # every transport.
+        if marker_names & _UC010_VERSION_NEGOTIATION_WIRED or "context" in marker_names:
             from tests.harness.capabilities import CapabilitiesEnv
 
             # _db_scope_for: per-test integration_db for in-process transports;

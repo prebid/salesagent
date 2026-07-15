@@ -422,12 +422,31 @@ async def get_products(
 
 
 @router.get("/capabilities", dependencies=[Depends(_version_after_resolve)])
-async def get_capabilities(identity: ResolvedIdentity | None = resolve_auth):
-    """Get AdCP capabilities (auth-optional discovery skill)."""
-    # Unlike the MCP/A2A siblings, no context= is forwarded here: /capabilities is a GET
-    # with no request body, so a REST caller has no channel to supply context and the echo
-    # would be a guaranteed no-op. The omission is inherent to GET semantics, not a gap.
-    response = await capabilities_module.get_adcp_capabilities_raw(identity=identity)
+async def get_capabilities(
+    identity: ResolvedIdentity | None = resolve_auth,
+    context: str | None = None,
+):
+    """Get AdCP capabilities (auth-optional discovery skill).
+
+    ``/capabilities`` is a GET with no request body, but the buyer still has a
+    channel to supply the AdCP ``context`` object: a JSON-encoded ``context`` query
+    parameter. It is decoded here and forwarded to the shared impl, which echoes it
+    unchanged on the response (BR-RULE-043 / POST-S9). Malformed JSON is a
+    VALIDATION_ERROR (the context is opaque but must be a JSON object).
+    """
+    context_obj = None
+    if context is not None:
+        with adcp_validation_boundary(context="get_capabilities request"):
+            try:
+                decoded = json.loads(context)
+            except (ValueError, TypeError) as exc:
+                raise AdCPValidationError(
+                    "context query parameter must be a JSON-encoded object.",
+                    field="context",
+                    suggestion='Pass context as a URL-encoded JSON object, e.g. context={"session_id":"abc"}.',
+                ) from exc
+            context_obj = to_context_object(decoded)
+    response = await capabilities_module.get_adcp_capabilities_raw(identity=identity, context=context_obj)
     return response.model_dump(mode="json")
 
 

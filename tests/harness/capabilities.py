@@ -174,9 +174,16 @@ class CapabilitiesEnv(IntegrationEnv):
 
         The negotiation pin travels as query params on REST (there is no JSON
         payload on a GET), which is exactly what the api_v1 router dependency
-        validates.
+        validates. The AdCP ``context`` object has no scalar query representation,
+        so it is JSON-encoded into a single ``context`` query param — the encode
+        convention the api_v1 GET handler decodes (json.loads).
         """
-        return {k: v for k, v in kwargs.items() if v is not None}
+        import json
+
+        params = {k: v for k, v in kwargs.items() if v is not None}
+        if "context" in params and not isinstance(params["context"], str):
+            params["context"] = json.dumps(params["context"])
+        return params
 
     def parse_rest_response(self, data: dict[str, Any]) -> GetAdcpCapabilitiesResponse:
         """Parse REST JSON into GetAdcpCapabilitiesResponse."""
