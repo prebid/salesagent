@@ -109,6 +109,48 @@ class TestCheckUrlSsrf:
         assert "resolve" in error.lower() or "cannot" in error.lower()
 
 
+class TestSsrfCompletenessAlwaysBlocked:
+    """The metadata-tier additions: multicast, reserved, unspecified, CGNAT, and
+    IPv4-mapped IPv6 — blocked in EVERY environment, even allow_private=True."""
+
+    def _check(self, url, ip, *, allow_private=False):
+        with patch("src.core.security.url_validator._resolve_ips", return_value=[ip]):
+            return check_url_ssrf(url, allow_private=allow_private)
+
+    def test_ipv4_multicast_rejected(self):
+        is_safe, error = self._check("http://224.0.0.1/", "224.0.0.1")
+        assert is_safe is False
+        assert "blocked" in error.lower()
+
+    def test_ipv6_multicast_rejected(self):
+        is_safe, _ = self._check("http://[ff02::1]/", "ff02::1")
+        assert is_safe is False
+
+    def test_cgnat_rejected(self):
+        is_safe, _ = self._check("http://100.64.0.1/", "100.64.0.1")
+        assert is_safe is False
+
+    def test_unspecified_rejected(self):
+        is_safe, _ = self._check("http://0.0.0.0/", "0.0.0.0")
+        assert is_safe is False
+
+    def test_ipv4_mapped_metadata_rejected(self):
+        # ::ffff:169.254.169.254 must unwrap to 169.254.169.254 and hit the IPv4 rule.
+        is_safe, _ = self._check("http://[::ffff:169.254.169.254]/", "::ffff:169.254.169.254")
+        assert is_safe is False
+
+    def test_ipv4_mapped_loopback_rejected(self):
+        # ::ffff:127.0.0.1 must unwrap to 127.0.0.1 (loopback, private tier).
+        is_safe, _ = self._check("http://[::ffff:127.0.0.1]/", "::ffff:127.0.0.1")
+        assert is_safe is False
+
+    def test_always_blocked_even_with_allow_private(self):
+        # multicast / CGNAT / mapped-metadata stay blocked when allow_private=True.
+        assert self._check("http://224.0.0.1/", "224.0.0.1", allow_private=True)[0] is False
+        assert self._check("http://100.64.0.1/", "100.64.0.1", allow_private=True)[0] is False
+        assert self._check("http://[::ffff:169.254.169.254]/", "::ffff:169.254.169.254", allow_private=True)[0] is False
+
+
 class TestValidateCallbackUrl:
     """The callback gate: strict by default (prod/staging/dev); private only via the
     dedicated ADCP_ALLOW_PRIVATE_WEBHOOKS opt-in (E2E harness) (#1512)."""

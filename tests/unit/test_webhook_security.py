@@ -340,6 +340,65 @@ class TestPinnedOutboundClient:
             with pytest.raises(requests.RequestException, match="SSRF"):
                 adapter.get_connection_with_tls_context(request, verify=True)
 
+    def test_session_ignores_environment_proxies_and_netrc(self):
+        """trust_env=False: no HTTP(S)_PROXY / NO_PROXY / ~/.netrc injection on egress."""
+        from src.services.protocol_webhook_service import ProtocolWebhookService
+
+        service = ProtocolWebhookService()
+        assert service._session.trust_env is False
+
+    def test_pinning_adapter_refuses_proxied_target(self):
+        """A configured proxy would defeat host-pinning — refuse to deliver, do not unpin."""
+        from unittest.mock import patch
+
+        import requests
+
+        from src.services import protocol_webhook_service as pws
+
+        adapter = pws._PinningHTTPAdapter()
+        request = requests.Request("POST", "https://buyer.example.com/webhook").prepare()
+
+        with (
+            patch.object(pws, "resolve_and_validate_target", return_value=("93.184.216.34", "")),
+            patch.object(pws, "select_proxy", return_value="http://proxy.internal:3128"),
+        ):
+            with pytest.raises(requests.RequestException, match="proxy"):
+                adapter.get_connection_with_tls_context(request, verify=True)
+
+    def test_post_streams_and_closes_response_body(self):
+        """Only the status code is consumed: the POST streams and the body is closed."""
+        import asyncio
+        from unittest.mock import MagicMock, patch
+
+        from src.core.database.models import PushNotificationConfig
+        from src.services.protocol_webhook_service import ProtocolWebhookService
+
+        config = PushNotificationConfig(
+            id="pnc-stream",
+            tenant_id="t",
+            principal_id="p",
+            url="https://buyer.example.com/webhook",
+            authentication_type=None,
+            authentication_token=None,
+        )
+        ok_resp = MagicMock()
+        ok_resp.status_code = 200
+        captured: dict = {}
+
+        def _fake_post(self, url, **kwargs):  # noqa: ANN001 - test stub
+            captured["kwargs"] = kwargs
+            return ok_resp
+
+        with patch("requests.sessions.Session.post", _fake_post):
+            asyncio.run(
+                ProtocolWebhookService().send_notification(
+                    config, {"status": "completed"}, metadata={"task_type": "create_media_buy"}
+                )
+            )
+
+        assert captured["kwargs"]["stream"] is True
+        ok_resp.close.assert_called_once_with()
+
     def test_post_disables_redirects_and_preserves_host_header(self):
         """Delivery POSTs disable redirects and set Host to the original netloc (vhost routing)."""
         import asyncio

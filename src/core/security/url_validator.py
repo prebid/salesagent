@@ -27,6 +27,11 @@ PRIVATE_NETWORKS = [
     ipaddress.ip_network("fc00::/7"),
 ]
 
+# Carrier-grade NAT (RFC 6598). ALWAYS blocked — never a legitimate public
+# webhook target, and ``is_private`` classifies it version-dependently, so pin it
+# to an explicit constant rather than relying on the stdlib flag.
+CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+
 # Backward-compatible union (importers depend on this name).
 BLOCKED_NETWORKS = METADATA_NETWORKS + PRIVATE_NETWORKS
 
@@ -117,10 +122,31 @@ def resolve_and_validate_target(
             except ValueError:
                 return None, f"Invalid IP address from hostname resolution: {ip_str}"
 
-            # Metadata / link-local is ALWAYS blocked (checked before the private
-            # ranges because Python classifies link-local as private too).
-            if any(ip in network for network in METADATA_NETWORKS) or ip.is_link_local:
-                return None, f"URL resolves to a link-local/metadata IP address: {ip}"
+            # Unwrap an IPv4-mapped IPv6 address (::ffff:a.b.c.d) BEFORE any
+            # membership test, so the IPv4 rules apply to the embedded address —
+            # otherwise ::ffff:169.254.169.254 / ::ffff:127.0.0.1 would slip past
+            # the IPv4-only ranges. ``ipv4_mapped`` exists only on IPv6Address.
+            mapped = getattr(ip, "ipv4_mapped", None)
+            if mapped is not None:
+                ip = mapped
+
+            # Always-blocked tier (regardless of allow_private): metadata/link-local
+            # plus multicast (224.0.0.0/4 + ff00::/8), reserved, unspecified
+            # (0.0.0.0 / ::), and CGNAT — none is ever a legitimate webhook target.
+            # Checked before the private ranges because Python classifies
+            # link-local/CGNAT as private too. Loopback is EXCLUDED from the
+            # reserved check: IPv6 ``::1`` is classified is_reserved, but loopback
+            # is a private-tier concept (a trusted test/dev receiver reaches it via
+            # allow_private) — always-blocking it would break that opt-in.
+            if (
+                any(ip in network for network in METADATA_NETWORKS)
+                or ip.is_link_local
+                or ip.is_multicast
+                or ip.is_unspecified
+                or ip in CGNAT_NETWORK
+                or (ip.is_reserved and not ip.is_loopback)
+            ):
+                return None, f"URL resolves to a blocked (metadata/multicast/reserved/CGNAT) IP address: {ip}"
 
             if not allow_private:
                 if any(ip in network for network in PRIVATE_NETWORKS) or ip.is_loopback or ip.is_private:

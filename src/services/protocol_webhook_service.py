@@ -69,10 +69,17 @@ class _PinningHTTPAdapter(HTTPAdapter):
         if pinned_ip is None:
             raise requests.RequestException(f"Webhook URL failed SSRF validation: {ssrf_error}")
 
-        # An egress proxy performs its own resolution, so host-pinning does not apply —
-        # but the validation above still rejected private/metadata targets first.
+        # An egress proxy would perform its OWN resolution, defeating host-pinning
+        # (the socket connects to the proxy, then the proxy re-resolves the
+        # original hostname — reopening the DNS-rebinding gap this adapter closes).
+        # No proxy is ever configured intentionally here (the session sets
+        # trust_env=False, so env proxies cannot activate this branch), so refuse
+        # to deliver via a proxy rather than silently unpinning.
         if select_proxy(url, proxies):
-            return super().get_connection_with_tls_context(request, verify, proxies=proxies, cert=cert)
+            raise requests.RequestException(
+                "Webhook delivery refused: a proxy is configured for this target, which "
+                "would bypass SSRF connection-pinning. Webhook egress must be direct."
+            )
 
         # ``verify`` reaches this override typed as Optional to match the base signature;
         # normalize None -> True (default verification) without collapsing an explicit False.
@@ -185,6 +192,11 @@ class ProtocolWebhookService:
 
     def __init__(self):
         self._session = requests.Session()
+        # Ignore the process environment for egress: no HTTP(S)_PROXY / NO_PROXY,
+        # no ~/.netrc credential injection. An env proxy would defeat the SSRF
+        # connection-pinning (see _PinningHTTPAdapter, which now REFUSES a proxied
+        # target); netrc could leak credentials to a buyer-controlled webhook host.
+        self._session.trust_env = False
         # Pin every webhook delivery to an SSRF-validated IP while preserving the
         # long-lived pooled session (see _PinningHTTPAdapter). One adapter instance
         # serves both schemes.
@@ -362,9 +374,16 @@ class ProtocolWebhookService:
                         headers={**headers, "Host": urlparse(url).netloc},
                         timeout=10.0,
                         allow_redirects=False,
+                        # Only the status code is consumed — do not buffer the
+                        # (buyer-controlled, potentially large) response body.
+                        stream=True,
                     )
 
                 response = await asyncio.to_thread(_post)
+                # The status code is available from the response line/headers without
+                # reading the body; close immediately to return the connection to the
+                # pool without downloading the buyer-controlled body.
+                response.close()
                 # Require a 2xx. raise_for_status() does NOT raise for 3xx, and with
                 # redirects disabled a 3xx is a REFUSED redirect — a failed delivery,
                 # not a success. Treat any non-2xx uniformly via the HTTPError path.
