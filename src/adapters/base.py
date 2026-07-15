@@ -369,7 +369,7 @@ class AdServerAdapter(ABC):
         creative_deadline = (
             datetime.now(UTC) + timedelta(days=creative_deadline_days) if creative_deadline_days is not None else None
         )
-        return CreateMediaBuySuccess(
+        return CreateMediaBuySuccess.sync_success(
             media_buy_id=media_buy_id,
             creative_deadline=creative_deadline,
             packages=package_responses,

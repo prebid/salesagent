@@ -295,6 +295,10 @@ class TestA2AResponseShape:
         mock_impl.return_value = CreateMediaBuySuccessResponse(
             media_buy_id="mb-test-1",
             packages=[],
+            # adcp 6.6 (spec 3.1.1) made these required on the success envelope
+            status="completed",
+            confirmed_at="2026-03-01T00:00:00Z",
+            revision=1,
         )
 
         payload = _build_jsonrpc(
@@ -376,6 +380,9 @@ class TestA2AResponseShape:
         mock_impl.return_value = UpdateMediaBuySuccessResponse(
             media_buy_id="mb-test-1",
             affected_packages=[],
+            # adcp 6.6 (spec 3.1.1) made these required on the success envelope
+            status="completed",
+            revision=1,
         )
 
         payload = _build_jsonrpc("update_media_buy", {"media_buy_id": "mb-test-1", "paused": False})

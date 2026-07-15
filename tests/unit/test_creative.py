@@ -270,11 +270,12 @@ class TestSyncCreativeResultSchema:
         result = SyncCreativeResult(
             creative_id="c_1",
             action="created",
-            status="approved",
+            internal_status="approved",
             review_feedback="Looks good",
         )
         data = result.model_dump()
         assert "status" not in data
+        assert "internal_status" not in data
         assert "review_feedback" not in data
         assert data["creative_id"] == "c_1"
         assert data["action"] == "created"

@@ -23,10 +23,7 @@ from src.core.validation_helpers import adcp_validation_boundary
 logger = logging.getLogger(__name__)
 
 from adcp.types import ContextObject
-from adcp.types.generated_poc.core.signal_id import (
-    SignalId,
-    SignalId5,
-)  # SDK 5.7: SignalId18 → SignalId5 (same fields: agent_url, id, source)
+from adcp.types.generated_poc.core.signal_id import SignalId
 from adcp.types.generated_poc.core.vendor_pricing_option import (
     VendorPricingOption,
 )  # TODO: no stable alias in adcp.types
@@ -46,8 +43,16 @@ from src.core.transport_helpers import resolve_identity_from_context
 
 
 def _agent_signal_id(segment_id: str) -> SignalId:
-    """Build a SignalId for an agent-native signal."""
-    return SignalId(SignalId5(id=segment_id, source="agent", agent_url="https://salesagent.adcontextprotocol.org"))
+    """Build a SignalId for an agent-native signal.
+
+    SignalId is a RootModel discriminated union on ``source``; validating a dict with
+    ``source="agent"`` selects the agent-URL variant. We deliberately do NOT name that
+    variant (adcp codegen emits an ordinal like ``SignalId54`` that churns on every bump).
+    (``signal-id.json`` is deprecated in spec 3.1.1 in favor of ``SignalRef`` — a follow-up.)
+    """
+    return SignalId.model_validate(
+        {"id": segment_id, "source": "agent", "agent_url": "https://salesagent.adcontextprotocol.org"}
+    )
 
 
 def _cpm_pricing_option(cpm: float, currency: str = "USD") -> list[VendorPricingOption]:
@@ -165,7 +170,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
         # Apply filters if provided
         if req.filters:
             # Filter by catalog_types (equivalent to old 'type' field)
-            # catalog_types contains SignalCatalogType enums; compare via .value
+            # catalog_types contains SignalAvailabilityType enums; compare via .value
             if req.filters.catalog_types and signal.signal_type not in [ct.value for ct in req.filters.catalog_types]:
                 continue
 
@@ -177,10 +182,11 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             if req.filters.max_cpm is not None and signal.pricing and signal.pricing.cpm > req.filters.max_cpm:
                 continue
 
-            # Filter by min_coverage_percentage
-            if (
-                req.filters.min_coverage_percentage is not None
-                and signal.coverage_percentage < req.filters.min_coverage_percentage
+            # Filter by min_coverage_percentage. adcp 6.6 made coverage_percentage
+            # Optional; a signal with unknown coverage cannot be shown to meet the
+            # minimum, so exclude it when the filter is set.
+            if req.filters.min_coverage_percentage is not None and (
+                signal.coverage_percentage is None or signal.coverage_percentage < req.filters.min_coverage_percentage
             ):
                 continue
 

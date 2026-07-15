@@ -35,7 +35,9 @@ def _emit_and_capture_task_id(step_data: dict) -> str:
         patch.object(mod, "create_mcp_webhook_payload", side_effect=_fake_mcp),
         patch.object(mod, "get_protocol_webhook_service"),
     ):
-        mod.emit_media_buy_webhook(step_data, MagicMock(), _result(), AdcpTaskStatus.completed)
+        mod.emit_media_buy_webhook(
+            step_data, MagicMock(), _result(), AdcpTaskStatus.completed, {"task_type": "create_media_buy"}
+        )
     return captured["task_id"]
 
 

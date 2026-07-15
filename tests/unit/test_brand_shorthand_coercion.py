@@ -160,6 +160,7 @@ def _minimal_create_media_buy_kwargs() -> dict:
         "ext": None,
         "account": None,
         "idempotency_key": req_dict["idempotency_key"],
+        "paused": None,
     }
 
 

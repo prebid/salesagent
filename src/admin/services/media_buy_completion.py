@@ -19,7 +19,7 @@ from collections.abc import Callable, Iterator
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
-from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
+from adcp import Error, create_a2a_webhook_payload, create_mcp_webhook_payload
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from sqlalchemy.orm import Session
 
@@ -28,9 +28,9 @@ from src.core.database.models import MEDIA_BUY_FINALIZING_STATUS
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.database.repositories.workflow import WorkflowRepository
-from src.core.exceptions import AdCPAdapterError, build_two_layer_error_envelope
+from src.core.exceptions import AdCPAdapterError, AdCPMediaBuyRejectedError, build_two_layer_error_envelope
 from src.core.media_buy_flight import lifecycle_status_for_window, resolve_flight_window_utc
-from src.core.schemas import CreateMediaBuySuccess, Package
+from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess, Package
 from src.core.thread_registry import ThreadRegistry
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -135,37 +135,48 @@ def build_media_buy_result(
     packages: list[MediaPackage],
     *,
     rejection_reason: str | None = None,
-) -> CreateMediaBuySuccess:
-    """Build the internal ``CreateMediaBuySuccess`` the completion/rejection webhook carries.
+) -> CreateMediaBuySuccess | CreateMediaBuyError:
+    """Build the internal artifact the completion/rejection webhook carries.
 
-    Echoes the persisted ``confirmed_at``/``revision``. ``rejection_reason`` is set
-    only on the reject path (a spec MUST on the seller rejection notification, pinned
-    beta.3); ``None`` otherwise, so it is omitted from the wire.
+    Approve path → ``CreateMediaBuySuccess`` echoing the persisted
+    ``confirmed_at``/``revision``. Reject path (``rejection_reason`` set) →
+    ``CreateMediaBuyError``: AdCP 3.1.1 ``create-media-buy-response`` models
+    non-success outcomes as the Error variant of the ``oneOf`` (Success / Error /
+    Submitted — there is NO rejection arm), so a seller decline cannot be a success
+    body with a ``rejection_reason`` field. The wire code is routed through the typed
+    ``AdCPMediaBuyRejectedError`` cascade (internal ``MEDIA_BUY_REJECTED`` →
+    ``POLICY_VIOLATION``), matching the create-media-buy tool path — never hand-picked.
+    Authority: dist/compliance/3.1.1/domains/media-buy/scenarios/governance_denied.yaml
+    (create_media_buy_denied, Case-2 wire placement). #1544 / PR #1567.
     """
-    return CreateMediaBuySuccess(
+    if rejection_reason is not None:
+        rejection = AdCPMediaBuyRejectedError(f"Rejected: {rejection_reason}")
+        return CreateMediaBuyError(errors=[Error(code=rejection.wire_error_code, message=rejection.message)])
+    return CreateMediaBuySuccess.sync_success(
         media_buy_id=media_buy.media_buy_id,
         packages=[Package(package_id=p.package_id) for p in packages],
         context={},
         confirmed_at=media_buy.confirmed_at,
         revision=media_buy.revision,
-        rejection_reason=rejection_reason,
     )
 
 
 def emit_media_buy_webhook(
     step_data: dict[str, Any],
     webhook_config: Any,
-    result: CreateMediaBuySuccess,
+    result: CreateMediaBuySuccess | CreateMediaBuyError,
     status: AdcpTaskStatus,
+    metadata: dict[str, Any],
 ) -> None:
     """Send the media-buy completion/rejection notification for the buyer's protocol.
 
     Protocol (``mcp``/``a2a``) is read from the workflow step's ``request_data``.
+    ``metadata`` carries the app-specific delivery/audit fields the protocol webhook
+    service logs (task_type/tenant_id/principal_id/media_buy_id — PR #1567 round-2).
     Best-effort: a webhook failure is logged, never raised — the DB transition has
     already committed and must not be rolled back by a delivery error (mirrors the
     approval routes). #1544.
     """
-    metadata = {"task_type": step_data["tool_name"]}
     # Default to MCP for backward compatibility with steps recorded before the
     # protocol was persisted on request_data.
     protocol = step_data["request_data"].get("protocol", "mcp")
@@ -200,7 +211,9 @@ def emit_media_buy_webhook(
                 metadata=metadata,
             )
         )
-        logger.info(f"Sent {status} webhook notification for media buy {result.media_buy_id}")
+        # CreateMediaBuyError (reject path) carries no media_buy_id — fall back to the step id.
+        result_media_buy_id = getattr(result, "media_buy_id", None) or step_data["step_id"]
+        logger.info(f"Sent {status} webhook notification for media buy {result_media_buy_id}")
     except Exception as webhook_err:
         logger.warning(f"Failed to send webhook notification: {webhook_err}")
 
@@ -233,11 +246,20 @@ def emit_media_buy_completion(
     if not matches:
         return
     webhook_config = matches[0]
+    # App-specific metadata the protocol webhook service reads for delivery logging and
+    # the audit trail (task_type/tenant_id/principal_id/media_buy_id — PR #1567 round-2).
+    metadata = {
+        "task_type": step_data["tool_name"],
+        "tenant_id": tenant_id,
+        "principal_id": media_buy.principal_id,
+        "media_buy_id": media_buy.media_buy_id,
+    }
     emit_media_buy_webhook(
         step_data,
         webhook_config,
         build_media_buy_result(media_buy, packages, rejection_reason=rejection_reason),
         status,
+        metadata,
     )
 
 
@@ -758,7 +780,8 @@ def finalize_media_buy_rejection(
     that raced an approve-HOLD (``pending_approval`` → ``pending_creatives``) and observed
     ``pending_approval`` loses the claim rather than also succeeding. On a won claim,
     stores the rejection artifact on the workflow step, commits, and emits the rejection
-    webhook carrying ``rejection_reason`` (a pinned-beta.3 MUST). #1544.
+    webhook as a ``CreateMediaBuyError`` (POLICY_VIOLATION) — AdCP 3.1.1 create-media-buy
+    has no rejection arm; see ``build_media_buy_result``. #1544 / PR #1567.
     """
     repo = MediaBuyRepository(session, tenant_id)
     claimed = repo.update_status_computed(media_buy_id, lambda _mb: "rejected", expected_status=expected_status)

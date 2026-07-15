@@ -12,7 +12,10 @@ import pytest
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 
 from src.admin.services import media_buy_completion as mod
+from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess
 from src.services.protocol_webhook_service import _to_wire_dict
+
+_METADATA = {"task_type": "create_media_buy", "tenant_id": "t1", "principal_id": "p1", "media_buy_id": "mb_1"}
 
 
 def _media_buy(*, media_buy_id="mb_1", confirmed_at=None, revision=2):
@@ -31,21 +34,26 @@ def _pkg(package_id):
 
 def test_build_media_buy_result_completion():
     result = mod.build_media_buy_result(_media_buy(revision=3), [_pkg("p1"), _pkg("p2")])
+    assert isinstance(result, CreateMediaBuySuccess)
     assert result.media_buy_id == "mb_1"
     assert result.revision == 3
-    assert result.rejection_reason is None
     assert [p.package_id for p in result.packages] == ["p1", "p2"]
 
 
-def test_build_media_buy_result_rejection_carries_reason():
+def test_build_media_buy_result_rejection_is_error_with_policy_violation():
+    """AdCP 3.1.1 create-media-buy has no rejection arm, so a reject builds a
+    CreateMediaBuyError carrying POLICY_VIOLATION (via the AdCPMediaBuyRejectedError
+    cascade) with the reason in the error message — not a success + rejection_reason."""
     result = mod.build_media_buy_result(_media_buy(), [_pkg("p1")], rejection_reason="policy violation")
-    assert result.rejection_reason == "policy violation"
+    assert isinstance(result, CreateMediaBuyError)
+    assert result.errors[0].code == "POLICY_VIOLATION"
+    assert "policy violation" in result.errors[0].message
 
 
 @pytest.mark.parametrize("protocol", ["mcp", "a2a"])
 def test_emit_media_buy_webhook_sends_payload_carrying_reason(protocol):
     """emit_media_buy_webhook sends exactly one notification whose serialized wire
-    carries the result data (here rejection_reason), for both MCP and A2A."""
+    carries the rejection reason (in the CreateMediaBuyError message), for MCP and A2A."""
     result = mod.build_media_buy_result(_media_buy(), [_pkg("p1")], rejection_reason="brand-safety-xyz")
     step_data = {
         "step_id": "step_1",
@@ -56,7 +64,7 @@ def test_emit_media_buy_webhook_sends_payload_carrying_reason(protocol):
     service = MagicMock()
     service.send_notification = AsyncMock()
     with patch.object(mod, "get_protocol_webhook_service", return_value=service):
-        mod.emit_media_buy_webhook(step_data, MagicMock(), result, AdcpTaskStatus.rejected)
+        mod.emit_media_buy_webhook(step_data, MagicMock(), result, AdcpTaskStatus.rejected, _METADATA)
 
     assert service.send_notification.call_count == 1
     payload = service.send_notification.call_args.kwargs["payload"]
@@ -71,7 +79,9 @@ def test_emit_media_buy_webhook_swallows_delivery_errors():
     service = MagicMock()
     service.send_notification = AsyncMock(side_effect=RuntimeError("network down"))
     with patch.object(mod, "get_protocol_webhook_service", return_value=service):
-        mod.emit_media_buy_webhook(step_data, MagicMock(), result, AdcpTaskStatus.completed)  # must not raise
+        mod.emit_media_buy_webhook(
+            step_data, MagicMock(), result, AdcpTaskStatus.completed, _METADATA
+        )  # must not raise
 
 
 _URL = "https://buyer.example/webhook"

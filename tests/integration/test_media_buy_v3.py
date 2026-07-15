@@ -34,7 +34,11 @@ from src.core.schemas import (
     UpdateMediaBuyRequest,
 )
 from src.core.testing_hooks import AdCPTestContext
-from tests.integration.media_buy_helpers import _get_tenant_dict, _make_create_request
+from tests.integration.media_buy_helpers import (
+    _get_tenant_dict,
+    _make_create_request,
+    resolve_media_buy_id_from_task,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -306,8 +310,12 @@ class TestCreateMediaBuyManualApproval:
         result = await _create_media_buy_impl(req=req, identity=identity)
         assert result.status == "submitted"
 
+        # Spec 3.1.1: the submitted response carries task_id (the workflow step id),
+        # not media_buy_id — resolve the persisted buy via the workflow mapping,
+        # exactly as the approval flow does (PR #1567 round-2 item 2).
+        media_buy_id = resolve_media_buy_id_from_task(result.response.task_id)
         with get_db_session() as session:
-            mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == result.response.media_buy_id)).first()
+            mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id)).first()
             assert mb is not None, "Media buy record should exist in DB"
             assert mb.raw_request is not None, "raw_request should be stored"
 
@@ -346,7 +354,9 @@ class TestCreateMediaBuyManualApproval:
         result = await _create_media_buy_impl(req=req, identity=identity)
         assert result.status == "submitted"
 
-        media_buy_id = result.response.media_buy_id
+        # Resolve the buy from the buyer-visible task_id via the workflow
+        # mapping — the submitted response has no media_buy_id (spec 3.1.1).
+        media_buy_id = resolve_media_buy_id_from_task(result.response.task_id)
 
         tenant_id = mb_tenant_with_approval["tenant_id"]
         success, error = execute_approved_media_buy(media_buy_id=media_buy_id, tenant_id=tenant_id)

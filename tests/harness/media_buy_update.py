@@ -228,11 +228,13 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         mock_cm.__exit__ = MagicMock(return_value=False)
         self.mock["db"].return_value = mock_cm
 
-    def setup_default_data(self) -> tuple[Any, Any]:
+    def setup_default_data(self, **tenant_kwargs: Any) -> tuple[Any, Any]:
         """Return mock tenant + principal for BDD Background steps.
 
         Unit env has no real DB. Returns lightweight mocks that satisfy
         the ctx["tenant"] / ctx["principal"] expectations from Background steps.
+        ``tenant_kwargs`` (base-signature parity) are ignored — there is no
+        tenant row to seed.
         """
         tenant = MagicMock()
         tenant.tenant_id = self._tenant_id

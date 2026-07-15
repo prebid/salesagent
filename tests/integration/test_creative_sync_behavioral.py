@@ -13,12 +13,12 @@ import json
 from datetime import UTC
 
 import pytest
-from adcp.types import CreativeAction, CreativeAsset
+from adcp.types import CreativeAction
 from adcp.types import FormatId as AdcpFormatId
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPCreativeRejectedError, AdCPNotFoundError
 from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, ProductFactory, TenantFactory
-from tests.factories.creative_asset import build_assets, image_spec, make_creative_asset_minimal
+from tests.factories.creative_asset import build_assets, image_spec, make_test_banner_creative
 from tests.harness import CreativeSyncEnv, make_identity
 from tests.harness.transport import Transport
 
@@ -37,18 +37,7 @@ def _error_messages(errors: list | None) -> list[str]:
     return [e.message if hasattr(e, "message") else str(e) for e in errors]
 
 
-def _make_creative_asset(**overrides) -> CreativeAsset:
-    """Build a minimal valid CreativeAsset for testing."""
-    defaults = {
-        "creative_id": "c_test_1",
-        "name": "Test Banner",
-        "format_id": AdcpFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250"),
-        "assets": build_assets(image_spec("banner")),
-    }
-    defaults.update(overrides)
-    return make_creative_asset_minimal(**defaults)
-
-
+_make_creative_asset = make_test_banner_creative  # Canonical version from tests.factories.creative_asset
 _make_identity = make_identity  # Canonical version from tests.harness
 
 
@@ -1167,9 +1156,11 @@ class TestSchemaCompleteness:
 
         assert len(response.creatives) == 1
         result = response.creatives[0]
-        # Warnings field should exist (may be empty or populated)
+        # warnings is inherited from the adcp 6.6 parent as an OPTIONAL list[str] | None
+        # (PR #1567): None when there are no warnings (omitted on the wire), a list
+        # when populated — never any other type.
         assert hasattr(result, "warnings")
-        assert isinstance(result.warnings, list)
+        assert result.warnings is None or isinstance(result.warnings, list)
 
     def test_per_creative_result_has_required_fields(self, integration_db):
         """Covers: UC-006-MAIN-MCP-01 — result has creative_id, action, changes, errors."""
@@ -1182,7 +1173,9 @@ class TestSchemaCompleteness:
         result = response.creatives[0]
         assert result.creative_id == "c_fields"
         assert result.action in [a.value for a in CreativeAction]
-        assert isinstance(result.changes, list)
+        # changes/errors are inherited optional list[str] | None (PR #1567): None when
+        # empty (omitted on the wire), a list when populated.
+        assert result.changes is None or isinstance(result.changes, list)
         assert result.errors is None or isinstance(result.errors, list)
 
 

@@ -247,10 +247,11 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
     Then the response status should be "submitted"
-    And the response should contain media_buy_id "mb_existing"
-    And the response should contain implementation_date that is null
+    And the response should contain a task_id
+    And the response should NOT contain "media_buy_id" field
+    And the response should NOT contain "implementation_date" field
     # POST-S7: Buyer knows update awaiting seller approval (status "submitted")
-    # POST-S8: implementation_date is null (pending approval)
+    # POST-S8: Buyer receives a task_id to poll; implementation_date is NOT conveyed on the Submitted envelope
 
   @T-UC-003-partial-update @invariant @BR-RULE-022
   Scenario: Partial update -- omitted fields remain unchanged
@@ -395,7 +396,9 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
     Then the response status should be "submitted"
-    And the response should contain implementation_date that is null
+    And the response should contain a task_id
+    And the response should NOT contain "media_buy_id" field
+    And the response should NOT contain "implementation_date" field
     # BR-RULE-017 INV-2: Tenant flag true → manual approval
 
   @T-UC-003-approval-adapter @invariant @BR-RULE-017
@@ -412,7 +415,9 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
     Then the response status should be "submitted"
-    And the response should contain implementation_date that is null
+    And the response should contain a task_id
+    And the response should NOT contain "media_buy_id" field
+    And the response should NOT contain "implementation_date" field
     # BR-RULE-017 INV-3: Adapter flag true → manual approval
 
   @T-UC-003-adapter-success @invariant @BR-RULE-020

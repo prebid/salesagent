@@ -7,10 +7,9 @@ repro ships with the salesagent-mpo1 fix commit, not before it.
 from __future__ import annotations
 
 import pytest
-from adcp.types import FormatId as AdcpFormatId
 
 from tests.factories import PrincipalFactory, TenantFactory
-from tests.factories.creative_asset import build_assets, image_spec, make_creative_asset_minimal
+from tests.factories.creative_asset import make_test_banner_creative
 from tests.harness import CreativeSyncEnv
 from tests.harness.transport import Transport
 
@@ -22,17 +21,7 @@ DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 # swallow at the MCP/A2A boundary must fail this matrix, not just REST.
 _WIRE_TRANSPORTS = [Transport.REST, Transport.MCP, Transport.A2A]
 
-
-def _make_creative_asset(**overrides):
-    """Build a minimal valid CreativeAsset for testing."""
-    defaults = {
-        "creative_id": "c_test_1",
-        "name": "Test Banner",
-        "format_id": AdcpFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250"),
-        "assets": build_assets(image_spec("banner")),
-    }
-    defaults.update(overrides)
-    return make_creative_asset_minimal(**defaults)
+_make_creative_asset = make_test_banner_creative  # Canonical version from tests.factories.creative_asset
 
 
 class TestFormatFetchTransientErrors:

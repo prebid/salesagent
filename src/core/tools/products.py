@@ -487,7 +487,7 @@ async def _get_products_impl(
             if req.filters.format_ids:
                 # Product.format_ids is list[str] or list[dict] (format IDs)
                 product_format_ids: set[str] = set()
-                for format_id in product.format_ids:
+                for format_id in product.format_ids or []:  # adcp 6.6: Product.format_ids is now Optional (spec 3.1.1)
                     if isinstance(format_id, str):
                         product_format_ids.add(format_id)
                     elif isinstance(format_id, dict):
@@ -518,7 +518,7 @@ async def _get_products_impl(
                 # Check if all formats are IAB standard formats
                 # IAB standard formats typically follow patterns like "display_", "video_", "audio_", "native_"
                 has_only_standard = True
-                for format_id in product.format_ids:
+                for format_id in product.format_ids or []:  # adcp 6.6: Product.format_ids is now Optional (spec 3.1.1)
                     format_id_str: str | None = None
                     if isinstance(format_id, str):
                         format_id_str = format_id
