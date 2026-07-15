@@ -642,3 +642,97 @@ class TestSyncAccountsBrandlessEntryRejected:
             "VALIDATION_ERROR",
             recovery="correctable",
         )
+
+
+class TestSyncAccountsPushNotificationConfig:
+    """AdCP push_notification_config: forwarded, SSRF-validated, and registered (#1546).
+
+    The MCP wrapper and A2A handler previously accepted the field and then built
+    SyncAccountsRequest without it — silently dropping the buyer's callback. REST
+    already forwarded it. These tests pin the end-to-end behavior for every
+    transport that carries the field into the impl: the callback channel is
+    SSRF-validated and persisted (register-only). Delivering the webhook when a
+    pending_approval account transitions is a documented follow-up (#1546).
+    """
+
+    # IMPL flattens req.push_notification_config directly; A2A/REST/MCP flatten it
+    # through their wrappers (the plumbing under test). All four reach the impl.
+    _PNC_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.REST, Transport.MCP]
+
+    @pytest.mark.parametrize("transport", _PNC_TRANSPORTS, ids=lambda t: t.value)
+    def test_valid_push_config_is_registered(self, integration_db, transport, monkeypatch):
+        """A valid callback URL is persisted for the calling principal on every transport."""
+        from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
+
+        # A loopback receiver is permitted only under the E2E opt-in; an IP literal
+        # needs no DNS resolution, so the SSRF check is deterministic offline.
+        monkeypatch.setenv("ADCP_ALLOW_PRIVATE_WEBHOOKS", "1")
+        callback = "https://127.0.0.1:8443/accounts/hook"
+        tid = f"pnc_ok_{transport.value}"
+        pid = f"agent_pnc_{transport.value}"
+
+        with AccountSyncEnv(tenant_id=tid, principal_id=pid) as env:
+            env.setup_default_data()
+            req = _sync_req(
+                accounts=[{"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"}],
+                push_notification_config={"url": callback},
+            )
+            result = env.call_via(transport, req=req)
+
+            assert result.is_success, f"[{transport.value}] valid push config must not fail: {result.error}"
+
+            rows = env.query(DBPushNotificationConfig, tenant_id=tid, principal_id=pid)
+
+        active = [r for r in rows if r.is_active]
+        assert active, f"[{transport.value}] push callback must be registered, got none"
+        assert any(str(r.url).rstrip("/") == callback.rstrip("/") for r in active), (
+            f"[{transport.value}] registered callback URL mismatch: {[r.url for r in active]}"
+        )
+
+    def test_ssrf_metadata_url_rejected_before_any_write(self, integration_db):
+        """A cloud-metadata callback rejects as VALIDATION_ERROR before any account upsert."""
+        from src.core.database.models import Account as DBAccount
+
+        tid = "pnc_ssrf"
+        pid = "agent_ssrf"
+        with AccountSyncEnv(tenant_id=tid, principal_id=pid) as env:
+            env.setup_default_data()
+            req = _sync_req(
+                accounts=[{"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"}],
+                # 169.254.169.254 (cloud metadata) is blocked in EVERY environment —
+                # no env opt-in or DNS lookup involved.
+                push_notification_config={"url": "http://169.254.169.254/latest/meta-data/"},
+            )
+            result = env.call_via(Transport.REST, req=req)
+
+            assert result.is_error, "SSRF metadata callback must reject the sync"
+            assert_envelope_shape(
+                result.wire_error_envelope,
+                "VALIDATION_ERROR",
+                recovery="correctable",
+            )
+            # SSRF validation runs before the account loop — no partial write survives.
+            assert env.query(DBAccount, tenant_id=tid, principal_id=pid) == [], (
+                "a rejected callback must leave no account rows"
+            )
+
+    def test_dry_run_does_not_register_callback(self, integration_db, monkeypatch):
+        """dry_run previews persist nothing — the callback channel is not registered."""
+        from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
+
+        monkeypatch.setenv("ADCP_ALLOW_PRIVATE_WEBHOOKS", "1")
+        tid = "pnc_dry"
+        pid = "agent_pnc_dry"
+        with AccountSyncEnv(tenant_id=tid, principal_id=pid) as env:
+            env.setup_default_data()
+            req = _sync_req(
+                accounts=[{"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"}],
+                push_notification_config={"url": "https://127.0.0.1:8443/accounts/hook"},
+                dry_run=True,
+            )
+            result = env.call_via(Transport.IMPL, req=req)
+
+            assert result.is_success
+            assert env.query(DBPushNotificationConfig, tenant_id=tid, principal_id=pid) == [], (
+                "dry_run must not persist a push callback"
+            )

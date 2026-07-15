@@ -2048,6 +2048,13 @@ class AdCPRequestHandler(RequestHandler):
                     if parameters.get("idempotency_key") is not None
                     else {}
                 ),
+                # Forward the AdCP request-level push callback instead of dropping
+                # it; the impl SSRF-validates and registers the channel (#1546).
+                **(
+                    {"push_notification_config": parameters["push_notification_config"]}
+                    if parameters.get("push_notification_config") is not None
+                    else {}
+                ),
             )
         return await core_sync_accounts_tool(
             req=request,

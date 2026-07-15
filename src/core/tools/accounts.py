@@ -17,7 +17,7 @@ import base64
 import logging
 import uuid
 from datetime import UTC
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 from adcp.types import ContextObject, PaginationRequest, PaginationResponse
 from adcp.types.generated_poc.account.list_accounts_request import (
@@ -33,7 +33,7 @@ from pydantic import Field, ValidationError
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.models import Account as DBAccount
-from src.core.database.repositories.uow import AccountUoW, IdempotencyUoW
+from src.core.database.repositories.uow import AccountUoW, IdempotencyUoW, PushNotificationConfigUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value
 from src.core.idempotency_canonical import canonical_payload_hash, canonical_request_hash
@@ -49,7 +49,11 @@ from src.core.schemas.account import (
 from src.core.tool_context import ToolContext
 from src.core.transport_helpers import resolve_identity_from_context
 from src.core.validation_helpers import adcp_validation_boundary
+from src.core.webhook_validator import WebhookURLValidator
 from src.services.idempotency_replay import lookup_cached_replay, record_replayable_success
+
+if TYPE_CHECKING:
+    from adcp.types.generated_poc.core.push_notification_config import PushNotificationConfig
 
 logger = logging.getLogger(__name__)
 
@@ -471,6 +475,66 @@ def _decode_sync_accounts_replay(envelope: dict[str, Any]) -> SyncAccountsRespon
 _SYNC_ACCOUNTS_TOOL_NAME = "sync_accounts"
 
 
+def _register_push_notification_config(
+    tenant_id: str, principal_id: str, config: "PushNotificationConfig"
+) -> str | None:
+    """SSRF-validate and persist a buyer-supplied push callback (AdCP push_notification_config).
+
+    Registers the callback CHANNEL for the calling principal so a later async
+    notification has somewhere to POST. Two controls, both applied here rather
+    than per-transport so MCP/A2A/REST are covered uniformly:
+
+    1. **SSRF validation.** The URL must pass the same ``WebhookURLValidator``
+       the media-buy delivery path uses (blocks loopback, link-local/metadata
+       169.254.169.254, and RFC-1918 targets). A failure raises
+       :class:`AdCPValidationError` (correctable) so the callback is never
+       stored and the whole sync rejects before any account write.
+    2. **Authentication.** Enforced by the caller — ``_sync_accounts_impl``
+       already requires an authenticated principal (BR-RULE-055) before this
+       runs, so an anonymous request can never reach registration.
+
+    Persists via the ``PushNotificationConfig`` repository (upsert). Returns the
+    stored config id, or ``None`` when the config carries no URL (nothing to
+    register).
+
+    NOTE (follow-up #1546): this REGISTERS the channel only. Delivering the
+    webhook when a pending_approval account transitions to active — routing the
+    approval through ``WorkflowContextManager._send_push_notifications`` — is a
+    separate, unimplemented step. The SDK ``PushNotificationConfig`` carries no
+    stable config identity, so each registration mints a fresh id; stable-id
+    keying is part of that same follow-up.
+    """
+    raw_url = config.url
+    if not raw_url:
+        return None
+    url = str(raw_url)
+
+    is_valid, error_msg = WebhookURLValidator.validate_callback_url(url)
+    if not is_valid:
+        raise AdCPValidationError(
+            f"push_notification_config.url failed SSRF validation: {error_msg}",
+            suggestion="Supply a publicly routable https callback URL.",
+        )
+
+    auth = config.authentication
+    schemes = list(auth.schemes) if auth and auth.schemes else []
+    auth_type = enum_value(schemes[0]) if schemes else None
+    credentials = auth.credentials if auth else None
+    config_id = f"pnc_{uuid.uuid4().hex[:16]}"
+
+    with PushNotificationConfigUoW(tenant_id) as uow:
+        assert uow.push_notification_configs is not None
+        uow.push_notification_configs.upsert(
+            config_id=config_id,
+            principal_id=principal_id,
+            url=url,
+            authentication_type=auth_type,
+            authentication_token=credentials,
+            validation_token=config.token,
+        )
+    return config_id
+
+
 async def _sync_accounts_impl(
     req: SyncAccountsRequest | None = None,
     identity: ResolvedIdentity | None = None,
@@ -548,6 +612,15 @@ async def _sync_accounts_impl(
         if replay is not None:
             logger.info("Idempotency replay: returning cached sync_accounts success for key %s", req.idempotency_key)
             return replay
+
+    # AdCP push_notification_config: SSRF-validate + register the callback channel
+    # for real syncs. Runs BEFORE any account write so a rejected callback fails
+    # the whole request with no partial state. dry_run persists nothing (mirrors
+    # create_media_buy, which skips push registration under dry_run). Delivering
+    # the webhook on an account approval transition is a documented follow-up
+    # (#1546) — this registers the channel only.
+    if req.push_notification_config is not None and not dry_run:
+        _register_push_notification_config(tenant_id, principal_id, req.push_notification_config)
 
     results: list[SyncResponseAccount] = []
     # Track natural keys in the payload for delete_missing
@@ -780,6 +853,9 @@ async def sync_accounts(
     idempotency_key: Annotated[
         str | None, Field(description="Client-generated idempotency key for safe retries (AdCP)")
     ] = None,
+    push_notification_config: Annotated[
+        dict[str, Any] | None, Field(description="Push notification callback for async account approvals (AdCP)")
+    ] = None,
     ctx: Context | ToolContext | None = None,
 ) -> Any:
     """Sync accounts by natural key (MCP tool).
@@ -796,6 +872,10 @@ async def sync_accounts(
             16-255 chars). Declared here so the envelope-tolerance middleware does
             not strip it, and forwarded verbatim — omitted when absent so a missing
             key rejects as VALIDATION_ERROR instead of being fabricated a fresh UUID.
+        push_notification_config: Push notification callback for async account
+            approvals. Declared here so the envelope-tolerance middleware does not
+            strip it, and forwarded into the request instead of being dropped
+            (#1546). The impl SSRF-validates and registers the callback channel.
         ctx: FastMCP context for authentication.
 
     Returns:
@@ -813,6 +893,7 @@ async def sync_accounts(
             dry_run=dry_run,
             context=context,
             **({"idempotency_key": idempotency_key} if idempotency_key is not None else {}),
+            **({"push_notification_config": push_notification_config} if push_notification_config is not None else {}),
         )
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     # The buyer's wire payload, captured by MCPAuthMiddleware before any strip —
