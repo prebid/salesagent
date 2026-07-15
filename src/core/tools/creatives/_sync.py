@@ -7,16 +7,19 @@ from typing import Any
 
 from adcp import PushNotificationConfig
 from adcp.types import ContextObject, CreativeAction, CreativeAsset
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from src.core.auth import require_identity, require_principal_id, require_tenant
-from src.core.database.repositories.uow import CreativeUoW
+from src.core.database.repositories.idempotency_attempt import DEFAULT_IN_FLIGHT_LEASE
+from src.core.database.repositories.uow import CreativeUoW, IdempotencyUoW
 from src.core.exceptions import AdCPError
 from src.core.helpers import log_tool_activity
+from src.core.idempotency_canonical import canonical_payload_hash
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 from src.core.schemas._base import validate_idempotency_key_shape
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
+from src.services.idempotency_replay import complete_idempotent, reserve_idempotent
 
 from ._assignments import _process_assignments
 from ._processing import _create_new_creative, _failed_sync_result, _update_existing_creative
@@ -24,6 +27,59 @@ from ._validation import _get_field, _validate_creative_input, check_provenance_
 from ._workflow import _audit_log_sync, _create_sync_workflow_steps, _send_creative_notifications
 
 logger = logging.getLogger(__name__)
+
+
+# Scope component of the idempotency cache key (see IdempotencyAttempt.tool_name).
+_SYNC_CREATIVES_TOOL_NAME = "sync_creatives"
+
+
+def _decode_sync_creatives_replay(envelope: dict[str, Any]) -> SyncCreativesResponse | None:
+    """Reconstruct a cached sync_creatives success, marked replayed.
+
+    Mirrors ``accounts._decode_sync_accounts_replay``: the cache stores
+    ``{"status": ..., "response": <SyncCreativesResponse dump>}``. Returns
+    ``None`` when the stored envelope no longer validates (schema drift inside
+    the TTL window) so the caller treats it as a miss and re-executes.
+    """
+    try:
+        response = SyncCreativesResponse.model_validate(envelope["response"])
+    except (KeyError, TypeError, ValidationError):
+        logger.warning("Cached sync_creatives envelope failed validation - treating as a miss", exc_info=True)
+        return None
+    response.replayed = True
+    return response
+
+
+def _sync_creatives_request_hash(
+    creatives: Sequence[Any],
+    assignments: dict | None,
+    creative_ids: list[str] | None,
+    delete_missing: bool,
+    validation_mode: str,
+    push_notification_config: PushNotificationConfig | dict | None,
+) -> str:
+    """Canonical hash of the mutating sync_creatives inputs (replay vs conflict key).
+
+    Covers the fields that determine the side effect - the creative payloads, the
+    assignment map, the scoping filter, delete_missing, the validation mode, and
+    the push callback (a changed callback is a different canonical request, matching
+    sync_accounts and the SDK canonicalizer, which excludes only nested
+    authentication.credentials). ``dry_run`` is excluded because a preview never
+    reserves, and ``context`` is app-level metadata, not part of the operation.
+    """
+
+    def _jsonable(value: Any) -> Any:
+        return value.model_dump(mode="json") if isinstance(value, BaseModel) else value
+
+    payload = {
+        "creatives": [_jsonable(c) for c in creatives],
+        "assignments": assignments,
+        "creative_ids": creative_ids,
+        "delete_missing": delete_missing,
+        "validation_mode": validation_mode,
+        "push_notification_config": _jsonable(push_notification_config),
+    }
+    return canonical_payload_hash(payload)
 
 
 def _append_warning(result: SyncCreativeResult, warning: str) -> None:
@@ -106,6 +162,37 @@ def _sync_creatives_impl(
     principal_id = require_principal_id(identity, context=context)
     identity = require_identity(identity, context=context)
     tenant = require_tenant(identity, context=context)
+
+    # Idempotency reservation (AdCP 3.1.1) - real syncs only; a dry_run preview has
+    # no side effect to dedupe. Reserve the key in its OWN committed transaction
+    # BEFORE any creative write: a same-key retry replays the completed row, a
+    # same-key / different-payload retry is IDEMPOTENCY_CONFLICT, and a same-key
+    # request while the first is still in flight is IDEMPOTENCY_IN_FLIGHT. Unlike
+    # sync_accounts this completes best-effort in its own transaction (the
+    # sync_creatives body spans several units of work - CreativeUoW, assignments,
+    # workflow steps, async notifications - so an all-or-nothing atomic compose is
+    # disproportionate); a handler failure leaves the in_flight row to expire and
+    # become stealable after its lease, so the key is never permanently poisoned.
+    reservation_attempt_id: str | None = None
+    if idempotency_key and not dry_run:
+        reservation = reserve_idempotent(
+            IdempotencyUoW,
+            tenant["tenant_id"],
+            principal_id=principal_id,
+            account_id=identity.account_id,
+            tool_name=_SYNC_CREATIVES_TOOL_NAME,
+            idempotency_key=idempotency_key,
+            request_hash=_sync_creatives_request_hash(
+                creatives, assignments, creative_ids, delete_missing, validation_mode, push_notification_config
+            ),
+            lease=DEFAULT_IN_FLIGHT_LEASE,
+            decode=_decode_sync_creatives_replay,
+            enforce_ceiling=True,
+        )
+        if reservation.replay is not None:
+            logger.info("Idempotency replay: returning cached sync_creatives success for key %s", idempotency_key)
+            return reservation.replay
+        reservation_attempt_id = reservation.attempt_id
 
     # Track actions per creative for AdCP-compliant response
 
@@ -472,8 +559,31 @@ def _sync_creatives_impl(
         message += f", {len(creatives_needing_approval)} require approval"
 
     # Build AdCP-compliant response (per official spec)
-    return SyncCreativesResponse(
+    response = SyncCreativesResponse(
         creatives=results,
         dry_run=dry_run,
         context=context,
     )
+
+    # Best-effort completion: flip the reservation to completed in its own txn so a
+    # later same-key retry replays this verbatim response. Best-effort because the
+    # side effects above already committed; a completion miss only costs a
+    # re-execution on the (rare) retry, never a wrong answer.
+    if reservation_attempt_id is not None:
+        try:
+            with IdempotencyUoW(tenant["tenant_id"]) as uow:
+                complete_idempotent(
+                    uow,
+                    attempt_id=reservation_attempt_id,
+                    response_model=response,
+                    protocol_status="completed",
+                )
+        except Exception:
+            logger.warning(
+                "Best-effort sync_creatives idempotency completion failed for key %s - "
+                "the in_flight reservation will expire and become stealable",
+                idempotency_key,
+                exc_info=True,
+            )
+
+    return response
