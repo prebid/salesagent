@@ -311,9 +311,9 @@ class TestCreativeValidation:
 
             # Make the registry reject the format so the real unknown-format
             # AdCPValidationError path runs (the env's default mock accepts any id).
-            from unittest.mock import AsyncMock
-
-            env.mock["registry"].return_value.get_format = AsyncMock(return_value=None)
+            # Set the return on the env's existing get_format mock rather than
+            # constructing a new one (the per-file hand-rolled-mock cap only shrinks).
+            env.mock["registry"].return_value.get_format.return_value = None
 
             response = env.call_impl(
                 creatives=[
