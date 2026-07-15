@@ -19,7 +19,8 @@ from sqlalchemy import func, select
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.admin.auth_helpers import require_api_key_auth
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AdapterConfig, SyncJob, Tenant, TenantManagementConfig
+from src.core.database.models import SyncJob, Tenant, TenantManagementConfig
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
 from src.services.gam_inventory_service import db_session as gam_db_session
 
 logger = logging.getLogger(__name__)
@@ -65,8 +66,7 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
         if tenant.ad_server != "google_ad_manager":
             return jsonify({"error": "Only Google Ad Manager sync is currently supported"}), 400
 
-        adapter_stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
-        adapter_config = db_session.scalars(adapter_stmt).first()
+        adapter_config = AdapterConfigRepository(db_session, tenant_id).find_by_tenant()
 
         if not adapter_config:
             return jsonify({"error": "Adapter not configured"}), 400
@@ -321,8 +321,7 @@ def list_tenants() -> tuple[Response, int]:
         results: list[dict[str, Any]] = []
         for tenant in tenants:
             # Get adapter config
-            adapter_stmt = select(AdapterConfig).filter_by(tenant_id=tenant.tenant_id)
-            adapter_config = db_session.scalars(adapter_stmt).first()
+            adapter_config = AdapterConfigRepository(db_session, tenant.tenant_id).find_by_tenant()
 
             # Get last sync info
             sync_stmt = (
@@ -466,8 +465,7 @@ def sync_tenant_orders(tenant_id: str) -> tuple[Response, int]:
         if not tenant:
             return jsonify({"error": "Tenant not found"}), 404
 
-        adapter_stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
-        adapter_config = db_session.scalars(adapter_stmt).first()
+        adapter_config = AdapterConfigRepository(db_session, tenant_id).find_by_tenant(adapter_type="google_ad_manager")
 
         if not adapter_config or not adapter_config.gam_network_code:
             return (

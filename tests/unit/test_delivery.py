@@ -1307,7 +1307,9 @@ class TestDeliveryAuthErrors:
         Covers: UC-004-EXT-B-01
         """
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_x"])
-        identity = _make_identity(principal_id="ghost_principal")
+        # Pre-boundary identity (no eager principal) — pins the transitional
+        # DB-fallback path in require_principal (#1088).
+        identity = _make_identity(principal_id="ghost_principal").model_copy(update={"principal": None})
 
         with patch("src.core.auth.get_principal_object", return_value=None):
             with pytest.raises(AdCPAuthenticationError, match="ghost_principal"):

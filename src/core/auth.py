@@ -255,7 +255,7 @@ def get_principal_from_context(
         logger.debug("Using global token lookup (finds tenant from token)")
         detection_method = "global token lookup"
 
-    principal_id, token_tenant = get_principal_from_token(auth_token, requested_tenant_id)
+    principal_id, token_tenant, _principal = get_principal_from_token(auth_token, requested_tenant_id)
 
     # If token was provided but invalid, raise an error (unless require_valid_token=False for discovery)
     # This distinguishes between "no auth" (OK) and "bad auth" (error or warning)
@@ -282,17 +282,6 @@ def get_principal_from_context(
     # Return both principal_id and tenant_context explicitly
     # Caller MUST call set_current_tenant(tenant_context) in their async context
     return (principal_id, tenant_context)
-
-
-def get_principal_adapter_mapping(principal_id: str, tenant_id: str | None = None) -> dict[str, Any]:
-    """Get the platform mappings for a principal."""
-    if tenant_id is None:
-        tenant = get_current_tenant()
-        tenant_id = tenant["tenant_id"]
-    with get_db_session() as session:
-        stmt = select(ModelPrincipal).filter_by(principal_id=principal_id, tenant_id=tenant_id)
-        principal = session.scalars(stmt).first()
-        return principal.platform_mappings if principal else {}
 
 
 def get_principal_object(principal_id: str, tenant_id: str | None = None) -> Principal | None:
@@ -332,6 +321,43 @@ def resolve_principal_or_raise(
     if principal is None:
         raise AdCPAuthenticationError(f"Principal {principal_id} not found", context=context)
     return principal
+
+
+def require_principal(
+    identity: "ResolvedIdentity",
+    *,
+    context: "ContextObject | dict[str, Any] | None" = None,
+) -> Principal:
+    """Return the identity's Principal or raise ``AdCPAuthenticationError``.
+
+    Identity-first replacement for per-tool ``resolve_principal_or_raise``
+    calls (#1088): the transport boundary eagerly loads ``identity.principal``
+    (zero extra queries), so _impl functions take it from the identity.
+
+    Transitional fallback: construction sites that predate the eager boundary
+    (background schedulers, the ToolContext fallback branch) carry a
+    principal_id but no principal object — those resolve via the same DB
+    lookup and raise the same "Principal {id} not found" error text as
+    before, keeping the wire byte-identical.
+    """
+    principal_id = require_principal_id(identity, context=context)
+    if identity.principal is not None:
+        return identity.principal
+    return resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=context)
+
+
+def find_principal(identity: "ResolvedIdentity | None") -> Principal | None:
+    """Return the identity's Principal, or None when unauthenticated.
+
+    Soft counterpart of ``require_principal`` for tools where a missing
+    principal is a normal case (anonymous discovery, degrade-to-error lists).
+    Same transitional DB fallback for pre-boundary construction sites.
+    """
+    if identity is None or not identity.principal_id:
+        return None
+    if identity.principal is not None:
+        return identity.principal
+    return get_principal_object(identity.principal_id, tenant_id=identity.tenant_id)
 
 
 def require_principal_id(
@@ -401,21 +427,3 @@ def require_identity(
             suggestion=AUTH_REQUIRED_SUGGESTION,
         )
     return identity
-
-
-def get_adapter_principal_id(principal_id: str, adapter: str, tenant_id: str | None = None) -> str | None:
-    """Get the adapter-specific ID for a principal."""
-    mappings = get_principal_adapter_mapping(principal_id, tenant_id=tenant_id)
-
-    # Map adapter names to their specific fields
-    adapter_field_map = {
-        "gam": "gam_advertiser_id",
-        "kevel": "kevel_advertiser_id",
-        "triton": "triton_advertiser_id",
-        "mock": "mock_advertiser_id",
-    }
-
-    field_name = adapter_field_map.get(adapter)
-    if field_name:
-        return str(mappings.get(field_name, "")) if mappings.get(field_name) else None
-    return None

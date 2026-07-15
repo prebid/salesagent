@@ -212,3 +212,53 @@ class TestResolvedIdentityPassthrough:
         assert identity.principal_id is None
         assert identity.is_authenticated is False
         assert identity.tenant_id == "default"
+
+
+class TestNoPrincipalDbLookupsInTools:
+    """Ratchet (#1088): tool modules never look up principals from the DB.
+
+    The transport boundary eagerly loads ``identity.principal``
+    (src/core/auth_utils.get_principal_from_token); tool business logic takes
+    it from the identity (``require_principal`` / ``find_principal``) or, for
+    background workers, from ``uow.principals``. A direct
+    ``get_principal_object``/``resolve_principal_or_raise`` call inside
+    ``src/core/tools`` reintroduces the per-tool DB lookup this ratchet
+    retired. Empty allowlist — it can only stay empty.
+    """
+
+    _BANNED = ("get_principal_object", "resolve_principal_or_raise")
+    ALLOWLIST: set[tuple[str, str]] = set()
+
+    @pytest.mark.arch_guard
+    def test_no_principal_db_lookup_in_tools(self):
+        import ast
+        from pathlib import Path
+
+        tools_dir = Path(__file__).parent.parent.parent / "src" / "core" / "tools"
+        violations: list[tuple[str, str]] = []
+        for path in sorted(tools_dir.rglob("*.py")):
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call):
+                    fn = node.func
+                    name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
+                    if name in self._BANNED:
+                        violations.append((f"src/core/tools/{path.relative_to(tools_dir)}", name))
+        new = [v for v in violations if v not in self.ALLOWLIST]
+        assert not new, (
+            "principal DB lookups inside tool modules (use identity.principal via "
+            f"require_principal/find_principal, or uow.principals): {new}"
+        )
+
+    @pytest.mark.arch_guard
+    def test_ratchet_scanner_detects_planted_violation(self):
+        """Positive meta-test: the scanner catches a banned call in tool-shaped source."""
+        import ast
+
+        tree = ast.parse("def _fake_impl(identity):\n    p = get_principal_object('x', tenant_id='t')\n")
+        found = [
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in self._BANNED
+        ]
+        assert found == ["get_principal_object"]

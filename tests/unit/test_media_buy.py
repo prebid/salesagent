@@ -43,6 +43,7 @@ from src.core.schemas import (
     CreateMediaBuyResult,
     CreateMediaBuySuccess,
     DeliveryTotals,
+    FormatId,
     GetMediaBuyDeliveryRequest,
     GetMediaBuyDeliveryResponse,
     GetMediaBuysMediaBuy,
@@ -131,7 +132,7 @@ def _mock_product(product_id: str = "prod_1", currency: str = "USD") -> MagicMoc
     product.name = "Test Product"
     product.pricing_options = [pricing_option]
     product.delivery_type = "non_guaranteed"
-    product.format_ids = [{"agent_url": "http://agent.test", "id": "fmt_1"}]
+    product.format_ids = [FormatId(agent_url="http://agent.test", id="fmt_1")]
     return product
 
 
@@ -967,7 +968,7 @@ class TestCreateMediaBuyCreativeValidation:
         # Product only accepts display_300x250
         mock_product = MagicMock()
         mock_product.product_id = "prod_display"
-        mock_product.format_ids = [{"agent_url": "http://agent.test", "id": "display_300x250"}]
+        mock_product.format_ids = [FormatId(agent_url="http://agent.test", id="display_300x250")]
 
         package = MagicMock()
         package.creative_ids = ["c_mismatch"]
@@ -2552,7 +2553,7 @@ class TestUpdateMediaBuyCreativeIds:
         mock_package.package_config = {"product_id": "prod_1"}
 
         mock_product = MagicMock()
-        mock_product.format_ids = [{"agent_url": "http://agent.test", "id": "display_300x250"}]
+        mock_product.format_ids = [FormatId(agent_url="http://agent.test", id="display_300x250")]
         mock_product.name = "Test Product"
         mock_product.placements = None
 
@@ -2638,7 +2639,7 @@ class TestUpdateMediaBuyCreativeIds:
         mock_package.package_config = {"product_id": "prod_1"}
 
         mock_product = MagicMock()
-        mock_product.format_ids = [{"agent_url": "http://agent.test", "id": "display_300x250"}]
+        mock_product.format_ids = [FormatId(agent_url="http://agent.test", id="display_300x250")]
         mock_product.name = "Test Product"
         mock_product.placements = None
 
@@ -3009,17 +3010,21 @@ class TestUpdateMediaBuyManualApproval:
             result = _update_media_buy_impl(req=req, identity=identity)
 
         # Spec 3.1.1: a pending-approval update is the SUBMITTED variant (status="submitted"
-        # + task_id), not a completed success, carried in the UpdateMediaBuyResult
-        # protocol envelope (#1417). The workflow step is marked requires_approval.
-        assert isinstance(result.response, UpdateMediaBuySubmitted)
+        # + task_id), not a completed success. The transport-boundary refactor returns the
+        # UpdateMediaBuySubmitted envelope UNWRAPPED from _impl (production:
+        # media_buy_update.py `return approval_response`), so result IS the submitted variant.
+        # It carries no affected_packages (the update is not yet applied). The workflow step
+        # is marked requires_approval, and the result's protocol status mirrors submitted.
+        assert isinstance(result, UpdateMediaBuySubmitted)
         assert result.status == "submitted"
-        assert result.response.task_id == "step_1"
+        assert result.task_id == "step_1"
+        # The submitted envelope must not claim any applied change: no affected_packages
+        # (the pre-3.1.1 success shape reported `affected_packages == []` for this case).
+        # 6.6 reconciliation of main's "affected_packages empty (not yet applied)" check.
+        assert "affected_packages" not in result.model_dump()
         ctx_mgr.audit_workflow_step_result.assert_called_once_with(
             ANY, ANY, status="requires_approval", request_obj=ANY, add_comment=ANY
         )
-        # 6.6 reconciliation of main's "affected_packages empty (not yet applied)" check:
-        # the submitted envelope has no affected_packages field — the update is not applied.
-        assert result.model_dump().get("affected_packages") is None
 
     def test_implementation_date_null_when_pending(self):
         """UC-003-MA02: implementation_date is null until approved.
@@ -3077,10 +3082,11 @@ class TestUpdateMediaBuyManualApproval:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        # Spec 3.1.1: a pending-approval update is the SUBMITTED variant, carried in the
-        # UpdateMediaBuyResult protocol envelope (#1417). implementation_date is not part
-        # of that envelope (the update is not yet applied), so it is absent/None.
-        assert isinstance(result.response, UpdateMediaBuySubmitted)
+        # Spec 3.1.1: a pending-approval update is the SUBMITTED variant, returned UNWRAPPED
+        # from _impl by the transport-boundary refactor, so result IS the submitted envelope.
+        # implementation_date is not part of that envelope (the update is not yet applied),
+        # so it is absent/None.
+        assert isinstance(result, UpdateMediaBuySubmitted)
         assert result.status == "submitted"
         dumped = result.model_dump()
         # implementation_date should be None when pending approval

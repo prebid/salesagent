@@ -17,9 +17,14 @@
 #   scripts/creative-agent-stack.sh publish # build+push pin-keyed image to ghcr.io (CI publish workflow)
 set -euo pipefail
 
-# Pin to a known-good commit — upstream HEAD has broken migrations
-# (community_points FK violation). Bump deliberately, never to HEAD.
-ADCP_PIN="ca70dd1e2a6c"
+# Pin to a known-good commit — bump deliberately, never to HEAD.
+# 467fd93d7711 = the v3.1.1 release tag (2026-06-30): the reference agent
+# matches the spec version this repo targets (SDK 6.6 / spec 3.1.1). The
+# previous pin ca70dd1e2a6c (2026-03-31) predated 3.1.1 and was chosen because
+# upstream HEAD then had broken migrations (community_points FK violation);
+# that fix (072b46e83) is an ancestor of v3.1.1, and the sealed-stack e2e +
+# bdd-in-network suites were re-vetted green against this pin before landing.
+ADCP_PIN="467fd93d7711"
 
 # The canonical local tag is pin-keyed so a cached image from a DIFFERENT pin
 # can never satisfy _ensure_image (a bare `adcp-creative-agent` image left by
@@ -167,8 +172,11 @@ cmd_up() {
 
     if ! docker ps --format '{{.Names}}' | grep -qx "$AGENT"; then
         docker rm -f "$AGENT" >/dev/null 2>&1 || true
+        # NODE_ENV must NOT be production: since adcp v3.1.1 the agent refuses
+        # to start with the DEV_USER_* auth bypass (which the harness needs) in
+        # a production-shaped env. Mirrored in docker-compose.e2e.yml.
         docker run -d --network "$NET" --name "$AGENT" -p 9999:8080 \
-            -e NODE_ENV=production -e PORT=8080 \
+            -e NODE_ENV=development -e PORT=8080 \
             -e DATABASE_URL=postgresql://adcp:localdev@${PG}:5432/adcp_registry \
             -e RUN_MIGRATIONS=true -e ALLOW_INSECURE_COOKIES=true \
             -e DEV_USER_EMAIL=ci@test.com -e DEV_USER_ID=ci-user \

@@ -27,6 +27,7 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
+from src.core.schemas._base import FormatId
 
 logger = logging.getLogger(__name__)
 
@@ -72,11 +73,11 @@ def _get_inventory_summary(inventory_config: dict) -> str:
     return ", ".join(parts) if parts else "No inventory"
 
 
-def _get_format_summary(formats: list[dict], tenant_id: str) -> str:
+def _get_format_summary(formats: list[FormatId], tenant_id: str) -> str:
     """Generate human-readable format summary.
 
     Args:
-        formats: List of format ID objects
+        formats: List of FormatId models (typed at the DB boundary, #1172)
         tenant_id: Tenant ID for format lookup
 
     Returns:
@@ -85,10 +86,8 @@ def _get_format_summary(formats: list[dict], tenant_id: str) -> str:
     if not formats:
         return "No formats"
 
-    # Group by type for simpler display
-    format_names = []
-    for fmt in formats[:5]:  # Limit to first 5
-        format_names.append(fmt.get("id", "Unknown"))
+    # Group by type for simpler display (limit to first 5)
+    format_names = [fmt.id for fmt in formats[:5]]
 
     summary = ", ".join(format_names)
     if len(formats) > 5:
@@ -645,7 +644,8 @@ def get_inventory_profile_api(tenant_id: str, profile_id: int):
                 "targeted_ad_unit_ids": ",".join(profile.inventory_config.get("ad_units", [])),
                 "targeted_placement_ids": ",".join(profile.inventory_config.get("placements", [])),
                 "include_descendants": profile.inventory_config.get("include_descendants", True),
-                "formats": profile.format_ids,
+                # Typed FormatId column (#1172): serialize to JSON-safe dicts for jsonify
+                "formats": [fmt.model_dump(mode="json", exclude_none=True) for fmt in profile.format_ids or []],
                 "publisher_properties": profile.publisher_properties,
                 "property_mode": "all",  # Default to "all" mode for now (no DB column yet)
                 "targeting_template": profile.targeting_template,

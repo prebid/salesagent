@@ -5,10 +5,12 @@ import pytest
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 # All MCP tools - unified mode is now enabled by default
-# Note: signals tools (get_signals, activate_signal) removed - should come from dedicated signals agents
+# Note: get_signals exposed on the wire (owner decision 2026-07-11, salesagent-8wf2);
+# activate_signal stays unregistered until v3.1.1-conformant (salesagent-42ap).
 ALL_TOOLS = [
     # Core AdCP discovery tools
     "get_adcp_capabilities",
+    "get_signals",
     # Core AdCP tools
     "get_products",
     "create_media_buy",

@@ -65,6 +65,9 @@ from tests.harness.media_buy_update import MediaBuyUpdateEnv
 # Product env
 from tests.harness.product import ProductEnv
 
+# Signals env
+from tests.harness.signals import SignalsEnv
+
 # Transport helpers
 from tests.harness.transport import Transport, TransportResult
 
@@ -88,6 +91,8 @@ __all__ = [
     "MediaBuyUpdateEnv",
     # Product env
     "ProductEnv",
+    # Signals env
+    "SignalsEnv",
     # Transport
     "Transport",
     "TransportResult",

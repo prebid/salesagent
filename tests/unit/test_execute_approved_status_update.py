@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-from src.core.schemas import CreateMediaBuySuccess, Principal
+from src.core.schemas import CreateMediaBuySuccess, FormatId, Principal
 
 
 def _make_mock_media_buy():
@@ -62,7 +62,8 @@ def _make_mock_product():
     product.product_id = "prod_1"
     product.name = "Test Product"
     product.delivery_type = "non_guaranteed"
-    product.format_ids = [{"agent_url": "https://example.com/formats", "format_id": "fmt_1", "id": "fmt_1"}]
+    # Typed column (#1172): ORM reads yield FormatId models, not dicts
+    product.format_ids = [FormatId(agent_url="https://example.com/formats", id="fmt_1")]
 
     # Set up pricing option
     pricing_option = MagicMock()

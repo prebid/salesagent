@@ -63,8 +63,18 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
                 jump_to_event=None,
                 test_session_id=None,
             )
+        principal_obj = None
+        if principal_id is not None:
+            from src.core.schemas import Principal as SchemaPrincipal
+
+            principal_obj = SchemaPrincipal(
+                principal_id=principal_id,
+                name=f"Test Advertiser {principal_id}",
+                platform_mappings={"mock": {"advertiser_id": f"mock-{principal_id}"}},
+            )
         return ResolvedIdentity(
             principal_id=principal_id,
+            principal=principal_obj,
             tenant_id=tenant_id,
             tenant=resolved_tenant,
             auth_token=auth_token,

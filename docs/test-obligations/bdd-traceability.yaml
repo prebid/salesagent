@@ -774,6 +774,12 @@ mappings:
       business_rules: []
       status: new
   UC-002:
+    - adcp_scenario_id: "T-UC-002-local-unknown-top-level-field"
+      adcp_feature: "local-uc002-unknown-top-level-field.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-002-main-mcp"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-002-main"
       adcp_feature: "BR-UC-002-create-media-buy.feature"
       obligation_id: null

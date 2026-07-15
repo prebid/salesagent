@@ -19,6 +19,11 @@ from sqlalchemy.types import TypeDecorator
 logger = logging.getLogger(__name__)
 
 
+def _dump_for_storage(model: BaseModel) -> dict:
+    """Dump a Pydantic model for JSONB storage: JSON-mode, optional-absent (not null)."""
+    return model.model_dump(mode="json", exclude_none=True)
+
+
 class JSONType(TypeDecorator):
     """PostgreSQL JSONB type with optional Pydantic coercion.
 
@@ -65,23 +70,51 @@ class JSONType(TypeDecorator):
     def process_bind_param(self, value: Any, dialect: Dialect) -> dict | list | None:
         """Serialize value for database storage.
 
-        Accepts Pydantic models, dicts, and lists. Pydantic models are
-        serialized via the engine's JSON serializer (pydantic_core.to_json).
+        Accepts Pydantic models, dicts, and lists. Pydantic models are dumped
+        here with ``exclude_none=True`` rather than left to the engine's JSON
+        serializer: AdCP optional fields are ABSENT, not null, and the migrated
+        database enforces that (e.g. the ``validate_format_ids`` plpgsql CHECK
+        rejects ``"width": null``). Letting ``pydantic_core.to_json`` serialize
+        the model would emit null-valued optional keys — a write that passes on
+        ``create_all``-built test databases (no trigger) but fails on any
+        Alembic-migrated database.
+
+        When ``model`` is configured, raw dicts are validated through it BEFORE
+        storage. The typed column validates on every read, so an invalid value
+        that reaches storage makes the row unreadable — the write boundary must
+        reject what the read path cannot load (#1172 review: a non-URL
+        agent_url persisted from a form; the plpgsql CHECK validates shape,
+        not URL syntax). Raises ``pydantic.ValidationError`` (surfaced by
+        SQLAlchemy as ``StatementError``) on invalid input.
         """
         if value is None:
             return None
 
-        # Accept dict, list, and Pydantic BaseModel instances.
-        # The engine's _pydantic_json_serializer (pydantic_core.to_json) handles
-        # BaseModel serialization correctly — no need to model_dump() here.
-        if not isinstance(value, dict | list | BaseModel):
+        if isinstance(value, BaseModel):
+            return _dump_for_storage(value)
+
+        if isinstance(value, list):
+            return [self._dump_item(item) for item in value]
+
+        if not isinstance(value, dict):
             logger.warning(
                 f"JSONType received non-JSON type: {type(value).__name__}. "
                 f"Converting to empty dict to prevent data corruption."
             )
             value = {}
 
+        if self._model is not None and not self._is_list:
+            return _dump_for_storage(self._model.model_validate(value))
+
         return value
+
+    def _dump_item(self, item: Any) -> Any:
+        """Serialize one list element, validating raw dicts through the configured model."""
+        if isinstance(item, BaseModel):
+            return _dump_for_storage(item)
+        if self._model is not None and isinstance(item, dict):
+            return _dump_for_storage(self._model.model_validate(item))
+        return item
 
     def process_result_value(self, value: Any, dialect: Dialect) -> Any:
         """Deserialize value from database, coercing to Pydantic model if configured."""

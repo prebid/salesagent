@@ -1736,15 +1736,21 @@ class TestFormatCompatibilityExtended:
         assert result.action != "failed", f"Expected success but got: {result.errors}"
 
     def test_format_id_dual_key_support(self, integration_db):
-        """Covers: UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-05 — 'format_id' key accepted alongside 'id'."""
+        """Covers: UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-05.
+
+        The legacy stored 'format_id' key was retired by the typed FormatId
+        column (#1172): the DB boundary only admits the canonical
+        {agent_url, id} object shape (the migrated DB CHECK rejects any other
+        key). This test now pins that a product seeded with the canonical key
+        passes the creative-format compatibility check.
+        """
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
-            # Product uses 'format_id' key instead of 'id'
             product = ProductFactory(
                 tenant=tenant,
                 format_ids=[
-                    {"agent_url": DEFAULT_AGENT_URL, "format_id": "display_300x250"},
+                    {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
                 ],
             )
             media_buy = MediaBuyFactory(tenant=tenant, principal=principal)

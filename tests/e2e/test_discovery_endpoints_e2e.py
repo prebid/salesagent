@@ -9,10 +9,9 @@ Both endpoints are "discovery" tools — they return catalog/inventory metadata 
 """
 
 import pytest
-from fastmcp.client import Client
-from fastmcp.client.transports import StreamableHttpTransport
 
 from tests.e2e.adcp_request_builder import parse_tool_result
+from tests.e2e.utils import make_mcp_client
 
 
 class TestListCreativeFormatsE2E:
@@ -26,13 +25,7 @@ class TestListCreativeFormatsE2E:
         The CI environment has a default creative agent registered, so at least
         one format should be available.
         """
-        headers = {
-            "x-adcp-auth": test_auth_token,
-            "x-adcp-tenant": "ci-test",
-        }
-        transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
-
-        async with Client(transport=transport) as client:
+        async with make_mcp_client(live_server, token=test_auth_token) as client:
             result = await client.call_tool("list_creative_formats", {})
             data = parse_tool_result(result)
 
@@ -48,13 +41,7 @@ class TestListCreativeFormatsE2E:
         Validates the serialization path from Pydantic model through ToolResult.structured_content
         to the final dict shape seen by MCP clients.
         """
-        headers = {
-            "x-adcp-auth": test_auth_token,
-            "x-adcp-tenant": "ci-test",
-        }
-        transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
-
-        async with Client(transport=transport) as client:
+        async with make_mcp_client(live_server, token=test_auth_token) as client:
             result = await client.call_tool("list_creative_formats", {})
             data = parse_tool_result(result)
 
@@ -76,13 +63,7 @@ class TestListCreativeFormatsE2E:
         """
         Context passed in the request is echoed back in the response (AdCP spec requirement).
         """
-        headers = {
-            "x-adcp-auth": test_auth_token,
-            "x-adcp-tenant": "ci-test",
-        }
-        transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
-
-        async with Client(transport=transport) as client:
+        async with make_mcp_client(live_server, token=test_auth_token) as client:
             test_context = {"e2e": "list_creative_formats", "session": "test-123"}
             result = await client.call_tool(
                 "list_creative_formats",
@@ -107,13 +88,7 @@ class TestListAuthorizedPropertiesE2E:
         The CI environment may not have PublisherPartner rows, so publisher_domains
         may be empty. We validate the response structure regardless.
         """
-        headers = {
-            "x-adcp-auth": test_auth_token,
-            "x-adcp-tenant": "ci-test",
-        }
-        transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
-
-        async with Client(transport=transport) as client:
+        async with make_mcp_client(live_server, token=test_auth_token) as client:
             result = await client.call_tool("list_authorized_properties", {})
             data = parse_tool_result(result)
 
@@ -127,13 +102,7 @@ class TestListAuthorizedPropertiesE2E:
         """
         Context passed in the request is echoed back in the response (AdCP spec requirement).
         """
-        headers = {
-            "x-adcp-auth": test_auth_token,
-            "x-adcp-tenant": "ci-test",
-        }
-        transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
-
-        async with Client(transport=transport) as client:
+        async with make_mcp_client(live_server, token=test_auth_token) as client:
             test_context = {"e2e": "list_authorized_properties", "session": "test-456"}
             result = await client.call_tool(
                 "list_authorized_properties",

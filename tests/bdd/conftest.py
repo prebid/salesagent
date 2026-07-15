@@ -58,6 +58,11 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc004_delivery",
     "tests.bdd.steps.domain.uc002_create_media_buy",
     "tests.bdd.steps.domain.uc002_nfr",
+    "tests.bdd.steps.domain.uc002_unknown_top_level_field",
+    "tests.bdd.steps.domain.uc001_discover_inventory",
+    "tests.bdd.steps.domain.uc009_performance",
+    "tests.bdd.steps.domain.uc010_capabilities",
+    "tests.bdd.steps.domain.uc008_signals",
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
     "tests.bdd.steps.domain.uc006_sync_creatives",
@@ -161,6 +166,44 @@ def pytest_configure(config: pytest.Config) -> None:
 # ---------------------------------------------------------------------------
 # These tags correspond to features not yet implemented in production code.
 # Each xfail has a FIXME pointing to the work needed.
+
+# --- Spec-production-gap xfails (strict: the moment production emits the
+# demanded field/behavior, the run xpasses and forces graduation — see the
+# xpass-graduation workflow). One row per gap; per-UC context lives on the row.
+_SPEC_GAP_XFAILS: list[tuple[frozenset[str], str]] = [
+    # UC-001 (#1594 wiring): T-UC-001-main is env-wired and its steps
+    # run for real, but the wire never carries brief_relevance (a pinned v3.1.1
+    # product field) — the impl sorts internally when AI ranking is enabled and
+    # never serializes it (#1595). (The former relevance_score ordering leg was
+    # RECONCILED away — not a pinned 3.1.1 field; see BR-UC-001 feature comment.)
+    # T-UC-001-alt-anonymous: the spec expects
+    # success with pricing suppressed when brand_manifest_policy is public, but
+    # every _impl runs the require_identity gate (src/core/auth.py) — a
+    # token-less wire request gets AUTH_REQUIRED on all transports. Production
+    # gap owned by the #1088 boundary work (#1591).
+    (
+        frozenset({"T-UC-001-main", "T-UC-001-alt-anonymous"}),
+        "UC-001 spec-production gap — see _SPEC_GAP_XFAILS comments",
+    ),
+    # UC-010 (#1594 wiring): both rich main scenarios end with three
+    # production-gap asserts (grouped last so the other eight run green):
+    # media_buy.supported_pricing_models and media_buy.reporting_delivery_methods
+    # are spec-optional sections production does not emit yet, and the `account`
+    # section (POST-S3: sandbox flag + billing models) stays None pending the
+    # account management epic (#1592).
+    (
+        frozenset({"T-UC-010-main-mcp", "T-UC-010-main-rest"}),
+        "UC-010 spec-production gap — pricing_models/reporting_delivery_methods/account not populated (#1592)",
+    ),
+    # UC-008 (#1594 wiring): main-mcp demands value_type on every
+    # signal; the production catalog (src/core/tools/signals.py) never sets it
+    # (schema default None; #1593).
+    (
+        frozenset({"T-UC-008-main-mcp"}),
+        "UC-008 spec-production gap — signal catalog carries no value_type",
+    ),
+]
+
 
 _XFAIL_TAGS: dict[str, str] = {
     # FIXME(salesagent-ghgx): UC-003 main/alt-timing — production doesn't populate these fields
@@ -621,14 +664,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # UC-003 empty update (#1417/nzjx): production now rejects with
+        # GRADUATED (#1417/nzjx): UC-003 empty update now rejected. Production raises
         # AdCPInvalidRequestError (INVALID_REQUEST + buyer suggestion) per BR-RULE-022
-        # INV-3, but the @T-UC-003-empty-update BDD scenario stays DORMANT — it is
-        # neither ext-* nor targeting-overlay, so the UC-003 harness gate below
-        # ("UC-003 harness not yet wired for non-extension scenarios") xfails it.
-        # The behavior is graded by tests/integration/test_uc003_mcp_update_error_capture.py
-        # (per-transport: INVALID_REQUEST + non-empty top-level suggestion on the wire).
-        # Grounded against AdCP 3.1 GA: update fields are all optional in
+        # INV-3. Grounded against AdCP 3.1 GA: update fields are all optional in
         # update-media-buy-request.json, so an empty update passes schema validation and
         # is a SEMANTIC rejection → INVALID_REQUEST, not the schema-level VALIDATION_ERROR
         # (GA L3 error-handling). The two Scenario-Outline rows that asserted
@@ -1345,14 +1383,34 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # buyer-supplied start_date/end_date in response.reporting_period,
             # so T-UC-004-daterange now genuinely passes (no strict xfail).
             #
-            # date-range partition (salesagent-x18x, #1545): GRADUATED. The Examples
-            # now name the wire code — error "VALIDATION_ERROR" with suggestion — and
-            # production emits exactly that on the a2a wire ("Start date must be before
-            # end date", media_buy_delivery.py:209-218 via AdCPValidationError). Only the
-            # [a2a-…] rows are parametrized for this partition (mcp/rest/impl not
-            # collected), and they pass the named code, so no partition marker remains.
-            # (The boundary counterpart below still masks mcp/rest — those transports
-            # ARE parametrized there and still gap.)
+            # date-range partition (salesagent-x18x, #1545): the a2a rows GRADUATED —
+            # the Examples now name the wire code (error "VALIDATION_ERROR" with
+            # suggestion) and production emits exactly that on the a2a wire ("Start date
+            # must be before end date", media_buy_delivery.py:209-218 via
+            # AdCPValidationError). Under the transport-aware harness (e2e-harness-wiring)
+            # mcp/rest ARE parametrized for this partition and still gap, so they retain a
+            # marker below.
+            # date-range partition/boundary (salesagent-04zf, 18h.10 Phase-2):
+            # when_partition/boundary_date_range now translate the descriptor
+            # into real start_date/end_date (previously the axis name was sent
+            # as a literal request field and rejected by extra=forbid, so the
+            # blanket _UC004_{PARTITION,BOUNDARY}_TAGS strict=False masked a
+            # broken step). With real wiring: the "valid" rows
+            # (start_before_end / dates_omitted) genuinely PASS on all 4
+            # transports (no marker). Only the "invalid" rows genuinely fail —
+            # production does not reject start>=end (same real gap as
+            # T-UC-004-daterange-invalid / -equal). strict=True forces marker
+            # removal the moment start>=end validation lands. See
+            # docs/test-debt-bdd-strict-markers.md item C4.
+            (
+                "T-UC-004-partition-date-range",
+                # a2a rows GRADUATED at the main merge (strict XPASS observed
+                # 2026-07-09): the merged wire path validates start>=end on a2a
+                # (same evidence class as the boundary-date-range rows below).
+                {"mcp-start_after_end", "mcp-start_equals_end", "[rest-start_after_end", "[rest-start_equals_end"},
+                "production does not validate start_date>=end_date (same gap as "
+                "T-UC-004-daterange-invalid/-equal). See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
             # Transport-scoped: impl genuinely PASSES start>=end on the _impl
             # path now. mcp/rest boundary rows still don't enforce the gap.
             (
@@ -1422,11 +1480,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-account_not_found",
                     "impl-empty_object",
                     # valid rows (explicit_account_id / natural_key) now resolve the
-                    # account on a2a/mcp/rest (seeded, salesagent-jr5b) — removed.
+                    # account on a2a/mcp/rest — the delivery When seeds the named valid
+                    # accounts via _seed_valid_account_if_named / seed_account_with_access
+                    # (salesagent-jr5b, #1545), which is exactly the "seed the account in the
+                    # delivery Given" follow-up the e2e-harness-wiring branch flagged as the
+                    # condition for graduation. That seeding is present in the merged tree,
+                    # so the earlier REVERT no longer applies — the valid rows are removed.
                     # account_not_found now correctly raises ACCOUNT_NOT_FOUND on
-                    # a2a/mcp/rest once resolution runs (seeded siblings exist, the
-                    # unseeded id 404s) — removed. Only invalid_oneOf_both / empty_object
-                    # still raise ValidationError-not-AdCPError on the wire, kept.
+                    # a2a/mcp/rest once resolution runs (seeded siblings exist, the unseeded
+                    # id 404s) — removed. Only invalid_oneOf_both / empty_object still raise
+                    # ValidationError-not-AdCPError on the wire, kept (impl path also fails).
                     "a2a-invalid_oneOf_both",
                     "a2a-empty_object",
                     "mcp-invalid_oneOf_both",
@@ -1444,9 +1507,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {
                     "impl-account_id present + not found",
                     # Valid rows (account exists / single match = "brand + operator
-                    # present", incl. the sandbox:true variant) now resolve on
-                    # a2a/mcp/rest once their accounts are seeded (salesagent-jr5b)
-                    # — removed. a2a invalid rows (both / not found / empty) already
+                    # present", incl. the sandbox:true variant) now resolve on a2a/mcp/rest
+                    # once their accounts are seeded (salesagent-jr5b, present in the merged
+                    # tree) — removed. a2a invalid rows (both / not found / empty) already
                     # raise AdCPError (wire-drop XPASS, #1417) — removed.
                     "mcp-both account_id and brand/operator",
                     # mcp-account_id present + not found genuinely passes
@@ -1512,7 +1575,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # (empirically verified: a2a/mcp/rest all PASS the named code). The earlier
             # INVALID_REQUEST framing (and the "A2A wraps in RuntimeError" note) were both
             # stale — production emits VALIDATION_ERROR here, not INVALID_REQUEST — so no
-            # partition marker remains.
+            # partition marker remains. (e2e-harness-wiring corroborates: strict XPASS
+            # observed on the merged tree 2026-07-09, the merged A2A boundary raises
+            # AdCPError on the empty-array reject — adcp_validation_boundary from the
+            # #1417 embed — matching the boundary-resolution graduation below. Entry removed.)
             # T-UC-004-boundary-resolution: a2a now raises AdCPError on the empty-array
             # reject (wire-drop confirmed XPASS, #1417); the only remaining
             # transport-aware failure (a2a empty array) is handled below — entry removed
@@ -1766,6 +1832,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # never reaches the live server (#1417). Marker kept for e2e_rest until the step-
         # binding bug is fixed.
         _aw_partition_error = "T-UC-004-partition-attribution" in marker_names and 'error "INVALID_REQUEST"' in nodeid
+        # #1545/x18x: the campaign partition row GRADUATED on a2a (the only transport
+        # parametrized for it) — INV-5 fires VALIDATION_ERROR with suggestion — so the
+        # former strict=True _aw_partition_campaign leg is dropped (no _aw_partition_campaign
+        # var remains). Only the error "INVALID_REQUEST" rows still fail on e2e_rest, where
+        # the generic "with {request_params}" step still shadows the specific partition step.
         _partition_window_dropped = _aw_partition_error and is_e2e_rest
         if _partition_window_dropped:
             item.add_marker(
@@ -2034,6 +2105,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
+        # --- Spec-production-gap xfails (strict) — table-driven, see _SPEC_GAP_XFAILS ---
+        for _gap_tags, _gap_reason in _SPEC_GAP_XFAILS:
+            if marker_names & _gap_tags:
+                item.add_marker(pytest.mark.xfail(reason=_gap_reason, strict=True))
+
         # --- UC-019: xfails for spec-production gaps ---
         # Graduated (k31s): status_computation active variants, default_status_filter
         # simple variants, status_filter boundary simple variants, inv-150-2/4,
@@ -2062,9 +2138,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-019-inv-153-3",
             "T-UC-019-inv-153-4",
             "T-UC-019-inv-153-5",
-            # Sandbox mode — not implemented
+            # Sandbox mode (response echo) — not implemented
             "T-UC-019-sandbox-happy",
-            "T-UC-019-sandbox-validation",
+            # Graduated (6szx): T-UC-019-sandbox-validation — BR-RULE-209 INV-7:
+            # invalid status_filter on a sandbox account yields a REAL rejection
+            # (_resolve_status_filter → AdCPValidationError → VALIDATION_ERROR wire
+            # envelope). Given now seeds a real sandbox Account + AgentAccountAccess
+            # (was an inert ctx flag); Then steps assert wire-first.
             # Graduated: T-UC-019-partition-principal-invalid identity_missing (impl/a2a/mcp pass)
             # — moved to _UC019_PARAM_XFAIL for selective identity_missing exclusion.
             # Extension errors — error code mismatches / not implemented.
@@ -2074,7 +2154,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-019-ext-a",
             "T-UC-019-ext-b",
             "T-UC-019-ext-c",
-            "T-UC-019-ext-d",
+            # Graduated (6szx): T-UC-019-ext-d — invalid parameter types are rejected
+            # inside the shared adcp_validation_boundary (_build_get_media_buys_request)
+            # with VALIDATION_ERROR, field-level details (field="media_buy_ids"),
+            # recovery=correctable and a top-level suggestion, on the A2A wire and via
+            # the typed exception on the legacy MCP wrapper. Then steps assert wire-first.
             "T-UC-019-ext-e",
             # Main flow snapshots — adapter not wired
             "T-UC-019-main-snapshot",
@@ -2837,15 +2921,17 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 
     # UCs without a REST endpoint (get_media_buys has no REST route) are graded on
     # the A2A + MCP wire transports only — including a REST variant would 404.
-    # This exclusion covers e2e_rest too: it is the SAME REST surface over live
-    # HTTP, so every e2e_rest variant of these UCs 404s against the server
-    # (the whole uc019 red cluster in the first in-network bdd_e2e run).
-    no_rest_route = any(t.startswith(_uc_prefix) for _uc_prefix in _NO_REST_UC_TAG_PREFIXES for t in marker_names)
-    if no_rest_route:
+    # This applies to e2e_rest too: it dispatches real HTTP REST to the live
+    # server, so a tool with no REST route 404s there identically (confirmed by
+    # the first in-network CI run: every UC-019 e2e_rest param died on a live
+    # 404). Skip the e2e append for these UCs instead of parking ~40 ledger
+    # entries for a definitionally-unsupported transport.
+    no_rest_uc = any(t.startswith(_uc_prefix) for _uc_prefix in _NO_REST_UC_TAG_PREFIXES for t in marker_names)
+    if no_rest_uc:
         transports = [Transport.A2A, Transport.MCP]
         ids = ["a2a", "mcp"]
 
-    if os.environ.get("BDD_E2E_ENABLED") == "true" and not no_rest_route:
+    if os.environ.get("BDD_E2E_ENABLED") == "true" and not no_rest_uc:
         transports.append(Transport.E2E_REST)
         ids.append("e2e_rest")
 
@@ -3024,6 +3110,14 @@ def _setup_existing_media_buy(ctx: dict, env: object, tenant: object, principal:
 def _detect_uc(request: pytest.FixtureRequest) -> str | None:
     """Detect which use case a BDD scenario belongs to via its tags."""
     marker_names = {m.name for m in request.node.iter_markers()}
+    if any(t.startswith("T-UC-001-") for t in marker_names):
+        return "UC-001"
+    if any(t.startswith("T-UC-009-") for t in marker_names):
+        return "UC-009"
+    if any(t.startswith("T-UC-010-") for t in marker_names):
+        return "UC-010"
+    if any(t.startswith("T-UC-008-") for t in marker_names):
+        return "UC-008"
     if any(t.startswith("T-UC-002") for t in marker_names):
         return "UC-002"
     if any(t.startswith("T-UC-003") for t in marker_names):
@@ -3140,6 +3234,36 @@ def _db_scope_for(request: pytest.FixtureRequest, e2e_config: object | None) -> 
     return _production_db_pointed_at(e2e_config.postgres_url)  # type: ignore[attr-defined]
 
 
+def _wire_simple_env(
+    request: pytest.FixtureRequest,
+    ctx: dict,
+    e2e_config,
+    *,
+    wired_tags: set[str],
+    env_cls: type,
+    uc_label: str,
+    seed=None,
+) -> Generator[None, None, None]:
+    """Shared _harness_env wiring branch: gate on the wired tag set, enter the
+    env, publish tenant/principal into ctx, optionally seed, yield.
+
+    Scenarios outside ``wired_tags`` stay dormant (xfail) — wiring never forces
+    graduation. ``seed(env, ctx, tenant, principal)`` covers per-UC catalog
+    seeding (UC-001) without a seventh copy of the wiring skeleton.
+    """
+    marker_names = {m.name for m in request.node.iter_markers()}
+    if not (marker_names & wired_tags):
+        pytest.xfail(f"{uc_label} harness not yet wired for this scenario (#1594)")
+    with _db_scope_for(request, e2e_config), env_cls(e2e_config=e2e_config) as env:
+        tenant, principal = env.setup_default_data()
+        ctx["env"] = env
+        ctx["tenant"] = tenant
+        ctx["principal"] = principal
+        if seed is not None:
+            seed(env, ctx, tenant, principal)
+        yield
+
+
 @pytest.fixture(autouse=True)
 def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, None, None]:
     """Provide the appropriate harness for each BDD scenario.
@@ -3230,6 +3354,22 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["default_product"] = product
                 ctx["default_pricing_option"] = pricing_option
                 yield
+        elif "T-UC-002-local-unknown-top-level-field" in marker_names:
+            # Locally-added Pattern #7 top-level unknown-field scenario (GH #1442).
+            # Its Given forces dispatch_mode=create_raw so the unknown key reaches
+            # the production transport boundary unfiltered; REST/A2A grade the
+            # INVALID_REQUEST envelope, MCP grades the FastMCP signature-level
+            # rejection (owner decision 2026-07-11).
+            from tests.harness.media_buy_create import MediaBuyCreateEnv
+
+            with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
+                tenant, principal, product, pricing_option = env.setup_media_buy_data()
+                ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                ctx["default_product"] = product
+                ctx["default_pricing_option"] = pricing_option
+                yield
         else:
             # Restore the xfail guard every other use case keeps on its catch-all:
             # non-account / non-extension UC-002 scenarios are NOT yet wired (no
@@ -3248,8 +3388,8 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-003-partition-targeting-overlay",
             "T-UC-003-boundary-targeting-overlay",
         }
-        # The 3 manual-approval submitted-envelope scenarios (PR #1567) — see the
-        # BOUNDED branch below.
+        # The 3 manual-approval submitted-envelope scenarios (PR #1567, adcp 6.6 /
+        # spec 3.1.1) — see the BOUNDED branch below.
         _UC003_WIRED_TAGS = {
             "T-UC-003-alt-manual",
             "T-UC-003-approval-tenant",
@@ -3317,14 +3457,16 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}
-        if marker_names & {"account", "creative-invariant", "BR-RULE-034"}:
+        if marker_names & {"account", "creative-invariant", "BR-RULE-034", "format-id-roundtrip"}:
             # CreativeSyncEnv exercises the full sync_creatives transport wrappers.
             # @account scenarios drive account resolution (enrich_identity_with_account());
             # @creative-invariant scenarios (#1399 R3-F2) drive the success-variant
             # response invariants (e.g. all-failed still returns the success variant);
             # @BR-RULE-034 scenarios drive cross-principal isolation (triple-key
             # creative lookup) — dormant until the cross-principal existence-gate
-            # fix (PR #1430 review) made the surface safe to grade.
+            # fix (PR #1430 review) made the surface safe to grade;
+            # @format-id-roundtrip drives the storyboard format_id roundtrip on sync
+            # (seller MUST accept its own advertised format_id, #1172).
             from tests.harness.creative_sync import CreativeSyncEnv
 
             with _db_scope_for(request, e2e_config), CreativeSyncEnv(e2e_config=e2e_config) as env:
@@ -3459,6 +3601,99 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 yield
         else:
             pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
+    elif uc == "UC-008":
+        # get_signals discovery (#1594; surface exposed by
+        # the get_signals registration work (#1593 tracks activate_signal)). SignalsEnv is zero-mock — the static catalog is
+        # production code. main-mcp is wired but strict-xfailed (no value_type
+        # in the catalog, _SPEC_GAP_XFAILS). activate_signal scenarios stay
+        # dormant here: the tool is deliberately unregistered (#1593).
+        from tests.harness.signals import SignalsEnv
+
+        yield from _wire_simple_env(
+            request,
+            ctx,
+            e2e_config,
+            wired_tags={"T-UC-008-main-mcp", "T-UC-008-main-rest", "T-UC-008-main-context-echo"},
+            env_cls=SignalsEnv,
+            uc_label="UC-008",
+        )
+    elif uc == "UC-010":
+        # get_adcp_capabilities (#1594). The main-flow scenarios
+        # run a real get_adcp_capabilities through the wire transports on
+        # CapabilitiesEnv (REST dispatches as GET via REST_METHOD). Everything
+        # else stays dormant here.
+        from tests.harness.capabilities import CapabilitiesEnv
+
+        yield from _wire_simple_env(
+            request,
+            ctx,
+            e2e_config,
+            wired_tags={
+                "T-UC-010-main-mcp",
+                "T-UC-010-main-rest",
+                "T-UC-010-main-readonly",
+                "T-UC-010-main-timestamp",
+            },
+            env_cls=CapabilitiesEnv,
+            uc_label="UC-010",
+        )
+    elif uc == "UC-009":
+        # update_performance_index (#1594). The five main-flow
+        # scenarios run a real update_performance_index through every
+        # transport on PerformanceEnv (adapter + audit logger mocked, all
+        # else real). Everything else stays dormant here.
+        from tests.harness.performance import PerformanceEnv
+
+        yield from _wire_simple_env(
+            request,
+            ctx,
+            e2e_config,
+            wired_tags={
+                "T-UC-009-main-mcp",
+                "T-UC-009-main-mcp-adapter",
+                "T-UC-009-main-mcp-audit",
+                "T-UC-009-main-rest",
+                "T-UC-009-main-rest-adapter",
+            },
+            env_cls=PerformanceEnv,
+            uc_label="UC-009",
+        )
+    elif uc == "UC-001":
+        # get_products discovery (#1594). The wired set runs a
+        # real get_products through every transport on ProductEnv; the seeded
+        # catalog (open US/guaranteed, open GB/non_guaranteed, and one product
+        # restricted to another principal) makes the visibility and filter
+        # asserts non-vacuous. T-UC-001-main additionally carries a strict
+        # xfail (production gap — see _SPEC_GAP_XFAILS). Everything else
+        # stays dormant here: wiring never forces graduation.
+        from tests.harness.product import ProductEnv
+
+        def _seed_uc001_catalog(env, ctx, tenant, principal):
+            from tests.factories import PricingOptionFactory, ProductFactory
+
+            open_us = ProductFactory(tenant=tenant, countries=["US"])
+            PricingOptionFactory(product=open_us)
+            open_gb = ProductFactory(tenant=tenant, delivery_type="non_guaranteed", countries=["GB"])
+            PricingOptionFactory(product=open_gb)
+            restricted = ProductFactory(tenant=tenant, countries=["US"], allowed_principal_ids=["someone-else"])
+            PricingOptionFactory(product=restricted)
+            ctx["seeded_products"] = [open_us, open_gb, restricted]
+            ctx["restricted_product_ids"] = {restricted.product_id}
+
+        yield from _wire_simple_env(
+            request,
+            ctx,
+            e2e_config,
+            wired_tags={
+                "T-UC-001-main",
+                "T-UC-001-alt-anonymous",
+                "T-UC-001-alt-empty",
+                "T-UC-001-alt-filtered",
+            },
+            env_cls=ProductEnv,
+            uc_label="UC-001",
+            seed=_seed_uc001_catalog,
+        )
     elif uc == "UC-GET-PRODUCTS":
         from tests.harness.product import ProductEnv
 

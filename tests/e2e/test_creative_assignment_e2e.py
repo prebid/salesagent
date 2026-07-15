@@ -11,16 +11,16 @@ import json
 import uuid
 
 import pytest
-from fastmcp.client import Client
-from fastmcp.client.transports import StreamableHttpTransport
 
 from tests.e2e.adcp_request_builder import (
     build_adcp_media_buy_request,
     build_creative,
+    build_default_campaign_request,
     build_sync_creatives_request,
     get_test_date_range,
     parse_tool_result,
 )
+from tests.e2e.utils import make_mcp_client
 
 
 def discover_pricing_option_id(product: dict) -> str:
@@ -65,7 +65,7 @@ class TestCreativeAssignment:
 
     @pytest.mark.asyncio
     async def test_creative_sync_with_assignment_in_single_call(
-        self, docker_services_e2e, live_server, test_auth_token
+        self, docker_services_e2e, live_server, test_auth_token, auto_approval_adapter
     ):
         """
         Test creative sync with assignment in a single call.
@@ -84,13 +84,7 @@ class TestCreativeAssignment:
         print("=" * 80)
 
         # Setup MCP client
-        headers = {
-            "x-adcp-auth": test_auth_token,
-            "x-adcp-tenant": "ci-test",  # Explicit tenant selection for E2E tests
-        }
-        transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
-
-        async with Client(transport=transport) as client:
+        async with make_mcp_client(live_server, token=test_auth_token) as client:
             # ================================================================
             # PHASE 1: Product Discovery
             # ================================================================
@@ -136,15 +130,9 @@ class TestCreativeAssignment:
             # ================================================================
             print("\n🎯 PHASE 2: Create Media Buy with Package")
 
-            start_time, end_time = get_test_date_range(days_from_now=1, duration_days=30)
-
-            media_buy_request = build_adcp_media_buy_request(
-                product_ids=[product_id],
-                total_budget=5000.0,
-                start_time=start_time,
-                end_time=end_time,
-                brand={"domain": "testbrand.com"},
-                pricing_option_id=pricing_option_id,
+            media_buy_request = build_default_campaign_request(
+                product_id,
+                pricing_option_id,
                 targeting_overlay={
                     "geo_countries": ["US"],
                 },
@@ -270,7 +258,9 @@ class TestCreativeAssignment:
             print("=" * 80)
 
     @pytest.mark.asyncio
-    async def test_multiple_creatives_multiple_packages(self, docker_services_e2e, live_server, test_auth_token):
+    async def test_multiple_creatives_multiple_packages(
+        self, docker_services_e2e, live_server, test_auth_token, auto_approval_adapter
+    ):
         """
         Test multiple creatives assigned to multiple packages.
 
@@ -288,13 +278,7 @@ class TestCreativeAssignment:
         print("E2E TEST: Multiple Creatives → Multiple Packages")
         print("=" * 80)
 
-        headers = {
-            "x-adcp-auth": test_auth_token,
-            "x-adcp-tenant": "ci-test",  # Explicit tenant selection for E2E tests
-        }
-        transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
-
-        async with Client(transport=transport) as client:
+        async with make_mcp_client(live_server, token=test_auth_token) as client:
             # ================================================================
             # PHASE 1: Product Discovery
             # ================================================================

@@ -183,12 +183,12 @@ class TestEffectiveFormats:
             effective = product.effective_format_ids
             assert effective == test_profile.format_ids
             assert len(effective) == 2
-            assert effective[0]["id"] == "display_300x250_image"
-            assert effective[1]["id"] == "display_728x90_image"
+            assert effective[0].id == "display_300x250_image"
+            assert effective[1].id == "display_728x90_image"
 
             # Should NOT return product's custom formats
             assert effective != product.format_ids
-            assert product.format_ids[0]["id"] == "ignored_format"
+            assert product.format_ids[0].id == "ignored_format"  # typed FormatId column (#1172)
 
     @pytest.mark.requires_db
     def test_effective_formats_returns_custom_formats_when_profile_not_set(self, integration_db, test_product_custom):
@@ -211,8 +211,8 @@ class TestEffectiveFormats:
             effective = product.effective_format_ids
             assert effective == product.format_ids
             assert len(effective) == 2
-            assert effective[0]["id"] == "video_15s"
-            assert effective[1]["id"] == "video_30s"
+            assert effective[0].id == "video_15s"
+            assert effective[1].id == "video_30s"
 
 
 class TestEffectiveProperties:

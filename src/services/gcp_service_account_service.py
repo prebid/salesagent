@@ -54,10 +54,9 @@ from typing import Any
 
 from google.cloud import iam_admin_v1
 from google.cloud.iam_admin_v1 import types
-from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AdapterConfig
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
 logger = logging.getLogger(__name__)
 
@@ -142,8 +141,7 @@ class GCPServiceAccountService:
         """
         with get_db_session() as session:
             # Get adapter config
-            stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
-            adapter_config = session.scalars(stmt).first()
+            adapter_config = AdapterConfigRepository(session, tenant_id).find_by_tenant()
 
             if not adapter_config:
                 raise ValueError(f"Tenant {tenant_id} not found or has no adapter config")
@@ -397,8 +395,7 @@ class GCPServiceAccountService:
             Service account email or None if not created
         """
         with get_db_session() as session:
-            stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
-            adapter_config = session.scalars(stmt).first()
+            adapter_config = AdapterConfigRepository(session, tenant_id).find_by_tenant()
 
             if not adapter_config:
                 return None
@@ -434,8 +431,7 @@ class GCPServiceAccountService:
             Exception: If deletion fails
         """
         with get_db_session() as session:
-            stmt = select(AdapterConfig).filter_by(tenant_id=tenant_id)
-            adapter_config = session.scalars(stmt).first()
+            adapter_config = AdapterConfigRepository(session, tenant_id).find_by_tenant()
 
             if not adapter_config or not adapter_config.gam_service_account_email:
                 return False

@@ -61,10 +61,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     # FIXME(#1388): tools import SDK types directly
     ("src/core/tools/capabilities.py", "Targeting"),
     ("src/core/tools/creative_formats.py", "FormatId"),
-    ("src/core/tools/products.py", "FormatId"),
     ("src/core/tools/products.py", "ProductFilters"),
-    # FIXME(#1388): services import SDK types directly
-    ("src/services/dynamic_pricing_service.py", "FormatId"),
 }
 
 

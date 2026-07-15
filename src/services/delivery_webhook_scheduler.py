@@ -206,11 +206,19 @@ class DeliveryWebhookScheduler:
                     return
 
             # Fetch delivery metrics
-            # Create a ResolvedIdentity for the delivery call
+            # Create a ResolvedIdentity for the delivery call. This is a
+            # background construction site (#1088): the principal comes from
+            # the media_buy row via PrincipalRepository, not from a token.
+            # Reuses the caller's session — same transaction as the media_buy
+            # row, no second pool connection per report (#1088).
+            from src.core.database.repositories import PrincipalRepository
             from src.core.resolved_identity import ResolvedIdentity
+
+            scheduler_principal = PrincipalRepository(session, media_buy.tenant_id).find_by_id(media_buy.principal_id)
 
             identity = ResolvedIdentity(
                 principal_id=media_buy.principal_id,
+                principal=scheduler_principal,
                 tenant_id=media_buy.tenant_id,
                 tenant={"tenant_id": media_buy.tenant_id},
                 protocol="rest",

@@ -313,7 +313,7 @@ def patched_internals():
     """
     with (
         patch("src.core.tools.media_buy_list.MediaBuyUoW") as m_uow,
-        patch("src.core.tools.media_buy_list.get_principal_object") as m_principal,
+        patch("src.core.tools.media_buy_list.find_principal") as m_principal,
         patch("src.core.tools.media_buy_list._fetch_target_media_buys") as m_buys,
         patch("src.core.tools.media_buy_list._fetch_packages") as m_packages,
         patch("src.core.tools.media_buy_list._fetch_creative_approvals") as m_approvals,

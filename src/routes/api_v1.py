@@ -40,6 +40,7 @@ from src.core.tools import media_buy_update as media_buy_update_module
 from src.core.tools import performance as performance_module
 from src.core.tools import products as products_module
 from src.core.tools import properties as properties_module
+from src.core.tools import signals as signals_module
 from src.core.tools.creatives import listing as creatives_listing_module
 from src.core.tools.creatives import sync_wrappers as creatives_sync_module
 from src.core.validation_helpers import adcp_validation_boundary
@@ -87,8 +88,8 @@ class CreateMediaBuyBody(SalesAgentBaseModel):
     context: dict[str, Any] | None = None
     ext: dict[str, Any] | None = None
     idempotency_key: str | None = None
-    # AdCP 3.1.1 pause-on-create surface; accepted for compatibility, not yet
-    # honored on the create path (#1619).
+    # AdCP 3.1.1 pause-on-create surface. Forwarded to create_media_buy_raw below,
+    # but not yet honored on the create path by _impl — see #1619.
     paused: bool | None = None
     adcp_version: str = "1.0.0"
 
@@ -195,6 +196,28 @@ class ListCreativeFormatsBody(SalesAgentBaseModel):
 class ListAuthorizedPropertiesBody(SalesAgentBaseModel):
     property_tags: list[str] | None = None
     publisher_domains: list[str] | None = None
+    adcp_version: str = "1.0.0"
+
+
+class GetSignalsBody(SalesAgentBaseModel):
+    """POST /signals request body — mirrors v3.1.1 get-signals-request (all 16 declared properties, all optional)."""
+
+    discovery_mode: str | None = None
+    account: dict[str, Any] | None = None
+    signal_spec: str | None = None
+    signal_refs: list[str] | None = None
+    signal_ids: list[str] | None = None
+    destinations: list[dict[str, Any]] | None = None
+    countries: list[str] | None = None
+    filters: dict[str, Any] | None = None
+    fields: list[str] | None = None
+    max_results: int | None = None
+    pagination: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
+    ext: dict[str, Any] | None = None
+    push_notification_config: dict[str, Any] | None = None
+    if_pricing_version: str | None = None
+    if_wholesale_feed_version: str | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -469,6 +492,17 @@ async def update_performance_index(body: UpdatePerformanceIndexBody, identity: R
         context=to_context_object(body.context),
         identity=identity,
     )
+    return response.model_dump(mode="json")
+
+
+@router.post("/signals")
+async def get_signals(body: GetSignalsBody, identity: ResolvedIdentity = require_auth):
+    """Discover available signals (principal-scoped; auth required)."""
+    from src.core.schemas import GetSignalsRequest
+
+    with adcp_validation_boundary(context="get_signals request"):
+        req = GetSignalsRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
+    response = await signals_module.get_signals_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
 

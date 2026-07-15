@@ -193,3 +193,24 @@ class TestValidateCreativeFormatAgainstProduct:
 
         assert is_valid is True
         assert error is None
+
+    def test_transport_suffix_variants_match(self):
+        """/a2a- and /mcp-suffixed agent_urls match the bare product URL (#1172).
+
+        The consolidation onto one canonical comparison key widened the check
+        from trailing-slash-only to transport-suffix tolerance; this pins the
+        /a2a variant (the /mcp variant is pinned at tests/unit/test_creative.py).
+        """
+        product = Product.model_construct(
+            product_id="product_1",
+            name="Test Product",
+            format_ids=[FormatId(agent_url="https://creative.example.com", id="banner_300x250")],
+        )
+        for suffix in ("/a2a", "/mcp"):
+            creative_format_id = FormatId(agent_url=f"https://creative.example.com{suffix}", id="banner_300x250")
+            is_valid, error = validate_creative_format_against_product(
+                creative_format_id=creative_format_id,
+                product=product,
+            )
+            assert is_valid is True, f"{suffix} variant rejected: {error}"
+            assert error is None

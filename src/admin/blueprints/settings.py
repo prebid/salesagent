@@ -327,17 +327,14 @@ def update_adapter(tenant_id):
                     flash("No adapter configured", "error")
                     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="adapter"))
 
-            # Update or create adapter config
-            adapter_config_obj = tenant.adapter_config
-            if adapter_config_obj:
-                # Update existing config
-                adapter_config_obj.adapter_type = new_adapter
-            else:
-                # Create new config
-                from src.core.database.models import AdapterConfig
+            # Update or create adapter config — same repository path as the other
+            # three writers (auth gam_callback, gam configure_gam, adapters
+            # save_adapter_config), so the pinned no-commit and PK-safety
+            # contracts cover this writer too.
+            from src.core.database.repositories import AdapterConfigRepository
 
-                adapter_config_obj = AdapterConfig(tenant_id=tenant_id, adapter_type=new_adapter)
-                db_session.add(adapter_config_obj)
+            adapter_config_obj = AdapterConfigRepository(db_session, tenant_id).get_or_create(adapter_type=new_adapter)
+            adapter_config_obj.adapter_type = new_adapter
 
             # Extract AXE keys (adapter-agnostic, work for all adapters)
             if request.is_json:

@@ -403,6 +403,39 @@ def _detect_snippet_type(snippet: str) -> str:
         return "html"  # Default
 
 
+def supported_format_keys(format_ids: "list[Any] | None") -> set[tuple[str, str]]:
+    """Return the canonical comparison keys for a product's ``format_ids``.
+
+    The ONE canonicalization for every creative-vs-product format check (#1172):
+    ``format_id_identity`` — spec-canonical agent_url (lowercased host, dropped
+    default ports) with transport suffixes (/mcp, /a2a) stripped. All four entry
+    tools (create_media_buy package check, update_media_buy, sync_creatives
+    assignments, validate_creative_format_against_product) key on this, so the
+    same buyer input can never be accepted by one tool and rejected by another.
+    """
+    from src.core.schemas._base import format_id_identity
+
+    return {format_id_identity(fmt) for fmt in format_ids or []}
+
+
+def format_key(agent_url: object, format_id: str) -> tuple[str, str]:
+    """Canonical comparison key for one (agent_url, id) pair — see supported_format_keys."""
+    from src.core.schemas._base import canonical_agent_url
+
+    return (canonical_agent_url(agent_url), format_id)
+
+
+def format_key_display(key: tuple[str | None, str]) -> str:
+    """Render one canonical (agent_url, id) key for error messages."""
+    url, fid = key
+    return f"{url}/{fid}" if url else str(fid)
+
+
+def supported_formats_display(keys: set[tuple[str, str]]) -> str:
+    """Render a supported-format key set for error messages (sorted, joined)."""
+    return ", ".join(format_key_display(k) for k in sorted(keys, key=lambda p: (p[1], p[0])))
+
+
 def validate_creative_format_against_product(
     creative_format_id: "FormatId",
     product: "Product | DBProduct",
@@ -445,56 +478,18 @@ def validate_creative_format_against_product(
     if not creative_agent_url or not creative_id:
         return False, "Creative format_id is missing agent_url or id"
 
-    # Helper to normalize URLs for comparison (strip trailing slashes)
-    # Pydantic AnyUrl adds trailing slash when converting to string, causing mismatches
-    def normalize_url(url_val: Any) -> str:
-        if not url_val:
-            return ""
-        return str(url_val).rstrip("/")
+    # format_ids entries are typed FormatId models on both the ORM (#1172, column
+    # TypeDecorator) and schema (Pydantic-coerced) paths — no shape re-parsing.
+    # One canonical comparison key across all entry tools (supported_format_keys).
+    supported = supported_format_keys(product_format_ids)
+    creative_key = format_key(creative_agent_url, creative_id)
+    if creative_key in supported:
+        return True, None
 
-    # Simple equality check: does creative's format_id match any product format_id?
-    for product_format in product_format_ids:
-        # Handle both FormatId objects and dicts (database stores as dicts)
-        if isinstance(product_format, dict):
-            product_agent_url: str | None = product_format.get("agent_url")
-            product_fmt_id: str | None = product_format.get("id") or product_format.get("format_id")
-        elif isinstance(product_format, LibraryFormatId):
-            # Convert AnyUrl to string for consistent comparison
-            product_agent_url = str(product_format.agent_url) if product_format.agent_url else None
-            product_fmt_id = product_format.id
-        else:
-            # Skip invalid format entries
-            continue
-
-        if not product_agent_url or not product_fmt_id:
-            continue
-
-        # Format IDs match if both agent_url and id are equal (normalized to strip trailing slashes)
-        if normalize_url(creative_agent_url) == normalize_url(product_agent_url) and creative_id == product_fmt_id:
-            return True, None
-
-    # Build error message with supported formats
-    supported_formats = []
-    for fmt in product_format_ids:
-        # Handle both FormatId objects and dicts
-        if isinstance(fmt, dict):
-            agent_url: str | None = fmt.get("agent_url")
-            fmt_id: str | None = fmt.get("id") or fmt.get("format_id")
-        elif isinstance(fmt, LibraryFormatId):
-            # Convert AnyUrl to string for consistent handling
-            agent_url = str(fmt.agent_url) if fmt.agent_url else None
-            fmt_id = fmt.id
-        else:
-            continue
-
-        if agent_url and fmt_id:
-            # Use normalized URL in display to avoid double slashes
-            supported_formats.append(f"{normalize_url(agent_url)}/{fmt_id}")
-
-    creative_format_display = f"{normalize_url(creative_agent_url)}/{creative_id}"
     error_msg = (
-        f"Creative format '{creative_format_display}' does not match product '{product_name}' ({product_id}). "
-        f"Supported formats: {supported_formats}"
+        f"Creative format '{format_key_display(creative_key)}' does not match "
+        f"product '{product_name}' ({product_id}). "
+        f"Supported formats: {supported_formats_display(supported)}"
     )
 
     return False, error_msg

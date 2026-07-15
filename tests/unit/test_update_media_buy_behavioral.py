@@ -33,6 +33,7 @@ from src.core.exceptions import (
 )
 from src.core.schemas import (
     Budget,
+    FormatId,
     UpdateMediaBuyError,
     UpdateMediaBuyRequest,
     UpdateMediaBuySubmitted,
@@ -83,11 +84,16 @@ def test_principal_not_found_returns_error():
     """When auth resolves to a non-existent principal, impl returns
     UpdateMediaBuyError with code='principal_not_found'."""
     with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-        # Principal ID resolves but the object doesn't exist in DB
+        # Principal ID resolves but the object doesn't exist in DB.
+        # Post-#1088 the boundary eagerly loads identity.principal, so this
+        # state only occurs on pre-boundary construction sites (background
+        # schedulers, ToolContext fallback) — pin that transitional fallback
+        # by stripping the eager principal from the harness identity.
         env.mock["principal"].return_value = None
+        identity_without_principal = env.identity.model_copy(update={"principal": None})
 
         with pytest.raises(AdCPAuthenticationError, match="principal_test") as exc_info:
-            env.call_impl(media_buy_id="mb_001")
+            env.call_impl(media_buy_id="mb_001", identity=identity_without_principal)
 
         assert exc_info.value.error_code == "AUTH_REQUIRED"
         # _update_media_buy_impl wraps its body in the ``audit_workflow_step_failure_ctx`` context
@@ -489,11 +495,14 @@ def test_manual_approval_path_through_impl():
 
         # Spec 3.1.1: a not-yet-applied (pending approval) update is the SUBMITTED variant,
         # not a completed success. status="submitted" + task_id (the workflow step).
-        assert isinstance(result.response, UpdateMediaBuySubmitted)
+        assert isinstance(result, UpdateMediaBuySubmitted)
         assert result.status == "submitted"
-        assert result.response.task_id == "step_001"
-        # Update not applied yet: the submitted variant carries no media_buy_id or
-        # affected_packages fields — the buyer polls task_id for the applied outcome.
+        assert result.task_id == "step_001"
+        # The submitted envelope carries no applied-change fields: the update is deferred
+        # until approval (the pre-3.1.1 success shape asserted `affected_packages == []`).
+        dumped = result.model_dump()
+        assert "affected_packages" not in dumped
+        assert "media_buy_id" not in dumped
 
         # Workflow step should be updated with requires_approval status
         result_calls = env.mock["ctx_mgr"].return_value.audit_workflow_step_result.call_args_list
@@ -600,7 +609,7 @@ def test_manual_approval_creates_object_workflow_mapping():
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result.response, UpdateMediaBuySubmitted)
+        assert isinstance(result, UpdateMediaBuySubmitted)
 
         # The DB session should have had an ObjectWorkflowMapping added via session.add()
         mock_session = env.mock["uow"].return_value.session
@@ -650,7 +659,7 @@ def test_manual_approval_stores_raw_request():
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result.response, UpdateMediaBuySubmitted)
+        assert isinstance(result, UpdateMediaBuySubmitted)
 
         # The workflow step's response_data must contain enough information
         # to execute the update after approval. At minimum, the request data
@@ -942,7 +951,7 @@ class TestUC003PauseResume:
             req = UpdateMediaBuyRequest(media_buy_id="mb_pause_manual", paused=True)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result.response, UpdateMediaBuySubmitted)
+            assert isinstance(result, UpdateMediaBuySubmitted)
             result_calls = env.mock["ctx_mgr"].return_value.audit_workflow_step_result.call_args_list
             assert len(result_calls) >= 1
             assert result_calls[0][1]["status"] == "requires_approval"
@@ -1255,7 +1264,7 @@ class TestUC003UpdateCreativeIds:
 
             # Product with only "display" format
             mock_product = MagicMock()
-            mock_product.format_ids = [{"agent_url": "http://test.com", "id": "display"}]
+            mock_product.format_ids = [FormatId(agent_url="http://test.com", id="display")]
             mock_product.name = "Display Product"
             uow.products.get_by_id.return_value = mock_product
 
@@ -1943,7 +1952,7 @@ class TestUC003ManualApproval:
             req = UpdateMediaBuyRequest(media_buy_id="mb_deferred", paused=True)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result.response, UpdateMediaBuySubmitted)
+            assert isinstance(result, UpdateMediaBuySubmitted)
             # Adapter should NOT be called (deferred until seller approves)
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
 
@@ -1962,7 +1971,7 @@ class TestUC003ManualApproval:
             req = UpdateMediaBuyRequest(media_buy_id="mb_reject_setup", paused=True)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result.response, UpdateMediaBuySubmitted)
+            assert isinstance(result, UpdateMediaBuySubmitted)
             # Verify workflow step created with requires_approval (enables rejection)
             result_calls = env.mock["ctx_mgr"].return_value.audit_workflow_step_result.call_args_list
             assert result_calls[0][1]["status"] == "requires_approval"
@@ -1983,9 +1992,9 @@ class TestUC003ManualApproval:
             req = UpdateMediaBuyRequest(media_buy_id="mb_poll")
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result.response, UpdateMediaBuySubmitted)
+            assert isinstance(result, UpdateMediaBuySubmitted)
             # The buyer polls status via the returned task_id (the workflow step).
-            assert result.response.task_id == "step_001"
+            assert result.task_id == "step_001"
             # The workflow step was created (step_id="step_001")
             # and the response allows the buyer to track the status
             env.mock["ctx_mgr"].return_value.create_workflow_step.assert_called_once_with(
@@ -2029,7 +2038,9 @@ class TestUC003ExtA:
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
             env.mock["principal"].return_value = None
 
-            identity = env.identity
+            # Pre-boundary identity (no eager principal) — pins the transitional
+            # DB-fallback path in require_principal (#1088).
+            identity = env.identity.model_copy(update={"principal": None})
             req = UpdateMediaBuyRequest(media_buy_id="mb_no_principal")
             with pytest.raises(AdCPAuthenticationError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
@@ -2044,7 +2055,7 @@ class TestUC003ExtA:
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
             env.mock["principal"].return_value = None
 
-            identity = env.identity
+            identity = env.identity.model_copy(update={"principal": None})
             req = UpdateMediaBuyRequest(media_buy_id="mb_auth_fail")
             with pytest.raises(AdCPAuthenticationError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)

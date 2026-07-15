@@ -50,7 +50,7 @@ async def test_public_policy_allows_no_brand_manifest():
 
     # Mock all the dependencies
     with (
-        patch("src.core.tools.products.get_principal_object") as mock_get_principal_obj,
+        patch("src.core.tools.products.find_principal") as mock_get_principal_obj,
         patch("src.services.dynamic_products.generate_variants_for_brief") as mock_generate_variants,
         patch("src.services.dynamic_pricing_service.DynamicPricingService") as mock_pricing_service,
         patch("src.core.database.repositories.uow.ProductUoW") as mock_uow_cls,
@@ -101,7 +101,7 @@ async def test_require_brand_policy_rejects_no_brand_manifest():
 
     # Mock dependencies - need get_principal_object since it's called before brand_manifest check
     with (
-        patch("src.core.tools.products.get_principal_object", return_value=None),
+        patch("src.core.tools.products.find_principal", return_value=None),
     ):
         # Call implementation - should raise AdCPAuthorizationError (transport-agnostic)
         with pytest.raises(AdCPAuthorizationError) as exc_info:
@@ -131,7 +131,7 @@ async def test_require_brand_policy_accepts_with_brand_manifest():
 
     # Mock all dependencies
     with (
-        patch("src.core.tools.products.get_principal_object") as mock_get_principal_obj,
+        patch("src.core.tools.products.find_principal") as mock_get_principal_obj,
         patch("src.services.dynamic_products.generate_variants_for_brief") as mock_generate_variants,
         patch("src.services.dynamic_pricing_service.DynamicPricingService") as mock_pricing_service,
         patch("src.core.database.repositories.uow.ProductUoW") as mock_uow_cls,
@@ -210,7 +210,7 @@ async def test_require_auth_policy_accepts_with_auth():
 
     # Mock all dependencies
     with (
-        patch("src.core.tools.products.get_principal_object") as mock_get_principal_obj,
+        patch("src.core.tools.products.find_principal") as mock_get_principal_obj,
         patch("src.services.dynamic_products.generate_variants_for_brief") as mock_generate_variants,
         patch("src.services.dynamic_pricing_service.DynamicPricingService") as mock_pricing_service,
         patch("src.core.database.repositories.uow.ProductUoW") as mock_uow_cls,

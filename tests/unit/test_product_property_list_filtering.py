@@ -332,7 +332,7 @@ class TestCapabilitiesPropertyListFiltering:
         mock_uow.tenant_config = mock_repo
 
         with (
-            patch("src.core.tools.capabilities.get_principal_object", return_value=None),
+            patch("src.core.tools.capabilities.find_principal", return_value=None),
             patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow),
         ):
             response = _get_adcp_capabilities_impl(None, identity)

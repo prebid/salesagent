@@ -7,7 +7,7 @@ import uuid
 
 from adcp.exceptions import ADCPConnectionError, ADCPError, ADCPTimeoutError
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
-from pydantic import BaseModel
+from pydantic import AnyUrl, TypeAdapter, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import joinedload
 
@@ -67,6 +67,44 @@ def _format_to_dict(fmt: Format) -> dict:
             data["dimensions"] = f"{match.group(1)}x{match.group(2)}"
 
     return data
+
+
+_AGENT_URL_ADAPTER = TypeAdapter(AnyUrl)
+
+
+def _invalid_format_agent_urls(formats_parsed: list[dict]) -> list[str]:
+    """Return submitted agent_url values that are not valid URLs.
+
+    FormatId.agent_url is AnyUrl, and the typed format_ids column (#1172)
+    validates on every read — a non-URL agent_url persisted from the form
+    would make the row unreadable. Reject it at the write boundary instead.
+    """
+    invalid = []
+    for fmt in formats_parsed:
+        agent_url = fmt.get("agent_url") if isinstance(fmt, dict) else None
+        if not agent_url:
+            continue  # entries without agent_url are dropped by _parse_format_entries
+        try:
+            _AGENT_URL_ADAPTER.validate_python(agent_url)
+        except ValidationError:
+            invalid.append(str(agent_url))
+    return invalid
+
+
+def _flash_if_invalid_agent_urls(formats_parsed: list[dict]) -> bool:
+    """Validate submitted agent_urls and flash the shared error message.
+
+    Returns True when invalid values were found (and the error flashed) —
+    the caller only decides render-vs-redirect.
+    """
+    invalid_agent_urls = _invalid_format_agent_urls(formats_parsed)
+    if not invalid_agent_urls:
+        return False
+    flash(
+        f"Invalid agent_url values: {', '.join(invalid_agent_urls)}. Each format's agent_url must be a valid URL.",
+        "error",
+    )
+    return True
 
 
 def _parse_format_entries(formats_parsed: list[dict]) -> list[dict]:
@@ -475,54 +513,10 @@ def list_products(tenant_id):
                 # Use helper function to get pricing options (handles legacy fallback)
                 pricing_options_list = get_product_pricing_options(product)
 
-                # Parse formats and resolve names from creative agents
-                formats_data = (
-                    product.format_ids
-                    if isinstance(product.format_ids, list)
-                    else json.loads(product.format_ids)
-                    if product.format_ids
-                    else []
-                )
-
-                # Debug: Log raw formats data
-                logger.info(
-                    f"[DEBUG] Product {product.product_id} raw product.format_ids from DB: {product.format_ids}"
-                )
-                logger.info(f"[DEBUG] Product {product.product_id} formats_data after parsing: {formats_data}")
-                logger.info(
-                    f"[DEBUG] Product {product.product_id} formats_data type: {type(formats_data)}, len: {len(formats_data)}"
-                )
-
-                # Display format IDs (like inventory profiles does)
-                # Don't resolve names during page rendering to avoid async issues
-                resolved_formats = []
-
-                for fmt in formats_data:
-                    format_id = None
-
-                    if isinstance(fmt, dict):
-                        # Database JSONB: uses "id" per AdCP spec
-                        format_id = fmt.get("id") or fmt.get("format_id")  # "id" is AdCP spec, "format_id" is legacy
-                    elif isinstance(fmt, BaseModel):
-                        # Pydantic object: uses "format_id" attribute (serializes to "id" in JSON)
-                        format_id = getattr(fmt, "format_id", None) or getattr(fmt, "id", None)
-                    elif isinstance(fmt, str):
-                        # Legacy: plain string format ID
-                        format_id = fmt
-                    else:
-                        logger.warning(f"Product {product.product_id} has unexpected format type {type(fmt)}: {fmt}")
-                        continue
-
-                    # Validate format_id
-                    if format_id:
-                        resolved_formats.append({"format_id": format_id, "name": format_id})
-
-                logger.info(f"[DEBUG] Product {product.product_id} resolved {len(resolved_formats)} formats")
-                if formats_data and not resolved_formats:
-                    logger.error(
-                        f"[DEBUG] Product {product.product_id} ERROR: Had {len(formats_data)} formats but resolved 0! "
-                        f"This means format resolution failed."
-                    )
+                # Display format IDs (like inventory profiles does).
+                # Column is typed at the DB boundary (#1172): format_ids is list[FormatId].
+                # Don't resolve names during page rendering to avoid async issues.
+                resolved_formats = [{"format_id": fmt.id, "name": fmt.id} for fmt in product.format_ids or []]
 
                 # Get inventory profile info if product uses one
                 inventory_profile_dict = None
@@ -736,6 +730,9 @@ def add_product(tenant_id):
                 try:
                     formats_parsed = json.loads(formats_json)
                     if isinstance(formats_parsed, list) and formats_parsed:
+                        if _flash_if_invalid_agent_urls(formats_parsed):
+                            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
+
                         # Validate formats against creative agent registry
                         from src.core.creative_agent_registry import get_creative_agent_registry
 
@@ -1357,6 +1354,9 @@ def edit_product(tenant_id, product_id):
         try:
             formats_parsed = json.loads(formats_json)
             if isinstance(formats_parsed, list) and formats_parsed:
+                if _flash_if_invalid_agent_urls(formats_parsed):
+                    return redirect(url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id))
+
                 # Validate formats against creative agent registry
                 from src.core.creative_agent_registry import get_creative_agent_registry
 
@@ -1951,13 +1951,9 @@ def edit_product(tenant_id, product_id):
                 "delivery_type": delivery_type,
                 "cpm": cpm,
                 "price_guidance": price_guidance,
-                "formats": (
-                    product.format_ids
-                    if isinstance(product.format_ids, list)
-                    else json.loads(product.format_ids)
-                    if product.format_ids
-                    else []
-                ),
+                # Column is typed at the DB boundary (#1172): serialize FormatId models
+                # to JSON-safe dicts for the template (tojson) and downstream reads.
+                "formats": [fmt.model_dump(mode="json", exclude_none=True) for fmt in product.format_ids or []],
                 "countries": (
                     product.countries
                     if isinstance(product.countries, list)
@@ -2019,35 +2015,11 @@ def edit_product(tenant_id, product_id):
                 )
                 inventory_synced = inventory_count > 0
 
-                # Build set of selected format IDs for template checking
-                # Use composite key (agent_url, format_id) tuples per AdCP spec (same as main.py)
-                selected_format_ids = set()
-                logger.info(
-                    f"[DEBUG] Building selected_format_ids from product_dict['formats']: {product_dict['formats']}"
-                )
-                for fmt in product_dict["formats"]:
-                    agent_url = None
-                    format_id = None
-
-                    if isinstance(fmt, dict):
-                        # Database JSONB: uses "id" per AdCP spec
-                        agent_url = fmt.get("agent_url")
-                        format_id = fmt.get("id") or fmt.get("format_id")  # "id" is AdCP spec, "format_id" is legacy
-                        logger.info(f"[DEBUG] Dict format: agent_url={agent_url}, format_id={format_id}")
-                    elif isinstance(fmt, BaseModel):
-                        # Pydantic object: uses "format_id" attribute (serializes to "id" in JSON)
-                        agent_url = getattr(fmt, "agent_url", None)
-                        format_id = getattr(fmt, "format_id", None) or getattr(fmt, "id", None)
-                        logger.info(f"[DEBUG] Pydantic format: agent_url={agent_url}, format_id={format_id}")
-                    elif isinstance(fmt, str):
-                        # Legacy: plain string format ID (no agent_url) - should be deprecated
-                        format_id = fmt
-                        logger.warning(f"Product {product_dict['product_id']} has legacy string format: {fmt}")
-
-                    if format_id:
-                        selected_format_ids.add((agent_url, format_id))
-
-                logger.info(f"[DEBUG] Final selected_format_ids set: {selected_format_ids}")
+                # Build set of selected format IDs for template checking.
+                # Use composite key (agent_url, format_id) tuples per AdCP spec (same as main.py).
+                # product_dict["formats"] holds JSON-safe dicts serialized from the typed
+                # FormatId column above (#1172) — agent_url and id are always present.
+                selected_format_ids = {(fmt["agent_url"], fmt["id"]) for fmt in product_dict["formats"]}
 
                 # Fetch assigned inventory for this product
                 from src.core.database.models import ProductInventoryMapping

@@ -415,13 +415,9 @@ def configure_gam(tenant_id):
                 return jsonify({"success": False, "error": "Tenant not found"}), 404
 
             # Get or create adapter config
-            from src.core.database.models import AdapterConfig
-
-            adapter_config = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first()
-
-            if not adapter_config:
-                adapter_config = AdapterConfig(tenant_id=tenant_id, adapter_type="google_ad_manager")
-                db_session.add(adapter_config)
+            adapter_config = AdapterConfigRepository(db_session, tenant_id).get_or_create(
+                adapter_type="google_ad_manager"
+            )
 
             # Update GAM configuration in adapter_config
             adapter_config.gam_network_code = network_code
@@ -899,9 +895,7 @@ def test_gam_connection(tenant_id):
         elif auth_method == "service_account":
             # Service account flow
             with get_db_session() as db_session:
-                from src.core.database.models import AdapterConfig
-
-                adapter_config = db_session.scalars(select(AdapterConfig).filter_by(tenant_id=tenant_id)).first()
+                adapter_config = AdapterConfigRepository(db_session, tenant_id).find_by_tenant()
 
                 if not adapter_config or not adapter_config.gam_service_account_json:
                     return (

@@ -54,14 +54,27 @@ Feature: BR-UC-010 Discover Seller Capabilities
     When the Buyer Agent calls get_adcp_capabilities MCP tool
     Then the response should include adcp.major_versions containing 3
     And the response should include supported_protocols containing "media_buy"
-    And the response should include account section with sandbox flag and billing models
-    And the response should include media_buy.features section with all 7 flags
-    And the response should include media_buy.supported_pricing_models
-    And the response should include media_buy.reporting_delivery_methods section
+    # RECONCILED with pinned spec v3.1.1 (#1442, mirror upstream in adcp-req):
+    # core/media-buy-features.json declares exactly 4 properties — ALL OPTIONAL
+    # ("Optional media-buy protocol features", no required array), so a seller omits
+    # flags it does not declare. 'all 7 flags' came from the older v3.1-04f59d2d5 ref;
+    # 'all 4 flags' over-specified presence the pin never mandates (caught the moment
+    # the assert first executed — committed_metrics_supported is legitimately absent).
+    And the response should include media_buy.features section with the declared feature flags
     And the response should include media_buy.execution section with targeting
     And the response should include media_buy.portfolio with publisher_domains "news.com", "sports.com"
     And the response should include media_buy.portfolio with primary_channels "display", "social", "ctv"
     And the response should include last_updated as a valid timestamp
+    # RECONCILED ORDER (#1442, local edit — mirror upstream in adcp-req):
+    # the three production-gap asserts are grouped LAST so the eight asserts above
+    # run green today (pytest-bdd stops at the first failing step). All three are
+    # the strict-xfail graduation triggers: supported_pricing_models and
+    # reporting_delivery_methods are spec-optional sections production does not
+    # emit yet (first executions of these asserts caught this — they were dormant
+    # behind the account gap); account is the #1592 gap.
+    And the response should include media_buy.supported_pricing_models
+    And the response should include media_buy.reporting_delivery_methods section
+    And the response should include account section with sandbox flag and billing models
     # @bva protocols: Not provided (no protocol filter)
     # POST-S1: Buyer knows AdCP major versions
     # POST-S2: Buyer knows supported protocols
@@ -85,14 +98,27 @@ Feature: BR-UC-010 Discover Seller Capabilities
     When the Buyer Agent sends a get_adcp_capabilities skill request
     Then the response should include adcp.major_versions containing 3
     And the response should include supported_protocols containing "media_buy"
-    And the response should include account section with sandbox flag and billing models
-    And the response should include media_buy.features section with all 7 flags
-    And the response should include media_buy.supported_pricing_models
-    And the response should include media_buy.reporting_delivery_methods section
+    # RECONCILED with pinned spec v3.1.1 (#1442, mirror upstream in adcp-req):
+    # core/media-buy-features.json declares exactly 4 properties — ALL OPTIONAL
+    # ("Optional media-buy protocol features", no required array), so a seller omits
+    # flags it does not declare. 'all 7 flags' came from the older v3.1-04f59d2d5 ref;
+    # 'all 4 flags' over-specified presence the pin never mandates (caught the moment
+    # the assert first executed — committed_metrics_supported is legitimately absent).
+    And the response should include media_buy.features section with the declared feature flags
     And the response should include media_buy.execution section with targeting
     And the response should include media_buy.portfolio with publisher_domains "news.com", "sports.com"
     And the response should include media_buy.portfolio with primary_channels "display", "social", "ctv"
     And the response should include last_updated as a valid timestamp
+    # RECONCILED ORDER (#1442, local edit — mirror upstream in adcp-req):
+    # the three production-gap asserts are grouped LAST so the eight asserts above
+    # run green today (pytest-bdd stops at the first failing step). All three are
+    # the strict-xfail graduation triggers: supported_pricing_models and
+    # reporting_delivery_methods are spec-optional sections production does not
+    # emit yet (first executions of these asserts caught this — they were dormant
+    # behind the account gap); account is the #1592 gap.
+    And the response should include media_buy.supported_pricing_models
+    And the response should include media_buy.reporting_delivery_methods section
+    And the response should include account section with sandbox flag and billing models
     # POST-S1 through POST-S8, POST-S10, POST-S18 verified (same as MCP path)
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/protocol/get-adcp-capabilities-response.json
 

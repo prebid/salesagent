@@ -22,6 +22,8 @@ from src.core.database.repositories.adapter_config import (
     AdapterConfigRepository,
     TenantNotConfiguredError,
 )
+from tests.factories import AdapterConfigFactory, TenantFactory
+from tests.harness._base import IntegrationEnv
 
 # Test encryption key
 _TEST_ENCRYPTION_KEY = Fernet.generate_key().decode()
@@ -262,3 +264,142 @@ class TestAdapterConfigRepositoryWrite:
             repo = AdapterConfigRepository(session, "repo_test_none")
             with pytest.raises(TenantNotConfiguredError, match="repo_test_none"):
                 repo.update_custom_targeting_keys({"key": "value"})
+
+
+@pytest.mark.integration
+@pytest.mark.requires_db
+class TestFindByTenantAdapterTypeFilter:
+    """find_by_tenant(adapter_type=...) — optional type filter (GH #1169).
+
+    Extends find_by_tenant with an optional adapter_type filter so callers that
+    today issue raw ``select(AdapterConfig).filter_by(tenant_id=..., adapter_type=
+    'google_ad_manager')`` (sync_api:469, inventory:704, gam_reporting_api:344/622)
+    can migrate without changing their 400 paths: when the tenant's row has a
+    DIFFERENT adapter_type, the filtered lookup must return None.
+    """
+
+    def test_returns_config_when_adapter_type_matches(self, integration_db):
+        with IntegrationEnv() as env:
+            tenant = TenantFactory(tenant_id="acr_type_match")
+            AdapterConfigFactory(tenant=tenant, adapter_type="google_ad_manager", gam_network_code="777888999")
+
+            repo = AdapterConfigRepository(env.get_session(), "acr_type_match")
+            config = repo.find_by_tenant(adapter_type="google_ad_manager")
+
+            assert config is not None
+            assert config.tenant_id == "acr_type_match"
+            assert config.adapter_type == "google_ad_manager"
+            assert config.gam_network_code == "777888999"
+
+    def test_returns_none_when_adapter_type_differs(self, integration_db):
+        """A row EXISTS for the tenant, but with a different adapter_type -> None."""
+        with IntegrationEnv() as env:
+            tenant = TenantFactory(tenant_id="acr_type_mismatch")
+            AdapterConfigFactory(tenant=tenant, adapter_type="mock")
+
+            repo = AdapterConfigRepository(env.get_session(), "acr_type_mismatch")
+            config = repo.find_by_tenant(adapter_type="google_ad_manager")
+
+            assert config is None
+
+    def test_adapter_type_none_is_backward_compatible(self, integration_db):
+        """adapter_type=None (the default) returns the row regardless of its type."""
+        with IntegrationEnv() as env:
+            tenant = TenantFactory(tenant_id="acr_type_nofilter")
+            AdapterConfigFactory(tenant=tenant, adapter_type="mock")
+
+            repo = AdapterConfigRepository(env.get_session(), "acr_type_nofilter")
+            config = repo.find_by_tenant(adapter_type=None)
+
+            assert config is not None
+            assert config.tenant_id == "acr_type_nofilter"
+            assert config.adapter_type == "mock"
+
+
+@pytest.mark.integration
+@pytest.mark.requires_db
+class TestGetOrCreate:
+    """get_or_create(adapter_type='google_ad_manager') — upsert helper (GH #1169).
+
+    Contract pinned by architect review (salesagent-u9ci.4 / salesagent-xj9r):
+    tenant_id is the PRIMARY KEY (strict 1:1) — get_or_create finds by tenant_id
+    ONLY; adapter_type is a construct-default for a NEW row, never a find filter.
+    Never commits: the caller mutates the returned row and owns the transaction.
+    """
+
+    def test_returns_existing_row_when_present(self, integration_db):
+        with IntegrationEnv() as env:
+            tenant = TenantFactory(tenant_id="acr_goc_existing")
+            AdapterConfigFactory(tenant=tenant, adapter_type="google_ad_manager", gam_network_code="123123123")
+
+            repo = AdapterConfigRepository(env.get_session(), "acr_goc_existing")
+            config = repo.get_or_create(adapter_type="google_ad_manager")
+
+            assert config.tenant_id == "acr_goc_existing"
+            assert config.gam_network_code == "123123123"
+
+    def test_returns_existing_row_even_when_adapter_type_differs(self, integration_db):
+        """PK-safety case: existing row has adapter_type='mock', request asks for GAM.
+
+        get_or_create must return the existing PK row (NOT construct a new one —
+        session.add of a second row for the same tenant_id would raise duplicate-PK
+        IntegrityError on save_adapter_config's mock->gam type-change path).
+        It must NOT silently overwrite adapter_type; mutation belongs to the caller.
+        """
+        with IntegrationEnv() as env:
+            tenant = TenantFactory(tenant_id="acr_goc_typechange")
+            AdapterConfigFactory(tenant=tenant, adapter_type="mock")
+
+            session = env.get_session()
+            repo = AdapterConfigRepository(session, "acr_goc_typechange")
+            config = repo.get_or_create(adapter_type="google_ad_manager")
+
+            # The EXISTING mock row is returned — adapter_type untouched by the repo
+            assert config.tenant_id == "acr_goc_typechange"
+            assert config.adapter_type == "mock"
+
+            # The save_adapter_config type-change path: caller mutates + commits.
+            # Must NOT raise duplicate-PK IntegrityError.
+            config.adapter_type = "google_ad_manager"
+            session.commit()
+
+            persisted = repo.find_by_tenant()
+            assert persisted is not None
+            assert persisted.adapter_type == "google_ad_manager"
+
+    def test_constructs_uncommitted_row_when_absent(self, integration_db):
+        """No row exists: constructs + session.add's with the requested adapter_type,
+        but NEVER commits — a rollback discards it (caller owns the transaction)."""
+        with IntegrationEnv() as env:
+            TenantFactory(tenant_id="acr_goc_new")
+
+            session = env.get_session()
+            # Ensure factory data is committed so the rollback below can only
+            # discard get_or_create's own (uncommitted) work.
+            session.commit()
+
+            repo = AdapterConfigRepository(session, "acr_goc_new")
+            config = repo.get_or_create(adapter_type="google_ad_manager")
+
+            assert config.tenant_id == "acr_goc_new"
+            assert config.adapter_type == "google_ad_manager"
+
+            # Never commits: rolling back the caller-owned transaction must
+            # discard the new row entirely.
+            session.rollback()
+            assert repo.find_by_tenant() is None
+
+    def test_default_adapter_type_is_google_ad_manager(self, integration_db):
+        """Calling get_or_create() with no argument constructs a GAM-typed row."""
+        with IntegrationEnv() as env:
+            TenantFactory(tenant_id="acr_goc_default")
+
+            session = env.get_session()
+            session.commit()
+
+            repo = AdapterConfigRepository(session, "acr_goc_default")
+            config = repo.get_or_create()
+
+            assert config.tenant_id == "acr_goc_default"
+            assert config.adapter_type == "google_ad_manager"
+            session.rollback()

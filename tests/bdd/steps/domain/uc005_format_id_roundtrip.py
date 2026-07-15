@@ -9,12 +9,10 @@ Source: media-buy/index.yaml list_formats_integrity phase (AdCP v3.1-04f59d2d5).
 
 from __future__ import annotations
 
-import asyncio
-
 from pytest_bdd import given, then, when
 
 from tests.bdd.steps.domain.uc005_format_id_shape import _serialized_formats
-from tests.helpers.format_assertions import assert_wire_format_id_is_object
+from tests.helpers.format_assertions import assert_wire_format_id_is_object, capture_advertised_format_id
 
 # Shared by ProductFactory defaults and the reference-format registry (_get_reference_formats).
 _AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -38,8 +36,6 @@ def given_captured_format_id_from_get_products(ctx: dict) -> None:
     (AI ranking skipped).
     """
     from src.core.database.models import Tenant
-    from src.core.schemas import GetProductsRequest
-    from src.core.tools.products import _get_products_impl
     from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
     from tests.factories.core import get_or_create
 
@@ -65,18 +61,7 @@ def given_captured_format_id_from_get_products(ctx: dict) -> None:
     PricingOptionFactory(product=product)
     env._commit_factory_data()
 
-    req = GetProductsRequest(brief="roundtrip test")
-    response = asyncio.run(_get_products_impl(req, env.identity))
-
-    assert response.products, "get_products returned no products — cannot capture format_id"
-    product = response.products[0]
-    assert product.format_ids, "product has no format_ids — cannot capture format_id"
-
-    fid = product.format_ids[0]
-    ctx["captured_format_id"] = {
-        "agent_url": str(fid.agent_url),
-        "id": str(fid.id),
-    }
+    ctx["captured_format_id"] = capture_advertised_format_id(env, brief="roundtrip test")
 
 
 @when("the Buyer Agent sends list_creative_formats with format_ids [{captured agent_url, captured id}]")

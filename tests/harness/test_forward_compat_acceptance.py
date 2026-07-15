@@ -120,7 +120,7 @@ def _get_products_patches():
     return [
         patch("src.core.mcp_auth_middleware.resolve_identity_from_context", return_value=identity),
         patch("src.core.database.repositories.uow.ProductUoW", mock_uow),
-        patch("src.core.tools.products.get_principal_object", return_value=mock_principal),
+        patch("src.core.tools.products.find_principal", return_value=mock_principal),
         patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
         patch("src.core.tools.products.PolicyCheckService"),
         patch("src.services.dynamic_products.generate_variants_for_brief", new_callable=AsyncMock, return_value=[]),

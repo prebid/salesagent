@@ -32,7 +32,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
-from src.core.auth import get_principal_object, require_identity
+from src.core.auth import find_principal, require_identity
 from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.helpers import enum_value
@@ -114,7 +114,7 @@ def _get_adcp_capabilities_impl(
     adapter = None
     try:
         # Get the Principal object to pass to adapter
-        principal = get_principal_object(principal_id, tenant_id=identity.tenant_id) if principal_id else None
+        principal = find_principal(identity)
 
         if principal:
             adapter = get_adapter(principal, dry_run=True, tenant=tenant)

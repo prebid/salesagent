@@ -10,6 +10,7 @@ from src.admin.utils import execute_limited, get_tenant_config_from_db, require_
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Principal, Tenant
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
 logger = logging.getLogger(__name__)
 
@@ -698,11 +699,9 @@ def sync_inventory(tenant_id):
                 )
 
             # Check if GAM is configured
-            from src.core.database.models import AdapterConfig
-
-            adapter_config = db_session.scalars(
-                select(AdapterConfig).filter_by(tenant_id=tenant_id, adapter_type="google_ad_manager")
-            ).first()
+            adapter_config = AdapterConfigRepository(db_session, tenant_id).find_by_tenant(
+                adapter_type="google_ad_manager"
+            )
 
             if not adapter_config or not adapter_config.gam_network_code:
                 return (

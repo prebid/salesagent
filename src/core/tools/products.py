@@ -9,10 +9,11 @@ import os
 import time
 from typing import Annotated, Any, cast
 
-# FIXME(#1388): FormatId, ProductFilters have local subclasses; import from src.core.schemas (Pattern #7/#4).
-from adcp import FormatId, ProductFilters
 from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp import Product as LibraryProduct
+
+# FIXME(#1388): ProductFilters has a local subclass; import from src.core.schemas (Pattern #7/#4).
+from adcp import ProductFilters
 from adcp.types import BrandReference, ContextObject, PropertyListReference
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
@@ -20,7 +21,7 @@ from pydantic import Field
 
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import get_principal_object, require_identity, require_tenant
+from src.core.auth import find_principal, require_identity, require_tenant
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthenticationError,
@@ -180,7 +181,7 @@ async def _get_products_impl(
     logger.info(f"[GET_PRODUCTS] Tenant context: {tenant['tenant_id']}")
 
     # Get the Principal object with ad server mappings
-    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id) if principal_id else None
+    principal = find_principal(identity)
 
     # Extract offering text from brand (adcp 3.6.0: brand replaces brand_manifest).
     # req.brand is BrandReference | None (Pydantic model with .domain attribute).
@@ -484,52 +485,24 @@ async def _get_products_impl(
                     continue
 
             # Filter by format_ids (format_types removed in adcp 3.12)
+            # format_ids are typed FormatId models end-to-end (Pydantic-coerced
+            # schema field + typed DB column, #1172) — no string/dict shapes.
             if req.filters.format_ids:
-                # Product.format_ids is list[str] or list[dict] (format IDs)
-                product_format_ids: set[str] = set()
-                for format_id in product.format_ids or []:  # adcp 6.6: Product.format_ids is now Optional (spec 3.1.1)
-                    if isinstance(format_id, str):
-                        product_format_ids.add(format_id)
-                    elif isinstance(format_id, dict):
-                        # Dict with 'id' key (from database)
-                        dict_id = format_id.get("id")
-                        if dict_id is not None:
-                            product_format_ids.add(dict_id)
-                    elif isinstance(format_id, FormatId):
-                        product_format_ids.add(format_id.id)
+                # adcp 6.6: Product.format_ids is now Optional (spec 3.1.1)
+                product_format_ids: set[str] = {fmt.id for fmt in product.format_ids or []}
+                request_format_ids: set[str] = {fmt.id for fmt in req.filters.format_ids}
 
-                # req.filters.format_ids contains FormatId objects, extract .id from them
-                request_format_ids: set[str] = set()
-                for fmt_id in req.filters.format_ids:
-                    if isinstance(fmt_id, str):
-                        request_format_ids.add(fmt_id)
-                    elif isinstance(fmt_id, FormatId):
-                        request_format_ids.add(fmt_id.id)
-                    elif isinstance(fmt_id, dict):
-                        dict_id = fmt_id.get("id")
-                        if dict_id is not None:
-                            request_format_ids.add(dict_id)
-
-                if not any(fmt_id in product_format_ids for fmt_id in request_format_ids):
+                if not product_format_ids & request_format_ids:
                     continue
 
             # Filter by standard_formats_only
             if req.filters.standard_formats_only:
                 # Check if all formats are IAB standard formats
                 # IAB standard formats typically follow patterns like "display_", "video_", "audio_", "native_"
-                has_only_standard = True
-                for format_id in product.format_ids or []:  # adcp 6.6: Product.format_ids is now Optional (spec 3.1.1)
-                    format_id_str: str | None = None
-                    if isinstance(format_id, str):
-                        format_id_str = format_id
-                    elif isinstance(format_id, dict):
-                        format_id_str = format_id.get("id")
-                    elif isinstance(format_id, FormatId):
-                        format_id_str = format_id.id
-
-                    if format_id_str and not format_id_str.startswith(("display_", "video_", "audio_", "native_")):
-                        has_only_standard = False
-                        break
+                # adcp 6.6: Product.format_ids is now Optional (spec 3.1.1)
+                has_only_standard = all(
+                    fmt.id.startswith(("display_", "video_", "audio_", "native_")) for fmt in product.format_ids or []
+                )
 
                 if not has_only_standard:
                     continue

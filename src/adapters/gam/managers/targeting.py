@@ -121,15 +121,12 @@ class GAMTargetingManager:
         keeping it separate makes it easier to understand, test, and maintain.
         Each method has a single, clear responsibility.
         """
-        from sqlalchemy import select
-
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import AdapterConfig
+        from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
         try:
             with get_db_session() as session:
-                stmt = select(AdapterConfig).filter_by(tenant_id=self.tenant_id)
-                adapter_config = session.scalars(stmt).first()
+                adapter_config = AdapterConfigRepository(session, self.tenant_id).find_by_tenant()
 
                 if adapter_config:
                     self.axe_include_key = adapter_config.axe_include_key
@@ -153,15 +150,12 @@ class GAMTargetingManager:
         This loads the cached mapping of key names → GAM key IDs from adapter_config.custom_targeting_keys.
         The mapping must be synced from GAM using sync_custom_targeting_keys() before use.
         """
-        from sqlalchemy import select
-
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import AdapterConfig
+        from src.core.database.repositories.adapter_config import AdapterConfigRepository
 
         try:
             with get_db_session() as session:
-                stmt = select(AdapterConfig).filter_by(tenant_id=self.tenant_id)
-                adapter_config = session.scalars(stmt).first()
+                adapter_config = AdapterConfigRepository(session, self.tenant_id).find_by_tenant()
 
                 if adapter_config and adapter_config.custom_targeting_keys:
                     self.custom_targeting_key_ids = adapter_config.custom_targeting_keys

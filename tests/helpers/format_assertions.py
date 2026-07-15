@@ -35,3 +35,28 @@ def assert_wire_format_id_is_object(fid: Any) -> None:
     assert isinstance(fid, dict), f"format_id must serialize as an object, got {type(fid).__name__}: {fid!r}"
     assert "agent_url" in fid, f"format_id missing agent_url: {fid!r}"
     assert "id" in fid, f"format_id missing id: {fid!r}"
+
+
+def capture_advertised_format_id(env, *, product_id=None, brief="format_id roundtrip"):
+    """Capture the seller's advertised ``format_id`` via a real get_products call.
+
+    The shared capture core for the UC-005/UC-006 roundtrip Givens: calls
+    ``_get_products_impl`` with the env identity and returns
+    ``products[].format_ids[0]`` verbatim as an ``{"agent_url", "id"}`` dict.
+    Callers keep their own product seeding; ``product_id`` narrows the capture
+    to the seeded product (required on shared e2e_rest server DBs).
+    """
+    import asyncio
+
+    from src.core.schemas import GetProductsRequest
+    from src.core.tools.products import _get_products_impl
+
+    response = asyncio.run(_get_products_impl(GetProductsRequest(brief=brief), env.identity))
+    assert response.products, "get_products returned no products — cannot capture format_id"
+    products = response.products
+    if product_id is not None:
+        products = [p for p in products if p.product_id == product_id]
+        assert products, f"seeded product {product_id!r} not in get_products response"
+    assert products[0].format_ids, "product has no format_ids — cannot capture format_id"
+    fid = products[0].format_ids[0]
+    return {"agent_url": str(fid.agent_url), "id": str(fid.id)}

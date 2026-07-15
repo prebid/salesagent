@@ -39,6 +39,7 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import BaseModel, Field, ValidationError
 from rich.console import Console
 
+from src.core.database.repositories.adapter_config import AdapterConfigRepository
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.exceptions import (
@@ -103,16 +104,15 @@ def validate_agent_url(url: str | None) -> bool:
 from src.core import schemas
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
-    get_principal_object,
     require_identity,
+    require_principal,
     require_principal_id,
     require_tenant,
-    resolve_principal_or_raise,
 )
 from src.core.context_manager import get_context_manager
-from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
+from src.core.database.models import CurrencyLimit, MediaBuy
 from src.core.database.models import MediaPackage as DBMediaPackage
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
@@ -124,7 +124,10 @@ from src.core.helpers.creative_helpers import (
     extract_click_url,
     extract_impression_tracker_url,
     extract_media_url_and_dimensions,
+    format_key_display,
     process_and_upload_package_creatives,
+    supported_format_keys,
+    supported_formats_display,
 )
 from src.core.logging_config import log_safe
 from src.core.resolved_identity import ResolvedIdentity
@@ -144,9 +147,8 @@ from src.core.schemas import (
     Principal,
     Product,
     Targeting,
-)
-from src.core.schemas import (
-    url as make_url,
+    canonical_agent_url,
+    format_id_identity,
 )
 from src.core.testing_hooks import AdCPTestContext, TestingContext, apply_testing_hooks
 from src.core.tool_context import ToolContext
@@ -457,16 +459,11 @@ def _validate_creatives_before_adapter_call(
         )
         products_list = list(session.scalars(product_stmt).all())
 
-        # Build product_id -> set of accepted format id strings
-        product_format_map: dict[str, set[str]] = {}
-        for product in products_list:
-            accepted_formats: set[str] = set()
-            if product.format_ids:
-                for fmt in product.format_ids:
-                    fmt_id = fmt.get("id")
-                    if fmt_id:
-                        accepted_formats.add(str(fmt_id))
-            product_format_map[product.product_id] = accepted_formats
+        # Build product_id -> set of accepted format id strings.
+        # Column is typed at the DB boundary (#1172): format_ids is list[FormatId].
+        product_format_map: dict[str, set[str]] = {
+            product.product_id: {fmt.id for fmt in product.format_ids or []} for product in products_list
+        }
 
         # Check each package's creatives against its product's accepted formats
         for package in packages:
@@ -942,23 +939,15 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                     if delivery_type_str not in ["guaranteed", "non_guaranteed"]:
                         delivery_type_str = "non_guaranteed"  # Default fallback
 
-                    # Convert formats to FormatId objects with comprehensive validation
-                    format_ids_list: list[FormatId] = []
-                    formats = product.format_ids or []
-
-                    logger.debug(f"[APPROVAL] Converting {len(formats)} formats for package {package_id}")
-
-                    for idx, fmt in enumerate(formats):
-                        try:
-                            validated = FormatId.model_validate(fmt)
-                            url_str = str(validated.agent_url)
-                            if not url_str.startswith(("http://", "https://")):
-                                raise ValueError(f"agent_url must be HTTP(S), got: {url_str}")
-                            format_ids_list.append(validated)
-                        except (ValueError, ValidationError) as e:
+                    # Column is typed at the DB boundary (#1172): format_ids is list[FormatId].
+                    # Only business validation remains: agent_url must be HTTP(S).
+                    format_ids_list: list[FormatId] = list(product.format_ids or [])
+                    for idx, fmt in enumerate(format_ids_list):
+                        url_str = str(fmt.agent_url)
+                        if not url_str.startswith(("http://", "https://")):
                             error_msg = (
                                 f"Failed to reconstruct package {package_id}: "
-                                f"Format validation failed at index {idx}: {e}"
+                                f"Format validation failed at index {idx}: agent_url must be HTTP(S), got: {url_str}"
                             )
                             logger.error(f"[APPROVAL] {error_msg}")
                             return False, error_msg
@@ -1017,10 +1006,9 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             # Get the Principal object (needed for adapter). Capture the id while
             # the session is open — media_buy detaches (attributes expired) when
             # this block commits, and the creative reload below runs in a later UoW.
-            from src.core.auth import get_principal_object
-
             buy_principal_id = media_buy.principal_id
-            principal = get_principal_object(buy_principal_id, tenant_id=tenant_id)
+            assert uow.principals is not None
+            principal = uow.principals.find_by_id(buy_principal_id)
             if not principal:
                 error_msg = f"Principal {buy_principal_id} not found"
                 logger.error(f"[APPROVAL] {error_msg}")
@@ -1307,7 +1295,8 @@ def push_creative_to_existing_buy(
             if not matching:
                 return False, f"No assignment of creative {creative_id} to media buy {media_buy_id}"
 
-            principal = get_principal_object(creative.principal_id, tenant_id=tenant_id)
+            assert uow.principals is not None
+            principal = uow.principals.find_by_id(creative.principal_id)
             if not principal:
                 return False, f"Principal {creative.principal_id} not found"
 
@@ -1556,12 +1545,11 @@ async def _validate_and_convert_format_ids(
     validated_format_ids = []
 
     # Get registered agents for this tenant
+    # canonical_agent_url is the single agent-identity form (same one the registry's
+    # own cache key uses): spec-canonical + transport suffixes stripped, so all URL
+    # variations match: "https://EXAMPLE.com/mcp/" -> "https://example.com"
     registered_agents = registry._get_tenant_agents(tenant_id)
-    # Normalize agent URLs for consistent comparison (strips /mcp, /a2a, /.well-known/*, trailing slashes)
-    # This ensures all URL variations match: "https://example.com/mcp/" -> "https://example.com"
-    from src.core.validation import normalize_agent_url
-
-    registered_agent_urls = {normalize_agent_url(agent.agent_url) for agent in registered_agents}
+    registered_agent_urls = {canonical_agent_url(agent.agent_url) for agent in registered_agents}
 
     for idx, fmt_id in enumerate(format_ids):
         # STRICT ENFORCEMENT: Reject plain strings
@@ -1589,10 +1577,8 @@ async def _validate_and_convert_format_ids(
                 f"Both agent_url and id are required. Got: agent_url={agent_url!r}, id={format_id!r}",
             )
 
-        # VALIDATION: Check agent is registered
-        # Normalize incoming agent_url for comparison (strips /mcp, /a2a, /.well-known/*, trailing slashes)
-        normalized_agent_url = normalize_agent_url(agent_url)
-        if normalized_agent_url not in registered_agent_urls:
+        # VALIDATION: Check agent is registered (same canonical form as the set above)
+        if canonical_agent_url(agent_url) not in registered_agent_urls:
             raise AdCPAuthorizationError(
                 f"Package {package_idx + 1}, format_ids[{idx}]: Creative agent not registered: {agent_url}. "
                 f"Registered agents: {', '.join(sorted(registered_agent_urls))}. "
@@ -2065,7 +2051,7 @@ async def _create_media_buy_impl(
 
     # Validate principal exists BEFORE creating context (foreign key constraint).
     # Cannot create context or workflow step without a valid principal.
-    principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
+    principal = require_principal(identity, context=req.context)
 
     # Idempotency (AdCP 3.0.1): a retry with the same key replays the ORIGINAL success
     # verbatim; the same key with a different canonical payload is a conflict; errors are
@@ -2433,8 +2419,7 @@ async def _create_media_buy_impl(
 
             # Check if currency is supported by GAM network (if GAM is configured)
             # GAM only accepts: primary currency OR enabled secondary currencies
-            adapter_config_stmt = select(AdapterConfig).where(AdapterConfig.tenant_id == tenant["tenant_id"])
-            adapter_config = session.scalars(adapter_config_stmt).first()
+            adapter_config = AdapterConfigRepository(session, tenant["tenant_id"]).find_by_tenant()
             if adapter_config and adapter_config.gam_network_currency:
                 # Build list of supported currencies: primary + any secondary
                 supported_currencies = {adapter_config.gam_network_currency}
@@ -3270,58 +3255,17 @@ async def _create_media_buy_impl(
 
             # If found and has format_ids, validate and use those
             if matching_package and matching_package.format_ids:
-                # Validate that requested formats are supported by product
-                # Format is composite key: (agent_url, id) per AdCP spec
-                product_format_keys: set[tuple[str | None, str]] = set()
-                if pkg_product.format_ids:
-                    for fmt in pkg_product.format_ids:
-                        agent_url = fmt.agent_url
-                        normalized_url = str(agent_url).rstrip("/") if agent_url else None
-                        product_format_keys.add((normalized_url, fmt.id))
+                # Validate that requested formats are supported by product.
+                # supported_format_keys is the ONE canonical comparison key shared by
+                # every creative-vs-product format check (#1172) — spec-canonical
+                # agent_url with transport suffixes stripped.
+                product_format_keys: set[tuple[str, str]] = supported_format_keys(pkg_product.format_ids)
 
                 # Build set of requested format keys for comparison
-                requested_format_keys: set[tuple[str | None, str]] = set()
-                for fmt in matching_package.format_ids:
-                    normalized_url = str(fmt.agent_url).rstrip("/") if fmt.agent_url else None
-                    requested_format_keys.add((normalized_url, fmt.id))
-
-                def format_display(url: str | None, fid: str) -> str:
-                    """Format a (url, id) pair for display, handling trailing slashes."""
-                    if not url:
-                        return fid
-                    # Remove trailing slash from URL to avoid double slashes
-                    # Convert to string in case it's an AnyUrl object
-                    clean_url = str(url).rstrip("/")
-                    return f"{clean_url}/{fid}"
-
-                def _has_supported_key(url: str | None, fid: str, keys: set = product_format_keys) -> bool:
-                    """Check if (url, fid) is supported, allowing an '/mcp' URL variant.
-
-                    This does not mutate any of the underlying key sets; it only checks
-                    for the presence of either the exact key or an alternative where
-                    '/mcp' is appended to the end of the URL path.
-
-                    Args:
-                        url: The format URL to check
-                        fid: The format ID to check
-                        keys: The set of supported (url, fid) tuples (bound at function definition)
-                    """
-                    # Exact match first
-                    if (url, fid) in keys:
-                        return True
-
-                    # If URL provided, also try with '/mcp' appended (idempotent if already present)
-                    if url:
-                        # Convert to string in case it's an AnyUrl object
-                        base = str(url).rstrip("/")
-                        mcp_url = base if base.endswith("/mcp") else f"{base}/mcp"
-                        if (mcp_url, fid) in keys:
-                            return True
-
-                    return False
+                requested_format_keys: set[tuple[str, str]] = supported_format_keys(matching_package.format_ids)
 
                 unsupported_formats = [
-                    format_display(url, fid) for url, fid in requested_format_keys if not _has_supported_key(url, fid)
+                    format_key_display(key) for key in sorted(requested_format_keys - product_format_keys)
                 ]
 
                 if unsupported_formats:
@@ -3333,35 +3277,24 @@ async def _create_media_buy_impl(
                             f"Please configure format_ids on the product or contact the publisher."
                         )
                     else:
-                        supported_formats_str = ", ".join(
-                            [format_display(url, fid) for url, fid in product_format_keys]
-                        )
                         error_msg = (
                             f"Product '{pkg_product.name}' ({pkg_product.product_id}) does not support requested format(s): "
-                            f"{', '.join(unsupported_formats)}. Supported formats: {supported_formats_str}"
+                            f"{', '.join(unsupported_formats)}. "
+                            f"Supported formats: {supported_formats_display(product_format_keys)}"
                         )
                     raise AdCPValidationError(error_msg)
 
                 # Merge dimensions from product's format_ids if request format_ids don't have them
                 # This handles the case where buyer specifies format_id but not dimensions
                 # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]]
-                product_format_dimensions = {}
-                if pkg_product.format_ids:
-                    for fmt in pkg_product.format_ids:
-                        agent_url = fmt.agent_url
-                        fmt_id = fmt.id
-                        normalized_url = str(agent_url).rstrip("/") if agent_url else None
-                        if fmt_id:
-                            product_format_dimensions[(normalized_url, fmt_id)] = (
-                                fmt.width,
-                                fmt.height,
-                                fmt.duration_ms,
-                            )
+                product_format_dimensions: dict[tuple[str, str], tuple[int | None, int | None, float | None]]
+                product_format_dimensions = {
+                    format_id_identity(fmt): (fmt.width, fmt.height, fmt.duration_ms)
+                    for fmt in pkg_product.format_ids or []
+                }
 
                 # Process request format_ids, merging dimensions from product if missing
                 for req_fmt in matching_package.format_ids:
-                    normalized_url = str(req_fmt.agent_url).rstrip("/") if req_fmt.agent_url else None
                     # Check if request format has dimensions
                     if req_fmt.width is not None and req_fmt.height is not None:
                         # Request has dimensions, convert to our FormatId type
@@ -3376,7 +3309,7 @@ async def _create_media_buy_impl(
                         )
                     else:
                         # Try to get dimensions from product's format_ids
-                        product_dims = product_format_dimensions.get((normalized_url, req_fmt.id))
+                        product_dims = product_format_dimensions.get(format_id_identity(req_fmt))
                         if product_dims and (product_dims[0] is not None or product_dims[1] is not None):
                             # Merge dimensions from product
                             format_ids_to_use.append(
@@ -3401,30 +3334,11 @@ async def _create_media_buy_impl(
                                 )
                             )
 
-            # Fallback to product's formats if no request format_ids
+            # Fallback to product's formats if no request format_ids.
+            # Product.format_ids is typed list[FormatId] end-to-end (Pydantic-coerced
+            # schema field + typed DB column, #1172) — no legacy string/dict shapes.
             if not format_ids_to_use:
-                if pkg_product.format_ids:
-                    # Convert product.format_ids to FormatId objects if they're strings or dicts
-                    # Get default creative agent URL from tenant config (tenant is dict[str, Any])
-                    default_agent_url = tenant.get("creative_agent_url") or "https://creative.adcontextprotocol.org"
-                    for fmt_item in pkg_product.format_ids:
-                        if isinstance(fmt_item, str):
-                            # Convert legacy string format to FormatId object
-                            format_ids_to_use.append(FormatId(agent_url=make_url(default_agent_url), id=fmt_item))
-                        elif isinstance(fmt_item, dict):
-                            # Convert dict to FormatId object (preserves width/height/duration_ms)
-                            # Ensure agent_url is set
-                            if "agent_url" not in fmt_item or not fmt_item["agent_url"]:
-                                fmt_item = {**fmt_item, "agent_url": default_agent_url}
-                            format_ids_to_use.append(FormatId(**fmt_item))
-                        elif isinstance(fmt_item, FormatId):
-                            # Already a FormatId object
-                            format_ids_to_use.append(fmt_item)
-                        else:
-                            # Unknown type - try to cast (backward compatibility)
-                            format_ids_to_use.append(cast(FormatId, fmt_item))
-                else:
-                    format_ids_to_use = []
+                format_ids_to_use = cast(list[FormatId], list(pkg_product.format_ids or []))
 
             # Get CPM from pricing_options
             cpm = 10.0  # Default

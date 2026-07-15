@@ -1,56 +1,46 @@
-"""Test that format ID comparison handles trailing slashes correctly."""
+"""Format-identity comparison canonicalizes URL variants (one shared key, #1172).
 
-from src.core.schemas import FormatId
+Exercises the PRODUCTION canonicalization (``format_id_identity`` /
+``supported_format_keys``) rather than re-implementing rstrip locally — a
+regression in the shared canonicalizer must fail here.
+"""
+
+from src.core.helpers.creative_helpers import format_key, supported_format_keys
+from src.core.schemas import FormatId, format_id_identity
 
 
 def test_format_comparison_with_trailing_slash():
-    """Test that format IDs with and without trailing slashes match correctly."""
+    """FormatIds with and without trailing slashes share one identity key."""
+    with_slash = FormatId(agent_url="https://creative.adcontextprotocol.org/", id="display_300x250_image")
+    without_slash = FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250_image")
 
-    # Create format IDs with and without trailing slashes
-    format_with_slash = FormatId(agent_url="https://creative.adcontextprotocol.org/", id="display_300x250_image")
-
-    format_without_slash = FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250_image")
-
-    # Normalize URLs by stripping trailing slashes (convert AnyUrl to string first)
-    url_with = str(format_with_slash.agent_url).rstrip("/") if format_with_slash.agent_url else None
-    url_without = str(format_without_slash.agent_url).rstrip("/") if format_without_slash.agent_url else None
-
-    # After normalization, they should be equal
-    assert url_with == url_without
-    assert url_with == "https://creative.adcontextprotocol.org"
-
-    # Tuples should match after normalization
-    tuple_with = (url_with, format_with_slash.id)
-    tuple_without = (url_without, format_without_slash.id)
-
-    assert tuple_with == tuple_without
-    assert tuple_with == ("https://creative.adcontextprotocol.org", "display_300x250_image")
+    assert format_id_identity(with_slash) == format_id_identity(without_slash)
+    assert format_id_identity(with_slash) == ("https://creative.adcontextprotocol.org", "display_300x250_image")
 
 
 def test_format_set_comparison_with_mixed_slashes():
-    """Test that sets of format tuples handle trailing slashes correctly."""
+    """supported_format_keys canonicalizes both sides of a set comparison."""
+    product_keys = supported_format_keys(
+        [
+            FormatId(agent_url="https://creative.adcontextprotocol.org/", id="display_300x250_image"),
+            FormatId(agent_url="https://creative.adcontextprotocol.org/", id="display_728x90_image"),
+        ]
+    )
 
-    # Product formats (from database, might have trailing slash)
-    product_formats = {
-        ("https://creative.adcontextprotocol.org/", "display_300x250_image"),
-        ("https://creative.adcontextprotocol.org/", "display_728x90_image"),
-    }
+    requested = format_key("https://creative.adcontextprotocol.org", "display_300x250_image")
+    assert requested in product_keys
 
-    # Requested formats (from client, might not have trailing slash)
-    requested_formats = {
-        ("https://creative.adcontextprotocol.org", "display_300x250_image"),
-    }
+    unsupported = format_key("https://creative.adcontextprotocol.org", "video_30s")
+    assert unsupported not in product_keys
 
-    # Without normalization, this would fail
-    # assert requested_formats.issubset(product_formats)  # This FAILS!
 
-    # With normalization
-    normalized_product = {(url.rstrip("/") if url else None, fid) for url, fid in product_formats}
-    normalized_requested = {(url.rstrip("/") if url else None, fid) for url, fid in requested_formats}
-
-    # After normalization, subset check should work
-    assert normalized_requested.issubset(normalized_product)
-
-    # Find unsupported formats (should be empty)
-    unsupported = normalized_requested - normalized_product
-    assert unsupported == set()
+def test_transport_suffix_and_case_variants_share_one_key():
+    """/mcp, /a2a and host-case variants canonicalize to the same identity."""
+    base = format_key("https://creative.adcontextprotocol.org", "display_300x250_image")
+    for variant in (
+        "https://creative.adcontextprotocol.org/mcp",
+        "https://creative.adcontextprotocol.org/a2a",
+        "https://creative.adcontextprotocol.org/.well-known/adcp/sales",
+        "https://CREATIVE.ADCONTEXTPROTOCOL.ORG/",
+    ):
+        assert format_key(variant, "display_300x250_image") == base, variant

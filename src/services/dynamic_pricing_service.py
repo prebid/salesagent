@@ -10,8 +10,6 @@ Uses historical GAM reporting data aggregated by country + creative format.
 import logging
 from datetime import UTC, datetime, timedelta
 
-# FIXME(#1388): FormatId has a local subclass; import from src.core.schemas (Pattern #7/#4).
-from adcp import FormatId
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
@@ -92,17 +90,10 @@ class DynamicPricingService:
         # Format IDs like "display_300x250" -> "300x250"
         creative_sizes = []
         for format_id in product.format_ids or []:  # adcp 6.6: Product.format_ids is now Optional (spec 3.1.1)
-            # Handle FormatId objects (dict or object with .id attribute)
-            # Pydantic validation may return dict, object, or string depending on context
-            if isinstance(format_id, dict):
-                format_id_str = format_id.get("id", "")
-            elif isinstance(format_id, FormatId):
-                format_id_str = format_id.id
-            else:
-                format_id_str = str(format_id)
-
+            # format_ids are typed FormatId models end-to-end (Pydantic-coerced
+            # schema field + typed DB column, #1172) — no string/dict shapes.
             # Extract size from format_id (e.g., "display_300x250" -> "300x250")
-            parts = format_id_str.split("_")
+            parts = format_id.id.split("_")
             if len(parts) >= 2:
                 # Look for dimensions pattern (NxM)
                 for part in parts:

@@ -12,7 +12,7 @@ import logging
 import os
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from adcp import PushNotificationConfig
 from adcp.server.helpers import MEDIA_BUY_STATE_MACHINE, is_terminal_status, valid_actions_for_status
@@ -21,6 +21,9 @@ from adcp.types import MediaBuyStatus
 from pydantic import Field
 
 from src.core.tools.media_buy_list import _compute_status, normalize_persisted_media_buy_status
+
+if TYPE_CHECKING:
+    from src.core.database.models import MediaBuy
 
 # ---------------------------------------------------------------------------
 # Financial policy constants (F-05)
@@ -55,9 +58,9 @@ logger = logging.getLogger(__name__)
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
     require_identity,
+    require_principal,
     require_principal_id,
     require_tenant,
-    resolve_principal_or_raise,
 )
 from src.core.context_manager import get_context_manager
 from src.core.database.models import (
@@ -72,6 +75,7 @@ from src.core.database.models import (
 )
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.helpers.adapter_helpers import get_adapter
+from src.core.helpers.creative_helpers import format_key, supported_format_keys, supported_formats_display
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AffectedPackage,
@@ -161,17 +165,6 @@ def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
     return actions
 
 
-def _normalize_creative_agent_url(url: str | None) -> str | None:
-    """Normalize a creative/format agent_url for comparison.
-
-    Strips a trailing slash and an optional ``/mcp`` suffix so the two
-    URL variants a buyer may use compare equal.
-    """
-    if not url:
-        return None
-    return url.rstrip("/").removesuffix("/mcp")
-
-
 def _validate_creatives_for_assignment(
     creative_ids: list[str],
     *,
@@ -258,29 +251,26 @@ def _validate_creatives_for_assignment(
 
     display_name = product_name or getattr(product, "name", None) or getattr(product, "product_id", "")
 
-    # Build the set of supported (normalized_agent_url, format_id) pairs.
-    supported_formats: set[tuple[str | None, str]] = set()
-    for fmt in product.format_ids:
-        if isinstance(fmt, dict):
-            agent_url = fmt.get("agent_url")
-            format_id = fmt.get("id") or fmt.get("format_id")
-            if format_id:
-                supported_formats.add((_normalize_creative_agent_url(agent_url), format_id))
+    # Build the set of supported canonical format keys.
+    # Column is typed at the DB boundary (#1172): format_ids is list[FormatId].
+    # supported_format_keys is the ONE canonical comparison key shared by every
+    # creative-vs-product format check, so URL variants compare equal.
+    supported_formats: set[tuple[str, str]] = supported_format_keys(product.format_ids)
 
     if not supported_formats:
         return  # No usable format restrictions — allow all.
 
     incompatible: list[str] = []
     for creative in creatives_list:
-        creative_pair = (_normalize_creative_agent_url(creative.agent_url), creative.format)
+        creative_pair = (
+            format_key(creative.agent_url, creative.format) if creative.agent_url else (None, creative.format)
+        )
         if creative_pair not in supported_formats:
             display = f"{creative.agent_url}/{creative.format}" if creative.agent_url else str(creative.format)
             incompatible.append(f"{creative.creative_id} (format '{display}')")
 
     if incompatible:
-        supported_display = ", ".join(
-            f"{url}/{fmt_id}" if url else fmt_id for url, fmt_id in sorted(supported_formats, key=lambda p: p[1])
-        )
+        supported_display = supported_formats_display(supported_formats)
         raise AdCPCreativeRejectedError(
             f"Creative format(s) not supported by product '{display_name}': {', '.join(incompatible)}. "
             f"Supported formats: {supported_display}",
@@ -344,7 +334,7 @@ def _update_media_buy_impl(
     req: UpdateMediaBuyRequest,
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
-) -> UpdateMediaBuyResult:
+) -> UpdateMediaBuyResult | UpdateMediaBuySubmitted:
     """Shared implementation for update_media_buy (used by both MCP and A2A).
 
     Callers construct the validated UpdateMediaBuyRequest at their boundary
@@ -466,7 +456,7 @@ def _update_media_buy_impl(
                     request_metadata={"protocol": identity.protocol},
                 )
 
-            principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
+            principal = require_principal(identity, context=req.context)
 
             adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
             today = req.today or date.today()
@@ -608,7 +598,10 @@ def _update_media_buy_impl(
                 )
                 session.add(mapping)
 
-                return UpdateMediaBuyResult(response=approval_response, status=AdcpTaskStatus.submitted.value)
+                # UpdateMediaBuySubmitted carries the protocol-envelope
+                # status="submitted" (const) natively — returned unwrapped so every
+                # transport serializes the spec-correct submitted envelope.
+                return approval_response
 
             # Validate currency limits if flight dates or budget changes
             # This prevents workarounds where buyers extend flight to bypass daily max

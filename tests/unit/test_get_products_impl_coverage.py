@@ -84,7 +84,7 @@ def _standard_patches(mock_uow, principal=None, convert_fn=None):
         convert_fn = lambda p, **kw: p  # noqa: E731
     return [
         patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
-        patch("src.core.tools.products.get_principal_object", return_value=principal),
+        patch("src.core.tools.products.find_principal", return_value=principal),
         patch("src.core.tools.products.convert_product_model_to_schema", side_effect=convert_fn),
         patch(
             "src.services.dynamic_products.generate_variants_for_brief",
@@ -165,7 +165,7 @@ class TestProductConversionError:
 
         with (
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
-            patch("src.core.tools.products.get_principal_object", return_value=None),
+            patch("src.core.tools.products.find_principal", return_value=None),
             patch(
                 "src.core.tools.products.convert_product_model_to_schema",
                 side_effect=Exception("missing required field 'delivery_type'"),
@@ -201,7 +201,7 @@ class TestProductConversionError:
 
         with (
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
-            patch("src.core.tools.products.get_principal_object", return_value=None),
+            patch("src.core.tools.products.find_principal", return_value=None),
             patch(
                 "src.core.tools.products.convert_product_model_to_schema",
                 side_effect=convert_with_error,

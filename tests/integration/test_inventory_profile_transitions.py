@@ -17,6 +17,7 @@ from sqlalchemy import delete, select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import InventoryProfile, Product, Tenant
+from src.core.schemas._base import FormatId
 from tests.helpers import assert_effective_properties_normalized
 
 
@@ -152,9 +153,11 @@ class TestInventoryProfileTransitions:
         Expected: effective_* properties return profile data, custom data preserved.
         """
         # Create product with custom formats and properties
+        # Typed FormatId column (#1172): reads yield FormatId models, so seed and
+        # compare with typed values.
         custom_formats = [
-            {"agent_url": "https://custom.com", "id": "custom_format_1"},
-            {"agent_url": "https://custom.com", "id": "custom_format_2"},
+            FormatId(agent_url="https://custom.com", id="custom_format_1"),
+            FormatId(agent_url="https://custom.com", id="custom_format_2"),
         ]
         custom_properties = [
             {
@@ -264,7 +267,9 @@ class TestInventoryProfileTransitions:
             product.inventory_profile_id = None
 
             # Set custom formats and properties
-            custom_formats = [{"agent_url": "https://new-custom.com", "id": "new_custom_format"}]
+            custom_formats = [
+                FormatId(agent_url="https://new-custom.com", id="new_custom_format")
+            ]  # typed column (#1172)
             custom_properties = [
                 {
                     "publisher_domain": "new-custom-site.com",
@@ -337,7 +342,7 @@ class TestInventoryProfileTransitions:
             )
 
             # Verify we have the expected profile_a data
-            profile_a_format_ids = [f["id"] for f in profile_a_obj.format_ids]
+            profile_a_format_ids = [f.id for f in profile_a_obj.format_ids]  # typed FormatId column (#1172)
             assert "format_a1" in profile_a_format_ids
             assert "format_a2" in profile_a_format_ids
 
@@ -354,12 +359,12 @@ class TestInventoryProfileTransitions:
             )
 
             # Verify we now have profile_b data
-            profile_b_format_ids = [f["id"] for f in profile_b_obj.format_ids]
+            profile_b_format_ids = [f.id for f in profile_b_obj.format_ids]
             assert "format_b1" in profile_b_format_ids
             assert "format_b2" in profile_b_format_ids
 
             # Verify profile_a data is NOT returned
-            current_format_ids = [f["id"] for f in product.effective_format_ids]
+            current_format_ids = [f.id for f in product.effective_format_ids]
             assert "format_a1" not in current_format_ids
             assert "format_a2" not in current_format_ids
 

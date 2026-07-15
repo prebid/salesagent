@@ -123,7 +123,6 @@ class TestPushCreativeToExistingBuy:
             patch(_UOW_PATCH, return_value=uow),
             patch("src.core.config_loader.get_tenant_by_id", return_value=None),
             patch("src.core.config_loader.set_current_tenant"),
-            patch(f"{_MODULE}.get_principal_object", return_value=MagicMock()),
             patch(f"{_MODULE}.get_adapter", return_value=mock_adapter),
             patch(
                 f"{_MODULE}.extract_media_url_and_dimensions", return_value=("https://ad.example.com/ad.jpg", 300, 250)
@@ -170,7 +169,6 @@ class TestPushCreativeToExistingBuy:
             patch(_UOW_PATCH, return_value=uow),
             patch("src.core.config_loader.get_tenant_by_id", return_value=None),
             patch("src.core.config_loader.set_current_tenant"),
-            patch(f"{_MODULE}.get_principal_object", return_value=MagicMock()),
             patch(f"{_MODULE}.get_adapter", return_value=mock_adapter),
             patch(
                 f"{_MODULE}.extract_media_url_and_dimensions", return_value=("https://ad.example.com/ad.jpg", 300, 250)
@@ -208,14 +206,13 @@ class TestPushCreativeToExistingBuy:
             patch(_UOW_PATCH, return_value=uow),
             patch("src.core.config_loader.get_tenant_by_id", return_value=None),
             patch("src.core.config_loader.set_current_tenant"),
-            patch(f"{_MODULE}.get_principal_object", return_value=MagicMock()) as mock_principal,
             patch(f"{_MODULE}.get_adapter", return_value=mock_adapter) as mock_get_adapter,
         ):
             success, err = _call()
 
         assert success is True
         assert err is None
-        mock_principal.assert_not_called()
+        uow.principals.find_by_id.assert_not_called()
         mock_get_adapter.assert_not_called()
         mock_adapter.creatives_manager.add_creative_assets.assert_not_called()
         uow.creatives.update_data.assert_not_called()
@@ -291,7 +288,6 @@ class TestPushCreativeToExistingBuy:
             patch(_UOW_PATCH, return_value=uow),
             patch("src.core.config_loader.get_tenant_by_id", return_value=None),
             patch("src.core.config_loader.set_current_tenant"),
-            patch(f"{_MODULE}.get_principal_object", return_value=MagicMock()),
             patch(f"{_MODULE}.get_adapter", return_value=_make_adapter()),
         ):
             success, err = _call()
@@ -318,7 +314,6 @@ class TestPushCreativeToExistingBuy:
             patch(_UOW_PATCH, return_value=uow),
             patch("src.core.config_loader.get_tenant_by_id", return_value=None),
             patch("src.core.config_loader.set_current_tenant"),
-            patch(f"{_MODULE}.get_principal_object", return_value=MagicMock()),
             patch(f"{_MODULE}.get_adapter", return_value=_make_adapter()),
         ):
             success, err = _call()
@@ -340,7 +335,6 @@ class TestPushCreativeToExistingBuy:
             patch(_UOW_PATCH, return_value=uow),
             patch("src.core.config_loader.get_tenant_by_id", return_value=None),
             patch("src.core.config_loader.set_current_tenant"),
-            patch(f"{_MODULE}.get_principal_object", return_value=MagicMock()),
             patch(f"{_MODULE}.get_adapter", return_value=adapter),
         ):
             success, err = _call()
@@ -363,7 +357,6 @@ class TestPushCreativeToExistingBuy:
             patch(_UOW_PATCH, return_value=uow),
             patch("src.core.config_loader.get_tenant_by_id", return_value=None),
             patch("src.core.config_loader.set_current_tenant"),
-            patch(f"{_MODULE}.get_principal_object", return_value=MagicMock()),
             patch(f"{_MODULE}.get_adapter", return_value=adapter),
             patch(
                 f"{_MODULE}.extract_media_url_and_dimensions", return_value=("https://ad.example.com/ad.jpg", 300, 250)
@@ -390,7 +383,6 @@ class TestPushCreativeToExistingBuy:
             patch(_UOW_PATCH, return_value=uow),
             patch("src.core.config_loader.get_tenant_by_id", return_value=None),
             patch("src.core.config_loader.set_current_tenant"),
-            patch(f"{_MODULE}.get_principal_object", return_value=MagicMock()),
             patch(f"{_MODULE}.get_adapter", return_value=adapter),
             patch(
                 f"{_MODULE}.extract_media_url_and_dimensions", return_value=("https://ad.example.com/ad.jpg", 300, 250)
@@ -415,7 +407,6 @@ class TestPushCreativeToExistingBuy:
             patch(_UOW_PATCH, return_value=uow),
             patch("src.core.config_loader.get_tenant_by_id", return_value=None),
             patch("src.core.config_loader.set_current_tenant"),
-            patch(f"{_MODULE}.get_principal_object", return_value=MagicMock()),
             patch(f"{_MODULE}.get_adapter", return_value=_make_adapter()),
             patch(f"{_MODULE}.extract_media_url_and_dimensions", return_value=(None, None, None)),
             patch(f"{_MODULE}.extract_click_url", return_value=None),
@@ -441,7 +432,6 @@ class TestPushCreativeToExistingBuy:
             patch(_UOW_PATCH, return_value=uow),
             patch("src.core.config_loader.get_tenant_by_id", return_value=None),
             patch("src.core.config_loader.set_current_tenant"),
-            patch(f"{_MODULE}.get_principal_object", return_value=MagicMock()),
             patch(f"{_MODULE}.get_adapter", return_value=adapter),
             patch(
                 f"{_MODULE}.extract_media_url_and_dimensions", return_value=("https://ad.example.com/ad.jpg", 300, 250)
@@ -476,7 +466,6 @@ class TestPushCreativeToExistingBuy:
             patch(_UOW_PATCH, return_value=uow),
             patch("src.core.config_loader.get_tenant_by_id", return_value=None),
             patch("src.core.config_loader.set_current_tenant"),
-            patch(f"{_MODULE}.get_principal_object", return_value=MagicMock()),
             patch(f"{_MODULE}.get_adapter", return_value=mock_adapter),
             patch(
                 f"{_MODULE}.extract_media_url_and_dimensions", return_value=("https://ad.example.com/ad.jpg", 300, 250)

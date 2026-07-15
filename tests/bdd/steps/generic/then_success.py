@@ -32,6 +32,7 @@ def then_no_media_buy_record_persisted(ctx: dict) -> None:
 # "completed" — at least one must be present and a list, not None.
 _STATUSLESS_SUCCESS_ATTRS: tuple[str, ...] = (
     "formats",  # ListCreativeFormatsResponse
+    "products",  # GetProductsResponse (UC-001)
     "media_buy_deliveries",  # GetMediaBuyDeliveryResponse
     "aggregated_totals",  # GetMediaBuyDeliveryResponse
 )
@@ -232,3 +233,43 @@ def then_no_real_api_calls(ctx: dict) -> None:
         f"got sandbox={sandbox!r}. Without sandbox=True, the response may "
         f"have been served by real ad-platform integration."
     )
+
+
+# --- Generic operation outcome (moved from uc026_package_media_buy.py, salesagent-cmjm) ---
+
+
+_FAILURE_STATUSES = frozenset({"failed", "rejected", "error", "canceled"})
+
+
+@then("the operation should succeed")
+def then_operation_succeeds(ctx: dict) -> None:
+    """Assert the operation succeeded (generic, transport-agnostic).
+
+    This step is shared across use cases with different response shapes
+    (UC-026 create/update media buy, UC-009 performance feedback, etc.).
+    It asserts the transport-agnostic success contract common to all:
+      1. No error was recorded in ctx.
+      2. A response object exists.
+      3. If the response exposes a status field (directly or on an inner
+         .response wrapper), the status is not a failure value.
+
+    Shape-specific checks (packages, detail messages) belong in the
+    dedicated follow-on Then steps already present in each scenario.
+    """
+    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none was recorded"
+
+    # Check status on the response itself or on an inner .response wrapper
+    # (CreateMediaBuyResult wraps .response which may carry status).
+    status = getattr(resp, "status", None)
+    if status is None:
+        inner = getattr(resp, "response", None)
+        if inner is not None:
+            status = getattr(inner, "status", None)
+
+    if status is not None:
+        status_str = str(status).lower()
+        assert status_str not in _FAILURE_STATUSES, (
+            f"Operation returned failure status '{status}' — expected a success state"
+        )

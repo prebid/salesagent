@@ -265,29 +265,15 @@ def normalize_agent_url(url: str) -> str:
 
     Returns:
         Normalized base URL
+
+    Note: input normalization only (no host-case/port canonicalization) — for
+    IDENTITY comparison use ``canonical_agent_url``/``format_id_identity``
+    (src.core.schemas), which apply the same suffix stripping on top of the
+    spec canonical form.
     """
-    if not url:
-        return url
+    from src.core.schemas._base import strip_transport_suffixes
 
-    # First, remove trailing slashes
-    normalized = url.rstrip("/")
-
-    # Common path suffixes to strip (order matters - longest first)
-    suffixes_to_strip = [
-        "/.well-known/adcp/sales",
-        "/mcp",
-        "/a2a",
-    ]
-
-    # Strip each suffix (check multiple times in case of multiple trailing slashes)
-    for suffix in suffixes_to_strip:
-        if normalized.endswith(suffix):
-            normalized = normalized[: -len(suffix)]
-            # Remove any trailing slashes that remain
-            normalized = normalized.rstrip("/")
-            break  # Only strip one suffix
-
-    return normalized
+    return strip_transport_suffixes(url)
 
 
 def sanitize_form_data(data: dict[str, Any]) -> dict[str, Any]:

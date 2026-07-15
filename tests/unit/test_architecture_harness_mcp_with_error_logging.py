@@ -119,7 +119,8 @@ def _func_references_name(source: str, func_name: str, name: str) -> bool:
 def test_migrated_update_site_is_guarded():
     """The #1417 fix: media_buy_dual update MCP path must surface the wire envelope.
 
-    Two compliant shapes: wrapping the tool explicitly (with_error_logging(...)),
+    Since the adcp 6.6 merge the update path mirrors the create path. Two
+    compliant shapes: wrapping the tool explicitly (with_error_logging(...)),
     or the stronger real-pipeline form — routing through _run_mcp_client, which
     drives the REGISTERED tool where src/core/main.py applies
     mcp.tool()(with_error_logging(fn)). The create-side call_mcp migrated the

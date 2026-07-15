@@ -902,10 +902,18 @@ class BaseTestEnv:
         - identity is None → dep raises AUTH_REQUIRED (no token) with suggestion
         - identity is ResolvedIdentity → dep returns it (valid token)
         - identity absent → uses default self.identity_for(Transport.REST)
+
+        HTTP method comes from ``REST_METHOD`` (default "post"), matching the
+        E2E dispatcher contract (tests/harness/dispatchers.py reads the same
+        attribute) so GET routes like /capabilities dispatch identically
+        in-process and in-network.
         """
         client, identity = self._prepare_rest_request(kwargs)
+        method = getattr(self, "REST_METHOD", "post").lower()
+        if method == "get":
+            return client.get(endpoint)
         body = self.build_rest_body(**kwargs)
-        return client.post(endpoint, json=body)
+        return getattr(client, method)(endpoint, json=body)
 
     def _prepare_rest_request(self, kwargs: dict[str, Any]) -> tuple[Any, Any]:
         """Resolve identity, commit factory data, get the client, and install auth.

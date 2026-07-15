@@ -8,7 +8,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 
 from src.admin.app import create_app
 
@@ -56,12 +56,13 @@ def test_tenant_and_products(integration_db):
         )
         PricingOptionFactory(product=p2, pricing_model="cpm", rate=Decimal("15.00"), is_fixed=False)
 
-        # Product with invalid format data (string, not list) for validation testing
+        # Product used by the validation-error test; corrupted there (not here:
+        # a corrupt row poisons every full product-list read for other tests).
         p3 = ProductFactory(
             tenant=tenant,
             product_id="test_product_invalid",
             name="Test Product Invalid Format",
-            format_ids='[{"format_id": "test", "type": "invalid_type"}]',
+            format_ids=[{"agent_url": "https://test.com", "id": "placeholder"}],
         )
         PricingOptionFactory(product=p3, pricing_model="cpm", rate=Decimal("20.00"), is_fixed=False)
 
@@ -263,19 +264,42 @@ class TestProductDeletion:
         tenant_id = "test_delete"
         product_id = "test_product_invalid"
 
-        # This product has invalid format data that might cause validation errors
-        response = client.delete(f"/tenant/{tenant_id}/products/{product_id}/delete")
+        from src.core.database.database_session import reset_health_state
 
-        # The deletion should either succeed (if validation doesn't trigger)
-        # or return a proper error message (if validation fails)
-        if response.status_code == 400:
+        # Plant invalid stored format data with a session-level raw update: the
+        # typed FormatId column (#1172) rejects invalid shapes at the ORM
+        # boundary, and the test's point is that the DELETE path handles a
+        # legacy-corrupt row loudly, not that the ORM admits one.
+        with IntegrationEnv() as corrupt_env:
+            session = corrupt_env.get_session()
+            session.execute(
+                text("UPDATE products SET format_ids = :fmt WHERE tenant_id = :t AND product_id = :p"),
+                {
+                    "fmt": '[{"format_id": "test", "type": "invalid_type"}]',
+                    "t": tenant_id,
+                    "p": product_id,
+                },
+            )
+            session.commit()
+
+        # The corrupt row fails loudly at read time, so the delete route
+        # reports the validation failure instead of silently succeeding.
+        try:
+            response = client.delete(f"/tenant/{tenant_id}/products/{product_id}/delete")
+
+            assert response.status_code == 500
             data = response.get_json()
             assert "error" in data
-            # Should have improved error message from our fix
-            assert "Validation error:" in data["error"] or "Failed to delete product:" in data["error"]
-        else:
-            # If deletion succeeded, that's also acceptable
-            assert response.status_code == 200
+            assert "Failed to delete product:" in data["error"]
+            # The message must NAME the invalid fields
+            assert "FormatId" in data["error"]
+            assert "agent_url" in data["error"]
+            assert "id" in data["error"]
+        finally:
+            # The aborted read can trip the process-wide DB circuit breaker;
+            # reset it so unrelated tests in this process aren't failed fast
+            # (sanctioned usage — see reset_health_state docstring).
+            reset_health_state()
 
     def test_delete_product_with_csrf_token(
         self, client, test_tenant_and_products, authenticated_session, setup_super_admin_config
@@ -352,8 +376,13 @@ class TestProductDeletion:
 class TestEnvironmentFirstAuthentication:
     """Test the environment-first authentication approach we implemented."""
 
-    def test_environment_super_admin_check(self):
-        """Test that environment variables are checked first for super admin status."""
+    def test_environment_super_admin_check(self, integration_db):
+        """Test that environment variables are checked first for super admin status.
+
+        Takes integration_db: the negative case falls through to the DB check,
+        and without a live test DB the failed connection trips the process-wide
+        circuit breaker, cascading into later tests.
+        """
         from src.admin.utils import is_super_admin
 
         # Test with environment variable
@@ -372,8 +401,12 @@ class TestEnvironmentFirstAuthentication:
             assert is_super_admin("test@example.com") is True
             assert is_super_admin("not-admin@example.com") is False
 
-    def test_domain_based_super_admin_environment(self):
-        """Test domain-based super admin authentication from environment."""
+    def test_domain_based_super_admin_environment(self, integration_db):
+        """Test domain-based super admin authentication from environment.
+
+        Takes integration_db for the same circuit-breaker reason as
+        test_environment_super_admin_check above.
+        """
         from src.admin.utils import is_super_admin
 
         with patch.dict("os.environ", {"SUPER_ADMIN_DOMAINS": "example.com,admin.org"}):
