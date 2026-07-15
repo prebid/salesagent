@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -664,14 +663,19 @@ async def list_accounts(body: ListAccountsBody, identity: ResolvedIdentity = req
 
 
 @router.post("/accounts/sync", dependencies=[Depends(_version_after_require)])
-async def sync_accounts(body: SyncAccountsBody, identity: ResolvedIdentity = require_auth):
+async def sync_accounts(
+    body: SyncAccountsBody,
+    identity: ResolvedIdentity = require_auth,
+    raw_wire_payload: dict[str, Any] = raw_json_body,
+):
     """Sync accounts by natural key (auth required)."""
     from src.core.schemas.account import SyncAccountsRequest
 
+    # exclude_none drops an absent idempotency_key so the required-field
+    # ValidationError fires inside the boundary → VALIDATION_ERROR envelope. No
+    # UUID synthesis: a missing required key is a buyer error, not the seller's
+    # to paper over (AdCP 3.1.1 makes it required).
     with adcp_validation_boundary(context="sync_accounts request"):
         req = SyncAccountsRequest(**body.model_dump(exclude_none=True, exclude=_NEGOTIATION_EXCLUDE))
-    # Preserve the buyer's idempotency_key; synthesize only when omitted (#1512), matching
-    # the MCP/A2A siblings so a retry carrying the same key is not fabricated a fresh UUID.
-    req.idempotency_key = req.idempotency_key or str(uuid.uuid4())
-    response = await accounts_module.sync_accounts_raw(req=req, identity=identity)
+    response = await accounts_module.sync_accounts_raw(req=req, identity=identity, raw_wire_payload=raw_wire_payload)
     return response.model_dump(mode="json")

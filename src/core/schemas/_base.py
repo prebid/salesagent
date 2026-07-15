@@ -217,11 +217,19 @@ class NestedModelSerializerMixin:
     @model_serializer(mode="wrap")
     def _serialize_nested_models(self, serializer, info):
         """Automatically serialize nested Pydantic models using their custom model_dump()."""
-        # Get default serialization
-        data = serializer(self)
+        return self._apply_nested_dump(serializer(self), info)
 
-        # Introspect all fields and re-serialize nested Pydantic models
-        for field_name, _ in self.__class__.model_fields.items():
+    def _apply_nested_dump(self, data: dict[str, Any], info) -> dict[str, Any]:
+        """Re-serialize any nested Pydantic-model fields via their own model_dump().
+
+        Plain helper (not a serializer) so a subclass that needs its OWN
+        ``model_serializer`` — e.g. to add an envelope-level marker — can still
+        reuse this nested-model handling instead of duplicating it (DRY).
+        """
+        # Introspect all fields and re-serialize nested Pydantic models. The mixin
+        # is only ever mixed into a pydantic BaseModel, so model_fields exists at
+        # runtime (the mixin class itself carries no such attribute — hence ignore).
+        for field_name, _ in self.__class__.model_fields.items():  # type: ignore[attr-defined]
             if field_name not in data:
                 continue
 

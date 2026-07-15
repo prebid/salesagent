@@ -119,6 +119,11 @@ from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
 
+# Skills whose handler takes the pre-strip wire payload (the canonical
+# idempotency payload-hash input) as a keyword argument. Every other skill's
+# handler is called with (parameters, identity) only.
+_RAW_WIRE_PAYLOAD_SKILLS = frozenset({"create_media_buy", "sync_accounts"})
+
 
 def _restore_a2a_integer_version_pin(params: dict[str, Any]) -> dict[str, Any]:
     """Restore an integral major pin after protobuf ``Struct`` decoding.
@@ -1613,8 +1618,10 @@ class AdCPRequestHandler(RequestHandler):
 
         try:
             handler = skill_handlers[skill_name]
-            # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
-            if skill_name == "create_media_buy":
+            # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure).
+            # Idempotent tools take the pre-strip wire payload for the canonical
+            # payload-hash; the rest use the (post-strip) parameters.
+            if skill_name in _RAW_WIRE_PAYLOAD_SKILLS:
                 result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload)
             else:
                 result = await handler(parameters, identity)
@@ -2015,7 +2022,9 @@ class AdCPRequestHandler(RequestHandler):
             )
         return core_list_accounts_tool(req=request, identity=identity)
 
-    async def _handle_sync_accounts_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
+    async def _handle_sync_accounts_skill(
+        self, parameters: dict, identity: ResolvedIdentity | None, raw_wire_payload: dict | None = None
+    ) -> Any:
         """Handle explicit sync_accounts skill invocation.
 
         Authentication is REQUIRED per BR-RULE-055.
@@ -2023,17 +2032,25 @@ class AdCPRequestHandler(RequestHandler):
         from src.core.schemas.account import SyncAccountsRequest
 
         # Same context string as the REST route's boundary (klkg parity).
+        # idempotency_key is omit-when-absent so a missing required key rejects as
+        # VALIDATION_ERROR — never synthesized (AdCP 3.1.1 makes it required).
         with adcp_validation_boundary(context="sync_accounts request"):
             request = SyncAccountsRequest(
                 accounts=parameters.get("accounts", []),
                 delete_missing=parameters.get("delete_missing", False),
                 dry_run=parameters.get("dry_run", False),
                 context=parameters.get("context"),
-                # Preserve the buyer's idempotency key (the A2A strip keeps envelope
-                # fields); only synthesize one when the client omitted it (#1512).
-                idempotency_key=parameters.get("idempotency_key") or str(uuid.uuid4()),
+                **(
+                    {"idempotency_key": parameters["idempotency_key"]}
+                    if parameters.get("idempotency_key") is not None
+                    else {}
+                ),
             )
-        return await core_sync_accounts_tool(req=request, identity=identity)
+        return await core_sync_accounts_tool(
+            req=request,
+            identity=identity,
+            raw_wire_payload=raw_wire_payload if raw_wire_payload is not None else parameters,
+        )
 
     async def _handle_list_authorized_properties_skill(
         self, parameters: dict, identity: ResolvedIdentity | None

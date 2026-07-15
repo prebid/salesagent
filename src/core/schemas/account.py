@@ -5,11 +5,9 @@ All classes are re-exported from ``src.core.schemas`` for backward compatibility
 
 beads: salesagent-x79
 
-SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
-- [misc] on line ~127: SyncAccountsResponse class def. Pydantic metaclass
-  interaction in SDK hierarchy; permanent.
-- [assignment] on line ~79: idempotency_key override (required -> optional).
-  Architectural; permanent.
+SDK type:ignore tracking (adcontextprotocol/adcp-client-python#913):
+- [misc] on the SyncAccountsResponse class def: Pydantic metaclass interaction
+  in the SDK hierarchy; permanent.
 """
 
 from typing import Any
@@ -23,10 +21,14 @@ from adcp.types import Setup as LibrarySetup
 from adcp.types import SyncAccountsRequest as LibrarySyncAccountsRequest
 from adcp.types.aliases import SyncAccountsSuccessResponse as LibrarySyncAccountsSuccess
 from adcp.types.generated_poc.core.brand_ref import BrandReference as LibraryBrandReference
-from pydantic import ConfigDict
+from pydantic import ConfigDict, model_serializer, model_validator
 
 from src.core.config import get_pydantic_extra_mode
-from src.core.schemas._base import NestedModelSerializerMixin, SalesAgentBaseModel
+from src.core.schemas._base import (
+    NestedModelSerializerMixin,
+    SalesAgentBaseModel,
+    validate_idempotency_key_shape,
+)
 
 # ---------------------------------------------------------------------------
 # Core domain Account (used in ListAccountsResponse.accounts)
@@ -80,9 +82,17 @@ class SyncAccountsRequest(LibrarySyncAccountsRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # adcp 4.3 makes idempotency_key required.  Override as optional —
-    # generated at the transport boundary when not supplied by the caller.
-    idempotency_key: str | None = None  # type: ignore[assignment]
+    # SDK 6.6 (spec 3.1.1) makes idempotency_key REQUIRED on sync_accounts (MinLen
+    # 16 + pattern ^[A-Za-z0-9_.:-]{16,255}$). We inherit that field verbatim — no
+    # optional override, no transport-boundary UUID synthesis — so a missing or
+    # malformed key rejects at the boundary as VALIDATION_ERROR (a MISSING required
+    # field is not saved by production's extra="ignore"). The after-validator gives
+    # suggestion parity with create/update on a malformed key.
+    @model_validator(mode="after")
+    def _check_idempotency_key(self) -> "SyncAccountsRequest":
+        """Reject a malformed idempotency_key with a tailored VALIDATION_ERROR."""
+        validate_idempotency_key_shape(self.idempotency_key)
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +172,24 @@ class SyncAccountsResponse(NestedModelSerializerMixin, LibrarySyncAccountsSucces
     dry_run: bool | None = None
     context: LibraryContextObject | dict[str, Any] | None = None
     ext: dict[str, Any] | None = None
+
+    # AdCP idempotency replay marker (top-level on the envelope). Set True ONLY
+    # when this response is a verbatim replay of a previously cached success;
+    # injected at replay time, never stored in the cached body. Omitted when
+    # False so a fresh response is byte-identical to one without the field
+    # (mirrors CreateMediaBuyResult._serialize).
+    replayed: bool = False
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, serializer, info):
+        """Serialize nested accounts, then emit ``replayed`` only when True."""
+        data = self._apply_nested_dump(serializer(self), info)
+        # `replayed=False` rides the default dump; strip it so the marker is
+        # present ONLY on a genuine replay (this serializer is its single source).
+        data.pop("replayed", None)
+        if self.replayed:
+            data["replayed"] = True
+        return data
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
