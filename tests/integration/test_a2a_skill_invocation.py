@@ -236,7 +236,7 @@ class TestA2ASkillInvocation:
         # The poll authenticates as the buyer; resolve to the real tenant identity.
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
         with patch.object(handler, "_resolve_a2a_identity", return_value=mock_identity):
-            task = handler._durable_task_from_step(external_task_id, context=None)
+            task = handler._durable_task_from_step(external_task_id, mock_identity)
 
         assert task is not None, "durable fallback must resolve the buyer's outer task id to the step"
         assert task.id == external_task_id
@@ -263,7 +263,7 @@ class TestA2ASkillInvocation:
         )
         handler._get_auth_token = MagicMock(return_value="other-tenant-token")
         with patch.object(handler, "_resolve_a2a_identity", return_value=other_identity):
-            task = handler._durable_task_from_step(external_task_id, context=None)
+            task = handler._durable_task_from_step(external_task_id, other_identity)
 
         assert task is None, "durable lookup must not cross tenant boundaries"
 
@@ -286,7 +286,7 @@ class TestA2ASkillInvocation:
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
         with patch.object(handler, "_resolve_a2a_identity", return_value=mock_identity):
             task = await handler.on_cancel_task(CancelTaskRequest(id=external_task_id), context=None)
-            polled = handler._durable_task_from_step(external_task_id, context=None)
+            polled = handler._durable_task_from_step(external_task_id, mock_identity)
 
         assert task is not None, "durable cancel must resolve the buyer's outer task id to the step"
         assert task.id == external_task_id
@@ -314,7 +314,7 @@ class TestA2ASkillInvocation:
         with patch.object(handler, "_resolve_a2a_identity", return_value=mock_identity):
             with pytest.raises(TaskNotCancelableError):
                 await handler.on_cancel_task(CancelTaskRequest(id=external_task_id), context=None)
-            polled = handler._durable_task_from_step(external_task_id, context=None)
+            polled = handler._durable_task_from_step(external_task_id, mock_identity)
 
         assert polled is not None
         assert polled.status.state == TaskState.TASK_STATE_COMPLETED, (
@@ -346,21 +346,78 @@ class TestA2ASkillInvocation:
         assert task is None, "durable cancel must not cross tenant boundaries"
 
     @pytest.mark.asyncio
-    async def test_cancel_of_terminal_in_memory_task_is_not_cancelable(self, handler):
-        """A2A spec tasks/cancel: an in-memory task already terminal (completed) must raise
-        TaskNotCancelableError, not be silently overwritten to CANCELED."""
+    async def test_cancel_of_terminal_in_memory_task_is_not_cancelable(self, handler, mock_identity):
+        """A2A spec tasks/cancel: the OWNER canceling an already-terminal in-memory task
+        gets TaskNotCancelableError, not a silent overwrite to CANCELED."""
         task_id = "task_inmem_terminal"
-        handler.tasks[task_id] = Task(
-            id=task_id,
-            context_id="ctx_inmem",
-            status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
+        handler._remember_task(
+            task_id,
+            Task(id=task_id, context_id="ctx_inmem", status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED)),
+            mock_identity,
         )
-        handler._get_auth_token = MagicMock(return_value=None)
-
-        with pytest.raises(TaskNotCancelableError):
-            await handler.on_cancel_task(CancelTaskRequest(id=task_id), context=None)
+        handler._get_auth_token = MagicMock(return_value="owner-token")
+        with patch.object(handler, "_resolve_a2a_identity", return_value=mock_identity):
+            with pytest.raises(TaskNotCancelableError):
+                await handler.on_cancel_task(CancelTaskRequest(id=task_id), context=None)
 
         assert handler.tasks[task_id].status.state == TaskState.TASK_STATE_COMPLETED
+
+    @pytest.mark.asyncio
+    async def test_get_in_memory_task_is_principal_isolated(
+        self, handler, sample_tenant, sample_principal, mock_identity
+    ):
+        """[Round-13 B1] A same-tenant sibling principal must not read another principal's
+        in-memory task via the public on_get_task — for BOTH a terminal and a nonterminal
+        victim task present in memory (task ids are bearer-ish; the map key alone is not authz)."""
+        from a2a.types import GetTaskRequest
+
+        sibling = self._same_tenant_other_identity(sample_tenant)
+        for state in (TaskState.TASK_STATE_COMPLETED, TaskState.TASK_STATE_WORKING):
+            task_id = f"task_inmem_iso_get_{int(state)}"
+            handler._remember_task(
+                task_id,
+                Task(id=task_id, context_id="ctx_victim", status=TaskStatus(state=state)),
+                mock_identity,  # owned by sample_principal
+            )
+            handler._get_auth_token = MagicMock(return_value="sibling-token")
+            with patch.object(handler, "_resolve_a2a_identity", return_value=sibling):
+                seen = await handler.on_get_task(GetTaskRequest(id=task_id), context=None)
+            assert seen is None, f"sibling principal must not read the victim's in-memory task (state={state})"
+
+    @pytest.mark.asyncio
+    async def test_cancel_in_memory_task_is_principal_isolated(
+        self, handler, sample_tenant, sample_principal, mock_identity
+    ):
+        """[Round-13 B1] A same-tenant sibling principal must not cancel another principal's
+        in-memory task via the public on_cancel_task; the victim task stays untouched. Covers
+        both a nonterminal victim (must not be mutated to CANCELED) and a terminal victim (must
+        not even be observable → returns None, not TaskNotCancelableError)."""
+        sibling = self._same_tenant_other_identity(sample_tenant)
+
+        nonterminal_id = "task_inmem_iso_cancel_working"
+        handler._remember_task(
+            nonterminal_id,
+            Task(id=nonterminal_id, context_id="ctx_victim", status=TaskStatus(state=TaskState.TASK_STATE_WORKING)),
+            mock_identity,
+        )
+        terminal_id = "task_inmem_iso_cancel_done"
+        handler._remember_task(
+            terminal_id,
+            Task(id=terminal_id, context_id="ctx_victim", status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED)),
+            mock_identity,
+        )
+
+        handler._get_auth_token = MagicMock(return_value="sibling-token")
+        with patch.object(handler, "_resolve_a2a_identity", return_value=sibling):
+            nonterminal_result = await handler.on_cancel_task(CancelTaskRequest(id=nonterminal_id), context=None)
+            terminal_result = await handler.on_cancel_task(CancelTaskRequest(id=terminal_id), context=None)
+
+        assert nonterminal_result is None, "sibling must not cancel the victim's in-memory task"
+        assert handler.tasks[nonterminal_id].status.state == TaskState.TASK_STATE_WORKING, (
+            "the victim's in-memory task must not be mutated by a sibling's cancel"
+        )
+        assert terminal_result is None, "sibling must not even observe the victim's terminal task (no leak)"
+        assert handler.tasks[terminal_id].status.state == TaskState.TASK_STATE_COMPLETED
 
     def _same_tenant_other_identity(self, sample_tenant):
         """A DIFFERENT principal in the SAME tenant (round-12 B2 adversary)."""
@@ -382,11 +439,10 @@ class TestA2ASkillInvocation:
             {"media_buy_id": "mb_prin_iso", "status": "completed"},
         )
 
+        sibling = self._same_tenant_other_identity(sample_tenant)
         handler._get_auth_token = MagicMock(return_value="other-principal-token")
-        with patch.object(
-            handler, "_resolve_a2a_identity", return_value=self._same_tenant_other_identity(sample_tenant)
-        ):
-            task = handler._durable_task_from_step(external_task_id, context=None)
+        with patch.object(handler, "_resolve_a2a_identity", return_value=sibling):
+            task = handler._durable_task_from_step(external_task_id, sibling)
 
         assert task is None, "durable lookup must not cross principal boundaries within a tenant"
 
@@ -413,7 +469,7 @@ class TestA2ASkillInvocation:
         # The owner still sees the step untouched (non-terminal → WORKING skeleton).
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
         with patch.object(handler, "_resolve_a2a_identity", return_value=mock_identity):
-            owner_view = handler._durable_task_from_step(external_task_id, context=None)
+            owner_view = handler._durable_task_from_step(external_task_id, mock_identity)
         assert owner_view is not None
         assert owner_view.status.state == TaskState.TASK_STATE_WORKING, (
             "the sibling principal's cancel attempt must not have mutated the step"
@@ -433,11 +489,11 @@ class TestA2ASkillInvocation:
             external_task_id,
             {"media_buy_id": "mb_stale", "status": "completed"},
         )
-        # Stale in-memory entry from the process that created the task.
-        handler.tasks[external_task_id] = Task(
-            id=external_task_id,
-            context_id="ctx_stale",
-            status=TaskStatus(state=TaskState.TASK_STATE_WORKING),
+        # Stale in-memory entry from the process that created the task (owned by the buyer).
+        handler._remember_task(
+            external_task_id,
+            Task(id=external_task_id, context_id="ctx_stale", status=TaskStatus(state=TaskState.TASK_STATE_WORKING)),
+            mock_identity,
         )
 
         from a2a.types import GetTaskRequest
@@ -456,66 +512,105 @@ class TestA2ASkillInvocation:
         )
 
     @pytest.mark.asyncio
-    async def test_get_task_without_step_returns_in_memory_task(self, handler):
+    async def test_get_task_without_step_returns_in_memory_task(self, handler, mock_identity):
         """[Round-12 B3] A non-terminal in-memory task with NO persisted step (sync/simple
-        skills) is still served from memory — reconciliation must not lose it."""
+        skills) is still served from memory TO ITS OWNER — reconciliation must not lose it."""
         from a2a.types import GetTaskRequest
 
         task_id = "task_memory_only"
-        handler.tasks[task_id] = Task(
-            id=task_id,
-            context_id="ctx_mem",
-            status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED),
+        handler._remember_task(
+            task_id,
+            Task(id=task_id, context_id="ctx_mem", status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED)),
+            mock_identity,
         )
-        handler._get_auth_token = MagicMock(return_value=None)
-
-        task = await handler.on_get_task(GetTaskRequest(id=task_id), context=None)
+        handler._get_auth_token = MagicMock(return_value="owner-token")
+        with patch.object(handler, "_resolve_a2a_identity", return_value=mock_identity):
+            task = await handler.on_get_task(GetTaskRequest(id=task_id), context=None)
 
         assert task is not None
         assert task.status.state == TaskState.TASK_STATE_SUBMITTED
 
+    def _step_status(self, tenant_id: str, step_id: str) -> str:
+        """Read a workflow step's committed status in its own fresh UoW session."""
+        from src.core.database.repositories import WorkflowUoW
+
+        with WorkflowUoW(tenant_id) as uow:
+            assert uow.workflows is not None
+            step = uow.workflows.get_by_step_id(step_id)
+            return step.status if step is not None else "missing"
+
     @pytest.mark.asyncio
-    async def test_cancel_race_with_approval_preserves_terminal_decision(
-        self, handler, sample_tenant, sample_principal, mock_identity
+    async def test_cancel_and_approval_race_preserves_terminal_decision_both_orderings(
+        self, handler, sample_tenant, sample_principal
     ):
-        """[Round-12 B4] Cancellation racing an approval must not overwrite the terminal
-        decision. Reproduces the TOCTOU window deterministically: the cancel path reads a
-        STALE non-terminal snapshot while the real row is already completed (an approval
-        committed in between). The conditional UPDATE must match zero rows and surface
-        TaskNotCancelableError; the step stays completed."""
-        from types import SimpleNamespace
+        """[Round-13 B4] The terminal-transition policy is two-sided: whichever of a buyer
+        cancel (WorkflowRepository.cancel_if_nonterminal) and an approval
+        (WorkflowRepository.update_status → transition_if_nonterminal) COMMITS FIRST wins,
+        and the loser's conditional UPDATE refuses. Verified against REAL separate
+        PostgreSQL sessions (each WorkflowUoW is its own session, committing on __exit__)
+        in three interleavings, including a true TOCTOU overlap where the approval session
+        began before the cancel committed."""
+        from datetime import UTC, datetime
+
+        from src.core.database.repositories import WorkflowUoW
+
+        tenant_id = sample_tenant["tenant_id"]
+        principal_id = sample_principal["principal_id"]
+        now = datetime.now(UTC)
+
+        # ── Ordering 1: cancel commits first → approval refused, stays canceled ──
+        step1 = self._persist_a2a_step(tenant_id, principal_id, "task_race_1", None, status="requires_approval")
+        with WorkflowUoW(tenant_id) as u_cancel:
+            assert u_cancel.workflows.cancel_if_nonterminal(step1, completed_at=now) is True
+        with WorkflowUoW(tenant_id) as u_approve:
+            refused = u_approve.workflows.update_status(step1, status="completed", completed_at=now)
+        assert refused is None, "approval must be refused once the step is terminally canceled"
+        assert self._step_status(tenant_id, step1) == "canceled"
+
+        # ── Ordering 2: approval commits first → cancel refused, stays completed ──
+        step2 = self._persist_a2a_step(tenant_id, principal_id, "task_race_2", None, status="requires_approval")
+        with WorkflowUoW(tenant_id) as u_approve2:
+            assert u_approve2.workflows.update_status(step2, status="completed", completed_at=now) is not None
+        with WorkflowUoW(tenant_id) as u_cancel2:
+            assert u_cancel2.workflows.cancel_if_nonterminal(step2, completed_at=now) is False
+        assert self._step_status(tenant_id, step2) == "completed"
+
+        # ── Ordering 3 (true TOCTOU overlap): approval session opens on a pending row,
+        #    cancel commits in between, approval writes with its STALE knowledge ──
+        step3 = self._persist_a2a_step(tenant_id, principal_id, "task_race_3", None, status="requires_approval")
+        with WorkflowUoW(tenant_id) as u_approve3:
+            # Approval "reads" the pending step (stale snapshot), does not write yet.
+            assert u_approve3.workflows.get_by_step_id(step3).status == "requires_approval"
+            # A concurrent buyer cancel commits canceled in a SEPARATE session (inner UoW).
+            with WorkflowUoW(tenant_id) as u_cancel3:
+                assert u_cancel3.workflows.cancel_if_nonterminal(step3, completed_at=now) is True
+            # Approval resumes and writes completed — the conditional UPDATE re-evaluates
+            # against the committed canceled row (READ COMMITTED) and matches zero rows.
+            refused3 = u_approve3.workflows.update_status(step3, status="completed", completed_at=now)
+        assert refused3 is None, "approval must refuse after a cancel committed, even from a stale read (TOCTOU)"
+        assert self._step_status(tenant_id, step3) == "canceled"
+
+    @pytest.mark.asyncio
+    async def test_context_manager_refuses_terminal_transition(self, handler, sample_tenant, sample_principal):
+        """[Round-13 B4] ContextManager.update_workflow_step — the second competing terminal
+        writer (create/auto-approve path) — must also refuse to overwrite an already-terminal
+        step, so an auto-approval completing a step the buyer just canceled is a no-op."""
+        from datetime import UTC, datetime
 
         from src.core.context_manager import ContextManager
-        from src.core.database.repositories.workflow import WorkflowRepository
+        from src.core.database.repositories import WorkflowUoW
 
-        external_task_id = "task_cancel_race"
+        tenant_id = sample_tenant["tenant_id"]
         step_id = self._persist_a2a_step(
-            sample_tenant["tenant_id"],
-            sample_principal["principal_id"],
-            external_task_id,
-            None,
-            status="requires_approval",
+            tenant_id, sample_principal["principal_id"], "task_cm_terminal", None, status="requires_approval"
         )
-        # The "approval" commits the terminal decision after the cancel path's read.
+        # Buyer cancels first (terminal).
+        with WorkflowUoW(tenant_id) as uow:
+            assert uow.workflows.cancel_if_nonterminal(step_id, completed_at=datetime.now(UTC))
+
+        # Auto-approval path tries to complete the canceled step → refused, stays canceled.
         ContextManager().update_workflow_step(step_id, status="completed")
-
-        stale_snapshot = SimpleNamespace(step_id=step_id, status="requires_approval", context_id="ctx_race")
-        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-        with (
-            patch.object(handler, "_resolve_a2a_identity", return_value=mock_identity),
-            patch.object(WorkflowRepository, "get_by_external_task_id", return_value=stale_snapshot),
-        ):
-            with pytest.raises(TaskNotCancelableError):
-                await handler.on_cancel_task(CancelTaskRequest(id=external_task_id), context=None)
-
-        # The approval's decision stands.
-        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-        with patch.object(handler, "_resolve_a2a_identity", return_value=mock_identity):
-            owner_view = handler._durable_task_from_step(external_task_id, context=None)
-        assert owner_view is not None
-        assert owner_view.status.state == TaskState.TASK_STATE_COMPLETED, (
-            "a racing cancel must never overwrite a committed terminal decision"
-        )
+        assert self._step_status(tenant_id, step_id) == "canceled"
 
     @pytest.mark.asyncio
     async def test_natural_language_get_products(

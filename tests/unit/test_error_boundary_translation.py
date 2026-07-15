@@ -474,13 +474,15 @@ class TestA2ADispatcherFailedSkillResult:
         assert "internal error" in env["errors"][0]["message"].lower()
 
     def test_internal_error_for_scrubs_full_jsonrpc_wire(self):
-        """[Round-12 B1] A typed internal-bucket error must not leak through the JSON-RPC
-        ``error.message`` even while ``error.data`` is scrubbed.
+        """[Round-12 B1] Helper-level: a typed internal-bucket error must not leak through the
+        JSON-RPC ``error.message`` even while ``error.data`` is scrubbed.
 
         ``_internal_error_for`` previously built the top-level JSON-RPC message from the
         ORIGINAL ``exc.message`` — so an ``AdCPAdapterError(f"...{e}")`` carrying a DB URL
         had a sanitized envelope in ``error.data`` while the URL stayed visible in
-        ``error.message``. Both layers of the FULL wire object must be clean.
+        ``error.message``. Both layers of the FULL wire object must be clean. (The
+        REACHABLE-handler proof — that a real push-config handler produces this scrubbed
+        InternalError — is ``test_push_config_handler_scrubs_secret_on_full_wire`` below.)
         """
         from src.a2a_server.adcp_a2a_server import _internal_error_for
 
@@ -495,6 +497,53 @@ class TestA2ADispatcherFailedSkillResult:
         # Wire code + recovery still accurate in the envelope.
         assert err.data["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
         assert err.data["errors"][0]["recovery"] == "transient"
+
+    @pytest.mark.asyncio
+    async def test_push_config_handler_scrubs_secret_on_full_wire(self):
+        """[Round-13 SHOULD-FIX] REACHABLE-path proof: a real push-config handler whose
+        backing store raises a secret-bearing internal error produces a JSON-RPC
+        ``InternalError`` whose ``message`` AND ``data`` are both scrubbed.
+
+        Drives the actual ``on_get_task_push_notification_config`` handler (one of the four
+        push-config methods that surface through ``_internal_error_for``) and captures the
+        REAL raised ``InternalError`` — not a fabricated ``{message, data}`` dict — so the
+        proof reaches the transport boundary, not just the helper.
+        """
+        from types import SimpleNamespace
+
+        from a2a.types import InternalError
+
+        import src.a2a_server.adcp_a2a_server as a2a_mod
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        secret = "postgresql://svc:hunter2@db.internal/prod SELECT * FROM principals"
+
+        handler = AdCPRequestHandler()
+        handler._get_auth_token = lambda context: "tok"  # noqa: ARG005
+        # Identity object is irrelevant — _make_tool_context is stubbed to the scope the
+        # handler actually reads. This keeps the test at unit altitude (no DB).
+        handler._resolve_a2a_identity = lambda *a, **k: object()
+        handler._make_tool_context = lambda *a, **k: SimpleNamespace(tenant_id="t", principal_id="p")
+
+        class _BoomUoW:
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                raise AdCPAdapterError(f"Config store unavailable: {secret}")
+
+            def __exit__(self, *a):
+                return False
+
+        with patch.object(a2a_mod, "PushNotificationConfigUoW", _BoomUoW):
+            with pytest.raises(InternalError) as exc_info:
+                await handler.on_get_task_push_notification_config({"id": "cfg_1"}, context=None)
+
+        err = exc_info.value
+        full_wire = json.dumps({"message": err.message, "data": err.data})
+        for leak in ("hunter2", "postgresql://", "db.internal", "SELECT", "principals"):
+            assert leak not in full_wire, f"push-config handler leaked {leak!r} on the JSON-RPC wire: {full_wire}"
+        assert err.data["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
 
     def test_internal_error_for_preserves_correctable_message(self):
         """[Round-12 B1] The JSON-RPC message keeps the controlled text of a

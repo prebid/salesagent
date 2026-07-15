@@ -244,8 +244,52 @@ class AdCPRequestHandler(RequestHandler):
     def __init__(self):
         """Initialize the AdCP A2A request handler."""
         self.tasks: dict[str, Task] = {}  # In-memory task storage
+        # Owner (tenant_id, principal_id) of each in-memory task. tasks/get and
+        # tasks/cancel authorize the CALLER against this before serving or mutating
+        # an in-memory entry — the map key (task id) is bearer-ish and must not by
+        # itself grant a same-tenant sibling principal access. See
+        # _authorized_in_memory_task / _remember_task.
+        self._task_owner: dict[str, tuple[str, str]] = {}
         self._task_push_configs: dict[str, TaskPushNotificationConfig] = {}
         logger.info("AdCP Request Handler initialized for direct function calls")
+
+    def _remember_task(self, task_id: str, task: Task, identity: ResolvedIdentity | None) -> None:
+        """Store an in-memory task together with its owner (tenant, principal).
+
+        Only records an owner when identity carries BOTH tenant and principal. An
+        ownerless task is never served through the memory path (fail closed), which
+        is correct for synchronous discovery responses that are returned inline and
+        never polled.
+        """
+        self.tasks[task_id] = task
+        if identity is not None and identity.tenant_id and identity.principal_id:
+            self._task_owner[task_id] = (identity.tenant_id, identity.principal_id)
+        else:
+            self._task_owner.pop(task_id, None)
+
+    def _forget_task(self, task_id: str) -> None:
+        """Drop an in-memory task and all its side state (owner + push config)."""
+        self.tasks.pop(task_id, None)
+        self._task_owner.pop(task_id, None)
+        self._task_push_configs.pop(task_id, None)
+
+    def _authorized_in_memory_task(self, task_id: str, identity: ResolvedIdentity | None) -> Task | None:
+        """Return the in-memory task ONLY when ``identity`` is its recorded owner.
+
+        Fails closed: an unresolved identity, an ownerless task, or an owner
+        mismatch (a same-tenant sibling principal, or a cross-tenant caller) all
+        yield None so the caller can neither read nor mutate another principal's
+        in-memory task.
+        """
+        task = self.tasks.get(task_id)
+        if task is None or identity is None:
+            return None
+        owner = self._task_owner.get(task_id)
+        if owner is None:
+            return None
+        if (identity.tenant_id, identity.principal_id) != owner:
+            return None
+        return task
 
     @staticmethod
     def _build_error_envelope(exc: Exception) -> dict[str, Any]:
@@ -921,7 +965,7 @@ class AdCPRequestHandler(RequestHandler):
                     if len(results) == 1:
                         del task.artifacts[:]
                     await self._send_protocol_webhook(task, status="submitted")
-                    self.tasks[task_id] = task
+                    self._remember_task(task_id, task, identity)
                     return task
 
                 if successful_skills:
@@ -1159,11 +1203,10 @@ class AdCPRequestHandler(RequestHandler):
             # Task-layer outcome — so the provisional WORKING task stored before
             # dispatch must not survive as a retrievable orphan. Drop it (and its
             # push config) before raising so ``tasks/get`` returns nothing.
-            self.tasks.pop(task_id, None)
-            self._task_push_configs.pop(task_id, None)
+            self._forget_task(task_id)
             raise _internal_error_for("message processing", e) from e
 
-        self.tasks[task_id] = task
+        self._remember_task(task_id, task, identity)
         return task
 
     async def on_message_send_stream(
@@ -1216,26 +1259,35 @@ class AdCPRequestHandler(RequestHandler):
     ) -> Task | None:
         """Handle 'tasks/get' method to retrieve task status.
 
+        Identity is resolved ONCE and gates BOTH stores: the in-memory task is
+        served only to its recorded owner (``_authorized_in_memory_task``), and the
+        durable step lookup is tenant+principal-scoped — so a same-tenant sibling
+        principal who learns a task id can read neither (#1547 round-13 B1).
+
         The persisted workflow step is the source of truth for an async task's
         outcome: the admin decision that terminalizes it runs in a DIFFERENT
         process, so this process's in-memory entry can be stale forever (a
         SUBMITTED/WORKING task whose workflow already completed). A poll therefore
-        returns the in-memory task only when IT is already terminal; otherwise the
-        durable step is consulted and, if it reached a terminal status, wins (and
-        reconciles the in-memory map). The durable fallback also serves polls after
-        a restart, when the map is empty. See #1544 (B6).
+        returns the owned in-memory task only when IT is already terminal;
+        otherwise the durable step is consulted and, if it reached a terminal
+        status, wins (and reconciles the owned in-memory entry). The durable
+        fallback also serves polls after a restart, when the map is empty. See
+        #1544 (B6).
         """
         task_id = params.id
-        task = self.tasks.get(task_id)
-        if task is not None and task.status.state in self._TERMINAL_TASK_STATES:
-            return task
-        durable = self._durable_task_from_step(task_id, context)
+        identity = self._durable_lookup_identity(context)
+        owned = self._authorized_in_memory_task(task_id, identity)
+        if owned is not None and owned.status.state in self._TERMINAL_TASK_STATES:
+            return owned
+        durable = self._durable_task_from_step(task_id, identity)
         if durable is not None and durable.status.state in self._TERMINAL_TASK_STATES:
-            self.tasks[task_id] = durable
+            if owned is not None:
+                # Reconcile only our OWN entry — never write a map key we don't own.
+                self._remember_task(task_id, durable, identity)
             return durable
-        # No terminal durable outcome: the richer in-memory task (metadata,
+        # No terminal durable outcome: the richer owned in-memory task (metadata,
         # artifacts) beats the durable WORKING skeleton.
-        return task if task is not None else durable
+        return owned if owned is not None else durable
 
     def _durable_lookup_identity(self, context: ServerCallContext | None):
         """Resolve the caller's identity for a durable (cross-process) task lookup.
@@ -1259,14 +1311,14 @@ class AdCPRequestHandler(RequestHandler):
             return None
         return identity
 
-    def _durable_task_from_step(self, task_id: str, context: ServerCallContext | None) -> Task | None:
+    def _durable_task_from_step(self, task_id: str, identity: ResolvedIdentity | None) -> Task | None:
         """Rebuild a terminal Task from the workflow step that stored this transport id.
 
-        See ``_durable_lookup_identity`` for why the poll's own auth provides the
-        tenant scope.
+        ``identity`` is the caller's resolved identity (see ``_durable_lookup_identity``);
+        the lookup is tenant+principal-scoped, so an unresolved or non-owning identity
+        yields None. Callers resolve identity once and pass it here.
         """
-        identity = self._durable_lookup_identity(context)
-        if identity is None:
+        if identity is None or identity.tenant_id is None or identity.principal_id is None:
             return None
 
         from src.core.database.database_session import get_db_session
@@ -1304,6 +1356,11 @@ class AdCPRequestHandler(RequestHandler):
         canceled; the durable check runs even on an in-memory hit so a stale
         WORKING task can't cancel a workflow that was approved out-of-band.
 
+        Identity is resolved ONCE and gates both stores: only the recorded owner
+        can observe or mutate the in-memory task, and the durable cancel is
+        tenant+principal-scoped — a same-tenant sibling principal can neither
+        terminalize the in-memory task nor cancel the workflow (#1547 round-13 B1).
+
         Grounding: ``tasks/cancel`` semantics are A2A-protocol-native (A2A spec
         Task Management: ``TaskNotCancelableError`` for tasks already in a
         terminal state; the SDK ``default_request_handler`` is the reference
@@ -1313,26 +1370,27 @@ class AdCPRequestHandler(RequestHandler):
         upstream task-lifecycle obligation (#1574).
 
         Returns:
-            Task object with canceled status, or None if not found anywhere.
+            Task object with canceled status, or None if not found (or not owned).
         """
         task_id = params.id
-        task = self.tasks.get(task_id)
-        if task is not None and task.status.state in self._TERMINAL_TASK_STATES:
-            raise TaskNotCancelableError(message=f"Task cannot be canceled - current state: {task.status.state}")
-        durable = self._durable_cancel_step(task_id, context)
-        if task is not None:
-            task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_CANCELED))
-            self.tasks[task_id] = task
-            return task
+        identity = self._durable_lookup_identity(context)
+        owned = self._authorized_in_memory_task(task_id, identity)
+        if owned is not None and owned.status.state in self._TERMINAL_TASK_STATES:
+            raise TaskNotCancelableError(message=f"Task cannot be canceled - current state: {owned.status.state}")
+        durable = self._durable_cancel_step(task_id, identity)
+        if owned is not None:
+            owned.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_CANCELED))
+            self._remember_task(task_id, owned, identity)
+            return owned
         return durable
 
-    def _durable_cancel_step(self, task_id: str, context: ServerCallContext | None) -> Task | None:
+    def _durable_cancel_step(self, task_id: str, identity: ResolvedIdentity | None) -> Task | None:
         """Durably cancel the workflow step carrying this outer task id.
 
-        Tenant- AND principal-scoped (see ``_durable_lookup_identity``). Returns
-        None when no persisted step matches. Raises ``TaskNotCancelableError`` when
-        the step already reached a terminal status: an approved/completed media buy
-        cannot be undone by ``tasks/cancel``.
+        Tenant- AND principal-scoped via ``identity`` (see ``_durable_lookup_identity``).
+        Returns None when identity is unresolved/non-owning or no persisted step
+        matches. Raises ``TaskNotCancelableError`` when the step already reached a
+        terminal status: an approved/completed media buy cannot be undone.
 
         The transition itself is a single conditional UPDATE
         (``cancel_if_nonterminal``) so a concurrent approval that commits
@@ -1340,8 +1398,7 @@ class AdCPRequestHandler(RequestHandler):
         zero-row outcome is reported as ``TaskNotCancelableError`` with the fresh
         status, and the terminal decision stands.
         """
-        identity = self._durable_lookup_identity(context)
-        if identity is None:
+        if identity is None or identity.tenant_id is None or identity.principal_id is None:
             return None
 
         from src.core.database.database_session import get_db_session

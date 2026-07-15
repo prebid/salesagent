@@ -305,7 +305,7 @@ class WorkflowRepository:
     # WorkflowStep writes
     # ------------------------------------------------------------------
 
-    def update_status(
+    def transition_if_nonterminal(
         self,
         step_id: str,
         *,
@@ -314,40 +314,32 @@ class WorkflowRepository:
         response_data: dict[str, Any] | None = None,
         error_message: str | None = None,
     ) -> WorkflowStep | None:
-        """Update the status of a workflow step.
+        """Atomically set a step's status IFF it is not already terminal.
 
-        Returns the updated step, or None if not found.
-        Does NOT commit — the caller handles that.
+        The SINGLE terminal-transition primitive shared by every competing writer
+        (buyer cancel, admin approve/reject, background approval, manual complete):
+        a terminal workflow step (completed/rejected/failed/canceled) is IMMUTABLE.
+        The write is one conditional UPDATE (``WHERE status NOT IN terminal``), so
+        under concurrency the FIRST committed writer wins and no later writer — in
+        EITHER ordering (approval-then-cancel or cancel-then-approval) — can
+        overwrite a committed terminal decision. Tenant-scoped via a correlated
+        Context subquery like every other query.
+
+        Returns the updated step (re-loaded, session-synced) or None when it does
+        not exist OR is already terminal (write refused). Does NOT commit — the
+        caller handles that.
         """
-        step = self.get_by_step_id(step_id)
-        if step is None:
-            return None
-
-        step.status = status
+        values: dict[str, Any] = {"status": status}
         if completed_at is not None:
-            step.completed_at = completed_at
+            values["completed_at"] = completed_at
         if response_data is not None:
-            step.response_data = response_data
+            values["response_data"] = response_data
         if error_message is not None:
-            step.error_message = error_message
+            values["error_message"] = error_message
         elif status == "completed":
-            # Clear error message on successful completion
-            step.error_message = None
+            # Clear error message on successful completion.
+            values["error_message"] = None
 
-        self._session.flush()
-        return step
-
-    def cancel_if_nonterminal(self, step_id: str, *, completed_at: datetime) -> bool:
-        """Atomically transition a step to ``canceled`` iff it is not already terminal.
-
-        Single conditional UPDATE — no read-check-write window: an approval that
-        commits ``completed``/``rejected`` between the caller's read and this write
-        makes the WHERE clause match zero rows, so a buyer's cancel can never
-        overwrite a terminal decision. Tenant-scoped via a correlated Context
-        subquery like every other query. Returns True when the step was canceled,
-        False when it no longer exists or already reached a terminal status.
-        Does NOT commit — the caller handles that.
-        """
         scoped_step_ids = (
             select(WorkflowStep.step_id)
             .join(DBContext)
@@ -358,16 +350,55 @@ class WorkflowRepository:
         )
         # returning() makes the DML yield rows, so success is observable without
         # the CursorResult.rowcount attribute (untyped on Session.execute's Result).
-        canceled_ids = self._session.execute(
-            update(WorkflowStep)
-            .where(
-                WorkflowStep.step_id.in_(scoped_step_ids),
-                WorkflowStep.status.not_in(TERMINAL_STEP_STATUSES),
+        # synchronize_session="fetch" keeps any already-loaded ORM copy consistent
+        # so callers that further mutate the returned step see the new status.
+        updated = (
+            self._session.execute(
+                update(WorkflowStep)
+                .where(
+                    WorkflowStep.step_id.in_(scoped_step_ids),
+                    WorkflowStep.status.not_in(TERMINAL_STEP_STATUSES),
+                )
+                .values(**values)
+                .returning(WorkflowStep.step_id)
+                .execution_options(synchronize_session="fetch")
             )
-            .values(status="canceled", completed_at=completed_at)
-            .returning(WorkflowStep.step_id)
-            # No session-state sync: callers re-read via repository methods, never
-            # reuse a previously loaded ORM instance after this transition.
-            .execution_options(synchronize_session=False)
-        ).scalars()
-        return canceled_ids.first() is not None
+            .scalars()
+            .first()
+        )
+        if updated is None:
+            return None
+        return self.get_by_step_id(step_id)
+
+    def update_status(
+        self,
+        step_id: str,
+        *,
+        status: str,
+        completed_at: datetime | None = None,
+        response_data: dict[str, Any] | None = None,
+        error_message: str | None = None,
+    ) -> WorkflowStep | None:
+        """Terminal-immutable status update — see ``transition_if_nonterminal``.
+
+        Returns the updated step, or None if the step does not exist OR is already
+        terminal (the write is refused rather than overwriting a terminal decision).
+        Does NOT commit — the caller handles that.
+        """
+        return self.transition_if_nonterminal(
+            step_id,
+            status=status,
+            completed_at=completed_at,
+            response_data=response_data,
+            error_message=error_message,
+        )
+
+    def cancel_if_nonterminal(self, step_id: str, *, completed_at: datetime) -> bool:
+        """Atomically transition a step to ``canceled`` iff it is not already terminal.
+
+        Thin bool-returning specialization of ``transition_if_nonterminal`` — the
+        single conditional-UPDATE primitive that makes terminal steps immutable.
+        Returns True when the step was canceled, False when it no longer exists or
+        already reached a terminal status. Does NOT commit — the caller handles that.
+        """
+        return self.transition_if_nonterminal(step_id, status="canceled", completed_at=completed_at) is not None

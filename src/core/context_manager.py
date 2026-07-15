@@ -20,6 +20,7 @@ from src.core.async_utils import pin_task
 from src.core.database.database_session import DatabaseManager
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
+from src.core.database.repositories.workflow import TERMINAL_STEP_STATUSES as _TERMINAL_STEP_STATUSES
 from src.core.exceptions import AdCPError, build_two_layer_error_envelope, normalize_to_adcp_error
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -287,6 +288,24 @@ class ContextManager(DatabaseManager):
                 stmt = stmt.join(DBContext).where(DBContext.tenant_id == tenant_id)
 
             step = session.scalars(stmt).first()
+            # Terminal steps are IMMUTABLE: skip a status change that would move an
+            # already-terminal step to a different status (e.g. an auto-approval
+            # completing a step the buyer just canceled). This is a NON-BLOCKING,
+            # best-effort guard — NOT a row lock — because this method runs on the
+            # ContextManager's own session while the surrounding request may hold the
+            # same row open in another session; a SELECT ... FOR UPDATE here
+            # deadlocks that flow (statement-timeout). The genuine concurrent
+            # competitor in the cancel race is the APPROVAL writer
+            # (WorkflowRepository.update_status → transition_if_nonterminal), which IS
+            # fully atomic via a conditional UPDATE. update_workflow_step's terminal
+            # transitions come from the synchronous create/auto-approve path, which
+            # does not overlap a buyer cancel, so a best-effort check is sufficient here.
+            if step and status and status != step.status and step.status in _TERMINAL_STEP_STATUSES:
+                console.print(
+                    f"[yellow]⚠️ Skipping terminal transition {step.status}→{status} for step {step_id} "
+                    f"(terminal steps are immutable)[/yellow]"
+                )
+                return
             if step:
                 old_status = step.status  # Capture old status before changing
 
