@@ -17,7 +17,11 @@ delivery-only terminal ``failed``::
     pending_creatives, pending_start, active, paused, completed,
     rejected, canceled, failed
 
-(``get-media-buy-delivery-response.json`` status enum; AdCP spec 3.1.0-beta.3.)
+(``get-media-buy-delivery-response.json`` status enum; AdCP spec 3.1.1. The
+pinned schema copy is tagged ``v3.1-04f59d2d5``; the delivery-response contract
+this module grounds — the status enum plus the webhook-only fields — is
+byte-identical in AdCP 3.1.1, so every ``@ v3.1-04f59d2d5`` reference below cites
+the pinned commit whose shape 3.1.1 preserves, not an older spec version.)
 The two callers adapt this single result to their own surface:
 
 - ``get_media_buy_delivery`` uses the canonical string directly and overlays

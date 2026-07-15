@@ -577,9 +577,19 @@ class TestPollOmitsWebhookOnlyFieldsOnEveryTransport:
             for transport in [Transport.MCP, Transport.A2A, Transport.REST, Transport.IMPL]:
                 result = env.call_via(transport, media_buy_ids=[buy.media_buy_id])
                 assert result.is_success, f"{transport}: {result.error}"
-                # IMPL has no wire; serialize the payload through the production
-                # serializer instead (see tests/CLAUDE.md § wire_response).
-                wire = result.wire_response or result.payload.model_dump(mode="json")
+                # Only IMPL legitimately lacks a real wire — serialize its payload
+                # through the production serializer. For MCP/A2A/REST require the
+                # actual stashed wire body; falling back to a model_dump() there
+                # would reserialize the parsed model and normalize away the very
+                # explicit-null / field-shape regression this test exists to catch
+                # (mirrors the BDD wire_dict guard).
+                if transport is Transport.IMPL:
+                    wire = result.payload.model_dump(mode="json")
+                else:
+                    assert result.wire_response is not None, (
+                        f"{transport}: env did not stash a success-path wire — cannot verify wire bytes"
+                    )
+                    wire = result.wire_response
                 # Anchor: the webhook-only fields only surface alongside deliveries,
                 # so an empty-deliveries response would pass the omission check vacuously.
                 assert wire.get("media_buy_deliveries"), f"{transport}: no deliveries — omission check is vacuous"

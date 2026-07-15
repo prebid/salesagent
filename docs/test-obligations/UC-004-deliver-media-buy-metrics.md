@@ -763,5 +763,5 @@ Source: BR-UC-004-ext-g.md
 **Given** a GetMediaBuyDeliveryResponse with notification_type set and next_expected_at not set
 **When** `model_dump(mode='json')` is called
 **Then** the output omits `next_expected_at` entirely — the field is a non-nullable date-time "only present in webhook deliveries when notification_type is not 'final'" (get-media-buy-delivery-response.json @ v3.1-04f59d2d5; optimization-reporting.mdx: "omitted for final notifications"), so an explicit `null` is non-conforming
-**Business Rule** BR-RULE-029 (INV-2: final = no next_expected_at); AdCP 3.1.0-beta.3
+**Business Rule** BR-RULE-029 (INV-2: final = no next_expected_at); AdCP 3.1.1 (shape unchanged from pinned schema `v3.1-04f59d2d5`)
 **Priority** P2

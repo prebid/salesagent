@@ -18,11 +18,11 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, then, when
 
-from src.core.tools._media_buy_status import WEBHOOK_ONLY_FIELDS
 from tests.bdd.steps._outcome_helpers import _require, wire_dict
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
+from tests.helpers.delivery_assertions import assert_omits_webhook_only_fields
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -1770,14 +1770,11 @@ def then_poll_omits_webhook_only_fields(ctx: dict) -> None:
     """
     wire = wire_dict(ctx)
     # Anchor: the webhook-only fields only surface when deliveries are present,
-    # so a delivery-less response would pass the omission loop vacuously.
+    # so a delivery-less response would pass the omission check vacuously.
     assert wire.get("media_buy_deliveries"), (
         f"poll returned no deliveries — omission check would be vacuous (keys={list(wire.keys())})"
     )
-    for field in sorted(WEBHOOK_ONLY_FIELDS):
-        assert field not in wire, (
-            f"synchronous poll must omit webhook-only {field!r}, got {wire.get(field)!r} (keys={list(wire.keys())})"
-        )
+    assert_omits_webhook_only_fields(wire, context="synchronous poll wire")
 
 
 @then('the payload should not include "aggregated_totals" field')

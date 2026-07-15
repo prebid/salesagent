@@ -25,6 +25,7 @@ from src.core.tools._media_buy_status import (
     PERSISTED_STATUS_TO_CANONICAL,
     SERVING_PERSISTED_STATUSES,
     TERMINAL_STATUSES,
+    WEBHOOK_ONLY_FIELDS,
     resolve_canonical_status,
 )
 from src.core.tools.media_buy_list import _PERSISTED_STATUS_TO_ADCP, _compute_status
@@ -173,6 +174,19 @@ class TestCanonicalVocabularyPinnedToSdk:
         assert PENDING_PERSISTED_STATUSES == pending_start_keys - {"pending", "pending_approval"}
         # and the two gates really are in the map (so the subtraction is load-bearing)
         assert {"pending", "pending_approval"} <= pending_start_keys
+
+    def test_webhook_only_fields_membership_is_pinned(self):
+        """Pin the exact WEBHOOK_ONLY_FIELDS set — the shared omission oracle's source of truth.
+
+        The centralized real-wire oracles (BDD then_poll_omits_webhook_only_fields +
+        the integration cross-transport test, both via
+        assert_omits_webhook_only_fields) check exactly this set. Without this pin,
+        removing a field from WEBHOOK_ONLY_FIELDS would silently stop those oracles
+        from checking it. The three are the response fields the pinned schema marks
+        "only present in webhook deliveries" (get-media-buy-delivery-response.json;
+        unchanged in AdCP 3.1.1).
+        """
+        assert WEBHOOK_ONLY_FIELDS == {"notification_type", "sequence_number", "next_expected_at"}
 
 
 class TestAdcpProjectionAgreesWithCanonicalMap:

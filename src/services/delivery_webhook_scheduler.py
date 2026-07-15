@@ -409,9 +409,7 @@ class DeliveryWebhookScheduler:
             # Re-raise for the caller (batch loop / manual trigger) to own the
             # single ERROR line. Log at DEBUG here to avoid a duplicate full
             # traceback on the common send_notification -> False path.
-            logger.debug(
-                "Error sending delivery report for media buy %s: %s", media_buy.media_buy_id, e, exc_info=True
-            )
+            logger.debug("Error sending delivery report for media buy %s: %s", media_buy.media_buy_id, e, exc_info=True)
             raise
 
 

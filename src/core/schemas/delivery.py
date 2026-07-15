@@ -82,7 +82,7 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
 
     # account, reporting_dimensions, attribution_window, time_granularity,
     # include_window_breakdown, include_package_daily_breakdown: all now provided
-    # by adcp SDK 5.7 (spec 3.1.0-beta.3). No local redeclarations needed.
+    # by adcp SDK 6.6.0 (spec 3.1.1). No local redeclarations needed.
 
 
 # ---------------------------------------------------------------------------
