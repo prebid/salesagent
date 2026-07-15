@@ -1,6 +1,6 @@
 """get_products emits placements that validate against AdCP placement.json v3.1.1.
 
-Regression for salesagent-au0o (PR #1567, adcp 5.7->6.6 bump). adcp 6.6 / spec
+Regression for PR #1567 (adcp 5.7->6.6 bump). adcp 6.6 / spec
 3.1.1 made Placement.kind and Placement.mode required and added an allOf
 conditional: `if kind == "publisher_ref" then required: [publisher_domain]`
 (and `if kind == "seller_inline" then required: [name]`). Legacy placement rows
@@ -89,4 +89,58 @@ def test_legacy_placement_is_schema_valid_on_all_transports(legacy_placement_pro
     ]
     assert placements, f"{transport}: expected at least one emitted placement to validate"
     for placement in placements:
+        _assert_placement_schema_valid(placement)
+
+
+@pytest.fixture
+def nameless_legacy_placement_product_env(integration_db):
+    """ProductEnv with a legacy placement row MISSING name (carries only placement_id).
+
+    seller_inline requires only ``name`` (placement.json 3.1.1 allOf), so the
+    seller_inline default assumed legacy rows carry it. This fixture covers the
+    other legacy shape: the conversion's defined fallback derives ``name`` from
+    ``placement_id`` rather than silently emitting a schema-invalid placement
+    (PR #1567 round-2 cleanup).
+    """
+    with ProductEnv(tenant_id="placement-noname-test", principal_id="test_principal") as env:
+        tenant = TenantFactory(tenant_id="placement-noname-test")
+        PrincipalFactory(tenant=tenant, principal_id="test_principal")
+        product = ProductFactory(
+            tenant=tenant,
+            product_id="nameless_placement_product",
+            name="Nameless Placement Product",
+            description="Product carrying a legacy placement row without a name",
+            delivery_type="guaranteed",
+            # Legacy shape variant: placement_id only — no name, no kind/mode/publisher_domain.
+            placements=[{"placement_id": "sidebar_btf"}],
+        )
+        PricingOptionFactory(product=product, pricing_model="cpm", rate="15.00", is_fixed=True, currency="USD")
+        env.set_policy_approved()
+        env.set_ranking_disabled()
+        yield env
+
+
+@pytest.mark.parametrize("transport", [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST])
+def test_nameless_legacy_placement_gets_fallback_name_and_is_schema_valid(
+    nameless_legacy_placement_product_env, transport
+):
+    """A legacy placement missing ``name`` emits a schema-valid seller_inline placement.
+
+    The conversion's defined fallback sets name := placement_id (never a silent
+    schema-invalid emission). Asserts the exact fallback value AND full
+    placement.json validity on every transport.
+    """
+    result = nameless_legacy_placement_product_env.call_via(transport, brief="display ads")
+    assert result.is_success, f"{transport} get_products failed: {result.error}"
+
+    placements = [
+        p.model_dump(mode="json") if hasattr(p, "model_dump") else p
+        for product in result.payload.products
+        for p in (product.placements or [])
+    ]
+    assert placements, f"{transport}: expected the nameless legacy placement to be emitted"
+    for placement in placements:
+        assert placement.get("name") == "sidebar_btf", (
+            f"{transport}: fallback must derive name from placement_id, got {placement.get('name')!r}"
+        )
         _assert_placement_schema_valid(placement)

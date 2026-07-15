@@ -15,6 +15,8 @@ Each test class maps to one beads bug.
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import extract_select_calls
+
 ROOT = Path(__file__).resolve().parents[2]
 
 # Models that require tenant_id in every query
@@ -54,62 +56,12 @@ def _extract_select_calls(
     Returns:
         List of dicts with: model, has_tenant_filter, lineno
     """
-    source_path = ROOT / file_path
-    tree = ast.parse(source_path.read_text())
-    source_text = source_path.read_text()
-    lines = source_text.splitlines()
-    results = []
-
-    # Find target function/method nodes
-    target_nodes = []
-    for node in ast.walk(tree):
-        if class_name:
-            if isinstance(node, ast.ClassDef) and node.name == class_name:
-                for child in ast.walk(node):
-                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        if child.name == func_name:
-                            target_nodes.append(child)
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node.name == func_name:
-                target_nodes.append(node)
-
-    for func_node in target_nodes:
-        for child in ast.walk(func_node):
-            if not isinstance(child, ast.Call):
-                continue
-
-            func = child.func
-            if not (isinstance(func, ast.Name) and func.id == "select"):
-                continue
-            if not child.args:
-                continue
-
-            model_arg = child.args[0]
-            model_name = None
-            if isinstance(model_arg, ast.Name):
-                model_name = model_arg.id
-            elif isinstance(model_arg, ast.Attribute):
-                model_name = model_arg.attr
-
-            if not model_name:
-                continue
-
-            if tenant_scoped_only and model_name not in TENANT_SCOPED_MODELS:
-                continue
-
-            select_line = child.lineno
-            stmt_text = "\n".join(lines[select_line - 1 : select_line + 10])
-            has_tenant_filter = "tenant_id" in stmt_text
-
-            results.append(
-                {
-                    "model": model_name,
-                    "has_tenant_filter": has_tenant_filter,
-                    "lineno": select_line,
-                }
-            )
-
-    return results
+    return extract_select_calls(
+        ROOT / file_path,
+        func_name,
+        class_name=class_name,
+        model_predicate=(lambda name: name in TENANT_SCOPED_MODELS) if tenant_scoped_only else None,
+    )
 
 
 class TestAuthUtilsTenantIsolation:

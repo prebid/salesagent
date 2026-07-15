@@ -12,7 +12,9 @@ beads: salesagent-2rq, salesagent-zh85
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
+from unittest.mock import ANY
 
 from pytest_bdd import given, parsers, then, when
 
@@ -712,11 +714,14 @@ def given_request_natural_key_sandbox(ctx: dict) -> None:
 def when_send_create_media_buy(ctx: dict) -> None:
     """Send the create_media_buy request and capture the result or error.
 
-    Three dispatch modes share this step text — every one routes a full
+    Four dispatch modes share this step text — every one routes a full
     ``create_media_buy`` through the parametrized wire transport (a2a/mcp/rest):
 
     - v3.1 idempotency scenarios (``ctx["idempotency_create"]``) dispatch flat
       ``request_kwargs`` so the production idempotency replay path runs end-to-end.
+    - Manual-approval scenarios (``ctx["uc002_full_create"]``, PR #1567) dispatch
+      the harness-seeded base request with a fresh idempotency key, carrying the
+      Given-step account reference, so the submitted-envelope path runs end-to-end.
     - ``dispatch_mode == "create"`` builds a typed ``CreateMediaBuyRequest`` from
       ctx["request_kwargs"] (carrying a typed ``account`` for account-resolution
       and budget/pricing scenarios) and dispatches it. Production resolves the
@@ -730,6 +735,21 @@ def when_send_create_media_buy(ctx: dict) -> None:
         from tests.bdd.steps.generic._dispatch import dispatch_request
 
         dispatch_request(ctx, **ctx["request_kwargs"])
+        return
+
+    if ctx.get("uc002_full_create"):
+        # Manual-approval wiring (PR #1567 round-2 item 2): dispatch a FULL create
+        # through the parametrized transport against the harness-seeded
+        # product, carrying the Given-step account reference so boundary
+        # account resolution runs too.
+        from tests.bdd.steps.generic._dispatch import dispatch_request
+
+        kwargs = _build_idempotency_request_kwargs(ctx)
+        kwargs["idempotency_key"] = f"uc002-manual-{uuid.uuid4().hex}"
+        account_ref = ctx.get("account_ref")
+        if account_ref is not None:
+            kwargs["account"] = account_ref.model_dump(mode="json", exclude_none=True)
+        dispatch_request(ctx, **kwargs)
         return
 
     if ctx.get("dispatch_mode") == "create_raw":
@@ -1425,8 +1445,42 @@ def given_sandbox_account_other_agent(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-# Step "the tenant is configured for auto-approval" is defined in
-# tests/bdd/steps/generic/given_media_buy.py (real DB-aware version).
+# Canonical owner of "the tenant is configured for auto-approval" — the
+# generic given_media_buy.py module keeps only the
+# "tenant human_review_required is false" alias to avoid a cross-module shadow.
+@given("the tenant is configured for auto-approval")
+def given_tenant_auto_approval(ctx: dict) -> None:
+    """Configure the tenant for auto-approval and verify the env reflects it.
+
+    Turns OFF ``human_review_required`` on the real tenant row AND in the
+    identity's tenant dict, and confirms the adapter mock is not gating on
+    manual approval — so the create returns ``status='completed'`` rather than
+    pending. The production approval gate (media_buy_create.py) is
+    ``tenant.human_review_required OR adapter.manual_approval_required`` AND
+    ``'create_media_buy' in adapter.manual_approval_operations``.
+
+    Only the wired idempotency scenarios (MediaBuyCreateEnv, with ctx["tenant"]
+    provisioned by conftest's _harness_env) reach this step; every other UC-002
+    scenario using this text is blanket-xfailed before any step runs.
+    """
+    env = ctx["env"]
+    tenant = ctx["tenant"]
+
+    tenant.human_review_required = False
+    env._commit_factory_data()
+    env._identity_cache.clear()
+    env._tenant_overrides["human_review_required"] = False
+
+    adapter_mock = env.mock["adapter"].return_value
+    assert adapter_mock.manual_approval_required is False, (
+        "Step claims 'tenant is configured for auto-approval' but the adapter mock "
+        f"reports manual_approval_required={adapter_mock.manual_approval_required!r}"
+    )
+    assert "create_media_buy" not in (adapter_mock.manual_approval_operations or []), (
+        "Step claims auto-approval but the adapter mock gates create_media_buy on "
+        f"manual approval: {adapter_mock.manual_approval_operations!r}"
+    )
+    ctx["tenant_auto_approval"] = True
 
 
 # ── v3.1 idempotency replay / missing (T-UC-002-v31-idempotency-{replay,missing}) ──
@@ -1582,8 +1636,12 @@ def given_package_positive_budget(ctx: dict) -> None:
     ctx["package_budget_valid"] = True
 
 
-# Step "the ad server adapter is available" is defined in
-# tests/bdd/steps/generic/given_media_buy.py (real DB-aware version).
+# Canonical owner of "the ad server adapter is available" — removed from the
+# generic given_media_buy.py module to avoid a cross-module shadow.
+@given("the ad server adapter is available")
+def given_adapter_available(ctx: dict) -> None:
+    """Mark the ad server adapter as available for the scenario."""
+    ctx["adapter_available"] = True
 
 
 @given("the request does NOT include an idempotency_key")
@@ -2071,3 +2129,105 @@ def then_webhook_notification(ctx: dict) -> None:
             f"step.request_data push_notification_config URL mismatch: "
             f"expected '{expected_url}', got '{step_push_cfg.get('url')}'"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THEN steps — seller notification (manual-approval wiring, PR #1567 round-2 item 2)
+# ═══════════════════════════════════════════════════════════════════════
+# Moved from steps/generic/then_media_buy.py (a module NOT in pytest_plugins,
+# so the step was unregistered/dead there): registering that whole module
+# would shadow three step texts already registered by domain modules.
+
+
+class _Matches:
+    """Equality matcher for assert_called_once_with: accepts values satisfying *predicate*."""
+
+    def __init__(self, predicate, description: str) -> None:
+        self._predicate = predicate
+        self._description = description
+
+    def __eq__(self, other: object) -> bool:
+        return bool(self._predicate(other))
+
+    def __repr__(self) -> str:
+        return f"<{self._description}>"
+
+
+@then("a Slack notification should be sent to the Seller")
+def then_slack_notification_sent(ctx: dict) -> None:
+    """Assert Slack notifier was called with seller-facing event details.
+
+    In E2E, mocks live in the test process while the server runs in Docker,
+    so mock.call_count is always 0. Verify the media buy reached a status that
+    triggers seller notification (the notification is a side-effect of status
+    transitions in production code).
+    """
+    from tests.bdd.steps._outcome_helpers import _get_response_field, assert_media_buy_created, is_e2e
+
+    if is_e2e(ctx):
+        # E2E: cannot observe Slack mock calls — verify:
+        # 1. The media buy was created successfully
+        # 2. It reached a status that triggers Slack notification to the Seller
+        #
+        # A SUBMITTED (pending-approval) response carries no media_buy_id on the
+        # wire (spec 3.1.1 CreateMediaBuySubmitted) — locate the persisted row
+        # via the workflow mapping's tenant instead of the response body.
+        resp = ctx.get("response")
+        if resp is not None and _get_response_field(resp, "media_buy_id") is None:
+            from src.core.database.models import MediaBuy as DBMediaBuy
+
+            env = ctx["env"]
+            tenant = ctx.get("tenant")
+            assert tenant is not None, "submitted-path Slack check needs ctx['tenant'] to locate the persisted buy"
+            rows = env.query(DBMediaBuy, tenant_id=tenant.tenant_id)
+            assert rows, "submitted create must persist a media buy row that triggered the Seller notification"
+            mb = rows[-1]
+        else:
+            mb = assert_media_buy_created(ctx)
+        # Seller notifications fire on creation/approval-needed status transitions
+        notification_trigger_statuses = (
+            "pending_approval",
+            "active",
+            "completed",
+            "submitted",
+        )
+        assert mb.status in notification_trigger_statuses, (
+            f"E2E media buy has status '{mb.status}' which does not trigger "
+            f"Seller Slack notification. Expected one of {notification_trigger_statuses}."
+        )
+        return
+
+    # In-process: full mock verification. One assert_called_once_with with
+    # value-constraining matchers (no split call_args inspection — the
+    # weak-mock-assertions guard). Production always passes these as kwargs;
+    # a positional call is a signature divergence and fails the match.
+    env = ctx["env"]
+    mock_slack = env.mock["slack"].return_value
+
+    # Buyer-facing events (rejected, approved, status_changed) must never be
+    # sent to the Seller's Slack channel.
+    seller_event_types = ("approval_required", "created", "config_approval_required")
+    resp = ctx.get("response")
+    expected_mb_id = _get_response_field(resp, "media_buy_id") if resp is not None else None
+    tenant = ctx.get("tenant")
+    expected_tenant_name = getattr(tenant, "name", None) if tenant is not None else None
+
+    mock_slack.notify_media_buy_event.assert_called_once_with(
+        event_type=_Matches(lambda v: v in seller_event_types, f"seller-facing event_type in {seller_event_types}"),
+        # A submitted (pending-approval) response carries no media_buy_id on
+        # the wire (spec 3.1.1) — then any non-empty id from production is fine.
+        media_buy_id=(
+            expected_mb_id
+            if expected_mb_id
+            else _Matches(lambda v: isinstance(v, str) and v != "", "non-empty media_buy_id")
+        ),
+        principal_name=ANY,
+        details=ANY,
+        tenant_name=(
+            expected_tenant_name
+            if expected_tenant_name
+            else _Matches(lambda v: isinstance(v, str) and v != "", "non-empty tenant_name (targets the Seller)")
+        ),
+        tenant_id=ANY,
+        success=True,
+    )

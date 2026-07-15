@@ -412,11 +412,11 @@ class TestBuildCreateSuccess:
     def test_buyer_ref_not_serialized_on_success_response(self):
         """buyer_ref must never reach the wire on CreateMediaBuySuccess.
 
-        SDK codegen still declares buyer_ref on the generated parent response type, but
-        adcp 6.6 (spec 3.1.1) removed it — buyer_ref belongs on the request, not the
-        response. CreateMediaBuySuccess neutralizes the inherited field by redeclaring it
-        with exclude=True, so it is absent from every serialization even though it remains
-        a model field on the SDK parent.
+        adcp 6.6 (spec 3.1.1) removed buyer_ref from the create-media-buy response type —
+        it belongs on the request, not the response. The adcp 6.6 parent therefore no
+        longer declares it, so it is not a field on CreateMediaBuySuccess at all and can
+        never be serialized. (The obsolete SDK-5.7 exclude=True redeclaration that used to
+        neutralize a wrongly-inherited parent field is gone with the 6.6 bump.)
         """
         adapter = _make_adapter_instance()
         result = adapter._build_create_success(
@@ -425,8 +425,9 @@ class TestBuildCreateSuccess:
             packages=[_make_media_package()],
         )
 
-        # The obligation is on the wire: buyer_ref is excluded from serialization.
-        assert type(result).model_fields["buyer_ref"].exclude is True
+        # The obligation is on the wire: buyer_ref never serializes. Under adcp 6.6 that
+        # holds because it is not a field on the response type at all.
+        assert "buyer_ref" not in type(result).model_fields
         assert "buyer_ref" not in result.model_dump()
         assert "buyer_ref" not in result.model_dump_json()
 

@@ -104,6 +104,18 @@ def test_known_violations_not_stale():
     )
 
 
+def _func_references_name(source: str, func_name: str, name: str) -> bool:
+    tree = ast.parse(source)
+    for func in ast.walk(tree):
+        if isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)) and func.name == func_name:
+            for node in ast.walk(func):
+                if isinstance(node, ast.Attribute) and node.attr == name:
+                    return True
+                if isinstance(node, ast.Name) and node.id == name:
+                    return True
+    return False
+
+
 def test_migrated_update_site_is_guarded():
     """The #1417 fix: media_buy_dual update MCP path must run the guarded pipeline.
 
@@ -121,12 +133,11 @@ def test_migrated_update_site_is_guarded():
         if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)) and f.name == "_call_update_mcp"
     ]
     assert funcs, "_call_update_mcp disappeared from media_buy_dual.py"
-    uses_client_pipeline = any(
-        isinstance(node, ast.Attribute) and node.attr == "_run_mcp_client" for node in ast.walk(funcs[0])
-    )
-    assert uses_client_pipeline or _func_references_with_error_logging(source, "_call_update_mcp"), (
+    explicit_wrap = _func_references_with_error_logging(source, "_call_update_mcp")
+    real_pipeline = _func_references_name(source, "_call_update_mcp", "_run_mcp_client")
+    assert explicit_wrap or real_pipeline, (
         "_call_update_mcp must either route through _run_mcp_client (production-registered "
-        "with_error_logging) or wrap the tool with with_error_logging inline (the ihwl fix regressed)."
+        "with_error_logging) or wrap the tool with with_error_logging inline (the #1417 fix regressed)."
     )
     # And it must not appear as a direct-call violation.
     assert ("media_buy_dual.py", "_call_update_mcp") not in _scan_violations()

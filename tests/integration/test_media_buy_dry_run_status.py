@@ -1,7 +1,7 @@
 """dry_run create/update_media_buy previews Success(status="completed") — behavior guard.
 
-Regression/characterization guard for salesagent-6tc3 (third member of the adcp
-5.7 -> 6.6 status-default family, alongside salesagent-5dxc and salesagent-88e2).
+Regression/characterization guard for PR #1567 (third member of the adcp
+5.7 -> 6.6 status-default family, alongside the update-path and reject-path members).
 
 WHAT THIS GUARDS
     adcp 6.6 gave Create/UpdateMediaBuySuccess a default protocol-envelope
@@ -33,8 +33,8 @@ WHY "completed" IS CORRECT HERE (grounded decision — Option a, no code change)
     to simulate the WOULD-BE outcome, and the would-be outcome IS completion, so
     Success(status="completed") is a truthful preview. This is deliberately
     DISTINCT from the siblings, where the operation genuinely did NOT complete:
-    salesagent-5dxc (pending human approval -> UpdateMediaBuySubmitted) and
-    salesagent-88e2 (reject -> Error). For those, "completed" is a lie routable
+    the update path (pending human approval -> UpdateMediaBuySubmitted) and
+    the reject path (reject -> Error). For those, "completed" is a lie routable
     to an existing variant; for dry_run it is a faithful preview.
 
 SCOPE OF THIS PIN
