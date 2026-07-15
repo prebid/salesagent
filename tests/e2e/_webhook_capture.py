@@ -28,6 +28,13 @@ class WebhookCaptureHandler(BaseHTTPRequestHandler):
 
     received_webhooks: list = []
 
+    # Per-connection socket timeout (seconds). StreamRequestHandler.setup() applies
+    # settimeout() to every accepted connection when this class attr is non-None, so
+    # a client that opens a socket and then stalls mid-request cannot wedge the
+    # serve_forever loop past teardown's bounded join. This is the idiomatic stdlib
+    # lever — NOT HTTPServer.timeout, which only governs handle_request() polling.
+    timeout = 30
+
     def do_POST(self):
         """Handle POST requests (webhook notifications)."""
         content_length = int(self.headers.get("Content-Length", 0))
@@ -70,6 +77,13 @@ def run_webhook_capture_server(
     """
     received.clear()
 
+    # A caller may pass a bare handler class without a per-connection timeout;
+    # apply the same default so a stalled client cannot wedge teardown regardless
+    # of which handler subclass is used. Only set it when unset — never override an
+    # explicit choice.
+    if getattr(handler_class, "timeout", None) is None:
+        handler_class.timeout = 30  # type: ignore[attr-defined]
+
     # Bind 0.0.0.0 (all interfaces), not 127.0.0.1: the in-network runner reaches
     # this receiver by its compose network alias, so a loopback-only bind would be
     # unreachable from the server container. The callback host (below) is what
@@ -102,4 +116,17 @@ def run_webhook_capture_server(
         shutdown_signal.join(timeout=10)
         serve_thread.join(timeout=10)
         server.server_close()
+        # Fail loud if the loop or the shutdown signaller is still alive after the
+        # bounded joins: a live handler could still mutate `received`, so we must
+        # NOT clear shared state under it (that would race a late append into the
+        # NEXT test's captures). The entry-side received.clear() already guarantees
+        # next-test isolation even when this raises, so a stuck server surfaces as a
+        # loud teardown error instead of silent cross-test contamination.
+        if serve_thread.is_alive() or shutdown_signal.is_alive():
+            raise RuntimeError(
+                "webhook-capture server did not shut down within the bounded teardown window "
+                f"(serve_thread alive={serve_thread.is_alive()}, "
+                f"shutdown_signal alive={shutdown_signal.is_alive()}) — refusing to clear shared "
+                "state under a live handler."
+            )
         received.clear()
