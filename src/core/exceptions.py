@@ -1026,15 +1026,21 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
     return envelope
 
 
-VALIDATION_ERROR_SUGGESTION = "check request parameters and fix"
+# Canonical buyer-facing suggestions from error-code.json enumMetadata (AdCP 3.1.1):
+# each code carries its own default hint, so a VALIDATION_ERROR must not borrow
+# INVALID_REQUEST's text.
+INVALID_REQUEST_SUGGESTION = "check request parameters and fix"
+VALIDATION_ERROR_SUGGESTION = "review error details and fix field values"
 
 
 def first_validation_error_field(validation_error: ValidationError) -> str | None:
-    """Return the bracket-notation path of the first Pydantic error.
+    """Return the bracket-notation path of the first Pydantic error, or ``None``.
 
-    List indices render as ``[i]`` so boundary-derived paths such as
-    ``packages[0].budget`` align with the ``packages[].budget`` field strings
-    raised by the implementation layer.
+    Lets a transport boundary attach a structured ``field`` to the
+    ``AdCPValidationError`` it raises, so the wire envelope carries the offending
+    field path instead of only the rendered message. List indices render as
+    ``[i]`` so boundary-derived paths such as ``packages[0].budget`` align with
+    the ``packages[].budget`` field strings raised by the implementation layer.
     """
     errors = validation_error.errors()
     if not errors:

@@ -68,7 +68,7 @@ def test_create_media_buy_missing_key_preserves_field_on_mcp_wire():
 
 @pytest.mark.xfail(
     reason=(
-        "Tracked in #1604: AdCP 3.1.0-beta.3 BR-UC-002-create-media-buy.feature "
+        "Tracked in #1604: AdCP 3.1.1 BR-UC-002-create-media-buy.feature "
         "@T-UC-002-inv-015-6 grades this in-body missing-field path INVALID_REQUEST; "
         "the current TypeAdapter boundary emits VALIDATION_ERROR"
     ),
