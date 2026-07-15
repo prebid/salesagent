@@ -318,8 +318,25 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # never find the step. Terminal steps stay excluded (immutable).
                     WorkflowStep.status.in_(["requires_approval", "pending_approval", "in_progress"]),
                 )
+                # Newest actionable step wins. With in_progress included (#1637), several
+                # steps can match the same media buy; an unordered .first() would act on
+                # an arbitrary one. Order by created_at desc so re-approval targets the
+                # latest, and warn (below) when more than one is actionable.
+                .order_by(WorkflowStep.created_at.desc())
             )
-            step = db_session.scalars(stmt).first()
+            # Fetch a small window (not just .first()) to DETECT — and warn on — multiple
+            # actionable steps for the same media buy; act on the newest.
+            actionable_steps = db_session.scalars(stmt.limit(5)).all()
+            if len(actionable_steps) > 1:
+                logger.warning(
+                    "Media buy %s (tenant %s) has %d actionable workflow steps %s; acting on the newest (%s).",
+                    media_buy_id,
+                    tenant_id,
+                    len(actionable_steps),
+                    [s.step_id for s in actionable_steps],
+                    actionable_steps[0].step_id,
+                )
+            step = actionable_steps[0] if actionable_steps else None
 
             if not step:
                 flash("No pending approval found for this media buy", "warning")
