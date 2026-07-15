@@ -41,7 +41,7 @@ from fastmcp.tools.tool import ToolResult
 # advertises from what validate_adcp_version_pins negotiates (#1512).
 from src.core import adcp_version
 from src.core.auth import get_principal_object, require_identity
-from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
+from src.core.database.repositories.idempotency_attempt import DEFAULT_IN_FLIGHT_LEASE, DEFAULT_REPLAY_TTL
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value
@@ -91,16 +91,9 @@ def _filter_supported_protocols(req: GetAdcpCapabilitiesRequest | None) -> list[
 
 _DEFAULT_SPECIALISMS: tuple[AdcpSpecialism, ...] = (AdcpSpecialism.sales_non_guaranteed,)
 
-# Maximum lifetime of an in-flight idempotency reservation before it is
-# considered failed and stealable (L1/security.mdx rule 9). Advertised via
-# get_adcp_capabilities.adcp.idempotency.in_flight_max_seconds so buyer SDKs cap
-# their IDEMPOTENCY_IN_FLIGHT retry budget at this value rather than the far
-# wider replay_ttl. MUST be <= replay_ttl_seconds (a bound larger than the replay
-# window is vacuous) and > the slowest handler (else a live attempt is stolen).
-# 300s comfortably exceeds sync_accounts/create_media_buy handler latency and is
-# far below the 24h replay TTL.
-IN_FLIGHT_MAX_SECONDS = 300
-assert IN_FLIGHT_MAX_SECONDS <= int(DEFAULT_REPLAY_TTL.total_seconds()), "in_flight bound must not exceed replay TTL"
+# Advertised in_flight_max_seconds: derived from the reservation lease constant so
+# the capability value and the actual lease the reserve path uses can never drift.
+IN_FLIGHT_MAX_SECONDS = int(DEFAULT_IN_FLIGHT_LEASE.total_seconds())
 
 
 def _build_adcp_block() -> Adcp:

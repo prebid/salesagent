@@ -33,7 +33,8 @@ from pydantic import Field, ValidationError
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.models import Account as DBAccount
-from src.core.database.repositories.uow import AccountUoW, IdempotencyUoW, PushNotificationConfigUoW
+from src.core.database.repositories.idempotency_attempt import DEFAULT_IN_FLIGHT_LEASE
+from src.core.database.repositories.uow import AccountUoW, SyncAccountsUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value
 from src.core.idempotency_canonical import canonical_payload_hash, canonical_request_hash
@@ -50,7 +51,7 @@ from src.core.tool_context import ToolContext
 from src.core.transport_helpers import resolve_identity_from_context
 from src.core.validation_helpers import adcp_validation_boundary
 from src.core.webhook_validator import WebhookURLValidator
-from src.services.idempotency_replay import lookup_cached_replay, record_replayable_success
+from src.services.idempotency_replay import complete_idempotent, release_idempotent, reserve_idempotent
 
 if TYPE_CHECKING:
     from adcp.types.generated_poc.core.push_notification_config import PushNotificationConfig
@@ -476,9 +477,9 @@ _SYNC_ACCOUNTS_TOOL_NAME = "sync_accounts"
 
 
 def _register_push_notification_config(
-    tenant_id: str, principal_id: str, config: "PushNotificationConfig"
+    uow: SyncAccountsUoW, principal_id: str, config: "PushNotificationConfig"
 ) -> str | None:
-    """SSRF-validate and persist a buyer-supplied push callback (AdCP push_notification_config).
+    """SSRF-validate and persist a buyer-supplied push callback on the SHARED sync txn.
 
     Registers the callback CHANNEL for the calling principal so a later async
     notification has somewhere to POST. Two controls, both applied here rather
@@ -493,16 +494,16 @@ def _register_push_notification_config(
        already requires an authenticated principal (BR-RULE-055) before this
        runs, so an anonymous request can never reach registration.
 
-    Persists via the ``PushNotificationConfig`` repository (upsert). Returns the
-    stored config id, or ``None`` when the config carries no URL (nothing to
-    register).
+    Persists via the SHARED ``SyncAccountsUoW`` — the callback registration, the
+    account upserts, and the idempotency completion commit as ONE unit, so a
+    later failure in the same request can never leave an orphaned callback (the
+    pre-fix bug: registration ran in its own already-committed transaction).
+    Returns the stored config id, or ``None`` when the config carries no URL.
 
-    NOTE (follow-up #1546): this REGISTERS the channel only. Delivering the
-    webhook when a pending_approval account transitions to active — routing the
-    approval through ``WorkflowContextManager._send_push_notifications`` — is a
-    separate, unimplemented step. The SDK ``PushNotificationConfig`` carries no
-    stable config identity, so each registration mints a fresh id; stable-id
-    keying is part of that same follow-up.
+    NOTE (follow-up #1546): this REGISTERS the channel. Delivering the webhook
+    when a pending_approval account transitions to active — routing the approval
+    through ``WorkflowContextManager._send_push_notifications`` keyed on this
+    returned id — lands in the delivery phase.
     """
     raw_url = config.url
     if not raw_url:
@@ -522,17 +523,213 @@ def _register_push_notification_config(
     credentials = auth.credentials if auth else None
     config_id = f"pnc_{uuid.uuid4().hex[:16]}"
 
-    with PushNotificationConfigUoW(tenant_id) as uow:
-        assert uow.push_notification_configs is not None
-        uow.push_notification_configs.upsert(
-            config_id=config_id,
-            principal_id=principal_id,
-            url=url,
-            authentication_type=auth_type,
-            authentication_token=credentials,
-            validation_token=config.token,
-        )
+    assert uow.push_notification_configs is not None
+    uow.push_notification_configs.upsert(
+        config_id=config_id,
+        principal_id=principal_id,
+        url=url,
+        authentication_type=auth_type,
+        authentication_token=credentials,
+        validation_token=config.token,
+    )
     return config_id
+
+
+def _process_sync_entries(
+    repo: Any,
+    req: SyncAccountsRequest,
+    identity: ResolvedIdentity,
+    principal_id: str,
+    tenant: dict[str, Any],
+) -> list[SyncResponseAccount]:
+    """Upsert/create/close accounts for one sync request; returns per-account results.
+
+    Pure work over the caller's AccountRepository (``repo``) — no transaction
+    management of its own, so the caller commits it atomically alongside the push
+    callback and the idempotency completion. dry_run/delete_missing are read from
+    ``req``.
+    """
+    tenant_id = tenant["tenant_id"]
+    dry_run = bool(req.dry_run)
+    delete_missing = bool(req.delete_missing)
+    results: list[SyncResponseAccount] = []
+    # Track natural keys in the payload for delete_missing
+    seen_account_ids: set[str] = set()
+
+    for entry in req.accounts:
+        brand_domain, brand_id, operator, sandbox = _extract_natural_key(entry)
+        billing_val = _enum_to_str(entry.billing)
+
+        # Domain validation: reject reserved TLDs
+        domain_errors = _check_domain_validity(brand_domain)
+        if domain_errors is not None:
+            results.append(
+                _build_sync_result(
+                    brand=entry.brand,
+                    operator=operator,
+                    action="failed",
+                    status="rejected",
+                    billing=billing_val,
+                    sandbox=sandbox,
+                    errors=domain_errors,
+                )
+            )
+            continue
+
+        # BR-RULE-059: check billing policy before processing
+        billing_errors = _check_billing_policy(billing_val, identity)
+        if billing_errors is not None:
+            results.append(
+                _build_sync_result(
+                    brand=entry.brand,
+                    operator=operator,
+                    action="failed",
+                    status="rejected",
+                    billing=billing_val,
+                    sandbox=sandbox,
+                    errors=billing_errors,
+                )
+            )
+            continue
+
+        # Look up existing account by natural key
+        existing = repo.get_by_natural_key(
+            operator=operator,
+            brand_domain=brand_domain,
+            brand_id=brand_id,
+            sandbox=sandbox,
+        )
+
+        if existing is not None:
+            seen_account_ids.add(existing.account_id)
+
+            if dry_run:
+                # Check if fields would change
+                changes = _account_fields_changed(existing, entry)
+                action = "updated" if changes else "unchanged"
+                results.append(
+                    _build_sync_result(
+                        brand=entry.brand,
+                        operator=operator,
+                        action=action,
+                        status=existing.status,
+                        account_id=existing.account_id,
+                        name=existing.name,
+                        billing=existing.billing,
+                        sandbox=existing.sandbox,
+                    )
+                )
+                continue
+
+            # Check for field changes and update if needed
+            changes = _account_fields_changed(existing, entry)
+            if changes:
+                repo.update_fields(existing.account_id, **changes)
+                action = "updated"
+            else:
+                action = "unchanged"
+
+            results.append(
+                _build_sync_result(
+                    brand=entry.brand,
+                    operator=operator,
+                    action=action,
+                    status=existing.status,
+                    account_id=existing.account_id,
+                    name=existing.name,
+                    billing=existing.billing,
+                    sandbox=existing.sandbox,
+                )
+            )
+        else:
+            # Create new account
+            billing_val = _enum_to_str(entry.billing)
+            payment_terms_val = _enum_to_str(entry.payment_terms)
+            governance_agents_val = _serialize_governance_agents(getattr(entry, "governance_agents", None))
+
+            account_id = _generate_account_id()
+            account_name = _generate_account_name(brand_domain, operator, brand_id)
+
+            # BR-RULE-060: determine approval status from tenant config.
+            # account_approval_mode is a distinct field from creative approval_mode
+            # (BR-RULE-037) — do NOT fall back to approval_mode.
+            # Resolved BEFORE the dry_run branch so previews reflect what a real
+            # create would return (BR-RULE-062).
+            approval_mode = tenant.get("account_approval_mode")
+            setup = _build_setup_for_approval(approval_mode or "auto", tenant_id)
+            initial_status = "pending_approval" if setup else "active"
+
+            if dry_run:
+                # account_id was generated above (BR-RULE-062 — preview reflects
+                # what a real create would return). It is a preview value, not a
+                # commitment to that specific id.
+                results.append(
+                    _build_sync_result(
+                        brand=entry.brand,
+                        operator=operator,
+                        action="created",
+                        status=initial_status,
+                        account_id=account_id,
+                        name=account_name,
+                        billing=billing_val,
+                        sandbox=sandbox,
+                        setup=setup,
+                    )
+                )
+                continue
+
+            new_account = DBAccount(
+                tenant_id=tenant_id,
+                account_id=account_id,
+                name=account_name,
+                status=initial_status,
+                brand={"domain": brand_domain, **({"brand_id": brand_id} if brand_id else {})},
+                operator=operator,
+                billing=billing_val,
+                payment_terms=payment_terms_val,
+                sandbox=sandbox,
+                governance_agents=governance_agents_val,
+                principal_id=principal_id,
+            )
+            repo.create(new_account)
+            seen_account_ids.add(account_id)
+
+            # Grant agent access to the new account
+            repo.grant_access(principal_id, account_id)
+
+            results.append(
+                _build_sync_result(
+                    brand=entry.brand,
+                    operator=operator,
+                    action="created",
+                    status=initial_status,
+                    account_id=account_id,
+                    name=account_name,
+                    billing=billing_val,
+                    sandbox=sandbox,
+                    setup=setup,
+                )
+            )
+
+    # BR-RULE-061: delete_missing — close accounts not in payload
+    if delete_missing and not dry_run:
+        agent_accounts = repo.list_by_principal(principal_id)
+        for db_acct in agent_accounts:
+            if db_acct.account_id not in seen_account_ids:
+                repo.update_status(db_acct.account_id, "closed")
+                results.append(
+                    _build_sync_result(
+                        brand=db_acct.brand,
+                        operator=db_acct.operator or "",
+                        action="updated",
+                        status="closed",
+                        account_id=db_acct.account_id,
+                        name=db_acct.name,
+                        billing=db_acct.billing,
+                        sandbox=db_acct.sandbox,
+                    )
+                )
+    return results
 
 
 async def _sync_accounts_impl(
@@ -587,253 +784,86 @@ async def _sync_accounts_impl(
     if not req.accounts:
         raise AdCPValidationError("accounts array must not be empty — at least one account is required.")
     dry_run = bool(req.dry_run)
-    delete_missing = bool(req.delete_missing)
 
-    # Idempotency probe (real syncs only — a dry_run preview has nothing to dedupe).
-    # request_hash is computed over the WIRE payload when the transport threaded it
-    # (the spec's equivalence input); the model-dump fallback is for impl-direct
-    # callers. Both include the dry_run field, so a preview and a real request hash
-    # differently and can never be resolved to each other.
-    request_hash: str | None = None
+    # Idempotency reservation (real syncs only — a dry_run preview has nothing to
+    # dedupe). request_hash is computed over the WIRE payload when the transport
+    # threaded it (the spec's equivalence input); the model-dump fallback is for
+    # impl-direct callers. Both include the dry_run field, so a preview and a real
+    # request hash differently and can never cross-replay.
+    #
+    # Reserve the key in its OWN committed transaction BEFORE any account side
+    # effect: the durable in_flight row is the first-insert-wins arbiter (accounts
+    # have no dup-booking backstop table). A same-key retry replays the completed
+    # row; a same-key / different-payload retry is IDEMPOTENCY_CONFLICT; a same-key
+    # request while the first is still running is IDEMPOTENCY_IN_FLIGHT.
+    reservation_attempt_id: str | None = None
     if req.idempotency_key and not dry_run:
         request_hash = (
             canonical_payload_hash(raw_wire_payload) if raw_wire_payload is not None else canonical_request_hash(req)
         )
-        replay = lookup_cached_replay(
-            IdempotencyUoW,
+        reservation = reserve_idempotent(
+            SyncAccountsUoW,
             tenant_id,
             principal_id=principal_id,
             account_id=identity.account_id,
+            tool_name=_SYNC_ACCOUNTS_TOOL_NAME,
             idempotency_key=req.idempotency_key,
             request_hash=request_hash,
+            lease=DEFAULT_IN_FLIGHT_LEASE,
             decode=_decode_sync_accounts_replay,
             enforce_ceiling=True,
         )
-        if replay is not None:
+        if reservation.replay is not None:
             logger.info("Idempotency replay: returning cached sync_accounts success for key %s", req.idempotency_key)
-            return replay
+            return reservation.replay
+        reservation_attempt_id = reservation.attempt_id
 
-    # AdCP push_notification_config: SSRF-validate + register the callback channel
-    # for real syncs. Runs BEFORE any account write so a rejected callback fails
-    # the whole request with no partial state. dry_run persists nothing (mirrors
-    # create_media_buy, which skips push registration under dry_run). Delivering
-    # the webhook on an account approval transition is a documented follow-up
-    # (#1546) — this registers the channel only.
-    if req.push_notification_config is not None and not dry_run:
-        _register_push_notification_config(tenant_id, principal_id, req.push_notification_config)
+    # Work + completion in ONE atomic transaction (SyncAccountsUoW): the push
+    # callback registration, the account upserts/closes, and the idempotency
+    # COMPLETION commit together. On ANY failure, release the reservation (errors
+    # are never cached — a retry re-executes) and re-raise.
+    try:
+        with SyncAccountsUoW(tenant_id) as uow:
+            assert uow.accounts is not None
+            # AdCP push_notification_config: SSRF-validate + register the callback
+            # channel BEFORE the account writes so a rejected callback fails the
+            # whole request with no partial state, and the registration commits
+            # atomically with the account write (no orphaned callback on a later
+            # failure — the pre-fix bug registered in its own committed txn).
+            # dry_run persists nothing.
+            if req.push_notification_config is not None and not dry_run:
+                _register_push_notification_config(uow, principal_id, req.push_notification_config)
 
-    results: list[SyncResponseAccount] = []
-    # Track natural keys in the payload for delete_missing
-    seen_account_ids: set[str] = set()
+            results = _process_sync_entries(uow.accounts, req, identity, principal_id, tenant)
 
-    with AccountUoW(tenant_id) as uow:
-        assert uow.accounts is not None
-        repo = uow.accounts
-
-        for entry in req.accounts:
-            brand_domain, brand_id, operator, sandbox = _extract_natural_key(entry)
-            billing_val = _enum_to_str(entry.billing)
-
-            # Domain validation: reject reserved TLDs
-            domain_errors = _check_domain_validity(brand_domain)
-            if domain_errors is not None:
-                results.append(
-                    _build_sync_result(
-                        brand=entry.brand,
-                        operator=operator,
-                        action="failed",
-                        status="rejected",
-                        billing=billing_val,
-                        sandbox=sandbox,
-                        errors=domain_errors,
-                    )
-                )
-                continue
-
-            # BR-RULE-059: check billing policy before processing
-            billing_errors = _check_billing_policy(billing_val, identity)
-            if billing_errors is not None:
-                results.append(
-                    _build_sync_result(
-                        brand=entry.brand,
-                        operator=operator,
-                        action="failed",
-                        status="rejected",
-                        billing=billing_val,
-                        sandbox=sandbox,
-                        errors=billing_errors,
-                    )
-                )
-                continue
-
-            # Look up existing account by natural key
-            existing = repo.get_by_natural_key(
-                operator=operator,
-                brand_domain=brand_domain,
-                brand_id=brand_id,
-                sandbox=sandbox,
+            response = SyncAccountsResponse(
+                accounts=results,
+                dry_run=dry_run if dry_run else None,
+                context=req.context,
             )
 
-            if existing is not None:
-                seen_account_ids.add(existing.account_id)
-
-                if dry_run:
-                    # Check if fields would change
-                    changes = _account_fields_changed(existing, entry)
-                    action = "updated" if changes else "unchanged"
-                    results.append(
-                        _build_sync_result(
-                            brand=entry.brand,
-                            operator=operator,
-                            action=action,
-                            status=existing.status,
-                            account_id=existing.account_id,
-                            name=existing.name,
-                            billing=existing.billing,
-                            sandbox=existing.sandbox,
-                        )
-                    )
-                    continue
-
-                # Check for field changes and update if needed
-                changes = _account_fields_changed(existing, entry)
-                if changes:
-                    repo.update_fields(existing.account_id, **changes)
-                    action = "updated"
-                else:
-                    action = "unchanged"
-
-                results.append(
-                    _build_sync_result(
-                        brand=entry.brand,
-                        operator=operator,
-                        action=action,
-                        status=existing.status,
-                        account_id=existing.account_id,
-                        name=existing.name,
-                        billing=existing.billing,
-                        sandbox=existing.sandbox,
-                    )
+            # Flip the reservation to completed IN THE SAME txn as the account
+            # write — the cached verbatim success and the side effect it describes
+            # commit as one unit (a completion failure rolls the whole unit back).
+            if reservation_attempt_id is not None:
+                complete_idempotent(
+                    uow,
+                    attempt_id=reservation_attempt_id,
+                    response_model=response,
+                    protocol_status="completed",
                 )
-            else:
-                # Create new account
-                billing_val = _enum_to_str(entry.billing)
-                payment_terms_val = _enum_to_str(entry.payment_terms)
-                governance_agents_val = _serialize_governance_agents(getattr(entry, "governance_agents", None))
+    except Exception:
+        if reservation_attempt_id is not None:
+            release_idempotent(SyncAccountsUoW, tenant_id, attempt_id=reservation_attempt_id)
+        raise
 
-                account_id = _generate_account_id()
-                account_name = _generate_account_name(brand_domain, operator, brand_id)
-
-                # BR-RULE-060: determine approval status from tenant config.
-                # account_approval_mode is a distinct field from creative approval_mode
-                # (BR-RULE-037) — do NOT fall back to approval_mode.
-                # Resolved BEFORE the dry_run branch so previews reflect what a real
-                # create would return (BR-RULE-062).
-                approval_mode = tenant.get("account_approval_mode")
-                setup = _build_setup_for_approval(approval_mode or "auto", tenant_id)
-                initial_status = "pending_approval" if setup else "active"
-
-                if dry_run:
-                    # account_id was generated above (BR-RULE-062 — preview reflects
-                    # what a real create would return). It is a preview value, not a
-                    # commitment to that specific id.
-                    results.append(
-                        _build_sync_result(
-                            brand=entry.brand,
-                            operator=operator,
-                            action="created",
-                            status=initial_status,
-                            account_id=account_id,
-                            name=account_name,
-                            billing=billing_val,
-                            sandbox=sandbox,
-                            setup=setup,
-                        )
-                    )
-                    continue
-
-                new_account = DBAccount(
-                    tenant_id=tenant_id,
-                    account_id=account_id,
-                    name=account_name,
-                    status=initial_status,
-                    brand={"domain": brand_domain, **({"brand_id": brand_id} if brand_id else {})},
-                    operator=operator,
-                    billing=billing_val,
-                    payment_terms=payment_terms_val,
-                    sandbox=sandbox,
-                    governance_agents=governance_agents_val,
-                    principal_id=principal_id,
-                )
-                repo.create(new_account)
-                seen_account_ids.add(account_id)
-
-                # Grant agent access to the new account
-                repo.grant_access(principal_id, account_id)
-
-                results.append(
-                    _build_sync_result(
-                        brand=entry.brand,
-                        operator=operator,
-                        action="created",
-                        status=initial_status,
-                        account_id=account_id,
-                        name=account_name,
-                        billing=billing_val,
-                        sandbox=sandbox,
-                        setup=setup,
-                    )
-                )
-
-        # BR-RULE-061: delete_missing — close accounts not in payload
-        if delete_missing and not dry_run:
-            agent_accounts = repo.list_by_principal(principal_id)
-            for db_acct in agent_accounts:
-                if db_acct.account_id not in seen_account_ids:
-                    repo.update_status(db_acct.account_id, "closed")
-                    results.append(
-                        _build_sync_result(
-                            brand=db_acct.brand,
-                            operator=db_acct.operator or "",
-                            action="updated",
-                            status="closed",
-                            account_id=db_acct.account_id,
-                            name=db_acct.name,
-                            billing=db_acct.billing,
-                            sandbox=db_acct.sandbox,
-                        )
-                    )
-
-    # Audit log
+    # Audit log (after the atomic unit committed).
     audit_logger = get_audit_logger("sync_accounts", tenant_id)
     action_counts: dict[str, int] = {}
     for r in results:
         act = _enum_to_str(r.action) or "unknown"
         action_counts[act] = action_counts.get(act, 0) + 1
     audit_logger.log_info(f"sync_accounts completed: {action_counts} (dry_run={dry_run}, principal={principal_id})")
-
-    response = SyncAccountsResponse(
-        accounts=results,
-        dry_run=dry_run if dry_run else None,
-        context=req.context,
-    )
-
-    # Best-effort verbatim-replay cache write (real syncs only). The AccountUoW
-    # above has committed; record AFTER it so a cache-write failure never rolls
-    # back the sync. No dup-booking backstop — a concurrent same-key loser's
-    # IntegrityError here is a logged no-op (the winner's row already stands).
-    if request_hash is not None:
-        record_replayable_success(
-            IdempotencyUoW,
-            tenant_id,
-            principal_id=principal_id,
-            account_id=identity.account_id,
-            tool_name=_SYNC_ACCOUNTS_TOOL_NAME,
-            idempotency_key=req.idempotency_key,
-            response_model=response,
-            protocol_status="completed",
-            payload_hash=request_hash,
-        )
 
     return response
 

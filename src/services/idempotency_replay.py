@@ -258,6 +258,7 @@ def reserve_idempotent[T](
     request_hash: str,
     lease: timedelta,
     decode: Callable[[dict[str, Any]], T | None],
+    enforce_ceiling: bool = False,
     conflict_details: dict[str, Any] | None = None,
 ) -> ReservationResult[T]:
     """Reserve the idempotency key in its OWN committed transaction, or replay/raise.
@@ -273,10 +274,38 @@ def reserve_idempotent[T](
     - COMPLETED, different payload hash → raises ``AdCPIdempotencyConflictError``.
     - IN_FLIGHT (a live same-key reservation) → raises
       ``AdCPIdempotencyInFlightError`` with the lease-derived ``retry_after``.
+
+    ``enforce_ceiling=True`` rate-limits a fresh key BEFORE it inserts a row: a
+    completed-row probe short-circuits replays/conflicts (never rate-limited —
+    they insert nothing), and only a genuine miss runs
+    :func:`enforce_insert_ceiling`. Enforcing before the INSERT is required: a
+    post-insert count would include the reservation's own row and wrongly reject
+    the Nth request. The unique-index INSERT remains the concurrency arbiter — the
+    probe is a fast path + ceiling gate, not a substitute (two racers may both
+    miss the probe, both pass the ceiling, then race the INSERT: one RESERVED, the
+    other IN_FLIGHT).
     """
     with uow_factory(tenant_id) as uow:
         assert uow.idempotency_attempts is not None
-        outcome = uow.idempotency_attempts.reserve(
+        repo = uow.idempotency_attempts
+        # Fast-path replay/conflict probe (completed rows only). A hit inserts
+        # nothing, so it is never rate-limited.
+        cached = repo.find_by_key(
+            principal_id=principal_id,
+            account_id=account_id,
+            idempotency_key=idempotency_key,
+        )
+        if cached is not None:
+            raise_on_payload_conflict(cached.payload_hash, request_hash, details=conflict_details)
+            decoded = decode(cached.response_envelope) if cached.response_envelope is not None else None
+            return ReservationResult(replay=decoded, attempt_id=None)
+        # Genuine miss → a fresh INSERT is coming. Enforce the ceiling now, BEFORE
+        # the reserve() INSERT so the count excludes this request's own row.
+        if enforce_ceiling:
+            from src.services.idempotency_policy import enforce_insert_ceiling
+
+            enforce_insert_ceiling(repo, principal_id=principal_id, account_id=account_id)
+        outcome = repo.reserve(
             principal_id=principal_id,
             account_id=account_id,
             tool_name=tool_name,

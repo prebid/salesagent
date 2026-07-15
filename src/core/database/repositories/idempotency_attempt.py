@@ -30,6 +30,15 @@ from src.core.database.models import IdempotencyAttempt
 # Matches GetAdcpCapabilitiesResponse.adcp.idempotency.replay_ttl_seconds (86400 = 24h).
 DEFAULT_REPLAY_TTL = timedelta(seconds=86400)
 
+# Maximum lifetime of an in-flight reservation before it is treated as failed and
+# stealable (L1/security.mdx rule 9). Advertised via
+# get_adcp_capabilities.adcp.idempotency.in_flight_max_seconds. MUST be
+# <= DEFAULT_REPLAY_TTL (a bound past the replay window is vacuous) and > the
+# slowest handler (else a live attempt is stolen). 300s comfortably clears
+# sync_accounts/create_media_buy latency and is far below the 24h replay TTL.
+DEFAULT_IN_FLIGHT_LEASE = timedelta(seconds=300)
+assert DEFAULT_IN_FLIGHT_LEASE <= DEFAULT_REPLAY_TTL, "in-flight lease must not exceed the replay TTL"
+
 # Reservation lifecycle states (IdempotencyAttempt.status).
 _STATUS_IN_FLIGHT = "in_flight"
 _STATUS_COMPLETED = "completed"
