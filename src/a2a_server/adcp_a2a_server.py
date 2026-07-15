@@ -1394,14 +1394,16 @@ class AdCPRequestHandler(RequestHandler):
 
         Tenant- AND principal-scoped via ``identity`` (see ``_durable_lookup_identity``).
         Returns None when identity is unresolved/non-owning or no persisted step
-        matches. Raises ``TaskNotCancelableError`` when the step already reached a
-        terminal status: an approved/completed media buy cannot be undone.
+        matches. Raises ``TaskNotCancelableError`` when the step is not in a
+        CANCELLABLE status — i.e. already terminal OR ``approved`` (irreversible
+        ad-server order creation has begun): an approved/completed media buy cannot
+        be canceled.
 
         The transition itself is a single conditional UPDATE
-        (``cancel_if_nonterminal``) so a concurrent approval that commits
-        ``completed``/``rejected`` after our read cannot be overwritten — the
-        zero-row outcome is reported as ``TaskNotCancelableError`` with the fresh
-        status, and the terminal decision stands.
+        (``cancel_if_cancellable`` — ``WHERE status IN cancellable``) so a concurrent
+        approval that commits ``approved``/``completed`` after our read cannot be
+        overwritten — the zero-row outcome is reported as ``TaskNotCancelableError``
+        with the fresh status, and the decision stands.
         """
         if identity is None or identity.tenant_id is None or identity.principal_id is None:
             return None
