@@ -937,7 +937,8 @@ def is_media_buy_approvable(media_buy: "MediaBuy") -> bool:
       UX-only (the CAS is authoritative).
     """
     return media_buy.status == "pending_approval" or (
-        media_buy.status == MEDIA_BUY_FINALIZING_STATUS and media_buy.finalize_recovery_mode == MEDIA_BUY_RECOVERY_MANUAL
+        media_buy.status == MEDIA_BUY_FINALIZING_STATUS
+        and media_buy.finalize_recovery_mode == MEDIA_BUY_RECOVERY_MANUAL
     )
 
 
