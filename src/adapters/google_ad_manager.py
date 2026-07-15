@@ -666,8 +666,12 @@ class GoogleAdManager(AdServerAdapter):
         # search for a different name. When the caller supplies an idempotency_key (the
         # persisted media_buy_id on the approval-replay path) use it directly; otherwise
         # (initial create, no persisted id yet) hash the client-stable AdCP anchor
-        # (tenant_id, request.idempotency_key — the per-request idempotency key REQUIRED
-        # by AdCP 3.0.1) so the same request yields the same name every attempt.
+        # (tenant_id, request.idempotency_key). Spec-grounding (#1637): this repo PINS
+        # adcp==5.7.0 -> AdCP 3.1.0-beta.3 (the authoritative version here), in which
+        # create-media-buy carries the required per-request idempotency_key (the field was
+        # introduced in the 3.0.1 spec line and carries forward). This deterministic-name
+        # reuse is an INTERNAL crash/timeout recovery mechanism, ungraded by the conformance
+        # storyboard — so the same request yields the same order name every attempt.
         if idempotency_key:
             stable_order_id = idempotency_key
         else:
