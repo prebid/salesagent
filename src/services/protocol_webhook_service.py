@@ -24,7 +24,7 @@ from uuid import uuid4
 
 import requests
 from a2a.types import Task, TaskStatusUpdateEvent
-from adcp import extract_webhook_result_data, get_adcp_signed_headers_for_webhook
+from adcp import extract_webhook_result_data, sign_legacy_webhook
 from adcp.types import McpWebhookPayload
 from google.protobuf.json_format import MessageToDict
 from requests.adapters import HTTPAdapter
@@ -161,6 +161,18 @@ def _to_wire_dict(payload: Any) -> dict[str, Any]:
     )
 
 
+def _canonical_body_bytes(payload_dict: dict[str, Any]) -> bytes:
+    """Serialize a webhook payload to the canonical on-wire bytes.
+
+    Compact separators (``","``/``":"``) per the adcp canonical form
+    (adcontextprotocol/adcp#2478) — byte-for-byte identical to what
+    ``sign_legacy_webhook`` computes its HMAC over. These EXACT bytes are both
+    signed and transmitted (``data=<bytes>``, never ``json=``), so the signature
+    can never cover different bytes than the receiver sees on the wire.
+    """
+    return json.dumps(payload_dict, separators=(",", ":")).encode("utf-8")
+
+
 def _normalize_localhost_for_docker(url: str) -> str:
     """Replace localhost host with host.docker.internal while preserving userinfo and port."""
     try:
@@ -251,24 +263,38 @@ class ProtocolWebhookService:
         # lowercase enum values; Pydantic -> model_dump; Mapping -> dict.
         payload_dict: dict[str, Any] = _to_wire_dict(payload)
 
+        # Serialize the body to exact bytes ONCE. Whatever we sign, we transmit
+        # THESE bytes verbatim (``data=body_bytes`` in _post, never ``json=`` which
+        # would re-serialize with spaced separators and break the signature).
+        body_bytes: bytes
+
         # Apply authentication based on schemes
         if (
             push_notification_config.authentication_type == "HMAC-SHA256"
             and push_notification_config.authentication_token
         ):
-            # Sign payload with HMAC-SHA256
+            # Legacy HMAC-SHA256 profile. sign_legacy_webhook returns the signature
+            # headers AND the exact compact body bytes it signed — we send those bytes,
+            # guaranteeing the HMAC covers precisely what the receiver verifies.
             timestamp = str(int(time.time()))
-            get_adcp_signed_headers_for_webhook(
-                headers, push_notification_config.authentication_token, timestamp, payload_dict
+            sig_headers, body_bytes = sign_legacy_webhook(
+                push_notification_config.authentication_token, payload_dict, timestamp=timestamp
             )
-
-        elif push_notification_config.authentication_type == "Bearer" and push_notification_config.authentication_token:
-            # Use Bearer token authentication
-            headers["Authorization"] = f"Bearer {push_notification_config.authentication_token}"
+            headers.update(sig_headers)
+        else:
+            # Bearer or unauthenticated: no signature, but still transmit the canonical
+            # compact bytes so the body is deterministic and matches the signed form used
+            # everywhere else.
+            body_bytes = _canonical_body_bytes(payload_dict)
+            if (
+                push_notification_config.authentication_type == "Bearer"
+                and push_notification_config.authentication_token
+            ):
+                headers["Authorization"] = f"Bearer {push_notification_config.authentication_token}"
 
         # Send notification with retry logic and logging
         return await self._send_with_retry_and_logging(
-            url=url, payload=payload_dict, headers=headers, metadata=metadata
+            url=url, payload=payload_dict, body=body_bytes, headers=headers, metadata=metadata
         )
 
     @staticmethod
@@ -320,13 +346,20 @@ class ProtocolWebhookService:
         self,
         url: str,
         payload: dict[str, Any],
+        body: bytes,
         headers: dict,
         metadata: dict[str, Any],
         max_attempts: int = 3,
     ) -> bool:
-        """Send webhook with exponential backoff retry logic, logging, and audit trail."""
-        # Calculate payload size for metrics
-        payload_size_bytes = len(json.dumps(payload).encode("utf-8"))
+        """Send webhook with exponential backoff retry logic, logging, and audit trail.
+
+        ``body`` is the exact serialized bytes to transmit — the same bytes any
+        signature header covers. It is sent verbatim via ``data=`` so the wire body
+        can never diverge from the signed body. ``payload`` is the parsed dict, used
+        only for metadata extraction (task_id, notification_type, sequence).
+        """
+        # Payload size metric reflects the ACTUAL transmitted bytes.
+        payload_size_bytes = len(body)
 
         task_type = metadata["task_type"] if "task_type" in metadata else None
         tenant_id = metadata["tenant_id"] if "tenant_id" in metadata else None
@@ -370,7 +403,7 @@ class ProtocolWebhookService:
                     # correct even though the socket connects by IP.
                     return self._session.post(
                         url,
-                        json=payload,
+                        data=body,
                         headers={**headers, "Host": urlparse(url).netloc},
                         timeout=10.0,
                         allow_redirects=False,
