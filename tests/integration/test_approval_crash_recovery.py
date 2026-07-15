@@ -22,6 +22,7 @@ helper instead of one per test) — tests themselves never open sessions.
 
 import datetime
 import threading
+import time
 from datetime import UTC
 from types import SimpleNamespace
 
@@ -30,15 +31,69 @@ import pytest
 from src.adapters.base import AdapterIdempotencyUncertain, AdapterPostMutationIncomplete
 from src.admin.services.media_buy_completion import (
     FinalizeOutcome,
+    finalize_lease_heartbeat,
     finalize_media_buy_approval,
     resume_finalizing_media_buy,
 )
 from src.core.context_manager import ContextManager
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MEDIA_BUY_RECOVERY_MANUAL, MediaPackage
-from src.core.database.repositories import MediaBuyRepository
+from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.database.repositories.workflow import WorkflowRepository
 from tests.integration.conftest import seed_pending_buy_and_step
+
+
+class _FakeClock:
+    """Thread-safe fake clock shared by a repo's lease/guard logic and a heartbeat, so
+    tests advance time instead of doing row surgery on lease expiries (#1637)."""
+
+    def __init__(self, start: datetime.datetime) -> None:
+        self._t = start
+        self._lock = threading.Lock()
+
+    def now(self) -> datetime.datetime:
+        with self._lock:
+            return self._t
+
+    def advance(self, seconds: float) -> None:
+        with self._lock:
+            self._t = self._t + datetime.timedelta(seconds=seconds)
+
+    def set(self, value: datetime.datetime) -> None:
+        with self._lock:
+            self._t = value
+
+
+def _lease_expires_at(tenant_id: str, media_buy_id: str) -> datetime.datetime | None:
+    """The buy's committed lease expiry, read through a UoW (no raw session)."""
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        buy = uow.media_buys.get_by_id(media_buy_id)
+        assert buy is not None
+        return buy.finalize_lease_expires_at
+
+
+def _reapproval_would_claim(tenant_id: str, media_buy_id: str, now_fn) -> bool:
+    """Probe the widened re-approval claim on the injected clock, rolled back either way."""
+    captured: dict[str, bool] = {}
+
+    class _Rollback(Exception):
+        pass
+
+    try:
+        with MediaBuyUoW(tenant_id, now_fn=now_fn) as uow:
+            assert uow.media_buys is not None
+            captured["claimed"] = (
+                uow.media_buys.claim_finalizing(
+                    media_buy_id, expected_status=("pending_approval", "finalizing"), lease_ttl_seconds=3600
+                )
+                is not None
+            )
+            raise _Rollback  # never persist a probe claim
+    except _Rollback:
+        pass
+    return captured["claimed"]
+
 
 # ── Session-owning module helpers (each carries ONE guard-allowlist entry) ──
 
@@ -653,19 +708,9 @@ class TestApprovalCrashRecovery:
         assert not _try_reapproval_claim(tenant_id, "mb_fenced"), (
             "a freshly-expired lease may belong to a still-running worker — re-approval must be fenced"
         )
-
-        # ...but once the lease has been expired beyond the abandonment grace → re-approvable.
-        _expire_lease_now(tenant_id, "mb_fenced", expired_by_seconds=7200)  # > 3600s grace
-        outcome_aged, _ = _finalize_approval(
-            tenant_id,
-            "mb_fenced",
-            step_id,
-            step_data,
-            lambda: (True, None),
-            expected_status=("pending_approval", "finalizing"),
-        )
-        assert outcome_aged is FinalizeOutcome.APPLIED
-        assert _buy_snapshot(tenant_id, "mb_fenced").status == "active"
+        # Re-approvability once the prior owner is GENUINELY gone (a live heartbeat vs a
+        # true crash, not a fast-forwarded dead timestamp) is pinned by
+        # test_heartbeat_fences_reapproval_of_live_worker_until_it_crashes below.
 
         # (b) owner-flagged manual (post-mutation failure; lease RELEASED) → immediate.
         step2_id, step2_data = self._seed_pending(
@@ -697,6 +742,73 @@ class TestApprovalCrashRecovery:
         self._seed_pending(context_manager, tenant_id, sample_principal["principal_id"], "mb_inflight")
         _claim_expired(tenant_id, "mb_inflight", mark_invoked=False, expired_by_seconds=-3600)  # unexpired
         assert not _try_reapproval_claim(tenant_id, "mb_inflight")
+
+    def test_heartbeat_fences_reapproval_of_live_worker_until_it_crashes(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """Elapsed time is NOT an ownership fence (#1637). A GENUINELY live worker whose
+        phase-2 heartbeat keeps renewing its lease fences operator re-approval even after
+        the clock advances far past TTL+grace; only when the heartbeat STOPS (the worker
+        crashed) does the lease age out and re-approval succeed.
+
+        Replaces the earlier timestamp-aging pin, which fast-forwarded a DEAD lease and so
+        never exercised a live renewer — it could not distinguish "abandoned" from
+        "blocked but alive", the exact bug this fence exists to prevent.
+        """
+        tenant_id = sample_tenant["tenant_id"]
+        self._seed_pending(context_manager, tenant_id, sample_principal["principal_id"], "mb_hb")
+
+        clock = _FakeClock(datetime.datetime(2026, 1, 1, tzinfo=UTC))
+        ttl = 3  # small so the renewer's ~TTL/3 interval fires quickly in REAL time
+        grace = 3600  # claim_finalizing's default abandoned_owner_grace_seconds
+
+        # Reach the reconciler-flagged shape (finalizing + manual_required + lease LEFT in
+        # place) through the real repo API on the fake clock: claim → mark invoked →
+        # advance past TTL so the lease reads expired → reconciler-mode manual flag, which
+        # keeps the lease of the possibly-still-alive worker.
+        with MediaBuyUoW(tenant_id, now_fn=clock.now) as uow:
+            assert uow.media_buys is not None
+            claim = uow.media_buys.claim_finalizing(
+                "mb_hb",
+                expected_status="pending_approval",
+                lease_ttl_seconds=ttl,
+                approved_at=clock.now(),
+                approved_by="admin",
+            )
+            assert claim is not None
+            _, lease_id = claim
+            assert uow.media_buys.set_finalize_adapter_invoked("mb_hb", lease_id)
+        clock.advance(ttl + 1)
+        with MediaBuyUoW(tenant_id, now_fn=clock.now) as uow:
+            assert uow.media_buys is not None
+            assert uow.media_buys.set_finalize_recovery_manual("mb_hb")  # reconciler mode; lease retained
+
+        # The worker is still ALIVE: run its heartbeat renewer on the SAME fake clock.
+        with finalize_lease_heartbeat(tenant_id, "mb_hb", lease_id, lease_ttl_seconds=ttl, now_fn=clock.now):
+            clock.advance(ttl + grace + 100_000)  # far past any abandonment threshold
+            # Wait until the live renewer bumps the lease forward to the advanced clock.
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                exp = _lease_expires_at(tenant_id, "mb_hb")
+                if exp is not None and exp > clock.now() - datetime.timedelta(seconds=grace):
+                    break
+                time.sleep(0.05)
+            else:
+                pytest.fail("heartbeat never renewed the lease")
+            # Re-approval MUST be fenced: the live worker keeps the lease fresh, so
+            # "expired + grace" never fires.
+            assert not _reapproval_would_claim(tenant_id, "mb_hb", clock.now), (
+                "a live worker's renewed lease must fence re-approval"
+            )
+
+        # The worker CRASHED: heartbeat stopped + joined. Read the FINAL lease expiry and
+        # advance past it + grace so the lease is GENUINELY abandoned.
+        final_expiry = _lease_expires_at(tenant_id, "mb_hb")
+        assert final_expiry is not None
+        clock.set(final_expiry + datetime.timedelta(seconds=grace + 10))
+        assert _reapproval_would_claim(tenant_id, "mb_hb", clock.now), (
+            "once the heartbeat stops and the lease ages out, re-approval must succeed"
+        )
 
     def test_stepless_resume_completes_without_step(self, integration_db, sample_tenant, sample_principal):
         """The step-less path (creative-unblock with no async buyer task) recovers the

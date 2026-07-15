@@ -10,10 +10,12 @@ completion artifact — async buyers otherwise never receive the final
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime
 import logging
 import os
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Iterator
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
@@ -29,6 +31,7 @@ from src.core.database.repositories.workflow import WorkflowRepository
 from src.core.exceptions import AdCPAdapterError, build_two_layer_error_envelope
 from src.core.media_buy_flight import lifecycle_status_for_window, resolve_flight_window_utc
 from src.core.schemas import CreateMediaBuySuccess, Package
+from src.core.thread_registry import ThreadRegistry
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -65,6 +68,66 @@ class FinalizeOutcome(StrEnum):
 # at worst the reconciler flags manual_required and the worker's eventual successful
 # publish self-heals it.
 FINALIZE_LEASE_TTL_SECONDS = int(os.getenv("MEDIA_BUY_FINALIZE_LEASE_TTL") or "3600")
+
+# Named registry of in-flight phase-2 heartbeat threads (#1637). Dead-thread reaping is
+# built in; used only so the renewers are discoverable/joinable, never for correctness.
+_FINALIZE_HEARTBEAT_REGISTRY = ThreadRegistry()
+
+
+@contextlib.contextmanager
+def finalize_lease_heartbeat(
+    tenant_id: str,
+    media_buy_id: str,
+    lease_id: str,
+    *,
+    lease_ttl_seconds: int = FINALIZE_LEASE_TTL_SECONDS,
+    now_fn: Callable[[], datetime.datetime] | None = None,
+) -> Iterator[None]:
+    """Renew the owner's phase-2 lease on a background thread while its adapter runs (#1637).
+
+    Elapsed time alone is NOT an ownership fence: a worker blocked inside a long network
+    call is ALIVE but silent, and "lease expired + grace" would wrongly declare it dead —
+    letting a reconciler or an operator re-approval start a SECOND adapter invocation.
+    While this context is open a daemon thread renews the lease at ~TTL/3 on its OWN
+    session, so a blocked-but-alive owner keeps its lease unexpired and "expired + grace"
+    genuinely means the process died or lost DB connectivity.
+
+    Renewal is a best-effort owner CAS (``renew_finalize_lease``); losing ownership (the
+    buy moved on / a different lease took over) stops the loop — the authoritative fences
+    remain the lease-CAS'd publishes, this only sharpens the liveness signal. ``now_fn``
+    is injected only by tests (advancing a fake clock instead of row surgery).
+    """
+    stop = threading.Event()
+    interval = max(lease_ttl_seconds / 3.0, 0.05)
+    key = f"finalize-heartbeat:{tenant_id}:{media_buy_id}:{lease_id}"
+
+    def _renew_loop() -> None:
+        from src.core.database.database_session import get_db_session
+
+        # stop.wait returns True once stop is set (context exiting) → loop ends; False on
+        # timeout → time to renew. First renewal is one interval in (the lease was just
+        # freshly minted), always < TTL.
+        while not stop.wait(interval):
+            try:
+                with get_db_session() as renew_session:
+                    still_owner = MediaBuyRepository(renew_session, tenant_id, now_fn=now_fn).renew_finalize_lease(
+                        media_buy_id, lease_id, lease_ttl_seconds=lease_ttl_seconds
+                    )
+                    renew_session.commit()
+                if not still_owner:
+                    break  # ownership lost — nothing left to renew
+            except Exception:  # noqa: BLE001 - renewal is best-effort; never break the adapter run
+                logger.exception(f"[FINALIZE] lease heartbeat renew failed for {media_buy_id}")
+
+    thread = threading.Thread(target=_renew_loop, name=key, daemon=True)
+    _FINALIZE_HEARTBEAT_REGISTRY.add(key, thread)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join(timeout=max(interval * 2, 1.0))
+        _FINALIZE_HEARTBEAT_REGISTRY.remove(key)
 
 
 def build_media_buy_result(
@@ -226,6 +289,7 @@ def finalize_media_buy_approval(
     expected_status: str | tuple[str, ...],
     approved_by: str | None = None,
     approved_at: datetime.datetime | None = None,
+    now_fn: Callable[[], datetime.datetime] | None = None,
 ) -> tuple[FinalizeOutcome, str | None]:
     """Atomic, single-winner approve finalizer (operations / workflow / creative-unblock).
 
@@ -256,7 +320,7 @@ def finalize_media_buy_approval(
     the flight-derived serving status AND terminalizes the step in ONE transaction;
     the scheduler's reconciliation pass re-drives any buy stranded in ``finalizing``.
     """
-    repo = MediaBuyRepository(session, tenant_id)
+    repo = MediaBuyRepository(session, tenant_id, now_fn=now_fn)
     # PHASE 1 — single-winner CLAIM to the transient ``finalizing`` status + a fresh
     # phase-2 LEASE, committed BEFORE any external work. Bumps revision (the
     # approval's single token advance) + stamps approved_at/approved_by. The buy is
@@ -286,6 +350,7 @@ def finalize_media_buy_approval(
         compute_target=compute_target,
         run_adapter=run_adapter,
         lease_id=lease_id,
+        now_fn=now_fn,
     )
 
 
@@ -299,6 +364,7 @@ def _run_adapter_and_finalize(
     compute_target: Callable[[MediaBuy], str | None],
     run_adapter: Callable[[], tuple[bool, str | None]],
     lease_id: str,
+    now_fn: Callable[[], datetime.datetime] | None = None,
 ) -> tuple[FinalizeOutcome, str | None]:
     """Phase 2 of the crash-recoverable approval: OWNED adapter run + atomic publish.
 
@@ -336,7 +402,7 @@ def _run_adapter_and_finalize(
     ``step_id``/``step_data`` are ``None`` for the step-less creative-unblock path
     (no async buyer task): the serving transition is committed on its own. #1637.
     """
-    repo = MediaBuyRepository(session, tenant_id)
+    repo = MediaBuyRepository(session, tenant_id, now_fn=now_fn)
     # Durable marker BEFORE the adapter: a crash after this commit means remote
     # mutations may exist, so only full-replay adapters may auto-resume past it.
     if not repo.set_finalize_adapter_invoked(media_buy_id, lease_id):
@@ -350,7 +416,10 @@ def _run_adapter_and_finalize(
     session.commit()
 
     try:
-        success, error_msg = run_adapter()
+        # Heartbeat-renew the lease while the adapter is in flight so a blocked-but-alive
+        # owner keeps its lease unexpired (#1637): elapsed time is not an ownership fence.
+        with finalize_lease_heartbeat(tenant_id, media_buy_id, lease_id, now_fn=now_fn):
+            success, error_msg = run_adapter()
     except AdapterIdempotencyUncertain as exc:
         # Contract: no remote mutation happened. ONE owner-CAS restores the fully
         # automatic state — marker, lease, and any manual_required flag a
@@ -452,6 +521,7 @@ def resume_finalizing_media_buy(
     step_data: dict[str, Any] | None,
     run_adapter: Callable[[], tuple[bool, str | None]],
     adapter_supports_replay: Callable[[], bool],
+    now_fn: Callable[[], datetime.datetime] | None = None,
 ) -> tuple[FinalizeOutcome, str | None]:
     """Re-drive a buy stranded in ``finalizing`` — the reconciler's single entry (#1637).
 
@@ -472,7 +542,7 @@ def resume_finalizing_media_buy(
          safe for EVERY adapter; marker set ⇒ only replay-capable adapters reach
          here).
     """
-    repo = MediaBuyRepository(session, tenant_id)
+    repo = MediaBuyRepository(session, tenant_id, now_fn=now_fn)
     stranded = repo.get_by_id(media_buy_id)
     if stranded is None or stranded.status != MEDIA_BUY_FINALIZING_STATUS or stranded.finalize_recovery_mode:
         return FinalizeOutcome.NOT_CLAIMED, None
@@ -524,6 +594,7 @@ def resume_finalizing_media_buy(
         compute_target=_flight_derived_status,
         run_adapter=run_adapter,
         lease_id=lease_id,
+        now_fn=now_fn,
     )
 
 

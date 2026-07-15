@@ -55,9 +55,22 @@ class MediaBuyRepository:
     _MEDIA_BUY_IMMUTABLE_FIELDS: frozenset[str] = frozenset({"tenant_id", "media_buy_id", "created_at", "revision"})
     _PACKAGE_IMMUTABLE_FIELDS: frozenset[str] = frozenset({"media_buy_id", "package_id"})
 
-    def __init__(self, session: Session, tenant_id: str) -> None:
+    def __init__(
+        self,
+        session: Session,
+        tenant_id: str,
+        now_fn: Callable[[], datetime.datetime] | None = None,
+    ) -> None:
         self._session = session
         self._tenant_id = tenant_id
+        # Injectable clock for lease/guard logic (#1637). Production uses wall-clock UTC;
+        # tests advance a fake clock instead of UPDATE-ing lease rows, so the heartbeat
+        # renewer and the ownership-fence guards observe the SAME advancing time.
+        self._now_fn: Callable[[], datetime.datetime] = now_fn or (lambda: datetime.datetime.now(datetime.UTC))
+
+    def _now(self) -> datetime.datetime:
+        """Current time from the injectable clock (see ``now_fn``)."""
+        return self._now_fn()
 
     @property
     def tenant_id(self) -> str:
@@ -764,9 +777,7 @@ class MediaBuyRepository:
         def _apply(media_buy: MediaBuy) -> None:
             media_buy.status = MEDIA_BUY_FINALIZING_STATUS
             media_buy.finalize_lease_id = lease_id
-            media_buy.finalize_lease_expires_at = datetime.datetime.now(datetime.UTC) + datetime.timedelta(
-                seconds=lease_ttl_seconds
-            )
+            media_buy.finalize_lease_expires_at = self._now() + datetime.timedelta(seconds=lease_ttl_seconds)
             media_buy.finalize_adapter_invoked_at = None
             media_buy.finalize_recovery_mode = None
             if approved_at is not None:
@@ -794,9 +805,7 @@ class MediaBuyRepository:
                 return True
             if mb.finalize_lease_expires_at is None:
                 return False
-            abandoned_cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(
-                seconds=abandoned_owner_grace_seconds
-            )
+            abandoned_cutoff = self._now() - datetime.timedelta(seconds=abandoned_owner_grace_seconds)
             return mb.finalize_lease_expires_at < abandoned_cutoff
 
         claimed = self._locked_mutate_and_bump(
@@ -817,7 +826,7 @@ class MediaBuyRepository:
         (someone owns it / disposition is manual / buy moved on). #1637.
         """
         lease_id = self._new_finalize_lease()
-        now = datetime.datetime.now(datetime.UTC)
+        now = self._now()
 
         def _apply(media_buy: MediaBuy) -> None:
             media_buy.finalize_lease_id = lease_id
@@ -834,6 +843,34 @@ class MediaBuyRepository:
         self._session.flush()
         return lease_id
 
+    def renew_finalize_lease(self, media_buy_id: str, lease_id: str, *, lease_ttl_seconds: int) -> bool:
+        """Heartbeat CAS: extend the current owner's phase-2 lease expiry (#1637).
+
+        Called periodically (~TTL/3) by the owner's heartbeat thread WHILE its adapter
+        call is in flight, so a worker that is blocked-but-ALIVE keeps its lease
+        unexpired. This turns "lease expired + grace" into a genuine liveness fence:
+        an expired lease now means the process actually died / lost DB connectivity,
+        not merely that it is slow inside a long network call.
+
+        CAS on the OWNER token (only the holder of ``lease_id`` renews) while the buy is
+        still ``finalizing``. Deliberately renews regardless of ``finalize_recovery_mode``
+        so an owner whose row was concurrently flagged ``manual_required`` still asserts
+        liveness (its subsequent publish/recovery CAS is the authority). No revision bump
+        (lease churn is not buyer-visible). Returns True on renew, False if ownership was
+        lost (buy moved on / a different lease took over). Mirrors
+        :meth:`acquire_finalize_lease`'s shape.
+        """
+        now = self._now()
+
+        media_buy = self.get_by_id(media_buy_id, for_update=True, populate_existing=True)
+        if media_buy is None or media_buy.status != MEDIA_BUY_FINALIZING_STATUS:
+            return False
+        if media_buy.finalize_lease_id != lease_id:
+            return False
+        media_buy.finalize_lease_expires_at = now + datetime.timedelta(seconds=lease_ttl_seconds)
+        self._session.flush()
+        return True
+
     def set_finalize_adapter_invoked(self, media_buy_id: str, lease_id: str) -> bool:
         """CAS-set the adapter-invoked marker (still owner + still finalizing). #1637.
 
@@ -842,7 +879,7 @@ class MediaBuyRepository:
         """
 
         def _apply(media_buy: MediaBuy) -> None:
-            media_buy.finalize_adapter_invoked_at = datetime.datetime.now(datetime.UTC)
+            media_buy.finalize_adapter_invoked_at = self._now()
 
         marked = self._locked_mutate_and_bump(
             media_buy_id,
@@ -903,7 +940,7 @@ class MediaBuyRepository:
             )
             return flagged is not None
 
-        now = datetime.datetime.now(datetime.UTC)
+        now = self._now()
         media_buy = self.get_by_id(media_buy_id, for_update=True, populate_existing=True)
         if media_buy is None or media_buy.status != MEDIA_BUY_FINALIZING_STATUS:
             return False

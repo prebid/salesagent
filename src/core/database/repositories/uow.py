@@ -26,8 +26,10 @@ beads: salesagent-t735 (foundation), salesagent-2lp8 (epic), salesagent-rn59 (Pr
 
 from __future__ import annotations
 
+import datetime
 import logging
 import warnings
+from collections.abc import Callable
 from types import TracebackType
 from typing import Any, Self
 
@@ -136,9 +138,16 @@ class MediaBuyUoW(BaseUoW):
     currency_limits: CurrencyLimitRepository | None
     idempotency_attempts: IdempotencyAttemptRepository | None
 
+    def __init__(self, tenant_id: str, now_fn: Callable[[], datetime.datetime] | None = None) -> None:
+        # now_fn injects a clock into MediaBuyRepository's lease/guard logic (#1637):
+        # production leaves it None (wall-clock UTC); tests advance a fake clock so the
+        # lease heartbeat and the ownership fences observe the same time.
+        super().__init__(tenant_id)
+        self._now_fn = now_fn
+
     def _init_repos(self) -> None:
         assert self._session is not None
-        self.media_buys = MediaBuyRepository(self._session, self._tenant_id)
+        self.media_buys = MediaBuyRepository(self._session, self._tenant_id, now_fn=self._now_fn)
         self.products = ProductRepository(self._session, self._tenant_id)
         self.creatives = CreativeRepository(self._session, self._tenant_id)
         self.currency_limits = CurrencyLimitRepository(self._session, self._tenant_id)
