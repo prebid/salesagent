@@ -735,7 +735,7 @@ class TestFormatValidationUnreachable:
     def test_unreachable_agent_fails_creative(self, integration_db, transport):
         """Typed transient from registry.get_format → SERVICE_UNAVAILABLE, recovery=transient."""
         from src.core.exceptions import AdCPServiceUnavailableError
-        from tests.helpers import assert_envelope_shape
+        from tests.helpers import assert_envelope_shape, error_envelope_for_raw_a2a_env
 
         with CreativeSyncEnv() as env:
             env.setup_default_data()
@@ -753,7 +753,9 @@ class TestFormatValidationUnreachable:
             )
 
             assert result.is_error, f"[{transport.value}] transient agent failure must fail the request"
-            envelope = result.wire_error_envelope or result.synthesized_error_envelope
+            # CreativeSyncEnv routes A2A through the raw wrapper (no captured wire):
+            # REST/MCP grade real wire, IMPL/A2A grade the synthesized envelope.
+            envelope = error_envelope_for_raw_a2a_env(result, transport)
             assert_envelope_shape(
                 envelope,
                 "SERVICE_UNAVAILABLE",

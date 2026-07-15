@@ -16,7 +16,31 @@ the envelope now requires updating exactly one helper.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from tests.harness.transport import Transport, TransportResult
+
+
+def error_envelope_for_raw_a2a_env(result: TransportResult, transport: Transport) -> dict[str, Any] | None:
+    """Pick the error envelope to assert on for an env whose A2A path is the raw wrapper.
+
+    Some envs (e.g. ``CreativeSyncEnv``) route ``call_a2a`` through the direct
+    ``*_raw`` wrapper rather than ``_run_a2a_handler`` — no Task framing, so no
+    captured wire. For those envs the transports that observe real wire bytes are
+    **REST and MCP** (``wire_error_envelope``); **IMPL and A2A** have only the
+    boundary-builder output (``synthesized_error_envelope``).
+
+    This is deliberately per-transport, not a ``wire or synthesized`` fallback: a
+    ``None`` ``wire_error_envelope`` on REST/MCP is a genuine boundary regression
+    and must surface as a failed ``assert_envelope_shape``, not be silently masked
+    by falling back to the synthesized value.
+    """
+    from tests.harness.transport import Transport
+
+    if transport in (Transport.REST, Transport.MCP):
+        return result.wire_error_envelope
+    return result.synthesized_error_envelope
 
 
 def assert_envelope_shape(

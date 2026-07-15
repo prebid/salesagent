@@ -331,14 +331,17 @@ class TestBaseClassContract:
         assert result.payload.ok is True
         assert result.envelope.get("transport") == "mcp"
 
-    def test_a2a_dispatcher_prefers_stashed_wire_and_falls_back_to_synthesized(self):
-        """Stashed real wire wins; an unstashed AdCPError falls back to synthesized (#1417).
+    def test_a2a_dispatcher_splits_stashed_wire_from_synthesized(self):
+        """``wire_error_envelope`` holds ONLY captured wire; raw-path output is synthesized.
 
-        Envs whose ``call_a2a`` uses the direct ``*_raw`` path (no Task framing,
-        e.g. CreativeSyncEnv) never stash a real wire envelope — the dispatcher
-        synthesizes one via the same helper production calls, so error-shape
-        tests still see the two-layer envelope. When a real wire envelope IS
-        stashed (``_run_a2a_handler`` path), it must win over synthesis.
+        The A2A dispatcher mirrors ``McpDispatcher``: real wire lives on
+        ``wire_error_envelope`` and is present ONLY when the env stashes it
+        (``_run_a2a_handler`` path, via ``_envelope_to_adcp_error``). Envs whose
+        ``call_a2a`` uses the direct ``*_raw`` path (no Task framing, e.g.
+        CreativeSyncEnv) never stash — so ``wire_error_envelope`` is ``None`` and
+        the envelope production WOULD emit is exposed on
+        ``synthesized_error_envelope``. This keeps the wire field honest: raw-path
+        synthesis can no longer masquerade as captured wire.
         """
         from src.core.exceptions import AdCPValidationError
         from tests.harness._base import BaseTestEnv
@@ -350,8 +353,9 @@ class TestBaseClassContract:
 
         result = _RawPathEnv().call_via(Transport.A2A)
         assert result.is_error
-        assert result.wire_error_envelope is not None, "raw-path A2A error must surface a synthesized envelope"
-        assert result.wire_error_envelope["adcp_error"]["code"] == "VALIDATION_ERROR"
+        assert result.wire_error_envelope is None, "raw path has no captured wire — must be None, not synthesized"
+        assert result.synthesized_error_envelope is not None, "raw-path A2A error must expose a synthesized envelope"
+        assert result.synthesized_error_envelope["adcp_error"]["code"] == "VALIDATION_ERROR"
 
         sentinel = {"adcp_error": {"code": "VALIDATION_ERROR", "message": "real-wire-sentinel"}}
 
@@ -362,7 +366,7 @@ class TestBaseClassContract:
                 raise exc
 
         result = _StashedEnv().call_via(Transport.A2A)
-        assert result.wire_error_envelope == sentinel, "stashed real wire must win over synthesis"
+        assert result.wire_error_envelope == sentinel, "stashed real wire must surface on wire_error_envelope"
 
     @pytest.mark.parametrize(
         ("rest_method", "payload_argument"),

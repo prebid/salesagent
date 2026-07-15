@@ -333,7 +333,7 @@ class TestValidationModeSemantics:
         STANDARD_ERROR_CODES gate on MCP/A2A (demoting the supplement-only
         CREATIVE_NOT_FOUND passthrough) must fail this matrix, not just REST.
         """
-        from tests.helpers import assert_envelope_shape
+        from tests.helpers import assert_envelope_shape, error_envelope_for_raw_a2a_env
 
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
@@ -349,8 +349,10 @@ class TestValidationModeSemantics:
             )
 
             assert result.is_error, f"Strict mode must abort on unknown creative: {result.payload!r}"
+            # CreativeSyncEnv routes A2A through the raw wrapper (synthesized envelope);
+            # REST/MCP capture real wire.
             assert_envelope_shape(
-                result.wire_error_envelope,
+                error_envelope_for_raw_a2a_env(result, transport),
                 "CREATIVE_NOT_FOUND",
                 recovery="correctable",
                 message_substr="c_never_synced",

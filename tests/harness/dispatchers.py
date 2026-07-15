@@ -54,24 +54,6 @@ def _envelope_from_adcp_error(exc: Exception) -> dict[str, Any] | None:
     return None
 
 
-def _wire_envelope_from_exception(exc: Exception) -> dict[str, Any] | None:
-    """Prefer the REAL wire envelope stashed by the harness; fall back to synthesized.
-
-    When the A2A pipeline reconstructs an AdCPError from a failed Task's
-    artifact DataPart, ``tests.harness._base._envelope_to_adcp_error``
-    attaches the captured envelope to the exception as
-    ``_wire_error_envelope``. This helper returns that real wire envelope
-    if present; otherwise falls back to ``_envelope_from_adcp_error``
-    (synthesized — same helper production calls). The fallback covers envs
-    whose ``call_a2a`` uses the direct ``*_raw`` path (no Task framing, so
-    no stash), e.g. CreativeSyncEnv (#1417).
-    """
-    real_wire = getattr(exc, "_wire_error_envelope", None)
-    if isinstance(real_wire, dict):
-        return real_wire
-    return _envelope_from_adcp_error(exc)
-
-
 def _envelope_from_mcp_error(exc: Exception) -> dict[str, Any] | None:
     """Extract the wire envelope from an MCP ToolError's JSON string."""
     from fastmcp.exceptions import ToolError
@@ -112,14 +94,26 @@ class ImplDispatcher:
 
 
 class A2ADispatcher:
-    """Dispatch via ``handler.on_message_send`` — exercises the full A2A pipeline.
+    """Dispatch via ``env.call_a2a`` — the A2A transport wrapper.
 
-    ``env.call_a2a`` drives ``AdCPRequestHandler.on_message_send`` end-to-end
-    (message parsing → skill routing → handler dispatch → ``_serialize_for_a2a``
-    → Task/Artifact framing). On a failed Task, the harness reconstructs the
-    ``AdCPError`` from the artifact DataPart and stashes the real wire
-    envelope on the exception via ``_wire_error_envelope`` — captured here
-    by ``_wire_envelope_from_exception``.
+    Two A2A call shapes exist across envs:
+
+    - **Full pipeline** (``_run_a2a_handler``): drives
+      ``AdCPRequestHandler.on_message_send`` end-to-end (message parsing →
+      skill routing → handler dispatch → ``_serialize_for_a2a`` →
+      Task/Artifact framing). On a failed Task, the harness reconstructs the
+      ``AdCPError`` from the artifact DataPart and stashes the REAL wire
+      envelope on the exception via ``_wire_error_envelope`` — surfaced here
+      as ``wire_error_envelope``.
+    - **Direct raw** (``*_raw``): no Task framing, so no stash. There is no
+      real wire; ``wire_error_envelope`` is ``None`` and the envelope
+      production WOULD emit is exposed on ``synthesized_error_envelope``.
+
+    Fields are split like ``McpDispatcher``: ``wire_error_envelope`` holds
+    ONLY captured wire (``None`` when the raw path was taken), and
+    ``synthesized_error_envelope`` always carries the boundary-builder output
+    for the caught exception. This keeps ``wire_error_envelope`` honest — a
+    raw-path env cannot masquerade its synthesized output as real wire.
     """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
@@ -128,7 +122,11 @@ class A2ADispatcher:
         except Exception as exc:
             return TransportResult(
                 error=exc,
-                wire_error_envelope=_wire_envelope_from_exception(exc),
+                # Stash only — None on the raw path (no Task framing).
+                wire_error_envelope=getattr(exc, "_wire_error_envelope", None),
+                # What production WOULD emit for the same exception; the only
+                # honest error envelope for raw-path envs (e.g. CreativeSyncEnv).
+                synthesized_error_envelope=_envelope_from_adcp_error(exc),
             )
         # Real A2A wire: the artifact DataPart dict stashed by _run_a2a_handler
         # (declared on BaseTestEnv, reset per call_via — read directly so a
