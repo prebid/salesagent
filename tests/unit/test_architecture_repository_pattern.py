@@ -690,51 +690,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/admin/test_workflows_blueprint.py", "test_reject_step_sets_status_rejected"),
     ("tests/admin/test_workflows_blueprint.py", "test_reject_step_without_reason_uses_default"),
     ("tests/admin/test_workflows_blueprint.py", "test_tenant"),
-    # #1544 route-level decision-ownership helpers read committed buy/step status
-    # across the Flask request boundary. FIXME(#1544): repository read helper.
-    ("tests/admin/test_workflows_blueprint.py", "_buy_status"),
-    ("tests/admin/test_workflows_blueprint.py", "_step_status"),
-    # #1544 durable A2A task-correlation + finalizer-race concurrency tests. The
-    # race tests need INDEPENDENT sessions per thread (threading.Barrier), which
-    # the single-session harness cannot provide. FIXME(#1544): factories where feasible.
-    ("tests/integration/test_a2a_task_correlation.py", "test_get_by_external_task_id_resolves_within_tenant"),
-    ("tests/integration/test_a2a_task_correlation.py", "test_get_by_external_task_id_is_tenant_scoped"),
-    (
-        "tests/integration/test_a2a_task_correlation.py",
-        "test_approval_adapter_failure_stores_buyer_facing_error_artifact",
-    ),
-    ("tests/integration/test_approval_finalizer_race.py", "test_two_concurrent_approvals_run_adapter_once"),
-    ("tests/integration/test_approval_finalizer_race.py", "test_concurrent_approve_and_reject_single_winner"),
-    ("tests/integration/test_approval_finalizer_race.py", "test_reject_that_observed_pending_approval_loses_to_a_hold"),
-    ("tests/integration/test_approval_finalizer_race.py", "approve_once"),
-    ("tests/integration/test_approval_finalizer_race.py", "do_approve"),
-    ("tests/integration/test_approval_finalizer_race.py", "do_reject"),
-    ("tests/integration/test_media_buy_repository_writes.py", "test_apply_status_transition_bumps_revision"),
-    (
-        "tests/integration/test_media_buy_repository_writes.py",
-        "test_apply_status_transition_never_clobbers_a_concurrent_confirmed_at",
-    ),
-    (
-        "tests/integration/test_media_buy_repository_writes.py",
-        "test_apply_status_transition_skips_when_status_changed_underneath",
-    ),
-    ("tests/integration/test_media_buy_repository_writes.py", "test_lock_timeout_does_not_trip_the_db_circuit_breaker"),
-    (
-        "tests/integration/test_media_buy_repository_writes.py",
-        "test_get_by_id_lock_timeout_translates_contention_to_transient_conflict",
-    ),
-    ("tests/integration/test_media_buy_repository_writes.py", "test_two_concurrent_bumps_yield_distinct_revisions"),
-    (
-        "tests/integration/test_media_buy_repository_writes.py",
-        "test_two_concurrent_apply_status_transition_yield_distinct_revisions",
-    ),
-    ("tests/integration/test_media_buy_repository_writes.py", "_read_revision"),
-    ("tests/integration/test_media_buy_repository_writes.py", "test_matching_token_mutates_and_bumps"),
-    (
-        "tests/integration/test_media_buy_repository_writes.py",
-        "test_two_concurrent_updates_same_token_one_wins_one_conflicts",
-    ),
-    ("tests/integration/test_media_buy_status_scheduler.py", "_get_media_buy_revision"),
     ("tests/e2e/test_gam_lifecycle.py", "_persist_media_buy"),
     ("tests/e2e/test_gam_lifecycle.py", "_seed_lifecycle_test_data"),
     ("tests/helpers/creative_test_helpers.py", "assert_stored_creative_assets"),

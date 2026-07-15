@@ -176,12 +176,12 @@ def _get_media_buy_status(tenant_id: str, media_buy_id: str) -> str:
 
 
 def _get_media_buy_revision(tenant_id: str, media_buy_id: str) -> int | None:
-    """Get the current persisted revision of a media buy."""
-    with get_db_session() as session:
-        from sqlalchemy import select
+    """Get the current persisted revision of a media buy (read via a tenant-scoped UoW)."""
+    from src.core.database.repositories import MediaBuyUoW
 
-        stmt = select(MediaBuy).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)
-        media_buy = session.scalars(stmt).first()
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        media_buy = uow.media_buys.get_by_id(media_buy_id)
         return media_buy.revision if media_buy else None
 
 

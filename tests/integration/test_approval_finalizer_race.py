@@ -21,8 +21,7 @@ from src.admin.services.media_buy_completion import (
     finalize_media_buy_rejection,
 )
 from src.core.context_manager import ContextManager
-from src.core.database.database_session import get_db_session
-from src.core.database.repositories import MediaBuyRepository
+from src.core.database.repositories import MediaBuyUoW
 from src.core.database.repositories.workflow import WorkflowRepository
 from tests.integration.conftest import seed_pending_buy_and_step
 
@@ -60,10 +59,13 @@ class TestApprovalFinalizerRace:
 
         def approve_once() -> None:
             try:
-                with get_db_session() as session:
+                # Each thread opens its OWN MediaBuyUoW → an INDEPENDENT session (a fresh
+                # get_db_session under the hood), which is exactly what the barrier-aligned
+                # CAS race needs; the barrier waits with both sessions open.
+                with MediaBuyUoW(tenant_id) as uow:
                     both_ready.wait()  # both threads race into the claim at once
                     outcome, _ = finalize_media_buy_approval(
-                        session,
+                        uow.session,
                         tenant_id,
                         media_buy_id="mb_race",
                         step_id=step_id,
@@ -91,11 +93,12 @@ class TestApprovalFinalizerRace:
         assert len(adapter_calls) == 1, f"adapter must run EXACTLY once, ran {len(adapter_calls)}"
         assert sorted(outcomes) == sorted([FinalizeOutcome.APPLIED, FinalizeOutcome.NOT_CLAIMED])
 
-        with get_db_session() as session:
-            step = WorkflowRepository(session, tenant_id).get_by_step_id(step_id)
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.media_buys is not None
+            step = WorkflowRepository(uow.session, tenant_id).get_by_step_id(step_id)
             assert step is not None and step.status == "completed"
             assert step.response_data is not None  # exactly one terminal artifact
-            buy = MediaBuyRepository(session, tenant_id).get_by_id("mb_race")
+            buy = uow.media_buys.get_by_id("mb_race")
             assert buy is not None and buy.status == "active"
 
     def test_concurrent_approve_and_reject_single_winner(
@@ -115,10 +118,11 @@ class TestApprovalFinalizerRace:
 
         def do_approve() -> None:
             try:
-                with get_db_session() as session:
+                # Independent per-thread session via MediaBuyUoW (see approve_once).
+                with MediaBuyUoW(tenant_id) as uow:
                     both_ready.wait()
                     outcome, _ = finalize_media_buy_approval(
-                        session,
+                        uow.session,
                         tenant_id,
                         media_buy_id="mb_race2",
                         step_id=step_id,
@@ -137,10 +141,11 @@ class TestApprovalFinalizerRace:
 
         def do_reject() -> None:
             try:
-                with get_db_session() as session:
+                # Independent per-thread session via MediaBuyUoW (see approve_once).
+                with MediaBuyUoW(tenant_id) as uow:
                     both_ready.wait()
                     outcome = finalize_media_buy_rejection(
-                        session,
+                        uow.session,
                         tenant_id,
                         media_buy_id="mb_race2",
                         step_id=step_id,
@@ -164,8 +169,9 @@ class TestApprovalFinalizerRace:
         # Exactly one decision won; the other lost the claim.
         assert sorted(outcomes) == sorted([FinalizeOutcome.APPLIED, FinalizeOutcome.NOT_CLAIMED])
 
-        with get_db_session() as session:
-            buy = MediaBuyRepository(session, tenant_id).get_by_id("mb_race2")
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.media_buys is not None
+            buy = uow.media_buys.get_by_id("mb_race2")
             assert buy is not None
             assert buy.status in ("active", "rejected")  # a single terminal decision, never both
 
@@ -180,15 +186,15 @@ class TestApprovalFinalizerRace:
         step_id, step_data = self._seed_pending_buy_and_step(
             context_manager, tenant_id, sample_principal["principal_id"], "mb_hold_then_reject"
         )
-        # The approve-HOLD already won: buy is now pending_creatives.
-        with get_db_session() as session:
-            MediaBuyRepository(session, tenant_id).update_status("mb_hold_then_reject", "pending_creatives")
-            session.commit()
+        # The approve-HOLD already won: buy is now pending_creatives (commit on UoW exit).
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.media_buys is not None
+            uow.media_buys.update_status("mb_hold_then_reject", "pending_creatives")
 
         # A reject that observed pending_approval (its pre-claim read) loses.
-        with get_db_session() as session:
+        with MediaBuyUoW(tenant_id) as uow:
             outcome = finalize_media_buy_rejection(
-                session,
+                uow.session,
                 tenant_id,
                 media_buy_id="mb_hold_then_reject",
                 step_id=step_id,
@@ -198,6 +204,7 @@ class TestApprovalFinalizerRace:
             )
         assert outcome is FinalizeOutcome.NOT_CLAIMED
 
-        with get_db_session() as session:
-            buy = MediaBuyRepository(session, tenant_id).get_by_id("mb_hold_then_reject")
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.media_buys is not None
+            buy = uow.media_buys.get_by_id("mb_hold_then_reject")
             assert buy is not None and buy.status == "pending_creatives"  # hold's decision stands

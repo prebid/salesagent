@@ -18,8 +18,7 @@ import pytest
 from a2a.types import GetTaskRequest, TaskState
 
 from src.core.context_manager import ContextManager
-from src.core.database.database_session import get_db_session
-from src.core.database.repositories.workflow import WorkflowRepository
+from src.core.database.repositories import WorkflowUoW
 from tests.factories import PrincipalFactory
 from tests.integration.conftest import make_create_media_buy_step
 
@@ -64,8 +63,9 @@ class TestA2ATaskCorrelation:
         tenant_id = sample_tenant["tenant_id"]
         step_id = _make_completed_step(context_manager, tenant_id, sample_principal["principal_id"])
 
-        with get_db_session() as session:
-            step = WorkflowRepository(session, tenant_id).get_by_external_task_id(_EXTERNAL_TASK_ID)
+        with WorkflowUoW(tenant_id) as uow:
+            assert uow.workflows is not None
+            step = uow.workflows.get_by_external_task_id(_EXTERNAL_TASK_ID)
             assert step is not None
             assert step.step_id == step_id
             assert step.status == "completed"
@@ -77,8 +77,9 @@ class TestA2ATaskCorrelation:
         tenant_id = sample_tenant["tenant_id"]
         _make_completed_step(context_manager, tenant_id, sample_principal["principal_id"])
 
-        with get_db_session() as session:
-            assert WorkflowRepository(session, "other_tenant").get_by_external_task_id(_EXTERNAL_TASK_ID) is None
+        with WorkflowUoW("other_tenant") as uow:
+            assert uow.workflows is not None
+            assert uow.workflows.get_by_external_task_id(_EXTERNAL_TASK_ID) is None
 
     def test_on_get_task_rebuilds_terminal_task_from_step(
         self, integration_db, sample_tenant, sample_principal, context_manager
@@ -214,9 +215,9 @@ class TestA2ATaskCorrelation:
             "request_data": {"protocol": "a2a", "external_task_id": external_task_id},
         }
 
-        with get_db_session() as session:
+        with MediaBuyUoW(tenant_id) as uow:
             outcome, err = finalize_media_buy_approval(
-                session,
+                uow.session,
                 tenant_id,
                 media_buy_id="mb_fail",
                 step_id=step.step_id,
@@ -232,8 +233,9 @@ class TestA2ATaskCorrelation:
         assert err == "GAM order creation failed"
 
         # The step is failed AND carries a buyer-facing two-layer error envelope.
-        with get_db_session() as session:
-            failed = WorkflowRepository(session, tenant_id).get_by_step_id(step.step_id)
+        with WorkflowUoW(tenant_id) as uow:
+            assert uow.workflows is not None
+            failed = uow.workflows.get_by_step_id(step.step_id)
             assert failed is not None
             assert failed.status == "failed"
             assert failed.response_data is not None

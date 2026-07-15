@@ -351,16 +351,20 @@ def _setup_mapped_media_buy_step(
 
 
 def _buy_status(tenant_id, media_buy_id):
-    from src.core.database.repositories import MediaBuyRepository
+    from src.core.database.repositories import MediaBuyUoW
 
-    with get_db_session() as session:
-        buy = MediaBuyRepository(session, tenant_id).get_by_id(media_buy_id)
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        buy = uow.media_buys.get_by_id(media_buy_id)
         return buy.status if buy else None
 
 
-def _step_status(step_id):
-    with get_db_session() as session:
-        step = session.get(WorkflowStep, step_id)
+def _step_status(tenant_id, step_id):
+    from src.core.database.repositories import WorkflowUoW
+
+    with WorkflowUoW(tenant_id) as uow:
+        assert uow.workflows is not None
+        step = uow.workflows.get_by_step_id(step_id)
         return step.status if step else None
 
 
@@ -383,7 +387,7 @@ class TestWorkflowDecisionOwnership:
             json={},
         )
         assert r.status_code == 409
-        assert _step_status(step_id) == "completed"
+        assert _step_status(test_tenant, step_id) == "completed"
 
     def test_reject_on_terminal_step_returns_409(self, client, test_tenant, factory_session):
         """Replaying reject on a rejected step → 409; the step stays rejected."""
@@ -397,7 +401,7 @@ class TestWorkflowDecisionOwnership:
             json={"reason": "again"},
         )
         assert r.status_code == 409
-        assert _step_status(step_id) == "rejected"
+        assert _step_status(test_tenant, step_id) == "rejected"
 
     def test_reject_when_mapped_buy_active_returns_409_no_step_change(self, client, test_tenant, factory_session):
         """Reject with the mapped buy already active → 409; the step is NOT force-rejected
@@ -412,7 +416,7 @@ class TestWorkflowDecisionOwnership:
             json={"reason": "late"},
         )
         assert r.status_code == 409
-        assert _step_status(step_id) == "in_progress"
+        assert _step_status(test_tenant, step_id) == "in_progress"
         assert _buy_status(test_tenant, mbid) == "active"
 
     def test_reject_of_held_buy_succeeds(self, client, test_tenant, factory_session):
@@ -427,7 +431,7 @@ class TestWorkflowDecisionOwnership:
             json={"reason": "changed mind"},
         )
         assert r.status_code == 200
-        assert _step_status(step_id) == "rejected"
+        assert _step_status(test_tenant, step_id) == "rejected"
         assert _buy_status(test_tenant, mbid) == "rejected"
 
     def test_replay_approve_keeps_tasks_get_completed(self, client, test_tenant, factory_session):
@@ -482,7 +486,7 @@ class TestOperationsDecisionOwnership:
             data={"action": "reject", "reason": "late"},
         )
         assert r.status_code == 302
-        assert _step_status(step_id) == "pending_approval"
+        assert _step_status(test_tenant, step_id) == "pending_approval"
         assert _buy_status(test_tenant, mbid) == "active"
 
     def test_operations_approve_on_completed_step_no_revert(self, client, test_tenant, factory_session):
@@ -497,4 +501,4 @@ class TestOperationsDecisionOwnership:
             data={"action": "approve"},
         )
         assert r.status_code == 302
-        assert _step_status(step_id) == "completed"
+        assert _step_status(test_tenant, step_id) == "completed"

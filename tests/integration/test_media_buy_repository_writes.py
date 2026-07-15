@@ -284,9 +284,10 @@ class TestRevisionBumpsOnStatusTransition:
 
         # The revision increment is a server-side SQL expression that only
         # materializes at flush/commit, so assert the value read back from the
-        # database, not the transient in-memory attribute.
-        with get_db_session() as session:
-            persisted = MediaBuyRepository(session, tenant_a).get_by_id("mb_rev_transition")
+        # database (a fresh UoW session), not the transient in-memory attribute.
+        with MediaBuyUoW(tenant_a) as uow:
+            assert uow.media_buys is not None
+            persisted = uow.media_buys.get_by_id("mb_rev_transition")
             assert persisted is not None
             assert persisted.status == "active"
             assert persisted.revision == 2
@@ -406,8 +407,9 @@ class TestRevisionBumpsOnStatusTransition:
             stale_session.close()
             approve_session.close()
 
-        with get_db_session() as session:
-            persisted = MediaBuyRepository(session, tenant_a).get_by_id("mb_confirm_race")
+        with MediaBuyUoW(tenant_a) as uow:
+            assert uow.media_buys is not None
+            persisted = uow.media_buys.get_by_id("mb_confirm_race")
             assert persisted is not None
             # The stale transition no-op'd (committed status advanced draft→active
             # under it), so revision stayed at the approval's bump (1→2), not 3.
@@ -453,8 +455,9 @@ class TestRevisionBumpsOnStatusTransition:
             stale_session.close()
             admin_session.close()
 
-        with get_db_session() as session:
-            persisted = MediaBuyRepository(session, tenant_a).get_by_id("mb_status_race")
+        with MediaBuyUoW(tenant_a) as uow:
+            assert uow.media_buys is not None
+            persisted = uow.media_buys.get_by_id("mb_status_race")
             assert persisted is not None
             # The terminal decision is preserved — NOT overwritten with 'completed'.
             assert persisted.status == "rejected"
@@ -466,14 +469,19 @@ class TestRevisionBumpsOnStatusTransition:
         breaker. A lock_timeout raises OperationalError (SQLSTATE 55P03); a prior
         version marked that as a DB outage in get_db_session, failing-fast every
         unrelated request for 10s. It must re-raise WITHOUT flipping _is_healthy,
-        so a subsequent get_db_session still works. #1544.
+        so a subsequent session still works. #1544.
+
+        The waiter/probe run through MediaBuyUoW, whose session is a real
+        get_db_session under the hood — so the OperationalError still propagates
+        through get_db_session's exit and exercises exactly the circuit-breaker
+        code path this test pins (``_is_healthy`` must stay ``True``).
         """
         from sqlalchemy import select, text
         from sqlalchemy.exc import OperationalError
         from sqlalchemy.orm import Session as SASession
 
         import src.core.database.database_session as dbs
-        from src.core.database.database_session import get_db_session, get_engine, reset_health_state
+        from src.core.database.database_session import get_engine, reset_health_state
         from src.core.database.models import MediaBuy
 
         with MediaBuyUoW(tenant_a) as uow:
@@ -485,17 +493,17 @@ class TestRevisionBumpsOnStatusTransition:
             holder.execute(select(MediaBuy).filter_by(media_buy_id="mb_lock_contended").with_for_update()).first()
 
             with pytest.raises(OperationalError) as exc_info:
-                with get_db_session() as waiter:
-                    waiter.execute(text("SET LOCAL lock_timeout = '1s'"))
-                    waiter.execute(
+                with MediaBuyUoW(tenant_a) as waiter:
+                    waiter.session.execute(text("SET LOCAL lock_timeout = '1s'"))
+                    waiter.session.execute(
                         select(MediaBuy).filter_by(media_buy_id="mb_lock_contended").with_for_update()
                     ).first()
             assert getattr(exc_info.value.orig, "pgcode", None) == "55P03"  # lock_not_available
 
             # The breaker stayed closed: health intact and a fresh session works.
             assert dbs._is_healthy is True
-            with get_db_session() as ok:
-                assert ok.execute(text("SELECT 1")).scalar() == 1
+            with MediaBuyUoW(tenant_a) as ok:
+                assert ok.session.execute(text("SELECT 1")).scalar() == 1
         finally:
             holder.rollback()
             holder.close()
@@ -513,7 +521,7 @@ class TestRevisionBumpsOnStatusTransition:
         from sqlalchemy import select
         from sqlalchemy.orm import Session as SASession
 
-        from src.core.database.database_session import get_db_session, get_engine, reset_health_state
+        from src.core.database.database_session import get_engine, reset_health_state
         from src.core.database.models import MediaBuy
         from src.core.exceptions import AdCPConflictError
 
@@ -525,9 +533,14 @@ class TestRevisionBumpsOnStatusTransition:
         try:
             holder.execute(select(MediaBuy).filter_by(media_buy_id="mb_lock_prod_path").with_for_update()).first()
 
+            # The waiter runs its locked read through a MediaBuyUoW session (a real
+            # get_db_session under the hood); the repository seam arms its OWN
+            # lock_timeout and translates the 55P03 contention into AdCPConflictError,
+            # which propagates out through the UoW's rollback-and-re-raise exit.
             with pytest.raises(AdCPConflictError) as exc_info:
-                with get_db_session() as waiter:
-                    MediaBuyRepository(waiter, tenant_a).get_by_id(
+                with MediaBuyUoW(tenant_a) as waiter:
+                    assert waiter.media_buys is not None
+                    waiter.media_buys.get_by_id(
                         "mb_lock_prod_path", for_update=True, populate_existing=True, lock_timeout="5s"
                     )
             # Buyer-facing recovery is transient (re-read and retry), not terminal.
@@ -956,8 +969,8 @@ class TestConcurrentRevisionBump:
             uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_concurrent_rev"))
 
         # Starting revision after create.
-        with get_db_session() as session:
-            start_rev = MediaBuyRepository(session, tenant_a).get_by_id("mb_concurrent_rev").revision
+        with MediaBuyUoW(tenant_a) as uow:
+            start_rev = uow.media_buys.get_by_id("mb_concurrent_rev").revision
         assert start_rev == 1
 
         both_preloaded = threading.Barrier(2, timeout=30)
@@ -989,8 +1002,8 @@ class TestConcurrentRevisionBump:
         assert not any(t.is_alive() for t in threads), "a bump thread hung (possible deadlock)"
         assert not errors, f"concurrent bump thread(s) failed: {errors}"
 
-        with get_db_session() as session:
-            final_rev = MediaBuyRepository(session, tenant_a).get_by_id("mb_concurrent_rev").revision
+        with MediaBuyUoW(tenant_a) as uow:
+            final_rev = uow.media_buys.get_by_id("mb_concurrent_rev").revision
         # Two bumps from revision 1 → 3. A collision (lost update) would leave 2.
         assert final_rev == 3, f"expected two distinct bumps 1→2→3, got final revision {final_rev}"
 
@@ -1042,8 +1055,8 @@ class TestConcurrentRevisionBump:
         assert not any(t.is_alive() for t in threads), "a transition thread hung (possible deadlock)"
         assert not errors, f"concurrent apply_status_transition thread(s) failed: {errors}"
 
-        with get_db_session() as session:
-            final_rev = MediaBuyRepository(session, tenant_a).get_by_id("mb_ast_concurrent").revision
+        with MediaBuyUoW(tenant_a) as uow:
+            final_rev = uow.media_buys.get_by_id("mb_ast_concurrent").revision
         # Two transitions from revision 1 → 3. A Python read-modify-write loses one → 2.
         assert final_rev == 3, f"lost update on the unlocked seam: expected 3, got {final_rev}"
 
@@ -1068,8 +1081,9 @@ class TestPersistedRevisionBump:
     """
 
     def _read_revision(self, tenant_id: str, media_buy_id: str) -> int:
-        with get_db_session() as session:
-            buy = MediaBuyRepository(session, tenant_id).get_by_id(media_buy_id)
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.media_buys is not None
+            buy = uow.media_buys.get_by_id(media_buy_id)
             assert buy is not None
             return buy.revision
 
@@ -1155,8 +1169,9 @@ class TestExpectedRevisionUnderLock:
             row = uow.media_buys.update_fields_or_raise("mb_lock_match", expected_revision=1, budget=Decimal("750.00"))
             assert row is not None
 
-        with get_db_session() as session:
-            persisted = MediaBuyRepository(session, tenant_a).get_by_id("mb_lock_match")
+        with MediaBuyUoW(tenant_a) as uow:
+            assert uow.media_buys is not None
+            persisted = uow.media_buys.get_by_id("mb_lock_match")
             assert persisted is not None
             assert persisted.revision == 2
             assert persisted.budget == Decimal("750.00")
@@ -1220,8 +1235,9 @@ class TestExpectedRevisionUnderLock:
 
         # Exactly one mutation landed: revision advanced by exactly one, and the
         # budget is whichever writer won (never a blend, never both).
-        with get_db_session() as session:
-            persisted = MediaBuyRepository(session, tenant_a).get_by_id("mb_token_race")
+        with MediaBuyUoW(tenant_a) as uow:
+            assert uow.media_buys is not None
+            persisted = uow.media_buys.get_by_id("mb_token_race")
             assert persisted is not None
             assert persisted.revision == 2
             assert persisted.budget in (Decimal("100.00"), Decimal("200.00"))
