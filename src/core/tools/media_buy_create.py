@@ -730,14 +730,20 @@ def _build_adapter_asset_from_creative(
     return asset, None
 
 
-def raise_on_failed_creative_uploads(asset_statuses, creative_map, creatives_repo) -> None:
-    """Enrich successfully-uploaded creatives; FAIL the approval on any failed upload.
+def enrich_uploaded_creatives(asset_statuses, creative_map, creatives_repo) -> list[str]:
+    """Enrich successfully-uploaded creatives; RETURN the failed-upload descriptions.
 
     A ``failed`` per-asset status means the remote order exists but is missing
-    creatives — proceeding to order approval would publish an incomplete buy, so the
-    batch raises :class:`AdapterPostMutationIncomplete` (post-mutation by definition:
-    the order was created before upload). Successful assets are still enriched first
-    so a partial batch keeps its concept/platform-id writebacks. #1637.
+    creatives — the caller must FAIL the approval (post-mutation by definition: the
+    order was created before upload). This function ONLY enriches the successful assets
+    and REPORTS the failures; it MUST NOT raise. The caller runs it inside a
+    ``MediaBuyUoW`` and, if the returned list is non-empty, raises
+    :class:`AdapterPostMutationIncomplete` AFTER the UoW commits — otherwise the in-block
+    raise would roll back the very enrichment writebacks this function performs (the
+    exact bug this split fixes). #1637.
+
+    Returns the ``"<creative_id>: <message>"`` descriptions of assets that failed to
+    upload (empty when all succeeded).
     """
     failed_uploads: list[str] = []
     for status in asset_statuses:
@@ -753,10 +759,7 @@ def raise_on_failed_creative_uploads(asset_statuses, creative_map, creatives_rep
         merged = _apply_creative_enrichment(creative, status)
         if merged is not None:
             creatives_repo.update_data(creative, merged)
-    if failed_uploads:
-        raise AdapterPostMutationIncomplete(
-            f"{len(failed_uploads)} creative(s) failed to upload to the remote order: " + "; ".join(failed_uploads)
-        )
+    return failed_uploads
 
 
 def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool, str | None]:
@@ -1126,7 +1129,10 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             logger.info("[APPROVAL] Adapter returned no media_buy_id — skipping ID persistence")
 
         # Upload and associate inline creatives if any exist
-        # This handles inline creatives that were uploaded during initial media buy creation
+        # This handles inline creatives that were uploaded during initial media buy creation.
+        # Failed per-asset uploads are collected here and raised AFTER uow2 commits, so the
+        # successful assets' enrichment writebacks are not rolled back by an in-block raise. #1637.
+        failed_creative_uploads: list[str] = []
         with MediaBuyUoW(tenant_id) as uow2:
             # FIXME(salesagent-9f2): creative handling should use repository methods
             assert uow2.session is not None
@@ -1224,11 +1230,12 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                             )
                             logger.info(f"[APPROVAL] Creative upload completed: {len(asset_statuses)} assets processed")
 
-                            # Enrich creatives (concept + platform id) on success. Per-asset
-                            # FAILED statuses FAIL the approval — continuing would approve +
-                            # publish the buy with creatives missing from the remote order
-                            # (#1637 review blocker).
-                            raise_on_failed_creative_uploads(
+                            # Enrich creatives (concept + platform id) on success and
+                            # COLLECT any per-asset failures. The approval fails on a failed
+                            # upload (continuing would approve + publish the buy with creatives
+                            # missing from the remote order), but the raise is HOISTED below —
+                            # AFTER uow2 commits — so the successful enrichments persist. #1637.
+                            failed_creative_uploads = enrich_uploaded_creatives(
                                 asset_statuses, creative_map, CreativeRepository(session, tenant_id)
                             )
                         else:
@@ -1243,6 +1250,15 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         raise AdapterPostMutationIncomplete(error_msg) from creative_error
             else:
                 logger.info(f"[APPROVAL] No creative assignments found for {media_buy_id}, skipping creative upload")
+
+        # uow2 has now committed the successful creative enrichments. If any asset FAILED
+        # to upload, fail the approval here — OUTSIDE the UoW, so the committed enrichments
+        # survive — with the post-mutation type (order exists, missing creatives). #1637.
+        if failed_creative_uploads:
+            raise AdapterPostMutationIncomplete(
+                f"{len(failed_creative_uploads)} creative(s) failed to upload to the remote order: "
+                + "; ".join(failed_creative_uploads)
+            )
 
         # After creatives are uploaded (or skipped), retry order approval
         # This is necessary because:
