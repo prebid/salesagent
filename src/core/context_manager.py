@@ -20,7 +20,7 @@ from src.core.async_utils import pin_task
 from src.core.database.database_session import DatabaseManager
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
-from src.core.database.repositories.workflow import TERMINAL_STEP_STATUSES as _TERMINAL_STEP_STATUSES
+from src.core.database.repositories.workflow import WorkflowRepository
 from src.core.exceptions import AdCPError, build_two_layer_error_envelope, normalize_to_adcp_error
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -283,90 +283,79 @@ class ContextManager(DatabaseManager):
             response_data = response_data.model_dump(mode="json")
         session = self.session
         try:
-            stmt = select(WorkflowStep).filter_by(step_id=step_id)
-            if tenant_id:
-                stmt = stmt.join(DBContext).where(DBContext.tenant_id == tenant_id)
-
-            step = session.scalars(stmt).first()
-            # Terminal steps are IMMUTABLE: skip a status change that would move an
-            # already-terminal step to a different status (e.g. an auto-approval
-            # completing a step the buyer just canceled). This is a NON-BLOCKING,
-            # best-effort guard — NOT a row lock — because this method runs on the
-            # ContextManager's own session while the surrounding request may hold the
-            # same row open in another session; a SELECT ... FOR UPDATE here
-            # deadlocks that flow (statement-timeout). The genuine concurrent
-            # competitor in the cancel race is the APPROVAL writer
-            # (WorkflowRepository.update_status → transition_if_nonterminal), which IS
-            # fully atomic via a conditional UPDATE. update_workflow_step's terminal
-            # transitions come from the synchronous create/auto-approve path, which
-            # does not overlap a buyer cancel, so a best-effort check is sufficient here.
-            if step and status and status != step.status and step.status in _TERMINAL_STEP_STATUSES:
-                console.print(
-                    f"[yellow]⚠️ Skipping terminal transition {step.status}→{status} for step {step_id} "
-                    f"(terminal steps are immutable)[/yellow]"
+            # Resolve the tenant scope the repository primitive needs. Most callers
+            # pass it; when absent, derive it from the step's context (a plain read —
+            # not part of the atomic guarantee, which lives in the conditional UPDATE).
+            scoped_tenant = tenant_id
+            if scoped_tenant is None:
+                scoped_tenant = session.scalar(
+                    select(DBContext.tenant_id)
+                    .join(WorkflowStep, WorkflowStep.context_id == DBContext.context_id)
+                    .where(WorkflowStep.step_id == step_id)
                 )
-                return
-            if step:
-                old_status = step.status  # Capture old status before changing
+                if scoped_tenant is None:
+                    return  # step (or its context) not found
+            repo = WorkflowRepository(session, scoped_tenant)
 
-                if status:
-                    step.status = status
-                    if status in ["completed", "failed"] and not step.completed_at:
-                        step.completed_at = datetime.now(UTC)
-
+            if status:
+                # ATOMIC terminal-safe status write via the SHARED conditional-UPDATE
+                # primitive (WHERE status NOT IN terminal). This closes the cancellation
+                # TOCTOU even when update_workflow_step runs concurrently with a buyer
+                # cancel — e.g. MockAdServer._schedule_async_completion() fires this from
+                # a delayed background thread. A refused transition (None) means the step
+                # was concurrently terminalized (canceled) or is gone: apply NOTHING and
+                # send NO webhook, so we never report a completion that lost the race.
+                completed_at = datetime.now(UTC) if status in ("completed", "failed") else None
+                step = repo.transition_if_nonterminal(
+                    step_id,
+                    status=status,
+                    completed_at=completed_at,
+                    response_data=response_data,
+                    error_message=error_message,
+                )
+                if step is None:
+                    console.print(
+                        f"[yellow]⚠️ Status change to '{status}' refused for step {step_id} "
+                        f"(already terminal or not found) — no webhook[/yellow]"
+                    )
+                    return
+                if transaction_details is not None:
+                    step.transaction_details = transaction_details
+                self._apply_comment(step, add_comment)
+                session.commit()
+                # Webhook fires ONLY because the status transition actually applied.
+                self._send_push_notifications(step, status, session)
+            else:
+                # No status change → plain field update; no terminal concern, no webhook
+                # (webhooks fire on status changes only, matching prior behavior).
+                step = repo.get_by_step_id(step_id)
+                if step is None:
+                    return
                 if response_data is not None:
                     step.response_data = response_data
                 if error_message is not None:
                     step.error_message = error_message
                 if transaction_details is not None:
                     step.transaction_details = transaction_details
-
-                if add_comment:
-                    # Ensure comments is a list
-                    if not isinstance(step.comments, list):
-                        step.comments = []
-                    # Create a new list to trigger SQLAlchemy change detection
-                    new_comments = list(step.comments)
-                    new_comments.append(
-                        {
-                            "user": add_comment.get("user", "system"),
-                            "timestamp": datetime.now(UTC).isoformat(),
-                            "text": add_comment.get("text", add_comment.get("comment", "")),
-                        }
-                    )
-                    step.comments = new_comments
-
-                # DEBUG: Log the condition check values BEFORE commit
-                console.print("[magenta]🔍 PRE-COMMIT WEBHOOK DEBUG:[/magenta]")
-                console.print("[magenta]   update_workflow_step called with:[/magenta]")
-                console.print(f"[magenta]     step_id={step_id}[/magenta]")
-                console.print(f"[magenta]     status parameter={status}[/magenta]")
-                console.print("[magenta]   Database state BEFORE commit:[/magenta]")
-                console.print(f"[magenta]     old_status={old_status}[/magenta]")
-                console.print(f"[magenta]     new step.status={step.status}[/magenta]")
-                console.print("[magenta]   Condition evaluation:[/magenta]")
-                console.print(f"[magenta]     status parameter truthy? {bool(status)}[/magenta]")
-                console.print(f"[magenta]     step object exists? {step is not None}[/magenta]")
-                console.print(f"[magenta]     Will trigger webhook? {status and step}[/magenta]")
-
+                self._apply_comment(step, add_comment)
                 session.commit()
-                console.print(f"[green]✅ Updated workflow step {step_id} (committed to database)[/green]")
-
-                # DEBUG: Log the condition check values AFTER commit
-                console.print("[yellow]🔍 POST-COMMIT WEBHOOK DEBUG:[/yellow]")
-                console.print(f"[yellow]   status={status}[/yellow]")
-                console.print(f"[yellow]   old_status={old_status}[/yellow]")
-                console.print(f"[yellow]   step exists={step is not None}[/yellow]")
-                console.print(f"[yellow]   Webhook trigger condition (status and step): {status and step}[/yellow]")
-
-                # Send push notifications if status changed
-                if status and step:
-                    console.print(f"[blue]🚀 WEBHOOK: Calling _send_push_notifications for step {step_id}[/blue]")
-                    self._send_push_notifications(step, status, session)
-                else:
-                    console.print(f"[yellow]⚠️ WEBHOOK SKIPPED: status={status}, step={step is not None}[/yellow]")
         finally:
             session.close()
+
+    @staticmethod
+    def _apply_comment(step: WorkflowStep, add_comment: dict[str, str] | None) -> None:
+        """Append a comment to a step's comments list (new list → change detection)."""
+        if not add_comment:
+            return
+        comments = list(step.comments) if isinstance(step.comments, list) else []
+        comments.append(
+            {
+                "user": add_comment.get("user", "system"),
+                "timestamp": datetime.now(UTC).isoformat(),
+                "text": add_comment.get("text", add_comment.get("comment", "")),
+            }
+        )
+        step.comments = comments
 
     def audit_workflow_step_failure(self, step_id: str, exc: Exception) -> None:
         """Mark a workflow step failed with the spec two-layer envelope as ``response_data``.

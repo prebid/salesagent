@@ -276,6 +276,29 @@ class TestCompleteTaskTool:
             response_data={"manually_completed": True, "completed_by": "principal_123"},
         )
 
+    async def test_complete_task_conflict_when_concurrently_finalized(
+        self, mock_uow, mock_workflow_repo, sample_tenant, sample_pending_step
+    ):
+        """[Round-14 B2] A lost transition must NOT be reported as success.
+
+        ``update_status`` is an atomic conditional transition that returns None when the
+        step was concurrently terminalized (e.g. a buyer cancel committed between the
+        read and the write). complete_task must raise a conflict, not return a successful
+        completion + audit. The MCP boundary translates the AdCPConflictError to ToolError.
+        """
+        from fastmcp.exceptions import ToolError
+
+        complete_task_fn = await self._get_complete_task_fn()
+
+        mock_workflow_repo.get_by_step_id_or_raise.return_value = sample_pending_step
+        mock_workflow_repo.update_status.return_value = None  # transition refused (lost the race)
+
+        identity = self._make_identity(sample_tenant)
+
+        with patch("src.core.tools.task_management.WorkflowUoW", return_value=mock_uow):
+            with pytest.raises(ToolError, match="concurrently finalized"):
+                await complete_task_fn(task_id="step_123", status="completed", identity=identity)
+
     async def test_complete_task_rejects_invalid_status(self, mock_uow, mock_workflow_repo, sample_tenant):
         """Test that complete_task rejects invalid status values.
 

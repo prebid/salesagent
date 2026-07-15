@@ -222,20 +222,30 @@ async def complete_task(
 
         completed_time = datetime.now(UTC)
 
+        # update_status is an ATOMIC conditional transition (WHERE status NOT IN
+        # terminal): it returns None if the step was concurrently terminalized
+        # (e.g. a buyer cancel committed between the read above and this write). The
+        # pre-check is a non-atomic hint; this None check is the authoritative guard.
+        # A lost transition must NOT be reported as a successful completion.
         if status == "completed":
-            uow.workflows.update_status(
+            updated = uow.workflows.update_status(
                 task_id,
                 status=status,
                 completed_at=completed_time,
                 response_data=response_data or {"manually_completed": True, "completed_by": principal_id},
             )
         else:
-            uow.workflows.update_status(
+            updated = uow.workflows.update_status(
                 task_id,
                 status=status,
                 completed_at=completed_time,
                 error_message=error_message or "Task marked as failed manually",
                 response_data=response_data,
+            )
+
+        if updated is None:
+            raise AdCPConflictError(
+                f"Task {task_id} was concurrently finalized (e.g. canceled) and cannot be marked {status}"
             )
 
         audit_logger = get_audit_logger("task_management", tenant["tenant_id"])

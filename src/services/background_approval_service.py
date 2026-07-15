@@ -148,10 +148,11 @@ def _run_approval_polling_thread(
 
                 if approval_success:
                     logger.info(f"[{workflow_step_id}] Order {order_id} approved successfully")
-                    _mark_approval_complete(tenant_id, workflow_step_id, order_id, attempt, elapsed_seconds)
-
-                    # Send webhook notification
-                    _send_approval_webhook(tenant_id, order_id, workflow_step_id, "completed")
+                    # Only emit the completed webhook if the completion transition
+                    # actually applied. If it was refused (buyer canceled mid-approval),
+                    # a completed webhook would contradict the buyer's canceled outcome.
+                    if _mark_approval_complete(tenant_id, workflow_step_id, order_id, attempt, elapsed_seconds):
+                        _send_approval_webhook(tenant_id, order_id, workflow_step_id, "completed")
                     break
                 else:
                     # Still not ready - continue polling
@@ -169,8 +170,10 @@ def _run_approval_polling_thread(
 
     except Exception as e:
         logger.error(f"[{workflow_step_id}] Approval polling failed: {e}", exc_info=True)
-        _mark_approval_failed(tenant_id, workflow_step_id, str(e))
-        _send_approval_webhook(tenant_id, order_id, workflow_step_id, "failed")
+        # Suppress the failed webhook if the failure transition lost to a concurrent
+        # terminal decision (e.g. the buyer canceled) — see _mark_approval_failed.
+        if _mark_approval_failed(tenant_id, workflow_step_id, str(e)):
+            _send_approval_webhook(tenant_id, order_id, workflow_step_id, "failed")
 
     finally:
         # Remove from active tasks
@@ -194,8 +197,20 @@ def _update_approval_progress(tenant_id: str, workflow_step_id: str, progress_da
 
 def _mark_approval_complete(
     tenant_id: str, workflow_step_id: str, order_id: str, attempts: int, elapsed_seconds: float
-) -> None:
-    """Mark approval as completed in workflow step via WorkflowUoW."""
+) -> bool:
+    """Mark approval as completed in the workflow step. Returns whether it applied.
+
+    ``update_status`` is an atomic conditional transition (WHERE status NOT IN
+    terminal): it returns None when the step was concurrently terminalized (e.g. a
+    buyer cancel committed while GAM approval was in flight). In that case the
+    completion LOST the race — we must NOT report success or emit a completed
+    webhook. Returns True only when the completion actually applied.
+
+    NB: the GAM order was already approved by the time we get here; a step that was
+    canceled meanwhile leaves an approved-order-behind-a-canceled-task orphan. That
+    orphan is out of scope for this method — it is the cancellable-state/claim-policy
+    work tracked separately; here we only avoid contradictory success reporting.
+    """
     try:
         with WorkflowUoW(tenant_id) as uow:
             assert uow.workflows is not None
@@ -209,21 +224,33 @@ def _mark_approval_complete(
                     "message": f"Order approved successfully after {attempts} attempts ({int(elapsed_seconds)}s)",
                 },
             )
-            if step:
-                step.transaction_details = {
-                    "approval_status": "approved",
-                    "gam_order_status": "APPROVED",
-                    "attempts": attempts,
-                    "elapsed_seconds": int(elapsed_seconds),
-                    "completed_at": datetime.now(UTC).isoformat(),
-                }
+            if step is None:
+                logger.warning(
+                    f"Approval completion for step {workflow_step_id} refused — step already terminal "
+                    f"(likely canceled); GAM order {order_id} was approved. Suppressing completed webhook."
+                )
+                return False
+            step.transaction_details = {
+                "approval_status": "approved",
+                "gam_order_status": "APPROVED",
+                "attempts": attempts,
+                "elapsed_seconds": int(elapsed_seconds),
+                "completed_at": datetime.now(UTC).isoformat(),
+            }
             logger.info(f"Marked workflow step {workflow_step_id} as completed")
+            return True
     except Exception as e:
         logger.error(f"Failed to mark approval complete: {e}")
+        return False
 
 
-def _mark_approval_failed(tenant_id: str, workflow_step_id: str, error_message: str) -> None:
-    """Mark approval as failed in workflow step via WorkflowUoW."""
+def _mark_approval_failed(tenant_id: str, workflow_step_id: str, error_message: str) -> bool:
+    """Mark approval as failed in the workflow step. Returns whether it applied.
+
+    Like ``_mark_approval_complete``, a None return from the atomic ``update_status``
+    means the step was concurrently terminalized (e.g. canceled) — the failure lost
+    the race, so callers must suppress a contradictory failed webhook.
+    """
     try:
         with WorkflowUoW(tenant_id) as uow:
             assert uow.workflows is not None
@@ -233,11 +260,18 @@ def _mark_approval_failed(tenant_id: str, workflow_step_id: str, error_message: 
                 error_message=error_message,
                 response_data={"status": "failed", "error": error_message},
             )
-            if step:
-                step.transaction_details = {"approval_status": "failed", "failure_reason": error_message}
+            if step is None:
+                logger.warning(
+                    f"Approval failure for step {workflow_step_id} refused — step already terminal "
+                    f"(likely canceled). Suppressing failed webhook."
+                )
+                return False
+            step.transaction_details = {"approval_status": "failed", "failure_reason": error_message}
             logger.info(f"Marked workflow step {workflow_step_id} as failed")
+            return True
     except Exception as e:
         logger.error(f"Failed to mark approval failed: {e}")
+        return False
 
 
 def _send_approval_webhook(tenant_id: str, order_id: str, workflow_step_id: str, status: str) -> None:

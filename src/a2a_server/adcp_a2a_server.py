@@ -1170,7 +1170,12 @@ class AdCPRequestHandler(RequestHandler):
                 await self._send_protocol_webhook(task, status="submitted")
 
         except A2AError:
-            # Re-raise A2AError as-is (will be caught by JSON-RPC handler)
+            # Transport-layer failure (missing auth, invalid request, …) → JSON-RPC
+            # error, NOT a Task-layer outcome. The provisional WORKING task + push
+            # config stored before dispatch (and before identity resolution) must not
+            # survive as ownerless, unservable orphans that grow the maps on repeated
+            # invalid requests — drop them, mirroring the untyped-crash path below.
+            self._forget_task(task_id)
             raise
         except AdCPError as e:
             # TYPED application/task failure → failed Task carrying the two-layer

@@ -591,10 +591,24 @@ class TestA2ASkillInvocation:
         assert self._step_status(tenant_id, step3) == "canceled"
 
     @pytest.mark.asyncio
-    async def test_context_manager_refuses_terminal_transition(self, handler, sample_tenant, sample_principal):
-        """[Round-13 B4] ContextManager.update_workflow_step — the second competing terminal
-        writer (create/auto-approve path) — must also refuse to overwrite an already-terminal
-        step, so an auto-approval completing a step the buyer just canceled is a no-op."""
+    def _step_response_data(self, tenant_id: str, step_id: str) -> dict | None:
+        """Read a step's committed response_data in its own fresh UoW session."""
+        from src.core.database.repositories import WorkflowUoW
+
+        with WorkflowUoW(tenant_id) as uow:
+            assert uow.workflows is not None
+            step = uow.workflows.get_by_step_id(step_id)
+            return step.response_data if step is not None else None
+
+    async def test_context_manager_update_workflow_step_is_atomically_terminal_safe(
+        self, handler, sample_tenant, sample_principal
+    ):
+        """[Round-14 B1] ContextManager.update_workflow_step routes the status write through
+        the ATOMIC conditional-UPDATE primitive (transition_if_nonterminal), so an
+        auto-approval that completes a step the buyer just canceled is refused with NO
+        partial write and NO webhook — closing the async TOCTOU that
+        MockAdServer._schedule_async_completion() (a delayed background thread) exposes.
+        The whole write is refused: neither status NOR response_data is overwritten."""
         from datetime import UTC, datetime
 
         from src.core.context_manager import ContextManager
@@ -604,13 +618,50 @@ class TestA2ASkillInvocation:
         step_id = self._persist_a2a_step(
             tenant_id, sample_principal["principal_id"], "task_cm_terminal", None, status="requires_approval"
         )
-        # Buyer cancels first (terminal).
+        # Buyer cancels first (terminal) in a separate committed session.
         with WorkflowUoW(tenant_id) as uow:
             assert uow.workflows.cancel_if_nonterminal(step_id, completed_at=datetime.now(UTC))
 
-        # Auto-approval path tries to complete the canceled step → refused, stays canceled.
-        ContextManager().update_workflow_step(step_id, status="completed")
-        assert self._step_status(tenant_id, step_id) == "canceled"
+        # Auto-approval path (its OWN session) tries to complete the canceled step with new
+        # response_data → the atomic UPDATE matches zero rows → refused.
+        ContextManager().update_workflow_step(step_id, status="completed", response_data={"attempted_completion": True})
+        assert self._step_status(tenant_id, step_id) == "canceled", "canceled decision must stand"
+        assert self._step_response_data(tenant_id, step_id) != {"attempted_completion": True}, (
+            "a refused transition must not partially write response_data"
+        )
+
+    async def test_background_approval_suppresses_success_on_lost_transition(
+        self, handler, sample_tenant, sample_principal
+    ):
+        """[Round-14 B2] _mark_approval_complete/_failed must report False (and their callers
+        suppress the webhook) when the step was concurrently canceled — the GAM order was
+        approved but the completion lost the race, so no contradictory success/failure is
+        reported. Positive control: on a still-pending step the completion applies."""
+        from datetime import UTC, datetime
+
+        from src.core.database.repositories import WorkflowUoW
+        from src.services.background_approval_service import _mark_approval_complete, _mark_approval_failed
+
+        tenant_id = sample_tenant["tenant_id"]
+        principal_id = sample_principal["principal_id"]
+
+        canceled = self._persist_a2a_step(tenant_id, principal_id, "task_bg_canceled", None, status="requires_approval")
+        with WorkflowUoW(tenant_id) as uow:
+            assert uow.workflows.cancel_if_nonterminal(canceled, completed_at=datetime.now(UTC))
+
+        assert _mark_approval_complete(tenant_id, canceled, "order-1", 1, 1.0) is False, (
+            "completion of a canceled step must report refused"
+        )
+        assert self._step_status(tenant_id, canceled) == "canceled"
+        assert _mark_approval_failed(tenant_id, canceled, "boom") is False, (
+            "failure of a canceled step must report refused"
+        )
+        assert self._step_status(tenant_id, canceled) == "canceled"
+
+        # Positive control: a still-pending step completes and reports applied.
+        pending = self._persist_a2a_step(tenant_id, principal_id, "task_bg_ok", None, status="requires_approval")
+        assert _mark_approval_complete(tenant_id, pending, "order-2", 1, 1.0) is True
+        assert self._step_status(tenant_id, pending) == "completed"
 
     @pytest.mark.asyncio
     async def test_natural_language_get_products(

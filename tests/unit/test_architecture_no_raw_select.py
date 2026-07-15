@@ -288,7 +288,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/core/context_manager.py", "get_pending_steps"),
     ("src/core/context_manager.py", "link_workflow_to_object"),
     ("src/core/context_manager.py", "update_activity"),
-    ("src/core/context_manager.py", "update_workflow_step"),
     ("src/core/database/queries.py", "get_ai_accuracy_metrics"),
     ("src/core/database/queries.py", "get_ai_review_stats"),
     ("src/core/database/queries.py", "get_creative_reviews"),

@@ -500,17 +500,21 @@ class TestA2ADispatcherFailedSkillResult:
 
     @pytest.mark.asyncio
     async def test_push_config_handler_scrubs_secret_on_full_wire(self):
-        """[Round-13 SHOULD-FIX] REACHABLE-path proof: a real push-config handler whose
-        backing store raises a secret-bearing internal error produces a JSON-RPC
-        ``InternalError`` whose ``message`` AND ``data`` are both scrubbed.
+        """[Round-14 SHOULD-FIX] REACHABLE-path + SERIALIZED-WIRE proof: a real push-config
+        handler whose backing store raises a secret-bearing internal error produces a
+        JSON-RPC error whose full serialized wire (``{jsonrpc, id, error:{code,message,data}}``)
+        leaks nothing.
 
         Drives the actual ``on_get_task_push_notification_config`` handler (one of the four
-        push-config methods that surface through ``_internal_error_for``) and captures the
-        REAL raised ``InternalError`` — not a fabricated ``{message, data}`` dict — so the
-        proof reaches the transport boundary, not just the helper.
+        push-config methods that surface through ``_internal_error_for``), captures the REAL
+        raised ``InternalError``, and serializes it through the a2a SDK's own
+        ``build_error_response`` — the exact function ``JsonRpcDispatcher._generate_error_response``
+        uses to produce the wire — so the assertion is on the actual serialized JSON-RPC
+        output, not a hand-built ``{message, data}`` dict.
         """
         from types import SimpleNamespace
 
+        from a2a.server.request_handlers.response_helpers import build_error_response
         from a2a.types import InternalError
 
         import src.a2a_server.adcp_a2a_server as a2a_mod
@@ -540,10 +544,12 @@ class TestA2ADispatcherFailedSkillResult:
                 await handler.on_get_task_push_notification_config({"id": "cfg_1"}, context=None)
 
         err = exc_info.value
-        full_wire = json.dumps({"message": err.message, "data": err.data})
+        # Serialize through the SDK's real JSON-RPC error builder (the dispatcher's path).
+        wire_dict = build_error_response("req-1", err)
+        serialized = json.dumps(wire_dict if isinstance(wire_dict, dict) else wire_dict.model_dump(), default=str)
         for leak in ("hunter2", "postgresql://", "db.internal", "SELECT", "principals"):
-            assert leak not in full_wire, f"push-config handler leaked {leak!r} on the JSON-RPC wire: {full_wire}"
-        assert err.data["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
+            assert leak not in serialized, f"push-config handler leaked {leak!r} on the JSON-RPC wire: {serialized}"
+        assert wire_dict["error"]["data"]["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
 
     def test_internal_error_for_preserves_correctable_message(self):
         """[Round-12 B1] The JSON-RPC message keeps the controlled text of a
