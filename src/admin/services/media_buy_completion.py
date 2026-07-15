@@ -68,6 +68,14 @@ class FinalizeOutcome(StrEnum):
 # somehow outlives even this cannot double-publish (every mutation is lease-CAS'd);
 # at worst the reconciler flags manual_required and the worker's eventual successful
 # publish self-heals it.
+#
+# TAKEOVER GRACE ≥ WORST-CASE RUNTIME (Fix #1637). Reconciler/operator takeover of a buy
+# whose lease was left in place fires only when the lease has been expired for at least
+# ``MediaBuyRepository.claim_finalizing``'s ``abandoned_owner_grace_seconds`` (default 3600s)
+# BEYOND its TTL-sized expiry. 3600s ≥ the ≈1300s worst-case adapter runtime above, so an
+# ALIVE worker (whose heartbeat renews every ~TTL/3) is never mistaken for abandoned: its
+# lease only ages out after the heartbeat STOPS, and takeover then waits a further full
+# grace. Keep grace ≥ the worst-case runtime if either bound is re-tuned.
 FINALIZE_LEASE_TTL_SECONDS = int(os.getenv("MEDIA_BUY_FINALIZE_LEASE_TTL") or "3600")
 
 # Named registry of in-flight phase-2 heartbeat threads (#1637). Dead-thread reaping is
@@ -83,7 +91,7 @@ def finalize_lease_heartbeat(
     *,
     lease_ttl_seconds: int = FINALIZE_LEASE_TTL_SECONDS,
     now_fn: Callable[[], datetime.datetime] | None = None,
-) -> Iterator[None]:
+) -> Iterator[threading.Event]:
     """Renew the owner's phase-2 lease on a background thread while its adapter runs (#1637).
 
     Elapsed time alone is NOT an ownership fence: a worker blocked inside a long network
@@ -93,18 +101,34 @@ def finalize_lease_heartbeat(
     session, so a blocked-but-alive owner keeps its lease unexpired and "expired + grace"
     genuinely means the process died or lost DB connectivity.
 
-    Renewal is a best-effort owner CAS (``renew_finalize_lease``); losing ownership (the
-    buy moved on / a different lease took over) stops the loop — the authoritative fences
-    remain the lease-CAS'd publishes, this only sharpens the liveness signal. ``now_fn``
-    is injected only by tests (advancing a fake clock instead of row surgery).
+    GUARANTEE BOUNDARY. This heartbeat is a LIVENESS SIGNAL, not a hard fence: a DB lease
+    cannot fence a live remote (GAM) side effect, and GAM has no server-side idempotency
+    token, so hard exactly-once remote-CREATE is impossible. The heartbeat only SHRINKS the
+    concurrent-invocation window. The authoritative guarantee (no double-PUBLISH) is the
+    lease-CAS on every status transition; double remote-CREATE is mitigated by the adapter's
+    deterministic-name dedup and, on any ambiguity, by FAILING SAFE to manual reconciliation.
+
+    Yields an ``ownership_lost`` :class:`threading.Event` the caller checks after its adapter
+    returns. It is set when this worker can PROVE it no longer owns the lease — either (a)
+    ``renew_finalize_lease`` reports ``still_owner=False`` (the buy moved on / a different
+    lease took over), or (b) renewals have failed continuously long enough that more than
+    ``lease_ttl_seconds`` elapsed since the last SUCCESSFUL renewal, so the lease has
+    certainly expired (e.g. Postgres connectivity was lost mid-run). Elapsed time is measured
+    on ``now_fn`` (injected only by tests, advancing a fake clock instead of row surgery).
     """
     stop = threading.Event()
+    ownership_lost = threading.Event()
     interval = max(lease_ttl_seconds / 3.0, 0.05)
     key = f"finalize-heartbeat:{tenant_id}:{media_buy_id}:{lease_id}"
+    _now = now_fn or (lambda: datetime.datetime.now(datetime.UTC))
+    lease_ttl = datetime.timedelta(seconds=lease_ttl_seconds)
 
     def _renew_loop() -> None:
         from src.core.database.database_session import get_db_session
 
+        # The lease was freshly minted (expiry = now + TTL) at context entry, so seed the
+        # last-success instant to now: (b) below measures continuous renewal failure from it.
+        last_success = _now()
         # stop.wait returns True once stop is set (context exiting) → loop ends; False on
         # timeout → time to renew. First renewal is one interval in (the lease was just
         # freshly minted), always < TTL.
@@ -116,15 +140,23 @@ def finalize_lease_heartbeat(
                     )
                     renew_session.commit()
                 if not still_owner:
-                    break  # ownership lost — nothing left to renew
+                    # (a) Provably lost ownership — the buy moved on / another lease took over.
+                    ownership_lost.set()
+                    break
+                last_success = _now()
             except Exception:  # noqa: BLE001 - renewal is best-effort; never break the adapter run
                 logger.exception(f"[FINALIZE] lease heartbeat renew failed for {media_buy_id}")
+                # (b) If renewals have been failing longer than the full TTL, the lease has
+                # CERTAINLY expired since the last successful renewal — signal loss and stop.
+                if _now() - last_success > lease_ttl:
+                    ownership_lost.set()
+                    break
 
     thread = threading.Thread(target=_renew_loop, name=key, daemon=True)
     _FINALIZE_HEARTBEAT_REGISTRY.add(key, thread)
     thread.start()
     try:
-        yield
+        yield ownership_lost
     finally:
         stop.set()
         thread.join(timeout=max(interval * 2, 1.0))
@@ -389,6 +421,47 @@ def finalize_media_buy_approval(
     )
 
 
+def _flag_manual_reconciliation(
+    session: Session,
+    repo: MediaBuyRepository,
+    *,
+    tenant_id: str,
+    media_buy_id: str,
+    step_id: str | None,
+    lease_id: str,
+    reason: str,
+) -> tuple[FinalizeOutcome, str | None]:
+    """Owner-CAS a ``finalizing`` buy to ``manual_required`` (fail-safe) and log remediation.
+
+    Shared by the two conservative outcomes that leave a possibly-partial remote graph with
+    NO proof of completion, and so must NOT be reported as success:
+
+    - ``AdapterPostMutationIncomplete`` — the adapter created the remote order but a later
+      stage (creative upload / order approval / id persistence) failed.
+    - PROVABLE ownership loss during the adapter run — the phase-2 heartbeat lost the lease
+      (a newer owner took over) or the lease provably expired because renewals kept failing,
+      so this worker can no longer assert it owns the finalization even though its adapter
+      call ran (a duplicate/partial remote graph may exist).
+
+    Keeps the buy ``finalizing`` with the invoked marker intact so the reconciliation signal
+    survives; the owner-mode CAS also releases the lease. A lost CAS (a newer owner already
+    took the row) → ``NOT_CLAIMED``, touch nothing. #1637.
+    """
+    flagged = repo.set_finalize_recovery_manual(media_buy_id, lease_id=lease_id)
+    if not flagged:
+        session.rollback()
+        return FinalizeOutcome.NOT_CLAIMED, reason
+    session.commit()
+    logger.error(
+        f"Media buy {media_buy_id} (tenant {tenant_id}, step {step_id}) could not be confirmed "
+        f"as successfully created: {reason}. Marked finalize_recovery_mode=manual_required — "
+        f"reconcile the remote state, then RE-APPROVE the buy (preferred) or clear BOTH flags to "
+        f"let the reconciler retry: UPDATE media_buys SET finalize_recovery_mode = NULL, "
+        f"finalize_adapter_invoked_at = NULL WHERE media_buy_id = '{media_buy_id}'."
+    )
+    return FinalizeOutcome.RETRYING, f"manual reconciliation required: {reason}"
+
+
 def _run_adapter_and_finalize(
     session: Session,
     tenant_id: str,
@@ -402,6 +475,18 @@ def _run_adapter_and_finalize(
     now_fn: Callable[[], datetime.datetime] | None = None,
 ) -> tuple[FinalizeOutcome, str | None]:
     """Phase 2 of the crash-recoverable approval: OWNED adapter run + atomic publish.
+
+    GUARANTEE BOUNDARY (#1637). The HARD, provable guarantee here is no double-PUBLISH:
+    every status transition below is a lease-CAS whose result is checked, so at most one
+    worker ever publishes the serving status / terminalizes the step / emits the webhook.
+    Double remote-CREATE is a SEPARATE, weaker guarantee: a DB lease cannot fence a live
+    remote (GAM) side effect, and GAM exposes no server-side idempotency token, so hard
+    exactly-once remote-create is NOT achievable. It is mitigated instead by
+    deterministic-name dedup in the adapter (a retry reuses the same order name) and, on ANY
+    ambiguity, by FAILING SAFE to manual reconciliation — both the adapter's
+    ``AdapterPostMutationIncomplete`` and a proven mid-run ownership loss (below) route to
+    :func:`_flag_manual_reconciliation` rather than claiming success. The heartbeat only
+    SHRINKS the concurrent-invocation window (it is a liveness signal, not a fence).
 
     Precondition: the caller holds the buy's phase-2 lease (``lease_id``) while the
     buy is claimed in ``finalizing``. Shared by the initial finalizer and the
@@ -453,7 +538,14 @@ def _run_adapter_and_finalize(
     try:
         # Heartbeat-renew the lease while the adapter is in flight so a blocked-but-alive
         # owner keeps its lease unexpired (#1637): elapsed time is not an ownership fence.
-        with finalize_lease_heartbeat(tenant_id, media_buy_id, lease_id, now_fn=now_fn):
+        # ``ownership_lost`` is set if the heartbeat PROVES this worker no longer owns the
+        # lease (a newer owner took over, or renewals failed long enough that the lease
+        # certainly expired) — checked after the adapter returns, below. Renew with the SAME
+        # TTL the claim minted the lease with (FINALIZE_LEASE_TTL_SECONDS) so the "lease
+        # provably expired" bound in the heartbeat matches the row's real expiry.
+        with finalize_lease_heartbeat(
+            tenant_id, media_buy_id, lease_id, lease_ttl_seconds=FINALIZE_LEASE_TTL_SECONDS, now_fn=now_fn
+        ) as ownership_lost:
             success, error_msg = run_adapter()
     except AdapterIdempotencyUncertain as exc:
         # Contract: no remote mutation happened. ONE owner-CAS restores the fully
@@ -478,19 +570,32 @@ def _run_adapter_and_finalize(
         # that would leave a dangling partial remote graph with no reconciliation
         # signal. Keep the buy ``finalizing`` with the invoked marker intact and flag
         # manual_required (owner CAS; releases the lease). #1637.
-        flagged = repo.set_finalize_recovery_manual(media_buy_id, lease_id=lease_id)
-        if not flagged:
-            session.rollback()
-            return FinalizeOutcome.NOT_CLAIMED, str(exc)
-        session.commit()
-        logger.error(
-            f"Media buy {media_buy_id} (tenant {tenant_id}, step {step_id}) created its remote order but a "
-            f"later stage failed: {exc}. Marked finalize_recovery_mode=manual_required — reconcile the remote "
-            f"state, then RE-APPROVE the buy (preferred) or clear BOTH flags to let the reconciler retry: "
-            f"UPDATE media_buys SET finalize_recovery_mode = NULL, finalize_adapter_invoked_at = NULL "
-            f"WHERE media_buy_id = '{media_buy_id}'."
+        return _flag_manual_reconciliation(
+            session,
+            repo,
+            tenant_id=tenant_id,
+            media_buy_id=media_buy_id,
+            step_id=step_id,
+            lease_id=lease_id,
+            reason=str(exc),
         )
-        return FinalizeOutcome.RETRYING, f"manual reconciliation required: {exc}"
+    # PROVABLE ownership loss DURING the adapter run (#1637). The adapter returned normally,
+    # but the heartbeat could no longer keep the lease alive — a newer owner took over, or
+    # renewals failed long enough that the lease certainly expired. The lease-CAS publish
+    # below would already return None (blocking a double-publish), but a losing worker must
+    # ALSO not silently report NOT_CLAIMED as if nothing happened: its adapter call ran and
+    # a duplicate/partial remote graph may exist while another owner runs concurrently. Fail
+    # SAFE to manual reconciliation, exactly like AdapterPostMutationIncomplete.
+    if ownership_lost.is_set():
+        return _flag_manual_reconciliation(
+            session,
+            repo,
+            tenant_id=tenant_id,
+            media_buy_id=media_buy_id,
+            step_id=step_id,
+            lease_id=lease_id,
+            reason="finalization lease ownership was lost while the adapter was running",
+        )
     if not success:
         failed = repo.update_status_computed(
             media_buy_id,

@@ -578,6 +578,70 @@ class TestApprovalCrashRecovery:
         outcome2, _ = _resume(tenant_id, "mb_unmanual", step_id, step_data, lambda: (True, None), replayable=False)
         assert outcome2 is FinalizeOutcome.APPLIED
 
+    def test_provable_ownership_loss_during_adapter_routes_to_manual_not_success(
+        self, integration_db, sample_tenant, sample_principal, context_manager, monkeypatch
+    ):
+        """Heartbeat is a liveness signal, not a hard fence (#1637). If the phase-2
+        heartbeat PROVES ownership loss while the adapter is running — renewals keep
+        FAILING (e.g. Postgres connectivity lost) until more than the lease TTL has elapsed
+        since the last successful renewal, so the lease certainly expired — the worker must
+        NOT report success even though its adapter returned ``(True, None)``. It fails safe
+        to manual reconciliation, exactly like ``AdapterPostMutationIncomplete``: a
+        duplicate/partial remote graph may exist. The lease-CAS already blocks a
+        double-PUBLISH; this pins that the LOSING worker also does not claim success."""
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(context_manager, tenant_id, sample_principal["principal_id"], "mb_lost")
+
+        # Small lease TTL so the heartbeat's ~TTL/3 interval fires quickly in REAL time; the
+        # finalizer reads this module constant for both the claim and the heartbeat renew.
+        monkeypatch.setattr("src.admin.services.media_buy_completion.FINALIZE_LEASE_TTL_SECONDS", 3)
+        clock = _FakeClock(datetime.datetime.now(UTC))
+
+        adapter_entered = threading.Event()
+        adapter_release = threading.Event()
+
+        def slow_adapter():
+            adapter_entered.set()
+            assert adapter_release.wait(timeout=30), "test deadlock: adapter never released"
+            return True, None  # adapter "succeeds" — but ownership was lost meanwhile
+
+        # Make EVERY heartbeat renewal FAIL (models DB connectivity lost mid-run). Only the
+        # heartbeat thread calls renew_finalize_lease, so nothing else in the flow is affected.
+        renew_attempts: list[int] = []
+
+        def failing_renew(self, media_buy_id, lease_id, *, lease_ttl_seconds):
+            renew_attempts.append(1)  # list.append is GIL-atomic — thread-safe counter
+            raise RuntimeError("renew failed: db connectivity lost")
+
+        monkeypatch.setattr(MediaBuyRepository, "renew_finalize_lease", failing_renew)
+
+        t, worker_result = _start_approval_worker(
+            tenant_id, "mb_lost", step_id, step_data, slow_adapter, now_fn=clock.now
+        )
+        try:
+            assert adapter_entered.wait(timeout=30)
+            before = len(renew_attempts)
+            # Advance the shared clock past the (small) TTL so the NEXT failed renewal proves
+            # the lease has expired since the last success → heartbeat sets ownership_lost.
+            clock.advance(4)
+            deadline = time.time() + 30
+            while len(renew_attempts) <= before and time.time() < deadline:
+                time.sleep(0.05)
+            assert len(renew_attempts) > before, "heartbeat never re-attempted a renewal after the advance"
+            time.sleep(0.3)  # let the post-failure ownership_lost.set() execute in the heartbeat thread
+        finally:
+            adapter_release.set()
+            t.join(timeout=60)
+
+        assert not t.is_alive(), "worker hung"
+        assert "error" not in worker_result, f"worker failed: {worker_result.get('error')}"
+        # Fails safe: RETRYING via manual reconciliation, NOT APPLIED.
+        assert worker_result["outcome"] is FinalizeOutcome.RETRYING
+        buy = _buy_snapshot(tenant_id, "mb_lost")
+        assert buy.status == "finalizing"  # did NOT publish the serving status
+        assert buy.finalize_recovery_mode == MEDIA_BUY_RECOVERY_MANUAL  # manual flag set, not cleared
+        assert _step_snapshot(tenant_id, step_id).status != "completed"  # no success artifact emitted
+
     # ── Round N+6/N+7 pins: shortcut removal / remediation / probe / fencing ──
 
     def test_persisted_order_id_never_skips_the_adapter(
