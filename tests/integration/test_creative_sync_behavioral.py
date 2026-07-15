@@ -56,6 +56,33 @@ def _wire_entries(result) -> dict:
     return {e.get("creative_id"): e for e in (result.wire_response or {}).get("creatives", [])}
 
 
+def _assert_correctable(result) -> None:
+    """Assert a per-creative IMPL failure is buyer-CORRECTABLE, not transient.
+
+    Grades BOTH halves of the retry contract, because the code alone does not
+    govern behavior: the wire code must be VALIDATION_ERROR (never the transient
+    SERVICE_UNAVAILABLE), AND recovery must be ``correctable`` — the field a
+    conforming buyer keys retry-forever-vs-fix-and-resubmit on. A regression that
+    kept the corrected code but reverted recovery to ``transient`` would still
+    drive the retry-forever behavior this class exists to prevent, and a code-only
+    assertion would stay green. SDK ``Recovery`` is an enum (not a str-mixin) —
+    compare ``.value`` (mirrors the sibling assertion at
+    test_lenient_mode_unknown_assignment_...:448). Extracted so both correctable-
+    code tests route through one assertion and cannot drift — a copy-paste that
+    drops the recovery half in one place and not the other is exactly the risk.
+    """
+    assert result.action == "failed", f"expected a failed result, got action={result.action!r}"
+    errors = result.errors or []
+    codes = [getattr(e, "code", None) for e in errors]
+    assert "SERVICE_UNAVAILABLE" not in codes, f"correctable failure mis-coded as transient: {codes}"
+    assert "VALIDATION_ERROR" in codes, f"expected VALIDATION_ERROR, got {codes}"
+    validation = [e for e in errors if getattr(e, "code", None) == "VALIDATION_ERROR"]
+    assert validation and all(e.recovery is not None and e.recovery.value == "correctable" for e in validation), (
+        f"VALIDATION_ERROR must carry recovery=correctable, got "
+        f"{[getattr(e, 'recovery', None) for e in validation]!r}"
+    )
+
+
 class TestSyncAuthRequired:
     """Auth errors are operation-level — raised before any creative processing."""
 
@@ -288,23 +315,35 @@ class TestCreativeValidation:
         """An input-validation failure (here: empty name) is buyer-CORRECTABLE:
         the per-creative error code must be VALIDATION_ERROR, not SERVICE_UNAVAILABLE
         — the latter implies a transient outage and drives a conforming buyer to
-        retry a permanent error forever."""
+        retry a permanent error forever.
+
+        Spec grounding (pinned AdCP 3.1.1, enums/error-code.json; docs/adcp-spec-
+        version.md, SDK 6.6.0): VALIDATION_ERROR → recovery ``correctable``,
+        SERVICE_UNAVAILABLE → recovery ``transient``. error-handling.mdx: a
+        correctable failure is fixed and resubmitted, a transient one retried
+        as-is. Graded in-process here; the A2A wire equivalent is
+        test_correctable_failure_code_and_recovery_on_the_a2a_wire.
+        """
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             PrincipalFactory(tenant=tenant, principal_id="test_principal")
 
             response = env.call_impl(creatives=[_make_creative_asset(creative_id="c_bad", name="")])
             assert len(response.creatives) == 1
-            result = response.creatives[0]
-            assert result.action == "failed"
-            codes = [getattr(e, "code", None) for e in (result.errors or [])]
-            assert "SERVICE_UNAVAILABLE" not in codes, f"correctable failure mis-coded as transient: {codes}"
-            assert "VALIDATION_ERROR" in codes, f"expected VALIDATION_ERROR, got {codes}"
+            _assert_correctable(response.creatives[0])
 
     def test_unknown_format_failure_uses_correctable_code(self, integration_db):
         """An unknown-format failure (typed AdCPValidationError, recovery correctable)
         must surface as VALIDATION_ERROR, not the default SERVICE_UNAVAILABLE the
-        `except AdCPError` handler used to emit for every non-transient typed error."""
+        `except AdCPError` handler used to emit for every non-transient typed error.
+
+        Spec grounding (pinned AdCP 3.1.1, enums/error-code.json): VALIDATION_ERROR
+        → correctable. The typed AdCPValidationError is non-transient, so the
+        `except AdCPError` path (_sync.py:363) keeps it as a per-item failure and
+        forwards its already-wire-standard code — see
+        test_non_wire_typed_error_code_normalized_not_leaked for the sibling path
+        where the typed code is NOT wire-standard and must be normalized.
+        """
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             PrincipalFactory(tenant=tenant, principal_id="test_principal")
@@ -327,11 +366,77 @@ class TestCreativeValidation:
                 ]
             )
             assert len(response.creatives) == 1
-            result = response.creatives[0]
-            assert result.action == "failed"
-            codes = [getattr(e, "code", None) for e in (result.errors or [])]
-            assert "SERVICE_UNAVAILABLE" not in codes, f"unknown format mis-coded as transient: {codes}"
-            assert "VALIDATION_ERROR" in codes, f"expected VALIDATION_ERROR, got {codes}"
+            _assert_correctable(response.creatives[0])
+
+    def test_correctable_failure_code_and_recovery_on_the_a2a_wire(self, integration_db):
+        """The correctable per-creative code+recovery must survive on a REAL wire, not
+        only in the in-process SyncCreativeResult the two tests above read. A
+        serialization boundary that dropped or re-coerced errors[].code / .recovery
+        would leave those in-process tests green while shipping the wrong contract.
+
+        Graded on A2A specifically. Unlike the CREATIVE_NOT_FOUND wire test (:369),
+        which grades an OPERATION-level error envelope every transport emits
+        uniformly, these #1650 conditions are PER-CREATIVE validation failures: A2A
+        returns them on the success-branch Task artifact (readable creatives[]),
+        whereas the REST/MCP request path surfaces an all-invalid creatives payload
+        as an operation-level rejection before per-item results are produced — a
+        transport behavior orthogonal to this PR (the existing per-item REST wire
+        test, :962, likewise drives an *assignment* failure, not a creative one).
+        ``result.payload`` here is deserialized from the real A2A artifact DataPart,
+        so this reads the wire, not the in-process result object. Routed through the
+        same ``_assert_correctable`` as the in-process tests (a SyncCreativeResult
+        parsed off the wire has the identical shape) so the code+recovery contract is
+        asserted by one helper on both surfaces.
+
+        Spec grounding (pinned AdCP 3.1.1, enums/error-code.json): VALIDATION_ERROR →
+        recovery ``correctable``; SERVICE_UNAVAILABLE → ``transient``.
+        """
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            result = env.call_via(Transport.A2A, creatives=[_make_creative_asset(creative_id="c_bad", name="")])
+
+            assert not result.is_error, (
+                f"per-creative validation failure must stay on the A2A success branch: {result.wire_error_envelope}"
+            )
+            creatives = getattr(result.payload, "creatives", None)
+            assert creatives, f"A2A wire payload must carry the per-item result: {result.payload!r}"
+            entry = next((c for c in creatives if c.creative_id == "c_bad"), None)
+            assert entry is not None, f"expected the failed creative on the A2A wire: {creatives!r}"
+            _assert_correctable(entry)
+
+    def test_non_wire_typed_error_code_normalized_not_leaked(self):
+        """A non-transient typed error whose code is NOT wire-standard must never reach
+        the buyer verbatim — _failed_sync_result normalizes it through to_wire_error_code
+        at the one choke point every call site shares.
+
+        The `except AdCPError` path (_sync.py:363) forwards e.error_code straight into
+        the advisory; advisory errors[] serialize verbatim and never pass through the
+        boundary translator that handles raised AdCPErrors, so a raw internal code would
+        leak. Pre-PR this path defaulted to the safe SERVICE_UNAVAILABLE — the code-
+        carrying fix removed that safety, so the normalization moved into the helper.
+        Drives a real AdCPFormatNotFoundError (FORMAT_NOT_FOUND, recovery correctable,
+        non-transient → not re-raised → lands at :363) exactly as line 363 forwards it,
+        and asserts the emitted code is the normalized wire value INVALID_REQUEST (per
+        to_wire_error_code) with the retry signal preserved. No DB needed — this is the
+        choke-point unit check backing the in-process/wire behavioral tests above.
+        """
+        from src.core.exceptions import AdCPFormatNotFoundError
+        from src.core.tools.creatives._processing import _failed_sync_result
+
+        err = AdCPFormatNotFoundError("format_does_not_exist_xyz")
+        assert err.error_code == "FORMAT_NOT_FOUND"  # a non-wire internal code
+
+        result = _failed_sync_result("c_leak", str(err), code=err.error_code, recovery=err.recovery)
+
+        emitted = result.errors[0]
+        assert emitted.code == "INVALID_REQUEST", (
+            f"non-wire typed code {err.error_code!r} must normalize to its wire value, got {emitted.code!r}"
+        )
+        assert emitted.code != "FORMAT_NOT_FOUND", "internal code leaked to the buyer verbatim"
+        # the code normalizes; the retry signal is preserved unchanged
+        assert emitted.recovery is not None and emitted.recovery.value == "correctable"
 
 
 # ---------------------------------------------------------------------------
