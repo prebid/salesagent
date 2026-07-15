@@ -483,10 +483,10 @@ def _update_media_buy_impl(
             # one raise site, so legacy buys never get a spurious not-found.
             # (Ungraded: no storyboard covers pre-dual-write data.)
             if req.packages:
-                for _pkg_update in req.packages:
-                    if _pkg_update.package_id:
+                for pkg_update in req.packages:
+                    if pkg_update.package_id:
                         uow.media_buys.package_exists_or_raise(
-                            media_buy_id_to_use, _pkg_update.package_id, context=req.context
+                            media_buy_id_to_use, pkg_update.package_id, context=req.context
                         )
 
             # Extract testing context early (needed for dry_run check)

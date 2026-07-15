@@ -978,7 +978,10 @@ def _send_storyboard_update(ctx: dict, extra: dict[str, Any] | None = None) -> N
     """Attach a correlation context, then dispatch via the canonical When step.
 
     The request carries context.correlation_id so the Then step can assert
-    the seller echoes it unchanged in the error envelope (spec 3.0.6).
+    the seller echoes it unchanged in the error envelope. Contract:
+    AdCP 3.1.0-beta.3, dist/compliance/3.1.0-beta.3/protocols/media-buy/
+    scenarios/invalid_transitions.yaml (``path: context.correlation_id``,
+    "returned unchanged").
     """
     kwargs = _ensure_update_defaults(ctx)
     if extra:

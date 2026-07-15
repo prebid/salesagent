@@ -122,6 +122,7 @@ class TestMediaBuyOrRaise:
 
         assert repo.get_package_config("mb-1", "pkg-raw-only") == raw_pkg
         session.add.assert_not_called()
+        session.flush.assert_not_called()  # a stray flush is a write under the UoW
 
     def test_materialize_package_creates_row_from_raw_request(self):
         """A package recorded only in MediaBuy.raw_request (pre-dual-write buy,
@@ -162,6 +163,38 @@ class TestMediaBuyOrRaise:
         assert exc.value.error_code == "PACKAGE_NOT_FOUND"
         assert "pkg-missing" in str(exc.value)
         assert exc.value.context == {"context_id": "ctx-7"}
+
+
+class TestBuildPackageRowNumericCoercion:
+    """_build_package_row must tolerate the untrusted legacy raw_request numerics
+    it exists to rescue — never 500 on a malformed value, never read a bool as 1/0."""
+
+    def test_to_decimal_or_none_rejects_bool_and_malformed(self):
+        from src.core.database.repositories.media_buy import _to_decimal_or_none
+
+        assert _to_decimal_or_none(True) is None  # bool is an int subtype — not 1
+        assert _to_decimal_or_none(False) is None
+        assert _to_decimal_or_none("not-a-number") is None  # would 500 via Decimal(str(...))
+        assert _to_decimal_or_none(object()) is None
+        assert _to_decimal_or_none(None) is None
+
+    def test_to_decimal_or_none_coerces_valid(self):
+        from src.core.database.repositories.media_buy import _to_decimal_or_none
+
+        assert _to_decimal_or_none(5000) == Decimal("5000")
+        assert _to_decimal_or_none(12.5) == Decimal("12.5")
+        assert _to_decimal_or_none("7.25") == Decimal("7.25")
+
+    def test_materialize_tolerates_malformed_legacy_budget(self):
+        # A pre-dual-write buy with a garbage scalar budget / bool bid_price must
+        # materialize to None columns, not raise InvalidOperation (a 500).
+        repo, session = _repo_with_raw_packages(
+            [{"package_id": "pkg-bad", "budget": "garbage", "bid_price": True}]
+        )
+        package = repo.materialize_package("mb-1", "pkg-bad")
+        assert package is not None
+        assert package.budget is None
+        assert package.bid_price is None
 
 
 class TestWorkflowOrRaise:

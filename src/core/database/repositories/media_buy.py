@@ -13,7 +13,7 @@ beads: salesagent-t735 (foundation), salesagent-2lp8 (epic), salesagent-to9i (ad
 from __future__ import annotations
 
 import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from sqlalchemy import select
@@ -23,6 +23,22 @@ from src.core.database.models import MediaBuy, MediaPackage
 
 if TYPE_CHECKING:
     from adcp.types import ContextObject
+
+
+def _to_decimal_or_none(value: Any) -> Decimal | None:
+    """Coerce a legacy raw_request numeric to ``Decimal``, tolerantly.
+
+    Rejects ``bool`` (an ``int`` subtype — a legacy ``True``/``False`` budget is
+    not ``1``/``0``) and returns ``None`` on a malformed value instead of raising
+    ``InvalidOperation`` (a 500) on exactly the untrusted pre-dual-write data
+    this path exists to rescue.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
 
 
 class MediaBuyRepository:
@@ -277,16 +293,15 @@ class MediaBuyRepository:
         if isinstance(budget_value, dict):
             budget_total = budget_value.get("total")
             pacing_value = budget_value.get("pacing")
-        elif isinstance(budget_value, int | float):
+        elif isinstance(budget_value, int | float) and not isinstance(budget_value, bool):
             budget_total = budget_value
-        bid_price_value = raw_pkg.get("bid_price")
 
         return MediaPackage(
             media_buy_id=media_buy_id,
             package_id=package_id,
             package_config=dict(raw_pkg),
-            budget=Decimal(str(budget_total)) if budget_total is not None else None,
-            bid_price=Decimal(str(bid_price_value)) if bid_price_value is not None else None,
+            budget=_to_decimal_or_none(budget_total),
+            bid_price=_to_decimal_or_none(raw_pkg.get("bid_price")),
             pacing=pacing_value,
         )
 
