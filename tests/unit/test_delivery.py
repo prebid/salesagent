@@ -52,6 +52,7 @@ from src.core.tools.media_buy_delivery import (
 )
 from src.services.webhook_delivery_service import CircuitBreaker, CircuitState, WebhookDeliveryService
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
+from tests.helpers.delivery_assertions import assert_omits_webhook_only_fields
 
 # ---------------------------------------------------------------------------
 # Fixtures (shared across all test classes)
@@ -2406,10 +2407,9 @@ class TestPollingResponseOmitsWebhookOnlyFields:
         assert response.sequence_number is None
         assert response.next_expected_at is None
 
-        dumped = response.model_dump(mode="json")
-        assert "notification_type" not in dumped
-        assert "sequence_number" not in dumped
-        assert "next_expected_at" not in dumped
+        # Serialized wire omits ALL webhook-only fields — via the shared oracle backed by
+        # WEBHOOK_ONLY_FIELDS, so a 4th field added there is enforced here automatically.
+        assert_omits_webhook_only_fields(response.model_dump(mode="json"), context="polling impl")
 
 
 class TestTimeSimulationReachesFinalNotification:

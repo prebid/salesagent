@@ -196,10 +196,10 @@ def derive_notification_type(statuses: Iterable[str]) -> str | None:
     invariant, not a directly graded conformance step — no storyboard exercises
     a rejected/canceled/failed buy's notification_type.
     """
-    statuses = list(statuses)
-    if not statuses:
+    status_list = list(statuses)  # materialize once (the param may be a one-shot iterable)
+    if not status_list:
         return None
-    if all(s in NO_MORE_DATA_STATUSES for s in statuses):
+    if all(s in NO_MORE_DATA_STATUSES for s in status_list):
         return "final"
     return "scheduled"
 

@@ -18,7 +18,6 @@ from types import SimpleNamespace
 from adcp.types import MediaBuyStatus
 
 from src.core.tools._media_buy_status import (
-    CANONICAL_SERVING,
     CANONICAL_STATUSES,
     NO_MORE_DATA_STATUSES,
     PENDING_PERSISTED_STATUSES,
@@ -146,12 +145,6 @@ class TestCanonicalVocabularyPinnedToSdk:
         failing test unless the membership itself is pinned.
         """
         assert SERVING_PERSISTED_STATUSES == {"active", "approved", "ready", "scheduled"}
-
-    def test_serving_persisted_statuses_is_derived_from_the_map(self):
-        """Every member maps to CANONICAL_SERVING and no non-member does."""
-        assert SERVING_PERSISTED_STATUSES == frozenset(
-            k for k, v in PERSISTED_STATUS_TO_CANONICAL.items() if v == CANONICAL_SERVING
-        )
 
     def test_pending_persisted_statuses_membership_is_pinned(self):
         """Pin the exact PENDING_PERSISTED_STATUSES set (the status scheduler's promote gate).

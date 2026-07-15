@@ -26,6 +26,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools._media_buy_status import SERVING_PERSISTED_STATUSES
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+from tests.helpers.delivery_fixtures import DAILY_REPORTING_WEBHOOK
 
 
 def _create_test_tenant_and_principal(ad_server: str | None = None) -> tuple[str, str]:
@@ -115,10 +116,9 @@ def _create_basic_media_buy_with_webhook(
             status="active",
             raw_request={
                 "packages": [{"product_id": product.product_id, "pricing_option_id": pricing_option.id}],
-                "reporting_webhook": {
-                    "url": "https://example.com/webhook",  # outbound HTTP will be mocked
-                    "frequency": "daily",
-                },
+                # Shared daily webhook config (outbound HTTP is mocked). This file's flight
+                # windows are bespoke boundary dates, NOT the flight_window named-phase taxonomy.
+                "reporting_webhook": dict(DAILY_REPORTING_WEBHOOK),
             },
         )
 
@@ -482,7 +482,8 @@ async def test_serving_persisted_status_receives_delivery_webhook(integration_db
             start_date=datetime.now(UTC).date() - timedelta(days=7),
             end_date=datetime.now(UTC).date() + timedelta(days=7),
             raw_request={
-                "reporting_webhook": {"url": "https://example.com/webhook", "frequency": "daily"},
+                # Shared webhook config; the ±7d window here is a bespoke boundary, not a named phase.
+                "reporting_webhook": dict(DAILY_REPORTING_WEBHOOK),
             },
         )
 

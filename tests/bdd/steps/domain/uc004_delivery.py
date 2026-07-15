@@ -23,6 +23,7 @@ from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
 from tests.helpers.delivery_assertions import assert_omits_webhook_only_fields
+from tests.helpers.delivery_fixtures import DAILY_REPORTING_WEBHOOK, flight_window
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -1682,24 +1683,23 @@ def given_media_buy_with_reporting_webhook(ctx: dict, mb_id: str, flight: str) -
     Requires the polling harness (DeliveryPollEnv) — the scenario must NOT be
     tagged @webhook (that routes to CircuitBreakerEnv, which has no
     send_delivery_webhook / set_adapter_response).
-    """
-    from datetime import UTC, datetime, timedelta
 
-    windows = {"live": (-30, 30), "completed": (-60, -30)}
-    assert flight in windows, f"unknown flight phase {flight!r}; expected one of {sorted(windows)}"
-    start_days, end_days = windows[flight]
+    The phase→window taxonomy and the webhook config are shared with the
+    integration fixture via ``tests/helpers/delivery_fixtures`` so the two layers
+    grade the same flight phase under the same phase name.
+    """
+    start_date, end_date = flight_window(flight)  # raises ValueError on unknown phase
 
     env = ctx["env"]
     owner = ctx.get("principal_id", "buyer-001")
-    today = datetime.now(UTC).date()
     buy = _ensure_media_buy_in_db(
         ctx,
         mb_id,
         owner,
         status="active",
-        start_date=(today + timedelta(days=start_days)).isoformat(),
-        end_date=(today + timedelta(days=end_days)).isoformat(),
-        raw_request={"reporting_webhook": {"url": "https://example.com/webhook", "frequency": "daily"}},
+        start_date=start_date.isoformat(),
+        end_date=end_date.isoformat(),
+        raw_request={"reporting_webhook": dict(DAILY_REPORTING_WEBHOOK)},
     )
     ctx.setdefault("media_buys", {})[mb_id] = {"media_buy_id": mb_id, "owner": owner, "status": "active"}
     ctx["scheduler_buy"] = buy

@@ -16,6 +16,7 @@ Each test targets exactly one obligation ID and follows the 6 hard rules:
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 import pytest
 
@@ -25,6 +26,7 @@ from src.core.exceptions import (
 )
 from src.core.schemas import GetMediaBuyDeliveryResponse
 from tests.helpers.delivery_assertions import assert_omits_webhook_only_fields
+from tests.helpers.delivery_fixtures import DAILY_REPORTING_WEBHOOK, flight_window
 
 # ---------------------------------------------------------------------------
 # Webhook-path coverage for UC-004-ALT-WEBHOOK-PUSH-REPORTING
@@ -38,15 +40,17 @@ from tests.helpers.delivery_assertions import assert_omits_webhook_only_fields
 # the buyer's webhook would receive.
 # ---------------------------------------------------------------------------
 
-_DAILY_WEBHOOK = {"url": "https://example.com/webhook", "frequency": "daily"}
 
-
-def _serving_webhook_buy(env, *, flight="live", mb_id=None, tenant=None, principal=None):
+def _serving_webhook_buy(
+    env: Any, *, flight: str = "live", mb_id: str | None = None, tenant: Any = None, principal: Any = None
+) -> Any:
     """Create a serving buy (tenant t1 / principal p1) with a daily reporting_webhook + adapter data.
 
     ``flight`` selects the window so the scheduler derives the right
     notification_type: "live" -> in-flight (resolves "active" -> "scheduled");
-    "completed" -> flight ended (date-refines to "completed" -> "final").
+    "completed" -> flight ended (date-refines to "completed" -> "final"). The
+    phase→window taxonomy lives once in ``flight_window`` (tests/helpers) so this
+    and the BDD fixture cannot diverge under the same phase name.
     Pass ``tenant``/``principal`` to reuse them across multiple buys in one env
     (a second TenantFactory("t1") would collide on the primary key). Returns the
     MediaBuy; the adapter response is registered for its id.
@@ -57,19 +61,15 @@ def _serving_webhook_buy(env, *, flight="live", mb_id=None, tenant=None, princip
         tenant = TenantFactory(tenant_id="t1")
     if principal is None:
         principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-    today = datetime.now(UTC).date()
-    windows = {
-        "live": (today - timedelta(days=30), today + timedelta(days=30)),
-        "completed": (today - timedelta(days=60), today - timedelta(days=30)),
-    }
-    start_date, end_date = windows[flight]
+    start_date, end_date = flight_window(flight)
     kwargs = {
         "tenant": tenant,
         "principal": principal,
         "status": "active",
         "start_date": start_date,
         "end_date": end_date,
-        "raw_request": {"reporting_webhook": dict(_DAILY_WEBHOOK)},
+        # Shared daily webhook config; copied to avoid aliasing the shared dict into ORM state.
+        "raw_request": {"reporting_webhook": dict(DAILY_REPORTING_WEBHOOK)},
     }
     if mb_id is not None:
         kwargs["media_buy_id"] = mb_id
@@ -291,7 +291,7 @@ class TestWebhookSequenceNumber:
                 log_id="failed-attempt-1",
                 principal_id="p1",
                 media_buy_id=buy.media_buy_id,
-                webhook_url="https://example.com/webhook",
+                webhook_url=DAILY_REPORTING_WEBHOOK["url"],
                 task_type="media_buy_delivery",
                 status="failed",
                 sequence_number=1,
@@ -414,7 +414,7 @@ class TestDedupSuppressesPriorFinalWebhook:
                 log_id="prior-final-success",
                 principal_id="p1",
                 media_buy_id=buy.media_buy_id,
-                webhook_url="https://example.com/webhook",
+                webhook_url=DAILY_REPORTING_WEBHOOK["url"],
                 task_type="media_buy_delivery",
                 status="success",
                 notification_type="final",
@@ -517,15 +517,17 @@ class TestPausedBuyReceivesNoDeliveryWebhook:
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            today = datetime.now(UTC).date()
-            # Paused, but mid-flight and with a reporting_webhook configured.
+            # Paused, but mid-flight ("live" window) and with a reporting_webhook configured.
+            # Same shared phase→window / webhook facts as _serving_webhook_buy — this buy is
+            # paused, so it can't call that helper (which forces status="active").
+            start_date, end_date = flight_window("live")
             buy = MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 status="paused",
-                start_date=today - timedelta(days=30),
-                end_date=today + timedelta(days=30),
-                raw_request={"reporting_webhook": dict(_DAILY_WEBHOOK)},
+                start_date=start_date,
+                end_date=end_date,
+                raw_request={"reporting_webhook": dict(DAILY_REPORTING_WEBHOOK)},
             )
             env.set_adapter_response(buy.media_buy_id, impressions=5000)
 
@@ -1035,7 +1037,6 @@ class TestNoIdentifiersReturnAll:
 
         Covers: UC-004-MAIN-04
         """
-        from datetime import timedelta
 
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
@@ -1081,7 +1082,6 @@ class TestNoIdentifiersReturnAll:
 
         Covers: UC-004-MAIN-04
         """
-        from datetime import timedelta
 
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
@@ -3007,7 +3007,7 @@ class TestCircuitBreakerReportingDelayed:
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
-        endpoint_key = "t1:https://example.com/webhook"
+        endpoint_key = f"t1:{DAILY_REPORTING_WEBHOOK['url']}"
         try:
             # Inject an OPEN circuit breaker into the global singleton
             cb = CircuitBreaker(failure_threshold=3)
@@ -3047,7 +3047,7 @@ class TestCircuitBreakerReportingDelayed:
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
-        endpoint_key = "t1:https://example.com/webhook"
+        endpoint_key = f"t1:{DAILY_REPORTING_WEBHOOK['url']}"
         try:
             cb = CircuitBreaker(failure_threshold=3)
             assert cb.state == CircuitState.CLOSED
