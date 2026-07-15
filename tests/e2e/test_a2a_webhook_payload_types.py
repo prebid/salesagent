@@ -281,92 +281,99 @@ class TestA2AWebhookPayloadTypes:
         - Submitted is an intermediate state
         - Intermediate states should send TaskStatusUpdateEvent
         """
-        # Enable manual approval so create_media_buy returns submitted state
+        # Enable manual approval so create_media_buy returns submitted state.
+        # MUST be restored in the finally below: adapter_config is SHARED
+        # tenant state — leaving manual approval on leaks into every later
+        # e2e test (pytest-randomly ordering), turning their creates into
+        # spec-3.1.1 submitted envelopes with no media_buy_id.
         set_live_adapter_behavior(live_server, manual_approval_required=True)
+        try:
+            a2a_url = f"{live_server['a2a']}/a2a"
+            context_id = str(uuid.uuid4())
 
-        a2a_url = f"{live_server['a2a']}/a2a"
-        context_id = str(uuid.uuid4())
+            # AdCP-spec packages[] format (the A2A skill rejects legacy
+            # product_ids/total_budget before the manual-approval path).
+            product_id, pricing_option_id = await _discover_product_and_pricing(live_server, test_auth_token)
+            start_time, end_time = get_test_date_range(days_from_now=1, duration_days=30)
+            media_buy_params = build_adcp_media_buy_request(
+                product_ids=[product_id],
+                total_budget=50000.0,
+                start_time=start_time,
+                end_time=end_time,
+                brand={"domain": "testbrand.com"},
+                pricing_option_id=pricing_option_id,
+                context={"e2e": "webhook_submitted_test"},
+            )
 
-        # AdCP-spec packages[] format (the A2A skill rejects legacy
-        # product_ids/total_budget before the manual-approval path).
-        product_id, pricing_option_id = await _discover_product_and_pricing(live_server, test_auth_token)
-        start_time, end_time = get_test_date_range(days_from_now=1, duration_days=30)
-        media_buy_params = build_adcp_media_buy_request(
-            product_ids=[product_id],
-            total_budget=50000.0,
-            start_time=start_time,
-            end_time=end_time,
-            brand={"domain": "testbrand.com"},
-            pricing_option_id=pricing_option_id,
-            context={"e2e": "webhook_submitted_test"},
-        )
+            # Send A2A create_media_buy message that triggers approval workflow
+            message = build_a2a_message_send(
+                skill="create_media_buy",
+                parameters=media_buy_params,
+                context_id=context_id,
+                push_notification_config={
+                    "url": webhook_capture_server["url"],
+                    "authentication": {"schemes": ["Bearer"], "credentials": "test-webhook-token"},
+                },
+            )
 
-        # Send A2A create_media_buy message that triggers approval workflow
-        message = build_a2a_message_send(
-            skill="create_media_buy",
-            parameters=media_buy_params,
-            context_id=context_id,
-            push_notification_config={
-                "url": webhook_capture_server["url"],
-                "authentication": {"schemes": ["Bearer"], "credentials": "test-webhook-token"},
-            },
-        )
+            headers = {
+                "Authorization": f"Bearer {test_auth_token}",
+                "Content-Type": "application/json",
+                "x-adcp-tenant": "ci-test",
+            }
 
-        headers = {
-            "Authorization": f"Bearer {test_auth_token}",
-            "Content-Type": "application/json",
-            "x-adcp-tenant": "ci-test",
-        }
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(a2a_url, json=message, headers=headers)
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(a2a_url, json=message, headers=headers)
+                # Request should succeed (returns submitted status for async operations)
+                assert response.status_code == 200, f"A2A request failed: {response.text}"
 
-            # Request should succeed (returns submitted status for async operations)
-            assert response.status_code == 200, f"A2A request failed: {response.text}"
+            # Wait for webhook to be delivered
+            timeout_seconds = 15
+            poll_interval = 0.5
+            elapsed = 0
 
-        # Wait for webhook to be delivered
-        timeout_seconds = 15
-        poll_interval = 0.5
-        elapsed = 0
+            # A manual-approval media buy emits the intermediate `submitted`
+            # TaskStatusUpdateEvent first, then (mock auto-approval simulation) a
+            # terminal `completed` Task. Breaking on merely the first delivery
+            # races against that ordering — poll until the submitted webhook is
+            # actually captured (or timeout).
+            while elapsed < timeout_seconds and not any(
+                w["status"] == "submitted" for w in webhook_capture_server["received"]
+            ):
+                sleep(poll_interval)
+                elapsed += poll_interval
 
-        # A manual-approval media buy emits the intermediate `submitted`
-        # TaskStatusUpdateEvent first, then (mock auto-approval simulation) a
-        # terminal `completed` Task. Breaking on merely the first delivery
-        # races against that ordering — poll until the submitted webhook is
-        # actually captured (or timeout).
-        while elapsed < timeout_seconds and not any(
-            w["status"] == "submitted" for w in webhook_capture_server["received"]
-        ):
-            sleep(poll_interval)
-            elapsed += poll_interval
+            received = webhook_capture_server["received"]
+            assert received, "Expected at least one webhook delivery"
 
-        received = webhook_capture_server["received"]
-        assert received, "Expected at least one webhook delivery"
+            # No received webhook may carry a snake_case wire violation (gh-#1299).
+            assert_no_classification_errors(received)
 
-        # No received webhook may carry a snake_case wire violation (gh-#1299).
-        assert_no_classification_errors(received)
+            # The submitted-status webhook MUST be present and MUST be a
+            # TaskStatusUpdateEvent. No `if submitted_webhooks:` guard — a missing or
+            # misclassified webhook is a failure, not a silent pass.
+            submitted_webhooks = [w for w in received if w["status"] == "submitted"]
+            assert submitted_webhooks, (
+                f"Expected a 'submitted' status webhook. Received statuses: {[w['status'] for w in received]}"
+            )
 
-        # The submitted-status webhook MUST be present and MUST be a
-        # TaskStatusUpdateEvent. No `if submitted_webhooks:` guard — a missing or
-        # misclassified webhook is a failure, not a silent pass.
-        submitted_webhooks = [w for w in received if w["status"] == "submitted"]
-        assert submitted_webhooks, (
-            f"Expected a 'submitted' status webhook. Received statuses: {[w['status'] for w in received]}"
-        )
+            webhook = submitted_webhooks[0]
+            # Per AdCP spec: submitted status should send TaskStatusUpdateEvent (has 'taskId' field)
+            assert webhook["payload_type"] == "TaskStatusUpdateEvent", (
+                f"Submitted status should send TaskStatusUpdateEvent payload, not {webhook['payload_type']}. "
+                f"Payload has 'id': {'id' in webhook['payload']}, 'taskId': {'taskId' in webhook['payload']}"
+            )
 
-        webhook = submitted_webhooks[0]
-        # Per AdCP spec: submitted status should send TaskStatusUpdateEvent (has 'taskId' field)
-        assert webhook["payload_type"] == "TaskStatusUpdateEvent", (
-            f"Submitted status should send TaskStatusUpdateEvent payload, not {webhook['payload_type']}. "
-            f"Payload has 'id': {'id' in webhook['payload']}, 'taskId': {'taskId' in webhook['payload']}"
-        )
-
-        # Verify TaskStatusUpdateEvent structure (camelCase per A2A wire contract)
-        payload = webhook["payload"]
-        assert "taskId" in payload, "TaskStatusUpdateEvent payload must have 'taskId' field"
-        assert "task_id" not in payload, "TaskStatusUpdateEvent must NOT use snake_case 'task_id'"
-        assert "status" in payload, "TaskStatusUpdateEvent payload must have 'status' field"
-        assert "state" in payload["status"], "TaskStatusUpdateEvent.status must have 'state' field"
+            # Verify TaskStatusUpdateEvent structure (camelCase per A2A wire contract)
+            payload = webhook["payload"]
+            assert "taskId" in payload, "TaskStatusUpdateEvent payload must have 'taskId' field"
+            assert "task_id" not in payload, "TaskStatusUpdateEvent must NOT use snake_case 'task_id'"
+            assert "status" in payload, "TaskStatusUpdateEvent payload must have 'status' field"
+            assert "state" in payload["status"], "TaskStatusUpdateEvent.status must have 'state' field"
+        finally:
+            # Restore shared tenant state for subsequent e2e tests.
+            set_live_adapter_behavior(live_server, manual_approval_required=False)
 
     @pytest.mark.asyncio
     async def test_webhook_payload_type_matches_status(
@@ -546,68 +553,73 @@ class TestWebhookPayloadStructure:
         webhook_capture_server,
     ):
         """Test that TaskStatusUpdateEvent payload has all required A2A fields."""
-        # Enable manual approval to get submitted status
+        # Enable manual approval to get submitted status. adapter_config is
+        # SHARED ci-test tenant state — restored in the finally below so later
+        # e2e creates don't silently route to the manual-approval submitted path.
         set_live_adapter_behavior(live_server, manual_approval_required=True)
+        try:
+            a2a_url = f"{live_server['a2a']}/a2a"
 
-        a2a_url = f"{live_server['a2a']}/a2a"
+            # AdCP-spec packages[] format (legacy product_ids/total_budget is
+            # rejected before the manual-approval path → no submitted webhook).
+            product_id, pricing_option_id = await _discover_product_and_pricing(live_server, test_auth_token)
+            start_time, end_time = get_test_date_range(days_from_now=1, duration_days=30)
+            media_buy_params = build_adcp_media_buy_request(
+                product_ids=[product_id],
+                total_budget=10000.0,
+                start_time=start_time,
+                end_time=end_time,
+                brand={"domain": "testbrand.com"},
+                pricing_option_id=pricing_option_id,
+                context={"e2e": "webhook_tsue_required_fields"},
+            )
 
-        # AdCP-spec packages[] format (legacy product_ids/total_budget is
-        # rejected before the manual-approval path → no submitted webhook).
-        product_id, pricing_option_id = await _discover_product_and_pricing(live_server, test_auth_token)
-        start_time, end_time = get_test_date_range(days_from_now=1, duration_days=30)
-        media_buy_params = build_adcp_media_buy_request(
-            product_ids=[product_id],
-            total_budget=10000.0,
-            start_time=start_time,
-            end_time=end_time,
-            brand={"domain": "testbrand.com"},
-            pricing_option_id=pricing_option_id,
-            context={"e2e": "webhook_tsue_required_fields"},
-        )
+            # Trigger an async operation that sends intermediate status
+            message = build_a2a_message_send(
+                skill="create_media_buy",
+                parameters=media_buy_params,
+                push_notification_config={"url": webhook_capture_server["url"]},
+            )
 
-        # Trigger an async operation that sends intermediate status
-        message = build_a2a_message_send(
-            skill="create_media_buy",
-            parameters=media_buy_params,
-            push_notification_config={"url": webhook_capture_server["url"]},
-        )
+            headers = {
+                "Authorization": f"Bearer {test_auth_token}",
+                "Content-Type": "application/json",
+                "x-adcp-tenant": "ci-test",
+            }
 
-        headers = {
-            "Authorization": f"Bearer {test_auth_token}",
-            "Content-Type": "application/json",
-            "x-adcp-tenant": "ci-test",
-        }
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                await client.post(a2a_url, json=message, headers=headers)
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            await client.post(a2a_url, json=message, headers=headers)
+            # Wait for webhook
+            timeout_seconds = 15
+            elapsed = 0
+            while elapsed < timeout_seconds and not webhook_capture_server["received"]:
+                sleep(0.5)
+                elapsed += 0.5
 
-        # Wait for webhook
-        timeout_seconds = 15
-        elapsed = 0
-        while elapsed < timeout_seconds and not webhook_capture_server["received"]:
-            sleep(0.5)
-            elapsed += 0.5
+            received = webhook_capture_server["received"]
+            assert received, "Expected at least one webhook delivery"
+            assert_no_classification_errors(received)
 
-        received = webhook_capture_server["received"]
-        assert received, "Expected at least one webhook delivery"
-        assert_no_classification_errors(received)
+            event_webhooks = [w for w in received if w["payload_type"] == "TaskStatusUpdateEvent"]
+            assert event_webhooks, (
+                f"Expected at least one TaskStatusUpdateEvent webhook. Received payload "
+                f"types: {[w['payload_type'] for w in received]}"
+            )
 
-        event_webhooks = [w for w in received if w["payload_type"] == "TaskStatusUpdateEvent"]
-        assert event_webhooks, (
-            f"Expected at least one TaskStatusUpdateEvent webhook. Received payload "
-            f"types: {[w['payload_type'] for w in received]}"
-        )
+            for webhook in event_webhooks:
+                payload = webhook["payload"]
 
-        for webhook in event_webhooks:
-            payload = webhook["payload"]
+                # Required TaskStatusUpdateEvent fields per A2A spec (camelCase wire contract)
+                assert "taskId" in payload, "TaskStatusUpdateEvent must have 'taskId' field"
+                assert "task_id" not in payload, "TaskStatusUpdateEvent must NOT use snake_case 'task_id'"
+                assert "status" in payload, "TaskStatusUpdateEvent must have 'status' field"
 
-            # Required TaskStatusUpdateEvent fields per A2A spec (camelCase wire contract)
-            assert "taskId" in payload, "TaskStatusUpdateEvent must have 'taskId' field"
-            assert "task_id" not in payload, "TaskStatusUpdateEvent must NOT use snake_case 'task_id'"
-            assert "status" in payload, "TaskStatusUpdateEvent must have 'status' field"
-
-            status = payload["status"]
-            assert "state" in status, "TaskStatusUpdateEvent.status must have 'state' field"
+                status = payload["status"]
+                assert "state" in status, "TaskStatusUpdateEvent.status must have 'state' field"
+        finally:
+            # Restore shared tenant state for subsequent e2e tests.
+            set_live_adapter_behavior(live_server, manual_approval_required=False)
 
 
 class TestProtocolWebhookWireFormat:

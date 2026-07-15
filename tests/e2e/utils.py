@@ -57,9 +57,9 @@ class _LiveDBEnv:
     """Minimal env shim exposing ``get_session()`` over the live e2e database.
 
     Bridges ``tests/factories`` helpers (which expect a harness env exposing
-    ``get_session()``, see tests/harness/_base.py) to the Docker-hosted e2e
-    stack, where only the DSN in ``live_server['postgres']`` is available
-    (GH #1423 consolidation).
+    ``get_session()`` and ``_commit_factory_data()``, see tests/harness/_base.py)
+    to the Docker-hosted e2e stack, where only the DSN in
+    ``live_server['postgres']`` is available (GH #1423 consolidation).
     """
 
     def __init__(self, session):
@@ -68,18 +68,41 @@ class _LiveDBEnv:
     def get_session(self):
         return self._session
 
+    def _commit_factory_data(self) -> None:
+        """Commit pending factory writes so the live HTTP server sees them.
+
+        Mirrors ``IntegrationEnv._commit_factory_data`` (tests/harness/_base.py):
+        factories use ``sqlalchemy_session_persistence = "commit"``, but this
+        explicit commit flushes cascading/deferred writes to the DB the
+        Docker-hosted server reads from its own session.
+        """
+        if self._session:
+            self._session.commit()
+
 
 @contextmanager
 def live_db_env(live_server: dict):
-    """Yield a ``get_session()``-bearing env bound to the live e2e database."""
+    """Yield a ``get_session()``-bearing env bound to the live e2e database.
+
+    Binds the ``tests/factories`` factories to this session for the duration of
+    the context so factory-based helpers (e.g. ``set_adapter_test_behavior``)
+    persist through the same live-DB session, then unbinds on exit — mirroring
+    the bind/unbind contract in ``IntegrationEnv`` (tests/harness/_base.py).
+    """
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
 
+    from tests.factories import ALL_FACTORIES
+
     engine = create_engine(live_server["postgres"])
     session = Session(engine)
+    for f in ALL_FACTORIES:
+        f._meta.sqlalchemy_session = session
     try:
         yield _LiveDBEnv(session)
     finally:
+        for f in ALL_FACTORIES:
+            f._meta.sqlalchemy_session = None
         session.close()
         engine.dispose()
 

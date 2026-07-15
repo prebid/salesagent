@@ -137,6 +137,7 @@ from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
+    CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
     CreativeApprovalStatus,
     FormatId,
@@ -1719,12 +1720,20 @@ def _replay_cached_success(envelope: dict[str, Any]) -> CreateMediaBuyResult | N
     callers treat that as a cache miss so the retry re-executes instead of erroring.
     """
     try:
-        success = CreateMediaBuySuccess.model_validate(envelope["response"])
         protocol_status = envelope["status"]
+        # A cached pending-approval create is the CreateMediaBuySubmitted variant
+        # (no media_buy_id/packages) — validating it as Success would fail and
+        # degrade to a cache miss, re-executing the create and minting a SECOND
+        # workflow step for the same idempotency_key (PR #1567 round-2 item 2).
+        response: CreateMediaBuySuccess | CreateMediaBuySubmitted
+        if protocol_status == AdcpTaskStatus.submitted.value:
+            response = CreateMediaBuySubmitted.model_validate(envelope["response"])
+        else:
+            response = CreateMediaBuySuccess.model_validate(envelope["response"])
     except (KeyError, TypeError, ValidationError):
         logger.warning("Cached idempotency envelope failed validation — treating as a miss", exc_info=True)
         return None
-    return CreateMediaBuyResult(response=success, status=protocol_status, replayed=True)
+    return CreateMediaBuyResult(response=response, status=protocol_status, replayed=True)
 
 
 def _lookup_cached_replay(
@@ -1801,6 +1810,26 @@ def _maybe_evict_expired(tenant_id: str) -> None:
         logger.warning("Best-effort idempotency cache eviction failed for tenant %s", tenant_id, exc_info=True)
 
 
+def _submitted_approval_result(step, req: CreateMediaBuyRequest, adapter) -> CreateMediaBuyResult:
+    """The submitted task envelope for a create that awaits human approval.
+
+    Spec 3.1.1 create-media-buy-response.json: a buy awaiting a human decision is
+    the CreateMediaBuySubmitted variant — status="submitted" + task_id only.
+    media_buy_id/packages land on the task's completion artifact; confirmed_at/
+    revision would falsely assert seller commitment (PR #1567 round-2 item 2;
+    mirrors the update-path fix b8b7e751b). Single construction site shared by the
+    manual-approval and config-approval branches (DRY, PR #1567 round-3).
+    """
+    return CreateMediaBuyResult(
+        response=CreateMediaBuySubmitted(
+            task_id=step.step_id,  # Client tracks approval via this ID
+            context=req.context,
+            errors=property_list_unsupported_advisories(req.packages, adapter),
+        ),
+        status=AdcpTaskStatus.submitted.value,
+    )
+
+
 def _cache_and_return(
     result: CreateMediaBuyResult,
     req: CreateMediaBuyRequest,
@@ -1821,11 +1850,13 @@ def _cache_and_return(
     # Errors are never cached (AdCP 3.0.1 security.mdx#idempotency rule 3). The
     # real enforcement of that invariant is the error paths' early returns —
     # they return before reaching this helper, so every caller hands us a
-    # success. The TestErrorsAreNeverCached suite pins it. This precondition is a
-    # fail-loud contract guard: if a future refactor ever routes a non-success
-    # here it raises, instead of silently skipping the cache write.
-    assert isinstance(result.response, CreateMediaBuySuccess), (
-        "_cache_and_return must be called only with a successful result"
+    # success or a submitted task envelope (a pending-approval create is a
+    # non-error outcome whose verbatim replay must return the SAME task_id, not
+    # mint a second workflow step). The TestErrorsAreNeverCached suite pins it.
+    # This precondition is a fail-loud contract guard: if a future refactor ever
+    # routes an error here it raises, instead of silently skipping the cache write.
+    assert isinstance(result.response, CreateMediaBuySuccess | CreateMediaBuySubmitted), (
+        "_cache_and_return must be called only with a successful or submitted result"
     )
 
     # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object.
@@ -3044,22 +3075,10 @@ async def _create_media_buy_impl(
                             # UoW auto-commits on clean exit
                             logger.info(f"✅ Created creative assignments for package {pkg_id}")
 
-            # Return success response with packages awaiting approval
-            # The workflow_step_id in packages indicates approval is required
-            _buy_result = CreateMediaBuyResult(
-                response=CreateMediaBuySuccess.sync_success(
-                    media_buy_id=media_buy_id,
-                    media_buy_status=MediaBuyStatus.pending_creatives.value,  # AdCP 3.1: mirrors deprecated `status`
-                    creative_deadline=None,
-                    packages=pending_packages,
-                    valid_actions=valid_actions_for_status(MediaBuyStatus.pending_creatives.value),
-                    workflow_step_id=step.step_id,  # Client can track approval via this ID
-                    context=req.context,
-                    errors=property_list_unsupported_advisories(req.packages, adapter),
-                ),
-                status=AdcpTaskStatus.submitted.value,
-            )
-            return _cache_and_return(_buy_result, req, identity, request_hash)
+            # Submitted task envelope (spec 3.1.1): media_buy_status/packages land on
+            # the task's completion artifact, not this response — main's media_buy_status
+            # addition to the old Success envelope is subsumed by the Submitted variant.
+            return _cache_and_return(_submitted_approval_result(step, req, adapter), req, identity, request_hash)
 
         # Get products for the media buy to check product-level auto-creation settings
         # Lazy: tests patch src.core.tools.products.get_product_catalog; the call-time import binds the patched object.
@@ -3146,21 +3165,6 @@ async def _create_media_buy_impl(
             response_msg = f"Media buy requires approval due to {reason.lower()}. Workflow Step ID: {step.step_id}. Context ID: {persistent_ctx.context_id}"
             ctx_manager.add_message(persistent_ctx.context_id, "assistant", response_msg)
 
-            # Generate permanent package IDs and prepare response packages
-            response_packages = []
-            assert req.packages is not None, "packages required - validated earlier"
-            for idx, pkg in enumerate(req.packages, 1):
-                # Generate permanent package ID
-                package_id = f"pkg_{pkg.product_id}_{secrets.token_hex(4)}_{idx}"
-
-                # Per AdCP spec, create-media-buy-response Package only includes:
-                # - package_id (required): Publisher's unique identifier
-                response_packages.append(
-                    Package(
-                        package_id=package_id,
-                    )
-                )
-
             # Send Slack notification for configuration-based approval requirement
             try:
                 # Get principal name for notification
@@ -3202,19 +3206,9 @@ async def _create_media_buy_impl(
             except Exception as e:
                 logger.warning(f"⚠️ Failed to send configuration approval Slack notification: {e}")
 
-            _buy_result = CreateMediaBuyResult(
-                response=CreateMediaBuySuccess.sync_success(
-                    media_buy_id=media_buy_id,
-                    media_buy_status=MediaBuyStatus.pending_start.value,  # AdCP 3.1: mirrors deprecated `status`
-                    packages=response_packages,
-                    valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
-                    workflow_step_id=step.step_id,
-                    context=req.context,
-                    errors=property_list_unsupported_advisories(req.packages, adapter),
-                ),
-                status=AdcpTaskStatus.submitted.value,
-            )
-            return _cache_and_return(_buy_result, req, identity, request_hash)
+            # Submitted task envelope (spec 3.1.1) — see note on the manual-approval
+            # branch above; main's media_buy_status addition is likewise subsumed.
+            return _cache_and_return(_submitted_approval_result(step, req, adapter), req, identity, request_hash)
 
         # Continue with synchronized media buy creation
 
@@ -3459,19 +3453,24 @@ async def _create_media_buy_impl(
                 for pkg in packages
             ]
             # The adcp-6.6 CreateMediaBuySuccess default status="completed" is KEPT for
-            # dry_run and is spec-correct (salesagent-6tc3): spec 3.1.1
+            # dry_run and is spec-correct (PR #1567): spec 3.1.1
             # create-media-buy-response.json has exactly three variants
             # (Success/Error/Submitted) and NO simulation envelope; dry_run is a
             # (deprecated) testing hook (X-Dry-Run header), not a wire field, and the spec
             # is SILENT on a dry_run response status -> production authoritative. A dry_run
             # buyer asked to SIMULATE the would-be outcome, which IS completion, so
-            # "completed" is a truthful preview (unlike salesagent-5dxc/-88e2, where the op
+            # "completed" is a truthful preview (unlike the pending-approval and reject paths, where the op
             # did not apply). Guarded by tests/unit/test_media_buy_dry_run_status.py.
+            # Simulated lifecycle: a would-be-created buy starts before its flight,
+            # so pending_start — the SAME value must feed both the wire field and
+            # valid_actions (spec 3.1.1 pending_creatives_to_start.yaml grades
+            # media_buy_status alongside the envelope status; partial GH #1326).
+            simulated_lifecycle = MediaBuyStatus.pending_start.value
             simulated_response = CreateMediaBuySuccess.sync_success(
                 media_buy_id=f"dry_run_{uuid.uuid4().hex[:12]}",
-                media_buy_status=MediaBuyStatus.pending_start.value,  # AdCP 3.1: mirrors deprecated `status`
                 packages=simulated_packages,
-                valid_actions=valid_actions_for_status(MediaBuyStatus.pending_start.value),
+                media_buy_status=simulated_lifecycle,  # AdCP 3.1: mirrors deprecated `status`
+                valid_actions=valid_actions_for_status(simulated_lifecycle),
                 context=req.context,
                 errors=property_list_unsupported_advisories(req.packages, adapter),
             )
@@ -4003,8 +4002,14 @@ async def _create_media_buy_impl(
         # Create AdCP response with typed Package objects
         adcp_response = CreateMediaBuySuccess.sync_success(
             media_buy_id=response.media_buy_id,
-            media_buy_status=media_buy_status,  # AdCP 3.1 preferred status; mirrors deprecated `status`
             packages=response_packages,
+            # AdCP 3.1 preferred status; mirrors deprecated `status`. Lifecycle on
+            # the wire, from the same single source that drives valid_actions
+            # (spec 3.1.1 create-media-buy-response.json;
+            # pending_creatives_to_start.yaml step create_buy_no_creatives
+            # grades media_buy_status == "pending_creatives" alongside
+            # envelope status == "completed"). Partial GH #1326.
+            media_buy_status=media_buy_status,
             valid_actions=valid_actions_for_status(media_buy_status),
             creative_deadline=getattr(response, "creative_deadline", None),
             context=req.context,
@@ -4323,7 +4328,7 @@ async def create_media_buy(
         Field(
             description=(
                 "Accepted for AdCP 3.1.1 compatibility; pause-on-create is NOT yet honored — "
-                "the buy delivers as if paused=false. Tracked in #1619."
+                "delivery starts per start_time regardless of this flag"
             )
         ),
     ] = None,
@@ -4415,7 +4420,7 @@ async def create_media_buy_raw(
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     account: AccountReference | None = None,  # A2A/REST send dicts; coerced by CreateMediaBuyRequest
     idempotency_key: str | None = None,
-    paused: bool | None = None,  # AdCP 3.1.1: create in paused state
+    paused: bool | None = None,  # AdCP 3.1.1 compatibility; pause-on-create NOT yet honored (PR #1567 follow-up)
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
     raw_wire_payload: dict[str, Any] | None = None,

@@ -82,7 +82,7 @@ class TestSchemaFieldMapping:
             # AdCP 6.6+ (spec 3.1.1) fields - inherited from library Product, not yet stored
             # in database. Pure forward-compat passthrough: nothing in src/ populates or reads
             # them (defaulted None). Persist deliberately if/when a product-management feature
-            # configures placement-type/signal arrays (salesagent-rw9q).
+            # configures placement-type/signal arrays (PR #1567).
             "video_placement_types",  # Video placement types from adcp 3.1.1 spec
             "social_placement_surfaces",  # Social placement surfaces from adcp 3.1.1 spec
             "signal_targeting_options",  # Signal targeting options from adcp 3.1.1 spec

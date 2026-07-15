@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, find_raw_select_violations
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -377,49 +377,10 @@ def _find_raw_selects() -> list[tuple[str, str, str, int]]:
 
     Returns list of (file_path, function_name, model_name, line_number).
     """
-    violations: list[tuple[str, str, str, int]] = []
-    src_dir = ROOT / "src"
-
-    for py_file in src_dir.rglob("*.py"):
-        rel_path = str(py_file.relative_to(ROOT))
-
-        # Skip repository files — they ARE the abstraction layer
-        if rel_path.startswith(REPOSITORY_DIR):
-            continue
-
-        # Skip infrastructure files
-        if rel_path in INFRASTRUCTURE_FILES:
-            continue
-
-        try:
-            tree = ast.parse(py_file.read_text())
-        except SyntaxError:
-            continue
-
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-
-            for child in iter_call_expressions(node):
-                func = child.func
-                if not (isinstance(func, ast.Name) and func.id == "select"):
-                    continue
-
-                if not child.args:
-                    continue
-
-                model_arg = child.args[0]
-                model_name = None
-                if isinstance(model_arg, ast.Name):
-                    model_name = model_arg.id
-                elif isinstance(model_arg, ast.Attribute):
-                    model_name = model_arg.attr
-
-                if model_name and model_name in ORM_MODEL_NAMES:
-                    violations.append((rel_path, node.name, model_name, child.lineno))
-                    break  # One violation per function is enough
-
-    return violations
+    return find_raw_select_violations(
+        skip=lambda rel_path: rel_path.startswith(REPOSITORY_DIR) or rel_path in INFRASTRUCTURE_FILES,
+        model_names=ORM_MODEL_NAMES,
+    )
 
 
 # ── Tests ───────────────────────────────────────────────────────────

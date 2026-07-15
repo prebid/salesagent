@@ -26,10 +26,12 @@ set -euo pipefail
 # bdd-in-network suites were re-vetted green against this pin before landing.
 ADCP_PIN="467fd93d7711"
 
-# The canonical local tag is pin-keyed so a cached image from a previous pin
-# can never satisfy _ensure_image (a bare `adcp-creative-agent` cache would
-# silently validate the old agent after a bump). The un-keyed alias is what
-# docker-compose.e2e.yml and the standalone `up` path run.
+# The canonical local tag is pin-keyed so a cached image from a DIFFERENT pin
+# can never satisfy _ensure_image (a bare `adcp-creative-agent` image left by
+# another branch/worktree on a shared Docker host would silently substitute
+# the wrong agent — exactly the drift salesagent-kczg exists to prevent). The
+# un-keyed alias is what docker-compose.e2e.yml and the standalone `up` run;
+# _ensure_image repoints it at this pin before every run.
 IMAGE_ALIAS="adcp-creative-agent"
 IMAGE="${IMAGE_ALIAS}:${ADCP_PIN}"
 NET="creative-net"
@@ -119,7 +121,7 @@ _ensure_image() {
         fi
     fi
     # Repoint the un-keyed alias (consumed by docker-compose.e2e.yml and
-    # `up`) at the current pin, clobbering any stale-pin leftover.
+    # `up`) at the current pin, clobbering any other-pin leftover.
     docker tag "$IMAGE" "$IMAGE_ALIAS"
 }
 

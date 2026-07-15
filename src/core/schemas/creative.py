@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import CreativeStatus
+from adcp.types import Error as LibraryError
 from adcp.types import FormatId as LibraryFormatId
 from adcp.types import (
     ListCreativeFormatsRequest as LibraryListCreativeFormatsRequest,
@@ -352,7 +353,7 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
 
     adcp 6.6 (spec 3.1.1) re-added assigned_to, assignment_errors, platform_id, status,
     changes and warnings to the library parent, so all six are now INHERITED (they were
-    locally redeclared under SDK 5.7 which had dropped them). See salesagent-qj0p.
+    locally redeclared under SDK 5.7 which had dropped them). See PR #1567.
 
     Internal-only (not in AdCP spec, excluded from responses):
     - internal_status: review-routing state (renamed off the inherited spec `status`)
@@ -366,17 +367,30 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     # a valid CreativeAction, and StrEnum coerces the strings, so no override or normalizer is needed.
 
     # adcp 6.6 (spec 3.1.1) re-added assigned_to/assignment_errors/platform_id/status/changes/
-    # warnings to the library parent — we now INHERIT all six (salesagent-qj0p, shrinking the
-    # schema-inheritance allowlist). Our former local `status` held internal review-routing state,
-    # not the spec's advisory CreativeStatus, so it is renamed to `internal_status` (excluded from
-    # the wire) rather than shadowing the inherited spec field. Per owner decision we inherit but
-    # do NOT populate the spec `status`: it stays None. On A2A/REST (model_dump with exclude_none)
-    # it is omitted, so the sync wire is byte-identical this bump; on MCP the response goes through
-    # structured_content -> to_jsonable_python, which BYPASSES the model_dump override, so there the
-    # inherited `status` (and empty changes/warnings) serialize as null rather than being omitted.
-    # changes/warnings inherit the parent's None default (writers use
-    # the _append_warning guard in _sync.py); platform_id/assigned_to/assignment_errors are
-    # type-compatible and inherited as-is.
+    # warnings to the library parent (PR #1567, shrinking the schema-inheritance
+    # allowlist). Our former local `status` held internal review-routing state, not the spec's
+    # advisory CreativeStatus, so it is renamed to `internal_status` (excluded from the wire)
+    # rather than shadowing the inherited spec field. Per owner decision we inherit but do NOT
+    # populate the spec `status`: it stays None. On A2A/REST (model_dump with exclude_none) it
+    # is omitted; on MCP the response goes through structured_content -> to_jsonable_python,
+    # which BYPASSES the model_dump override, so the inherited `status` serializes as null —
+    # that broader None-serialization question is tracked separately.
+    # platform_id/assigned_to/assignment_errors are type-compatible and inherited as-is.
+    #
+    # changes/warnings/errors are REDECLARED (sanctioned redeclaration, CLAUDE.md pattern 1)
+    # with default_factory=list rather than inheriting the parent's None default: spec 3.1.1
+    # sync-creatives-response.json types all three as `array`, and the MCP structured_content
+    # path above serializes a None default as the spec-invalid `null` (PR #1567 round-2 item 3).
+    # Wire outcome per transport — both spec-valid: MCP emits [] (array); A2A/REST OMIT empty
+    # lists via the model_dump strip below (byte-identical to the pre-6.6 wire).
+    # Writers still use the _append_warning guard in _sync.py.
+    changes: list[str] = Field(
+        default_factory=list, description="Field names that were modified (only populated when action='updated')"
+    )
+    warnings: list[str] = Field(default_factory=list, description="Non-fatal warnings about this creative")
+    errors: list[LibraryError] = Field(
+        default_factory=list, description="Validation or processing errors (only populated when action='failed')"
+    )
     internal_status: str | None = Field(
         None, exclude=True, description="Internal review-routing status (INTERNAL - excluded from AdCP responses)"
     )
@@ -449,16 +463,14 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
     Since the error variant is never constructed (ToolError handles failures),
     we subclass the success variant directly.
 
-    SDK 5.7 collapsed the success envelope — dry_run, sandbox, context, ext
-    removed from parent. Declared locally where needed.
+    adcp 6.6 restored the fields SDK 5.7 had collapsed off the success envelope:
+    dry_run, context (ContextObject|None) and ext (ExtensionObject|None) are all
+    INHERITED from the parent again (identical definitions; production may assign
+    raw dicts to context/ext, which Pydantic coerces on validation). Only
+    ``creatives`` remains overridden — see below.
 
     Design decision (salesagent-g3c): error variant never constructed.
     """
-
-    # SDK 5.7 removed dry_run from the parent — declare locally. context (ContextObject|None) and
-    # ext (ExtensionObject|None) were re-added by adcp 6.6 and are now inherited: production may
-    # assign raw dicts, which Pydantic coerces to the typed models on validation.
-    dry_run: bool | None = None
 
     # Override creatives to use our SyncCreativeResult (Pattern #4: nested serialization).
     # Library parent uses its Creative type which lacks assigned_to, assignment_errors, etc.

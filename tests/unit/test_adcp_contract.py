@@ -239,6 +239,36 @@ class TestSchemaMatchesLibrary:
             assert (lib_req.brief is None) == (our_req.brief is None), f"brief mismatch for {case}"
             assert (lib_req.brand is None) == (our_req.brand is None), f"brand mismatch for {case}"
 
+    @pytest.mark.parametrize(
+        "field_name",
+        ["account", "sandbox", "creative_deadline", "valid_actions", "context"],
+    )
+    def test_create_media_buy_success_inherits_parent_typed_annotations(self, field_name):
+        """CreateMediaBuySuccess must inherit the adcp 6.6 parent's TYPED annotations.
+
+        Regression test for PR #1567 round-3 (GH #1620): _base.py carried
+        'SDK 5.7 removed these from parent' redeclarations that are stale under
+        adcp 6.6 — the parent re-added all five fields, typed. Two of the local
+        redeclarations WEAKEN the parent's types (account: Any | None vs the
+        parent's Account | None; creative_deadline: datetime | None vs the
+        parent's AwareDatetime | None). The subclass annotation must be exactly
+        the parent's annotation — the library parent is the source of truth,
+        which also catches any future drift on an SDK bump.
+        """
+        from adcp.types.aliases import (
+            CreateMediaBuySuccessResponse as LibraryCreateMediaBuySuccess,
+        )
+
+        from src.core.schemas import CreateMediaBuySuccess as LocalCreateMediaBuySuccess
+
+        parent_annotation = LibraryCreateMediaBuySuccess.model_fields[field_name].annotation
+        local_annotation = LocalCreateMediaBuySuccess.model_fields[field_name].annotation
+        assert local_annotation == parent_annotation, (
+            f"CreateMediaBuySuccess.{field_name} drifts from the adcp parent: "
+            f"local={local_annotation!r} vs parent={parent_annotation!r} — "
+            f"delete the stale local redeclaration and inherit the parent's typed field"
+        )
+
 
 class TestAdCPContract:
     """Test that models and schemas align with AdCP protocol requirements."""

@@ -3010,14 +3010,17 @@ class TestUpdateMediaBuyManualApproval:
             result = _update_media_buy_impl(req=req, identity=identity)
 
         # Spec 3.1.1: a pending-approval update is the SUBMITTED variant (status="submitted"
-        # + task_id), not a completed success. It carries no affected_packages (the update is
-        # not yet applied). The workflow step is marked requires_approval, and the result
-        # envelope's protocol status mirrors the submitted state.
+        # + task_id), not a completed success. The transport-boundary refactor returns the
+        # UpdateMediaBuySubmitted envelope UNWRAPPED from _impl (production:
+        # media_buy_update.py `return approval_response`), so result IS the submitted variant.
+        # It carries no affected_packages (the update is not yet applied). The workflow step
+        # is marked requires_approval, and the result's protocol status mirrors submitted.
         assert isinstance(result, UpdateMediaBuySubmitted)
         assert result.status == "submitted"
         assert result.task_id == "step_1"
         # The submitted envelope must not claim any applied change: no affected_packages
         # (the pre-3.1.1 success shape reported `affected_packages == []` for this case).
+        # 6.6 reconciliation of main's "affected_packages empty (not yet applied)" check.
         assert "affected_packages" not in result.model_dump()
         ctx_mgr.audit_workflow_step_result.assert_called_once_with(
             ANY, ANY, status="requires_approval", request_obj=ANY, add_comment=ANY
@@ -3079,8 +3082,10 @@ class TestUpdateMediaBuyManualApproval:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        # Spec 3.1.1: a pending-approval update is the SUBMITTED variant. implementation_date
-        # is not part of that envelope (the update is not yet applied), so it is absent/None.
+        # Spec 3.1.1: a pending-approval update is the SUBMITTED variant, returned UNWRAPPED
+        # from _impl by the transport-boundary refactor, so result IS the submitted envelope.
+        # implementation_date is not part of that envelope (the update is not yet applied),
+        # so it is absent/None.
         assert isinstance(result, UpdateMediaBuySubmitted)
         assert result.status == "submitted"
         dumped = result.model_dump()

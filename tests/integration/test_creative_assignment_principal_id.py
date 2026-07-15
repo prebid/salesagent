@@ -31,7 +31,11 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext
 from tests.helpers.adcp_factories import create_test_format
-from tests.integration.media_buy_helpers import _get_tenant_dict, _make_create_request
+from tests.integration.media_buy_helpers import (
+    _get_tenant_dict,
+    _make_create_request,
+    resolve_media_buy_id_from_task,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -228,9 +232,9 @@ class TestCreativeAssignmentPrincipalIdManualApproval:
         assert result.status in ("submitted", "completed"), f"Unexpected status: {result.status}"
         assert result.response is not None
 
-        # Extract media_buy_id from the response
-        media_buy_id = getattr(result.response, "media_buy_id", None)
-        assert media_buy_id is not None, "Response should contain media_buy_id"
+        # Spec 3.1.1: the submitted response carries task_id, not media_buy_id —
+        # resolve the persisted buy via the workflow mapping (PR #1567 round-2 item 2).
+        media_buy_id = resolve_media_buy_id_from_task(result.response.task_id)
 
         # Verify creative_assignment rows have principal_id populated
         assignments = _query_assignments(ca_tenant_with_approval["tenant_id"], media_buy_id)

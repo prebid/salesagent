@@ -1,6 +1,6 @@
 """A pending-approval update_media_buy reports the SUBMITTED envelope, not completed.
 
-Regression for salesagent-5dxc (PR #1567, adcp 5.7->6.6 bump). adcp 6.6 gave
+Regression for PR #1567 (adcp 5.7->6.6 bump). adcp 6.6 gave
 UpdateMediaBuySuccess a default status="completed" (the same _base.py mechanism
 as CreateMediaBuySuccess). The manual-approval branch of _update_media_buy_impl
 (src/core/tools/media_buy_update.py) constructs UpdateMediaBuySuccess directly for
@@ -12,12 +12,15 @@ Spec 3.1.1 models a not-yet-applied update as UpdateMediaBuySubmitted
 path returns CreateMediaBuyResult(status="submitted") whose _serialize overrides
 the envelope status. update_media_buy has no such wrapper.
 
-Wire faithfulness: the update transport wrappers put the _impl-returned model
-straight onto the wire — the MCP wrapper does ToolResult(structured_content=response)
-(media_buy_update.py:1421) and the A2A/REST wrappers serialize the same model — so
-the success-envelope `status` is transport-invariant and the serialized model dump
-IS the wire shape on every transport. This test therefore asserts on the serialized
-envelope produced by the shared _impl.
+Wire faithfulness, per transport: on REST the model_dump IS the HTTP body; on
+MCP the wrapper does ToolResult(structured_content=response)
+(media_buy_update.py:1421), serialized via pydantic to_jsonable_python — NOT
+model_dump, though for this model the two agree (no model_dump override); on
+A2A a submitted result is conveyed by the Task object itself (state=SUBMITTED,
+no artifacts — the early-return in on_message_send), so no serialized response
+body crosses the A2A wire at all. This unit test asserts the shared _impl's
+serialized envelope; the per-transport wire is graded by the wired BR-UC-003
+manual-approval BDD scenarios (1b2f03bc9).
 """
 
 from __future__ import annotations

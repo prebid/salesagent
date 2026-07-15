@@ -323,9 +323,10 @@ class RestE2EDispatcher:
         except Exception as exc:
             return TransportResult(payload=None, envelope=envelope, error=exc, raw_response=response)
 
-        # Expose the serialized success body as wire_response (parallel to
-        # wire_error_envelope on the error path) so success Then-steps assert on the
-        # real HTTP body rather than re-deriving from the typed payload (#rlgl.3).
+        # Real HTTP wire body — the e2e analogue of the in-process RestDispatcher's
+        # wire_response (parallel to wire_error_envelope on the error path), so
+        # success-path wire-shape steps grade the live server too instead of
+        # re-deriving from the typed payload (#rlgl.3).
         return TransportResult(
             payload=payload,
             envelope=envelope,
