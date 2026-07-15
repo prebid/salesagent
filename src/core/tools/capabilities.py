@@ -43,16 +43,52 @@ from src.core import adcp_version
 from src.core.auth import get_principal_object, require_identity
 from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.database.repositories.uow import TenantConfigUoW
+from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
+from src.core.validation_helpers import adcp_validation_boundary
 from src.services.targeting_capabilities import supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_PROTOCOLS: tuple[SupportedProtocol, ...] = (SupportedProtocol.media_buy,)
+
+
+def _filter_supported_protocols(req: GetAdcpCapabilitiesRequest | None) -> list[SupportedProtocol]:
+    """Intersect the seller's supported protocols with the buyer's ``protocols`` filter.
+
+    No filter (``req.protocols is None``) returns the full supported set. Otherwise
+    return only the supported protocols the buyer asked for (matched by enum value),
+    so ``protocols=["signals"]`` against a media_buy-only seller returns ``[]`` — the
+    buyer learns the seller does not offer signals, rather than being handed the
+    unfiltered default set. Empty-array and unknown-enum inputs are rejected upstream
+    by the request model (minItems=1 + the ``Protocol`` enum), which the transport
+    boundaries translate to VALIDATION_ERROR.
+    """
+    full = list(_DEFAULT_PROTOCOLS)
+    requested = req.protocols if req else None
+    if not requested:
+        return full
+    requested_values = {enum_value(p) for p in requested}
+    filtered = [p for p in full if enum_value(p) in requested_values]
+    if not filtered:
+        # The response's supported_protocols is minItems=1, so "none of your
+        # requested protocols is supported" cannot be an empty list — it is a
+        # VALIDATION_ERROR. The buyer learns the seller offers none of what they
+        # asked for, instead of being handed the unfiltered default set.
+        supported = ", ".join(enum_value(p) for p in full)
+        raise AdCPValidationError(
+            f"None of the requested protocols {sorted(requested_values)} are supported "
+            f"by this seller (supported: {supported}).",
+            field="protocols",
+            suggestion=f"Request one of the supported protocols: {supported}.",
+        )
+    return filtered
+
+
 _DEFAULT_SPECIALISMS: tuple[AdcpSpecialism, ...] = (AdcpSpecialism.sales_non_guaranteed,)
 
 
@@ -122,12 +158,20 @@ def _get_adcp_capabilities_impl(
     # it, so the success path must too or context silently vanishes.
     request_context = req.context if req else None
 
+    # Honor the buyer's `protocols` filter on EVERY transport (#1546): return only the
+    # requested domains' capabilities, not the unfiltered default set. Specialisms roll
+    # up to a parent protocol, so they are only advertised when that protocol survives
+    # the filter (today all _DEFAULT_SPECIALISMS roll up to media_buy).
+    supported_protocols = _filter_supported_protocols(req)
+    media_buy_requested = SupportedProtocol.media_buy in supported_protocols
+    specialisms = list(_DEFAULT_SPECIALISMS) if media_buy_requested else []
+
     if not tenant:
         # Return minimal capabilities if no tenant context
         return GetAdcpCapabilitiesResponse(
             adcp=_build_adcp_block(),
-            supported_protocols=list(_DEFAULT_PROTOCOLS),
-            specialisms=list(_DEFAULT_SPECIALISMS),
+            supported_protocols=supported_protocols,
+            specialisms=specialisms,
             context=request_context,
         )
 
@@ -139,6 +183,17 @@ def _get_adcp_capabilities_impl(
 
     # Log activity
     log_tool_activity(identity, "get_adcp_capabilities")
+
+    # media_buy is the only domain with detailed capabilities today; if the buyer
+    # filtered it out there is nothing further to compute or return.
+    if not media_buy_requested:
+        return GetAdcpCapabilitiesResponse(
+            adcp=_build_adcp_block(),
+            supported_protocols=supported_protocols,
+            specialisms=specialisms,
+            last_updated=datetime.now(UTC),
+            context=request_context,
+        )
 
     # Get adapter to determine channels and capabilities
     primary_channels: list[MediaChannel] = []
@@ -296,8 +351,8 @@ def _get_adcp_capabilities_impl(
     # prioritization of the remaining gaps instead of hiding them.
     response = GetAdcpCapabilitiesResponse(
         adcp=_build_adcp_block(),
-        supported_protocols=list(_DEFAULT_PROTOCOLS),
-        specialisms=list(_DEFAULT_SPECIALISMS),
+        supported_protocols=supported_protocols,
+        specialisms=specialisms,
         media_buy=media_buy,
         last_updated=datetime.now(UTC),
         context=request_context,
@@ -316,10 +371,9 @@ async def get_adcp_capabilities(
     MCP tool wrapper aligned with adcp v3.x spec.
 
     Args:
-        protocols: Specific protocols to query (optional). Forwarded into the
-            request; the impl does not yet filter supported_protocols by it
-            (documented @known-gap ext-d), but the value now reaches the impl
-            instead of being dropped at the boundary (#1546).
+        protocols: Specific protocols to filter by (optional). The impl returns only
+            these domains' capabilities; an unknown enum value or an empty array is a
+            VALIDATION_ERROR (#1546).
         context: AdCP request context echoed unchanged on the response. Declared
             here so the envelope-tolerance middleware does not strip it before it
             reaches the request (#1512).
@@ -331,9 +385,11 @@ async def get_adcp_capabilities(
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
     # Build request object, forwarding the buyer's context (echoed back) and the
-    # requested protocols so the impl receives them instead of silently dropping
-    # the buyer's selection (#1546).
-    req = GetAdcpCapabilitiesRequest(protocols=protocols, context=context)
+    # requested protocols so the impl filters supported_protocols by the buyer's
+    # selection (#1546). A bad protocols value becomes VALIDATION_ERROR at this
+    # boundary rather than an untyped pydantic error.
+    with adcp_validation_boundary(context="get_adcp_capabilities request"):
+        req = GetAdcpCapabilitiesRequest(protocols=protocols, context=context)
 
     # Call shared implementation
     response = _get_adcp_capabilities_impl(req, identity)
@@ -370,9 +426,9 @@ async def get_adcp_capabilities_raw(
     Raw function without @mcp.tool decorator for A2A server use.
 
     Args:
-        protocols: Specific protocols to query (optional). Forwarded into the
-            request; filtering is a documented @known-gap (ext-d), but the value
-            now reaches the impl instead of being dropped (#1546).
+        protocols: Specific protocols to filter by (optional). The impl returns only
+            these domains' capabilities; an unknown enum value or an empty array is a
+            VALIDATION_ERROR (#1546).
         context: AdCP request context echoed unchanged on the response (#1512).
         ctx: FastMCP context (automatically provided)
         identity: Pre-resolved identity (preferred over ctx)
@@ -384,7 +440,8 @@ async def get_adcp_capabilities_raw(
         from src.core.transport_helpers import resolve_identity_from_context
 
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
-    # Forward protocols alongside context so the impl receives the buyer's
-    # selection instead of dropping it (#1546).
-    req = GetAdcpCapabilitiesRequest(protocols=protocols, context=context)
+    # Forward protocols so the impl filters by the buyer's selection (#1546); a bad
+    # value becomes VALIDATION_ERROR at this boundary, not an untyped pydantic error.
+    with adcp_validation_boundary(context="get_adcp_capabilities request"):
+        req = GetAdcpCapabilitiesRequest(protocols=protocols, context=context)
     return _get_adcp_capabilities_impl(req, identity)

@@ -20,7 +20,7 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     AttributionWindow,
     ReportingDimensions,
 )
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 
 from src.core.adcp_version import validate_adcp_version_pins
 from src.core.auth_context import require_auth, resolve_auth
@@ -421,18 +421,43 @@ async def get_products(
     return apply_version_compat("get_products", response, served_version)
 
 
+# Module-level FastAPI marker singleton (B008: never call Query() in an argument
+# default). Mirrors the ``resolve_auth = Depends(...)`` pattern used across this router.
+_protocols_query: Any = Query(default=None)
+
+
+def _parse_protocols_query(raw: list[str] | None) -> list[str] | None:
+    """Normalize the ``protocols`` query param into a flat list (or None for no filter).
+
+    Accepts both repeated (``?protocols=a&protocols=b``) and CSV (``?protocols=a,b``)
+    forms — each element is split on commas and trimmed. An absent or all-blank value
+    means "no filter" (None); the raw strings are validated against the ``Protocol``
+    enum downstream when the request model is built.
+    """
+    if not raw:
+        return None
+    parsed = [p.strip() for item in raw for p in item.split(",") if p.strip()]
+    return parsed or None
+
+
 @router.get("/capabilities", dependencies=[Depends(_version_after_resolve)])
 async def get_capabilities(
     identity: ResolvedIdentity | None = resolve_auth,
     context: str | None = None,
+    protocols: list[str] | None = _protocols_query,
 ):
     """Get AdCP capabilities (auth-optional discovery skill).
 
-    ``/capabilities`` is a GET with no request body, but the buyer still has a
-    channel to supply the AdCP ``context`` object: a JSON-encoded ``context`` query
-    parameter. It is decoded here and forwarded to the shared impl, which echoes it
-    unchanged on the response (BR-RULE-043 / POST-S9). Malformed JSON is a
-    VALIDATION_ERROR (the context is opaque but must be a JSON object).
+    ``/capabilities`` is a GET with no request body, but the buyer still has two
+    query channels:
+
+    * ``context`` — a JSON-encoded AdCP context object, echoed unchanged on the
+      response (BR-RULE-043 / POST-S9). Malformed JSON is a VALIDATION_ERROR.
+    * ``protocols`` — the domain filter, mirroring the MCP/A2A ``protocols`` param.
+      Accepts repeated (``?protocols=media_buy&protocols=signals``) or CSV
+      (``?protocols=media_buy,signals``) forms. An unknown protocol is a
+      VALIDATION_ERROR (raised in ``get_adcp_capabilities_raw``'s validation
+      boundary when the request model rejects the enum value).
     """
     context_obj = None
     if context is not None:
@@ -446,7 +471,9 @@ async def get_capabilities(
                     suggestion='Pass context as a URL-encoded JSON object, e.g. context={"session_id":"abc"}.',
                 ) from exc
             context_obj = to_context_object(decoded)
-    response = await capabilities_module.get_adcp_capabilities_raw(identity=identity, context=context_obj)
+    response = await capabilities_module.get_adcp_capabilities_raw(
+        identity=identity, context=context_obj, protocols=_parse_protocols_query(protocols)
+    )
     return response.model_dump(mode="json")
 
 

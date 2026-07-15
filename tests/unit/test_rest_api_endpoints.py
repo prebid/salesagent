@@ -35,6 +35,41 @@ _MOCK_IDENTITY = ResolvedIdentity(
 # ---------------------------------------------------------------------------
 
 
+class TestCapabilitiesProtocolsQuery:
+    """REST GET /capabilities must accept and honor the ``protocols`` filter (#1546).
+
+    Before the fix the route had no ``protocols`` param at all — REST could not
+    filter. These exercise the real wire path (no impl mock): the auth-optional,
+    no-tenant path returns the filtered supported_protocols.
+    """
+
+    def test_no_protocols_returns_full_set(self):
+        response = client.get("/api/v1/capabilities")
+        assert response.status_code == 200
+        assert response.json()["supported_protocols"] == ["media_buy"]
+
+    def test_repeated_protocols_param_filters(self):
+        response = client.get("/api/v1/capabilities?protocols=media_buy")
+        assert response.status_code == 200
+        assert response.json()["supported_protocols"] == ["media_buy"]
+
+    def test_csv_protocols_param_intersects(self):
+        # media_buy supported, signals not -> only media_buy survives.
+        response = client.get("/api/v1/capabilities?protocols=media_buy,signals")
+        assert response.status_code == 200
+        assert response.json()["supported_protocols"] == ["media_buy"]
+
+    def test_only_unsupported_protocol_is_validation_error(self):
+        response = client.get("/api/v1/capabilities?protocols=signals")
+        assert response.status_code == 400
+        assert_envelope_shape(response.json(), "VALIDATION_ERROR", recovery="correctable")
+
+    def test_unknown_protocol_is_validation_error(self):
+        response = client.get("/api/v1/capabilities?protocols=marketing")
+        assert response.status_code == 400
+        assert_envelope_shape(response.json(), "VALIDATION_ERROR", recovery="correctable")
+
+
 # ---------------------------------------------------------------------------
 # Auth-required endpoints
 # ---------------------------------------------------------------------------

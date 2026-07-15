@@ -239,10 +239,8 @@ class TestGetAdcpCapabilitiesProtocolsThreading:
 
     Both transport wrappers previously constructed the request with only
     ``context`` — the ``protocols`` parameter was accepted at the boundary and
-    then dropped, so the impl never saw it (#1546). The impl does not yet
-    *filter* on protocols (documented @known-gap ext-d), but the threading is a
-    prerequisite: the value must reach the request or no filter can ever act on
-    it. These tests pin the threading, not filter behavior.
+    then dropped, so the impl never saw it (#1546). These tests pin the
+    threading; filter behavior is covered in TestGetAdcpCapabilitiesProtocolFiltering.
     """
 
     async def test_raw_wrapper_forwards_protocols_into_request(self):
@@ -267,6 +265,85 @@ class TestGetAdcpCapabilitiesProtocolsThreading:
 
         req = mock_impl.call_args.args[0]
         assert req.protocols == ["media_buy"], "MCP wrapper must thread protocols into the request, not drop it"
+
+
+class TestGetAdcpCapabilitiesProtocolFiltering:
+    """The ``protocols`` filter actually narrows the response on every transport (#1546).
+
+    Reviewer probe: a direct impl call with ``protocols=["signals"]`` used to return
+    ``supported_protocols=["media_buy"]`` (the filter was ignored). It must now filter.
+    """
+
+    def _impl(self, protocols):
+        from adcp.types import GetAdcpCapabilitiesRequest
+
+        from src.core.config_loader import current_tenant
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        current_tenant.set(None)
+        req = GetAdcpCapabilitiesRequest(protocols=protocols)
+        return _get_adcp_capabilities_impl(req, None)
+
+    def test_no_filter_returns_full_supported_set(self):
+        response = self._impl(None)
+        assert response.supported_protocols == [SupportedProtocol.media_buy]
+
+    def test_filter_to_supported_protocol_returns_it(self):
+        response = self._impl(["media_buy"])
+        assert response.supported_protocols == [SupportedProtocol.media_buy]
+
+    def test_filter_intersects_dropping_unsupported(self):
+        # media_buy is supported, signals is not -> only media_buy survives.
+        response = self._impl(["media_buy", "signals"])
+        assert response.supported_protocols == [SupportedProtocol.media_buy]
+
+    def test_filter_to_only_unsupported_protocol_is_validation_error(self):
+        """protocols=["signals"] against a media_buy-only seller must NOT return the
+        default set — the response can't be empty (minItems=1), so it's a VALIDATION_ERROR."""
+        from src.core.exceptions import AdCPValidationError
+
+        with pytest.raises(AdCPValidationError) as exc:
+            self._impl(["signals"])
+        assert exc.value.field == "protocols"
+
+    def test_unknown_protocol_rejected_by_request_model(self):
+        """An unknown enum value is rejected when the request model is built (the
+        transport boundaries translate that to VALIDATION_ERROR)."""
+        from adcp.types import GetAdcpCapabilitiesRequest
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            GetAdcpCapabilitiesRequest(protocols=["marketing"])
+
+
+class TestParseProtocolsQuery:
+    """REST ``protocols`` query param normalization (repeated or CSV) (#1546)."""
+
+    def test_none_and_empty_mean_no_filter(self):
+        from src.routes.api_v1 import _parse_protocols_query
+
+        assert _parse_protocols_query(None) is None
+        assert _parse_protocols_query([]) is None
+        assert _parse_protocols_query([""]) is None
+
+    def test_repeated_params(self):
+        from src.routes.api_v1 import _parse_protocols_query
+
+        assert _parse_protocols_query(["media_buy", "signals"]) == ["media_buy", "signals"]
+
+    def test_csv_param_is_split(self):
+        from src.routes.api_v1 import _parse_protocols_query
+
+        assert _parse_protocols_query(["media_buy,signals"]) == ["media_buy", "signals"]
+
+    def test_mixed_and_trimmed(self):
+        from src.routes.api_v1 import _parse_protocols_query
+
+        assert _parse_protocols_query([" media_buy , signals ", "creative"]) == [
+            "media_buy",
+            "signals",
+            "creative",
+        ]
 
 
 class TestGetAdcpCapabilitiesWithTenant:
