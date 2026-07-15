@@ -962,6 +962,60 @@ class TestApprovalCrashRecovery:
 
     # ── Fix A: real takeover records a durable ownership-independent incident ──
 
+    def _run_worker_through_takeover(
+        self, context_manager, tenant_id, principal_id, media_buy_id, takeover_lease_id, adapter_terminal
+    ):
+        """Drive W1 (the real approval finalizer) through a REAL takeover and assert the
+        ownership-independent-incident invariants COMMON to both CAS-loss branches.
+
+        Seeds the buy/step, starts W1 on a blocking adapter whose post-release terminal
+        behaviour is ``adapter_terminal`` (a 0-arg callable that either RETURNS
+        ``(success, msg)`` or RAISES — the ONLY thing that genuinely differs between the two
+        branches), then installs W2's REAL replacement lease (``takeover_lease_id``) while W1
+        is mid-adapter so W1's owner-CAS on its OWN lease id loses, and releases + joins W1.
+
+        Asserts the shared outcome: the worker neither hung nor raised, lost the CAS
+        (NOT_CLAIMED) yet was NOT silent — it recorded EXACTLY ONE durable
+        ownership-independent incident (buy column + AuditLog) without stealing W2's finalize
+        state (W2 still owns ``takeover_lease_id``, status still ``finalizing``).
+
+        Returns ``(step_id, worker_result, buy_snapshot)`` so each caller pins its OWN
+        branch discriminator (the incident REASON, incident survival, step terminal-ness) —
+        deliberately NOT folded in here, so each test still proves its distinct branch.
+        """
+        step_id, step_data = self._seed_pending(context_manager, tenant_id, principal_id, media_buy_id)
+
+        adapter_entered = threading.Event()
+        adapter_release = threading.Event()
+
+        def w1_adapter():
+            adapter_entered.set()
+            assert adapter_release.wait(timeout=30), "test deadlock: adapter never released"
+            return adapter_terminal()
+
+        t, worker_result = _start_approval_worker(tenant_id, media_buy_id, step_id, step_data, w1_adapter)
+        try:
+            assert adapter_entered.wait(timeout=30), "worker never reached the adapter"
+            # W2 takes over with a NEW lease while W1 is mid-adapter (status stays finalizing),
+            # so W1's own-lease CAS (manual_required OR failed) loses.
+            _install_takeover_lease(tenant_id, media_buy_id, takeover_lease_id)
+        finally:
+            adapter_release.set()
+            t.join(timeout=60)
+
+        assert not t.is_alive(), "worker hung"
+        assert "error" not in worker_result, f"worker failed: {worker_result.get('error')}"
+        # W1 lost the owner-CAS to W2's lease → NOT_CLAIMED, but NOT silent.
+        assert worker_result["outcome"] is FinalizeOutcome.NOT_CLAIMED
+        buy = _buy_snapshot(tenant_id, media_buy_id)
+        # Durable ownership-independent incident recorded (buy column + AuditLog), exactly once.
+        assert buy.finalize_reconcile_incident_at is not None
+        assert _finalize_incident_audit_count(tenant_id, media_buy_id) == 1
+        # W1 did NOT steal W2's finalize state.
+        assert buy.finalize_lease_id == takeover_lease_id
+        assert buy.status == "finalizing"
+        return step_id, worker_result, buy
+
     def test_real_takeover_records_incident_that_survives_winner_publish(
         self, integration_db, sample_tenant, sample_principal, context_manager
     ):
@@ -978,39 +1032,21 @@ class TestApprovalCrashRecovery:
         the-lease path whose CAS succeeds.
         """
         tenant_id = sample_tenant["tenant_id"]
-        step_id, step_data = self._seed_pending(
-            context_manager, tenant_id, sample_principal["principal_id"], "mb_takeover"
-        )
 
-        adapter_entered = threading.Event()
-        adapter_release = threading.Event()
-
-        def w1_adapter():
-            adapter_entered.set()
-            assert adapter_release.wait(timeout=30), "test deadlock: adapter never released"
+        def w1_terminal():
             # W1's post-mutation ambiguity: its remote order may exist.
             raise AdapterPostMutationIncomplete("W1 order created; approval failed")
 
-        t, worker_result = _start_approval_worker(tenant_id, "mb_takeover", step_id, step_data, w1_adapter)
-        try:
-            assert adapter_entered.wait(timeout=30), "worker never reached the adapter"
-            # W2 takes over with a NEW lease while W1 is mid-adapter (status stays finalizing).
-            _install_takeover_lease(tenant_id, "mb_takeover", "lease_w2_takeover")
-        finally:
-            adapter_release.set()
-            t.join(timeout=60)
-
-        assert not t.is_alive(), "worker hung"
-        assert "error" not in worker_result, f"worker failed: {worker_result.get('error')}"
-        # W1 lost the owner-CAS to W2's lease → NOT_CLAIMED, but NOT silent.
-        assert worker_result["outcome"] is FinalizeOutcome.NOT_CLAIMED
-        mid = _buy_snapshot(tenant_id, "mb_takeover")
-        assert mid.finalize_reconcile_incident_at is not None  # durable marker despite no ownership
+        _step_id, _worker_result, mid = self._run_worker_through_takeover(
+            context_manager,
+            tenant_id,
+            sample_principal["principal_id"],
+            "mb_takeover",
+            "lease_w2_takeover",
+            w1_terminal,
+        )
+        # Branch discriminator: the incident REASON pins the manual-CAS (post-mutation) branch.
         assert "W1 order created" in (mid.finalize_reconcile_incident_reason or "")
-        assert _finalize_incident_audit_count(tenant_id, "mb_takeover") == 1  # durable audit row
-        # W1 did NOT steal W2's finalize state.
-        assert mid.finalize_lease_id == "lease_w2_takeover"
-        assert mid.status == "finalizing"
 
         # W2 (the new owner) now publishes cleanly — clears finalize state but MUST leave the incident.
         _clean_publish_as(tenant_id, "mb_takeover", "lease_w2_takeover")
@@ -1039,43 +1075,24 @@ class TestApprovalCrashRecovery:
         path, whose incident recording only the success-publish CAS-loss sibling covered.
         """
         tenant_id = sample_tenant["tenant_id"]
-        step_id, step_data = self._seed_pending(
-            context_manager, tenant_id, sample_principal["principal_id"], "mb_fail_takeover"
-        )
 
-        adapter_entered = threading.Event()
-        adapter_release = threading.Event()
-
-        def w1_failing_adapter():
-            adapter_entered.set()
-            assert adapter_release.wait(timeout=30), "test deadlock: adapter never released"
+        def w1_terminal():
             # A HANDLED failure return (the (False, msg) contract), NOT a raise — after the
             # remote order may already have been created.
             return False, "GAM order creation failed after the remote order was created"
 
-        t, worker_result = _start_approval_worker(tenant_id, "mb_fail_takeover", step_id, step_data, w1_failing_adapter)
-        try:
-            assert adapter_entered.wait(timeout=30), "worker never reached the adapter"
-            # W2 takes over with a NEW lease while W1 is mid-adapter (status stays finalizing),
-            # so W1's failed-status CAS on its own lease id fails.
-            _install_takeover_lease(tenant_id, "mb_fail_takeover", "lease_w2_fail_takeover")
-        finally:
-            adapter_release.set()
-            t.join(timeout=60)
-
-        assert not t.is_alive(), "worker hung"
-        assert "error" not in worker_result, f"worker failed: {worker_result.get('error')}"
-        # W1 lost the failed-transition CAS to W2's lease → NOT_CLAIMED, but NOT silent.
-        assert worker_result["outcome"] is FinalizeOutcome.NOT_CLAIMED
-        buy = _buy_snapshot(tenant_id, "mb_fail_takeover")
-        # The buy is NOT marked failed (W1 lost the CAS); W2 still owns the finalize lease.
-        assert buy.status == "finalizing"
-        assert buy.finalize_lease_id == "lease_w2_fail_takeover"  # W1 did not steal W2's state
-        # The durable ownership-independent incident IS recorded (buy column + AuditLog).
-        assert buy.finalize_reconcile_incident_at is not None
+        step_id, _worker_result, buy = self._run_worker_through_takeover(
+            context_manager,
+            tenant_id,
+            sample_principal["principal_id"],
+            "mb_fail_takeover",
+            "lease_w2_fail_takeover",
+            w1_terminal,
+        )
+        # Branch discriminator: the incident REASON pins the FAILED-transition branch
+        # (``if not success:`` → ``if failed is None:``), NOT the publish/manual-CAS branch.
         assert "adapter ran" in (buy.finalize_reconcile_incident_reason or "")
         assert "reported failure" in (buy.finalize_reconcile_incident_reason or "")
-        assert _finalize_incident_audit_count(tenant_id, "mb_fail_takeover") == 1
         # The step was not terminalized as failed — W2 owns the decision.
         assert _step_snapshot(tenant_id, step_id).status != "failed"
 
