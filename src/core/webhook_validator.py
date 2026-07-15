@@ -5,11 +5,23 @@ Server-Side Request Forgery (SSRF) attacks where malicious users could
 trick the server into making requests to internal services.
 """
 
+import logging
 import os
 
 from adcp.types import TaskType
 
 from src.core.security.url_validator import check_url_ssrf
+
+logger = logging.getLogger(__name__)
+
+# Buyer-facing message for a rejected callback URL. Deliberately GENERIC: the
+# detailed reason (resolved IP, matched CIDR range, resolver diagnostics) is an
+# SSRF oracle — it lets the URL supplier probe internal network topology through
+# the error channel — so it goes to the server log ONLY, never back over the wire.
+_GENERIC_CALLBACK_REJECTION = "URL failed SSRF validation"
+# The one non-sensitive hint we DO surface: the scheme requirement. It echoes the
+# buyer's own submitted scheme and reveals nothing about internal resolution.
+_HTTPS_REQUIRED_MESSAGE = "URL must use HTTPS scheme"
 
 
 def _allow_private_webhook_targets() -> bool:
@@ -118,4 +130,17 @@ class WebhookURLValidator:
         allow_private = _allow_private_webhook_targets()
         # Require HTTPS whenever private targets are NOT permitted (every real
         # deployment). The E2E opt-in that permits private receivers also permits HTTP.
-        return check_url_ssrf(url, require_https=not allow_private, allow_private=allow_private)
+        require_https = not allow_private
+        is_valid, detail = check_url_ssrf(url, require_https=require_https, allow_private=allow_private)
+        if is_valid:
+            return True, ""
+
+        # Info-disclosure guard (#1546): never hand the resolved IP / matched CIDR
+        # range back to the buyer — that is an SSRF oracle. Log the precise reason
+        # server-side; return a generic message. The HTTPS-scheme requirement is the
+        # sole exception (it is not a resolution diagnostic and helps the buyer fix
+        # a plain-http callback).
+        logger.warning("Push callback URL rejected by SSRF validation: %s", detail)
+        if require_https and "https" in detail.lower():
+            return False, _HTTPS_REQUIRED_MESSAGE
+        return False, _GENERIC_CALLBACK_REJECTION

@@ -8,11 +8,21 @@ import ipaddress
 import socket
 from urllib.parse import urlparse
 
-# Link-local / cloud-metadata ranges. ALWAYS blocked — never a legitimate webhook
-# target, in any environment (this is the cloud-credential-exfiltration surface).
+# Link-local / cloud-metadata / this-network ranges. ALWAYS blocked — never a
+# legitimate webhook target, in any environment (this is the cloud-credential-
+# exfiltration surface). Includes:
+#   169.254.0.0/16  link-local (AWS/GCP/Azure IMDS at 169.254.169.254)
+#   fe80::/10       IPv6 link-local
+#   0.0.0.0/8       "this-network" (RFC 1122) — 0.0.0.1 / 0.1.2.3 alias localhost
+#                   on some stacks and is never a routable public target
+#   fd00:ec2::/32   AWS IPv6 instance metadata — sits INSIDE fc00::/7 (unique-local,
+#                   the private tier), so it needs its own always-block entry here or
+#                   it would be reachable whenever allow_private=True
 METADATA_NETWORKS = [
     ipaddress.ip_network("169.254.0.0/16"),
     ipaddress.ip_network("fe80::/10"),
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("fd00:ec2::/32"),
 ]
 
 # RFC-1918 private + loopback + unique-local ranges. Blocked by default, but a

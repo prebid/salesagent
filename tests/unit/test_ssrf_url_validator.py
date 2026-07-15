@@ -151,6 +151,69 @@ class TestSsrfCompletenessAlwaysBlocked:
         assert self._check("http://[::ffff:169.254.169.254]/", "::ffff:169.254.169.254", allow_private=True)[0] is False
 
 
+class TestSsrfAlwaysBlockRanges:
+    """Reviewer probe (#1546): 0.0.0.0/8 (this-network) and fd00:ec2::/32 (AWS IPv6
+    instance metadata) must be blocked in EVERY environment, even allow_private=True.
+
+    fd00:ec2::/32 sits inside fc00::/7 (the unique-local private tier), so before the
+    fix it was reachable whenever allow_private=True; 0.0.0.x fell through every range.
+    These use real literal IPs (getaddrinfo resolves a literal to itself), so no mock.
+    """
+
+    def test_this_network_0_0_0_1_blocked_with_allow_private(self):
+        is_safe, error = check_url_ssrf("http://0.0.0.1/", allow_private=True)
+        assert is_safe is False
+        assert "blocked" in error.lower()
+
+    def test_this_network_0_1_2_3_blocked_with_allow_private(self):
+        is_safe, error = check_url_ssrf("http://0.1.2.3/", allow_private=True)
+        assert is_safe is False
+        assert "blocked" in error.lower()
+
+    def test_aws_ipv6_metadata_blocked_with_allow_private(self):
+        is_safe, error = check_url_ssrf("http://[fd00:ec2::254]/", allow_private=True)
+        assert is_safe is False
+        assert "blocked" in error.lower()
+
+
+class TestCallbackErrorNoInfoDisclosure:
+    """Reviewer probe (#1546): the buyer-facing callback rejection must NOT leak the
+    resolved IP or matched CIDR range — that error channel is an SSRF oracle.
+    validate_callback_url returns a generic message; the detail goes to the log only.
+    """
+
+    def test_private_target_message_has_no_ip_or_range(self):
+        import re
+
+        from src.core.webhook_validator import WebhookURLValidator
+
+        # Flag OFF + https scheme: passes the scheme gate, then resolves to a private
+        # 10.x address — the branch whose detail string embeds the resolved IP.
+        with (
+            patch("src.core.webhook_validator._allow_private_webhook_targets", return_value=False),
+            patch("src.core.security.url_validator._resolve_ips", return_value=["10.11.12.13"]),
+        ):
+            is_valid, error = WebhookURLValidator.validate_callback_url("https://internal.example.com/webhook")
+        assert is_valid is False
+        # No resolved IP octets and no CIDR range must appear in the buyer-facing string.
+        assert "10.11.12.13" not in error
+        assert not re.search(r"\d+\.\d+\.\d+\.\d+", error), f"leaked an IP: {error!r}"
+        assert "/" not in error, f"leaked a CIDR range: {error!r}"
+        assert error == "URL failed SSRF validation"
+
+    def test_metadata_target_message_has_no_ip_or_range(self):
+        import re
+
+        from src.core.webhook_validator import WebhookURLValidator
+
+        with patch("src.core.webhook_validator._allow_private_webhook_targets", return_value=True):
+            is_valid, error = WebhookURLValidator.validate_callback_url("http://[fd00:ec2::254]/webhook")
+        assert is_valid is False
+        assert "fd00:ec2" not in error.lower()
+        assert not re.search(r"\d+\.\d+\.\d+\.\d+", error)
+        assert error == "URL failed SSRF validation"
+
+
 class TestValidateCallbackUrl:
     """The callback gate: strict by default (prod/staging/dev); private only via the
     dedicated ADCP_ALLOW_PRIVATE_WEBHOOKS opt-in (E2E harness) (#1512)."""
