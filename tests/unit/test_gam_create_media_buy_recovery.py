@@ -7,7 +7,10 @@ severed the response), so ``create_media_buy`` runs a recovery lookup by the DET
 order name:
 
 * lookup finds the order  → mutation happened; recover its id and finish normally,
-* lookup finds nothing     → provably pre-mutation; re-raise the original error,
+* lookup finds nothing     → NOT proof of pre-mutation. GAM createOrders is not
+  read-your-writes consistent, so a committed order can be briefly invisible; a bounded
+  retry absorbs that lag, and a persistent miss FAILS SAFE to
+  ``AdapterPostMutationIncomplete`` (remote state unknown → manual reconciliation),
 * lookup itself fails      → ambiguous; raise ``AdapterPostMutationIncomplete``.
 
 The order name is deterministic (the idempotency key, or a stable hash of
@@ -15,6 +18,7 @@ The order name is deterministic (the idempotency key, or a stable hash of
 second order.
 """
 
+import re
 from datetime import UTC, datetime
 from unittest.mock import Mock, patch
 
@@ -105,6 +109,9 @@ def _make_adapter():
     adapter.orders_manager.create_line_items = Mock(return_value=["li_001"])
     adapter.orders_manager.approve_order = Mock(return_value=True)
     adapter._finish_create_media_buy = GoogleAdManager._finish_create_media_buy.__get__(adapter)
+    adapter._recover_order_id_after_create_failure = GoogleAdManager._recover_order_id_after_create_failure.__get__(
+        adapter
+    )
     return adapter
 
 
@@ -144,17 +151,30 @@ def test_create_failure_with_lookup_hit_recovers_id_with_single_remote_create():
     assert finalizer_order_ids == ["999"]
 
 
-def test_create_failure_with_lookup_miss_reraises_original_pre_mutation_error():
-    """Recovery lookup finds nothing → provably pre-mutation → re-raise the ORIGINAL
-    error unchanged (a plain, retryable failure), NOT AdapterPostMutationIncomplete."""
+def test_create_failure_with_persistent_lookup_miss_fails_safe_to_post_mutation_incomplete():
+    """Recovery lookup finds nothing on EVERY bounded attempt → still NOT proof of
+    pre-mutation (GAM createOrders is not read-your-writes consistent, so a committed
+    order can stay invisible), so FAIL SAFE to AdapterPostMutationIncomplete — the SAME
+    conservative outcome as the lookup-failed branch, never a plain retryable re-raise.
+
+    Contract change (#1637): the previous test asserted a lookup miss re-raised the
+    original error as a plain PRE-mutation failure. That encoded the WRONG contract — a
+    miss could be a committed-but-invisible order, so treating it as pre-mutation risks a
+    duplicate remote create on retry. Updated to pin the corrected fail-safe behaviour.
+    """
     adapter = _make_adapter()
-    boom = RuntimeError("createOrders rejected pre-commit")
+    boom = RuntimeError("createOrders ambiguous timeout")
     adapter.orders_manager.create_order = Mock(side_effect=boom)
     adapter.orders_manager.find_order_by_name = Mock(return_value=None)
 
-    with pytest.raises(RuntimeError, match="createOrders rejected pre-commit"):
-        _run(adapter, _make_request(), [_make_package()])
+    with patch("src.adapters.google_ad_manager.time.sleep") as mock_sleep:
+        with pytest.raises(AdapterPostMutationIncomplete):
+            _run(adapter, _make_request(), [_make_package()])
 
+    # Bounded retry: the deterministic-name lookup is attempted the full budget before the
+    # miss is concluded, absorbing GAM's create-visibility lag (backoff between attempts).
+    assert adapter.orders_manager.find_order_by_name.call_count == 3
+    assert mock_sleep.call_count == 2  # backoff between the 3 attempts, none after the last
     adapter.orders_manager.create_line_items.assert_not_called()
 
 
@@ -233,3 +253,24 @@ def test_idempotency_key_drives_deterministic_order_name():
 
     assert captured[0] == captured[1]
     assert "mb_mb_persisted_123" in captured[0]
+
+
+def test_fallback_anchor_uses_128_bit_hash_for_collision_resistance():
+    """Collision resistance (#1637): the no-idempotency-key fallback anchor embeds 128 bits
+    (32 hex chars) of the SHA-256 digest, NOT 32 bits. At 32 bits the birthday bound gives
+    ~50% collision near ~77k buys/tenant, so two DISTINCT idempotency keys could hash to one
+    order name and the second buy would silently reuse the first's order. Pin the width."""
+    captured: list[str] = []
+
+    def capture_order_name(**kwargs):
+        captured.append(kwargs["order_name"])
+        return "order_1"
+
+    adapter = _make_adapter()
+    adapter.orders_manager.create_order = Mock(side_effect=capture_order_name)
+    _run(adapter, _make_request(idempotency_key="anchor-width"), [_make_package()])
+
+    assert len(captured) == 1
+    match = re.search(r"\[mb_gam_([0-9a-f]+)\]", captured[0])
+    assert match is not None, f"deterministic anchor suffix not found in {captured[0]!r}"
+    assert len(match.group(1)) == 32  # 128 bits — not the old 8-hex (32-bit) anchor

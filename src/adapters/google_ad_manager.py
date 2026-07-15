@@ -14,6 +14,7 @@ __all__ = [
 
 import hashlib
 import logging
+import time
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -83,6 +84,14 @@ from src.core.schemas import (
 
 # Set up logger
 logger = logging.getLogger(__name__)
+
+# Bounded post-failure recovery lookup (#1637). ``create_order`` can fail AMBIGUOUSLY —
+# createOrders may have committed remotely before a timeout severed the response — and GAM
+# createOrders is NOT read-your-writes consistent, so a just-committed order can be briefly
+# invisible to a name lookup. Retry the deterministic-name lookup a few times with short
+# backoff to absorb that visibility lag before concluding a MISS (which fails safe).
+_CREATE_RECOVERY_LOOKUP_ATTEMPTS = 3
+_CREATE_RECOVERY_LOOKUP_BACKOFF_SECONDS = 0.5
 
 
 class GoogleAdManager(AdServerAdapter):
@@ -676,8 +685,14 @@ class GoogleAdManager(AdServerAdapter):
         if idempotency_key:
             stable_order_id = idempotency_key
         else:
+            # Collision resistance (#1637): use 128 bits (32 hex chars) of the digest, NOT
+            # 32 bits. At 32 bits the birthday bound gives ~50% collision near 2^16 (~77k
+            # buys/tenant), so two DISTINCT idempotency keys could hash to ONE order name
+            # and the second buy would silently reuse the first's order. 128 bits pushes
+            # that bound past 2^64. The suffix stays tiny — truncate_name_with_suffix
+            # preserves it well inside GAM's 255-char order-name budget.
             stable_seed = f"{self.tenant_id}:{request.idempotency_key}"
-            stable_order_id = f"gam_{hashlib.sha256(stable_seed.encode()).hexdigest()[:8]}"
+            stable_order_id = f"gam_{hashlib.sha256(stable_seed.encode()).hexdigest()[:32]}"
 
         context = build_order_name_context(
             request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key, media_buy_id=stable_order_id
@@ -713,27 +728,30 @@ class GoogleAdManager(AdServerAdapter):
             # the buy stays in the automatic-retry path (finalizing; reconciler retries).
             raise
         except Exception as create_error:
-            # create_order raised AFTER possibly committing createOrders. Attempt a
-            # recovery lookup by the DETERMINISTIC name to disambiguate.
-            try:
-                recovered_order_id = self.orders_manager.find_order_by_name(order_name)
-            except Exception as lookup_error:
-                # Lookup itself failed → we cannot prove the order's absence, and a remote
-                # order MAY exist. Surface AdapterPostMutationIncomplete (NOT
-                # AdapterIdempotencyUncertain, whose contract falsely asserts no mutation).
-                raise AdapterPostMutationIncomplete(
-                    f"GAM order create for '{order_name}' failed ({create_error}) and the "
-                    f"recovery lookup also failed ({lookup_error}); remote state is unknown."
-                ) from create_error
+            # create_order raised AFTER possibly committing createOrders. Attempt a BOUNDED
+            # recovery lookup by the DETERMINISTIC name to disambiguate (see the helper — it
+            # retries to absorb GAM's create-visibility lag, and raises
+            # AdapterPostMutationIncomplete if the lookup RPC itself fails).
+            recovered_order_id = self._recover_order_id_after_create_failure(order_name, create_error)
             if recovered_order_id is not None:
-                # The order exists → createOrders DID commit before the failure. Recover
-                # its id and continue into the post-mutation finalizer.
+                # POSITIVE find → createOrders DID commit before the failure. Recover its id
+                # and continue into the post-mutation finalizer.
                 order_id = recovered_order_id
                 self.log(f"✓ Recovered GAM Order ID after create failure: {order_id}")
             else:
-                # Lookup succeeded and found nothing → provably pre-mutation. Re-raise the
-                # original error so it becomes a plain, retryable failure.
-                raise
+                # A lookup MISS does NOT prove pre-mutation. GAM createOrders is NOT
+                # read-your-writes consistent, so a committed order may still be invisible
+                # even after the bounded retries — a miss cannot be classified as a plain
+                # retryable pre-mutation failure. Fail SAFE: raise
+                # AdapterPostMutationIncomplete (remote state unknown → manual
+                # reconciliation), IDENTICAL to the lookup-FAILED branch. Only a POSITIVE
+                # find recovers the id and continues.
+                raise AdapterPostMutationIncomplete(
+                    f"GAM order create for '{order_name}' failed ({create_error}) and a bounded "
+                    f"recovery lookup did not find the order; GAM createOrders is not "
+                    f"read-your-writes consistent, so a committed order may still be invisible — "
+                    f"remote state is unknown. Manual reconciliation required."
+                ) from create_error
 
         self.log(f"✓ Created GAM Order ID: {order_id}")
 
@@ -762,6 +780,37 @@ class GoogleAdManager(AdServerAdapter):
             raise AdapterPostMutationIncomplete(
                 f"GAM order {order_id} was created but a later stage failed: {post_order_error}"
             ) from post_order_error
+
+    def _recover_order_id_after_create_failure(self, order_name: str, create_error: Exception) -> str | None:
+        """Bounded recovery lookup by deterministic order name after a create failure (#1637).
+
+        ``orders_manager.create_order`` failed AMBIGUOUSLY — createOrders may have committed
+        remotely before a timeout severed the response. GAM createOrders is NOT
+        read-your-writes consistent, so a just-committed order can be momentarily invisible
+        to a name lookup. Retry ``find_order_by_name`` up to
+        ``_CREATE_RECOVERY_LOOKUP_ATTEMPTS`` times with a short backoff to absorb that
+        visibility lag.
+
+        Returns the recovered order id on a POSITIVE find, or ``None`` if the order is still
+        not found after every attempt. The caller MUST treat that ``None`` (a MISS)
+        conservatively — a miss does NOT prove pre-mutation. A lookup RPC failure is itself
+        ambiguous (a mutation MAY exist) and is raised as
+        :class:`AdapterPostMutationIncomplete` (NEVER ``AdapterIdempotencyUncertain``, whose
+        contract falsely asserts no mutation).
+        """
+        for attempt in range(_CREATE_RECOVERY_LOOKUP_ATTEMPTS):
+            try:
+                recovered_order_id = self.orders_manager.find_order_by_name(order_name)
+            except Exception as lookup_error:
+                raise AdapterPostMutationIncomplete(
+                    f"GAM order create for '{order_name}' failed ({create_error}) and the "
+                    f"recovery lookup also failed ({lookup_error}); remote state is unknown."
+                ) from create_error
+            if recovered_order_id is not None:
+                return recovered_order_id
+            if attempt < _CREATE_RECOVERY_LOOKUP_ATTEMPTS - 1:
+                time.sleep(_CREATE_RECOVERY_LOOKUP_BACKOFF_SECONDS)
+        return None
 
     def _finish_create_media_buy(
         self,
