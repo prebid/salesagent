@@ -723,6 +723,35 @@ def _build_adapter_asset_from_creative(
     return asset, None
 
 
+def raise_on_failed_creative_uploads(asset_statuses, creative_map, creatives_repo) -> None:
+    """Enrich successfully-uploaded creatives; FAIL the approval on any failed upload.
+
+    A ``failed`` per-asset status means the remote order exists but is missing
+    creatives — proceeding to order approval would publish an incomplete buy, so the
+    batch raises :class:`AdapterPostMutationIncomplete` (post-mutation by definition:
+    the order was created before upload). Successful assets are still enriched first
+    so a partial batch keeps its concept/platform-id writebacks. #1637.
+    """
+    failed_uploads: list[str] = []
+    for status in asset_statuses:
+        if status.status == "failed":
+            logger.error(log_safe(f"[APPROVAL] Failed to upload creative {status.creative_id}: {status.message}"))
+            failed_uploads.append(f"{status.creative_id}: {status.message}")
+            continue
+        if not status.creative_id:
+            continue
+        creative = creative_map.get(status.creative_id)
+        if creative is None:
+            continue
+        merged = _apply_creative_enrichment(creative, status)
+        if merged is not None:
+            creatives_repo.update_data(creative, merged)
+    if failed_uploads:
+        raise AdapterPostMutationIncomplete(
+            f"{len(failed_uploads)} creative(s) failed to upload to the remote order: " + "; ".join(failed_uploads)
+        )
+
+
 def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool, str | None]:
     """Execute adapter creation for a manually approved media buy.
 
@@ -1184,29 +1213,17 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                             )
                             logger.info(f"[APPROVAL] Creative upload completed: {len(asset_statuses)} assets processed")
 
-                            # Enrich creatives (concept + platform id) on success; log failures.
-                            # This is the manual-approval push path — the third of three GAM push
-                            # sites, wired here so admin-approved buys enrich like the other two
-                            # (#1506). uow2 commits the writeback on block exit.
-                            creatives_repo = CreativeRepository(session, tenant_id)
-                            for status in asset_statuses:
-                                if status.status == "failed":
-                                    logger.error(
-                                        log_safe(
-                                            f"[APPROVAL] Failed to upload creative {status.creative_id}: {status.message}"
-                                        )
-                                    )
-                                    continue
-                                if not status.creative_id:
-                                    continue
-                                creative = creative_map.get(status.creative_id)
-                                if creative is None:
-                                    continue
-                                merged = _apply_creative_enrichment(creative, status)
-                                if merged is not None:
-                                    creatives_repo.update_data(creative, merged)
+                            # Enrich creatives (concept + platform id) on success. Per-asset
+                            # FAILED statuses FAIL the approval — continuing would approve +
+                            # publish the buy with creatives missing from the remote order
+                            # (#1637 review blocker).
+                            raise_on_failed_creative_uploads(
+                                asset_statuses, creative_map, CreativeRepository(session, tenant_id)
+                            )
                         else:
                             logger.warning("[APPROVAL] Adapter does not support creative upload, skipping")
+                    except AdapterPostMutationIncomplete:
+                        raise
                     except Exception as creative_error:
                         # Creative upload failed AFTER the remote order was created —
                         # a partial graph exists; must not become terminal failed. #1637.

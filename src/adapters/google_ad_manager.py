@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 from flask import Flask
 
-from src.adapters.base import AdapterCapabilities, AdServerAdapter, TargetingCapabilities
+from src.adapters.base import AdapterCapabilities, AdapterPostMutationIncomplete, AdServerAdapter, TargetingCapabilities
 
 # Import modular components
 from src.adapters.gam.client import GAMClientManager
@@ -673,6 +673,49 @@ class GoogleAdManager(AdServerAdapter):
 
         self.log(f"✓ Created GAM Order ID: {order_id}")
 
+        # ── GAM MUTATION BOUNDARY (#1637) ─────────────────────────────────
+        # The remote order now EXISTS. Any failure from here on (targeting build,
+        # line items, activation workflow, response assembly) leaves a partial
+        # remote graph — it must surface as AdapterPostMutationIncomplete so the
+        # approval finalizer preserves the manual-reconciliation state instead of
+        # terminal-failing the buy and erasing the signal. The typed exception
+        # originates HERE, at the actual mutation boundary, because the caller's
+        # post-hoc flag cannot see an exception thrown mid-adapter.
+        try:
+            return self._finish_create_media_buy(
+                request=request,
+                packages=packages,
+                start_time=start_time,
+                end_time=end_time,
+                products_map=products_map,
+                order_id=order_id,
+                order_name=order_name,
+                package_pricing_info=package_pricing_info,
+            )
+        except AdapterPostMutationIncomplete:
+            raise
+        except Exception as post_order_error:
+            raise AdapterPostMutationIncomplete(
+                f"GAM order {order_id} was created but a later stage failed: {post_order_error}"
+            ) from post_order_error
+
+    def _finish_create_media_buy(
+        self,
+        *,
+        request: CreateMediaBuyRequest,
+        packages: list[MediaPackage],
+        start_time: datetime,
+        end_time: datetime,
+        products_map: dict,
+        order_id: str,
+        order_name: str,
+        package_pricing_info: dict[str, dict] | None,
+    ) -> CreateMediaBuyResponse:
+        """Everything after the remote order exists — line items, activation, response.
+
+        Runs strictly INSIDE the post-mutation boundary of ``create_media_buy``: any
+        exception escaping here is converted to ``AdapterPostMutationIncomplete``. #1637.
+        """
         # Build targeting for each package (per AdCP spec, targeting is at package level)
         package_targeting = {}
         for package in packages:

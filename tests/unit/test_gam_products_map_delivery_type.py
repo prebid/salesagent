@@ -112,6 +112,9 @@ def test_products_map_includes_delivery_type():
     mock_adapter.orders_manager.create_line_items = Mock(side_effect=capture_create_line_items)
     mock_adapter.orders_manager.create_order = Mock(return_value="order_123")
     mock_adapter.orders_manager.approve_order = Mock(return_value=True)
+    # create_media_buy delegates the post-order work to _finish_create_media_buy
+    # (the #1637 mutation boundary); bind the REAL helper so the capture runs.
+    mock_adapter._finish_create_media_buy = GoogleAdManager._finish_create_media_buy.__get__(mock_adapter)
 
     mock_session = _make_db_session(mock_product)
 

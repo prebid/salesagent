@@ -499,13 +499,9 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     # tests/admin/test_workflows_blueprint.py
     ("tests/admin/test_workflows_blueprint.py", "test_tenant"),
     ("tests/admin/test_workflows_blueprint.py", "_create_context_and_step"),
-    # #1637 exactly-once tests: seed a package carrying platform_order_id to pin the
-    # partial-graph conservatism (raw-session pattern, like test_approval_finalizer_race).
-    (
-        "tests/integration/test_approval_crash_recovery.py",
-        "test_crash_after_marker_on_real_adapter_goes_manual_once_no_hot_loop",
-    ),
-    ("tests/integration/test_approval_crash_recovery.py", "test_persisted_order_id_never_skips_the_adapter"),
+    # #1637 exactly-once tests: ONE session-owning seeding helper (crash-artifact
+    # platform ids); tests themselves never touch sessions. FIXME(#1637): factory.
+    ("tests/integration/test_approval_crash_recovery.py", "_seed_platform_order_id"),
     # ── tests/e2e/ — pre-existing violations from e2e lifecycle test ──
     # FIXME(salesagent-e2e-admin-factories): migrate e2e seed helpers to factories.
     ("tests/e2e/test_gam_lifecycle.py", "_seed_lifecycle_test_data"),
@@ -742,41 +738,21 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
         "test_two_concurrent_updates_same_token_one_wins_one_conflicts",
     ),
     ("tests/integration/test_media_buy_status_scheduler.py", "_get_media_buy_revision"),
-    # #1637 exactly-once lease-protocol tests: model crash windows / ownership races with
-    # INDEPENDENT sessions (worker threads + reconciler passes) that the single-session
-    # harness cannot provide. FIXME(#1637): factories where feasible.
+    # #1637 exactly-once lease-protocol suite: DB access is consolidated into these
+    # session-owning module helpers (crash windows / ownership races need INDEPENDENT
+    # sessions the single-session harness cannot provide); the tests themselves never
+    # open sessions. One entry per helper, not per test. FIXME(#1637).
+    ("tests/integration/test_approval_crash_recovery.py", "_resume"),
+    ("tests/integration/test_approval_crash_recovery.py", "_finalize_approval"),
+    ("tests/integration/test_approval_crash_recovery.py", "_buy_snapshot"),
+    ("tests/integration/test_approval_crash_recovery.py", "_step_snapshot"),
+    ("tests/integration/test_approval_crash_recovery.py", "_recoverable_ids"),
     ("tests/integration/test_approval_crash_recovery.py", "_claim_expired"),
-    ("tests/integration/test_approval_crash_recovery.py", "_start_approval_worker"),
     ("tests/integration/test_approval_crash_recovery.py", "_expire_lease_now"),
-    (
-        "tests/integration/test_approval_crash_recovery.py",
-        "test_crash_before_marker_is_auto_recoverable_even_for_real_adapters",
-    ),
-    (
-        "tests/integration/test_approval_crash_recovery.py",
-        "test_crash_after_marker_on_real_adapter_goes_manual_once_no_hot_loop",
-    ),
-    (
-        "tests/integration/test_approval_crash_recovery.py",
-        "test_crash_after_marker_on_replay_capable_adapter_auto_resumes",
-    ),
-    ("tests/integration/test_approval_crash_recovery.py", "test_reconciler_does_not_touch_a_live_workers_buy"),
-    ("tests/integration/test_approval_crash_recovery.py", "test_stale_worker_returning_after_takeover_does_nothing"),
-    ("tests/integration/test_approval_crash_recovery.py", "test_adapter_uncertain_keeps_automatic_retry_path"),
-    ("tests/integration/test_approval_crash_recovery.py", "test_slow_worker_publish_self_heals_manual_flag"),
-    ("tests/integration/test_approval_crash_recovery.py", "test_stepless_resume_completes_without_step"),
-    (
-        "tests/integration/test_approval_crash_recovery.py",
-        "test_happy_path_bumps_revision_once_and_stamps_confirmed_at",
-    ),
-    ("tests/integration/test_approval_crash_recovery.py", "worker"),
-    ("tests/integration/test_approval_crash_recovery.py", "test_persisted_order_id_never_skips_the_adapter"),
-    ("tests/integration/test_approval_crash_recovery.py", "adapter"),
-    ("tests/integration/test_approval_crash_recovery.py", "test_uncertain_clears_a_concurrent_manual_flag"),
-    ("tests/integration/test_approval_crash_recovery.py", "test_documented_operator_remediation_recovers"),
-    ("tests/integration/test_approval_crash_recovery.py", "test_capability_probe_failure_goes_manual_once"),
-    ("tests/integration/test_approval_crash_recovery.py", "test_post_mutation_failure_preserves_reconciliation_signal"),
-    ("tests/integration/test_approval_crash_recovery.py", "test_operator_reapproval_of_manual_required_buy"),
+    ("tests/integration/test_approval_crash_recovery.py", "_clear_recovery_and_marker"),
+    ("tests/integration/test_approval_crash_recovery.py", "_seed_platform_order_id"),
+    ("tests/integration/test_approval_crash_recovery.py", "_package_configs"),
+    ("tests/integration/test_approval_crash_recovery.py", "_try_reapproval_claim"),
     ("tests/e2e/test_gam_lifecycle.py", "_persist_media_buy"),
     ("tests/e2e/test_gam_lifecycle.py", "_seed_lifecycle_test_data"),
     ("tests/helpers/creative_test_helpers.py", "assert_stored_creative_assets"),

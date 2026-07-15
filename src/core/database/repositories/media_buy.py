@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session, joinedload, object_session
 
 from src.core.database.models import (
     MEDIA_BUY_FINALIZING_STATUS,
+    MEDIA_BUY_RECOVERY_MANUAL,
     MediaBuy,
     MediaPackage,
     is_media_buy_seller_confirmed,
@@ -747,6 +748,7 @@ class MediaBuyRepository:
         lease_ttl_seconds: int,
         approved_at: datetime.datetime | None = None,
         approved_by: str | None = None,
+        abandoned_owner_grace_seconds: int = 3600,
     ) -> tuple[MediaBuy, str] | None:
         """Phase-1 single-winner CLAIM: eligible status → ``finalizing`` + fresh lease.
 
@@ -772,16 +774,36 @@ class MediaBuyRepository:
             if approved_by is not None:
                 media_buy.approved_by = approved_by
 
+        def _reapproval_guard(mb: MediaBuy) -> bool:
+            # Operator RE-APPROVAL gate (#1637): a buy already in ``finalizing`` may
+            # be re-claimed ONLY when it is parked manual_required AND its previous
+            # owner is provably done or ABANDONED. A reconciler-flagged row keeps
+            # the expired lease of a possibly-still-alive worker; re-claiming it
+            # immediately could start a SECOND adapter invocation concurrently with
+            # the first (the lease CAS fences publishes, not remote side effects).
+            # Fencing: lease cleared by the owner itself (post-mutation manual /
+            # uncertain paths release it) ⇒ done; otherwise the lease must have
+            # been expired for at least ``abandoned_owner_grace_seconds`` beyond
+            # its TTL-sized expiry — a worker alive that long past its lease is
+            # pathological and its own writes are already CAS-fenced.
+            if mb.status != MEDIA_BUY_FINALIZING_STATUS:
+                return True
+            if mb.finalize_recovery_mode != MEDIA_BUY_RECOVERY_MANUAL:
+                return False
+            if mb.finalize_lease_id is None:
+                return True
+            if mb.finalize_lease_expires_at is None:
+                return False
+            abandoned_cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(
+                seconds=abandoned_owner_grace_seconds
+            )
+            return mb.finalize_lease_expires_at < abandoned_cutoff
+
         claimed = self._locked_mutate_and_bump(
             media_buy_id,
             _apply,
             expected_status=expected_status,
-            # Operator RE-APPROVAL gate (#1637): a buy already in ``finalizing`` may
-            # be re-claimed ONLY when it is parked manual_required (no live owner
-            # exists — the reconciler never touches flagged buys). An in-flight
-            # finalizing buy must never be re-claimed out from under its owner.
-            claim_guard=lambda mb: mb.status != MEDIA_BUY_FINALIZING_STATUS
-            or mb.finalize_recovery_mode == "manual_required",
+            claim_guard=_reapproval_guard,
         )
         return (claimed, lease_id) if claimed is not None else None
 
@@ -868,7 +890,7 @@ class MediaBuyRepository:
         if lease_id is not None:
 
             def _apply(media_buy: MediaBuy) -> None:
-                media_buy.finalize_recovery_mode = "manual_required"
+                media_buy.finalize_recovery_mode = MEDIA_BUY_RECOVERY_MANUAL
                 media_buy.finalize_lease_id = None
                 media_buy.finalize_lease_expires_at = None
 
@@ -889,7 +911,7 @@ class MediaBuyRepository:
             return False
         if media_buy.finalize_lease_expires_at is not None and media_buy.finalize_lease_expires_at > now:
             return False
-        media_buy.finalize_recovery_mode = "manual_required"
+        media_buy.finalize_recovery_mode = MEDIA_BUY_RECOVERY_MANUAL
         self._session.flush()
         return True
 

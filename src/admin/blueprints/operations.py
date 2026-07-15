@@ -312,7 +312,11 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     DBContext.tenant_id == tenant_id,
                     ObjectWorkflowMapping.object_type == "media_buy",
                     ObjectWorkflowMapping.object_id == media_buy_id,
-                    WorkflowStep.status.in_(["requires_approval", "pending_approval"]),
+                    # in_progress included (#1637): a post-mutation partial failure
+                    # deliberately leaves the step in_progress while the buy is parked
+                    # manual_required — without it the detail-page RE-APPROVAL could
+                    # never find the step. Terminal steps stay excluded (immutable).
+                    WorkflowStep.status.in_(["requires_approval", "pending_approval", "in_progress"]),
                 )
             )
             step = db_session.scalars(stmt).first()

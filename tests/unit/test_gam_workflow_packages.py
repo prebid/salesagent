@@ -421,10 +421,15 @@ class TestGAMAdapterErrorTaxonomy:
     wire-mapping test and the GAM lifecycle integration suite.
     """
 
-    def test_line_item_creation_failure_raises_typed_line_item_error(
+    def test_line_item_creation_failure_crosses_the_mutation_boundary(
         self, mock_principal, sample_request, sample_packages
     ):
-        """A line-item creation failure raises AdCPLineItemError (LINE_ITEM_CREATION_FAILED)."""
+        """A line-item failure happens AFTER the remote order exists, so it surfaces as
+        ``AdapterPostMutationIncomplete`` — the #1637 mutation-boundary contract: the
+        approval finalizer must preserve the manual-reconciliation state, never
+        terminal-fail a buy whose partial remote graph exists. The original
+        AdCPLineItemError is preserved as the cause chain."""
+        from src.adapters.base import AdapterPostMutationIncomplete
         from src.core.exceptions import AdCPLineItemError
 
         adapter = _build_gam_adapter(mock_principal)
@@ -438,12 +443,14 @@ class TestGAMAdapterErrorTaxonomy:
 
             start_time = datetime.now()
             end_time = start_time + timedelta(days=30)
-            with pytest.raises(AdCPLineItemError) as exc_info:
+            with pytest.raises(AdapterPostMutationIncomplete) as exc_info:
                 adapter.create_media_buy(
                     request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
                 )
 
-        assert exc_info.value.error_code == "LINE_ITEM_CREATION_FAILED"
+        assert "order_123" in str(exc_info.value)  # names the partial remote order
+        assert isinstance(exc_info.value.__cause__, AdCPLineItemError)
+        assert exc_info.value.__cause__.error_code == "LINE_ITEM_CREATION_FAILED"
 
 
 class TestGAMProductUnavailableRaiseSites:

@@ -920,6 +920,11 @@ MEDIA_BUY_UNCONFIRMED_STATUSES: frozenset[str] = frozenset(
 MEDIA_BUY_FINALIZING_STATUS: str = "finalizing"
 
 
+# Canonical value for MediaBuy.finalize_recovery_mode when an operator must
+# reconcile a partial remote graph before recovery can continue (#1637).
+MEDIA_BUY_RECOVERY_MANUAL = "manual_required"
+
+
 def is_media_buy_approvable(media_buy: "MediaBuy") -> bool:
     """True when an admin approve action may (re)claim this buy (#1637).
 
@@ -932,7 +937,7 @@ def is_media_buy_approvable(media_buy: "MediaBuy") -> bool:
       UX-only (the CAS is authoritative).
     """
     return media_buy.status == "pending_approval" or (
-        media_buy.status == MEDIA_BUY_FINALIZING_STATUS and media_buy.finalize_recovery_mode == "manual_required"
+        media_buy.status == MEDIA_BUY_FINALIZING_STATUS and media_buy.finalize_recovery_mode == MEDIA_BUY_RECOVERY_MANUAL
     )
 
 
