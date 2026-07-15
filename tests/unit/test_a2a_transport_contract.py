@@ -248,7 +248,7 @@ class TestA2AJsonRpcProtocol:
 
         The JSON-RPC method (message/send) is valid; routing failed *inside*
         skill dispatch, which is an application-layer failure. Per AdCP
-        3.1.0-beta.3 transport-errors.mdx "Layer Separation" it belongs in the
+        3.1.1 transport-errors.mdx "Layer Separation" it belongs in the
         task body as a failed Task carrying a two-layer envelope — JSON-RPC
         MethodNotFoundError is reserved for unknown JSON-RPC *methods*
         (see test_invalid_method_returns_error). Identity is mocked so the
@@ -492,7 +492,7 @@ class TestA2AStubHandlers:
     unimplemented skill is an application-layer failure, so it must return a
     failed Task carrying a two-layer ``UNSUPPORTED_FEATURE``/``correctable``
     envelope — NOT a JSON-RPC ``UnsupportedOperationError`` (-32004). Reserving
-    JSON-RPC for transport faults is the AdCP 3.1.0-beta.3 "Layer Separation"
+    JSON-RPC for transport faults is the AdCP 3.1.1 "Layer Separation"
     contract; these stubs are advertised on the agent card, so a buyer must get
     a structured, recoverable AdCP error rather than a transport exception.
     """

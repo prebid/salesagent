@@ -224,7 +224,7 @@ Feature: BR-UC-002 Create Media Buy
     And the wire error envelope should carry code "UNSUPPORTED_FEATURE" with recovery "correctable"
     # HAND-EDITED: no adcp-req id yet (upstream obligation tracked in #1574) —
     # @hand-edited classifies this LEGACY-PRESERVE so compile_bdd.py --merge keeps it.
-    # grounded: AdCP 3.1.0-beta.3 building/operating/transport-errors.mdx "Layer Separation"
+    # grounded: AdCP 3.1.1 building/operating/transport-errors.mdx "Layer Separation"
     # storyboard: ungraded, pending upstream obligation (#1574)
     # drives the top-level on_message_send except -> failed Task envelope, not JSON-RPC
     # --- ext-e: Duplicate Products ---

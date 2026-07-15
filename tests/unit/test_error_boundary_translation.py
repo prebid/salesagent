@@ -473,6 +473,37 @@ class TestA2ADispatcherFailedSkillResult:
         assert env["errors"][0]["recovery"] == "transient"
         assert "internal error" in env["errors"][0]["message"].lower()
 
+    def test_internal_error_for_scrubs_full_jsonrpc_wire(self):
+        """[Round-12 B1] A typed internal-bucket error must not leak through the JSON-RPC
+        ``error.message`` even while ``error.data`` is scrubbed.
+
+        ``_internal_error_for`` previously built the top-level JSON-RPC message from the
+        ORIGINAL ``exc.message`` — so an ``AdCPAdapterError(f"...{e}")`` carrying a DB URL
+        had a sanitized envelope in ``error.data`` while the URL stayed visible in
+        ``error.message``. Both layers of the FULL wire object must be clean.
+        """
+        from src.a2a_server.adcp_a2a_server import _internal_error_for
+
+        secret = "postgresql://svc:hunter2@db.internal/prod SELECT * FROM principals"
+        err = _internal_error_for(
+            "set_task_push_notification_config", AdCPAdapterError(f"Failed to store config: {secret}")
+        )
+
+        full_wire = json.dumps({"message": err.message, "data": err.data})
+        for leak in ("hunter2", "postgresql://", "db.internal", "SELECT", "principals"):
+            assert leak not in full_wire, f"JSON-RPC wire leaked {leak!r}: {full_wire}"
+        # Wire code + recovery still accurate in the envelope.
+        assert err.data["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
+        assert err.data["errors"][0]["recovery"] == "transient"
+
+    def test_internal_error_for_preserves_correctable_message(self):
+        """[Round-12 B1] The JSON-RPC message keeps the controlled text of a
+        client-correctable typed error — the fix must not over-sanitize."""
+        from src.a2a_server.adcp_a2a_server import _internal_error_for
+
+        err = _internal_error_for("set_task_push_notification_config", AdCPValidationError("url is required"))
+        assert "url is required" in err.message
+
     def test_client_correctable_typed_error_message_is_preserved(self):
         """A client-correctable typed error keeps its controlled message — the boundary must
         NOT over-sanitize. Buyers need the specific guidance to fix their request.

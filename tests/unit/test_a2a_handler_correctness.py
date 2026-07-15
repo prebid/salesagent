@@ -85,7 +85,7 @@ class TestStubSkillsRaiseErrors:
 
     A recognized-but-unimplemented skill is an application failure — the outer
     dispatcher surfaces it as a failed Task with an ``UNSUPPORTED_FEATURE``
-    two-layer envelope, per AdCP 3.1.0-beta.3 "Layer Separation". Raising an
+    two-layer envelope, per AdCP 3.1.1 "Layer Separation". Raising an
     ``A2AError`` (UnsupportedOperationError) would leak it onto the JSON-RPC
     transport layer, discarding any accumulated results in a multi-skill message.
     """

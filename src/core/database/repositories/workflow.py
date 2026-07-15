@@ -19,11 +19,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from src.core.database.models import Context as DBContext
 from src.core.database.models import ObjectWorkflowMapping, Principal, WorkflowStep
+
+# Workflow-step statuses that are final outcomes. Single source of truth for the
+# repository's atomic cancel guard and the A2A boundary's step→TaskState mapping.
+TERMINAL_STEP_STATUSES = frozenset({"completed", "rejected", "failed", "canceled"})
 
 
 class WorkflowRepository:
@@ -60,16 +64,21 @@ class WorkflowRepository:
             )
         ).first()
 
-    def get_by_external_task_id(self, external_task_id: str) -> WorkflowStep | None:
-        """Get the workflow step carrying a given transport outer task id (tenant-scoped).
+    def get_by_external_task_id(self, external_task_id: str, *, principal_id: str) -> WorkflowStep | None:
+        """Get the workflow step carrying a given transport outer task id.
 
         The A2A boundary persists its outer ``task_*`` id (the id returned to the
         buyer) on the create step's ``request_data.external_task_id`` (see
         ``_create_media_buy_impl``), so a durable ``tasks/get`` poll can resolve the
         buyer's id → step → terminal status + stored ``response_data`` artifact,
         surviving a server restart (the admin approval that terminalized the step runs
-        in a different process, so the in-memory task map is not enough). Tenant-scoped
-        via the Context join like every other read. #1544 B6.
+        in a different process, so the in-memory task map is not enough). #1544 B6.
+
+        Scoped to BOTH the tenant (Context join, like every read) AND the owning
+        ``principal_id``: task ids are bearer-ish identifiers, and the durable
+        get/cancel must authorize the CALLER — another principal in the same tenant
+        who learns a task id must be able to neither read its stored response_data
+        nor cancel its workflow. Keyword-required so no call site can omit the scope.
         """
         return self._session.scalars(
             select(WorkflowStep)
@@ -77,6 +86,7 @@ class WorkflowRepository:
             .where(
                 WorkflowStep.request_data["external_task_id"].as_string() == external_task_id,
                 DBContext.tenant_id == self._tenant_id,
+                DBContext.principal_id == principal_id,
             )
         ).first()
 
@@ -326,3 +336,38 @@ class WorkflowRepository:
 
         self._session.flush()
         return step
+
+    def cancel_if_nonterminal(self, step_id: str, *, completed_at: datetime) -> bool:
+        """Atomically transition a step to ``canceled`` iff it is not already terminal.
+
+        Single conditional UPDATE — no read-check-write window: an approval that
+        commits ``completed``/``rejected`` between the caller's read and this write
+        makes the WHERE clause match zero rows, so a buyer's cancel can never
+        overwrite a terminal decision. Tenant-scoped via a correlated Context
+        subquery like every other query. Returns True when the step was canceled,
+        False when it no longer exists or already reached a terminal status.
+        Does NOT commit — the caller handles that.
+        """
+        scoped_step_ids = (
+            select(WorkflowStep.step_id)
+            .join(DBContext)
+            .where(
+                WorkflowStep.step_id == step_id,
+                DBContext.tenant_id == self._tenant_id,
+            )
+        )
+        # returning() makes the DML yield rows, so success is observable without
+        # the CursorResult.rowcount attribute (untyped on Session.execute's Result).
+        canceled_ids = self._session.execute(
+            update(WorkflowStep)
+            .where(
+                WorkflowStep.step_id.in_(scoped_step_ids),
+                WorkflowStep.status.not_in(TERMINAL_STEP_STATUSES),
+            )
+            .values(status="canceled", completed_at=completed_at)
+            .returning(WorkflowStep.step_id)
+            # No session-state sync: callers re-read via repository methods, never
+            # reuse a previously loaded ORM instance after this transition.
+            .execution_options(synchronize_session=False)
+        ).scalars()
+        return canceled_ids.first() is not None

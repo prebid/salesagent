@@ -58,6 +58,7 @@ from src.core.auth import AUTH_REQUIRED_SUGGESTION
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.repositories import PushNotificationConfigUoW
+from src.core.database.repositories.workflow import TERMINAL_STEP_STATUSES
 from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import (
     AdCPAuthenticationError,
@@ -207,12 +208,16 @@ def _safe_adcp_error(exc: Exception) -> AdCPError:
 def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     """Canonical JSON-RPC ``InternalError`` for A2A boundary failures — SANITIZED.
 
-    Security (transport-errors.mdx "Error Message Security"): raw exception text may
+    Security (transport-errors.mdx "Security Considerations" § Seller Requirements): raw exception text may
     contain credentials, connection strings, SQL, hostnames, filesystem paths, or
     upstream responses and MUST NOT reach the client. So:
 
-    - A TYPED ``AdCPError`` carries a controlled, client-safe ``message`` — it passes
-      through with its own wire code and text.
+    - A TYPED ``AdCPError`` passes through with its own wire code, but the message
+      placed on the JSON-RPC layer is the SANITIZED one from ``_safe_adcp_error`` —
+      a typed internal-bucket error (``AdCPAdapterError`` et al.) can interpolate
+      ``str(e)`` into its message, so the ORIGINAL ``exc.message`` must never be
+      used here (it would leak through ``error.message`` even while ``error.data``
+      is scrubbed).
     - Any UNTYPED exception is replaced with a generic message and a base
       ``SERVICE_UNAVAILABLE`` envelope; the raw ``str(exc)`` is NEVER placed on the
       wire (callers log it server-side via ``record_boundary_error``).
@@ -225,7 +230,9 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     """
     adcp_error = _safe_adcp_error(exc)
     if isinstance(exc, AdCPError):
-        message = f"{operation} failed: {exc.message}"
+        # adcp_error.message, NOT exc.message: the sanitized message (identical for
+        # client-correctable errors, scrubbed for the internal bucket).
+        message = f"{operation} failed: {adcp_error.message}"
     else:
         message = f"Internal error during {operation}"
     return InternalError(message=message, data=build_two_layer_error_envelope(adcp_error))
@@ -297,7 +304,7 @@ class AdCPRequestHandler(RequestHandler):
 
     def _mark_task_failed(self, task: Task) -> None:
         """Mark a task FAILED. No webhook — the caller returns this terminal Task
-        synchronously in the response, and AdCP 3.1.0-beta.3 a2a-guide.mdx
+        synchronously in the response, and AdCP 3.1.1 a2a-guide.mdx
         ("Webhook Trigger Rules for Terminal States") says a push notification is
         NOT sent when the initial response is already terminal (the buyer already
         has the result). Webhooks fire only for genuinely async transitions
@@ -1110,7 +1117,7 @@ class AdCPRequestHandler(RequestHandler):
 
             # Notify ONLY for a non-terminal (submitted) initial response. An
             # immediately-completed task is returned synchronously in this response,
-            # and AdCP 3.1.0-beta.3 a2a-guide.mdx ("Webhook Trigger Rules for
+            # and AdCP 3.1.1 a2a-guide.mdx ("Webhook Trigger Rules for
             # Terminal States") says no webhook is sent when the initial response is
             # already terminal — the buyer already has the result. Only the
             # sync_creatives-pending → submitted transition reaches here as
@@ -1193,7 +1200,12 @@ class AdCPRequestHandler(RequestHandler):
 
     # Step statuses that are final outcomes — a buyer's tasks/cancel cannot undo
     # work that already completed/failed/was rejected (or was already canceled).
-    _TERMINAL_STEP_STATUSES = frozenset(_STEP_STATUS_TO_TASK_STATE)
+    # Single source of truth is the repository's TERMINAL_STEP_STATUSES (the atomic
+    # cancel guard's vocabulary); the state mapping above must cover exactly that
+    # set, checked at import time so the two can't silently drift.
+    _TERMINAL_STEP_STATUSES = TERMINAL_STEP_STATUSES
+    if frozenset(_STEP_STATUS_TO_TASK_STATE) != _TERMINAL_STEP_STATUSES:
+        raise RuntimeError("A2A step->TaskState mapping out of sync with WorkflowRepository.TERMINAL_STEP_STATUSES")
 
     _TERMINAL_TASK_STATES = frozenset(_STEP_STATUS_TO_TASK_STATE.values())
 
@@ -1204,27 +1216,35 @@ class AdCPRequestHandler(RequestHandler):
     ) -> Task | None:
         """Handle 'tasks/get' method to retrieve task status.
 
-        Resolves the buyer's outer ``task_*`` id first against this process's
-        in-memory map (a task still in flight), then — for an async media-buy task
-        that was approved/rejected out-of-band — against its persisted workflow step.
-        The admin decision that terminalizes the step runs in a DIFFERENT process and
-        the in-memory map does not survive a restart, so the durable fallback is what
-        lets a poll of the original ``task_x`` return ``completed`` with the stored
-        result artifact. See #1544 (B6).
+        The persisted workflow step is the source of truth for an async task's
+        outcome: the admin decision that terminalizes it runs in a DIFFERENT
+        process, so this process's in-memory entry can be stale forever (a
+        SUBMITTED/WORKING task whose workflow already completed). A poll therefore
+        returns the in-memory task only when IT is already terminal; otherwise the
+        durable step is consulted and, if it reached a terminal status, wins (and
+        reconciles the in-memory map). The durable fallback also serves polls after
+        a restart, when the map is empty. See #1544 (B6).
         """
         task_id = params.id
         task = self.tasks.get(task_id)
-        if task is not None:
+        if task is not None and task.status.state in self._TERMINAL_TASK_STATES:
             return task
-        return self._durable_task_from_step(task_id, context)
+        durable = self._durable_task_from_step(task_id, context)
+        if durable is not None and durable.status.state in self._TERMINAL_TASK_STATES:
+            self.tasks[task_id] = durable
+            return durable
+        # No terminal durable outcome: the richer in-memory task (metadata,
+        # artifacts) beats the durable WORKING skeleton.
+        return task if task is not None else durable
 
     def _durable_lookup_identity(self, context: ServerCallContext | None):
         """Resolve the caller's identity for a durable (cross-process) task lookup.
 
-        A restart-surviving lookup needs a tenant scope, so identity is resolved
-        from the request's own auth (the buyer who created the task authenticated).
-        Returns None when no tenant is resolvable — the durable lookup must then be
-        refused rather than risk serving or mutating another tenant's task.
+        A restart-surviving lookup needs a tenant AND principal scope, so identity
+        is resolved from the request's own auth (the buyer who created the task
+        authenticated). Returns None when either is unresolvable — the durable
+        lookup must then be refused rather than risk serving or mutating another
+        tenant's (or same-tenant sibling principal's) task.
         """
         try:
             auth_token = self._get_auth_token(context)
@@ -1235,7 +1255,7 @@ class AdCPRequestHandler(RequestHandler):
             )
         except Exception:
             return None
-        if identity is None or not identity.tenant_id:
+        if identity is None or not identity.tenant_id or not identity.principal_id:
             return None
         return identity
 
@@ -1253,7 +1273,9 @@ class AdCPRequestHandler(RequestHandler):
         from src.core.database.repositories.workflow import WorkflowRepository
 
         with get_db_session() as session:
-            step = WorkflowRepository(session, identity.tenant_id).get_by_external_task_id(task_id)
+            step = WorkflowRepository(session, identity.tenant_id).get_by_external_task_id(
+                task_id, principal_id=identity.principal_id
+            )
             if step is None:
                 return None
             state = self._STEP_STATUS_TO_TASK_STATE.get(step.status, TaskState.TASK_STATE_WORKING)
@@ -1279,9 +1301,16 @@ class AdCPRequestHandler(RequestHandler):
         resolved first, then the persisted workflow step carrying the buyer's outer
         ``task_*`` id — so a cancel still lands after a restart or in a different
         process than the create. A task/step already in a terminal state cannot be
-        canceled (A2A spec ``tasks/cancel``: ``TaskNotCancelableError``); the
-        durable check runs even on an in-memory hit so a stale WORKING task can't
-        cancel a workflow that was approved out-of-band.
+        canceled; the durable check runs even on an in-memory hit so a stale
+        WORKING task can't cancel a workflow that was approved out-of-band.
+
+        Grounding: ``tasks/cancel`` semantics are A2A-protocol-native (A2A spec
+        Task Management: ``TaskNotCancelableError`` for tasks already in a
+        terminal state; the SDK ``default_request_handler`` is the reference
+        cross-check). AdCP 3.1.1 prose defines no cancel contract of its own —
+        a2a-guide.mdx "Webhook Trigger Rules" lists ``canceled`` among the final
+        states ("Cancellation confirmed"). Storyboard: ungraded, pending the
+        upstream task-lifecycle obligation (#1574).
 
         Returns:
             Task object with canceled status, or None if not found anywhere.
@@ -1298,12 +1327,18 @@ class AdCPRequestHandler(RequestHandler):
         return durable
 
     def _durable_cancel_step(self, task_id: str, context: ServerCallContext | None) -> Task | None:
-        """Durably cancel the workflow step carrying this outer task id (tenant-scoped).
+        """Durably cancel the workflow step carrying this outer task id.
 
-        Returns None when no persisted step matches (or no tenant is resolvable —
-        see ``_durable_lookup_identity``). Raises ``TaskNotCancelableError`` when
+        Tenant- AND principal-scoped (see ``_durable_lookup_identity``). Returns
+        None when no persisted step matches. Raises ``TaskNotCancelableError`` when
         the step already reached a terminal status: an approved/completed media buy
         cannot be undone by ``tasks/cancel``.
+
+        The transition itself is a single conditional UPDATE
+        (``cancel_if_nonterminal``) so a concurrent approval that commits
+        ``completed``/``rejected`` after our read cannot be overwritten — the
+        zero-row outcome is reported as ``TaskNotCancelableError`` with the fresh
+        status, and the terminal decision stands.
         """
         identity = self._durable_lookup_identity(context)
         if identity is None:
@@ -1314,12 +1349,14 @@ class AdCPRequestHandler(RequestHandler):
 
         with get_db_session() as session:
             repo = WorkflowRepository(session, identity.tenant_id)
-            step = repo.get_by_external_task_id(task_id)
+            step = repo.get_by_external_task_id(task_id, principal_id=identity.principal_id)
             if step is None:
                 return None
-            if step.status in self._TERMINAL_STEP_STATUSES:
-                raise TaskNotCancelableError(message=f"Task cannot be canceled - current step status: {step.status}")
-            repo.update_status(step.step_id, status="canceled", completed_at=datetime.now(UTC))
+            if not repo.cancel_if_nonterminal(step.step_id, completed_at=datetime.now(UTC)):
+                session.rollback()
+                fresh = repo.get_by_step_id(step.step_id)
+                current = fresh.status if fresh is not None else "unknown"
+                raise TaskNotCancelableError(message=f"Task cannot be canceled - current step status: {current}")
             session.commit()
             return Task(
                 id=task_id,
@@ -1725,7 +1762,7 @@ class AdCPRequestHandler(RequestHandler):
         try:
             # An unknown SKILL is an application-layer failure — the JSON-RPC method
             # (message/send) is valid; routing failed inside skill dispatch. Per AdCP
-            # 3.1.0-beta.3 transport-errors.mdx "Layer Separation", it belongs in the
+            # 3.1.1 transport-errors.mdx "Layer Separation", it belongs in the
             # task body as a failed Task with a two-layer envelope, NOT a JSON-RPC
             # MethodNotFoundError (reserved for unknown JSON-RPC methods). Raised
             # INSIDE this try so the boundary observability below records it exactly

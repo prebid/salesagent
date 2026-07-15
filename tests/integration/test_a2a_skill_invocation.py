@@ -362,6 +362,161 @@ class TestA2ASkillInvocation:
 
         assert handler.tasks[task_id].status.state == TaskState.TASK_STATE_COMPLETED
 
+    def _same_tenant_other_identity(self, sample_tenant):
+        """A DIFFERENT principal in the SAME tenant (round-12 B2 adversary)."""
+        from tests.factories import PrincipalFactory
+
+        return PrincipalFactory.make_identity(
+            tenant_id=sample_tenant["tenant_id"], principal_id="same_tenant_other_buyer", protocol="a2a"
+        )
+
+    @pytest.mark.asyncio
+    async def test_durable_get_is_principal_isolated(self, handler, sample_tenant, sample_principal):
+        """[Round-12 B2] A DIFFERENT principal in the SAME tenant who learns a task id
+        must not read its stored response_data through the durable tasks/get path."""
+        external_task_id = "task_prin_iso_get"
+        self._persist_a2a_step(
+            sample_tenant["tenant_id"],
+            sample_principal["principal_id"],
+            external_task_id,
+            {"media_buy_id": "mb_prin_iso", "status": "completed"},
+        )
+
+        handler._get_auth_token = MagicMock(return_value="other-principal-token")
+        with patch.object(
+            handler, "_resolve_a2a_identity", return_value=self._same_tenant_other_identity(sample_tenant)
+        ):
+            task = handler._durable_task_from_step(external_task_id, context=None)
+
+        assert task is None, "durable lookup must not cross principal boundaries within a tenant"
+
+    @pytest.mark.asyncio
+    async def test_durable_cancel_is_principal_isolated(self, handler, sample_tenant, sample_principal, mock_identity):
+        """[Round-12 B2] A DIFFERENT principal in the SAME tenant must not be able to
+        cancel another principal's workflow via its task id."""
+        external_task_id = "task_prin_iso_cancel"
+        self._persist_a2a_step(
+            sample_tenant["tenant_id"],
+            sample_principal["principal_id"],
+            external_task_id,
+            None,
+            status="requires_approval",
+        )
+
+        handler._get_auth_token = MagicMock(return_value="other-principal-token")
+        with patch.object(
+            handler, "_resolve_a2a_identity", return_value=self._same_tenant_other_identity(sample_tenant)
+        ):
+            task = await handler.on_cancel_task(CancelTaskRequest(id=external_task_id), context=None)
+        assert task is None, "durable cancel must not cross principal boundaries within a tenant"
+
+        # The owner still sees the step untouched (non-terminal → WORKING skeleton).
+        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
+        with patch.object(handler, "_resolve_a2a_identity", return_value=mock_identity):
+            owner_view = handler._durable_task_from_step(external_task_id, context=None)
+        assert owner_view is not None
+        assert owner_view.status.state == TaskState.TASK_STATE_WORKING, (
+            "the sibling principal's cancel attempt must not have mutated the step"
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_task_reconciles_stale_in_memory_with_terminal_step(
+        self, handler, sample_tenant, sample_principal, mock_identity
+    ):
+        """[Round-12 B3] The persisted workflow step is the source of truth: a poll of a
+        task whose in-memory entry is still WORKING but whose workflow was terminalized
+        in another process must return the terminal outcome, not the stale memory."""
+        external_task_id = "task_stale_memory"
+        self._persist_a2a_step(
+            sample_tenant["tenant_id"],
+            sample_principal["principal_id"],
+            external_task_id,
+            {"media_buy_id": "mb_stale", "status": "completed"},
+        )
+        # Stale in-memory entry from the process that created the task.
+        handler.tasks[external_task_id] = Task(
+            id=external_task_id,
+            context_id="ctx_stale",
+            status=TaskStatus(state=TaskState.TASK_STATE_WORKING),
+        )
+
+        from a2a.types import GetTaskRequest
+
+        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
+        with patch.object(handler, "_resolve_a2a_identity", return_value=mock_identity):
+            task = await handler.on_get_task(GetTaskRequest(id=external_task_id), context=None)
+
+        assert task is not None
+        assert task.status.state == TaskState.TASK_STATE_COMPLETED, (
+            "stale in-memory WORKING must not shadow the terminal durable outcome"
+        )
+        assert task.artifacts, "the reconciled Task must carry the stored result artifact"
+        assert handler.tasks[external_task_id].status.state == TaskState.TASK_STATE_COMPLETED, (
+            "the in-memory map must be reconciled with the durable decision"
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_task_without_step_returns_in_memory_task(self, handler):
+        """[Round-12 B3] A non-terminal in-memory task with NO persisted step (sync/simple
+        skills) is still served from memory — reconciliation must not lose it."""
+        from a2a.types import GetTaskRequest
+
+        task_id = "task_memory_only"
+        handler.tasks[task_id] = Task(
+            id=task_id,
+            context_id="ctx_mem",
+            status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED),
+        )
+        handler._get_auth_token = MagicMock(return_value=None)
+
+        task = await handler.on_get_task(GetTaskRequest(id=task_id), context=None)
+
+        assert task is not None
+        assert task.status.state == TaskState.TASK_STATE_SUBMITTED
+
+    @pytest.mark.asyncio
+    async def test_cancel_race_with_approval_preserves_terminal_decision(
+        self, handler, sample_tenant, sample_principal, mock_identity
+    ):
+        """[Round-12 B4] Cancellation racing an approval must not overwrite the terminal
+        decision. Reproduces the TOCTOU window deterministically: the cancel path reads a
+        STALE non-terminal snapshot while the real row is already completed (an approval
+        committed in between). The conditional UPDATE must match zero rows and surface
+        TaskNotCancelableError; the step stays completed."""
+        from types import SimpleNamespace
+
+        from src.core.context_manager import ContextManager
+        from src.core.database.repositories.workflow import WorkflowRepository
+
+        external_task_id = "task_cancel_race"
+        step_id = self._persist_a2a_step(
+            sample_tenant["tenant_id"],
+            sample_principal["principal_id"],
+            external_task_id,
+            None,
+            status="requires_approval",
+        )
+        # The "approval" commits the terminal decision after the cancel path's read.
+        ContextManager().update_workflow_step(step_id, status="completed")
+
+        stale_snapshot = SimpleNamespace(step_id=step_id, status="requires_approval", context_id="ctx_race")
+        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
+        with (
+            patch.object(handler, "_resolve_a2a_identity", return_value=mock_identity),
+            patch.object(WorkflowRepository, "get_by_external_task_id", return_value=stale_snapshot),
+        ):
+            with pytest.raises(TaskNotCancelableError):
+                await handler.on_cancel_task(CancelTaskRequest(id=external_task_id), context=None)
+
+        # The approval's decision stands.
+        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
+        with patch.object(handler, "_resolve_a2a_identity", return_value=mock_identity):
+            owner_view = handler._durable_task_from_step(external_task_id, context=None)
+        assert owner_view is not None
+        assert owner_view.status.state == TaskState.TASK_STATE_COMPLETED, (
+            "a racing cancel must never overwrite a committed terminal decision"
+        )
+
     @pytest.mark.asyncio
     async def test_natural_language_get_products(
         self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator

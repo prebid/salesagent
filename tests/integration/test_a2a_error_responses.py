@@ -149,7 +149,7 @@ class TestA2AErrorPropagation:
         )
 
         # Immediate terminal failure returned synchronously → no protocol webhook
-        # (AdCP 3.1.0-beta.3 a2a-guide.mdx terminal-state rule); the failure rides
+        # (AdCP 3.1.1 a2a-guide.mdx terminal-state rule); the failure rides
         # in the Task body as the two-layer envelope asserted above.
         handler._send_protocol_webhook.assert_not_awaited()
 
@@ -355,7 +355,7 @@ class TestA2AErrorPropagation:
     ):
         """NL create-media-buy is an application failure in a failed Task, not JSON-RPC.
 
-        Grounding: AdCP 3.1.0-beta.3
+        Grounding: AdCP 3.1.1
         ``building/operating/transport-errors.mdx`` "Layer Separation";
         storyboard: ungraded, pending upstream obligation (#1574).
         """
