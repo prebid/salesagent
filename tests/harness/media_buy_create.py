@@ -181,18 +181,6 @@ class MediaBuyCreateEnv(IntegrationEnv):
             kwargs.setdefault("tool_name", tool_name)
             return real.create_workflow_step(**kwargs)
 
-        def _get_or_create_context(*_args: Any, **kwargs: Any):
-            # The async update path calls get_or_create_context (not
-            # create_context) to obtain a persistent Context whose real
-            # context_id backs the workflow_steps FK. Delegate to the real
-            # manager so the persisted context_id is a string, not a MagicMock.
-            return real.get_or_create_context(
-                tenant_id=kwargs.get("tenant_id", self._tenant_id),
-                principal_id=kwargs.get("principal_id", self._principal_id),
-                context_id=kwargs.get("context_id"),
-                is_async=kwargs.get("is_async", True),
-            )
-
         def _link_workflow_to_object(*_args: Any, **kwargs: Any):
             return real.link_workflow_to_object(**kwargs)
 
@@ -200,7 +188,6 @@ class MediaBuyCreateEnv(IntegrationEnv):
         mgr.get_context.return_value = None
         mgr.get_or_create_context.side_effect = _get_or_create_context
         mgr.create_workflow_step.side_effect = _create_workflow_step
-        mgr.get_or_create_context.side_effect = _get_or_create_context
         mgr.link_workflow_to_object.side_effect = _link_workflow_to_object
         mgr.update_workflow_step.return_value = None
         mgr.add_message.return_value = None
