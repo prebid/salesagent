@@ -244,22 +244,36 @@ def review_task(tenant_id, task_id):
                 if not step:
                     return "Task not found", 404
 
-                # Update status based on action
+                # Atomic terminal-safe transition via the shared conditional-UPDATE
+                # primitive — a concurrent cancel/terminal decision makes it return
+                # None → the review is refused (409) rather than overwriting.
+                from src.core.database.repositories.workflow import WorkflowRepository
+
+                repo = WorkflowRepository(db_session, tenant_id)
                 if action == "approve":
-                    step.status = "completed"
-                    step.response_data = {"approved": True, "notes": notes}
+                    transitioned = repo.transition_if_nonterminal(
+                        task_id, status="completed", response_data={"approved": True, "notes": notes}
+                    )
                 elif action == "reject":
-                    step.status = "failed"
-                    step.response_data = {"approved": False, "notes": notes}
+                    transitioned = repo.transition_if_nonterminal(
+                        task_id, status="failed", response_data={"approved": False, "notes": notes}
+                    )
+                else:
+                    transitioned = None
+
+                if transitioned is None:
+                    return "Task was already finalized (e.g. canceled) and cannot be reviewed", 409
 
                 db_session.commit()
 
-                # Log the action
-                audit_logger = AuditLogger()
-                audit_logger.log(
-                    tenant_id=tenant_id,
+                # Log the action (AuditLogger requires adapter_name; the method is
+                # log_operation, not a nonexistent .log — the prior call 500'd the route).
+                reviewer = str(session.get("user") or "admin")
+                AuditLogger(adapter_name="AdminUI", tenant_id=tenant_id).log_operation(
                     operation="policy_review",
-                    principal_id=session.get("user"),
+                    principal_name=reviewer,
+                    principal_id=reviewer,
+                    adapter_id="AdminUI",
                     success=True,
                     details={"task_id": task_id, "action": action, "notes": notes},
                 )

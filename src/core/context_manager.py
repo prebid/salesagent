@@ -284,17 +284,11 @@ class ContextManager(DatabaseManager):
         session = self.session
         try:
             # Resolve the tenant scope the repository primitive needs. Most callers
-            # pass it; when absent, derive it from the step's context (a plain read —
-            # not part of the atomic guarantee, which lives in the conditional UPDATE).
-            scoped_tenant = tenant_id
+            # pass it; when absent, the repository derives it from the step's context
+            # (data access stays in the repository — no raw query here).
+            scoped_tenant = tenant_id or WorkflowRepository.resolve_tenant_for_step(session, step_id)
             if scoped_tenant is None:
-                scoped_tenant = session.scalar(
-                    select(DBContext.tenant_id)
-                    .join(WorkflowStep, WorkflowStep.context_id == DBContext.context_id)
-                    .where(WorkflowStep.step_id == step_id)
-                )
-                if scoped_tenant is None:
-                    return  # step (or its context) not found
+                return  # step (or its context) not found
             repo = WorkflowRepository(session, scoped_tenant)
 
             if status:

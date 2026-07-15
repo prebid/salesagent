@@ -14,6 +14,7 @@ from sqlalchemy import select
 from src.admin.utils import echo_context, require_auth, require_tenant_access
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.database.repositories.workflow import WorkflowRepository
 from src.core.exceptions import AdCPMediaBuyRejectedError
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess
 from src.core.webhook_validator import validate_webhook_task_type
@@ -369,7 +370,18 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 }
 
             if action == "approve":
-                step.status = "approved"
+                # Atomic terminal-safe claim: transition requires_approval → approved
+                # via the shared conditional-UPDATE primitive. If a buyer cancel (or any
+                # terminal decision) committed in between, this returns None → refuse the
+                # approval and DO NOT run the irreversible adapter creation below.
+                if (
+                    WorkflowRepository(db_session, tenant_id).transition_if_nonterminal(step.step_id, status="approved")
+                    is None
+                ):
+                    flash("This step was already finalized (e.g. canceled) and can no longer be approved.", "error")
+                    return redirect(
+                        url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
+                    )
                 step.updated_at = datetime.now(UTC)
 
                 if not step.comments:
@@ -546,8 +558,18 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     flash("Media buy approved successfully", "success")
 
             elif action == "reject":
-                step.status = "rejected"
-                step.error_message = reason or "Rejected by administrator"
+                # Atomic terminal-safe transition (mirror of approve): a concurrent
+                # cancel/terminal decision makes this return None → refuse the reject.
+                if (
+                    WorkflowRepository(db_session, tenant_id).transition_if_nonterminal(
+                        step.step_id, status="rejected", error_message=reason or "Rejected by administrator"
+                    )
+                    is None
+                ):
+                    flash("This step was already finalized (e.g. canceled) and can no longer be rejected.", "error")
+                    return redirect(
+                        url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
+                    )
                 step.updated_at = datetime.now(UTC)
 
                 if not step.comments:

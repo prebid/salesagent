@@ -187,6 +187,12 @@ def select_call_model_name(call: ast.Call) -> str | None:
 
     Matches only bare-name ``select(...)`` calls (not attribute access) and
     resolves the first argument whether written as ``Model`` or ``mod.Model``.
+
+    NOTE: this resolves the leading attribute name, so a COLUMN-select
+    ``select(Model.column)`` resolves to ``"column"`` (the attr), not the model —
+    i.e. column-selects of ORM models are invisible to callers that match the
+    result against ORM model names. Use ``select_target_model_name`` when
+    column-selects of ORM models must also be detected.
     """
     if not (isinstance(call.func, ast.Name) and call.func.id == "select") or not call.args:
         return None
@@ -195,6 +201,31 @@ def select_call_model_name(call: ast.Call) -> str | None:
         return model_arg.id
     if isinstance(model_arg, ast.Attribute):
         return model_arg.attr
+    return None
+
+
+def select_target_model_name(call: ast.Call, model_names: set[str]) -> str | None:
+    """ORM model targeted by ``select(...)`` — including ``select(Model.column)``.
+
+    Closes the blind spot in ``select_call_model_name``: a column-select of an ORM
+    model (``select(Model.tenant_id)``) is a raw model query just as much as
+    ``select(Model)`` is, but the bare resolver returns the column name and misses
+    it. This resolver disambiguates against ``model_names``:
+      * ``select(Model)`` → ``Model`` (if a model);
+      * ``select(pkg.Model)`` → ``Model`` (attr is the model);
+      * ``select(Model.column)`` → ``Model`` (value is the model — a column-select).
+    Returns the model name when the select targets an ORM model, else None.
+    """
+    if not (isinstance(call.func, ast.Name) and call.func.id == "select") or not call.args:
+        return None
+    arg = call.args[0]
+    if isinstance(arg, ast.Name):
+        return arg.id if arg.id in model_names else None
+    if isinstance(arg, ast.Attribute):
+        if arg.attr in model_names:  # select(pkg.Model)
+            return arg.attr
+        if isinstance(arg.value, ast.Name) and arg.value.id in model_names:  # select(Model.column)
+            return arg.value.id
     return None
 
 

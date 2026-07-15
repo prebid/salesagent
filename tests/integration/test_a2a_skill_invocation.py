@@ -630,38 +630,93 @@ class TestA2ASkillInvocation:
             "a refused transition must not partially write response_data"
         )
 
-    async def test_background_approval_suppresses_success_on_lost_transition(
+    async def test_background_approval_discriminates_race_apply_and_persist_error(
         self, handler, sample_tenant, sample_principal
     ):
-        """[Round-14 B2] _mark_approval_complete/_failed must report False (and their callers
-        suppress the webhook) when the step was concurrently canceled — the GAM order was
-        approved but the completion lost the race, so no contradictory success/failure is
-        reported. Positive control: on a still-pending step the completion applies."""
+        """[Round-15 B3] _mark_approval_complete/_failed must return a DISCRIMINATED outcome:
+        RACE_LOST when the step was concurrently canceled (suppress webhook), APPLIED on a
+        pending step, and PERSIST_ERROR on a DB failure (NOT conflated with a race loss —
+        that would let a transient error permanently strand an approved order)."""
         from datetime import UTC, datetime
+        from unittest.mock import patch
 
         from src.core.database.repositories import WorkflowUoW
-        from src.services.background_approval_service import _mark_approval_complete, _mark_approval_failed
+        from src.services.background_approval_service import (
+            ApprovalPersistOutcome,
+            _mark_approval_complete,
+            _mark_approval_failed,
+        )
 
         tenant_id = sample_tenant["tenant_id"]
         principal_id = sample_principal["principal_id"]
 
+        # RACE_LOST: a canceled step → completion/failure report the lost race, stay canceled.
         canceled = self._persist_a2a_step(tenant_id, principal_id, "task_bg_canceled", None, status="requires_approval")
         with WorkflowUoW(tenant_id) as uow:
             assert uow.workflows.cancel_if_nonterminal(canceled, completed_at=datetime.now(UTC))
-
-        assert _mark_approval_complete(tenant_id, canceled, "order-1", 1, 1.0) is False, (
-            "completion of a canceled step must report refused"
-        )
+        assert _mark_approval_complete(tenant_id, canceled, "order-1", 1, 1.0) is ApprovalPersistOutcome.RACE_LOST
         assert self._step_status(tenant_id, canceled) == "canceled"
-        assert _mark_approval_failed(tenant_id, canceled, "boom") is False, (
-            "failure of a canceled step must report refused"
-        )
+        assert _mark_approval_failed(tenant_id, canceled, "boom") is ApprovalPersistOutcome.RACE_LOST
         assert self._step_status(tenant_id, canceled) == "canceled"
 
-        # Positive control: a still-pending step completes and reports applied.
+        # APPLIED: a still-pending step completes.
         pending = self._persist_a2a_step(tenant_id, principal_id, "task_bg_ok", None, status="requires_approval")
-        assert _mark_approval_complete(tenant_id, pending, "order-2", 1, 1.0) is True
+        assert _mark_approval_complete(tenant_id, pending, "order-2", 1, 1.0) is ApprovalPersistOutcome.APPLIED
         assert self._step_status(tenant_id, pending) == "completed"
+
+        # PERSIST_ERROR: a DB failure while persisting is NOT a race loss. Patch the UoW's
+        # update_status to raise; the step stays non-terminal (nothing committed).
+        pending2 = self._persist_a2a_step(tenant_id, principal_id, "task_bg_dberr", None, status="requires_approval")
+        with patch(
+            "src.core.database.repositories.workflow.WorkflowRepository.update_status",
+            side_effect=RuntimeError("db down"),
+        ):
+            assert (
+                _mark_approval_complete(tenant_id, pending2, "order-3", 1, 1.0) is ApprovalPersistOutcome.PERSIST_ERROR
+            )
+        assert self._step_status(tenant_id, pending2) == "requires_approval", (
+            "a persistence error must leave the step non-terminal for retry, not stranded terminal"
+        )
+
+    async def test_cancel_if_cancellable_refuses_approved_step(self, handler, sample_tenant, sample_principal):
+        """[Round-15 B3] cancel_if_cancellable refuses an `approved` step (the point where
+        irreversible ad-server order creation begins) but accepts `requires_approval` — so a
+        cancel can never strand a real order behind a canceled task."""
+        from datetime import UTC, datetime
+
+        from src.core.database.repositories import WorkflowUoW
+
+        tenant_id = sample_tenant["tenant_id"]
+        principal_id = sample_principal["principal_id"]
+
+        approved = self._persist_a2a_step(tenant_id, principal_id, "task_appr", None, status="approved")
+        with WorkflowUoW(tenant_id) as uow:
+            assert uow.workflows.cancel_if_cancellable(approved, completed_at=datetime.now(UTC)) is False
+        assert self._step_status(tenant_id, approved) == "approved", "an approved step must not be cancellable"
+
+        pending = self._persist_a2a_step(tenant_id, principal_id, "task_pend", None, status="requires_approval")
+        with WorkflowUoW(tenant_id) as uow:
+            assert uow.workflows.cancel_if_cancellable(pending, completed_at=datetime.now(UTC)) is True
+        assert self._step_status(tenant_id, pending) == "canceled"
+
+    @pytest.mark.asyncio
+    async def test_a2a_cancel_of_approved_task_is_not_cancelable(
+        self, handler, sample_tenant, sample_principal, mock_identity
+    ):
+        """[Round-15 B3] The public A2A tasks/cancel of an `approved` task raises
+        TaskNotCancelableError and leaves the step approved — no orphaned ad-server order."""
+        tenant_id = sample_tenant["tenant_id"]
+        external_task_id = "task_appr_cancel"
+        step_id = self._persist_a2a_step(
+            tenant_id, sample_principal["principal_id"], external_task_id, None, status="approved"
+        )
+
+        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
+        with patch.object(handler, "_resolve_a2a_identity", return_value=mock_identity):
+            with pytest.raises(TaskNotCancelableError):
+                await handler.on_cancel_task(CancelTaskRequest(id=external_task_id), context=None)
+
+        assert self._step_status(tenant_id, step_id) == "approved"
 
     @pytest.mark.asyncio
     async def test_natural_language_get_products(

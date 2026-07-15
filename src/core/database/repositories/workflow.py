@@ -26,8 +26,15 @@ from src.core.database.models import Context as DBContext
 from src.core.database.models import ObjectWorkflowMapping, Principal, WorkflowStep
 
 # Workflow-step statuses that are final outcomes. Single source of truth for the
-# repository's atomic cancel guard and the A2A boundary's step→TaskState mapping.
+# repository's atomic terminal-transition guard and the A2A boundary's step→TaskState map.
 TERMINAL_STEP_STATUSES = frozenset({"completed", "rejected", "failed", "canceled"})
+
+# Statuses from which a buyer cancel is still safe. Deliberately EXCLUDES ``approved``:
+# an approved step is the point where irreversible ad-server order creation begins
+# (admin approve commits ``approved`` BEFORE execute_approved_media_buy), so cancelling
+# it would leave a real order behind a canceled task. Cancel is only accepted before
+# that claim. Terminal statuses are (trivially) excluded too.
+CANCELLABLE_STEP_STATUSES = frozenset({"pending", "in_progress", "requires_approval", "pending_approval"})
 
 
 class WorkflowRepository:
@@ -305,29 +312,39 @@ class WorkflowRepository:
     # WorkflowStep writes
     # ------------------------------------------------------------------
 
-    def transition_if_nonterminal(
+    @staticmethod
+    def resolve_tenant_for_step(session: Session, step_id: str) -> str | None:
+        """Resolve a step's tenant from its Context (repository owns this join).
+
+        Lets callers that lack a tenant scope up front (e.g. ContextManager) build a
+        tenant-scoped repository without issuing a raw ``WorkflowStep``/``DBContext``
+        query outside the repository layer. Returns None when the step (or its
+        context) does not exist. Read-only; does not commit.
+        """
+        return session.scalar(
+            select(DBContext.tenant_id)
+            .join(WorkflowStep, WorkflowStep.context_id == DBContext.context_id)
+            .where(WorkflowStep.step_id == step_id)
+        )
+
+    def _atomic_transition(
         self,
         step_id: str,
         *,
         status: str,
+        status_guard: Any,
         completed_at: datetime | None = None,
         response_data: dict[str, Any] | None = None,
         error_message: str | None = None,
     ) -> WorkflowStep | None:
-        """Atomically set a step's status IFF it is not already terminal.
+        """Shared atomic conditional transition: set ``status`` IFF ``status_guard`` holds.
 
-        The SINGLE terminal-transition primitive shared by every competing writer
-        (buyer cancel, admin approve/reject, background approval, manual complete):
-        a terminal workflow step (completed/rejected/failed/canceled) is IMMUTABLE.
-        The write is one conditional UPDATE (``WHERE status NOT IN terminal``), so
-        under concurrency the FIRST committed writer wins and no later writer — in
-        EITHER ordering (approval-then-cancel or cancel-then-approval) — can
-        overwrite a committed terminal decision. Tenant-scoped via a correlated
-        Context subquery like every other query.
-
-        Returns the updated step (re-loaded, session-synced) or None when it does
-        not exist OR is already terminal (write refused). Does NOT commit — the
-        caller handles that.
+        ONE conditional UPDATE (tenant-scoped ``WHERE step_id … AND <status_guard>``)
+        with ``RETURNING`` — the single-statement re-evaluation against committed state
+        is what makes competing writers safe in either ordering. ``status_guard`` is a
+        SQLAlchemy predicate on ``WorkflowStep.status`` (e.g. NOT IN terminal, or IN
+        cancellable). Returns the re-loaded step, or None when no row matched (step
+        absent or its status failed the guard). Does NOT commit.
         """
         values: dict[str, Any] = {"status": status}
         if completed_at is not None:
@@ -355,10 +372,7 @@ class WorkflowRepository:
         updated = (
             self._session.execute(
                 update(WorkflowStep)
-                .where(
-                    WorkflowStep.step_id.in_(scoped_step_ids),
-                    WorkflowStep.status.not_in(TERMINAL_STEP_STATUSES),
-                )
+                .where(WorkflowStep.step_id.in_(scoped_step_ids), status_guard)
                 .values(**values)
                 .returning(WorkflowStep.step_id)
                 .execution_options(synchronize_session="fetch")
@@ -369,6 +383,35 @@ class WorkflowRepository:
         if updated is None:
             return None
         return self.get_by_step_id(step_id)
+
+    def transition_if_nonterminal(
+        self,
+        step_id: str,
+        *,
+        status: str,
+        completed_at: datetime | None = None,
+        response_data: dict[str, Any] | None = None,
+        error_message: str | None = None,
+    ) -> WorkflowStep | None:
+        """Atomically set a step's status IFF it is not already terminal.
+
+        The SINGLE terminal-transition primitive shared by every competing writer
+        (admin approve/reject, background approval, manual complete): a terminal
+        workflow step (completed/rejected/failed/canceled) is IMMUTABLE. The FIRST
+        committed writer wins and no later writer — in either ordering — can
+        overwrite a committed terminal decision.
+
+        Returns the updated step (re-loaded) or None when it does not exist OR is
+        already terminal (write refused). Does NOT commit.
+        """
+        return self._atomic_transition(
+            step_id,
+            status=status,
+            status_guard=WorkflowStep.status.not_in(TERMINAL_STEP_STATUSES),
+            completed_at=completed_at,
+            response_data=response_data,
+            error_message=error_message,
+        )
 
     def update_status(
         self,
@@ -393,12 +436,33 @@ class WorkflowRepository:
             error_message=error_message,
         )
 
+    def cancel_if_cancellable(self, step_id: str, *, completed_at: datetime) -> bool:
+        """Atomically cancel a step IFF it is in a CANCELLABLE status.
+
+        The buyer-facing cancel primitive (A2A ``tasks/cancel``). Unlike
+        ``cancel_if_nonterminal``, this refuses to cancel an ``approved`` step —
+        the point where irreversible ad-server order creation has begun — so a
+        cancel can never strand a real order behind a canceled task
+        (CANCELLABLE_STEP_STATUSES excludes ``approved`` and all terminal states).
+        Returns True when canceled, False when the step is absent or not in a
+        cancellable status. Does NOT commit.
+        """
+        return (
+            self._atomic_transition(
+                step_id,
+                status="canceled",
+                status_guard=WorkflowStep.status.in_(CANCELLABLE_STEP_STATUSES),
+                completed_at=completed_at,
+            )
+            is not None
+        )
+
     def cancel_if_nonterminal(self, step_id: str, *, completed_at: datetime) -> bool:
         """Atomically transition a step to ``canceled`` iff it is not already terminal.
 
-        Thin bool-returning specialization of ``transition_if_nonterminal`` — the
-        single conditional-UPDATE primitive that makes terminal steps immutable.
-        Returns True when the step was canceled, False when it no longer exists or
-        already reached a terminal status. Does NOT commit — the caller handles that.
+        Lower-level terminal-guard specialization (used by repository-level race
+        tests). Production cancel goes through ``cancel_if_cancellable``, which is
+        stricter (refuses ``approved``). Returns True when canceled, False when the
+        step is absent or already terminal. Does NOT commit.
         """
         return self.transition_if_nonterminal(step_id, status="canceled", completed_at=completed_at) is not None
