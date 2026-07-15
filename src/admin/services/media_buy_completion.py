@@ -435,6 +435,35 @@ def finalize_media_buy_approval(
     )
 
 
+def _record_takeover_incident(
+    session: Session,
+    repo: MediaBuyRepository,
+    *,
+    tenant_id: str,
+    media_buy_id: str,
+    step_id: str | None,
+    reason: str,
+) -> None:
+    """Discard a failed post-adapter lease-CAS, then durably record the ownership-INDEPENDENT
+    possible-duplicate incident on its own transaction and log the remediation (#1637 Hole A).
+
+    Shared by every path where THIS worker's adapter provably RAN this attempt but the worker
+    then lost a lease-CAS to a newer owner — so the newer owner will also run the adapter and a
+    duplicate remote order may exist. Covers the ``_flag_manual_reconciliation`` CAS-lost case
+    (heartbeat proved the loss) AND the two post-adapter transition CAS losses where the
+    heartbeat did NOT prove it in time (path (ii)). The ``session.rollback()`` drops the aborted
+    CAS's row lock/mutation before the ownership-independent incident write commits.
+    """
+    session.rollback()
+    repo.record_finalize_reconcile_incident(media_buy_id, reason)
+    session.commit()
+    logger.error(
+        f"Media buy {media_buy_id} (tenant {tenant_id}, step {step_id}) ran its adapter but lost the "
+        f"finalize lease to a newer owner: {reason}. Recorded a possible-duplicate reconcile incident "
+        f"(ownership-independent) — the new owner may publish a SECOND remote order; reconcile the remote state."
+    )
+
+
 def _flag_manual_reconciliation(
     session: Session,
     repo: MediaBuyRepository,
@@ -477,14 +506,8 @@ def _flag_manual_reconciliation(
         # Lost the owner-CAS to a NEWER owner (a real takeover installed a fresh lease while
         # this worker's adapter was still running). Discard the failed CAS attempt, then record
         # the possible-duplicate incident WITHOUT ownership so it is not silently swallowed.
-        session.rollback()
-        repo.record_finalize_reconcile_incident(media_buy_id, reason)
-        session.commit()
-        logger.error(
-            f"Media buy {media_buy_id} (tenant {tenant_id}, step {step_id}) lost its finalize lease to a "
-            f"newer owner while its adapter was running: {reason}. Recorded a possible-duplicate reconcile "
-            f"incident (ownership-independent) — the new owner may publish a SECOND remote order; reconcile "
-            f"the remote state."
+        _record_takeover_incident(
+            session, repo, tenant_id=tenant_id, media_buy_id=media_buy_id, step_id=step_id, reason=reason
         )
         return FinalizeOutcome.NOT_CLAIMED, reason
     # CAS won. Also record the incident: this worker's adapter ran and could not complete
@@ -651,8 +674,20 @@ def _run_adapter_and_finalize(
             clear_finalize_state=True,
         )
         if failed is None:
-            # Lost ownership while the adapter ran — a newer owner decides.
-            session.rollback()
+            # Lost ownership while the adapter ran — a newer owner decides. The adapter RAN this
+            # attempt (the invoked marker was committed before it), so a duplicate/partial remote
+            # graph may exist once the newer owner also runs: record the ownership-independent
+            # incident before returning NOT_CLAIMED, exactly like the ownership_lost path but for
+            # the case where the heartbeat did NOT prove the loss in time (#1637 Hole A, path (ii)).
+            _record_takeover_incident(
+                session,
+                repo,
+                tenant_id=tenant_id,
+                media_buy_id=media_buy_id,
+                step_id=step_id,
+                reason="adapter ran (reported failure) but the failed-status transition lost the "
+                "finalize lease to a newer owner; a duplicate remote order may exist",
+            )
             return FinalizeOutcome.NOT_CLAIMED, error_msg
         if step_id is not None:
             # Store a buyer-facing two-layer error envelope as the step's response_data
@@ -679,7 +714,20 @@ def _run_adapter_and_finalize(
         bump=False,
     )
     if published is None:
-        session.rollback()
+        # The adapter RAN this attempt but a newer owner (W2) took the row over before this
+        # worker could publish the serving status — W2 will ALSO run the adapter, so a duplicate
+        # remote order may exist. This is the SAME silent-double-invocation hole as the
+        # ownership_lost path, reached when the heartbeat did NOT prove the loss in time: record
+        # the ownership-independent incident before returning NOT_CLAIMED (#1637 Hole A, path (ii)).
+        _record_takeover_incident(
+            session,
+            repo,
+            tenant_id=tenant_id,
+            media_buy_id=media_buy_id,
+            step_id=step_id,
+            reason="adapter ran but the serving-status publish lost the finalize lease to a newer owner; "
+            "a duplicate remote order may exist",
+        )
         return FinalizeOutcome.NOT_CLAIMED, None
     if step_id is not None and step_data is not None:
         # Commits the serving-status transition AND the terminal step artifact together.

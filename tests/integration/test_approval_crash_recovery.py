@@ -451,13 +451,18 @@ class TestApprovalCrashRecovery:
         assert _buy_snapshot(tenant_id, "mb_live").status == "active"
         assert _step_snapshot(tenant_id, step_id).status == "completed"
 
-    def test_stale_worker_returning_after_takeover_does_nothing(
+    def test_stale_worker_returning_after_takeover_records_incident_not_publishes(
         self, integration_db, sample_tenant, sample_principal, context_manager
     ):
-        """A worker's lease expires mid-adapter and a reconciler takes over and
-        completes; when the stale worker's adapter finally returns, BOTH its failure
-        transition and its success publish lose the lease CAS — it must not publish,
-        mark failed, terminalize, or emit a second artifact."""
+        """A worker's lease expires mid-adapter and a reconciler takes over and completes; when
+        the stale worker's adapter finally returns, its success-publish CAS loses the lease — it
+        must not publish, mark failed, terminalize, or emit a second artifact. This is #1637
+        Hole A path (ii): the heartbeat did NOT prove the loss in time (it is dormant), so the
+        loss surfaces at the publish CAS, NOT via ``ownership_lost``/``_flag_manual_reconciliation``.
+        Because the stale worker's adapter provably RAN this attempt, it must still record the
+        durable ownership-independent incident (buy column + AuditLog) rather than silently
+        returning NOT_CLAIMED — otherwise a genuine double remote-create leaves no trace. The
+        incident is recorded on the already-serving buy the winner published (it survives)."""
         tenant_id = sample_tenant["tenant_id"]
         step_id, step_data = self._seed_pending(
             context_manager, tenant_id, sample_principal["principal_id"], "mb_stale"
@@ -494,14 +499,19 @@ class TestApprovalCrashRecovery:
 
         assert not t.is_alive(), "stale worker hung"
         assert "error" not in worker_result, f"stale worker failed: {worker_result.get('error')}"
-        # The stale worker lost ownership → NOT_CLAIMED, and it changed NOTHING.
+        # The stale worker lost ownership at the publish CAS → NOT_CLAIMED, did not publish.
         assert worker_result["outcome"] is FinalizeOutcome.NOT_CLAIMED
         buy = _buy_snapshot(tenant_id, "mb_stale")
         assert buy.status == "active"
-        assert buy.revision == revision_after_takeover  # no extra bump
+        assert buy.revision == revision_after_takeover  # no extra bump — incident does not bump revision
         step_final = _step_snapshot(tenant_id, step_id)
         assert step_final.status == "completed"
         assert step_final.response_data == step_after.response_data  # artifact untouched
+        # But its adapter RAN, so the possible-duplicate incident IS durably recorded (path (ii)),
+        # and it survives the winner's clean publish (buy shows serving, incident still set).
+        assert buy.finalize_reconcile_incident_at is not None
+        assert "adapter ran" in (buy.finalize_reconcile_incident_reason or "")
+        assert _finalize_incident_audit_count(tenant_id, "mb_stale") == 1
 
     # ── Uncertain-before-mutation + self-heal ────────────────────────────
 
