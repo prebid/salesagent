@@ -159,6 +159,16 @@ def parse_conftest_xfail_tags(conftest_path: Path) -> dict[str, tuple[str, str]]
 # ── Step-level xfail detector ────────────────────────────────────────
 
 
+def _mentions_identifier(haystack: str, name: str) -> bool:
+    """True when ``name`` appears as an identifier boundary in ``haystack``.
+
+    Avoids bare substring false positives (``check_x`` matching ``check_xy``).
+    """
+    if not name:
+        return False
+    return bool(re.search(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])", haystack))
+
+
 def find_premature_xfails(steps_dir: Path) -> set[str]:
     """Find step functions that call pytest.xfail() before any production code.
 
@@ -190,8 +200,12 @@ def find_premature_xfails(steps_dir: Path) -> set[str]:
 
             # Check if first meaningful statement is pytest.xfail()
             for stmt in node.body:
-                # Skip docstrings (ast.Str removed in Python 3.12; Constant covers str)
-                if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
+                # Skip string docstrings only (ast.Str removed in Python 3.12)
+                if (
+                    isinstance(stmt, ast.Expr)
+                    and isinstance(stmt.value, ast.Constant)
+                    and isinstance(stmt.value.value, str)
+                ):
                     continue
                 # Skip imports
                 if isinstance(stmt, (ast.Import, ast.ImportFrom)):
@@ -280,12 +294,12 @@ def classify_xfail(
     )
 
     # Priority 0: Premature step-level pytest.xfail() (AST scan)
-    # Match when a known premature step function appears in wasxfail / longrepr.
+    # Match on identifier boundaries so e.g. check_x does not hit check_xy.
     call = test.get("call") or {}
     longrepr = str(call.get("longrepr") or "") if isinstance(call, dict) else ""
     haystack = f"{wasxfail}\n{longrepr}\n{nodeid}"
     for fname in premature_xfails:
-        if fname and fname in haystack:
+        if fname and _mentions_identifier(haystack, fname):
             entry.category = "PREMATURE_XFAIL"
             entry.reason = f"step {fname} calls pytest.xfail() before production code"
             entry.xfail_source = f"step:{fname}"
