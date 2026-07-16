@@ -21,6 +21,7 @@
         <div style="display: flex; gap: 0.5rem;">
             <form method="POST" action="{{ url_for('operations.approve_media_buy', tenant_id=tenant_id, media_buy_id=media_buy.media_buy_id) }}" style="display: inline;" onsubmit="return handleApprovalSubmit(event, this)">
                 <input type="hidden" name="action" value="approve">
+                <input type="hidden" name="workflow_step_id" value="{{ pending_approval_step.step_id }}">
                 <button type="submit" class="btn btn-success btn-sm" id="approveBtn">
                     ✅ Approve
                 </button>
@@ -384,6 +385,7 @@
         </div>
         <form method="POST" action="{{ url_for('operations.approve_media_buy', tenant_id=tenant_id, media_buy_id=media_buy.media_buy_id) }}">
             <input type="hidden" name="action" value="reject">
+            <input type="hidden" name="workflow_step_id" value="{{ pending_approval_step.step_id if pending_approval_step else '' }}">
             <div class="modal-body">
                 <label for="reason">Reason for rejection:</label>
                 <textarea id="reason" name="reason" rows="4" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px;" required></textarea>

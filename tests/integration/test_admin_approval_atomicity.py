@@ -113,7 +113,7 @@ class TestOperationsApproveAtomicity:
         ):
             resp = client.post(
                 f"/tenant/{tenant_id}/media-buy/{media_buy_id}/approve",
-                data={"action": "approve"},
+                data={"action": "approve", "workflow_step_id": step_id},
                 follow_redirects=False,
             )
 
@@ -133,7 +133,7 @@ class TestOperationsApproveAtomicity:
 
         resp = client.post(
             f"/tenant/{tenant_id}/media-buy/{media_buy_id}/approve",
-            data={"action": "approve"},
+            data={"action": "approve", "workflow_step_id": step_id},
             follow_redirects=False,
         )
 
@@ -152,7 +152,7 @@ class TestOperationsApproveAtomicity:
 
         resp = client.post(
             f"/tenant/{tenant_id}/media-buy/{media_buy_id}/approve",
-            data={"action": "reject", "reason": "no"},
+            data={"action": "reject", "reason": "no", "workflow_step_id": step_id},
             follow_redirects=False,
         )
 
@@ -245,6 +245,66 @@ class TestApprovalClaimCompareAndSet:
         with WorkflowUoW(tenant_id) as uow:
             assert uow.workflows.get_approvable_step_for_object("media_buy", mb_done) is None
 
+    def test_get_approvable_step_for_object_selects_exact_rendered_step(self, sample_tenant, sample_principal):
+        """Multiple approval operations may map to one media buy; POST must revalidate the
+        exact step rendered by GET instead of selecting an arbitrary sibling."""
+        tenant_id = sample_tenant["tenant_id"]
+        principal_id = sample_principal["principal_id"]
+        media_buy_id = f"mb_{uuid.uuid4().hex[:8]}"
+        first_id = _make_step(tenant_id, principal_id, "approval", media_buy_id=media_buy_id)
+        second_id = _make_step(tenant_id, principal_id, "requires_approval", media_buy_id=media_buy_id)
+
+        with WorkflowUoW(tenant_id) as uow:
+            default = uow.workflows.get_approvable_step_for_object("media_buy", media_buy_id)
+            exact = uow.workflows.get_approvable_step_for_object("media_buy", media_buy_id, step_id=second_id)
+            assert default is not None and default.step_id == first_id
+            assert exact is not None and exact.step_id == second_id
+
+    def test_media_buy_detail_post_actions_only_selected_step(self, client, sample_tenant, sample_principal):
+        """A stale/multi-step form actions its explicit step and leaves siblings untouched."""
+        tenant_id = sample_tenant["tenant_id"]
+        principal_id = sample_principal["principal_id"]
+        _auth(client, tenant_id)
+        media_buy_id = f"mb_{uuid.uuid4().hex[:8]}"
+        first_id = _make_step(tenant_id, principal_id, "approval", media_buy_id=media_buy_id)
+        second_id = _make_step(tenant_id, principal_id, "requires_approval", media_buy_id=media_buy_id)
+
+        response = client.post(
+            f"/tenant/{tenant_id}/media-buy/{media_buy_id}/approve",
+            data={"action": "reject", "reason": "selected", "workflow_step_id": second_id},
+            follow_redirects=False,
+        )
+
+        assert response.status_code in (302, 303)
+        assert _status(tenant_id, first_id) == "approval"
+        assert _status(tenant_id, second_id) == "rejected"
+
+    def test_media_buy_detail_refuses_step_mapped_to_different_buy(self, client, sample_tenant, sample_principal):
+        """A hidden step id is only a selector: POST must re-authorize its URL object mapping."""
+        tenant_id = sample_tenant["tenant_id"]
+        principal_id = sample_principal["principal_id"]
+        _auth(client, tenant_id)
+        requested_buy_id = f"mb_{uuid.uuid4().hex[:8]}"
+        other_buy_id = f"mb_{uuid.uuid4().hex[:8]}"
+        requested_step_id = _make_step(tenant_id, principal_id, "requires_approval", media_buy_id=requested_buy_id)
+        other_step_id = _make_step(tenant_id, principal_id, "requires_approval", media_buy_id=other_buy_id)
+
+        with (
+            patch("src.admin.blueprints.operations.WorkflowRepository.claim_approval") as mock_claim,
+            patch("src.core.tools.media_buy_create.execute_approved_media_buy") as mock_execute,
+        ):
+            response = client.post(
+                f"/tenant/{tenant_id}/media-buy/{requested_buy_id}/approve",
+                data={"action": "approve", "workflow_step_id": other_step_id},
+                follow_redirects=False,
+            )
+
+        assert response.status_code in (302, 303)
+        mock_claim.assert_not_called()
+        mock_execute.assert_not_called()
+        assert _status(tenant_id, requested_step_id) == "requires_approval"
+        assert _status(tenant_id, other_step_id) == "requires_approval"
+
 
 class TestWorkflowsRouteConflict:
     """[Round-19] The generic workflow approve/reject JSON route distinguishes a genuine
@@ -317,7 +377,7 @@ class TestMediaBuyDetailApprovalUI:
         media_buy_id = media_buy.media_buy_id
 
         _auth(client, tenant_id)
-        _make_step(tenant_id, principal_id, "approval", media_buy_id=media_buy_id)
+        step_id = _make_step(tenant_id, principal_id, "approval", media_buy_id=media_buy_id)
 
         resp = client.get(f"/tenant/{tenant_id}/media-buy/{media_buy_id}")
 
@@ -328,3 +388,4 @@ class TestMediaBuyDetailApprovalUI:
         assert "Approve" in html and "Reject" in html, "approve/reject controls must render"
         # And the approve control posts to the media-buy approve route for THIS buy.
         assert f"/media-buy/{media_buy_id}/approve" in html
+        assert f'name="workflow_step_id" value="{step_id}"' in html

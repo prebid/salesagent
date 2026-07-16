@@ -1299,19 +1299,14 @@ class AdCPRequestHandler(RequestHandler):
 
         A restart-surviving lookup needs a tenant AND principal scope, so identity
         is resolved from the request's own auth (the buyer who created the task
-        authenticated). Returns None when either is unresolvable — the durable
-        lookup must then be refused rather than risk serving or mutating another
-        tenant's (or same-tenant sibling principal's) task.
+        authenticated). Missing or invalid authentication remains a transport-layer
+        ``InvalidRequestError``; it must not be downgraded to a task-not-found result.
+        Returns None only when a resolved identity is unexpectedly incomplete — the
+        durable lookup must then be refused rather than risk serving or mutating
+        another tenant's (or same-tenant sibling principal's) task.
         """
-        try:
-            auth_token = self._get_auth_token(context)
-            identity = (
-                self._resolve_a2a_identity(auth_token, require_valid_token=True, context=context)
-                if auth_token
-                else None
-            )
-        except Exception:
-            return None
+        auth_token = self._get_auth_token(context)
+        identity = self._resolve_a2a_identity(auth_token, require_valid_token=True, context=context)
         if identity is None or not identity.tenant_id or not identity.principal_id:
             return None
         return identity

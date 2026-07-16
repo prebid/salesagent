@@ -14,9 +14,11 @@ beads: salesagent-b61l.17
 
 import json
 import uuid
+from contextlib import nullcontext
 from unittest.mock import patch
 
 import pytest
+from a2a.types import InvalidRequestError
 from starlette.testclient import TestClient
 
 from src.a2a_server.adcp_a2a_server import DISCOVERY_SKILLS as _PROD_DISCOVERY_SKILLS
@@ -225,6 +227,46 @@ class TestA2AAuthContract:
         assert "auth" in error_msg or "token" in error_msg, (
             f"Error for '{skill}' should mention auth/token: {body['error']['message']}"
         )
+
+    @pytest.mark.parametrize("method", ["GetTask", "CancelTask"])
+    @pytest.mark.parametrize(
+        ("headers", "resolver_error"),
+        [
+            ({"Content-Type": "application/json", "A2A-Version": "1.0"}, None),
+            (
+                {
+                    "Authorization": "Bearer invalid-task-token",
+                    "Content-Type": "application/json",
+                    "A2A-Version": "1.0",
+                },
+                "Authentication token is invalid or expired.",
+            ),
+        ],
+        ids=["missing-token", "invalid-token"],
+    )
+    def test_task_management_auth_errors_use_json_rpc_dispatcher(self, client, method, headers, resolver_error):
+        """The real dispatcher must serialize task auth failures as JSON-RPC errors."""
+        payload = {"jsonrpc": "2.0", "id": "task-auth-request", "method": method, "params": {"id": "task_auth"}}
+        resolver_patch = (
+            patch.object(
+                AdCPRequestHandler,
+                "_resolve_a2a_identity",
+                side_effect=InvalidRequestError(message=resolver_error),
+            )
+            if resolver_error
+            else nullcontext()
+        )
+
+        with resolver_patch:
+            response = client.post("/a2a", json=payload, headers=headers)
+
+        body = response.json()
+        assert body["jsonrpc"] == "2.0"
+        assert body["id"] == "task-auth-request"
+        assert "result" not in body
+        assert body["error"]["code"] == -32600
+        assert "auth" in body["error"]["message"].lower()
+        assert "task_auth" not in json.dumps(body)
 
 
 # ---------------------------------------------------------------------------

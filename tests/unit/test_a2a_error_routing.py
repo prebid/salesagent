@@ -23,6 +23,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from a2a.types import (
     Artifact,
+    CancelTaskRequest,
+    GetTaskRequest,
     InternalError,
     InvalidRequestError,
     Part,
@@ -392,3 +394,38 @@ async def test_genuine_transport_fault_still_raises_json_rpc_error():
     assert "authentication" in str(exc_info.value).lower(), (
         f"transport fault should name the missing authentication; got: {exc_info.value}"
     )
+
+
+@pytest.mark.parametrize(
+    ("handler_method", "params"),
+    [
+        ("on_get_task", GetTaskRequest(id="task_auth")),
+        ("on_cancel_task", CancelTaskRequest(id="task_auth")),
+    ],
+)
+@pytest.mark.parametrize("auth_token", [None, "invalid-token"])
+@pytest.mark.asyncio
+async def test_task_management_auth_failures_stay_on_json_rpc_wire(handler_method, params, auth_token):
+    """Missing/invalid task-management auth must remain a serialized transport error.
+
+    ``_durable_lookup_identity`` previously swallowed every resolver exception and made
+    tasks/get + tasks/cancel return ``None`` (indistinguishable from task-not-found).
+    Drive both public handlers and serialize the real ``InvalidRequestError`` through
+    the SDK dispatcher helper so the regression is pinned at the JSON-RPC wire altitude.
+    """
+    from a2a.server.request_handlers.response_helpers import build_error_response
+
+    handler = AdCPRequestHandler()
+    handler._get_auth_token = MagicMock(return_value=auth_token)
+    if auth_token:
+        handler._resolve_a2a_identity = MagicMock(
+            side_effect=InvalidRequestError(message="Authentication token is invalid or expired.")
+        )
+
+    with pytest.raises(InvalidRequestError) as exc_info:
+        await getattr(handler, handler_method)(params, context=None)
+
+    wire = build_error_response("req-auth", exc_info.value)
+    serialized = json.dumps(wire if isinstance(wire, dict) else wire.model_dump(), default=str)
+    assert "Authentication" in serialized or "authentication" in serialized
+    assert "task_auth" not in serialized, "auth failures must not be downgraded to task-not-found output"

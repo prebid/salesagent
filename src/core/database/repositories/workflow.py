@@ -94,7 +94,9 @@ class WorkflowRepository:
             )
         ).first()
 
-    def get_approvable_step_for_object(self, object_type: str, object_id: str) -> WorkflowStep | None:
+    def get_approvable_step_for_object(
+        self, object_type: str, object_id: str, *, step_id: str | None = None
+    ) -> WorkflowStep | None:
         """The workflow step awaiting a decision for a mapped business object (tenant-scoped).
 
         Joins ObjectWorkflowMapping and filters status to APPROVABLE_STEP_STATUSES — the
@@ -102,9 +104,14 @@ class WorkflowRepository:
         adapter workflow producers). The admin media-buy detail approve/reject route uses this
         so its prefilter matches the ``claim_approval`` / ``reject_if_approvable`` source-state
         guard; an inline ``{requires_approval, pending_approval}`` filter previously dropped
-        legacy ``approval`` steps before they could reach the CAS. Returns the first match or None.
+        legacy ``approval`` steps before they could reach the CAS.
+
+        When ``step_id`` is supplied, the step must also be the exact decision rendered to the
+        administrator. This prevents a stale form from approving a different mapped workflow
+        when several approval operations exist for one media buy. Without ``step_id`` (the GET
+        page), the oldest mapped approval is selected deterministically.
         """
-        return self._session.scalars(
+        stmt = (
             select(WorkflowStep)
             .join(ObjectWorkflowMapping, WorkflowStep.step_id == ObjectWorkflowMapping.step_id)
             .join(DBContext, WorkflowStep.context_id == DBContext.context_id)
@@ -114,6 +121,11 @@ class WorkflowRepository:
                 ObjectWorkflowMapping.object_id == object_id,
                 WorkflowStep.status.in_(APPROVABLE_STEP_STATUSES),
             )
+        )
+        if step_id is not None:
+            stmt = stmt.where(WorkflowStep.step_id == step_id)
+        return self._session.scalars(
+            stmt.order_by(ObjectWorkflowMapping.created_at, WorkflowStep.created_at, WorkflowStep.step_id)
         ).first()
 
     def get_by_external_task_id(self, external_task_id: str, *, principal_id: str) -> WorkflowStep | None:

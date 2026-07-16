@@ -313,6 +313,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
     try:
         action = request.form.get("action")  # "approve" or "reject"
         reason = request.form.get("reason", "")
+        requested_step_id = request.form.get("workflow_step_id")
 
         with get_db_session() as db_session:
             # Find the workflow step awaiting a decision for this media buy, via the repository
@@ -321,10 +322,16 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
             # claim_approval/reject_if_approvable methods guard on. An inline
             # {requires_approval, pending_approval} filter here would drop legacy ``approval``
             # steps before they ever reached the claim/reject below.
-            step = WorkflowRepository(db_session, tenant_id).get_approvable_step_for_object("media_buy", media_buy_id)
+            step = (
+                WorkflowRepository(db_session, tenant_id).get_approvable_step_for_object(
+                    "media_buy", media_buy_id, step_id=requested_step_id
+                )
+                if requested_step_id
+                else None
+            )
 
             if not step:
-                flash("No pending approval found for this media buy", "warning")
+                flash("The selected approval is missing or no longer pending for this media buy", "warning")
                 return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
             # Extract step data to dict to avoid detached instance errors after commit/nested sessions

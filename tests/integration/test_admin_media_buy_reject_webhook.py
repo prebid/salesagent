@@ -123,7 +123,7 @@ def make_pending_media_buy(integration_db):
             tenant_id=tenant.tenant_id,
             principal_id=principal.principal_id,
         )
-        cm.create_workflow_step(
+        step = cm.create_workflow_step(
             context_id=context.context_id,
             step_type="approval",
             owner="publisher",
@@ -142,6 +142,7 @@ def make_pending_media_buy(integration_db):
         return {
             "tenant_id": tenant.tenant_id,
             "media_buy_id": media_buy.media_buy_id,
+            "workflow_step_id": step.step_id,
         }
 
     try:
@@ -188,9 +189,10 @@ def webhook_capture():
 
 def _post_approval_action(admin_session, ids: dict, data: dict):
     """Drive the real admin approve/reject route and assert the 302 redirect."""
+    form_data = {"workflow_step_id": ids["workflow_step_id"], **data}
     resp = admin_session.post(
         f"/tenant/{ids['tenant_id']}/media-buy/{ids['media_buy_id']}/approve",
-        data=data,
+        data=form_data,
     )
     assert resp.status_code == 302, f"expected redirect, got {resp.status_code}"
 
