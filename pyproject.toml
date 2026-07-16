@@ -140,25 +140,42 @@ select = [
     "TID251", # banned-api — enforce prohibited function usage
 ]
 ignore = [
-    # Justified suppressions — each must explain WHY it's ignored, not just WHAT it is.
-    # Do not add new entries without a justification comment.
+    # Policy: ADR-009 (#1228 F1). Do not add entries without a justification comment.
+    # "Ratchet target" = follow-up count baseline (not this PR). "Permanently accepted" =
+    # low-signal, no ceiling. "Boy-scout debt" = fix when touching.
+    #
+    # --- Ratchet targets (count-ratcheted via .ruff-complexity-baseline; ADR-009) ---
+    "C901",    # complexity
+    "PLR0912", # too-many-branches
+    "PLR0915", # too-many-statements
+    #
+    # --- Permanently accepted (low-signal style; ADR-009) ---
+    "PLR0911", # too-many-return-statements — guard-clause returns; low signal
+    "PLR0913", # too-many-arguments — wide spec-mirroring signatures; low signal
+    "PLR2004", # magic-value comparisons — inline constants often readable
+    #
+    # --- Justified keep / boy-scout debt (not gated; clean up when touching) ---
     "E501",    # Handled by ruff formatter; manual enforcement would conflict
-    "E402",    # Flask app (admin_ui.py) requires imports after app config; 3 occurrences
-    "E722",    # 12 bare excepts in error-recovery paths (adapters, auth); TODO: add specific exceptions
-    "F821",    # 4 false positives from conditional imports and TYPE_CHECKING blocks
-    "F403",    # 8 star imports in __init__.py re-exports; TODO: replace with explicit imports
-    "F405",    # Consequence of F403 — will resolve when F403 is fixed
-    "E741",    # 3 uses of `l` variable in loops; renaming would hurt readability in math-heavy code
-    "B904",    # 47 raise-without-from in adapter error handling; TODO: add `from e` systematically
-    "B027",    # 6 empty methods in BaseAdapter — intentional optional interface, not abstract
-    "F841",    # 5 remaining unused vars in complex destructuring; each reviewed, kept for clarity
-    "C901",    # 216 complex functions — structural; fix incrementally per-module
-    "PLR2004", # 158 magic values — too noisy for signal; numeric constants in config/tests are readable
-    "PLR0911", # 68 too-many-return-statements — structural; fix incrementally
-    "PLR0912", # 148 too-many-branches — structural; fix incrementally
-    "PLR0913", # 94 too-many-arguments — structural; fix incrementally
-    "PLR0915", # 134 too-many-statements — structural; fix incrementally
+    "E402",    # Flask app (admin_ui.py) requires imports after app config
+    "E722",    # Bare excepts in error-recovery paths (adapters, auth) — prefer specific exceptions
+    "F821",    # False positives from conditional imports and TYPE_CHECKING blocks
+    "F403",    # Star imports in __init__.py re-exports — prefer explicit imports when touching
+    "F405",    # Consequence of F403
+    "E741",    # Short `l` in math-heavy loops — renaming hurts readability
+    "B904",    # raise-without-from in adapter error handling — add `from e` when touching
+    "B027",    # Empty methods in BaseAdapter — intentional optional interface, not abstract
+    "F841",    # Unused vars in complex destructuring — each reviewed, kept for clarity
 ]
+
+
+# Pin current ruff defaults so complexity counts in .ruff-complexity-baseline
+# stay version-independent (ADR-009 / #1613). Absent → live count drifts on ruff bumps.
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-branches = 12
+max-statements = 50
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "inspect.getsource".msg = "inspect.getsource() is banned in tests. Write behavioral tests that exercise the actual code path instead of asserting strings exist in source code. See salesagent-gqzp."

@@ -29,20 +29,19 @@ def given_unknown_top_level_field(ctx: dict, field_name: str) -> None:
 
 @then(parsers.parse('the unknown top-level field "{field_name}" is rejected per the transport contract'))
 def then_unknown_top_level_field_rejected(ctx: dict, field_name: str) -> None:
-    """Assert the rejection in the shape each transport actually produces.
+    """Assert the identical cross-transport rejection contract on the real wire.
 
-    All transports must REJECT (the Pattern #7 dev-forbid gate), but each
-    validates at its own boundary layer (owner decision 2026-07-11,
-    salesagent-cyz0 — shape differences accepted, no remap):
-    - REST (incl. e2e_rest): pydantic extra=forbid -> RequestValidationError
-      handler -> two-layer INVALID_REQUEST envelope, asserted on the REAL
-      wire envelope per the Error Verification Policy.
-    - A2A: its boundary validator rejects before the Body model, emitting a
-      two-layer VALIDATION_ERROR envelope whose message names the field.
-    - MCP: FastMCP's tool-signature TypeAdapter rejects the unknown kwarg
-      before with_error_logging can build an envelope, so no
-      wire_error_envelope exists; the observable contract is a
-      transport-native error naming the offending field.
+    Every transport REJECTS (the Pattern #7 dev-forbid gate) and names the
+    offending field in the spec-canonical place. AdCP 3.1.1 ``core/error.json``
+    names the field in the ``field`` property (JSONPath-lite), NOT the free-form
+    ``message`` — so the field-naming obligation is asserted on ``error.field``,
+    which every transport emits identically (verified: ``field="nonsense_field"``
+    on MCP, A2A, and REST). The only accepted per-transport difference is the
+    boundary ``code`` (owner decision 2026-07-11, salesagent-cyz0 — no remap):
+    REST rejects at the pydantic extra=forbid handler -> ``INVALID_REQUEST``;
+    A2A's boundary validator and MCP's ``mcp_compat_middleware`` (#1534) both
+    emit ``VALIDATION_ERROR``. Message prose is intentionally NOT asserted — the
+    spec leaves ``message`` free-form, and pinning it would be non-portable.
     """
     from tests.harness.transport import Transport
     from tests.helpers import assert_envelope_shape
@@ -57,21 +56,11 @@ def then_unknown_top_level_field_rejected(ctx: dict, field_name: str) -> None:
     transport = ctx["transport"]
     transport_key = transport.name.lower() if isinstance(transport, Transport) else str(transport).lower()
 
-    if transport_key == "mcp":
-        # Transport-native rejection: the error must name the offending field
-        # (FastMCP's signature-level message), proving THIS key caused it.
-        assert field_name in str(error), f"MCP rejection does not name the unknown field {field_name!r}: {error!r}"
-    elif transport_key == "a2a":
-        assert_envelope_shape(
-            ctx.get("wire_error_envelope"),
-            "VALIDATION_ERROR",
-            recovery="correctable",
-            message_substr=field_name,
-        )
-    else:
-        assert_envelope_shape(
-            ctx.get("wire_error_envelope"),
-            "INVALID_REQUEST",
-            recovery="correctable",
-            message_substr="Extra inputs are not permitted",
-        )
+    # Owner-accepted boundary-code difference; field naming is identical.
+    expected_code = "INVALID_REQUEST" if transport_key in ("rest", "e2e_rest") else "VALIDATION_ERROR"
+    assert_envelope_shape(
+        ctx.get("wire_error_envelope"),
+        expected_code,
+        recovery="correctable",
+        field=field_name,
+    )

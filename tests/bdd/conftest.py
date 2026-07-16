@@ -3370,6 +3370,8 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["default_product"] = product
                 ctx["default_pricing_option"] = pricing_option
                 yield
+        elif "T-UC-002-inv-015-6" in marker_names:
+            pytest.xfail("T-UC-002-inv-015-6 create_media_buy harness wiring is tracked in #1652")
         else:
             # Restore the xfail guard every other use case keeps on its catch-all:
             # non-account / non-extension UC-002 scenarios are NOT yet wired (no
@@ -3510,6 +3512,8 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             with _db_scope_for(request, e2e_config), CreativeListEnv(e2e_config=e2e_config) as env:
                 ctx["env"] = env
                 yield
+        elif "T-UC-018-ext-c" in marker_names:
+            pytest.xfail("T-UC-018-ext-c list_creatives validation harness wiring is tracked in #1652")
         else:
             pytest.xfail(
                 "UC-018 harness wired only for the @list-after-sync (#1405), @concept-id (#1407), "

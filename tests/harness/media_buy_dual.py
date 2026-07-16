@@ -258,19 +258,21 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
             UpdateMediaBuySuccess,
         )
 
-        # Harness-side union discrimination for the REST/synthesized wires: submitted first
-        # (status="submitted"+task_id, no applied media_buy_id — a submitted envelope must
-        # not be mis-reconstructed as Success, whose status is Literal completed), then
-        # error (non-empty errors), else success. The submitted arm serves the REST wire and
-        # the harness-synthesized A2A submitted dict — production A2A has NO submitted
-        # reconstruction (Task early-return; PR #1567 round-2 follow-up). The reconstructed
-        # union member is wrapped in the UpdateMediaBuyResult task envelope carrying the
-        # top-level wire status (#1417).
+        # Harness-side union discrimination mirroring production _update_media_buy_impl
+        # per path. A submitted result (status="submitted"+task_id, no applied
+        # media_buy_id) is reconstructed BARE: production returns the bare
+        # UpdateMediaBuySubmitted variant (media_buy_update.py `return approval_response`),
+        # which spec 3.1.1 serializes flat (status+task_id at top level), so the harness
+        # must not wrap it. This arm serves the REST wire and the harness-synthesized A2A
+        # submitted dict — production A2A has NO submitted reconstruction (Task
+        # early-return). Completed/error results ARE wrapped in the UpdateMediaBuyResult
+        # task envelope carrying the top-level wire status (#1417), matching production's
+        # `return UpdateMediaBuyResult(response=..., status=...)` on those paths.
         status = data.pop("status", "completed")
-        response: UpdateMediaBuySubmitted | UpdateMediaBuyError | UpdateMediaBuySuccess
         if status == "submitted":
-            response = UpdateMediaBuySubmitted(status=status, **data)
-        elif "errors" in data and data["errors"]:
+            return UpdateMediaBuySubmitted(status=status, **data)
+        response: UpdateMediaBuyError | UpdateMediaBuySuccess
+        if "errors" in data and data["errors"]:
             response = UpdateMediaBuyError(**data)
         else:
             response = UpdateMediaBuySuccess(**data)

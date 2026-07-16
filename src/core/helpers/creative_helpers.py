@@ -40,6 +40,23 @@ class FormatInfo(TypedDict):
     parameters: FormatParameters | None
 
 
+def _optional_format_parameters(
+    *,
+    width: Any = None,
+    height: Any = None,
+    duration_ms: Any = None,
+) -> FormatParameters | None:
+    """Build FormatParameters from optional width/height/duration_ms (omit if all absent)."""
+    params: FormatParameters = {}
+    if width is not None:
+        params["width"] = int(width)
+    if height is not None:
+        params["height"] = int(height)
+    if duration_ms is not None:
+        params["duration_ms"] = float(duration_ms)
+    return params or None
+
+
 def _extract_format_info(format_value: Any) -> FormatInfo:
     """Extract complete format information from format_id field (AdCP 2.5).
 
@@ -67,32 +84,20 @@ def _extract_format_info(format_value: Any) -> FormatInfo:
             raise ValueError(f"format_id must have both 'agent_url' and 'id' fields. Got: {format_value}")
         agent_url = str(agent_url_val)
         format_id = format_id_val
-
-        # Extract optional parameters
-        params: FormatParameters = {}
-        if format_value.get("width") is not None:
-            params["width"] = int(format_value["width"])
-        if format_value.get("height") is not None:
-            params["height"] = int(format_value["height"])
-        if format_value.get("duration_ms") is not None:
-            params["duration_ms"] = float(format_value["duration_ms"])
-        if params:
-            parameters = params
+        parameters = _optional_format_parameters(
+            width=format_value.get("width"),
+            height=format_value.get("height"),
+            duration_ms=format_value.get("duration_ms"),
+        )
 
     elif isinstance(format_value, LibraryFormatId):
         agent_url = str(format_value.agent_url)
         format_id = format_value.id
-
-        # Extract optional parameters from object
-        params = {}
-        if format_value.width is not None:
-            params["width"] = int(format_value.width)
-        if format_value.height is not None:
-            params["height"] = int(format_value.height)
-        if format_value.duration_ms is not None:
-            params["duration_ms"] = float(format_value.duration_ms)
-        if params:
-            parameters = params
+        parameters = _optional_format_parameters(
+            width=format_value.width,
+            height=format_value.height,
+            duration_ms=format_value.duration_ms,
+        )
 
     elif isinstance(format_value, str):
         raise ValueError(

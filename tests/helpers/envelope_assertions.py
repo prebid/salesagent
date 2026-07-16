@@ -19,12 +19,19 @@ from __future__ import annotations
 from typing import Any
 
 
+def assert_no_raw_validation_leak(message: str) -> None:
+    """Assert a buyer-facing validation message omits raw Pydantic internals."""
+    assert "input_value" not in message, f"raw Pydantic input leaked into validation message: {message!r}"
+    assert "errors.pydantic.dev" not in message, f"Pydantic documentation URL leaked into message: {message!r}"
+
+
 def assert_envelope_shape(
     target: Any,
     code: str,
     *,
     recovery: str,
     message_substr: str | None = None,
+    field: str | None = None,
     check_mcp_tool_error: bool = False,
 ) -> None:
     """Assert the AdCP spec two-layer error envelope shape.
@@ -46,6 +53,11 @@ def assert_envelope_shape(
         message_substr: If provided, must appear in ``errors[0].message``.
                 ``adcp_error.message`` is allowed to differ (it carries the
                 envelope-level summary).
+        field: If provided, must equal ``errors[0].field`` (and the mirrored
+                ``adcp_error.field``). AdCP 3.1.1 ``core/error.json`` names the
+                offending field in the ``field`` property (JSONPath-lite) — NOT
+                necessarily the free-form ``message`` — so this is the
+                spec-canonical, transport-portable way to assert field naming.
         check_mcp_tool_error: If ``True``, additionally assert that ``target``
                 is an ``AdCPToolError`` instance before reading its envelope.
                 MCP-boundary call sites use this to pin the exception type as
@@ -78,3 +90,13 @@ def assert_envelope_shape(
     if message_substr is not None:
         actual = body["errors"][0].get("message", "")
         assert message_substr in actual, f"errors[0].message={actual!r} does not contain {message_substr!r}"
+
+    if field is not None:
+        # AdCP 3.1.1 core/error.json: the offending field is named in `field`
+        # (JSONPath-lite), mirrored across both envelope layers.
+        assert body["errors"][0].get("field") == field, (
+            f"errors[0].field={body['errors'][0].get('field')!r}, expected {field!r}"
+        )
+        assert body["adcp_error"].get("field") == field, (
+            f"adcp_error.field={body['adcp_error'].get('field')!r}, expected {field!r}"
+        )

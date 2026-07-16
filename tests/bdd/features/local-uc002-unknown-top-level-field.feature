@@ -8,13 +8,16 @@
 # Pattern #7 drift gate (a project gate, NOT a spec obligation) — GH #1442.
 # The generated BR-UC-002 unknown-field partitions grade NESTED objects
 # (targeting_overlay) only; this file grades the TOP-LEVEL request body.
-# Every transport REJECTS, each at its own boundary layer (owner decision
-# 2026-07-11, salesagent-cyz0 — shape differences accepted, no remap):
-# REST -> INVALID_REQUEST envelope (pydantic extra=forbid via app handler);
-# A2A -> VALIDATION_ERROR envelope (its boundary validator, names the field);
-# MCP -> FastMCP tool-signature rejection, before the envelope builder can
-# run (in dev mode mcp_compat_middleware deliberately does not strip —
-# unknowns fail loudly).
+# Every transport REJECTS (the internal Pattern #7 dev-forbid gate) and names
+# the offending field in the spec-canonical place. AdCP 3.1.1 core/error.json
+# names the field in the `field` property (JSONPath-lite), NOT the free-form
+# `message` — and all transports emit it identically (field="nonsense_field" on
+# MCP, A2A, REST). The only accepted per-transport difference is the boundary
+# `code` (owner decision 2026-07-11, salesagent-cyz0 — no remap): REST ->
+# INVALID_REQUEST (pydantic extra=forbid handler); A2A boundary validator and
+# MCP mcp_compat_middleware (#1534) -> VALIDATION_ERROR. Recovery=correctable on
+# all. Message prose is not asserted (spec leaves it free-form).
+
 Feature: UC-002 create_media_buy — unknown top-level request field (local, Pattern #7 gate)
 
   @T-UC-002-local-unknown-top-level-field @project-gate

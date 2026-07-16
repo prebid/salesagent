@@ -29,9 +29,9 @@ ADCP_PIN="467fd93d7711"
 # The canonical local tag is pin-keyed so a cached image from a DIFFERENT pin
 # can never satisfy _ensure_image (a bare `adcp-creative-agent` image left by
 # another branch/worktree on a shared Docker host would silently substitute
-# the wrong agent — exactly the drift salesagent-kczg exists to prevent). The
-# un-keyed alias is what docker-compose.e2e.yml and the standalone `up` run;
-# _ensure_image repoints it at this pin before every run.
+# the wrong agent after a bump — exactly the drift this pin-keying prevents).
+# The un-keyed alias is what docker-compose.e2e.yml and the standalone `up`
+# path run; _ensure_image repoints it at this pin before every run.
 IMAGE_ALIAS="adcp-creative-agent"
 IMAGE="${IMAGE_ALIAS}:${ADCP_PIN}"
 NET="creative-net"
