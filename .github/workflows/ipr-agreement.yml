@@ -1,32 +1,185 @@
 name: IPR Agreement
 
+# Two paths (durability under GitHub API Unicorn/HTML 503s — #1669):
+#   A) pull_request_target → read-only check against signatures/ipr-signatures.json
+#      (no PR-comments API; that is what CLA Assistant was dying on).
+#   B) issue_comment sign → wait for API health (retries), then CLA Assistant.
+#
+# Do NOT check out PR head (ADR-003 / dangerous-triggers allowlist).
+
 on:
   issue_comment:
     types: [created]
-  pull_request_target:
-    types: [opened, closed, synchronize]
+  # pull_request (not pull_request_target): verify is read-only, and the workflow
+  # file from this PR must run on synchronize — pull_request_target always loads
+  # the base-branch copy, so durability fixes would never apply until merge.
+  pull_request:
+    types: [opened, synchronize, reopened]
 
-permissions:
-  actions: write
-  contents: write
-  pull-requests: write
-  statuses: write
+permissions: {}
 
 jobs:
+  # ── A: verify already-signed contributors (push / open) ───────────────────
   ipr-check:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
-      - name: CLA Assistant
-        if: (github.event.comment.body == 'I have read the IPR Policy' || github.event_name == 'pull_request_target')
+      - name: Verify IPR signatures (read-only, with retries)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -euo pipefail
+
+          # Retry wrapper for transient GitHub Unicorn/503 HTML responses.
+          gh_retry() {
+            local attempt=1
+            local max=5
+            local sleep_s
+            while true; do
+              if "$@"; then
+                return 0
+              fi
+              if [ "${attempt}" -ge "${max}" ]; then
+                echo "command failed after ${max} attempts: $*" >&2
+                return 1
+              fi
+              sleep_s=$((attempt * 15))
+              echo "attempt ${attempt}/${max} failed; retrying in ${sleep_s}s..." >&2
+              sleep "${sleep_s}"
+              attempt=$((attempt + 1))
+            done
+          }
+
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          export TMPDIR_IPR="${tmp}"
+
+          echo "Fetching signatures from ipr-signatures branch..."
+          gh_retry gh api \
+            "repos/${REPO}/contents/signatures/ipr-signatures.json?ref=ipr-signatures" \
+            --jq .content | tr -d '\n' | base64 --decode > "${tmp}/sigs.json"
+
+          echo "Fetching PR commit authors..."
+          gh_retry gh api --paginate \
+            "repos/${REPO}/pulls/${PR_NUMBER}/commits" > "${tmp}/commits.json"
+
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          tmp = Path(os.environ["TMPDIR_IPR"])
+          sigs_doc = json.loads((tmp / "sigs.json").read_text(encoding="utf-8"))
+          commits = json.loads((tmp / "commits.json").read_text(encoding="utf-8"))
+          if not isinstance(commits, list):
+              print("expected commits list from GitHub API", file=sys.stderr)
+              sys.exit(2)
+
+          signed = {
+              (c.get("name") or "").lower()
+              for c in sigs_doc.get("signedContributors") or []
+              if c.get("name")
+          }
+          allow_res = [
+              re.compile(r"^bot.*$", re.I),
+              re.compile(r"^dependabot.*$", re.I),
+              re.compile(r"^renovate.*$", re.I),
+              re.compile(r"^github-actions.*$", re.I),
+          ]
+
+          def allowed(login: str) -> bool:
+              return any(r.match(login) for r in allow_res)
+
+          authors: set[str] = set()
+          pr_author = (os.environ.get("PR_AUTHOR") or "").strip()
+          if pr_author:
+              authors.add(pr_author)
+          for commit in commits:
+              for key in ("author", "committer"):
+                  login = (commit.get(key) or {}).get("login")
+                  if login:
+                      authors.add(login)
+
+          if not authors:
+              print("no PR authors/committers found — cannot verify IPR", file=sys.stderr)
+              sys.exit(2)
+
+          missing = sorted(
+              a for a in authors if not allowed(a) and a.lower() not in signed
+          )
+          print(f"authors={sorted(authors)}")
+          print(f"signed_count={len(signed)} missing={missing}")
+          if missing:
+              print(
+                  "IPR Policy not signed by: "
+                  + ", ".join(missing)
+                  + ". Comment on the PR with exactly: I have read the IPR Policy",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+          print("All contributors have signed the IPR Policy.")
+          PY
+
+  # ── B: record a new signature (comment path only) ─────────────────────────
+  ipr-sign:
+    if: >-
+      github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
+      && github.event.comment.body == 'I have read the IPR Policy'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+      statuses: write
+    steps:
+      - name: Wait for GitHub API (retry on Unicorn/503)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          attempt=1
+          max=6
+          while true; do
+            code="$(curl -sS -o /tmp/gh_api_body -w "%{http_code}" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/rate_limit" || true)"
+            if [ "${code}" = "200" ]; then
+              # Reject HTML error pages even with odd status
+              if head -c 15 /tmp/gh_api_body | grep -q '{'; then
+                echo "GitHub API healthy (HTTP ${code})"
+                exit 0
+              fi
+            fi
+            if [ "${attempt}" -ge "${max}" ]; then
+              echo "GitHub API still unhealthy after ${max} attempts (last HTTP ${code})" >&2
+              head -c 200 /tmp/gh_api_body >&2 || true
+              exit 1
+            fi
+            sleep_s=$((attempt * 15))
+            echo "API not ready (HTTP ${code}); retry ${attempt}/${max} in ${sleep_s}s..." >&2
+            sleep "${sleep_s}"
+            attempt=$((attempt + 1))
+          done
+
+      - name: CLA Assistant (record signature)
         uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          path-to-signatures: 'signatures/ipr-signatures.json'
-          path-to-document: 'https://github.com/prebid/salesagent/blob/main/IPR_POLICY.md'
-          branch: 'ipr-signatures'
-          allowlist: 'bot*,dependabot*,renovate*,github-actions*'
-
+          path-to-signatures: "signatures/ipr-signatures.json"
+          path-to-document: "https://github.com/prebid/salesagent/blob/main/IPR_POLICY.md"
+          branch: "ipr-signatures"
+          allowlist: "bot*,dependabot*,renovate*,github-actions*"
           custom-notsigned-prcomment: |
             ## IPR Policy Agreement Required
 
@@ -44,11 +197,8 @@ jobs:
             ```
 
             You can read the full [IPR Policy here](https://github.com/prebid/salesagent/blob/main/IPR_POLICY.md).
-
-          custom-pr-sign-comment: 'I have read the IPR Policy'
-
+          custom-pr-sign-comment: "I have read the IPR Policy"
           custom-allsigned-prcomment: |
             All contributors have agreed to the [IPR Policy](https://github.com/prebid/salesagent/blob/main/IPR_POLICY.md). Thank you!
-
           lock-pullrequest-aftermerge: false
           use-dco-flag: false
