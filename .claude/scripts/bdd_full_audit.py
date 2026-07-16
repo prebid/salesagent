@@ -299,7 +299,9 @@ def classify_xfail(entry: TestEntry, tag_reasons: dict[str, str]) -> tuple[str, 
 def classify_xpass(entry: TestEntry, all_entries: list[TestEntry]) -> tuple[str, str, str]:
     """Classify an xpassed test. Returns (bucket, category, detail).
 
-    All xpasses are FIX_NOW — remove the stale xfail tag.
+    FIX_NOW either way: GRADUATE when all four transports pass (remove the
+    stale xfail tag); PARTIAL_XPASS when only a subset passes (investigate
+    remaining gaps before graduating).
     """
     base = extract_scenario_base(entry.nodeid)
 
@@ -504,18 +506,12 @@ def generate_report(
         for item in fix_now:
             by_cat[item.category].append(item)
 
-        for cat in [
-            "STALE_STRICT_XFAIL",
-            "GRADUATE",
-            "PARTIAL_XPASS",
-            "FIXTURE_GAP",
-            "STEP_BUG",
-            "WEAK_ASSERTION",
-        ]:
+        # Single source of truth: FIX_NOW insertion order (no parallel list).
+        for cat in FIX_NOW:
             cat_items = by_cat.get(cat, [])
             if not cat_items:
                 continue
-            cat_desc = FIX_NOW.get(cat, cat)
+            cat_desc = FIX_NOW[cat]
             total = sum(i.test_count for i in cat_items)
             lines.append(f"### {cat} ({len(cat_items)} items, {total} tests)")
             lines.append(f"*{cat_desc}*")
