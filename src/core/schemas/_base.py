@@ -311,15 +311,22 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     # envelope. ``status`` is invariant for a synchronous committed success, so its
     # spec-correct default lives here rather than being threaded through every constructor.
     #
-    # ``confirmed_at`` and ``revision``, however, are overridden back to NULLABLE (adcp 6.6
-    # types them non-null AwareDatetime / int). PR #1544's crash-recoverable approval
-    # finalizer legitimately emits confirmed_at=None / revision=None for a PROVISIONAL
-    # (manual-approval, not-yet-seller-confirmed) buy — a state adcp 6.6's non-nullable
-    # types cannot model. The approve / immediate-activation paths set both EXPLICITLY from
-    # the persisted MediaBuy (see media_buy_completion.finalize_media_buy / adapters
-    # _build_create_success), so a committed success is never spec-thin; only the provisional
-    # arm carries None. 3.1.1 create-media-buy-response oneOf[0] lists confirmed_at/revision
-    # (prose/schema divergence historically tracked in #1564; re-grounded to 3.1.1).
+    # ``confirmed_at`` and ``revision`` are overridden back to NULLABLE (adcp 6.6 types
+    # them non-null AwareDatetime / int). This is a MODEL TYPE capability, not a live wire
+    # arm: 3.1.1 create-media-buy-response oneOf[0] types confirmed_at as ["string","null"]
+    # ("May be null in deferred or manual-approval flows until seller commitment occurs"),
+    # so the required field must be able to serialize as present-with-null to represent a
+    # not-yet-seller-confirmed buy. adcp 6.6's non-nullable types cannot express that state,
+    # hence the widening. It does NOT mean the finalizer publishes a null-confirmed_at
+    # success: the approval finalizer always publishes a confirmed serving status BEFORE
+    # building the success body, and the approve / immediate-activation paths set both
+    # confirmed_at and revision EXPLICITLY from the persisted MediaBuy (see
+    # media_buy_completion.finalize_media_buy / adapters _build_create_success), so a real
+    # CreateMediaBuySuccess on the wire carries a committed confirmed_at — there is no live
+    # path emitting a null-confirmed_at success. The nullable override exists purely so the
+    # model can REPRESENT the not-yet-committed state, not because it is emitted. 3.1.1
+    # create-media-buy-response oneOf[0] lists confirmed_at/revision (prose/schema
+    # divergence historically tracked in #1564; re-grounded to 3.1.1).
     #   status      — protocol TaskStatus; a create_media_buy returning this type has, by
     #                 definition, completed.
     #   confirmed_at — persisted, write-once seller-confirmation instant (None until confirmed).
@@ -417,15 +424,19 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
         # 3.1.1 create-media-buy-response.json oneOf[0] (CreateMediaBuySuccess)
         # required = [media_buy_id, confirmed_at, revision, packages]; confirmed_at
         # is typed ["string", "null"] ("May be null in deferred or manual-approval
-        # flows until seller commitment occurs"). A simulated/sandbox success (the
-        # dry-run arm) confirms nothing, so confirmed_at is honestly null — but the
-        # inherited exclude_none=True would DROP the key, leaving the body missing a
-        # required field. For a sandbox success only, re-emit confirmed_at explicitly
-        # as null so the required key is present-with-null on the wire. The
-        # ``"confirmed_at" not in data`` guard means a real committed instant (a
-        # non-null datetime already in ``data``) is never clobbered. revision already
-        # serializes as a non-null int (>=1). See PR #1544.
-        if getattr(self, "sandbox", False) and "confirmed_at" not in data:
+        # flows until seller commitment occurs"). ANY CreateMediaBuySuccess must
+        # therefore carry confirmed_at on the wire — present-with-null when the buy is
+        # not yet seller-confirmed (e.g. the simulated/sandbox dry-run arm, which
+        # confirms nothing). The inherited exclude_none=True would DROP a null
+        # confirmed_at, leaving the body missing a REQUIRED key, so re-emit it
+        # explicitly as null whenever it is absent from ``data``. This is a success-arm
+        # invariant, not a sandbox special case: it also guards adapter-layer successes
+        # (adapters/base.py, mock_ad_server.py) that are one refactor away from omitting
+        # the key. The ``"confirmed_at" not in data`` guard means a real committed
+        # instant (a non-null datetime already in ``data``) is never clobbered. revision
+        # already serializes as a non-null int (>=1) and is not re-injected here.
+        # See PR #1544.
+        if "confirmed_at" not in data:
             data["confirmed_at"] = None
 
         return data

@@ -2358,11 +2358,22 @@ def then_dry_run_sandbox_labelled_conformant(ctx: dict) -> None:
                        but nullable field (["string","null"], "May be null in deferred
                        or manual-approval flows"), so the sandbox serializer emits it
                        as null on the wire (present, not omitted). #1544.
+
+    The confirmed_at claim is a SERIALIZATION claim, so it is asserted on the wire
+    body (present-as-null) as well as on the typed payload — mirroring the unit
+    test. exclude_none would otherwise DROP a null confirmed_at and silently omit a
+    REQUIRED key; the model serializer re-injects it explicitly (see
+    CreateMediaBuySuccess._serialize_model).
     """
     resp = _require_success_response(ctx)
     assert _get_response_field(resp, "sandbox") is True, "dry-run must be labelled sandbox=true"
     assert _get_response_field(resp, "revision") == 1, "dry-run must carry the initial revision 1"
     assert _get_response_field(resp, "confirmed_at") is None, "dry-run confirmed_at must be null (nothing committed)"
+    body = _serialized_success_body(ctx)
+    assert "confirmed_at" in body, f"REQUIRED confirmed_at must be PRESENT on the wire, not omitted: {body!r}"
+    assert body["confirmed_at"] is None, (
+        f"dry-run confirmed_at must serialize as null (present-with-null), got {body['confirmed_at']!r}"
+    )
 
 
 # THEN steps — seller notification (manual-approval wiring, PR #1567 round-2 item 2)
