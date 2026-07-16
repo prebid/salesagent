@@ -15,6 +15,7 @@ Validates the two contracts the helper exists to enforce:
    failure.
 """
 
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -25,7 +26,6 @@ from src.core.exceptions import (
     AdCPConfigurationError,
     AdCPValidationError,
     build_two_layer_error_envelope,
-    normalize_to_adcp_error,
     safe_adcp_error,
 )
 
@@ -61,11 +61,14 @@ def _expected_response_data(
 
 def _scrubbed_response_data(exc: Exception) -> dict:
     """The scrubbed two-layer ``response_data`` the audit helper must emit for an INTERNAL
-    error — built through the exact production policy (``normalize_to_adcp_error`` →
-    ``safe_adcp_error`` → ``build_two_layer_error_envelope``). If the helper stops scrubbing,
-    the raw message survives and no longer matches this expected shape (the mutation reddens).
+    error — built through the exact production policy (``safe_adcp_error`` →
+    ``build_two_layer_error_envelope``, on the ORIGINAL exception, NOT pre-normalized). If the
+    helper stops scrubbing, the raw message survives and no longer matches this expected shape
+    (the mutation reddens). The independent secret-absence tests below don't route through this
+    helper — they assert the literal secret is nowhere in the payload — so a shared regression in
+    both helper and production can't hide the leak.
     """
-    return build_two_layer_error_envelope(safe_adcp_error(normalize_to_adcp_error(exc)))
+    return build_two_layer_error_envelope(safe_adcp_error(exc))
 
 
 class TestFailWorkflowStepForExceptionWebhookPayload:
@@ -134,6 +137,46 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
             error_message=_SANITIZED_INTERNAL_MESSAGE,
             response_data=_scrubbed_response_data(AdCPConfigurationError(f"decrypt failed: {secret}")),
         )
+
+    @pytest.mark.parametrize(
+        "exc_factory",
+        [
+            pytest.param(lambda s: ValueError(s), id="ValueError"),
+            pytest.param(lambda s: PermissionError(s), id="PermissionError"),
+        ],
+    )
+    def test_untyped_valueerror_permissionerror_scrub_secret_from_webhook_payload(self, exc_factory):
+        """Untyped ``ValueError``/``PermissionError`` must be scrubbed on the webhook path.
+
+        These are the adversarial siblings of the RuntimeError case: ``normalize_to_adcp_error``
+        maps ``ValueError`` → *trusted* ``AdCPValidationError`` and ``PermissionError`` →
+        ``AdCPAuthorizationError``, both client-correctable, so pre-normalizing before
+        ``safe_adcp_error`` would let their raw ``str(exc)`` (a connection string / token) pass
+        through the scrub. ``_create_media_buy_impl`` funnels every untyped post-step exception
+        here, and adapters raise ``ValueError`` freely, so this path is reachable.
+
+        Authored INDEPENDENTLY of ``safe_adcp_error``: it asserts the literal secret is absent
+        from BOTH ``error_message`` and the serialized ``response_data`` — it does not reconstruct
+        the expected envelope through the same policy under test, so a shared regression can't hide
+        the leak.
+        """
+        # Record the persisted payload via a plain callable (not a Mock) so the assertions can do
+        # substring-absence checks on the ACTUAL emitted values without the assert_called_once() +
+        # call_args split-assertion pattern the weak-mock guard forbids.
+        calls: list[dict] = []
+        cm = ContextManager.__new__(ContextManager)
+        cm.update_workflow_step = lambda step_id, **kw: calls.append({"step_id": step_id, **kw})  # type: ignore[method-assign]
+        secret = "postgresql://svc:hunter2@db.internal/prod TOKEN=abc123 SELECT * FROM principals"
+
+        cm.audit_workflow_step_failure("step_abc", exc_factory(secret))
+
+        assert len(calls) == 1, "audit must persist exactly one failed-step update"
+        payload = calls[0]
+        assert payload["error_message"] == _SANITIZED_INTERNAL_MESSAGE
+        serialized = json.dumps(payload["response_data"])
+        for leak in ("hunter2", "postgresql://", "db.internal", "TOKEN=abc123", "SELECT", "principals"):
+            assert leak not in serialized, f"secret fragment {leak!r} leaked into webhook response_data"
+            assert leak not in payload["error_message"], f"secret fragment {leak!r} leaked into error_message"
 
 
 class TestFailWorkflowStepForExceptionAuditFailureNonFatal:

@@ -21,7 +21,7 @@ from src.core.database.database_session import DatabaseManager
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
 from src.core.database.repositories.workflow import WorkflowRepository
-from src.core.exceptions import build_two_layer_error_envelope, normalize_to_adcp_error
+from src.core.exceptions import build_two_layer_error_envelope
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -361,12 +361,16 @@ class ContextManager(DatabaseManager):
         (``adcp_error`` + ``errors[]``) via ``build_two_layer_error_envelope``
         so async and sync paths see the same wire shape.
 
-        The shared ``safe_adcp_error`` policy (``src/core/exceptions.py``) does the whole job:
-        it scrubs the message for internal/infra errors (the SERVICE_UNAVAILABLE family + terminal
-        CONFIGURATION_ERROR) so a raw interpolated ``str(exc)`` — e.g. a connection string — never
-        reaches the buyer's webhook, coerces any non-standard code to ``SERVICE_UNAVAILABLE``, and
-        passes client-correctable errors through with their buyer-facing message intact. This is
-        the async twin of the synchronous re-raise scrub; both share one definition.
+        The shared ``safe_adcp_error`` policy (``src/core/exceptions.py``) does the whole job and
+        must receive the ORIGINAL exception: it scrubs the message for internal/infra errors (the
+        SERVICE_UNAVAILABLE family + terminal CONFIGURATION_ERROR) AND for every UNTYPED exception
+        (``ValueError``, ``PermissionError``, adapter ``RuntimeError``…), so a raw interpolated
+        ``str(exc)`` — e.g. a connection string — never reaches the buyer's webhook; it coerces any
+        non-standard code to ``SERVICE_UNAVAILABLE`` and passes only TYPED client-correctable
+        ``AdCPError`` subclasses through with their buyer-facing message intact. Do NOT pre-wrap
+        with ``normalize_to_adcp_error`` — that would map an untyped ``ValueError`` to a *trusted*
+        ``AdCPValidationError`` whose raw message (the secret) then passes through the scrub. This
+        is the async twin of the synchronous re-raise scrub; both share one definition.
 
         Wraps the ``update_workflow_step`` call in ``try/except`` so a DB
         hiccup during audit doesn't replace the original exception that the
@@ -375,7 +379,7 @@ class ContextManager(DatabaseManager):
         from src.core.exceptions import safe_adcp_error
 
         try:
-            source = safe_adcp_error(normalize_to_adcp_error(exc))
+            source = safe_adcp_error(exc)
             response_data = build_two_layer_error_envelope(source)
             error_message = source.message or str(source)
 
