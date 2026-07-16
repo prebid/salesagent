@@ -64,6 +64,14 @@ class MediaBuyLifecycleEnv(MediaBuyDualEnv, MediaBuyListDispatchMixin):
             return self._call_list_mcp(**kwargs)
         return super().call_mcp(**kwargs)
 
+    def rest_dispatch_target(self, kwargs: dict[str, Any]) -> tuple[str, str]:
+        # List queries POST to the query collection; create/update defer to the dual
+        # layer's route resolution (put /media-buys/{id} vs post /media-buys). Resolved
+        # by the E2E dispatcher BEFORE build_rest_body — see MediaBuyDualEnv.rest_dispatch_target.
+        if _is_list_request(kwargs):
+            return "post", "/api/v1/media-buys/query"
+        return super().rest_dispatch_target(kwargs)
+
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         # Selects the list parser alongside the body build; create/update
         # requests fall through to the dual/create layers, which select

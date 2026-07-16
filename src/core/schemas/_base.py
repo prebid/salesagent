@@ -311,32 +311,46 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     # envelope. ``status`` is invariant for a synchronous committed success, so its
     # spec-correct default lives here rather than being threaded through every constructor.
     #
-    # ``confirmed_at`` and ``revision`` are overridden back to NULLABLE (adcp 6.6 types
-    # them non-null AwareDatetime / int). This is a MODEL TYPE capability, not a live wire
-    # arm: 3.1.1 create-media-buy-response oneOf[0] types confirmed_at as ["string","null"]
+    # ``confirmed_at`` is overridden back to NULLABLE (adcp 6.6 types it a non-null
+    # AwareDatetime). This is a MODEL TYPE capability grounded in the spec: 3.1.1
+    # create-media-buy-response oneOf[0] types confirmed_at as ["string","null"]
     # ("May be null in deferred or manual-approval flows until seller commitment occurs"),
     # so the required field must be able to serialize as present-with-null to represent a
-    # not-yet-seller-confirmed buy. adcp 6.6's non-nullable types cannot express that state,
-    # hence the widening. It does NOT mean the finalizer publishes a null-confirmed_at
-    # success: the approval finalizer always publishes a confirmed serving status BEFORE
-    # building the success body, and the approve / immediate-activation paths set both
-    # confirmed_at and revision EXPLICITLY from the persisted MediaBuy (see
-    # media_buy_completion.finalize_media_buy / adapters _build_create_success), so a real
-    # CreateMediaBuySuccess on the wire carries a committed confirmed_at — there is no live
-    # path emitting a null-confirmed_at success. The nullable override exists purely so the
-    # model can REPRESENT the not-yet-committed state, not because it is emitted. 3.1.1
-    # create-media-buy-response oneOf[0] lists confirmed_at/revision (prose/schema
-    # divergence historically tracked in #1564; re-grounded to 3.1.1).
+    # not-yet-seller-confirmed buy. adcp 6.6's non-nullable type cannot express that state,
+    # hence the widening. There IS a live wire arm that legitimately serializes confirmed_at
+    # present-as-null: the DRY-RUN / sandbox success arm (media_buy_create._dry_run branch),
+    # where a simulation commits nothing, so confirmed_at is honestly null while the required
+    # key stays present (the serializer below re-emits it as null so exclude_none does not
+    # drop it). The non-sandbox committed paths are the opposite: the approval finalizer
+    # publishes a confirmed serving status BEFORE building the success body, and the approve /
+    # immediate-activation paths set confirmed_at EXPLICITLY from the persisted MediaBuy (see
+    # media_buy_completion.finalize_media_buy / the sync-success tool path), so a real
+    # COMMITTED CreateMediaBuySuccess on the wire always carries a non-null confirmed_at.
+    # (prose/schema divergence historically tracked in #1564; re-grounded to 3.1.1.)
+    #
+    # ``revision`` is NON-nullable: 3.1.1 requires it present as a non-null int >= 1 and —
+    # unlike confirmed_at — it has NO spec-sanctioned null arm (a would-be-fresh buy is
+    # revision 1; a committed/updated buy carries its persisted counter). A nullable revision
+    # left None would serialize OMITTED (exclude_none), leaving the body missing a REQUIRED
+    # key — non-conformant, and it cannot be null-injected like confirmed_at. So it defaults
+    # to the spec-minimum initial revision 1; every wire-emitting tool path (sync-success /
+    # dry-run / finalizer / auto-approve) passes the real persisted revision explicitly,
+    # overriding the default. Adapter-layer builders (_build_create_success) leave the
+    # default 1 — their revision is discarded, the tool rebuilds the wire success with the
+    # persisted revision. This matches the serializer note below ("revision already
+    # serializes as a non-null int (>=1)").
     #   status      — protocol TaskStatus; a create_media_buy returning this type has, by
     #                 definition, completed.
-    #   confirmed_at — persisted, write-once seller-confirmation instant (None until confirmed).
-    #   revision     — persisted monotonic revision counter (None until first persist).
+    #   confirmed_at — persisted, write-once seller-confirmation instant (None until
+    #                 confirmed; present-as-null in the dry-run/sandbox simulation arm).
+    #   revision     — persisted monotonic revision counter (default 1 = initial).
     status: Literal["completed"] = "completed"
-    # The two inline ignores below deliberately WIDEN the 6.6 non-null parent fields to
-    # nullable (pydantic permits this at runtime; mypy flags the override as incompatible).
-    # The provisional/rejected finalizer path requires None; see the rationale above.
+    # confirmed_at is WIDENED from the 6.6 non-null parent to nullable (pydantic permits this
+    # at runtime; mypy flags the override as incompatible) — the dry-run/sandbox and
+    # not-yet-committed arms require present-as-null. revision stays a non-null int (default
+    # 1); it is never None, so it can never serialize OMITTED.
     confirmed_at: AwareDatetime | None = None  # type: ignore[assignment]
-    revision: int | None = None  # type: ignore[assignment]
+    revision: int = 1
 
     @classmethod
     def sync_success(cls, **kwargs: Any) -> "CreateMediaBuySuccess":

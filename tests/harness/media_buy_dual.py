@@ -123,6 +123,29 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
             return self._run_update_rest_request(**kwargs)
         return super()._run_rest_request(endpoint, **kwargs)
 
+    def rest_dispatch_target(self, kwargs: dict[str, Any]) -> tuple[str, str]:
+        """Resolve (method, endpoint) for the E2E dispatcher BEFORE ``build_rest_body`` runs.
+
+        ``RestE2EDispatcher`` reads the route up-front via
+        ``getattr(env, "rest_dispatch_target")``, BEFORE it calls ``build_rest_body``.
+        The create/update ``REST_METHOD`` / ``REST_ENDPOINT`` @property values depend on
+        ``_active_update``, which ``build_rest_body`` only sets LATER — so without this
+        hook an update PUT would be issued as a POST to the create route
+        (``/api/v1/media-buys``) carrying the update body, which the create request
+        schema then rejects for its missing required fields (``idempotency_key``,
+        ``packages.0.product_id``, …). Compute the route deterministically from the
+        request kind here; ``build_rest_body`` still (re)sets ``_active_update`` for the
+        body build and the response parse. The in-process ``RestDispatcher`` is
+        unaffected — it routes through the ``_run_rest_request`` override instead.
+        """
+        if _is_update_request(kwargs):
+            req = kwargs.get("req")
+            target = self._seeded_media_buy_id
+            if req is not None and getattr(req, "media_buy_id", None):
+                target = req.media_buy_id
+            return "put", f"/api/v1/media-buys/{target}"
+        return "post", "/api/v1/media-buys"
+
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         # The E2E dispatcher (RestE2EDispatcher) reads REST_ENDPOINT/REST_METHOD as
         # plain attrs and never calls _run_rest_request, so set the mode flag + target

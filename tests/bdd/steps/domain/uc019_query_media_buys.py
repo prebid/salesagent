@@ -2591,6 +2591,25 @@ def given_tenant_manual_approval(ctx: dict) -> None:
     adapter_mock.manual_approval_operations = ["create_media_buy"]
 
 
+def _resolve_submitted_media_buy_id(ctx: dict, task_id: str) -> str:
+    """Resolve the persisted media_buy_id behind a submitted (pending-approval) create.
+
+    The 3.1.1 CreateMediaBuySubmitted envelope exposes only ``task_id`` (the workflow
+    step id). The create tool links that step to the buy via
+    ``ObjectWorkflowMapping(object_type="media_buy", step_id=task_id)`` — read that
+    mapping back on the harness's bound session (READ COMMITTED sees the create's
+    committed rows, same as the sibling get_by_id read-backs in this module).
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import ObjectWorkflowMapping
+
+    session = ctx["env"]._session
+    mapping = session.scalars(select(ObjectWorkflowMapping).filter_by(step_id=task_id, object_type="media_buy")).first()
+    assert mapping is not None, f"no media_buy workflow mapping for submitted task {task_id!r}"
+    return mapping.object_id
+
+
 @given(parsers.parse('the Buyer Agent has created media buy "{mb_id}" awaiting seller approval'))
 def given_created_awaiting_approval(ctx: dict, mb_id: str) -> None:
     """Drive a real create that lands on the submitted (manual-approval) arm.
@@ -2607,7 +2626,12 @@ def given_created_awaiting_approval(ctx: dict, mb_id: str) -> None:
     result = env.call_impl(**env.default_create_kwargs(ctx["default_product"], brand_domain="manual-approval.example"))
     status = getattr(result, "status", None)
     assert status == "submitted", f"expected the submitted (manual-approval) arm, got status {status!r}"
-    media_buy_id = result.response.media_buy_id
+    # The 3.1.1 CreateMediaBuySubmitted arm carries ONLY task_id (the workflow step id);
+    # media_buy_id/packages land on the task's completion artifact, not this envelope
+    # (adcp 6.6 create-media-buy-response oneOf). Resolve the persisted buy via the
+    # workflow->object mapping the create linked (object_type="media_buy",
+    # step_id=task_id) — the same authoritative link the admin approval flow acts on.
+    media_buy_id = _resolve_submitted_media_buy_id(ctx, result.response.task_id)
     media_buy = _media_buy_repo(ctx).get_by_id(media_buy_id)
     assert media_buy is not None, f"created media buy {media_buy_id} not found in DB"
     assert media_buy.status == "pending_approval", f"expected pending_approval, got {media_buy.status!r}"

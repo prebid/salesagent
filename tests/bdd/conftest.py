@@ -3404,17 +3404,27 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
     elif uc == "UC-019":
         marker_names = {m.name for m in request.node.iter_markers()}
-        request.getfixturevalue("integration_db")
         if marker_names & _UC019_WIRED:
             # Wired revision/confirmed_at invariants — MediaBuyLifecycleEnv
             # composes create/update/get so Given steps drive real transitions
             # and the query runs through every transport (incl. REST). #1544.
+            # The intervening state change is a TRANSPORT-BYPASS ``call_impl`` that
+            # runs IN-PROCESS even over e2e, so production must point at the same DB
+            # the seed factories and the wire reads use: the live-server DB in e2e
+            # mode, the per-test DB in-process. ``_db_scope_for`` does exactly that
+            # (it returns ``integration_db`` + nullcontext when e2e_config is None),
+            # matching every other e2e-capable branch — the prior unconditional
+            # ``integration_db`` repointed production at the per-test DB while the
+            # env's factories/reads used the server DB, so an intervening in-process
+            # update never landed where the wire read looked (#1544 e2e revision/
+            # confirmed_at drift).
             from tests.harness.media_buy_lifecycle import MediaBuyLifecycleEnv
 
-            with MediaBuyLifecycleEnv(e2e_config=ctx.get("e2e_config")) as env:
+            with _db_scope_for(request, e2e_config), MediaBuyLifecycleEnv(e2e_config=e2e_config) as env:
                 _seed_media_buy_ctx(ctx, env)
                 yield
         else:
+            request.getfixturevalue("integration_db")
             # Broader get_media_buys query scenarios — MediaBuyListEnv runs the
             # real _get_media_buys_impl and its A2A/MCP/REST wrappers against a
             # real DB (no adapter mock; list is a pure read). Scenarios seed buys
