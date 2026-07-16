@@ -235,19 +235,27 @@ class TestCISuiteCoverage:
         steps = job.get("steps", [])
         assert steps, "bdd-in-network must declare steps (empty job is a vacuous pass)."
 
-        free_disk = [s for s in steps if s.get("name") == "Free disk space"]
-        assert free_disk, "bdd-in-network must include a 'Free disk space' step before compose."
-        free_run = str(free_disk[0].get("run", ""))
+        step_names = [s.get("name") for s in steps]
+        assert "Free disk space" in step_names, "bdd-in-network must include a 'Free disk space' step before compose."
+        assert "Run BDD suite in-network" in step_names, "bdd-in-network must run ./run_all_tests.sh bdd_e2e."
+        free_idx = step_names.index("Free disk space")
+        run_idx = step_names.index("Run BDD suite in-network")
+        assert free_idx < run_idx, (
+            "Free disk space must run before 'Run BDD suite in-network' "
+            f"(found Free disk at {free_idx}, run at {run_idx})."
+        )
+
+        free_run = str(steps[free_idx].get("run", ""))
         assert "/usr/share/dotnet" in free_run, "Free disk space must remove /usr/share/dotnet."
         assert "docker builder prune" in free_run, "Free disk space must prune the Docker builder cache."
 
-        run_steps = [s for s in steps if s.get("name") == "Run BDD suite in-network"]
-        assert run_steps, "bdd-in-network must run ./run_all_tests.sh bdd_e2e."
-        env = run_steps[0].get("env") or {}
+        run_step = steps[run_idx]
+        env = run_step.get("env") or {}
         assert env.get("PGDATA_TMPFS_SIZE") == "2g", (
-            "bdd-in-network must set PGDATA_TMPFS_SIZE=2g (serial leg; default 10g overflows runners)."
+            "bdd-in-network must set PGDATA_TMPFS_SIZE=2g "
+            "(serial leg; default 10g wastes RAM / contributes to pressure)."
         )
-        assert "run_all_tests.sh bdd_e2e" in str(run_steps[0].get("run", "")), (
+        assert "run_all_tests.sh bdd_e2e" in str(run_step.get("run", "")), (
             "bdd-in-network must invoke ./run_all_tests.sh bdd_e2e."
         )
 
