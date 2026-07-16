@@ -12,7 +12,6 @@ beads: salesagent-2rq, salesagent-zh85
 
 from __future__ import annotations
 
-import logging  # TEMP DEBUG (#1544) — remove after diagnosis
 import uuid
 from typing import Any
 from unittest.mock import ANY
@@ -29,8 +28,6 @@ from tests.bdd.steps._outcome_helpers import (
     require_success_response as _require_success_response,
 )
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
-
-_e2e_dbg_logger = logging.getLogger(__name__)  # TEMP DEBUG (#1544) — remove after diagnosis
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — request setup and account state
@@ -2320,13 +2317,6 @@ def then_adapter_never_invoked(ctx: dict) -> None:
             return
         resp = _require_success_response(ctx)
         media_buy_id = _get_response_field(resp, "media_buy_id")
-        # TEMP DEBUG (#1544) — remove after diagnosis
-        _e2e_dbg_logger.warning(
-            "[E2E-DBG] assert-read id(ctx)=%s ctx_response_media_buy_id=%s ctx_keys=%s",
-            id(ctx),
-            media_buy_id,
-            list(ctx.keys()),
-        )
         assert isinstance(media_buy_id, str) and media_buy_id.startswith("dry_run_"), (
             f"dry-run over e2e must return a simulated dry_run_ media_buy_id (proof the adapter "
             f"was not invoked), got {media_buy_id!r}"
