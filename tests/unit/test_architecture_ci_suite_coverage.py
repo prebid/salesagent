@@ -224,6 +224,34 @@ class TestCISuiteCoverage:
         )
 
     @pytest.mark.arch_guard
+    def test_bdd_in_network_frees_disk_before_compose(self):
+        """In-network e2e_rest must reclaim runner disk before image build (#1662).
+
+        Regression: after #1613/#1634, ``uv sync`` into ``tox_data`` hit ENOSPC
+        on ubuntu-latest (image + /opt/venv + second full tox env). The job must
+        free preinstalled toolchains and cap PGDATA tmpfs for the serial leg.
+        """
+        job = load_ci_workflow()["jobs"]["bdd-in-network"]
+        steps = job.get("steps", [])
+        assert steps, "bdd-in-network must declare steps (empty job is a vacuous pass)."
+
+        free_disk = [s for s in steps if s.get("name") == "Free disk space"]
+        assert free_disk, "bdd-in-network must include a 'Free disk space' step before compose."
+        free_run = str(free_disk[0].get("run", ""))
+        assert "/usr/share/dotnet" in free_run, "Free disk space must remove /usr/share/dotnet."
+        assert "docker builder prune" in free_run, "Free disk space must prune the Docker builder cache."
+
+        run_steps = [s for s in steps if s.get("name") == "Run BDD suite in-network"]
+        assert run_steps, "bdd-in-network must run ./run_all_tests.sh bdd_e2e."
+        env = run_steps[0].get("env") or {}
+        assert env.get("PGDATA_TMPFS_SIZE") == "2g", (
+            "bdd-in-network must set PGDATA_TMPFS_SIZE=2g (serial leg; default 10g overflows runners)."
+        )
+        assert "run_all_tests.sh bdd_e2e" in str(run_steps[0].get("run", "")), (
+            "bdd-in-network must invoke ./run_all_tests.sh bdd_e2e."
+        )
+
+    @pytest.mark.arch_guard
     def test_bdd_and_e2e_run_on_pull_request(self):
         """The gate is worthless if it doesn't run on PRs.
 

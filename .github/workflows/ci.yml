@@ -320,6 +320,23 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
+      # #1662: image build + /opt/venv + second full tox env under tox_data
+      # overflowed ubuntu-latest (~14GB free) → ENOSPC on uv sync into /app/.tox.
+      # Drop unused preinstalled toolchains and prune builder cache before compose.
+      - name: Free disk space
+        run: |
+          set -eux
+          df -h
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost \
+            /usr/share/swift \
+            || true
+          docker builder prune -af 2>/dev/null || true
+          df -h
       - name: Clean up lingering containers
         run: |
           docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
@@ -334,6 +351,9 @@ jobs:
         env:
           DOCKER_BUILDKIT: 1
           COMPOSE_DOCKER_CLI_BUILD: 1
+          # Serial e2e_rest leg — no xdist fan-out; default 10g tmpfs wastes RAM
+          # on ubuntu-latest and contributes to ENOSPC pressure (#1662).
+          PGDATA_TMPFS_SIZE: 2g
           # No host uvx in this job (no _setup-env); the dedicated Security
           # Audit check owns the uv-secure scan.
           RUN_ALL_SKIP_AUDIT: 1
