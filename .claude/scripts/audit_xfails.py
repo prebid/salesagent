@@ -190,8 +190,8 @@ def find_premature_xfails(steps_dir: Path) -> set[str]:
 
             # Check if first meaningful statement is pytest.xfail()
             for stmt in node.body:
-                # Skip docstrings
-                if isinstance(stmt, ast.Expr) and isinstance(stmt.value, (ast.Constant, ast.Str)):
+                # Skip docstrings (ast.Str removed in Python 3.12; Constant covers str)
+                if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
                     continue
                 # Skip imports
                 if isinstance(stmt, (ast.Import, ast.ImportFrom)):
@@ -278,6 +278,18 @@ def classify_xfail(
         transport=transport,
         tags=tags,
     )
+
+    # Priority 0: Premature step-level pytest.xfail() (AST scan)
+    # Match when a known premature step function appears in wasxfail / longrepr.
+    call = test.get("call") or {}
+    longrepr = str(call.get("longrepr") or "") if isinstance(call, dict) else ""
+    haystack = f"{wasxfail}\n{longrepr}\n{nodeid}"
+    for fname in premature_xfails:
+        if fname and fname in haystack:
+            entry.category = "PREMATURE_XFAIL"
+            entry.reason = f"step {fname} calls pytest.xfail() before production code"
+            entry.xfail_source = f"step:{fname}"
+            return entry
 
     # Priority 1: Missing step definition (auto-xfail from pytest hook)
     if "Step definition not found" in wasxfail:

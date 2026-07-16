@@ -47,6 +47,7 @@ STEPS_DIR = PROJECT_ROOT / "tests" / "bdd" / "steps"
 FIX_NOW = {
     "STALE_STRICT_XFAIL": "Test passes but strict xfail tag rejects it — remove tag",
     "GRADUATE": "All transports pass — remove xfail tag",
+    "PARTIAL_XPASS": "Passes some transports — investigate remaining gaps before graduating",
     "FIXTURE_GAP": "Strengthened assertion exposes missing test fixture data — fix factory",
     "STEP_BUG": "Step implementation has a bug — fix step code",
     "WEAK_ASSERTION": "Inspector-flagged: assertion doesn't match scenario intent",
@@ -311,9 +312,8 @@ def classify_xpass(entry: TestEntry, all_entries: list[TestEntry]) -> tuple[str,
 
     if passing_transports >= TRANSPORTS:
         return "FIX_NOW", "GRADUATE", f"All transports pass: {sorted(passing_transports)}"
-    else:
-        missing = TRANSPORTS - passing_transports
-        return "FIX_NOW", "GRADUATE", f"Passes: {sorted(passing_transports)}, missing: {sorted(missing)}"
+    missing = TRANSPORTS - passing_transports
+    return "FIX_NOW", "PARTIAL_XPASS", f"Passes: {sorted(passing_transports)}, missing: {sorted(missing)}"
 
 
 # ── Work item generation ─────────────────────────────────────────────
@@ -378,20 +378,20 @@ def generate_work_items(
                 )
             )
 
-    # ── 2. Xpassed tests → FIX_NOW (graduate) ───────────────────────
-    grad_groups: dict[str, list[TestEntry]] = defaultdict(list)
+    # ── 2. Xpassed tests → FIX_NOW (graduate only when all 4 transports) ─
+    grad_groups: dict[tuple[str, str], list[TestEntry]] = defaultdict(list)
     for entry in xpassed:
-        _, _, detail = classify_xpass(entry, all_entries)
-        grad_groups[detail].append(entry)
+        _, cat, detail = classify_xpass(entry, all_entries)
+        grad_groups[(cat, detail)].append(entry)
 
-    for detail, entries in grad_groups.items():
+    for (cat, detail), entries in grad_groups.items():
         uc = extract_uc(entries[0].nodeid) if entries else "MIXED"
-        all_pass = "All transports pass" in detail
+        all_pass = cat == "GRADUATE"
         items.append(
             WorkItem(
-                title=f"Graduate {'(all transports)' if all_pass else '(partial)'}: {uc}",
+                title=f"{'Graduate' if all_pass else 'Partial xpass'} ({'all transports' if all_pass else 'gaps remain'}): {uc}",
                 bucket="FIX_NOW",
-                category="GRADUATE",
+                category=cat,
                 uc=uc,
                 test_count=len(entries),
                 details=detail,
@@ -504,7 +504,14 @@ def generate_report(
         for item in fix_now:
             by_cat[item.category].append(item)
 
-        for cat in ["STALE_STRICT_XFAIL", "GRADUATE", "FIXTURE_GAP", "STEP_BUG", "WEAK_ASSERTION"]:
+        for cat in [
+            "STALE_STRICT_XFAIL",
+            "GRADUATE",
+            "PARTIAL_XPASS",
+            "FIXTURE_GAP",
+            "STEP_BUG",
+            "WEAK_ASSERTION",
+        ]:
             cat_items = by_cat.get(cat, [])
             if not cat_items:
                 continue
