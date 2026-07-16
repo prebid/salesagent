@@ -402,6 +402,37 @@ class TestSafeAdcpErrorSuggestionMatchesRecovery:
             "correctable must give correction guidance, not silence"
         )
 
+    def test_scrubbed_message_and_suggestion_match_semantic_category(self):
+        """A scrubbed error's MESSAGE and SUGGESTION match its wire code — the machine field and
+        the human guidance must not contradict. A VALIDATION_ERROR must not read "internal error",
+        and an AUTH_REQUIRED must say authenticate/credentials, not "adjust the request". All are
+        static and secret-free."""
+        from src.core.exceptions import safe_adcp_error
+
+        # VALIDATION_ERROR (raw ValueError): about the submitted fields, not an internal error.
+        v = safe_adcp_error(ValueError("secret hunter2"))
+        assert v.wire_error_code == "VALIDATION_ERROR"
+        assert "internal error" not in v.message.lower()
+        assert "validate" in v.message.lower()
+        assert "retry" not in v.suggestion.lower()
+        assert "field" in v.suggestion.lower()
+
+        # AUTH_REQUIRED (raw PermissionError): about credentials/permissions, not field correction.
+        a = safe_adcp_error(PermissionError("secret token"))
+        assert a.wire_error_code == "AUTH_REQUIRED"
+        assert "internal error" not in a.message.lower()
+        assert any(w in a.message.lower() for w in ("authenticat", "authoriz", "credential"))
+        assert any(w in a.suggestion.lower() for w in ("credential", "permission"))
+
+        # SERVICE_UNAVAILABLE (untyped internal): the generic internal message + retry IS correct.
+        s = safe_adcp_error(RuntimeError("boom"))
+        assert s.wire_error_code == "SERVICE_UNAVAILABLE"
+        assert "internal error" in s.message.lower()
+        assert "retry" in s.suggestion.lower()
+
+        for e in (v, a, s):
+            assert "hunter2" not in e.message and "secret" not in e.message and "token" not in e.message
+
 
 # ---------------------------------------------------------------------------
 # A2A Boundary: AdCPError → A2AError with proper JSON-RPC error code

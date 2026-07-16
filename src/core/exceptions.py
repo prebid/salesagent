@@ -1097,16 +1097,41 @@ def _canonical_recovery_for(wire_code: str) -> RecoveryHint:
     return cast(RecoveryHint, meta["recovery"]) if meta else "transient"
 
 
-def _scrubbed_error(*, error_code: str, recovery: RecoveryHint, status_code: int, context: Any) -> AdCPError:
-    """A wire-safe ``AdCPError`` carrying the given code/recovery but the SANITIZED generic message
-    and a recovery-matched suggestion, with ``details``/``field`` dropped. The single scrub
-    constructor for ``safe_adcp_error`` so message replacement can't drift between call sites."""
+# Category-specific sanitized (message, suggestion) for the client-correctable codes a scrub can
+# emit, so the human text MATCHES the machine code — a VALIDATION_ERROR must not read "an internal
+# error occurred", and an AUTH_REQUIRED must say "authenticate", not "adjust the request". Codes
+# absent here (SERVICE_UNAVAILABLE, CONFIGURATION_ERROR) fall back to the generic internal message +
+# a recovery-matched suggestion, which is correct for the internal/infra bucket. All strings are
+# static and secret-free — ``str(exc)`` is never restored.
+_SANITIZED_BY_WIRE_CODE: dict[str, tuple[str, str]] = {
+    "VALIDATION_ERROR": (
+        "The request could not be validated; review the submitted fields and resubmit.",
+        "Review and correct the request fields, then resubmit.",
+    ),
+    "AUTH_REQUIRED": (
+        "Authentication or authorization failed; provide valid credentials or the required permissions.",
+        "Provide valid credentials or request the required permissions, then retry.",
+    ),
+}
+
+
+def _scrubbed_error(
+    *, error_code: str, wire_code: str, recovery: RecoveryHint, status_code: int, context: Any
+) -> AdCPError:
+    """A wire-safe ``AdCPError`` carrying the given code/recovery but a SANITIZED, secret-free
+    message + suggestion selected by the BUYER-FACING ``wire_code`` (so the human text matches the
+    machine code), with ``details``/``field`` dropped. The single scrub constructor for
+    ``safe_adcp_error`` so message replacement can't drift between call sites. Codes without a
+    category entry fall back to the generic internal message + a recovery-matched suggestion."""
+    message, suggestion = _SANITIZED_BY_WIRE_CODE.get(
+        wire_code, (_SANITIZED_INTERNAL_MESSAGE, _sanitized_suggestion_for(recovery))
+    )
     return AdCPError.synthesize(
-        _SANITIZED_INTERNAL_MESSAGE,
+        message,
         error_code=error_code,
         status_code=status_code,
         recovery=recovery,
-        suggestion=_sanitized_suggestion_for(recovery),
+        suggestion=suggestion,
         context=context,
     )
 
@@ -1148,6 +1173,7 @@ def safe_adcp_error(exc: Exception) -> AdCPError:
     if wire_code in INTERNAL_WIRE_CODES:
         return _scrubbed_error(
             error_code=normalized.error_code,
+            wire_code=wire_code,
             recovery=_canonical_recovery_for(wire_code),
             status_code=normalized.status_code,
             context=normalized.context,
@@ -1156,6 +1182,7 @@ def safe_adcp_error(exc: Exception) -> AdCPError:
         # An internal-only code the wire doesn't model: coerce to SERVICE_UNAVAILABLE + scrub.
         return _scrubbed_error(
             error_code="SERVICE_UNAVAILABLE",
+            wire_code="SERVICE_UNAVAILABLE",
             recovery=_canonical_recovery_for("SERVICE_UNAVAILABLE"),
             status_code=normalized.status_code,
             context=normalized.context,
@@ -1165,9 +1192,13 @@ def safe_adcp_error(exc: Exception) -> AdCPError:
         # Explicitly-raised typed error → controlled buyer-facing message, pass through unchanged.
         return exc
     # A RAW built-in that normalized to a client-correctable code: keep that SEMANTIC code/recovery
-    # (so webhook and synchronous responses agree) but SCRUB the untrusted ``str(exc)`` message.
+    # (so webhook and synchronous responses agree) but SCRUB the untrusted ``str(exc)`` message —
+    # replaced with a static, category-appropriate message + suggestion (a VALIDATION_ERROR reads
+    # "review the submitted fields", an AUTH_REQUIRED reads "provide valid credentials"), never the
+    # generic "internal error" that contradicts the code.
     return _scrubbed_error(
         error_code=normalized.error_code,
+        wire_code=wire_code,
         recovery=normalized.recovery,
         status_code=normalized.status_code,
         context=normalized.context,

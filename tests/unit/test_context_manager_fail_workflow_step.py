@@ -139,13 +139,15 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
         )
 
     @pytest.mark.parametrize(
-        ("exc_factory", "expected_code"),
+        ("exc_factory", "expected_code", "msg_keyword"),
         [
-            pytest.param(lambda s: ValueError(s), "VALIDATION_ERROR", id="ValueError"),
-            pytest.param(lambda s: PermissionError(s), "AUTH_REQUIRED", id="PermissionError"),
+            pytest.param(lambda s: ValueError(s), "VALIDATION_ERROR", "validate", id="ValueError"),
+            pytest.param(lambda s: PermissionError(s), "AUTH_REQUIRED", "credential", id="PermissionError"),
         ],
     )
-    def test_untyped_valueerror_permissionerror_scrub_secret_from_webhook_payload(self, exc_factory, expected_code):
+    def test_untyped_valueerror_permissionerror_scrub_secret_from_webhook_payload(
+        self, exc_factory, expected_code, msg_keyword
+    ):
         """Untyped ``ValueError``/``PermissionError`` on the webhook path: message scrubbed, but the
         SEMANTIC code matches what the synchronous boundary emits (webhook↔sync parity).
 
@@ -175,7 +177,10 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
 
         assert len(calls) == 1, "audit must persist exactly one failed-step update"
         payload = calls[0]
-        assert payload["error_message"] == _SANITIZED_INTERNAL_MESSAGE
+        # The message is category-appropriate, NOT the generic "internal error" (which would
+        # contradict a client-correctable code), and secret-free.
+        assert msg_keyword in payload["error_message"].lower()
+        assert "internal error" not in payload["error_message"].lower()
         serialized = json.dumps(payload["response_data"])
         for leak in ("hunter2", "postgresql://", "db.internal", "TOKEN=abc123", "SELECT", "principals"):
             assert leak not in serialized, f"secret fragment {leak!r} leaked into webhook response_data"

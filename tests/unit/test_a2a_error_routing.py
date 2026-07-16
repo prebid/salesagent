@@ -154,13 +154,15 @@ async def test_explicit_skill_untyped_crash_scrubs_secret_from_failed_task():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("exc_factory", "expected_code"),
+    ("exc_factory", "expected_code", "msg_keyword"),
     [
-        pytest.param(lambda s: ValueError(s), "VALIDATION_ERROR", id="ValueError"),
-        pytest.param(lambda s: PermissionError(s), "AUTH_REQUIRED", id="PermissionError"),
+        pytest.param(lambda s: ValueError(s), "VALIDATION_ERROR", "validate", id="ValueError"),
+        pytest.param(lambda s: PermissionError(s), "AUTH_REQUIRED", "credential", id="PermissionError"),
     ],
 )
-async def test_explicit_skill_raw_builtin_scrubs_secret_but_keeps_semantic_code(exc_factory, expected_code):
+async def test_explicit_skill_raw_builtin_scrubs_secret_but_keeps_semantic_code(
+    exc_factory, expected_code, msg_keyword
+):
     """A raw ``ValueError``/``PermissionError`` raised INSIDE a skill returns a failed Task whose
     envelope keeps the SEMANTIC code the synchronous boundaries emit (VALIDATION_ERROR /
     AUTH_REQUIRED) but is scrubbed of the raw ``str(e)``.
@@ -189,9 +191,12 @@ async def test_explicit_skill_raw_builtin_scrubs_secret_but_keeps_semantic_code(
     client_facing = json.dumps(envelope) + " " + " ".join(text_parts)
     for leak in ("hunter2", "postgresql://", "db.internal", "SELECT", "principals"):
         assert leak not in client_facing, f"raw exception leaked to client ({leak!r}): {client_facing}"
-    # SEMANTIC code preserved (matches the synchronous boundary), message scrubbed.
+    # SEMANTIC code preserved (matches the synchronous boundary), message scrubbed AND
+    # category-appropriate — a VALIDATION_ERROR / AUTH_REQUIRED must not read "internal error".
     assert envelope["errors"][0]["code"] == expected_code
-    assert "internal error" in envelope["errors"][0]["message"].lower()
+    message = envelope["errors"][0]["message"].lower()
+    assert msg_keyword in message
+    assert "internal error" not in message
 
 
 @pytest.mark.asyncio
