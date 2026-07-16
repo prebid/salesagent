@@ -228,6 +228,52 @@ class TestSimulationReachesFinalThroughRealHook:
             assert_omits_webhook_only_fields(dumped, context="mock-time active poll")
 
 
+@pytest.mark.requires_db
+class TestFinalWebhookSurvivesStatusHandoff:
+    """The spec-required FINAL webhook survives the status-scheduler -> delivery-batch handoff.
+
+    Regression (#1575 blocker): the media-buy status scheduler flips an ended buy
+    to persisted "completed" on its 60s cadence, long before the hourly delivery
+    batch. When the delivery batch selected only the serving persisted set, the
+    just-completed buy was dropped and its FINAL delivery webhook ("one final
+    notification when the campaign completes" — optimization-reporting.mdx
+    §Publisher Commitment) was never sent. This drives the REAL lifecycle path —
+    the status scheduler THEN the delivery batch — and asserts exactly one "final"
+    wire webhook, sent once. Prior "final" tests seeded an active row with a past
+    flight or called the send helper directly, bypassing this handoff.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
+    """
+
+    @pytest.mark.asyncio
+    async def test_final_sent_once_after_status_scheduler_marks_completed(self, integration_db):
+        from src.services.media_buy_status_scheduler import MediaBuyStatusScheduler
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            # A serving buy (persisted "active") whose flight has ENDED.
+            buy = _serving_webhook_buy(env, flight="completed")
+
+            # 1) Status scheduler runs first (its real transition), flipping the
+            #    ended buy to persisted "completed" — the exact state that used to
+            #    make the hourly delivery batch drop it.
+            await MediaBuyStatusScheduler()._update_statuses()
+            session = env.get_session()
+            session.expire(buy)
+            assert buy.status == "completed", "status scheduler must flip the ended buy to persisted completed"
+
+            # 2) The delivery batch runs for real (only the outbound POST is mocked,
+            #    inside the harness). The just-completed buy must still get exactly
+            #    one webhook, and it must be the "final".
+            wires = await env.run_delivery_batch()
+            assert len(wires) == 1, "the just-completed buy must still receive exactly one webhook"
+            assert wires[0]["result"]["notification_type"] == "final"
+            assert wires[0]["result"]["media_buy_deliveries"][0]["media_buy_id"] == buy.media_buy_id
+
+            # 3) A subsequent batch must NOT re-send the final (durable per-buy gate).
+            assert await env.run_delivery_batch() == [], "the final webhook must be sent exactly once, never re-sent"
+
+
 # ---------------------------------------------------------------------------
 # UC-004-ALT-WEBHOOK-PUSH-REPORTING-05
 # ---------------------------------------------------------------------------

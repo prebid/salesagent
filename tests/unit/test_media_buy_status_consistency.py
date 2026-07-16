@@ -23,6 +23,7 @@ from src.core.tools._media_buy_status import (
     NO_MORE_DATA_STATUSES,
     PENDING_PERSISTED_STATUSES,
     PERSISTED_STATUS_TO_CANONICAL,
+    REPORTABLE_PERSISTED_STATUSES,
     SERVING_PERSISTED_STATUSES,
     TERMINAL_STATUSES,
     WEBHOOK_ONLY_FIELDS,
@@ -156,6 +157,18 @@ class TestCanonicalVocabularyPinnedToSdk:
         scheduler migrates (#1556 class — same as the SERVING pin above).
         """
         assert LEGACY_SERVING_ALIASES == {"approved", "ready", "scheduled"}
+
+    def test_reportable_persisted_statuses_membership_is_pinned(self):
+        """Pin the persisted statuses the DELIVERY webhook batch selects.
+
+        Must be the serving set PLUS terminal "completed": the status scheduler
+        flips an ended buy to persisted "completed" (~60s) before the hourly
+        delivery batch, so a serving-only selection would strand the buy's
+        spec-required FINAL webhook. This pin fails loudly if "completed" is ever
+        dropped from the selection (the #1575 blocker regression).
+        """
+        assert REPORTABLE_PERSISTED_STATUSES == {"active", "approved", "ready", "scheduled", "completed"}
+        assert REPORTABLE_PERSISTED_STATUSES == SERVING_PERSISTED_STATUSES | {"completed"}
 
     def test_pending_persisted_statuses_membership_is_pinned(self):
         """Pin the exact PENDING_PERSISTED_STATUSES set (the status scheduler's promote gate).

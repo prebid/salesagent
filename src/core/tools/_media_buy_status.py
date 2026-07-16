@@ -173,6 +173,20 @@ PENDING_PERSISTED_STATUSES: frozenset[str] = frozenset(
 # because it describes the read tool's contract, not the scheduler's.
 REPORTABLE_CANONICAL_STATUSES: frozenset[str] = frozenset({CANONICAL_SERVING, CANONICAL_COMPLETED})
 
+# The PERSISTED statuses the delivery webhook batch must SELECT — every persisted
+# value that resolves to a reportable canonical (serving OR completed). Derived
+# from the map (not a hardcoded partial copy, #1556 class) so it tracks the
+# canonical set. This MUST include persisted "completed": the status scheduler
+# flips an ended buy to persisted "completed" within ~60s, long before the hourly
+# delivery batch runs, so selecting only the serving set would drop the ended buy
+# and the spec-required FINAL webhook ("one final notification when the campaign
+# completes", optimization-reporting.mdx §Publisher Commitment) would never be
+# sent. Selecting completed too lets the batch send exactly one final, gated
+# per-buy by DeliveryRepository.has_successful_final.
+REPORTABLE_PERSISTED_STATUSES: frozenset[str] = frozenset(
+    k for k, v in PERSISTED_STATUS_TO_CANONICAL.items() if v in REPORTABLE_CANONICAL_STATUSES
+)
+
 # The three webhook-only response fields — "only present in webhook deliveries"
 # (get-media-buy-delivery-response.json @ v3.1-04f59d2d5). The polling
 # _get_media_buy_delivery_impl must omit all three; the delivery webhook

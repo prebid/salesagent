@@ -25,8 +25,9 @@ from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.helpers import enum_value
 from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse
 from src.core.tools._media_buy_status import (
+    CANONICAL_COMPLETED,
     REPORTABLE_CANONICAL_STATUSES,
-    SERVING_PERSISTED_STATUSES,
+    REPORTABLE_PERSISTED_STATUSES,
     derive_notification_type,
     resolve_canonical_status,
 )
@@ -99,11 +100,14 @@ class DeliveryWebhookScheduler:
 
         try:
             with get_db_session() as session:
-                # Find all serving media buys (cross-tenant scheduler query).
-                # Uses the derived serving set so legacy aliases ("ready" /
-                # "scheduled") are included — a hardcoded partial list stranded
-                # them without webhooks (#1556).
-                media_buys = MediaBuyRepository.get_all_by_statuses(session, sorted(SERVING_PERSISTED_STATUSES))
+                # Find all reportable media buys (cross-tenant scheduler query):
+                # the serving set (incl. legacy aliases "ready"/"scheduled" —
+                # #1556) PLUS terminal "completed". Completed is REQUIRED: the
+                # status scheduler flips an ended buy to persisted "completed"
+                # within ~60s, long before this hourly batch, so a serving-only
+                # selection would drop it and the buy's spec-required FINAL webhook
+                # would never be sent. The per-buy final gate below sends it once.
+                media_buys = MediaBuyRepository.get_all_by_statuses(session, sorted(REPORTABLE_PERSISTED_STATUSES))
 
                 reports_sent = 0
                 errors = 0
@@ -211,28 +215,42 @@ class DeliveryWebhookScheduler:
             start_date_obj = datetime.now(UTC).date() - timedelta(days=1)
             end_date_obj = datetime.now(UTC)
 
-            # Check if we've already sent a delivery report webhook for this
-            # media buy within the last 24 hours (rolling window on created_at,
-            # success rows only). Any notification_type counts (#1570): a sent
-            # "final" must also dedup within the window — the durable stopper
-            # is the status scheduler flipping the buy out of the serving
-            # selection, not this check.
+            # Whether THIS send is the buy's one-and-only "final" notification —
+            # the buy has ended (resolves to canonical "completed"). The batch and
+            # the impl both resolve against today, so this agrees with the
+            # notification_type the impl-derived response will carry below.
+            is_final = resolve_canonical_status(media_buy, datetime.now(UTC).date()) == CANONICAL_COMPLETED
+
+            # Dedup gate. The "final" and periodic "scheduled" reports have
+            # DIFFERENT stoppers (#1570):
+            #   - final: sent exactly ONCE per buy, gated durably by a prior
+            #     successful "final" log (no time window). This must fire even
+            #     when a "scheduled" went out in the last 24h — otherwise the
+            #     status scheduler flipping the buy to persisted "completed"
+            #     (~60s after flight end, before this hourly batch) would leave
+            #     the spec-required final permanently unsent.
+            #   - scheduled: 24h rolling dedup on successful sends.
             if not force:
-                # Look back 24 hours to find recent successful webhooks (any
-                # notification_type — the broadened #1570 dedup). Tenant-scoped
-                # via the repository.
-                one_day_ago = datetime.now(UTC) - timedelta(hours=24)
-                existing_log = delivery_repo.get_recent_successful_log(
-                    media_buy.media_buy_id, task_type="media_buy_delivery", since=one_day_ago
-                )
-                if existing_log:
-                    logger.info(
-                        "Skipping daily delivery webhook for media buy %s and date %s – already sent (log id %s)",
-                        media_buy.media_buy_id,
-                        end_date_obj,
-                        existing_log.id,
+                if is_final:
+                    if delivery_repo.has_successful_final(media_buy.media_buy_id, task_type="media_buy_delivery"):
+                        logger.info(
+                            "Final delivery webhook already sent for media buy %s – skipping",
+                            media_buy.media_buy_id,
+                        )
+                        return False
+                else:
+                    one_day_ago = datetime.now(UTC) - timedelta(hours=24)
+                    existing_log = delivery_repo.get_recent_successful_log(
+                        media_buy.media_buy_id, task_type="media_buy_delivery", since=one_day_ago
                     )
-                    return False
+                    if existing_log:
+                        logger.info(
+                            "Skipping daily delivery webhook for media buy %s and date %s – already sent (log id %s)",
+                            media_buy.media_buy_id,
+                            end_date_obj,
+                            existing_log.id,
+                        )
+                        return False
 
             # Fetch delivery metrics
             # Create a ResolvedIdentity for the delivery call
@@ -247,10 +265,10 @@ class DeliveryWebhookScheduler:
 
             # The impl reports on exactly REPORTABLE_CANONICAL_STATUSES: the
             # scheduler already filters by persisted DB status
-            # (SERVING_PERSISTED_STATUSES) at query time and skips buys that
-            # resolve outside the reportable set, so ended campaigns (dynamic
-            # status=completed) are included rather than filtered out and
-            # reported as "not found" errors.
+            # (REPORTABLE_PERSISTED_STATUSES — serving + completed) at query time
+            # and skips buys that resolve outside the reportable set, so both
+            # still-serving and ended (persisted "completed") campaigns are
+            # included rather than filtered out and reported as "not found" errors.
             from adcp.types import MediaBuyStatus
 
             req = GetMediaBuyDeliveryRequest(

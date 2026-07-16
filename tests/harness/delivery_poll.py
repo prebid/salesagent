@@ -113,3 +113,22 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
             )
         assert mock_post.call_count == 1, "scheduler must send exactly one webhook"
         return mock_post.call_args.kwargs["json"]
+
+    async def run_delivery_batch(self) -> list[dict[str, Any]]:
+        """Run one REAL delivery-webhook batch (``_send_reports``); return the wire bodies sent.
+
+        Drives the cross-tenant batch — selection, per-buy dedup gate, delivery
+        impl, serialization — mocking only the outbound HTTP POST. Returns one
+        JSON body per webhook actually sent (empty when the batch sends nothing),
+        so a test can assert both the count and each wire ``result`` (the
+        webhook-only fields live under ``result``; #1570) without hand-rolling a
+        mock in the test body.
+        """
+        from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+
+        scheduler = DeliveryWebhookScheduler()
+        mock_response = MagicMock(status_code=200, text="OK")
+        mock_response.raise_for_status.return_value = None
+        with patch.object(scheduler.webhook_service._session, "post", return_value=mock_response) as mock_post:
+            await scheduler._send_reports()
+        return [call.kwargs["json"] for call in mock_post.call_args_list]
