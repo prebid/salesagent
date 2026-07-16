@@ -100,11 +100,12 @@ Each shard runs against a GitHub Actions service container (Postgres 15).
 The workflow sets `ADCP_TESTING: true` at the top level. The **E2E job**
 pre-starts the stack (pinned `creative-agent` build + `compose up -d --wait`
 with healthchecks and the host-ports overlay), then runs pytest with
-`ADCP_TESTING` left true so `docker_services_e2e` is verify-only. Do **not**
-clear `ADCP_TESTING` on the E2E pytest step — an empty value forces the
-fixture into the standalone cold-build path under `pytest --timeout=300`
-(setup timeouts / ENOSPC on cold runners). Local standalone runs (no pre-started
-stack) still clear or omit `ADCP_TESTING` so conftest owns build+up.
+`ADCP_TESTING: "true"` set explicitly on the pytest step so
+`docker_services_e2e` is verify-only. Do **not** clear or omit it on that
+step — an empty/false value forces the fixture into the standalone cold-build
+path under `pytest --timeout=300` (setup timeouts / ENOSPC on cold runners).
+Local standalone runs (no pre-started stack) still clear or omit
+`ADCP_TESTING` so conftest owns build+up.
 
 ## Reference Creative Agent
 
