@@ -319,7 +319,7 @@ def given_request_omits_start_end_paused(ctx: dict) -> None:
         kwargs.pop(field, None)
 
 
-# Step "the request does NOT include an idempotency_key" is defined in
+# Step "the request does NOT include an idempotency_key" is owned by
 # tests/bdd/steps/domain/uc002_create_media_buy.py (canonical, shared across
 # UC-002/003) to avoid a cross-module shadow now that this module is registered.
 # No graded UC-003 scenario uses that text; when the dormant UC-003 idempotency

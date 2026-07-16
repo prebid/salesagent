@@ -68,6 +68,10 @@ _SCHEMA_VALIDATION_FAILURE_MARKERS = (
     "validation error",
     "validationerror",
     "failed to validate",
+    # adcp >= 6.6 phrasing: "Schema validation failed for <tool>: ... oneOf
+    # composition failed" (seen live when the pinned reference agent serves
+    # post-pin additive asset_types, e.g. pixel_tracker).
+    "schema validation failed",
 )
 
 
@@ -173,7 +177,8 @@ def _get_reference_formats() -> list[Format]:
 
     These are loaded from the checked-in fixture
     (tests/fixtures/creative_formats/reference_formats.json) captured from the
-    pinned reference creative agent (adcp@ca70dd1e2a6c). Reading from the fixture
+    pinned reference creative agent (pin: ADCP_PIN in
+    scripts/creative-agent-stack.sh). Reading from the fixture
     — rather than a hand-maintained list — is what keeps the in-process harness
     and the e2e server serving identical formats by construction, with no risk of
     silent drift from the real agent.
