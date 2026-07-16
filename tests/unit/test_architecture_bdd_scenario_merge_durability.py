@@ -184,6 +184,29 @@ def test_registry_is_bijection_with_marked_scenarios():
     )
 
 
+def test_is_spec_artifact_ref_discriminates_source_from_requirement_id():
+    """[Codex] Self-test for the scenario-discovery discriminator so a silently-degraded
+    ``_is_spec_artifact_ref`` (a broken regex, a traceability-schema drift) can't empty the
+    candidate set and let the set-equality guards below pass vacuously — the guard "passes when
+    the candidate set is empty" only in its stale direction. Mirrors the committed known-bad/good
+    detector self-test in ``test_architecture_no_raw_select.py::TestColumnSelectDetection``.
+    """
+    # POSITIVE — a source-less scenario grounds itself in a spec ARTIFACT (prose/storyboard/schema
+    # by path or URL); each must be recognized as a candidate ref.
+    for ref in (
+        "dist/docs/3.1.1/building/implementation/create-media-buy.mdx",
+        "dist/compliance/3.1.1/uc-004.yaml",
+        "dist/compliance/3.1.1/uc-004.yml",
+        "schemas/v1/media-buy.json",
+        "https://github.com/adcontextprotocol/adcp/blob/main/spec.mdx",
+        "docs/foo.mdx#create-media-buy",
+    ):
+        assert _is_spec_artifact_ref(ref) is True, f"{ref!r} is a spec artifact and must be detected"
+    # NEGATIVE — a bare adcp-req requirement id renders from adcp-req (not source-less); must NOT match.
+    for ref in ("BR-UC-004-MAIN-01", "SR-RULE-055", "adcp-req-123", "UC-004"):
+        assert _is_spec_artifact_ref(ref) is False, f"{ref!r} is a requirement id, not a spec artifact"
+
+
 def test_source_less_scenarios_are_marked_and_registered():
     """Independent-source completeness — every SOURCE-LESS compiled scenario must be
     registered (and, via the bijection above, marked).

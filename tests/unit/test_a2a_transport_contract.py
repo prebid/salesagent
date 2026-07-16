@@ -37,35 +37,51 @@ _TEST_IDENTITY = make_test_a2a_identity()
 #   classification: "implemented" (must NOT return UNSUPPORTED_FEATURE) or
 #                   "unsupported" (must return a UNSUPPORTED_FEATURE failed Task)
 #   advertised:     whether the agent card advertises it (asserted for exact equality)
+#   discovery:      whether the skill is auth-OPTIONAL (no principal required); HAND-AUTHORED
+#                   here and asserted for exact equality against production's DISCOVERY_SKILLS,
+#                   so a skill wrongly flipped into/out of the discovery set in production
+#                   reddens the build instead of silently re-partitioning the test.
 #   params:         request params that reach the skill's terminal branch
 # ---------------------------------------------------------------------------
 SKILL_METADATA: dict[str, dict] = {
-    "get_adcp_capabilities": {"classification": "implemented", "advertised": True, "params": {}},
-    "get_products": {"classification": "implemented", "advertised": True, "params": {}},
-    "create_media_buy": {"classification": "implemented", "advertised": True, "params": {}},
-    "list_creative_formats": {"classification": "implemented", "advertised": True, "params": {}},
-    "list_accounts": {"classification": "implemented", "advertised": True, "params": {}},
-    "sync_accounts": {"classification": "implemented", "advertised": True, "params": {}},
-    "list_authorized_properties": {"classification": "implemented", "advertised": True, "params": {}},
-    "update_media_buy": {"classification": "implemented", "advertised": True, "params": {}},
-    "get_media_buys": {"classification": "implemented", "advertised": True, "params": {}},
-    "get_media_buy_delivery": {"classification": "implemented", "advertised": True, "params": {}},
-    "update_performance_index": {"classification": "implemented", "advertised": True, "params": {}},
-    "sync_creatives": {"classification": "implemented", "advertised": True, "params": {}},
-    "list_creatives": {"classification": "implemented", "advertised": True, "params": {}},
+    "get_adcp_capabilities": {"classification": "implemented", "advertised": True, "discovery": True, "params": {}},
+    "get_products": {"classification": "implemented", "advertised": True, "discovery": True, "params": {}},
+    "create_media_buy": {"classification": "implemented", "advertised": True, "discovery": False, "params": {}},
+    "list_creative_formats": {"classification": "implemented", "advertised": True, "discovery": True, "params": {}},
+    "list_accounts": {"classification": "implemented", "advertised": True, "discovery": True, "params": {}},
+    "sync_accounts": {"classification": "implemented", "advertised": True, "discovery": False, "params": {}},
+    "list_authorized_properties": {
+        "classification": "implemented",
+        "advertised": True,
+        "discovery": True,
+        "params": {},
+    },
+    "update_media_buy": {"classification": "implemented", "advertised": True, "discovery": False, "params": {}},
+    "get_media_buys": {"classification": "implemented", "advertised": True, "discovery": False, "params": {}},
+    "get_media_buy_delivery": {"classification": "implemented", "advertised": True, "discovery": False, "params": {}},
+    "update_performance_index": {
+        "classification": "implemented",
+        "advertised": True,
+        "discovery": False,
+        "params": {},
+    },
+    "sync_creatives": {"classification": "implemented", "advertised": True, "discovery": False, "params": {}},
+    "list_creatives": {"classification": "implemented", "advertised": True, "discovery": False, "params": {}},
     # Unsupported + NOT advertised (round-9 SF-B): handlers raise UNSUPPORTED_FEATURE,
     # so they are hidden from the agent card but stay reachable-but-unsupported by name.
-    "approve_creative": {"classification": "unsupported", "advertised": False, "params": {}},
-    "get_media_buy_status": {"classification": "unsupported", "advertised": False, "params": {}},
-    "optimize_media_buy": {"classification": "unsupported", "advertised": False, "params": {}},
+    "approve_creative": {"classification": "unsupported", "advertised": False, "discovery": False, "params": {}},
+    "get_media_buy_status": {"classification": "unsupported", "advertised": False, "discovery": False, "params": {}},
+    "optimize_media_buy": {"classification": "unsupported", "advertised": False, "discovery": False, "params": {}},
     "create_creative": {
         "classification": "unsupported",
         "advertised": False,
+        "discovery": False,
         "params": {"format_id": "display_300x250", "content_uri": "https://ex/c.jpg", "name": "c"},
     },
     "assign_creative": {
         "classification": "unsupported",
         "advertised": False,
+        "discovery": False,
         "params": {"media_buy_id": "mb-1", "package_id": "pkg-1", "creative_id": "cr-1"},
     },
 }
@@ -75,8 +91,10 @@ IMPLEMENTED_SKILLS = sorted(s for s, m in SKILL_METADATA.items() if m["classific
 UNSUPPORTED_SKILLS = sorted(s for s, m in SKILL_METADATA.items() if m["classification"] == "unsupported")
 ADVERTISED_SKILLS = {s for s, m in SKILL_METADATA.items() if m["advertised"]}
 
-# Discovery (no-auth) skills come from the production frozenset so this never drifts.
-DISCOVERY_SKILLS = sorted(_PROD_DISCOVERY_SKILLS)
+# Discovery (no-auth) skills come from the HAND-AUTHORED oracle above (not the production
+# frozenset), so the auth-boundary tests can't move in lockstep with a production mis-classification.
+# ``test_discovery_metadata_matches_production`` pins this set equal to production's DISCOVERY_SKILLS.
+DISCOVERY_SKILLS = sorted(s for s, m in SKILL_METADATA.items() if m["discovery"])
 
 AUTH_REQUIRED_SKILLS = [s for s in ALL_SKILLS if s not in DISCOVERY_SKILLS]
 
@@ -591,6 +609,20 @@ class TestA2ARegistryContract:
         assert set(SKILL_METADATA) == registry, (
             f"metadata↔registry drift — missing: {registry - set(SKILL_METADATA)}, "
             f"stale: {set(SKILL_METADATA) - registry}"
+        )
+
+    def test_discovery_metadata_matches_production(self):
+        """[Codex #4] The HAND-AUTHORED ``discovery`` flags must equal production's
+        ``DISCOVERY_SKILLS`` frozenset. The auth-boundary tests derive their partitions from the
+        oracle, so without this pin they would move in lockstep with production and a skill
+        wrongly flipped into (or out of) the no-auth discovery set would still pass. Combined with
+        the metadata↔registry bijection above (which forces every skill to carry a ``discovery``
+        bool), a production classification change reddens here.
+        """
+        hand_authored = {s for s, m in SKILL_METADATA.items() if m["discovery"]}
+        assert hand_authored == set(_PROD_DISCOVERY_SKILLS), (
+            f"discovery classification drift — production-only: {set(_PROD_DISCOVERY_SKILLS) - hand_authored}, "
+            f"oracle-only: {hand_authored - set(_PROD_DISCOVERY_SKILLS)}"
         )
 
 
