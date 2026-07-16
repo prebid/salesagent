@@ -480,14 +480,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # xfails over e2e_rest — but NOT because the body is dropped (build_rest_body
         # now serializes the request and the live server observes the filters). The
         # remaining gaps are transport-independent production gaps that the in-process
-        # transports xfail strict=True: the `type` filter was removed from the SDK 5.7
-        # request model (adcp 3.12 — the pin 3.1.0-beta.3 still lists it, but the
-        # generated request cannot carry it), and disclosure_positions lacks the pin's
+        # transports xfail strict=True: `type` is not part of AdCP 3.1.1 — it is
+        # absent from both the adcp 6.6 request model AND the bundled 3.1 spec schema
+        # (list-creative-formats-request.json), so the generated request cannot carry
+        # a `type` filter — and disclosure_positions lacks the pin's
         # uniqueItems validation. Against the live Docker server these scenarios pass
         # vacuously (valid rows dispatch unfiltered) rather than failing deterministically,
         # so strict=True would XPASS — weaken to strict=False to tolerate either outcome.
         uc005_filter_e2e_untestable = {
-            # type filter — removed from the SDK 5.7 request model (pin still lists it)
+            # type filter — `type` is not part of AdCP 3.1.1 (absent from model + schema)
             "T-UC-005-inv-031-1-violated",
             "T-UC-005-partition-type-filter",
             "T-UC-005-boundary-type-filter",
@@ -496,9 +497,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-005-boundary-disclosure",
         }
         uc005_filter_e2e_reason = (
-            "e2e_rest: type filter removed from SDK 5.7 request model / disclosure_positions "
-            "uniqueItems not validated in production — transport-independent gaps that pass "
-            "vacuously over the live server, so the strict in-process xfail cannot hold here"
+            "e2e_rest: `type` is not part of AdCP 3.1.1 (absent from the 6.6 request model "
+            "and the 3.1 schema) / disclosure_positions uniqueItems not validated in "
+            "production — transport-independent gaps that pass vacuously over the live "
+            "server, so the strict in-process xfail cannot hold here"
         )
 
         # Graduated: UC-005 creative agent type/asset_type filter tests now pass —
