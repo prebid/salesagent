@@ -19,9 +19,11 @@ attribute here, which would only hold the unflushed SQL expression object.
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import ValidationError
 
 from src.core.database.models import MediaBuy
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.schemas._base import CreateMediaBuySuccess, UpdateMediaBuySuccess
 
 
 def _session_returning(media_buy: MediaBuy | None) -> MagicMock:
@@ -134,3 +136,73 @@ class TestRevisionNumericStringCoercionDivergence:
         from src.routes.api_v1 import UpdateMediaBuyBody
 
         assert UpdateMediaBuyBody.model_validate({"revision": "7"}).revision == 7
+
+
+class TestRevisionSuccessFieldConstraint:
+    """The wire ``revision`` on the success envelopes keeps the 3.1.1 ``ge=1`` bound.
+
+    AdCP 3.1.1 types ``revision`` as ``integer`` with ``minimum: 1`` (the pinned
+    ``adcp`` 6.6 parents carry ``Ge(ge=1)``). Both ``CreateMediaBuySuccess`` and
+    ``UpdateMediaBuySuccess`` override the field to default it to the spec-minimum
+    initial revision 1; the override MUST re-declare the ``ge=1`` constraint so a
+    plain ``revision: int = 1`` cannot silently widen the domain to accept 0 or
+    negative counters. Regression for #1544 (the override had dropped the bound).
+    """
+
+    @pytest.mark.parametrize("bad_revision", [0, -1])
+    def test_create_success_rejects_sub_minimum_revision(self, bad_revision):
+        with pytest.raises(ValidationError, match="revision"):
+            CreateMediaBuySuccess(
+                media_buy_id="mb_1",
+                packages=[],
+                context={},
+                confirmed_at=None,
+                revision=bad_revision,
+            )
+
+    def test_create_success_accepts_minimum_revision(self):
+        resp = CreateMediaBuySuccess(
+            media_buy_id="mb_1",
+            packages=[],
+            context={},
+            confirmed_at=None,
+            revision=1,
+        )
+        assert resp.revision == 1
+
+    def test_create_success_defaults_to_minimum_revision(self):
+        # The dry-run/sandbox arm constructs without an explicit revision.
+        resp = CreateMediaBuySuccess(
+            media_buy_id="mb_1",
+            packages=[],
+            context={},
+            confirmed_at=None,
+        )
+        assert resp.revision == 1
+
+    @pytest.mark.parametrize("bad_revision", [0, -1])
+    def test_update_success_rejects_sub_minimum_revision(self, bad_revision):
+        with pytest.raises(ValidationError, match="revision"):
+            UpdateMediaBuySuccess(
+                media_buy_id="mb_1",
+                status="completed",
+                affected_packages=[],
+                revision=bad_revision,
+            )
+
+    def test_update_success_accepts_minimum_revision(self):
+        resp = UpdateMediaBuySuccess(
+            media_buy_id="mb_1",
+            status="completed",
+            affected_packages=[],
+            revision=1,
+        )
+        assert resp.revision == 1
+
+    def test_update_success_defaults_to_minimum_revision(self):
+        resp = UpdateMediaBuySuccess(
+            media_buy_id="mb_1",
+            status="completed",
+            affected_packages=[],
+        )
+        assert resp.revision == 1

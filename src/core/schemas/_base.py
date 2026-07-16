@@ -350,7 +350,7 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     # not-yet-committed arms require present-as-null. revision stays a non-null int (default
     # 1); it is never None, so it can never serialize OMITTED.
     confirmed_at: AwareDatetime | None = None  # type: ignore[assignment]
-    revision: int = 1
+    revision: int = Field(default=1, ge=1)
 
     @classmethod
     def sync_success(cls, **kwargs: Any) -> "CreateMediaBuySuccess":
@@ -619,7 +619,7 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
     # default; the tool rebuilds the wire success with the persisted counter).
     # (prose/schema divergence historically tracked in #1564; re-grounded to 3.1.1.)
     status: Literal["completed"] = "completed"
-    revision: int = 1
+    revision: int = Field(default=1, ge=1)
 
     # Override affected_packages to use our extended AffectedPackage type
     # This allows us to include internal tracking fields (changes_applied, buyer_package_ref)
