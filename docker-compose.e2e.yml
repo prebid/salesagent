@@ -89,11 +89,14 @@ services:
       - single-request-reopen
     volumes:
       - .:/app
+    # Tighter probes + start_period so `compose up --wait` (CI #1667) survives
+    # alembic + cold import without waiting a full 30s interval before first check.
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      interval: 5s
+      timeout: 5s
+      retries: 36
+      start_period: 60s
 
   proxy:
     image: nginx:stable
