@@ -270,6 +270,42 @@ class TestCISuiteCoverage:
         )
 
     @pytest.mark.arch_guard
+    def test_bdd_in_network_frees_disk_before_compose(self):
+        """In-network e2e_rest must reclaim runner disk before image build (#1662).
+
+        Regression: after #1613/#1634, ``uv sync`` into ``tox_data`` hit ENOSPC
+        on ubuntu-latest (image + /opt/venv + second full tox env). The job must
+        free preinstalled toolchains and cap PGDATA tmpfs for the serial leg.
+        """
+        job = load_ci_workflow()["jobs"]["bdd-in-network"]
+        steps = job.get("steps", [])
+        assert steps, "bdd-in-network must declare steps (empty job is a vacuous pass)."
+
+        step_names = [s.get("name") for s in steps]
+        assert "Free disk space" in step_names, "bdd-in-network must include a 'Free disk space' step before compose."
+        assert "Run BDD suite in-network" in step_names, "bdd-in-network must run ./run_all_tests.sh bdd_e2e."
+        free_idx = step_names.index("Free disk space")
+        run_idx = step_names.index("Run BDD suite in-network")
+        assert free_idx < run_idx, (
+            "Free disk space must run before 'Run BDD suite in-network' "
+            f"(found Free disk at {free_idx}, run at {run_idx})."
+        )
+
+        free_run = str(steps[free_idx].get("run", ""))
+        assert "/usr/share/dotnet" in free_run, "Free disk space must remove /usr/share/dotnet."
+        assert "docker builder prune" in free_run, "Free disk space must prune the Docker builder cache."
+
+        run_step = steps[run_idx]
+        env = run_step.get("env") or {}
+        assert env.get("PGDATA_TMPFS_SIZE") == "2g", (
+            "bdd-in-network must set PGDATA_TMPFS_SIZE=2g "
+            "(serial leg; default 10g wastes RAM / contributes to pressure)."
+        )
+        assert "run_all_tests.sh bdd_e2e" in str(run_step.get("run", "")), (
+            "bdd-in-network must invoke ./run_all_tests.sh bdd_e2e."
+        )
+
+    @pytest.mark.arch_guard
     def test_bdd_and_e2e_run_on_pull_request(self):
         """The gate is worthless if it doesn't run on PRs.
 
