@@ -14,9 +14,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-INSPECTOR="/Users/konst/.claude/plugins/cache/agentic-toolkit/qa-bdd/0.2.0/skills/inspect-steps/scripts/inspect_bdd_steps.py"
+# Prefer repo-local inspector; allow override for plugin/vendored copies.
+INSPECTOR="${INSPECT_BDD_STEPS:-$SCRIPT_DIR/inspect_bdd_steps.py}"
 FEATURES_DIR="$PROJECT_ROOT/tests/bdd/features"
 STEPS_DIR="$PROJECT_ROOT/tests/bdd/steps"
+
+if [ ! -f "$INSPECTOR" ]; then
+    echo "ERROR: inspector not found: $INSPECTOR" >&2
+    echo "Set INSPECT_BDD_STEPS to an alternate inspect_bdd_steps.py path." >&2
+    exit 1
+fi
 
 # Parse args
 OUTPUT_DIR="${1:-.claude/reports/inspect-parallel-$(date +%d%m%y_%H%M)}"
@@ -24,7 +31,7 @@ mkdir -p "$OUTPUT_DIR"
 
 # Create patched inspector with timeout=600 and --then-only=False
 PATCHED="/tmp/inspect_bdd_parallel.py"
-sed 's/timeout=180/timeout=600/;s/"--then-only", action="store_true", default=True/"--then-only", action="store_true", default=False/' \
+sed -E 's/timeout=[0-9]+/timeout=600/;s/"--then-only", action="store_true", default=True/"--then-only", action="store_true", default=False/' \
     "$INSPECTOR" > "$PATCHED"
 
 echo "=== Parallel BDD Step Inspection ==="
