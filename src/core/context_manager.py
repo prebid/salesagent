@@ -15,10 +15,9 @@ from adcp.webhooks import GeneratedTaskStatus
 from pydantic import BaseModel
 from rich.console import Console
 from sqlalchemy import select
-from sqlalchemy.orm import Session, scoped_session, sessionmaker
 
 from src.core.async_utils import pin_task
-from src.core.database.database_session import DatabaseManager, get_engine
+from src.core.database.database_session import DatabaseManager
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
 from src.core.exceptions import AdCPError, build_two_layer_error_envelope, normalize_to_adcp_error
@@ -28,45 +27,6 @@ from src.services.protocol_webhook_service import get_protocol_webhook_service
 logger = logging.getLogger(__name__)
 
 console = Console()
-
-# Dedicated, thread-local session registry for ContextManager.
-#
-# ContextManager writes contexts and workflow steps and commits/closes its
-# session as part of those writes. If it shared the application's
-# ``get_scoped_session()`` registry (DatabaseManager's default), those
-# commits/closes would run on the SAME thread-local session a caller's
-# Unit-of-Work is using — prematurely committing the caller's pending writes
-# and releasing any ``SELECT ... FOR UPDATE`` row lock it holds (e.g. the
-# media-buy optimistic-concurrency revision lock).
-#
-# Binding to a private ``scoped_session`` keeps the manager thread-safe (it is
-# a process-wide singleton, so it must be) while making its transaction
-# boundary fully independent of any caller's scoped session. It uses the same
-# engine/pool, so its commits/closes only ever touch its own connection.
-_context_scoped_session: scoped_session | None = None
-_context_bound_engine: Any = None
-
-
-def _get_context_scoped_session() -> scoped_session:
-    """Return the process-wide, thread-local session registry for ContextManager.
-
-    The registry is rebuilt whenever the application engine identity changes.
-    In production the engine is created once, so this binds a single time. The
-    integration test harness, however, swaps ``database_session._engine`` to a
-    fresh per-test database (``reset_engine()`` + reassignment); rebinding on
-    engine change keeps this manager pointed at the live database instead of a
-    disposed one — the analogue of the harness resetting the ContextManager
-    singleton for the same reason.
-    """
-    global _context_scoped_session, _context_bound_engine
-    engine = get_engine()
-    if _context_scoped_session is None or _context_bound_engine is not engine:
-        if _context_scoped_session is not None:
-            _context_scoped_session.remove()
-        _context_scoped_session = scoped_session(sessionmaker(bind=engine))
-        _context_bound_engine = engine
-    return _context_scoped_session
-
 
 # Fire-and-forget webhook tasks are pinned against asyncio's weak-ref GC via
 # the shared src.core.async_utils.pin_task helper (single source of truth;
@@ -83,19 +43,6 @@ class ContextManager(DatabaseManager):
 
     def __init__(self):
         super().__init__()
-
-    @property
-    def session(self) -> Session:
-        """Session from ContextManager's private, thread-local registry.
-
-        Overrides ``DatabaseManager.session`` so this manager never borrows the
-        caller's application-scoped session. Calling the scoped registry on the
-        same thread returns the same Session, so callers that do
-        ``session = self.session`` and later ``session.close()`` behave exactly
-        as before — but on an isolated connection that cannot release a caller's
-        FOR UPDATE lock. See ``_get_context_scoped_session`` for the rationale.
-        """
-        return _get_context_scoped_session()()
 
     def create_context(
         self, tenant_id: str, principal_id: str, initial_conversation: list[dict[str, Any]] | None = None

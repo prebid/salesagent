@@ -564,8 +564,6 @@ def process_and_upload_package_creatives(
                 dry_run=testing_ctx.dry_run if testing_ctx else False,
                 validation_mode="strict",
                 push_notification_config=None,
-                # Internal programmatic call (not the sync_creatives protocol endpoint):
-                # required-ness is enforced at the protocol boundary, so no key here.
                 identity=context,  # ResolvedIdentity for principal_id extraction
             )
 

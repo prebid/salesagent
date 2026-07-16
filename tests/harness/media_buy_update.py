@@ -54,6 +54,7 @@ _WRAPPER_UNSUPPORTED_FIELDS = (
     "invoice_recipient",
     "new_packages",
     "proposal_id",
+    "revision",
     "today",
     "total_budget",
 )

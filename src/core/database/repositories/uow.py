@@ -234,59 +234,6 @@ class AccountUoW(BaseUoW):
         self.accounts = None
 
 
-class SyncAccountsUoW(BaseUoW):
-    """Atomic Unit of Work for sync_accounts (accounts + push config + idempotency).
-
-    Exposes the three repositories sync_accounts mutates on ONE session so the
-    account upserts, the push-callback registration, and the idempotency
-    reservation COMPLETION commit as a single atomic unit. A failure anywhere
-    rolls all three back — no orphaned callback, no cached success without the
-    account write it describes. Auto-commits on clean exit, rolls back on
-    exception.
-
-    Args:
-        tenant_id: Tenant scope for all repository queries.
-    """
-
-    accounts: AccountRepository | None
-    push_notification_configs: PushNotificationConfigRepository | None
-    idempotency_attempts: IdempotencyAttemptRepository | None
-
-    def _init_repos(self) -> None:
-        assert self._session is not None
-        self.accounts = AccountRepository(self._session, self._tenant_id)
-        self.push_notification_configs = PushNotificationConfigRepository(self._session, self._tenant_id)
-        self.idempotency_attempts = IdempotencyAttemptRepository(self._session, self._tenant_id)
-
-    def _clear_repos(self) -> None:
-        self.accounts = None
-        self.push_notification_configs = None
-        self.idempotency_attempts = None
-
-
-class IdempotencyUoW(BaseUoW):
-    """Unit of Work for standalone idempotency-cache access.
-
-    Wraps a database session and provides only a tenant-scoped
-    ``IdempotencyAttemptRepository``. Used by tools whose verbatim-replay
-    plumbing needs the cache but not a full domain UoW (e.g. sync_accounts,
-    via :mod:`src.services.idempotency_replay`). Auto-commits on clean exit,
-    rolls back on exception.
-
-    Args:
-        tenant_id: Tenant scope for all repository queries.
-    """
-
-    idempotency_attempts: IdempotencyAttemptRepository | None
-
-    def _init_repos(self) -> None:
-        assert self._session is not None
-        self.idempotency_attempts = IdempotencyAttemptRepository(self._session, self._tenant_id)
-
-    def _clear_repos(self) -> None:
-        self.idempotency_attempts = None
-
-
 class PushNotificationConfigUoW(BaseUoW):
     """Unit of Work for PushNotificationConfig operations.
 

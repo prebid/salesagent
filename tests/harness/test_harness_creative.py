@@ -81,17 +81,12 @@ class TestCreativeSyncEnvContract:
         assert env.call_a2a.__func__ is not env.call_impl.__func__
 
     def test_has_build_rest_body(self):
-        """CreativeSyncEnv implements build_rest_body for REST dispatch.
-
-        AdCP 3.1.1 makes idempotency_key REQUIRED on the sync_creatives request, so
-        build_rest_body now carries it through. Pass an explicit key to keep the shape
-        assertion deterministic (an absent key is otherwise defaulted to a fresh value).
-        """
+        """CreativeSyncEnv implements build_rest_body for REST dispatch."""
         from tests.harness.creative_sync import CreativeSyncEnv
 
         env = CreativeSyncEnv()
-        body = env.build_rest_body(creatives=[], dry_run=True, idempotency_key="test-key-harness-rest-01")
-        assert body == {"creatives": [], "dry_run": True, "idempotency_key": "test-key-harness-rest-01"}
+        body = env.build_rest_body(creatives=[], dry_run=True)
+        assert body == {"creatives": [], "dry_run": True}
 
     def test_has_parse_rest_response(self):
         """CreativeSyncEnv implements parse_rest_response."""

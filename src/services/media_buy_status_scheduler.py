@@ -94,10 +94,7 @@ class MediaBuyStatusScheduler:
 
                     if new_status and new_status != media_buy.status:
                         old_status = media_buy.status
-                        # Route through apply_status_transition so the AdCP
-                        # optimistic-concurrency revision is bumped atomically
-                        # with this out-of-band status write.
-                        MediaBuyRepository(session, media_buy.tenant_id).apply_status_transition(media_buy, new_status)
+                        media_buy.status = new_status
                         updated_count += 1
                         logger.info(f"Updated media buy {media_buy.media_buy_id} status: {old_status} -> {new_status}")
 

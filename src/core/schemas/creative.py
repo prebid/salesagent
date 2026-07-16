@@ -322,12 +322,11 @@ class SyncCreativesRequest(LibrarySyncCreativesRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # adcp 4.3+ makes account required. Override as optional — identity is resolved at
-    # the transport boundary. idempotency_key stays REQUIRED (inherited from the SDK
-    # parent, spec 3.1.1): a missing/malformed key rejects as VALIDATION_ERROR; it is
-    # never synthesized. Enforcement for the flat-param sync_creatives path lives in
-    # _sync_creatives_impl (which all transports forward the key into).
+    # adcp 4.3 makes account and idempotency_key required.  Override as optional
+    # — identity is resolved at the transport boundary, and idempotency_key is
+    # generated at the transport boundary when not supplied by the caller.
     account: LibraryAccountReference | None = None  # type: ignore[assignment]
+    idempotency_key: str | None = None  # type: ignore[assignment]
 
     creatives: list[Creative] = Field(
         ..., min_length=1, max_length=100, description="Array of creative assets to sync (create or update)"
@@ -480,23 +479,11 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
     # (#1399 R3-F2).
     creatives: list[SyncCreativeResult]  # type: ignore[assignment]
 
-    # Spec idempotency replay marker (AdCP 3.1.1): top-level on the structured
-    # result, set True ONLY when this response is a verbatim replay of a
-    # previously cached success. Wrapper/impl-owned; emitted at response time,
-    # never stored in the cached body, and omitted when False so fresh responses
-    # stay byte-identical (mirrors SyncAccountsResponse.replayed).
-    replayed: bool = False
-
     def model_dump(self, **kwargs):
         """Override to call child model_dump() for nested SyncCreativeResult (Pattern #4)."""
         result = super().model_dump(**kwargs)
         if "creatives" in result and self.creatives:
             result["creatives"] = [c.model_dump(**kwargs) for c in self.creatives]
-        # `replayed=False` rides the default dump; strip it so the marker is present
-        # ONLY on a genuine replay (this dump is its single source, per #1546).
-        result.pop("replayed", None)
-        if self.replayed:
-            result["replayed"] = True
         return result
 
     def __str__(self) -> str:

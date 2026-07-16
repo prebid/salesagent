@@ -42,7 +42,6 @@ class _MediaBuyData:
     updated_at: datetime | None
     status: str | None
     is_paused: bool
-    revision: int
 
 
 @dataclass
@@ -280,7 +279,6 @@ def _get_media_buys_impl(
                 media_buy_id=buy.media_buy_id,
                 buyer_campaign_ref=buyer_campaign_ref,
                 status=status,
-                revision=buy.revision,
                 valid_actions=valid_actions_for_status(status.value),
                 currency=buy.currency or "USD",
                 total_budget=total_budget,
@@ -419,7 +417,6 @@ def _fetch_target_media_buys(
             updated_at=buy.updated_at,
             status=buy.status,
             is_paused=buy.is_paused,
-            revision=buy.revision,
         )
         for buy in buys
         if filter_statuses is None or _compute_status(buy, today) in filter_statuses

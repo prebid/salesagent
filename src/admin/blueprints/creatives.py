@@ -651,7 +651,7 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                     mb = uow2.media_buys.get_by_id(action["media_buy_id"])
                     if mb:
                         new_status = _compute_media_buy_status_from_flight_dates(mb)
-                        uow2.media_buys.apply_status_transition(mb, new_status)
+                        mb.status = new_status
                         mb.approved_at = datetime.now(UTC)
                         mb.approved_by = "system"
                     # auto-commits

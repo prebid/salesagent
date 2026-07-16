@@ -66,9 +66,7 @@ class TestSyncAccountsRestRoute:
                             "operator": "rest-test.com",
                             "billing": "operator",
                         }
-                    ],
-                    # AdCP 3.1.1 makes idempotency_key REQUIRED on the sync_accounts request.
-                    "idempotency_key": "test-key-sync-accounts-rest-01",
+                    ]
                 },
             )
             assert rest_response.status_code == 200, (

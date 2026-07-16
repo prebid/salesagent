@@ -134,7 +134,6 @@ class TestA2AMessageFieldValidation:
                     }
                 ],
                 "validation_mode": "strict",
-                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
             }
 
             # Call handler directly - may fail if external creative agent is unavailable

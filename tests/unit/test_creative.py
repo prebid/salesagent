@@ -483,7 +483,6 @@ class TestSyncCreativesRequestSchema:
         req = SyncCreativesRequest(
             creatives=[creative],
             creative_ids=["c_test_1"],
-            idempotency_key="idem-key-test-0001",
         )
         assert req.creative_ids == ["c_test_1"]
 
@@ -505,7 +504,6 @@ class TestSyncCreativesRequestSchema:
                 Assignment(creative_id="c_test_1", package_id="pkg_1"),
                 Assignment(creative_id="c_test_1", package_id="pkg_2"),
             ],
-            idempotency_key="idem-key-test-0001",
         )
         assert len(req.assignments) == 2
         assert req.assignments[0].creative_id == "c_test_1"
@@ -3231,7 +3229,7 @@ class TestValidationModeSemantics:
         Covers: UC-006-MAIN-MCP-08
         """
         creative = _make_creative()
-        req = SyncCreativesRequest(creatives=[creative], idempotency_key="idem-key-test-0001")
+        req = SyncCreativesRequest(creatives=[creative])
         assert req.validation_mode is not None
         # validation_mode is an enum; compare by value
         assert req.validation_mode.value == "strict", (
@@ -4530,18 +4528,10 @@ class TestA2ATransportGaps:
             mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
 
-            # Phase 3 wired the idempotency key to a reservation that opens a real DB
-            # transaction; mock it out for this transport-gap unit test (reservation
-            # behavior is covered by tests/integration/test_sync_creatives_idempotency.py).
-            with patch(
-                "src.core.tools.creatives._sync.reserve_idempotent",
-                return_value=MagicMock(replay=None, attempt_id=None),
-            ):
-                result = sync_creatives_raw(
-                    creatives=[_make_creative_asset()],
-                    idempotency_key="idem-key-test-0001",
-                    identity=identity,
-                )
+            result = sync_creatives_raw(
+                creatives=[_make_creative_asset()],
+                identity=identity,
+            )
 
             assert isinstance(result, SyncCreativesResponse)
             assert len(result.creatives) == 1
@@ -4745,7 +4735,7 @@ class TestRequestConstraintValidation:
         from pydantic import ValidationError as PydanticValidationError
 
         with pytest.raises(PydanticValidationError):
-            SyncCreativesRequest(creatives=[], idempotency_key="idem-key-test-0001")
+            SyncCreativesRequest(creatives=[])
 
     def test_over_100_creatives_rejected(self):
         """Creatives array exceeding 100 should be rejected.
@@ -4757,7 +4747,7 @@ class TestRequestConstraintValidation:
 
         creatives = [_make_creative(creative_id=f"c_{i}") for i in range(101)]
         with pytest.raises(PydanticValidationError):
-            SyncCreativesRequest(creatives=creatives, idempotency_key="idem-key-test-0001")
+            SyncCreativesRequest(creatives=creatives)
 
 
 # ============================================================================

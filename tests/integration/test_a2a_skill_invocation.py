@@ -807,14 +807,13 @@ class TestA2ASkillInvocation:
             # carry the now-required status/revision fields. This proves the defaulted
             # UpdateMediaBuySuccess subclass reaches the wire (not the raw library type),
             # which is the whole point of du92.
-            # Value guard: status/revision must reach the wire. The seeded media buy is at
-            # revision 1; a successful applied update INCREMENTS it (AdCP 3.1.1 INV-4), so
-            # the wire reports revision 2. (Numbers are doubles on the A2A protobuf-Struct
-            # transport, so 2 arrives as 2.0 — a transport representation detail; assert on value.)
+            # Value-presence guard: status/revision must reach the wire. (Numbers are
+            # doubles on the A2A protobuf-Struct transport, so 1 arrives as 1.0 — a
+            # transport-wide representation detail, not du92's concern; assert on value.)
             assert result.artifacts, "update_media_buy skill returned no artifacts"
             payload = validator.extract_adcp_payload_from_a2a_artifact(result.artifacts[0])
             assert payload["status"] == "completed", f"missing/incorrect status on wire: {payload!r}"
-            assert payload["revision"] == 2, f"missing/incorrect revision on wire: {payload!r}"
+            assert payload["revision"] == 1, f"missing/incorrect revision on wire: {payload!r}"
 
     @pytest.mark.asyncio
     async def test_list_creative_formats_skill(
@@ -943,8 +942,7 @@ class TestA2ASkillInvocation:
                         "format_id": "display_300x250",
                         "assets": build_assets(image_spec("asset_1", url="https://example.com/creative.jpg")),
                     }
-                ],
-                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+                ]
             }
             message = create_a2a_message_with_skill("sync_creatives", skill_params)
             params = SendMessageRequest(message=message)

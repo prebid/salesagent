@@ -119,11 +119,6 @@ from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
 
-# Skills whose handler takes the pre-strip wire payload (the canonical
-# idempotency payload-hash input) as a keyword argument. Every other skill's
-# handler is called with (parameters, identity) only.
-_RAW_WIRE_PAYLOAD_SKILLS = frozenset({"create_media_buy", "sync_accounts"})
-
 
 def _restore_a2a_integer_version_pin(params: dict[str, Any]) -> dict[str, Any]:
     """Restore an integral major pin after protobuf ``Struct`` decoding.
@@ -1539,31 +1534,11 @@ class AdCPRequestHandler(RequestHandler):
             record_boundary_error_for_identity("a2a", skill_name, version_exc, identity)
             raise
 
-        # Inject push_notification_config into parameters for skills that need it,
-        # BEFORE snapshotting raw_wire_payload. The A2A buyer carries the callback
-        # in the protobuf `configuration` channel, not the message body, so it must
-        # be injected to reach the handler AND to participate in the idempotency
-        # payload hash — a changed callback URL is a different canonical request
-        # (top-level push_notification_config is NOT excluded by the SDK
-        # canonicalizer; only nested authentication.credentials is), so it must
-        # yield IDEMPOTENCY_CONFLICT, exactly as it does on MCP/REST where the
-        # callback rides in-body. Serialize protobuf to dict at the boundary.
-        if push_notification_config and skill_name in ("create_media_buy", "sync_creatives", "sync_accounts"):
-            pnc_dict = json_format.MessageToDict(push_notification_config)
-            # Translate A2A protobuf authentication.scheme (singular) → AdCP schemes (plural list).
-            # A2A's protobuf AuthenticationInfo uses a single `scheme` field; AdCP's
-            # PushNotificationConfig schema uses a `schemes` array.
-            auth = pnc_dict.get("authentication") if isinstance(pnc_dict, dict) else None
-            if isinstance(auth, dict) and "scheme" in auth and "schemes" not in auth:
-                scheme_value = auth.pop("scheme")
-                auth["schemes"] = [scheme_value] if scheme_value else []
-            parameters = {**parameters, "push_notification_config": pnc_dict}
-
-        # The buyer's wire payload, captured AFTER the pnc injection (so the
-        # callback is business-hashable) but BEFORE the negotiation-field strip,
-        # deprecated-field normalization, and any handler mutations — the
-        # idempotency payload-hash input (AdCP defines equivalence over the
-        # request as sent; adcp_version participates in the canonicalizer hash).
+        # The buyer's wire payload, captured BEFORE the negotiation-field strip,
+        # the pnc protocol-layer injection, deprecated-field normalization, and
+        # any handler mutations — the idempotency payload-hash input (AdCP
+        # defines equivalence over the request as sent, and the SDK
+        # canonicalizer's exclusion list is closed: adcp_version participates).
         # MCP captures its raw_wire_payload in MCPAuthMiddleware (before the
         # RequestCompatMiddleware strip) and REST hashes the raw body bytes, so
         # capturing pre-strip here keeps the canonical hash identical across
@@ -1579,6 +1554,18 @@ class AdCPRequestHandler(RequestHandler):
         parameters, dropped_negotiation = strip_negotiation_fields(parameters)
         _log_dropped_fields(skill_name, "AdCP negotiation", dropped_negotiation)
 
+        # Inject push_notification_config into parameters for skills that need it
+        # Serialize protobuf to dict at the transport boundary — _impl accepts dict
+        if push_notification_config and skill_name in ("create_media_buy", "sync_creatives"):
+            pnc_dict = json_format.MessageToDict(push_notification_config)
+            # Translate A2A protobuf authentication.scheme (singular) → AdCP schemes (plural list).
+            # A2A's protobuf AuthenticationInfo uses a single `scheme` field; AdCP's
+            # PushNotificationConfig schema uses a `schemes` array.
+            auth = pnc_dict.get("authentication") if isinstance(pnc_dict, dict) else None
+            if isinstance(auth, dict) and "scheme" in auth and "schemes" not in auth:
+                scheme_value = auth.pop("scheme")
+                auth["schemes"] = [scheme_value] if scheme_value else []
+            parameters = {**parameters, "push_notification_config": pnc_dict}
         # Normalize deprecated fields before any handler sees the parameters
         from src.core.request_compat import normalize_request_params
 
@@ -1626,10 +1613,8 @@ class AdCPRequestHandler(RequestHandler):
 
         try:
             handler = skill_handlers[skill_name]
-            # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure).
-            # Idempotent tools take the pre-strip wire payload for the canonical
-            # payload-hash; the rest use the (post-strip) parameters.
-            if skill_name in _RAW_WIRE_PAYLOAD_SKILLS:
+            # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
+            if skill_name == "create_media_buy":
                 result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload)
             else:
                 result = await handler(parameters, identity)
@@ -1850,9 +1835,6 @@ class AdCPRequestHandler(RequestHandler):
             push_notification_config=parameters.get("push_notification_config"),
             context=context,
             account=to_account_reference(parameters.get("account")),
-            # AdCP 3.1.1 REQUIRED — forwarded verbatim (never fabricated); a missing/
-            # malformed key rejects as VALIDATION_ERROR in the shared impl.
-            idempotency_key=parameters.get("idempotency_key"),
             identity=identity,
         )
 
@@ -2041,9 +2023,7 @@ class AdCPRequestHandler(RequestHandler):
             )
         return core_list_accounts_tool(req=request, identity=identity)
 
-    async def _handle_sync_accounts_skill(
-        self, parameters: dict, identity: ResolvedIdentity | None, raw_wire_payload: dict | None = None
-    ) -> Any:
+    async def _handle_sync_accounts_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit sync_accounts skill invocation.
 
         Authentication is REQUIRED per BR-RULE-055.
@@ -2051,32 +2031,17 @@ class AdCPRequestHandler(RequestHandler):
         from src.core.schemas.account import SyncAccountsRequest
 
         # Same context string as the REST route's boundary (klkg parity).
-        # idempotency_key is omit-when-absent so a missing required key rejects as
-        # VALIDATION_ERROR — never synthesized (AdCP 3.1.1 makes it required).
         with adcp_validation_boundary(context="sync_accounts request"):
             request = SyncAccountsRequest(
                 accounts=parameters.get("accounts", []),
                 delete_missing=parameters.get("delete_missing", False),
                 dry_run=parameters.get("dry_run", False),
                 context=parameters.get("context"),
-                **(
-                    {"idempotency_key": parameters["idempotency_key"]}
-                    if parameters.get("idempotency_key") is not None
-                    else {}
-                ),
-                # Forward the AdCP request-level push callback instead of dropping
-                # it; the impl SSRF-validates and registers the channel (#1546).
-                **(
-                    {"push_notification_config": parameters["push_notification_config"]}
-                    if parameters.get("push_notification_config") is not None
-                    else {}
-                ),
+                # Preserve the buyer's idempotency key (the A2A strip keeps envelope
+                # fields); only synthesize one when the client omitted it (#1512).
+                idempotency_key=parameters.get("idempotency_key") or str(uuid.uuid4()),
             )
-        return await core_sync_accounts_tool(
-            req=request,
-            identity=identity,
-            raw_wire_payload=raw_wire_payload if raw_wire_payload is not None else parameters,
-        )
+        return await core_sync_accounts_tool(req=request, identity=identity)
 
     async def _handle_list_authorized_properties_skill(
         self, parameters: dict, identity: ResolvedIdentity | None
@@ -2153,9 +2118,6 @@ class AdCPRequestHandler(RequestHandler):
             packages=params.get("packages"),
             push_notification_config=params.get("push_notification_config"),
             context=params.get("context"),
-            # Optimistic-concurrency revision (AdCP 3.1.1). Forwarded RAW so a
-            # wrong-type value reaches _check_revision → INVALID_REQUEST.
-            revision=params.get("revision"),
             identity=identity,
         )
 

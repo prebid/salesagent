@@ -433,23 +433,6 @@ def _update_media_buy_impl(
             # Extract testing context early (needed for dry_run check)
             testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
 
-            # ── Optimistic-concurrency revision check (AdCP 3.1.1) ───────────
-            # Lock the row FOR UPDATE and compare its revision to the buyer's
-            # ``req.revision`` BEFORE any workflow-step creation, manual-approval
-            # branch, or adapter call — a CONFLICT here leaves no partial write
-            # (POST-F1). The lock is held to the UoW commit, making the compare
-            # atomic with the eventual increment (spec: sellers MUST enforce the
-            # comparison atomically with the write). ``req.revision=None`` is
-            # last-write-wins: the row is locked but not compared. dry_run echoes
-            # the current revision without locking or incrementing.
-            locked_media_buy = None
-            if not testing_ctx.dry_run:
-                locked_media_buy = uow.media_buys.lock_for_revision_check(
-                    media_buy_id_to_use,
-                    expected_revision=req.revision,
-                    context=req.context,
-                )
-
             # Create or get persistent context and workflow step
             # (ctx_manager + step were hoisted before the try block so the
             # AdCPError / Exception handlers can mark the step as failed)
@@ -576,9 +559,6 @@ def _update_media_buy_impl(
                     media_buy_status=_dry_run_mbs,  # AdCP 3.1: mirrors `status`
                     affected_packages=simulated_affected,
                     valid_actions=_dry_run_actions,
-                    # dry_run is a preview — echo the CURRENT revision unchanged
-                    # (no lock, no increment; a simulated update does not advance it).
-                    revision=_dry_run_mb.revision if _dry_run_mb else 1,
                     context=req.context,
                     errors=property_list_unsupported_advisories(req.packages, adapter),
                 )
@@ -749,23 +729,11 @@ def _update_media_buy_impl(
                     _post_action_mbs, _post_action_actions = _adcp_status_and_actions(
                         _post_action_mb, fallback_status=("paused" if req.paused else "active")
                     )
-                    # A mutating update advances the stored revision (INV-4). The
-                    # FOR UPDATE lock taken above is held on the row for the whole
-                    # transaction, so incrementing the freshly-fetched instance
-                    # (_post_action_mb) is race-free — do NOT reuse the locked
-                    # instance, which intervening workflow-step writes (separate
-                    # scoped get_db_session() contexts) detach.
-                    _new_revision = (
-                        uow.media_buys.increment_revision(_post_action_mb)
-                        if (locked_media_buy is not None and _post_action_mb is not None)
-                        else 1
-                    )
                     success_response = UpdateMediaBuySuccess(
                         media_buy_id=media_buy_id,
                         media_buy_status=_post_action_mbs,  # AdCP 3.1: mirrors `status`
                         affected_packages=affected_pkgs,
                         valid_actions=_post_action_actions,
-                        revision=_new_revision,
                         errors=property_list_unsupported_advisories(req.packages, adapter),
                     )
                     # Log successful update_media_buy (pause/resume)
@@ -1007,9 +975,7 @@ def _update_media_buy_impl(
                                 context=req.context,
                             )
 
-                        # Sync creatives (upload/update). Internal programmatic call — not
-                        # the sync_creatives protocol endpoint — so no idempotency_key is
-                        # required (required-ness is enforced at the protocol boundary).
+                        # Sync creatives (upload/update)
                         sync_response = _sync_creatives_impl(
                             creatives=pkg_update.creatives,
                             assignments={
@@ -1417,22 +1383,11 @@ def _update_media_buy_impl(
 
             _final_mb = uow.media_buys.get_by_id(req.media_buy_id)
             _final_mbs, _final_actions = _adcp_status_and_actions(_final_mb)
-            # A mutating update advances the stored revision (INV-4). The FOR UPDATE
-            # lock taken above is held on the row for the whole transaction, so
-            # incrementing the freshly-fetched instance (_final_mb) is race-free — do
-            # NOT reuse the locked instance, which intervening workflow-step writes
-            # (separate scoped get_db_session() contexts) detach.
-            _final_revision = (
-                uow.media_buys.increment_revision(_final_mb)
-                if (locked_media_buy is not None and _final_mb is not None)
-                else 1
-            )
             final_response = UpdateMediaBuySuccess(
                 media_buy_id=req.media_buy_id or "",
                 media_buy_status=_final_mbs,  # AdCP 3.1: mirrors `status`
                 affected_packages=affected_packages_list,
                 valid_actions=_final_actions,
-                revision=_final_revision,
                 context=req.context,
                 errors=property_list_unsupported_advisories(req.packages, adapter),
             )
@@ -1478,16 +1433,11 @@ def _build_update_request(
     reporting_webhook: Any = None,
     ext: Any = None,
     idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
-    revision: int | str | None = None,
 ) -> UpdateMediaBuyRequest:
     """Build UpdateMediaBuyRequest from flat parameters.
 
     Handles deprecated field mapping and budget object construction.
     Used by both MCP wrapper and A2A raw function.
-
-    ``revision`` is typed ``int | str | None`` so a wrong-type value (e.g. the
-    string ``"7"``) survives the boundary and reaches ``_check_revision``, which
-    rejects it as INVALID_REQUEST rather than FastMCP coercing/erroring first.
     """
     # Handle deprecated field names
     effective_start = start_time or flight_start_date
@@ -1538,8 +1488,6 @@ def _build_update_request(
         request_params["ext"] = ext
     if idempotency_key is not None:
         request_params["idempotency_key"] = idempotency_key
-    if revision is not None:
-        request_params["revision"] = revision
 
     with adcp_validation_boundary(context="update_media_buy request"):
         req = UpdateMediaBuyRequest(**request_params)
@@ -1583,10 +1531,6 @@ async def update_media_buy(
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
-    revision: Annotated[
-        int | str | None,
-        Field(description="Expected current revision for optimistic concurrency (minimum 1)"),
-    ] = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Update a media buy with campaign-level and/or package-level changes.
@@ -1637,7 +1581,6 @@ async def update_media_buy(
         reporting_webhook=reporting_webhook,
         ext=ext,
         idempotency_key=idempotency_key,
-        revision=revision,
     )
     # Read identity and context_id pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
@@ -1667,7 +1610,6 @@ def update_media_buy_raw(
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     idempotency_key: str | None = None,  # AdCP idempotency key for retry safety
-    revision: int | str | None = None,  # AdCP optimistic-concurrency revision (minimum 1)
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -1717,7 +1659,6 @@ def update_media_buy_raw(
         reporting_webhook=reporting_webhook,
         ext=ext,
         idempotency_key=idempotency_key,
-        revision=revision,
     )
     if identity is None:
         identity = resolve_identity_from_context(ctx, require_valid_token=True)

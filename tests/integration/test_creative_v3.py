@@ -15,7 +15,6 @@ Covers:
 - Media buy status transition on creative assignment (BR-RULE-040)
 """
 
-import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
@@ -43,15 +42,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # ---------------------------------------------------------------------------
 DEFAULT_AGENT_URL = "https://test-agent.example.com"
 DEFAULT_FORMAT_ID = "display_300x250_image"
-
-
-def _valid_idempotency_key() -> str:
-    """Fresh AdCP 3.1.1-valid idempotency_key (16-255 chars, [A-Za-z0-9_.:-]).
-
-    Required on the sync_creatives request as of 3.1.1. Minted fresh per call so
-    distinct syncs never replay onto each other.
-    """
-    return f"test-key-{uuid.uuid4().hex}"
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +173,6 @@ class TestCrossPrincipalIsolation:
         identity = _make_identity(self.TENANT_ID, principal_id)
         return sync_creatives_raw(
             creatives=[_make_creative_dict(creative_id=creative_id)],
-            idempotency_key=_valid_idempotency_key(),
             identity=identity,
         )
 
@@ -300,7 +289,6 @@ class TestApprovalWorkflow:
         identity = _make_identity(self.TENANT_ID, self.PRINCIPAL_ID, approval_mode=approval_mode)
         return sync_creatives_raw(
             creatives=[_make_creative_dict(creative_id=creative_id)],
-            idempotency_key=_valid_idempotency_key(),
             identity=identity,
         )
 
@@ -352,7 +340,6 @@ class TestApprovalWorkflow:
         )
         sync_creatives_raw(
             creatives=[_make_creative_dict(creative_id="c_default")],
-            idempotency_key=_valid_idempotency_key(),
             identity=identity,
         )
         assert self._get_db_status("c_default") == CreativeStatusEnum.pending_review.value
@@ -415,9 +402,7 @@ class TestBatchSync:
         from src.core.tools.creatives import sync_creatives_raw
 
         creatives = [_make_creative_dict(creative_id=f"c_{i}", name=f"Creative {i}") for i in range(5)]
-        result = sync_creatives_raw(
-            creatives=creatives, idempotency_key=_valid_idempotency_key(), identity=self._identity()
-        )
+        result = sync_creatives_raw(creatives=creatives, identity=self._identity())
 
         assert len(result.creatives) == 5
         result_ids = {r.creative_id for r in result.creatives}
@@ -443,7 +428,6 @@ class TestBatchSync:
         # First sync: create
         result1 = sync_creatives_raw(
             creatives=[_make_creative_dict(creative_id="c_upsert", name="Original Name")],
-            idempotency_key=_valid_idempotency_key(),
             identity=identity,
         )
         action1 = result1.creatives[0].action
@@ -454,7 +438,6 @@ class TestBatchSync:
         # Second sync: update
         result2 = sync_creatives_raw(
             creatives=[_make_creative_dict(creative_id="c_upsert", name="Updated Name")],
-            idempotency_key=_valid_idempotency_key(),
             identity=identity,
         )
         action2 = result2.creatives[0].action
@@ -570,7 +553,6 @@ class TestFormatCompatibility:
         # First sync the display creative (so it exists in DB)
         sync_creatives_raw(
             creatives=[_make_creative_dict(creative_id="c_display")],
-            idempotency_key=_valid_idempotency_key(),
             identity=identity,
         )
 
@@ -580,7 +562,6 @@ class TestFormatCompatibility:
                 creatives=[_make_creative_dict(creative_id="c_display")],
                 assignments={"c_display": ["pkg_video"]},
                 validation_mode="strict",
-                idempotency_key=_valid_idempotency_key(),
                 identity=identity,
             )
 
@@ -684,7 +665,6 @@ class TestMediaBuyStatusTransition:
         sync_creatives_raw(
             creatives=[_make_creative_dict(creative_id="c_transition")],
             assignments={"c_transition": ["pkg_draft"]},
-            idempotency_key=_valid_idempotency_key(),
             identity=identity,
         )
 

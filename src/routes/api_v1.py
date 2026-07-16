@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -274,10 +275,6 @@ class UpdateMediaBuyBody(_VersionedBody):
     reporting_webhook: dict[str, Any] | None = None
     ext: dict[str, Any] | None = None
     idempotency_key: str | None = None
-    # Optimistic-concurrency revision (AdCP 3.1.1). Typed ``int | str`` so a
-    # wrong-type value survives to _check_revision → INVALID_REQUEST rather than
-    # a bare pydantic 422 at the REST body.
-    revision: int | str | None = None
 
 
 class GetMediaBuyDeliveryBody(_VersionedBody):
@@ -302,9 +299,6 @@ class SyncCreativesBody(_VersionedBody):
     push_notification_config: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
     account: dict[str, Any] | None = None  # AccountReference; resolved at the transport boundary
-    # AdCP 3.1.1 REQUIRED (16-255, ^[A-Za-z0-9_.:-]{16,255}$); forwarded verbatim so a
-    # missing/malformed key rejects as VALIDATION_ERROR in the shared impl.
-    idempotency_key: str | None = None
 
 
 class ListCreativesBody(_VersionedBody):
@@ -602,7 +596,6 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         reporting_webhook=reporting_webhook,
         ext=body.ext,
         idempotency_key=body.idempotency_key,
-        revision=body.revision,
         identity=identity,
     )
     return response.model_dump(mode="json")
@@ -657,7 +650,6 @@ async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = r
         push_notification_config=push_notification_config,
         context=context,
         account=account_ref,
-        idempotency_key=body.idempotency_key,
         identity=identity,
     )
     return response.model_dump(mode="json")
@@ -718,19 +710,14 @@ async def list_accounts(body: ListAccountsBody, identity: ResolvedIdentity = req
 
 
 @router.post("/accounts/sync", dependencies=[Depends(_version_after_require)])
-async def sync_accounts(
-    body: SyncAccountsBody,
-    identity: ResolvedIdentity = require_auth,
-    raw_wire_payload: dict[str, Any] = raw_json_body,
-):
+async def sync_accounts(body: SyncAccountsBody, identity: ResolvedIdentity = require_auth):
     """Sync accounts by natural key (auth required)."""
     from src.core.schemas.account import SyncAccountsRequest
 
-    # exclude_none drops an absent idempotency_key so the required-field
-    # ValidationError fires inside the boundary → VALIDATION_ERROR envelope. No
-    # UUID synthesis: a missing required key is a buyer error, not the seller's
-    # to paper over (AdCP 3.1.1 makes it required).
     with adcp_validation_boundary(context="sync_accounts request"):
         req = SyncAccountsRequest(**body.model_dump(exclude_none=True, exclude=_NEGOTIATION_EXCLUDE))
-    response = await accounts_module.sync_accounts_raw(req=req, identity=identity, raw_wire_payload=raw_wire_payload)
+    # Preserve the buyer's idempotency_key; synthesize only when omitted (#1512), matching
+    # the MCP/A2A siblings so a retry carrying the same key is not fabricated a fresh UUID.
+    req.idempotency_key = req.idempotency_key or str(uuid.uuid4())
+    response = await accounts_module.sync_accounts_raw(req=req, identity=identity)
     return response.model_dump(mode="json")

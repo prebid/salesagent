@@ -681,7 +681,6 @@ class TestGetMediaBuysResponseStructure:
                 GetMediaBuysMediaBuy(
                     media_buy_id="mb_1",
                     status=MediaBuyStatus.active,
-                    revision=1,
                     currency="USD",
                     total_budget=1000.0,
                     packages=[

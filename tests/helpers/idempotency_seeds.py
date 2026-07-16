@@ -36,27 +36,6 @@ def make_active_cached_success(media_buy_id: str = "mb_seeded") -> CreateMediaBu
     )
 
 
-def make_sync_accounts_cached_success(account_id: str = "acc_seeded", action: str = "created"):
-    """Build the canonical sync_accounts success model that cache-seeding tests store.
-
-    One construction shared by the replay integration tests so the seeded shape
-    (a single account result + brand echo) cannot drift between files.
-    """
-    from src.core.schemas.account import SyncAccountsResponse, SyncResponseAccount
-
-    return SyncAccountsResponse(
-        accounts=[
-            SyncResponseAccount(
-                brand={"domain": "seeded.example.com"},
-                operator="seeded.example.com",
-                action=action,
-                status="active",
-                account_id=account_id,
-            )
-        ],
-    )
-
-
 def seed_cached_success(
     tenant_id: str,
     principal_id: str,
@@ -64,31 +43,29 @@ def seed_cached_success(
     *,
     response_model: BaseModel,
     payload_hash: str,
-    tool_name: str = "create_media_buy",
     protocol_status: str = "completed",
     account_id: str | None = None,
     ttl: timedelta | None = None,
     now: datetime | None = None,
 ) -> None:
-    """Write a verbatim-cache row via the production repository.
+    """Write a verbatim-cache row for ``create_media_buy`` via the production repository.
 
     ``payload_hash`` must match the canonical hash of the request the test will
     retry for a replay; pass a non-matching hash to exercise the
-    ``IDEMPOTENCY_CONFLICT`` path. ``tool_name`` scopes the cached row's tool
-    dimension (``create_media_buy`` default; ``sync_accounts`` for the account
-    sync replay tests). Only successes are ever seeded — errors are never cached
-    by production, and tests must mirror that. ``ttl``/``now`` pass through to
-    ``record_success`` so expiry tests can seed already-expired rows.
+    ``IDEMPOTENCY_CONFLICT`` path. Only successes are ever seeded — errors are
+    never cached by production, and tests must mirror that. ``ttl``/``now``
+    pass through to ``record_success`` so expiry tests can seed already-expired
+    rows.
     """
-    from src.core.database.repositories import IdempotencyUoW
+    from src.core.database.repositories import MediaBuyUoW
     from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 
-    with IdempotencyUoW(tenant_id) as uow:
+    with MediaBuyUoW(tenant_id) as uow:
         assert uow.idempotency_attempts is not None
         uow.idempotency_attempts.record_success(
             principal_id=principal_id,
             account_id=account_id,
-            tool_name=tool_name,
+            tool_name="create_media_buy",
             idempotency_key=idempotency_key,
             response_model=response_model,
             protocol_status=protocol_status,
@@ -121,15 +98,13 @@ def seed_media_buy(
     idempotency_key: str | None = None,
     account_id: str | None = None,
     status: str = "active",
-    revision: int = 1,
 ) -> None:
     """Commit a tenant + principal + MediaBuy (the dup-booking backstop) via factories.
 
     The committed MediaBuy carries the ``idempotency_key`` backstop without a
     verbatim cache row — the state the degraded post-race path and the
-    account-scoped key lookup are tested against. ``revision`` seeds the
-    optimistic-concurrency token for revision-lock tests. One home so the seed
-    block does not duplicate across the repository and race test modules.
+    account-scoped key lookup are tested against. One home so the seed block
+    does not duplicate across the repository and race test modules.
     """
     from tests.factories import AccountFactory, MediaBuyFactory, PrincipalFactory, TenantFactory
     from tests.harness._base import BareIntegrationEnv
@@ -147,6 +122,5 @@ def seed_media_buy(
             idempotency_key=idempotency_key,
             account_id=account_id,
             status=status,
-            revision=revision,
         )
         env.get_session()

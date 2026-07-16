@@ -41,7 +41,7 @@ from fastmcp.tools.tool import ToolResult
 # advertises from what validate_adcp_version_pins negotiates (#1512).
 from src.core import adcp_version
 from src.core.auth import get_principal_object, require_identity
-from src.core.database.repositories.idempotency_attempt import DEFAULT_IN_FLIGHT_LEASE, DEFAULT_REPLAY_TTL
+from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value
@@ -91,10 +91,6 @@ def _filter_supported_protocols(req: GetAdcpCapabilitiesRequest | None) -> list[
 
 _DEFAULT_SPECIALISMS: tuple[AdcpSpecialism, ...] = (AdcpSpecialism.sales_non_guaranteed,)
 
-# Advertised in_flight_max_seconds: derived from the reservation lease constant so
-# the capability value and the actual lease the reserve path uses can never drift.
-IN_FLIGHT_MAX_SECONDS = int(DEFAULT_IN_FLIGHT_LEASE.total_seconds())
-
 
 def _build_adcp_block() -> Adcp:
     """Build the ``adcp`` version/idempotency envelope block for the response.
@@ -108,14 +104,7 @@ def _build_adcp_block() -> Adcp:
         major_versions=[MajorVersion(root=adcp_version.adcp_major_version())],
         supported_versions=[SupportedVersion(root=v) for v in adcp_version.supported_adcp_versions()],
         build_version=adcp_version.adcp_build_version(),
-        idempotency=Idempotency(
-            supported=True,
-            replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds()),
-            # in_flight_max_seconds bounds the IDEMPOTENCY_IN_FLIGHT retry budget
-            # (mutation-only dedup: idempotency.supported=true covers mutating
-            # tools; read tools are not keyed).
-            in_flight_max_seconds=IN_FLIGHT_MAX_SECONDS,
-        ),
+        idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
     )
 
 

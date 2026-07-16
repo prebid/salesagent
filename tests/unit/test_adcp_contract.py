@@ -1429,7 +1429,6 @@ class TestAdCPContract:
             delete_missing=False,
             dry_run=False,
             validation_mode="strict",
-            idempotency_key="idem-key-test-0001",
         )
 
         # Test model_dump (SyncCreativesRequest doesn't have internal fields)

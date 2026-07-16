@@ -8,8 +8,6 @@ BR-RULE-057 (atomic XOR response), BR-RULE-060 (approval workflow),
 BR-RULE-061 (delete_missing), BR-RULE-062 (dry_run)
 """
 
-import uuid
-
 import pytest
 
 from src.core.schemas.account import SyncAccountsRequest
@@ -20,19 +18,6 @@ from tests.helpers import assert_envelope_shape
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.REST, Transport.MCP]
-
-
-def _sync_req(**kwargs) -> SyncAccountsRequest:
-    """Build a SyncAccountsRequest with a fresh, pattern-valid idempotency_key.
-
-    AdCP 3.1.1 makes idempotency_key REQUIRED; these upsert-semantics tests are
-    not about idempotency, so each request gets a UNIQUE key — a distinct key per
-    construction means no request is ever a replay/conflict of another, preserving
-    the original one-execution-per-call semantics. Tests that DO exercise
-    replay/conflict pass an explicit shared key.
-    """
-    kwargs.setdefault("idempotency_key", f"itest-sync-{uuid.uuid4().hex}")
-    return SyncAccountsRequest(**kwargs)
 
 
 def _action_value(action):
@@ -53,7 +38,7 @@ class TestSyncAccountsCreate:
         with AccountSyncEnv(tenant_id="sync_t1", principal_id="agent_sync") as env:
             env.setup_default_data()
 
-            req = _sync_req(
+            req = SyncAccountsRequest(
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -76,7 +61,7 @@ class TestSyncAccountsCreate:
         with AccountSyncEnv(tenant_id="sync_t2", principal_id="agent_sync2") as env:
             env.setup_default_data()
 
-            req = _sync_req(
+            req = SyncAccountsRequest(
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -106,7 +91,7 @@ class TestSyncAccountsUpdate:
             env.setup_default_data()
 
             # Create account first
-            req1 = _sync_req(
+            req1 = SyncAccountsRequest(
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -118,7 +103,7 @@ class TestSyncAccountsUpdate:
             await env.call_impl_async(req=req1)
 
             # Sync again with updated billing
-            req2 = _sync_req(
+            req2 = SyncAccountsRequest(
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -138,19 +123,19 @@ class TestSyncAccountsUpdate:
         with AccountSyncEnv(tenant_id="sync_t4", principal_id="agent_sync4") as env:
             env.setup_default_data()
 
-            entry = [
-                {
-                    "brand": {"domain": "acme.com"},
-                    "operator": "example.com",
-                    "billing": "operator",
-                }
-            ]
-            # Two DISTINCT idempotency keys (via _sync_req) so both requests really
-            # execute against the DB — a SHARED key would (correctly, per 3.1.1)
-            # replay the first "created" response verbatim instead of re-running the
-            # upsert. The point here is the DB-level unchanged-upsert path.
-            await env.call_impl_async(req=_sync_req(accounts=entry))
-            response = await env.call_impl_async(req=_sync_req(accounts=entry))
+            req = SyncAccountsRequest(
+                accounts=[
+                    {
+                        "brand": {"domain": "acme.com"},
+                        "operator": "example.com",
+                        "billing": "operator",
+                    }
+                ],
+            )
+            # Create
+            await env.call_impl_async(req=req)
+            # Sync identical
+            response = await env.call_impl_async(req=req)
 
         assert len(response.accounts) == 1
         assert _action_value(response.accounts[0].action) == "unchanged"
@@ -166,7 +151,7 @@ class TestSyncAccountsAuth:
         with AccountSyncEnv(tenant_id="sync_t5", principal_id="agent_sync5") as env:
             env.setup_default_data()
 
-            req = _sync_req(
+            req = SyncAccountsRequest(
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -188,7 +173,7 @@ class TestSyncAccountsDeleteMissing:
             env.setup_default_data()
 
             # Create two accounts
-            req1 = _sync_req(
+            req1 = SyncAccountsRequest(
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -205,7 +190,7 @@ class TestSyncAccountsDeleteMissing:
             await env.call_impl_async(req=req1)
 
             # Sync with only one account + delete_missing=True
-            req2 = _sync_req(
+            req2 = SyncAccountsRequest(
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -236,7 +221,7 @@ class TestSyncAccountsDryRun:
         with AccountSyncEnv(tenant_id="sync_t7", principal_id="agent_sync7") as env:
             env.setup_default_data()
 
-            req = _sync_req(
+            req = SyncAccountsRequest(
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -260,7 +245,7 @@ class TestSyncAccountsDryRun:
         with AccountSyncEnv(tenant_id="sync_t8", principal_id="agent_sync8") as env:
             env.setup_default_data()
 
-            req = _sync_req(
+            req = SyncAccountsRequest(
                 accounts=[
                     {
                         "brand": {"domain": "dryrun.com"},
@@ -293,7 +278,7 @@ class TestSyncAccountsDryRun:
             env.setup_default_data()
             env.set_approval_mode("credit_review")
 
-            req = _sync_req(
+            req = SyncAccountsRequest(
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                 ],
@@ -327,7 +312,7 @@ class TestSyncAccountsBillingPolicy:
         ) as env:
             env.setup_default_data()
 
-            req = _sync_req(
+            req = SyncAccountsRequest(
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -356,7 +341,7 @@ class TestSyncAccountsBillingPolicy:
         ) as env:
             env.setup_default_data()
 
-            req = _sync_req(
+            req = SyncAccountsRequest(
                 accounts=[
                     {
                         "brand": {"domain": "good.com"},
@@ -391,7 +376,7 @@ class TestSyncAccountsApproval:
         ) as env:
             env.setup_default_data()
 
-            req = _sync_req(
+            req = SyncAccountsRequest(
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -461,7 +446,7 @@ class TestSyncAccountsBillingPolicyTransport:
             env.setup_default_data()
             env.set_billing_policy(["agent"])
 
-            req = _sync_req(
+            req = SyncAccountsRequest(
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                 ],
@@ -488,7 +473,7 @@ class TestSyncAccountsBillingPolicyTransport:
             env.setup_default_data()
             env.set_billing_policy(["agent"])
 
-            req = _sync_req(
+            req = SyncAccountsRequest(
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                 ],
@@ -509,7 +494,7 @@ class TestSyncAccountsBillingPolicyTransport:
         ) as env:
             env.setup_default_data()
 
-            req = _sync_req(
+            req = SyncAccountsRequest(
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                     {"brand": {"domain": "beta.com"}, "operator": "example.com", "billing": "agent"},
@@ -538,7 +523,7 @@ class TestSyncAccountsApprovalTransport:
             env.setup_default_data()
             env.set_approval_mode("credit_review")
 
-            req = _sync_req(
+            req = SyncAccountsRequest(
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                 ],
@@ -563,7 +548,7 @@ class TestSyncAccountsApprovalTransport:
             env.setup_default_data()
             env.set_approval_mode("legal_review")
 
-            req = _sync_req(
+            req = SyncAccountsRequest(
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                 ],
@@ -587,7 +572,7 @@ class TestSyncAccountsApprovalTransport:
         ) as env:
             env.setup_default_data()
 
-            req = _sync_req(
+            req = SyncAccountsRequest(
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                 ],
@@ -631,7 +616,7 @@ class TestSyncAccountsBrandlessEntryRejected:
             env.setup_default_data()
 
             # Accounts3 arm: omits brand entirely → parses with brand=None.
-            req = _sync_req(
+            req = SyncAccountsRequest(
                 accounts=[{"account": {"account_id": "x"}, "operator": "example.com"}],
             )
             result = env.call_via(transport, req=req)
@@ -642,97 +627,3 @@ class TestSyncAccountsBrandlessEntryRejected:
             "VALIDATION_ERROR",
             recovery="correctable",
         )
-
-
-class TestSyncAccountsPushNotificationConfig:
-    """AdCP push_notification_config: forwarded, SSRF-validated, and registered (#1546).
-
-    The MCP wrapper and A2A handler previously accepted the field and then built
-    SyncAccountsRequest without it — silently dropping the buyer's callback. REST
-    already forwarded it. These tests pin the end-to-end behavior for every
-    transport that carries the field into the impl: the callback channel is
-    SSRF-validated and persisted (register-only). Delivering the webhook when a
-    pending_approval account transitions is a documented follow-up (#1546).
-    """
-
-    # IMPL flattens req.push_notification_config directly; A2A/REST/MCP flatten it
-    # through their wrappers (the plumbing under test). All four reach the impl.
-    _PNC_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.REST, Transport.MCP]
-
-    @pytest.mark.parametrize("transport", _PNC_TRANSPORTS, ids=lambda t: t.value)
-    def test_valid_push_config_is_registered(self, integration_db, transport, monkeypatch):
-        """A valid callback URL is persisted for the calling principal on every transport."""
-        from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
-
-        # A loopback receiver is permitted only under the E2E opt-in; an IP literal
-        # needs no DNS resolution, so the SSRF check is deterministic offline.
-        monkeypatch.setenv("ADCP_ALLOW_PRIVATE_WEBHOOKS", "1")
-        callback = "https://127.0.0.1:8443/accounts/hook"
-        tid = f"pnc_ok_{transport.value}"
-        pid = f"agent_pnc_{transport.value}"
-
-        with AccountSyncEnv(tenant_id=tid, principal_id=pid) as env:
-            env.setup_default_data()
-            req = _sync_req(
-                accounts=[{"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"}],
-                push_notification_config={"url": callback},
-            )
-            result = env.call_via(transport, req=req)
-
-            assert result.is_success, f"[{transport.value}] valid push config must not fail: {result.error}"
-
-            rows = env.query(DBPushNotificationConfig, tenant_id=tid, principal_id=pid)
-
-        active = [r for r in rows if r.is_active]
-        assert active, f"[{transport.value}] push callback must be registered, got none"
-        assert any(str(r.url).rstrip("/") == callback.rstrip("/") for r in active), (
-            f"[{transport.value}] registered callback URL mismatch: {[r.url for r in active]}"
-        )
-
-    def test_ssrf_metadata_url_rejected_before_any_write(self, integration_db):
-        """A cloud-metadata callback rejects as VALIDATION_ERROR before any account upsert."""
-        from src.core.database.models import Account as DBAccount
-
-        tid = "pnc_ssrf"
-        pid = "agent_ssrf"
-        with AccountSyncEnv(tenant_id=tid, principal_id=pid) as env:
-            env.setup_default_data()
-            req = _sync_req(
-                accounts=[{"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"}],
-                # 169.254.169.254 (cloud metadata) is blocked in EVERY environment —
-                # no env opt-in or DNS lookup involved.
-                push_notification_config={"url": "http://169.254.169.254/latest/meta-data/"},
-            )
-            result = env.call_via(Transport.REST, req=req)
-
-            assert result.is_error, "SSRF metadata callback must reject the sync"
-            assert_envelope_shape(
-                result.wire_error_envelope,
-                "VALIDATION_ERROR",
-                recovery="correctable",
-            )
-            # SSRF validation runs before the account loop — no partial write survives.
-            assert env.query(DBAccount, tenant_id=tid, principal_id=pid) == [], (
-                "a rejected callback must leave no account rows"
-            )
-
-    def test_dry_run_does_not_register_callback(self, integration_db, monkeypatch):
-        """dry_run previews persist nothing — the callback channel is not registered."""
-        from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
-
-        monkeypatch.setenv("ADCP_ALLOW_PRIVATE_WEBHOOKS", "1")
-        tid = "pnc_dry"
-        pid = "agent_pnc_dry"
-        with AccountSyncEnv(tenant_id=tid, principal_id=pid) as env:
-            env.setup_default_data()
-            req = _sync_req(
-                accounts=[{"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"}],
-                push_notification_config={"url": "https://127.0.0.1:8443/accounts/hook"},
-                dry_run=True,
-            )
-            result = env.call_via(Transport.IMPL, req=req)
-
-            assert result.is_success
-            assert env.query(DBPushNotificationConfig, tenant_id=tid, principal_id=pid) == [], (
-                "dry_run must not persist a push callback"
-            )

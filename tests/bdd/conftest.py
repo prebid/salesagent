@@ -3004,43 +3004,24 @@ def ctx(request: pytest.FixtureRequest, e2e_stack) -> Generator[dict, None, None
                 pass  # already stopped
 
 
-def _setup_existing_media_buy(
-    ctx: dict,
-    env: object,
-    tenant: object,
-    principal: object,
-    product: object,
-    *,
-    media_buy_id: str | None = None,
-    status: str = "pending_approval",
-) -> None:
+def _setup_existing_media_buy(ctx: dict, env: object, tenant: object, principal: object, product: object) -> None:
     """Create an existing media buy + package for UC-003 update scenarios.
 
     Seeds the database with a committed media buy and one package, then
     stores references in ctx so Given/When/Then steps can find them.
     Also registers the package label mapping for Gherkin "pkg_001".
-
-    ``media_buy_id`` seeds a LITERAL id (e.g. "mb_existing") when a scenario
-    asserts on it directly (the revision CONFLICT scenario grades
-    details.resource_id == "mb_existing"); default None lets the factory pick.
-    ``status`` selects the seeded lifecycle state — the revision partitions need
-    "active" so an ``update_budget`` is a valid state-machine action.
     """
     from datetime import UTC, datetime, timedelta
 
     from tests.factories import MediaBuyFactory, MediaPackageFactory
 
-    mb_kwargs: dict = {}
-    if media_buy_id is not None:
-        mb_kwargs["media_buy_id"] = media_buy_id
     mb = MediaBuyFactory(
         tenant=tenant,
         principal=principal,
-        status=status,
+        status="pending_approval",
         currency="USD",
         start_time=datetime.now(UTC),
         end_time=datetime.now(UTC) + timedelta(days=30),
-        **mb_kwargs,
     )
     pkg = MediaPackageFactory(
         media_buy=mb,
@@ -3295,29 +3276,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-003-approval-tenant",
             "T-UC-003-approval-adapter",
         }
-        # Optimistic-concurrency revision scenarios (AdCP 3.1.1). They run the full
-        # update flow through MediaBuyDualEnv against a media buy seeded with the
-        # LITERAL id "mb_existing" (the CONFLICT scenario grades
-        # details.resource_id == "mb_existing") in "active" status (so a budget
-        # update is a valid state-machine action). @revision covers the
-        # partition/boundary outlines; @concurrency covers the success-increment,
-        # independence, and CONFLICT-version scenarios.
-        if marker_names & {"revision", "concurrency"}:
-            from tests.harness.media_buy_dual import MediaBuyDualEnv
-
-            with _db_scope_for(request, e2e_config), MediaBuyDualEnv(e2e_config=e2e_config) as env:
-                tenant, principal, product, pricing_option = env.setup_media_buy_data()
-                ctx["env"] = env
-                ctx["tenant"] = tenant
-                ctx["principal"] = principal
-                ctx["default_product"] = product
-                ctx["default_pricing_option"] = pricing_option
-                _setup_existing_media_buy(
-                    ctx, env, tenant, principal, product, media_buy_id="mb_existing", status="active"
-                )
-                env._seeded_media_buy_id = "mb_existing"
-                yield
-        elif any(t.startswith("T-UC-003-ext-") for t in marker_names) or (marker_names & _UC003_TARGETING_OVERLAY):
+        if any(t.startswith("T-UC-003-ext-") for t in marker_names) or (marker_names & _UC003_TARGETING_OVERLAY):
             # Extension/error scenarios: budget, currency, auth, creative,
             # placement, keyword, and immutable-field validation on the update
             # path. MediaBuyDualEnv extends MediaBuyCreateEnv with update-module
@@ -3372,20 +3331,6 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["default_pricing_option"] = pricing_option
                 ctx["existing_media_buy"] = existing_media_buy
                 yield
-        elif "T-UC-003-v31-error-idempotency-conflict" in marker_names:
-            # DOCUMENTED FOLLOW-UP: update_media_buy's idempotency-replay (and thus
-            # IDEMPOTENCY_CONFLICT detection) is a deliberate deferred fast-follow —
-            # its idempotency_key path is shape-validated-only today. The scenario
-            # further asserts details.current_version == the recorded ETag token
-            # (W/"etag-abc"), but the idempotency cache stores a payload_hash, not a
-            # per-request ETag, so there is no token to echo. Wiring both is out of
-            # scope for the revision/optimistic-concurrency work; xfail with the real
-            # reason rather than the generic non-wired message below.
-            pytest.xfail(
-                "update_media_buy IDEMPOTENCY_CONFLICT + ETag current_version is a deferred fast-follow: "
-                "the idempotency-replay path is not wired for update, and the cache stores a payload_hash "
-                "(no per-request ETag token to echo)"
-            )
         else:
             pytest.xfail(
                 "UC-003 harness not yet wired for non-extension scenarios (full graduation pending, PR #1567 follow-up)"
@@ -3393,16 +3338,14 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}
-        if marker_names & {"account", "creative-invariant", "BR-RULE-034", "idempotency-key"}:
+        if marker_names & {"account", "creative-invariant", "BR-RULE-034"}:
             # CreativeSyncEnv exercises the full sync_creatives transport wrappers.
             # @account scenarios drive account resolution (enrich_identity_with_account());
             # @creative-invariant scenarios (#1399 R3-F2) drive the success-variant
             # response invariants (e.g. all-failed still returns the success variant);
             # @BR-RULE-034 scenarios drive cross-principal isolation (triple-key
             # creative lookup) — dormant until the cross-principal existence-gate
-            # fix (PR #1430 review) made the surface safe to grade;
-            # @idempotency-key scenarios drive the AdCP 3.1.1 required-key boundary
-            # enforcement (require_idempotency_key in the sync_creatives wrappers).
+            # fix (PR #1430 review) made the surface safe to grade.
             from tests.harness.creative_sync import CreativeSyncEnv
 
             with _db_scope_for(request, e2e_config), CreativeSyncEnv(e2e_config=e2e_config) as env:

@@ -34,7 +34,6 @@ class TestSyncCreativesCreativeIdsFilter:
             creatives=[creative],
             creative_ids=["creative_1"],  # Filter to only sync this creative
             dry_run=True,
-            idempotency_key="idem-key-test-0001",
         )
 
         assert request.creative_ids == ["creative_1"]
@@ -55,7 +54,6 @@ class TestSyncCreativesCreativeIdsFilter:
             SyncCreativesRequest(
                 creatives=[creative],
                 patch=True,  # Deprecated - should fail
-                idempotency_key="idem-key-test-0001",
             )
         # ValidationError will mention 'extra' fields are forbidden or 'patch' specifically
         assert "patch" in str(exc_info.value).lower() or "extra" in str(exc_info.value).lower()
@@ -310,7 +308,6 @@ class TestSyncCreativesErrorCases:
             creatives=[creative],
             creative_ids=["nonexistent_1", "nonexistent_2"],  # None match
             dry_run=True,
-            idempotency_key="idem-key-test-0001",
         )
 
         # Schema should accept this - filtering is implementation behavior
@@ -347,7 +344,6 @@ class TestSyncCreativesErrorCases:
             creatives=creatives,
             creative_ids=["creative_1", "nonexistent"],  # Only creative_1 matches
             dry_run=True,
-            idempotency_key="idem-key-test-0001",
         )
 
         assert len(request.creatives) == 2  # Payload preserved
@@ -374,9 +370,7 @@ class TestSyncCreativesErrorCases:
         )
 
         # None = no filter, process all
-        request_no_filter = SyncCreativesRequest(
-            creatives=[creative], dry_run=True, idempotency_key="idem-key-test-0001"
-        )
+        request_no_filter = SyncCreativesRequest(creatives=[creative], dry_run=True)
         assert request_no_filter.creative_ids is None
 
         # adcp 3.6.0: empty list is rejected (MinLen(1) constraint)
@@ -385,7 +379,6 @@ class TestSyncCreativesErrorCases:
                 creatives=[creative],
                 creative_ids=[],
                 dry_run=True,
-                idempotency_key="idem-key-test-0001",
             )
 
         # List with IDs = filter to specific creatives
@@ -393,7 +386,6 @@ class TestSyncCreativesErrorCases:
             creatives=[creative],
             creative_ids=["creative_1"],
             dry_run=True,
-            idempotency_key="idem-key-test-0001",
         )
         assert request_with_filter.creative_ids == ["creative_1"]
 
@@ -624,7 +616,6 @@ class TestDeleteMissingWithCreativeIdsFilter:
             creative_ids=["creative_1"],
             delete_missing=True,
             dry_run=True,
-            idempotency_key="idem-key-test-0001",
         )
 
         assert request.creative_ids == ["creative_1"]
@@ -658,7 +649,6 @@ class TestDeleteMissingWithCreativeIdsFilter:
             creative_ids=["c1", "c2"],  # Filter includes c2 not in payload
             delete_missing=True,
             dry_run=True,
-            idempotency_key="idem-key-test-0001",
         )
 
         # Schema valid - behavior is implementation concern
@@ -722,7 +712,6 @@ class TestUpsertSemantics:
             creatives=[c1, c2],
             creative_ids=["c1"],  # Filter to only c1
             dry_run=True,
-            idempotency_key="idem-key-test-0001",
         )
 
         # Both in payload, but only c1 matches filter
