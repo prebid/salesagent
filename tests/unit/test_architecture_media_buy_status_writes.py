@@ -3,7 +3,7 @@
 Every media-buy status transition MUST flow through ``MediaBuyRepository``
 (``update_status`` / ``apply_status_transition``, or ``update_fields`` for the
 staged status change inside ``update_media_buy``). Those methods bump the AdCP
-3.1.0-beta.3 ``revision`` optimistic-concurrency counter and stamp
+3.1.1 ``revision`` optimistic-concurrency counter and stamp
 ``approved_at`` / ``approved_by`` in one place. A direct
 ``media_buy.status = ...`` / ``.approved_at = ...`` / ``.approved_by = ...``
 assignment in production code skips the bump, so ``revision`` silently goes
@@ -295,7 +295,7 @@ def test_no_direct_media_buy_status_writes_outside_repository():
             "Route the transition through MediaBuyRepository.update_status() "
             "(or apply_status_transition() for an already-loaded cross-tenant row, "
             "or stage it into update_media_buy's pending_field_updates) so the "
-            "AdCP 3.1.0-beta.3 revision counter bumps and approved_at/approved_by "
+            "AdCP 3.1.1 revision counter bumps and approved_at/approved_by "
             "are stamped. See #1544."
         ),
     )

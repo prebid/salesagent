@@ -368,7 +368,7 @@ class TestValidationModeSemantics:
         error-handling.mdx "Not-found precedence" (newest prose at the pin,
         3.1.0-beta.1): the resource-specific code for a creative_id reference
         SHOULD be CREATIVE_NOT_FOUND. Ungraded by storyboard (zero
-        CREATIVE_NOT_FOUND hits in dist/compliance/3.1.0-beta.3).
+        CREATIVE_NOT_FOUND hits in dist/compliance/3.1.1).
 
         Same-surface consistency: the strict-mode raise for the IDENTICAL
         condition already emits CREATIVE_NOT_FOUND on the wire (287c93099,

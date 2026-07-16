@@ -2112,7 +2112,7 @@ class AdCPRequestHandler(RequestHandler):
             reporting_dimensions=req.reporting_dimensions,
             attribution_window=req.attribution_window,
             include_package_daily_breakdown=req.include_package_daily_breakdown,
-            # account is a typed AccountReference on GetMediaBuyDeliveryRequest (adcp SDK 5.7);
+            # account is a typed AccountReference on GetMediaBuyDeliveryRequest (adcp SDK 6.6);
             # forward the validated model field rather than re-coercing the raw dict (#1438).
             account=req.account,
             context=params.get("context"),

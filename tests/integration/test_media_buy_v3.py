@@ -801,7 +801,7 @@ class TestGetMediaBuysResponseFields:
         )
         mb_response = response.media_buys[0]
         assert mb_response.media_buy_id == media_buy_id
-        # SDK 5.7: MediaBuyStatus is plain Enum, not StrEnum; normalize for comparison
+        # Normalize status to str for comparison (handles StrEnum, plain Enum, or test doubles)
         actual_status = mb_response.status.value if hasattr(mb_response.status, "value") else str(mb_response.status)
         assert actual_status == expected, (
             f"Persisted status {persisted_status!r} must be authoritative; "

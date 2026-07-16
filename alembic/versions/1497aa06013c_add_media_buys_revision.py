@@ -1,7 +1,7 @@
 """add media_buys.revision
 
 Persisted monotonic optimistic-concurrency counter for media buys
-(AdCP 3.1.0-beta.3 `revision` response field). A persisted counter — bumped by the
+(AdCP 3.1.1 `revision` response field). A persisted counter — bumped by the
 repository on every successful mutation — is the only way to guarantee
 strict monotonicity: anything derived from timestamps collides when two
 updates land within the clock resolution.

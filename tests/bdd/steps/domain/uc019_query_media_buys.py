@@ -1097,7 +1097,7 @@ def _shift_seeded_windows_to_real_clock(ctx: dict) -> None:
 
     Over e2e transports the server classifies lifecycle status with its real
     clock; the ``today is`` patch can't reach that process. Nor may the clock
-    be pinned over the wire: AdCP 3.1.0-beta.3 deprecates the X-Mock-Time
+    be pinned over the wire: AdCP 3.1.1 deprecates the X-Mock-Time
     testing header — "Sellers MUST NOT alter behavior based on these headers"
     (media-buy/advanced-topics/sandbox.mdx) — so the seeded flight windows are
     the only real time surface. Translate every seeded window by

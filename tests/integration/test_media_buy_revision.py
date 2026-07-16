@@ -1,4 +1,4 @@
-"""Persisted media-buy revision counter on the wire (AdCP 3.1.0-beta.3 fields).
+"""Persisted media-buy revision counter on the wire (AdCP 3.1.1 fields).
 
 ``revision`` is a persisted monotonic counter (``media_buys.revision``), not a
 timestamp-derived value: two updates within the same second MUST still yield
@@ -95,7 +95,7 @@ class TestPersistedRevisionOnTheWire:
 
         Regression for #1544: the update path bumped independently for the
         package set, the budget, and the date range (3 sites), so a combined
-        update jumped the revision by 2-3. AdCP 3.1.0-beta.3 ``revision`` is a per-resource
+        update jumped the revision by 2-3. AdCP 3.1.1 ``revision`` is a per-resource
         version token, so one update must advance it by exactly one.
         """
         from datetime import UTC, datetime, timedelta
@@ -181,7 +181,7 @@ class TestPersistedRevisionOnTheWire:
 class TestRevisionOptimisticConcurrency:
     """req.revision gate: mismatch MUST reject with CONFLICT; match/absent proceed.
 
-    AdCP 3.1.0-beta.3 update-media-buy-request.json ``properties.revision``:
+    AdCP 3.1.1 update-media-buy-request.json ``properties.revision``:
     "When provided, sellers MUST reject the update with CONFLICT if the media
     buy's current revision does not match." (Schema MUST; no conformance
     storyboard step grades it — ungraded. #1544 round-6 review item 1.)

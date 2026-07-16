@@ -279,7 +279,7 @@ class TestRecoveryClassification:
     def test_conflict_error_defaults_to_transient(self):
         """AdCPConflictError defaults to recovery='transient'.
 
-        Pinned AdCP 3.1.0-beta.3 error-code.json enumMetadata: CONFLICT → transient
+        Pinned AdCP 3.1.1 error-code.json enumMetadata: CONFLICT → transient
         ("re-read the resource and retry with current state"). #1544.
         """
         from src.core.exceptions import AdCPConflictError

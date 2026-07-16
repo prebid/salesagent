@@ -220,7 +220,7 @@ class TestUpdateStatus:
 
 
 class TestRevisionBumpsOnStatusTransition:
-    """Every status transition through the repository seam bumps the AdCP 3.1.0-beta.3
+    """Every status transition through the repository seam bumps the AdCP 3.1.1
     ``revision`` counter, and manual approval stamps the confirmation instant.
 
     Regression for #1544: the admin approve/reject routes, the flight-date
@@ -1131,7 +1131,7 @@ class TestExpectedRevisionUnderLock:
     mutation seam — the authoritative backstop, independent of the update tool's
     pre-adapter gate (which holds the same lock in the same UoW).
 
-    AdCP 3.1.0-beta.3 update-media-buy-request.json properties.revision MUST.
+    AdCP 3.1.1 update-media-buy-request.json properties.revision MUST.
     The discriminating case: the mutating session already holds a STALE
     in-memory instance (identity map), another session bumps the row, and the
     seam must still CONFLICT — the locked SELECT re-populates the counter under

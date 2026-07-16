@@ -2187,10 +2187,11 @@ def then_response_confirmed_at_is_iso(ctx: dict) -> None:
     for IMPL) rather than the type-coerced payload — otherwise the ISO-string
     parse never runs (the payload's confirmed_at is already a ``datetime``).
 
-    AdCP 3.1.0-beta.3 media-buy/specification.mdx: a successful synchronous
-    create_media_buy response constitutes order confirmation (prose-MUST;
-    schema-optional in beta.3). The prose/schema divergence is tracked for
-    upstream reconciliation in #1564.
+    AdCP 3.1.1 media-buy/specification.mdx: a successful synchronous
+    create_media_buy response constitutes order confirmation. At 3.1.1
+    ``confirmed_at``/``revision`` are schema-REQUIRED on the success arm
+    (create-media-buy-response.json ``oneOf[0].required``), resolving the
+    beta.3 prose-MUST/schema-optional divergence (#1564).
     """
     body = _serialized_success_body(ctx)
     confirmed_at = body.get("confirmed_at")
@@ -2257,7 +2258,7 @@ def then_valid_actions_are_enum_members(ctx: dict) -> None:
 
     Authority chain: the allowed set is the pinned spec's
     enums/media-buy-valid-action.json; the SDK enum imported here is the
-    CI-pinned derivation of it (adcp==5.7.0 ↔ 3.1.0-beta.3, guarded by
+    CI-pinned derivation of it (adcp==6.6.0 ↔ 3.1.1, guarded by
     tests/unit/test_adcp_spec_version.py) — re-verify against the JSON on an
     SDK bump.
     """

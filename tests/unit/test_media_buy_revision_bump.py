@@ -1,6 +1,6 @@
 """MediaBuyRepository persisted revision counter: bump semantics (unit level).
 
-The AdCP 3.1.0-beta.3 ``revision`` response field is a persisted monotonic
+The AdCP 3.1.1 ``revision`` response field is a persisted monotonic
 optimistic-concurrency counter (``media_buys.revision``), NOT a value derived
 from timestamps — any formula based on ``created_at``/``updated_at`` collides
 when two updates land within the clock resolution.

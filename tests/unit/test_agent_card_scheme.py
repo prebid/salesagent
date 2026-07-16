@@ -44,13 +44,13 @@ def test_agent_card_scheme(host, xfp, expected):
 def test_agent_card_adcp_extension_follows_v2_convention():
     """The A2A agent card's AdCP extension follows the pinned A2A guide's convention.
 
-    Per ``dist/docs/3.1.0-beta.3/building/by-layer/L0/a2a-guide.mdx`` § "AdCP
+    Per ``dist/docs/3.1.0/building/by-layer/L0/a2a-guide.mdx`` § "AdCP
     Extension": the extension URI is the STABLE
     ``https://adcontextprotocol.org/extensions/adcp`` (the versioned
     ``adcp-extension.json`` schema was a v2 artifact, removed in v3, so a
     ``/schemas/<version>/...`` URI addresses nothing), and the card's
     ``adcp_version`` is a v2 static-metadata CONVENTION emitted at full patch
-    precision (e.g. ``3.1.0-beta.3``). It is explicitly NOT subject to the v3
+    precision (e.g. ``3.1.1``). It is explicitly NOT subject to the v3
     envelope release-precision rule — that rule governs the envelope-root
     adcp_version on request/response wire, not this card. Release-precision here
     would also fail the retained deprecated three-component version pattern.

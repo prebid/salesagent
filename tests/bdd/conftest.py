@@ -2230,7 +2230,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # scenarios now realize `today is` on e2e_rest by shifting seeded
         # flight windows onto the real clock (_shift_seeded_windows_to_real_clock
         # in tests/bdd/steps/domain/uc019_query_media_buys.py), since AdCP
-        # 3.1.0-beta.3 deprecates the X-Mock-Time header (sellers MUST NOT
+        # 3.1.1 deprecates the X-Mock-Time header (sellers MUST NOT
         # alter behavior based on it).
         if is_e2e_rest and any(t.startswith("T-UC-019") for t in marker_names):
             _UC019_E2E_MOCK_TAGS: set[str] = {
@@ -2764,7 +2764,7 @@ _IMPL_ONLY: set[tuple[str, str]] = set()
 _UC002_CREATE_WIRED: set[str] = {
     "T-UC-002-v31-idempotency-replay",
     "T-UC-002-v31-idempotency-missing",
-    # AdCP 3.1.0-beta.3 revision/confirmed_at/valid_actions on the sync success arm (#1544)
+    # AdCP 3.1.1 revision/confirmed_at/valid_actions on the sync success arm (#1544)
     "T-UC-002-v31-success-revision-and-actions",
     # Dry-run parity: the simulated success arm carries confirmed_at/revision too,
     # never invokes the adapter, and persists nothing (#1544 round-2 BG-04)
@@ -2775,7 +2775,7 @@ _UC002_CREATE_WIRED: set[str] = {
 # real update through every transport). The rest stay blanket-xfailed in
 # _harness_env until their steps are wired.
 _UC003_WIRED: set[str] = {
-    # AdCP 3.1.0-beta.3 revision counter: successful update increments and returns it (#1544)
+    # AdCP 3.1.1 revision counter: successful update increments and returns it (#1544)
     "T-UC-003-revision-success-increments",
     # NOTE: T-UC-003-partition-revision / T-UC-003-boundary-revision are NOT wired.
     # Their schema-invalid rows (revision below minimum / wrong type) grade
@@ -2795,7 +2795,7 @@ _UC003_WIRED: set[str] = {
 # queries run through every transport). The rest stay blanket-xfailed in
 # _harness_env until their steps are wired.
 _UC019_WIRED: set[str] = {
-    # AdCP 3.1.0-beta.3 revision/confirmed_at invariants (#1544). These scenarios
+    # AdCP 3.1.1 revision/confirmed_at invariants (#1544). These scenarios
     # create a REAL buy (via create_default_buy) and drive real revision/
     # confirmed_at transitions, so they must run on MediaBuyLifecycleEnv (the
     # list-only MediaBuyListEnv has no create_default_buy). Query-only scenarios

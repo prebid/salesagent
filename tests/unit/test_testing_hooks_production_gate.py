@@ -1,7 +1,7 @@
 """P1 (#1544): proprietary X-* test headers must NOT be honored in production.
 
 The pinned AdCP sandbox guidance
-(dist/docs/3.1.0-beta.3/media-buy/advanced-topics/sandbox.mdx) says sellers MUST NOT
+(dist/docs/3.1.0/media-buy/advanced-topics/sandbox.mdx) says sellers MUST NOT
 alter behavior based on X-Dry-Run / X-Mock-Time. Those headers are internal tooling, so
 ``AdCPTestContext.from_headers`` returns None in production (ENVIRONMENT=production),
 meaning no external MCP/A2A caller can activate dry-run against a live seller. Outside

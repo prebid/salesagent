@@ -1,6 +1,6 @@
 """The seller rejection webhook MUST carry ``rejection_reason`` (MCP + A2A).
 
-Pinned AdCP 3.1.0-beta.3 ``core/media-buy.json`` defines ``rejection_reason``
+Pinned AdCP 3.1.1 ``core/media-buy.json`` defines ``rejection_reason``
 ("present only when status is 'rejected'"), and ``specification.mdx`` makes it a
 MUST on the seller rejection notification: the webhook payload MUST include
 ``media_buy_id``, ``status: "rejected"``, and ``rejection_reason``.
