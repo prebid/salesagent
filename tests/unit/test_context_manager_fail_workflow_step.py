@@ -20,7 +20,14 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.core.context_manager import ContextManager
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import (
+    _SANITIZED_INTERNAL_MESSAGE,
+    AdCPConfigurationError,
+    AdCPValidationError,
+    build_two_layer_error_envelope,
+    normalize_to_adcp_error,
+    safe_adcp_error,
+)
 
 
 def _new_ctx_manager_with_mocked_update() -> tuple[ContextManager, MagicMock]:
@@ -45,11 +52,20 @@ def _expected_response_data(
     now uses — so the test asserts on EXACTLY the dict shape
     ``update_workflow_step`` will receive.
     """
-    from src.core.exceptions import AdCPError, build_two_layer_error_envelope
+    from src.core.exceptions import AdCPError
 
     exc = AdCPError(message, field=field, details=details, recovery=recovery)
     exc.error_code = code
     return build_two_layer_error_envelope(exc)
+
+
+def _scrubbed_response_data(exc: Exception) -> dict:
+    """The scrubbed two-layer ``response_data`` the audit helper must emit for an INTERNAL
+    error — built through the exact production policy (``normalize_to_adcp_error`` →
+    ``safe_adcp_error`` → ``build_two_layer_error_envelope``). If the helper stops scrubbing,
+    the raw message survives and no longer matches this expected shape (the mutation reddens).
+    """
+    return build_two_layer_error_envelope(safe_adcp_error(normalize_to_adcp_error(exc)))
 
 
 class TestFailWorkflowStepForExceptionWebhookPayload:
@@ -82,39 +98,41 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
             ),
         )
 
-    def test_untyped_exception_wrapped_with_wire_safe_code(self):
-        """Bare exceptions get a synthetic AdCPError so the wire code stays standard.
+    def test_untyped_internal_error_scrubs_secret_from_webhook_payload(self):
+        """An untyped/internal exception's raw message — which may embed a connection string —
+        is SCRUBBED to the sanitized generic message before it reaches the webhook subscriber.
 
-        ``AdCPError`` defaults to ``INTERNAL_ERROR`` which is in
-        ``INTERNAL_CODES``; the helper's defensive wire-code enforcement
-        falls back to ``SERVICE_UNAVAILABLE`` so async subscribers only see
-        codes from ``STANDARD_ERROR_CODES`` even when the source was untyped.
-        Recovery is transient — the pinned enumMetadata classification of the
-        SERVICE_UNAVAILABLE wire code (salesagent-nr2q).
+        The async webhook path is the twin of the synchronous re-raise scrub; both route
+        internal/infra errors through ``safe_adcp_error`` so ``str(exc)`` never reaches the
+        buyer. The wire code stays standard (SERVICE_UNAVAILABLE) and recovery transient.
         """
         cm, mock_update = _new_ctx_manager_with_mocked_update()
+        secret = "postgresql://svc:hunter2@db.internal/prod"
 
-        cm.audit_workflow_step_failure("step_abc", RuntimeError("kaboom"))
+        cm.audit_workflow_step_failure("step_abc", RuntimeError(secret))
 
+        # error_message + response_data carry the sanitized message, NOT the secret.
         mock_update.assert_called_once_with(
             "step_abc",
             status="failed",
-            error_message="kaboom",
-            response_data=_expected_response_data("SERVICE_UNAVAILABLE", "kaboom", recovery="transient"),
+            error_message=_SANITIZED_INTERNAL_MESSAGE,
+            response_data=_scrubbed_response_data(RuntimeError(secret)),
         )
 
-    def test_empty_exception_message_falls_back_to_type_name(self):
+    def test_config_error_scrubs_secret_from_webhook_payload(self):
+        """``AdCPConfigurationError`` (wire code CONFIGURATION_ERROR) is terminal-internal and
+        also scrubbed — its decryption-failure raise sites can interpolate a secret. Before the
+        shared-policy fix this leg passed through unscrubbed (Codex #3)."""
         cm, mock_update = _new_ctx_manager_with_mocked_update()
+        secret = "postgresql://svc:hunter2@db.internal/prod"
 
-        cm.audit_workflow_step_failure("step_abc", RuntimeError())
+        cm.audit_workflow_step_failure("step_abc", AdCPConfigurationError(f"decrypt failed: {secret}"))
 
-        # Empty message is replaced with type name so the wire envelope and
-        # error_message never carry blank strings.
         mock_update.assert_called_once_with(
             "step_abc",
             status="failed",
-            error_message="RuntimeError",
-            response_data=_expected_response_data("SERVICE_UNAVAILABLE", "RuntimeError", recovery="transient"),
+            error_message=_SANITIZED_INTERNAL_MESSAGE,
+            response_data=_scrubbed_response_data(AdCPConfigurationError(f"decrypt failed: {secret}")),
         )
 
 

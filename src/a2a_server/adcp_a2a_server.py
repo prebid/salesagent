@@ -68,6 +68,7 @@ from src.core.exceptions import (
     AdCPValidationError,
     build_two_layer_error_envelope,
     normalize_to_adcp_error,
+    safe_adcp_error,
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import coerce_creative_filters, to_account_reference, to_brand_reference
@@ -151,58 +152,20 @@ DISCOVERY_SKILLS = frozenset(
 )
 
 
-_SANITIZED_INTERNAL_MESSAGE = "An internal error occurred while processing the request."
-# error.json grades a non-empty TOP-LEVEL suggestion on every error; the scrub
-# replaces the raise site's suggestion (which, like the message, may interpolate
-# internals) with static retry guidance that matches the bucket's transient
-# semantics (#1417 top-level-suggestion conformance).
-_SANITIZED_INTERNAL_SUGGESTION = "Retry the request later; if the problem persists, contact the seller."
-
-
 def _safe_adcp_error(exc: Exception) -> AdCPError:
-    """The single sanitization policy for the A2A boundary.
+    """A2A-boundary handle for the shared sanitization policy ``exceptions.safe_adcp_error``.
 
-    Message safety is decided by ERROR CLASS, not by whether the error is typed —
-    because a *typed* ``AdCPError`` can still carry an interpolated ``str(exc)`` in
-    its message (e.g. reachable handlers do ``AdCPAdapterError(f"...: {e}")`` where
-    ``e`` is a broadly-caught DB/adapter exception carrying a connection string).
-
-    - CLIENT-CORRECTABLE errors (VALIDATION_ERROR, *_NOT_FOUND, AUTH_*,
-      POLICY_VIOLATION, BUDGET_*, RATE_LIMITED, …) carry a controlled, client-facing
-      message that the buyer needs to fix their request → pass through unchanged.
-    - INTERNAL/INFRA errors — the ``wire_error_code == "SERVICE_UNAVAILABLE"`` bucket
-      (base ``AdCPError``, ``AdCPAdapterError`` + subclasses, ``AdCPServiceUnavailableError``,
-      ``AdCPConfigurationError``) — have messages that may embed internals. The message
-      is replaced with a generic one while the wire code + recovery (retry semantics)
-      are PRESERVED via ``AdCPError.synthesize``. The raw message is already logged
-      server-side via ``record_boundary_error`` before we get here.
-    - UNTYPED exceptions → generic ``AdCPError``; ``str(exc)`` never reaches the wire.
-
-    ``wire_error_code == "SERVICE_UNAVAILABLE"`` is the discriminator (not
-    ``recovery == "transient"``, which misses terminal base/Config errors and
-    false-positives on the safe-message ``RateLimit``). Both A2A error paths route
-    through this one helper: the top-level ``_internal_error_for`` (→ JSON-RPC
-    ``InternalError``) and the per-skill ``_build_error_envelope`` (→ failed-Task
-    artifact). Do NOT reintroduce a normalizer that trusts a typed message verbatim.
+    Both A2A error paths route through it: the top-level ``_internal_error_for`` (→ JSON-RPC
+    ``InternalError``) and the per-skill ``_build_error_envelope`` (→ failed-Task artifact).
+    Internal/infra errors — the SERVICE_UNAVAILABLE family AND terminal ``CONFIGURATION_ERROR``
+    (whose secret-decryption raise sites can interpolate a connection string) — are scrubbed to
+    a generic message with wire code/recovery preserved; client-correctable typed errors pass
+    through unchanged. The policy now lives in ``src/core/exceptions.py`` so the webhook push
+    path (``ContextManager.audit_workflow_step_failure``) shares one definition (MCP/REST
+    adoption tracked in #1587). Do NOT reintroduce a normalizer that trusts a typed message
+    verbatim.
     """
-    if isinstance(exc, AdCPError):
-        if exc.wire_error_code == "SERVICE_UNAVAILABLE":
-            # Internal/infra bucket — scrub the (possibly internals-bearing) message,
-            # keep the wire code + recovery so the buyer still gets accurate retry
-            # semantics. Drop details/field and replace the suggestion (raise-site
-            # suggestions can interpolate internals just like messages) with static
-            # retry guidance so the envelope keeps the graded top-level suggestion;
-            # keep context for request correlation.
-            return AdCPError.synthesize(
-                _SANITIZED_INTERNAL_MESSAGE,
-                error_code=exc.error_code,
-                status_code=exc.status_code,
-                recovery=exc.recovery,
-                suggestion=_SANITIZED_INTERNAL_SUGGESTION,
-                context=exc.context,
-            )
-        return exc
-    return AdCPError(_SANITIZED_INTERNAL_MESSAGE, suggestion=_SANITIZED_INTERNAL_SUGGESTION)
+    return safe_adcp_error(exc)
 
 
 def _internal_error_for(operation: str, exc: Exception) -> InternalError:

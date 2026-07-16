@@ -1042,3 +1042,71 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
     if isinstance(exc, PermissionError):
         return AdCPAuthorizationError(str(exc))
     return AdCPError(str(exc) or type(exc).__name__)
+
+
+# Internal/infra wire codes whose raise-site message may embed adapter/DB internals (a
+# connection string, a stack detail) and MUST be scrubbed before reaching ANY buyer-facing
+# wire. The SERVICE_UNAVAILABLE family (base ``AdCPError``, ``AdCPAdapterError`` + subclasses,
+# ``AdCPServiceUnavailableError``) plus terminal ``CONFIGURATION_ERROR`` (seller-side
+# misconfiguration the buyer can't resolve — its decryption-failure raise sites can interpolate
+# a secret) both belong here. Keyed on the wire code, NOT on ``recovery == "transient"`` (which
+# would miss the terminal Config/base errors and false-positive on the safe-message RateLimit).
+INTERNAL_WIRE_CODES: frozenset[str] = frozenset({"SERVICE_UNAVAILABLE", "CONFIGURATION_ERROR"})
+
+_SANITIZED_INTERNAL_MESSAGE = "An internal error occurred while processing the request."
+# error.json grades a non-empty TOP-LEVEL suggestion on every error; the scrub replaces the
+# raise site's suggestion (which, like the message, may interpolate internals) with static
+# retry guidance that matches the bucket's semantics (#1417 top-level-suggestion conformance).
+_SANITIZED_INTERNAL_SUGGESTION = "Retry the request later; if the problem persists, contact the seller."
+
+
+def safe_adcp_error(exc: Exception) -> AdCPError:
+    """Return a wire-safe ``AdCPError`` — THE single sanitization policy for every buyer-facing
+    boundary (A2A failed-Task / JSON-RPC ``InternalError``, and the webhook push path via
+    ``ContextManager.audit_workflow_step_failure``; MCP/REST adoption tracked in #1587).
+
+    Message safety is decided by ERROR CLASS, not by whether the error is typed — a *typed*
+    ``AdCPError`` can still carry an interpolated ``str(exc)`` (e.g. reachable handlers do
+    ``AdCPAdapterError(f"...: {e}")`` where ``e`` is a broadly-caught DB/adapter exception
+    bearing a connection string).
+
+    - INTERNAL/INFRA errors (``wire_error_code in INTERNAL_WIRE_CODES`` — the SERVICE_UNAVAILABLE
+      family AND terminal ``CONFIGURATION_ERROR``): the message is replaced with a controlled
+      generic one while the wire code + recovery + status + context are PRESERVED (accurate
+      retry semantics); ``details``/``field`` are dropped and the suggestion is replaced with
+      static guidance. The raw message is expected to have been logged server-side already.
+    - CLIENT-CORRECTABLE typed errors (VALIDATION_ERROR, ``*_NOT_FOUND``, AUTH_*,
+      POLICY_VIOLATION, BUDGET_*, RATE_LIMITED, …) carry a message the buyer needs to fix their
+      request → pass through unchanged.
+    - A wire code that is not even in ``WIRE_STANDARD_CODES`` (internal-only) must never reach a
+      subscriber: it is coerced to ``SERVICE_UNAVAILABLE`` and its message scrubbed.
+    - UNTYPED exceptions → generic base ``AdCPError``; ``str(exc)`` never reaches the wire.
+    """
+    if not isinstance(exc, AdCPError):
+        return AdCPError(_SANITIZED_INTERNAL_MESSAGE, suggestion=_SANITIZED_INTERNAL_SUGGESTION)
+
+    wire_code = exc.wire_error_code
+    if wire_code in INTERNAL_WIRE_CODES:
+        # Internal/infra — scrub the (possibly internals-bearing) message; keep the wire code +
+        # recovery so the buyer still gets accurate retry semantics; drop details/field and
+        # replace the suggestion (raise-site suggestions can interpolate internals too).
+        return AdCPError.synthesize(
+            _SANITIZED_INTERNAL_MESSAGE,
+            error_code=exc.error_code,
+            status_code=exc.status_code,
+            recovery=exc.recovery,
+            suggestion=_SANITIZED_INTERNAL_SUGGESTION,
+            context=exc.context,
+        )
+    if wire_code not in WIRE_STANDARD_CODES:
+        # An internal-only code the wire doesn't model: coerce to SERVICE_UNAVAILABLE and scrub,
+        # so a subscriber never receives a non-standard code or an internals-bearing message.
+        return AdCPError.synthesize(
+            _SANITIZED_INTERNAL_MESSAGE,
+            error_code="SERVICE_UNAVAILABLE",
+            status_code=exc.status_code,
+            recovery="terminal",
+            suggestion=_SANITIZED_INTERNAL_SUGGESTION,
+            context=exc.context,
+        )
+    return exc
