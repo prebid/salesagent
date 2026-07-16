@@ -586,7 +586,7 @@ class AdCPAccountAmbiguousError(AdCPConflictError):
     """Natural key matches multiple accounts (409, ACCOUNT_AMBIGUOUS)."""
 
     _default_error_code: ClassVar[str] = "ACCOUNT_AMBIGUOUS"
-    # Pinned beta.3 error-code.json: ACCOUNT_AMBIGUOUS → correctable (the buyer
+    # Pinned 3.1.1 error-code.json enumMetadata: ACCOUNT_AMBIGUOUS → correctable (the buyer
     # disambiguates by supplying the exact account), unlike the CONFLICT base which
     # is transient. Explicit override so the base change does not leak here (#1417, #1544).
     _default_recovery: ClassVar[RecoveryHint] = "correctable"

@@ -86,7 +86,7 @@ class TestExtractErrorInfoAdCPError:
         code, message, recovery = extract_error_info(exc)
         assert code == "CONFLICT"
         assert message == "duplicate key"
-        assert recovery == "transient"  # pinned beta.3 error-code.json: CONFLICT → transient. #1544
+        assert recovery == "transient"  # pinned 3.1.1 error-code.json: CONFLICT → transient. #1544
 
     def test_adcp_gone_error_extracts_code_and_message(self):
         """AdCPGoneError → ('INVALID_STATE', 'proposal expired', 'correctable').
@@ -564,7 +564,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")
             assert response.status_code == 409
-            # Pinned beta.3 error-code.json enumMetadata: CONFLICT → transient. #1544.
+            # Pinned 3.1.1 error-code.json enumMetadata: CONFLICT → transient. #1544.
             assert_envelope_shape(response.json(), "CONFLICT", recovery="transient")
 
     def test_adcp_service_unavailable_from_impl_returns_503(self):

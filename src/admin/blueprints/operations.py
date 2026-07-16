@@ -481,7 +481,10 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 if media_buy and media_buy.status in ("pending_approval", "pending_creatives"):
                     # Atomic, single-winner reject: CLAIM buy → rejected (+revision bump),
                     # workflow step terminalized with the rejection artifact, then the
-                    # rejection webhook carrying rejection_reason (a pinned-beta.3 MUST).
+                    # rejection webhook carrying rejection_reason (the pinned 3.1.1 spec
+                    # requires the seller to reject the buy AND propagate the denial
+                    # reason — dist/compliance/3.1.1/domains/media-buy/scenarios/
+                    # governance_denied.yaml).
                     # expected_status is the OBSERVED buy status, so a reject that raced an
                     # approve-hold and observed pending_approval loses (rather than also
                     # succeeding). Same finalizer the workflow reject route uses. #1544.

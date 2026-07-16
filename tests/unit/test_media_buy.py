@@ -1646,12 +1646,25 @@ class TestCreateMediaBuyAdapterInteraction:
             assert status == "completed"
             assert response.media_buy_id is not None
             assert response.media_buy_id.startswith("dry_run_")
-            # Dry-run persists nothing and calls no adapter, so it must NOT fabricate
-            # a confirmation instant or a revision for a resource that never existed.
-            # The pinned beta.3 success branch requires only media_buy_id + packages
-            # (both optional), so oneOf still resolves. #1544.
+            # 3.1.1 create-media-buy-response.json oneOf[0] (CreateMediaBuySuccess)
+            # required = [media_buy_id, confirmed_at, revision, packages], so the
+            # simulated success arm must be CONFORMANT, not thin:
+            #   revision == 1  — correct initial value of a would-be-fresh buy
+            #                    (schema: integer, minimum=1).
+            #   confirmed_at is None on the model (a simulation commits nothing) but,
+            #                    because confirmed_at is a REQUIRED nullable field
+            #                    (["string","null"]), the sandbox serializer emits it
+            #                    as null on the wire so the required key is present.
+            # #1544.
+            assert response.revision == 1
             assert response.confirmed_at is None
-            assert response.revision is None
+            # Wire body: confirmed_at MUST be present-with-null (not omitted by
+            # exclude_none) and revision MUST serialize as 1.
+            wire = response.model_dump(mode="json")
+            assert "confirmed_at" in wire
+            assert wire["confirmed_at"] is None
+            assert wire["revision"] == 1
+            assert wire["sandbox"] is True
 
 
 # ===========================================================================

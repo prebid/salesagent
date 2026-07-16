@@ -414,6 +414,20 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
             elif isinstance(field_value, BaseModel):
                 data[field_name] = field_value.model_dump(mode=info.mode)
 
+        # 3.1.1 create-media-buy-response.json oneOf[0] (CreateMediaBuySuccess)
+        # required = [media_buy_id, confirmed_at, revision, packages]; confirmed_at
+        # is typed ["string", "null"] ("May be null in deferred or manual-approval
+        # flows until seller commitment occurs"). A simulated/sandbox success (the
+        # dry-run arm) confirms nothing, so confirmed_at is honestly null — but the
+        # inherited exclude_none=True would DROP the key, leaving the body missing a
+        # required field. For a sandbox success only, re-emit confirmed_at explicitly
+        # as null so the required key is present-with-null on the wire. The
+        # ``"confirmed_at" not in data`` guard means a real committed instant (a
+        # non-null datetime already in ``data``) is never clobbered. revision already
+        # serializes as a non-null int (>=1). See PR #1544.
+        if getattr(self, "sandbox", False) and "confirmed_at" not in data:
+            data["confirmed_at"] = None
+
         return data
 
     def model_dump_internal(self, **kwargs):

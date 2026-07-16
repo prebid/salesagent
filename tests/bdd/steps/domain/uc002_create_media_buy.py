@@ -2190,8 +2190,11 @@ def then_response_confirmed_at_is_iso(ctx: dict) -> None:
     AdCP 3.1.1 media-buy/specification.mdx: a successful synchronous
     create_media_buy response constitutes order confirmation. At 3.1.1
     ``confirmed_at``/``revision`` are schema-REQUIRED on the success arm
-    (create-media-buy-response.json ``oneOf[0].required``), resolving the
-    beta.3 prose-MUST/schema-optional divergence (#1564).
+    (create-media-buy-response.json ``oneOf[0].required`` =
+    [media_buy_id, confirmed_at, revision, packages]). The divergence tracked in
+    #1564 is that the pinned SDK types ``confirmed_at`` as non-nullable while the
+    spec schema types it ``["string","null"]`` (nullable) — SDK-required-non-nullable
+    vs spec-nullable; a committed success carries a real ISO instant regardless.
     """
     body = _serialized_success_body(ctx)
     confirmed_at = body.get("confirmed_at")
@@ -2340,21 +2343,26 @@ def then_simulated_success(ctx: dict) -> None:
 # then_error.py (shadowed-steps guard forbids a duplicate here).
 
 
-@then("the simulated response should be labelled sandbox and not fabricate confirmed_at or revision")
-def then_dry_run_sandbox_labelled_and_no_fabrication(ctx: dict) -> None:
-    """Internal-tooling correctness for the proprietary X-Dry-Run header (NOT a
-    protocol MUST — the sanctioned test path is account-level sandbox, graded by
-    the @sandbox scenarios). The simulated response is honestly labelled
-    ``sandbox=true``, and since dry-run persists nothing and calls no adapter it
-    does NOT fabricate a confirmation instant or a revision for a resource that
-    never existed. Both fields are optional in the pinned beta.3 create-response
-    success branch (which requires only media_buy_id + packages), so a strict
-    client's oneOf still resolves. #1544.
+@then("the simulated response should be labelled sandbox with revision 1 and confirmed_at null")
+def then_dry_run_sandbox_labelled_conformant(ctx: dict) -> None:
+    """The simulated success arm is a CONFORMANT 3.1.1 create-media-buy success.
+
+    3.1.1 create-media-buy-response.json oneOf[0] (CreateMediaBuySuccess) required =
+    [media_buy_id, confirmed_at, revision, packages], so the dry-run arm cannot be
+    thin. The response is honestly labelled ``sandbox=true`` (the proprietary
+    X-Dry-Run header maps onto the spec's sanctioned account-level ``sandbox`` test
+    concept), and:
+      revision == 1  — correct initial value of a would-be-fresh buy (schema:
+                       integer, minimum=1).
+      confirmed_at is None — a simulation commits nothing; confirmed_at is a REQUIRED
+                       but nullable field (["string","null"], "May be null in deferred
+                       or manual-approval flows"), so the sandbox serializer emits it
+                       as null on the wire (present, not omitted). #1544.
     """
     resp = _require_success_response(ctx)
     assert _get_response_field(resp, "sandbox") is True, "dry-run must be labelled sandbox=true"
-    assert _get_response_field(resp, "confirmed_at") is None, "dry-run must not fabricate confirmed_at"
-    assert _get_response_field(resp, "revision") is None, "dry-run must not fabricate revision"
+    assert _get_response_field(resp, "revision") == 1, "dry-run must carry the initial revision 1"
+    assert _get_response_field(resp, "confirmed_at") is None, "dry-run confirmed_at must be null (nothing committed)"
 
 
 # THEN steps — seller notification (manual-approval wiring, PR #1567 round-2 item 2)

@@ -3668,17 +3668,24 @@ async def _create_media_buy_impl(
                 # the simulated response ``sandbox=True`` so it is honestly labelled
                 # as simulated rather than masquerading as a real create.
                 sandbox=True,
-                # confirmed_at/revision are omitted (None), not fabricated: dry-run
-                # persists nothing and calls no adapter, so there is no real
-                # confirmation instant and no addressable resource to version. The
-                # pinned 3.1.1 create-media-buy-response success branch
-                # requires only media_buy_id + packages (both optional), so a strict
-                # client's oneOf still resolves. Protocol CONFORMANCE testing uses
-                # account-level sandbox accounts, not this header — so the field
-                # omission here is an internal-tooling detail, never graded as a
-                # protocol MUST. See #1544.
+                # 3.1.1 create-media-buy-response.json oneOf[0] (CreateMediaBuySuccess)
+                # required = [media_buy_id, confirmed_at, revision, packages] (verified
+                # against authoritative dist/schemas/3.1.1/media-buy/
+                # create-media-buy-response.json). So the simulated success arm must be
+                # CONFORMANT, not thin:
+                #   revision=1     — the correct initial value of a would-be-fresh buy
+                #                    (schema: integer, minimum=1).
+                #   confirmed_at=None — honest (a simulation commits nothing) AND
+                #                    schema-valid: confirmed_at is typed
+                #                    ["string","null"] and "May be null in deferred or
+                #                    manual-approval flows until seller commitment
+                #                    occurs". The CreateMediaBuySuccess serializer
+                #                    (_base.py) re-emits confirmed_at as null for a
+                #                    sandbox success so exclude_none does not drop the
+                #                    required key — the wire body carries
+                #                    "confirmed_at": null. See #1544.
                 confirmed_at=None,
-                revision=None,
+                revision=1,
             )
             return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
 

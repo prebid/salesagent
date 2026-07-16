@@ -570,7 +570,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/conflict")
         assert response.status_code == 409
-        # Pinned beta.3 error-code.json enumMetadata: CONFLICT → transient. #1544.
+        # Pinned 3.1.1 error-code.json enumMetadata: CONFLICT → transient. #1544.
         assert_envelope_shape(response.json(), "CONFLICT", recovery="transient")
 
     def test_gone_error_returns_410(self, exc_handler_test_app):

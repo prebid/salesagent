@@ -829,15 +829,14 @@ Feature: BR-UC-002 Create Media Buy
     Then the ad server adapter should never be invoked
     And a simulated success should be returned
     And no database records should be created
-    And the simulated response should be labelled sandbox and not fabricate confirmed_at or revision
+    And the simulated response should be labelled sandbox with revision 1 and confirmed_at null
     # BR-RULE-020 INV-5 (v3.1): dry-run validates fully but never calls the adapter or persists.
-    # #1544: X-Dry-Run is proprietary INTERNAL tooling, not an AdCP concept — the spec's only
-    # sanctioned test mode is the account-level ``sandbox`` (see the @sandbox scenarios below,
-    # which grade the real protocol path). So this scenario asserts internal-tooling correctness,
-    # NOT a protocol MUST: the simulated response is honestly labelled sandbox=true, and it does
-    # not fabricate a confirmation instant / revision for a resource that never existed (both are
-    # optional in the pinned beta.3 create-response success branch, which requires only
-    # media_buy_id + packages).
+    # #1544: X-Dry-Run is proprietary INTERNAL tooling mapped onto the spec's sanctioned
+    # account-level ``sandbox`` test concept (see the @sandbox scenarios below). The simulated
+    # response is a CONFORMANT 3.1.1 create-media-buy success: oneOf[0] (CreateMediaBuySuccess)
+    # requires [media_buy_id, confirmed_at, revision, packages], so the arm carries sandbox=true,
+    # revision=1 (initial value of a would-be-fresh buy) and confirmed_at=null (a simulation
+    # commits nothing; confirmed_at is REQUIRED-but-nullable, emitted present-as-null on the wire).
     # --- BR-RULE-026: Creative Assignment Validation ---
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/create-media-buy-request.json
 
