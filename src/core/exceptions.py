@@ -1056,8 +1056,23 @@ INTERNAL_WIRE_CODES: frozenset[str] = frozenset({"SERVICE_UNAVAILABLE", "CONFIGU
 _SANITIZED_INTERNAL_MESSAGE = "An internal error occurred while processing the request."
 # error.json grades a non-empty TOP-LEVEL suggestion on every error; the scrub replaces the
 # raise site's suggestion (which, like the message, may interpolate internals) with static
-# retry guidance that matches the bucket's semantics (#1417 top-level-suggestion conformance).
-_SANITIZED_INTERNAL_SUGGESTION = "Retry the request later; if the problem persists, contact the seller."
+# guidance whose retry semantics MATCH the emitted ``recovery`` (#1417 top-level-suggestion
+# conformance). A single retry-later string is WRONG for a ``terminal`` internal error
+# (CONFIGURATION_ERROR — per 3.1.1 the buyer MUST NOT auto-retry; the seller operator must
+# resolve it): pairing ``recovery: terminal`` with "retry later" emits a self-contradictory
+# envelope. Pick the suggestion by recovery so the two never disagree.
+_SANITIZED_TRANSIENT_SUGGESTION = "Retry the request later; if the problem persists, contact the seller."
+_SANITIZED_TERMINAL_SUGGESTION = (
+    "This request cannot be retried; the seller must resolve the issue before it can succeed. Contact the seller."
+)
+
+
+def _sanitized_suggestion_for(recovery: RecoveryHint) -> str:
+    """Static, internals-free guidance whose retry semantics match ``recovery``: no-retry
+    escalation for ``terminal`` internal errors (seller-side misconfiguration the buyer can't
+    resolve), retry guidance otherwise. Keyed on the SAME ``recovery`` the sanitized error will
+    carry so the suggestion can't contradict it."""
+    return _SANITIZED_TERMINAL_SUGGESTION if recovery == "terminal" else _SANITIZED_TRANSIENT_SUGGESTION
 
 
 def safe_adcp_error(exc: Exception) -> AdCPError:
@@ -1074,7 +1089,9 @@ def safe_adcp_error(exc: Exception) -> AdCPError:
       family AND terminal ``CONFIGURATION_ERROR``): the message is replaced with a controlled
       generic one while the wire code + recovery + status + context are PRESERVED (accurate
       retry semantics); ``details``/``field`` are dropped and the suggestion is replaced with
-      static guidance. The raw message is expected to have been logged server-side already.
+      static guidance whose retry semantics MATCH the preserved recovery — a terminal
+      CONFIGURATION_ERROR gets no-retry/escalation guidance, not "retry later". The raw message
+      is expected to have been logged server-side already.
     - CLIENT-CORRECTABLE typed errors (VALIDATION_ERROR, ``*_NOT_FOUND``, AUTH_*,
       POLICY_VIOLATION, BUDGET_*, RATE_LIMITED, …) carry a message the buyer needs to fix their
       request → pass through unchanged.
@@ -1083,30 +1100,39 @@ def safe_adcp_error(exc: Exception) -> AdCPError:
     - UNTYPED exceptions → generic base ``AdCPError``; ``str(exc)`` never reaches the wire.
     """
     if not isinstance(exc, AdCPError):
-        return AdCPError(_SANITIZED_INTERNAL_MESSAGE, suggestion=_SANITIZED_INTERNAL_SUGGESTION)
+        # Untyped → generic base error; its recovery is the base default (transient), so the
+        # suggestion is picked for that same recovery.
+        return AdCPError(
+            _SANITIZED_INTERNAL_MESSAGE,
+            suggestion=_sanitized_suggestion_for(AdCPError._default_recovery),
+        )
 
     wire_code = exc.wire_error_code
     if wire_code in INTERNAL_WIRE_CODES:
         # Internal/infra — scrub the (possibly internals-bearing) message; keep the wire code +
         # recovery so the buyer still gets accurate retry semantics; drop details/field and
-        # replace the suggestion (raise-site suggestions can interpolate internals too).
+        # replace the suggestion (raise-site suggestions can interpolate internals too) with
+        # guidance matching the PRESERVED recovery — terminal CONFIGURATION_ERROR must not say
+        # "retry later".
         return AdCPError.synthesize(
             _SANITIZED_INTERNAL_MESSAGE,
             error_code=exc.error_code,
             status_code=exc.status_code,
             recovery=exc.recovery,
-            suggestion=_SANITIZED_INTERNAL_SUGGESTION,
+            suggestion=_sanitized_suggestion_for(exc.recovery),
             context=exc.context,
         )
     if wire_code not in WIRE_STANDARD_CODES:
         # An internal-only code the wire doesn't model: coerce to SERVICE_UNAVAILABLE and scrub,
         # so a subscriber never receives a non-standard code or an internals-bearing message.
+        # Marked terminal (the buyer can't model an unknown internal fault), so the suggestion
+        # is the no-retry one.
         return AdCPError.synthesize(
             _SANITIZED_INTERNAL_MESSAGE,
             error_code="SERVICE_UNAVAILABLE",
             status_code=exc.status_code,
             recovery="terminal",
-            suggestion=_SANITIZED_INTERNAL_SUGGESTION,
+            suggestion=_sanitized_suggestion_for("terminal"),
             context=exc.context,
         )
     return exc

@@ -304,6 +304,55 @@ class TestMCPBoundaryAdCPErrorTranslation:
         )
 
 
+class TestSafeAdcpErrorSuggestionMatchesRecovery:
+    """``safe_adcp_error``'s sanitized suggestion must not contradict the preserved recovery.
+
+    The sanitizer scrubs the (possibly secret-bearing) message on every internal error but keeps
+    the wire code + recovery. A terminal ``CONFIGURATION_ERROR`` (per 3.1.1 the buyer MUST NOT
+    auto-retry; a seller operator must resolve it) paired with a "retry the request later"
+    suggestion is a self-contradictory envelope. These pins are authored independently of the
+    module's suggestion CONSTANTS — they assert the semantic ``retry`` property directly — so they
+    are not tautological with the sanitizer that produces the value (the config webhook payload
+    test derives its expected envelope through ``safe_adcp_error`` itself and only checks the
+    generic message, so it can't see this).
+    """
+
+    def test_terminal_config_error_suggestion_does_not_advise_retry(self):
+        from src.core.exceptions import AdCPConfigurationError, safe_adcp_error
+
+        # A raise site that interpolates a secret into a CONFIGURATION_ERROR (recovery=terminal).
+        safe = safe_adcp_error(AdCPConfigurationError("decrypt failed: postgresql://svc:hunter2@db.internal/prod"))
+
+        assert safe.recovery == "terminal", "CONFIGURATION_ERROR recovery must be preserved as terminal"
+        assert "retry" not in safe.suggestion.lower(), (
+            f"a terminal error must not advise the buyer to retry, got: {safe.suggestion!r}"
+        )
+        # The secret is still scrubbed from BOTH message and suggestion.
+        assert "hunter2" not in safe.suggestion
+        assert "hunter2" not in safe.message
+
+    def test_transient_service_unavailable_suggestion_advises_retry(self):
+        from src.core.exceptions import AdCPServiceUnavailableError, safe_adcp_error
+
+        safe = safe_adcp_error(AdCPServiceUnavailableError("db connection pool exhausted"))
+
+        assert safe.recovery == "transient", "SERVICE_UNAVAILABLE recovery must be preserved as transient"
+        assert "retry" in safe.suggestion.lower(), (
+            f"a transient error should advise the buyer to retry, got: {safe.suggestion!r}"
+        )
+
+    def test_untyped_internal_error_advises_retry(self):
+        """An untyped crash sanitizes to a transient base error, so retry guidance is correct."""
+        from src.core.exceptions import safe_adcp_error
+
+        safe = safe_adcp_error(RuntimeError("kaboom postgresql://svc:hunter2@db.internal/prod"))
+
+        assert safe.recovery == "transient"
+        assert "retry" in safe.suggestion.lower()
+        assert "hunter2" not in safe.suggestion
+        assert "hunter2" not in safe.message
+
+
 # ---------------------------------------------------------------------------
 # A2A Boundary: AdCPError → A2AError with proper JSON-RPC error code
 # ---------------------------------------------------------------------------
