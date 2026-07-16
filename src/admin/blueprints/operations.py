@@ -22,6 +22,12 @@ from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
 
+
+def _as_request_dict(value: dict[str, Any] | str | None) -> dict[str, Any]:
+    """Narrow JSONType (dict|str|None) to a dict for .get() / echo_context."""
+    return value if isinstance(value, dict) else {}
+
+
 # Create blueprint
 operations_bp = Blueprint("operations", __name__)
 
@@ -344,8 +350,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
 
             # Extract step data to dict to avoid detached instance errors after commit/nested sessions.
             # JSONType columns are typed as dict|str|None; narrow before echo_context / .get().
-            raw_request = step.request_data
-            request_data: dict[str, Any] = raw_request if isinstance(raw_request, dict) else {}
+            request_data = _as_request_dict(step.request_data)
             step_data = {
                 "step_id": step.step_id,
                 "context_id": step.context_id,
