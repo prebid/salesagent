@@ -2175,7 +2175,17 @@ async def _create_media_buy_impl(
         request_hash = (
             canonical_payload_hash(raw_wire_payload) if raw_wire_payload is not None else canonical_request_hash(req)
         )
-    if req.idempotency_key:
+    # A dry-run MUST always simulate: it has no side effects to deduplicate, so it never
+    # consults the idempotency replay cache. Gating the lookup on ``not dry_run`` is a
+    # correctness invariant, not an optimization — the dry_run simulation branch sits far
+    # below this probe, so without the gate a dry-run whose idempotency_key happened to hit
+    # a cached REAL create would REPLAY that committed buy (returning its real ``buy_`` id)
+    # instead of a fresh ``dry_run_`` simulation, violating INV-5 ("dry-run never invokes the
+    # adapter and persists nothing"; BR-RULE-020). Dry-runs are likewise never WRITTEN to the
+    # cache (the dry_run branch returns before ``_cache_and_return``), so the cache stays a
+    # committed-creates-only record. This probe is therefore reached only for a real
+    # (non-dry-run) create carrying a key.
+    if req.idempotency_key and not testing_ctx.dry_run:
         replay = _lookup_cached_replay(
             tenant["tenant_id"],
             principal_id=principal_id,
