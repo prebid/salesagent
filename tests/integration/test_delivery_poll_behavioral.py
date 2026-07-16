@@ -238,9 +238,11 @@ class TestFinalWebhookSurvivesStatusHandoff:
     just-completed buy was dropped and its FINAL delivery webhook ("one final
     notification when the campaign completes" — optimization-reporting.mdx
     §Publisher Commitment) was never sent. This drives the REAL lifecycle path —
-    the status scheduler THEN the delivery batch — and asserts exactly one "final"
-    wire webhook, sent once. Prior "final" tests seeded an active row with a past
-    flight or called the send helper directly, bypassing this handoff.
+    the status scheduler THEN the delivery batch — and asserts one "final" wire
+    webhook, not re-sent by a subsequent batch (best-effort dedup; a true
+    exactly-once final under concurrent workers / crash is deferred to #1606).
+    Prior "final" tests seeded an active row with a past flight or called the send
+    helper directly, bypassing this handoff.
 
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
     """
@@ -263,15 +265,65 @@ class TestFinalWebhookSurvivesStatusHandoff:
             assert buy.status == "completed", "status scheduler must flip the ended buy to persisted completed"
 
             # 2) The delivery batch runs for real (only the outbound POST is mocked,
-            #    inside the harness). The just-completed buy must still get exactly
-            #    one webhook, and it must be the "final".
+            #    inside the harness). The just-completed buy must still get a webhook,
+            #    and it must be the "final".
             wires = await env.run_delivery_batch()
-            assert len(wires) == 1, "the just-completed buy must still receive exactly one webhook"
+            assert len(wires) == 1, "the just-completed buy must still receive a delivery webhook"
             assert wires[0]["result"]["notification_type"] == "final"
             assert wires[0]["result"]["media_buy_deliveries"][0]["media_buy_id"] == buy.media_buy_id
 
-            # 3) A subsequent batch must NOT re-send the final (durable per-buy gate).
-            assert await env.run_delivery_batch() == [], "the final webhook must be sent exactly once, never re-sent"
+            # 3) A subsequent batch does NOT re-send the final (best-effort per-buy gate).
+            assert await env.run_delivery_batch() == [], "the delivered final must not be re-sent by a later batch"
+
+
+@pytest.mark.requires_db
+class TestForceDoesNotDuplicateDeliveredFinal:
+    """A manual (force=True) trigger must NOT re-send a final that was already delivered.
+
+    ``force`` bypasses the frequency + 24h "scheduled" dedup so an operator can
+    re-send a fresh periodic report — but it must NOT bypass the final-ever gate,
+    or a manual re-trigger of a completed buy would put a DUPLICATE final (with a
+    fresh sequence) on the wire. The gate keys on a *successful* final, so a retry
+    after a FAILED final still goes through. (This is best-effort; a true
+    exactly-once final under concurrent workers / crash is deferred to #1606.)
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
+    """
+
+    @pytest.mark.asyncio
+    async def test_manual_force_trigger_skips_when_final_already_delivered(self, integration_db):
+        from unittest.mock import AsyncMock, patch
+
+        from src.core.database.repositories.delivery import DeliveryRepository
+        from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            # An ended buy -> resolves to canonical "completed" -> its report is a final.
+            buy = _serving_webhook_buy(env, flight="completed")
+
+            # A final was already SUCCESSFULLY delivered for this buy.
+            session = env.get_session()
+            DeliveryRepository(session, "t1").create_log(
+                log_id="prior-final-success",
+                principal_id="p1",
+                media_buy_id=buy.media_buy_id,
+                webhook_url=DAILY_REPORTING_WEBHOOK["url"],
+                task_type="media_buy_delivery",
+                status="success",
+                notification_type="final",
+            )
+            session.commit()
+
+            # Manual trigger uses force=True; the final-ever gate must still fire.
+            scheduler = DeliveryWebhookScheduler()
+            with patch.object(
+                scheduler.webhook_service, "send_notification", new_callable=AsyncMock, return_value=True
+            ) as mock_send:
+                delivered = await scheduler.trigger_report_for_media_buy_by_id(buy.media_buy_id, "t1")
+
+            assert delivered is False, "a manual force trigger must not re-send an already-delivered final"
+            mock_send.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

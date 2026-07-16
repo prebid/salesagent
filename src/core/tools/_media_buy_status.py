@@ -181,8 +181,9 @@ REPORTABLE_CANONICAL_STATUSES: frozenset[str] = frozenset({CANONICAL_SERVING, CA
 # delivery batch runs, so selecting only the serving set would drop the ended buy
 # and the spec-required FINAL webhook ("one final notification when the campaign
 # completes", optimization-reporting.mdx §Publisher Commitment) would never be
-# sent. Selecting completed too lets the batch send exactly one final, gated
-# per-buy by DeliveryRepository.has_successful_final.
+# sent. Selecting completed too lets the batch send the final, de-duplicated on
+# a best-effort basis by DeliveryRepository.has_successful_final (a true
+# exactly-once final under concurrency/crash needs the outbox tracked in #1606).
 REPORTABLE_PERSISTED_STATUSES: frozenset[str] = frozenset(
     k for k, v in PERSISTED_STATUS_TO_CANONICAL.items() if v in REPORTABLE_CANONICAL_STATUSES
 )

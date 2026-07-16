@@ -106,7 +106,8 @@ class DeliveryWebhookScheduler:
                 # status scheduler flips an ended buy to persisted "completed"
                 # within ~60s, long before this hourly batch, so a serving-only
                 # selection would drop it and the buy's spec-required FINAL webhook
-                # would never be sent. The per-buy final gate below sends it once.
+                # would never be sent. The per-buy final gate below de-dups it on a
+                # best-effort basis (true exactly-once is #1606).
                 media_buys = MediaBuyRepository.get_all_by_statuses(session, sorted(REPORTABLE_PERSISTED_STATUSES))
 
                 reports_sent = 0
@@ -173,7 +174,11 @@ class DeliveryWebhookScheduler:
                     logger.warning(f"Cannot trigger report: No reporting_webhook configured for {media_buy_id}")
                     return False
 
-                # Force sending even if already sent today (for testing)
+                # force bypasses the frequency + 24h "scheduled" dedup so an
+                # operator can re-send a fresh periodic report. It does NOT bypass
+                # the final gate: a completed buy whose final was already delivered
+                # is still skipped, so a manual trigger won't duplicate the final on
+                # the read-check path (best-effort; #1606 for true exactly-once).
                 return await self._send_report_for_media_buy(media_buy, reporting_webhook, session, force=True)
         except Exception as e:
             logger.error(f"Error manually triggering report for {media_buy_id}: {e}", exc_info=True)
@@ -188,7 +193,10 @@ class DeliveryWebhookScheduler:
             media_buy: MediaBuy database model
             reporting_webhook: Webhook configuration dict
             session: Database session
-            force: If True, bypass frequency checks and duplicate checks
+            force: If True, bypass frequency + the 24h "scheduled" dedup. Does
+                NOT bypass the final gate, so a manual re-trigger won't emit a
+                duplicate final on the read-check path (best-effort; a crash /
+                concurrency window remains — see #1606).
 
         Returns:
             True when a webhook was actually delivered; False when the buy was
@@ -215,42 +223,51 @@ class DeliveryWebhookScheduler:
             start_date_obj = datetime.now(UTC).date() - timedelta(days=1)
             end_date_obj = datetime.now(UTC)
 
-            # Whether THIS send is the buy's one-and-only "final" notification —
-            # the buy has ended (resolves to canonical "completed"). The batch and
-            # the impl both resolve against today, so this agrees with the
+            # Whether THIS send is the buy's "final" notification — the buy has
+            # ended (resolves to canonical "completed"). The batch and the impl
+            # both resolve against today, so this agrees with the
             # notification_type the impl-derived response will carry below.
             is_final = resolve_canonical_status(media_buy, datetime.now(UTC).date()) == CANONICAL_COMPLETED
 
-            # Dedup gate. The "final" and periodic "scheduled" reports have
-            # DIFFERENT stoppers (#1570):
-            #   - final: sent exactly ONCE per buy, gated durably by a prior
-            #     successful "final" log (no time window). This must fire even
-            #     when a "scheduled" went out in the last 24h — otherwise the
-            #     status scheduler flipping the buy to persisted "completed"
-            #     (~60s after flight end, before this hourly batch) would leave
-            #     the spec-required final permanently unsent.
-            #   - scheduled: 24h rolling dedup on successful sends.
-            if not force:
-                if is_final:
-                    if delivery_repo.has_successful_final(media_buy.media_buy_id, task_type="media_buy_delivery"):
-                        logger.info(
-                            "Final delivery webhook already sent for media buy %s – skipping",
-                            media_buy.media_buy_id,
-                        )
-                        return False
-                else:
-                    one_day_ago = datetime.now(UTC) - timedelta(hours=24)
-                    existing_log = delivery_repo.get_recent_successful_log(
-                        media_buy.media_buy_id, task_type="media_buy_delivery", since=one_day_ago
+            # BEST-EFFORT de-duplication — NOT a hard exactly-once guarantee.
+            #   - final: skip if a SUCCESSFUL "final" was already logged for this
+            #     buy. This gate applies EVEN under ``force`` — a manual re-trigger
+            #     must never put a DUPLICATE final (with a fresh sequence) on the
+            #     wire. It keys on a *successful* final, so a retry after a FAILED
+            #     final still goes through. It also fires regardless of the 24h
+            #     window, so the status scheduler flipping the buy to persisted
+            #     "completed" (~60s after flight end, before this hourly batch)
+            #     can't leave the spec-required final unsent.
+            #   - scheduled: 24h rolling dedup, bypassed by ``force`` so an operator
+            #     can re-send a fresh periodic report on demand.
+            #
+            # This is a READ-then-send check with no atomic reservation, so it does
+            # NOT guarantee exactly-once: two concurrent workers can both observe
+            # "no final" and both send, and a crash (or swallowed log-write) between
+            # a successful POST and the log write leaves no record so a later batch
+            # re-sends. A durable exactly-once final (atomic reserve + sequence
+            # allocation, e.g. an outbox / unique constraint) is tracked in #1606;
+            # until then this is explicitly best-effort.
+            if is_final:
+                if delivery_repo.has_successful_final(media_buy.media_buy_id, task_type="media_buy_delivery"):
+                    logger.info(
+                        "Final delivery webhook already sent for media buy %s – skipping",
+                        media_buy.media_buy_id,
                     )
-                    if existing_log:
-                        logger.info(
-                            "Skipping daily delivery webhook for media buy %s and date %s – already sent (log id %s)",
-                            media_buy.media_buy_id,
-                            end_date_obj,
-                            existing_log.id,
-                        )
-                        return False
+                    return False
+            elif not force:
+                one_day_ago = datetime.now(UTC) - timedelta(hours=24)
+                existing_log = delivery_repo.get_recent_successful_log(
+                    media_buy.media_buy_id, task_type="media_buy_delivery", since=one_day_ago
+                )
+                if existing_log:
+                    logger.info(
+                        "Skipping daily delivery webhook for media buy %s and date %s – already sent (log id %s)",
+                        media_buy.media_buy_id,
+                        end_date_obj,
+                        existing_log.id,
+                    )
+                    return False
 
             # Fetch delivery metrics
             # Create a ResolvedIdentity for the delivery call

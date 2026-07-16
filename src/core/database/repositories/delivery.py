@@ -234,15 +234,18 @@ class DeliveryRepository:
         return result or 0
 
     def has_successful_final(self, media_buy_id: str, *, task_type: str) -> bool:
-        """Whether a successful FINAL delivery webhook has ever been sent for this buy.
+        """Whether a successful FINAL delivery webhook has already been logged for this buy.
 
-        The spec promises "one final notification when the campaign completes"
-        (optimization-reporting.mdx §Publisher Commitment). Because the status
-        scheduler flips an ended buy to persisted "completed" within ~60s — long
-        before the hourly delivery batch — the batch selects completed buys and
-        this DURABLE per-buy check (no time window) is what makes the final send
-        exactly once: it must fire even when a recent "scheduled" would satisfy
-        the 24h dedup, and must NOT re-send on subsequent batches.
+        Backs the delivery scheduler's BEST-EFFORT final de-duplication: the spec
+        promises "one final notification when the campaign completes"
+        (optimization-reporting.mdx §Publisher Commitment), and because the status
+        scheduler flips an ended buy to persisted "completed" within ~60s — before
+        the hourly delivery batch — the batch selects completed buys and skips the
+        final when this returns True (no time window; independent of the 24h
+        "scheduled" dedup). This is a READ-only check, so it does NOT by itself
+        guarantee exactly-once under concurrent workers or a crash between a
+        successful POST and the log write — that needs an atomic reserve / outbox
+        (#1606).
         """
         stmt = select(WebhookDeliveryLog.id).where(
             WebhookDeliveryLog.tenant_id == self._tenant_id,
