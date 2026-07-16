@@ -932,8 +932,9 @@ Feature: BR-UC-019 Query Media Buys
     And the suggestion should contain "omit" or "without the `account` filter"
     # BR-RULE-293 INV-5: validation fails -> no DB query; no partial result leak
 
-  # corrected: INTERNAL_ERROR is internal-only (src/core/exceptions.py INTERNAL_CODES)
-  # and collapses to SERVICE_UNAVAILABLE on the wire — AdCP 3.1.1
+  # CORRECTED to AdCP 3.1.1 enums/error-code.json: SERVICE_UNAVAILABLE is on-wire;
+  # INTERNAL_ERROR is absent from the enum (off-wire). Implementation: src/core/exceptions.py
+  # INTERNAL_CODES collapses INTERNAL_ERROR -> SERVICE_UNAVAILABLE on the wire.
   @T-UC-019-partition-targeting-rehydration @partition @targeting_overlay @schema-v3.1
   Scenario Outline: targeting_overlay rehydration - <partition>
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
@@ -943,8 +944,6 @@ Feature: BR-UC-019 Query Media Buys
     # BR-RULE-294: per-package fail-soft; TypeError caught narrowly; ValidationError NOT caught
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
 
-    # corrected: INTERNAL_ERROR is internal-only (src/core/exceptions.py INTERNAL_CODES)
-    # and collapses to SERVICE_UNAVAILABLE on the wire — AdCP 3.1.1
     Examples: Valid partitions
       | partition                            | persisted_state                                       | expected_outcome                                                                                                                                                |
       | no_targeting_persisted               | no targeting_overlay and no legacy targeting          | the package "pkg-001" targeting_overlay should be null and no error should appear in response.errors[] for "pkg-001"                                            |
@@ -952,8 +951,10 @@ Feature: BR-UC-019 Query Media Buys
       | legacy_targeting_key                 | no targeting_overlay but legacy targeting {geo:['US']} | the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]                                                                            |
       | rehydration_typeerror_partial_success | targeting_overlay set to the string 'not a dict'      | the package "pkg-001" targeting_overlay should be null and response.errors[] should include a SERVICE_UNAVAILABLE entry with message starting "TARGETING_REHYDRATION_FAILED:" |
 
-  # corrected: INTERNAL_ERROR is internal-only (src/core/exceptions.py INTERNAL_CODES)
-  # and collapses to SERVICE_UNAVAILABLE on the wire — AdCP 3.1.1
+  # CORRECTED to AdCP 3.1.1 enums/error-code.json: SERVICE_UNAVAILABLE is on-wire;
+  # INTERNAL_ERROR is absent from the enum (off-wire). Implementation: src/core/exceptions.py
+  # INTERNAL_CODES collapses INTERNAL_ERROR -> SERVICE_UNAVAILABLE on the wire.
+  # graded: unit — tests/unit/test_get_media_buys.py (BDD errors[] steps not wired; scenario dormant/xfail)
   @T-UC-019-inv-294-3 @invariant @BR-RULE-294 @error @schema-v3.1
   Scenario: INV-3 holds - TypeError during Targeting instantiation yields non-fatal SERVICE_UNAVAILABLE + null overlay
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
@@ -1209,8 +1210,9 @@ Feature: BR-UC-019 Query Media Buys
       | sandbox absent in response (production account)         | targets a production account            | should not include a sandbox field         |
       | sandbox: false in response (explicit production)        | targets an explicit production account  | should include sandbox equals false        |
 
-  # corrected: INTERNAL_ERROR is internal-only (src/core/exceptions.py INTERNAL_CODES)
-  # and collapses to SERVICE_UNAVAILABLE on the wire — AdCP 3.1.1
+  # CORRECTED to AdCP 3.1.1 enums/error-code.json: SERVICE_UNAVAILABLE is on-wire;
+  # INTERNAL_ERROR is absent from the enum (off-wire). Implementation: src/core/exceptions.py
+  # INTERNAL_CODES collapses INTERNAL_ERROR -> SERVICE_UNAVAILABLE on the wire.
   @T-UC-019-boundary-targeting-overlay @boundary @targeting_overlay @br-rule-294 @schema-v3.1
   Scenario Outline: targeting_overlay rehydration boundary - <boundary_point>
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
@@ -1219,8 +1221,6 @@ Feature: BR-UC-019 Query Media Buys
     Then <expected_outcome>
     # BR-RULE-294 BVA: per-package fail-soft on TypeError; clean rehydration otherwise
 
-    # corrected: INTERNAL_ERROR is internal-only (src/core/exceptions.py INTERNAL_CODES)
-    # and collapses to SERVICE_UNAVAILABLE on the wire — AdCP 3.1.1
     Examples: Boundary values
       | boundary_point                                                                 | persisted_state                                              | expected_outcome                                                                                                                                                                                                                       |
       | targeting_overlay key absent, targeting key absent                             | no targeting_overlay and no legacy targeting                  | the package "pkg-001" targeting_overlay should be null and no error should appear in response.errors[] for "pkg-001"                                                                                                                    |
