@@ -2140,6 +2140,14 @@ async def _create_media_buy_impl(
 
     testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
 
+    # TEMP DEBUG (#1544) — remove after diagnosis
+    logger.warning(
+        "[E2E-DBG-SRV] impl dry_run=%s idempotency_key=%s po_number=%s",
+        getattr(testing_ctx, "dry_run", None),
+        req.idempotency_key,
+        req.po_number or getattr(req, "buyer_ref", None),
+    )
+
     # Authentication and tenant setup
     principal_id = require_principal_id(identity, context=req.context)
 
@@ -2196,6 +2204,11 @@ async def _create_media_buy_impl(
         )
         if replay is not None:
             logger.info("Idempotency replay: returning cached success for key %s", req.idempotency_key)
+            # TEMP DEBUG (#1544) — remove after diagnosis
+            logger.warning(
+                "[E2E-DBG-SRV] returning-replay media_buy_id=%s replayed=True",
+                getattr(getattr(replay, "response", None), "media_buy_id", None),
+            )
             return replay
         # Miss or unusable cached envelope — proceed as a fresh execution; the
         # MediaBuy backstop resolves any resulting duplicate to the degraded path.
@@ -3697,6 +3710,11 @@ async def _create_media_buy_impl(
                 confirmed_at=None,
                 revision=1,
             )
+            # TEMP DEBUG (#1544) — remove after diagnosis
+            logger.warning(
+                "[E2E-DBG-SRV] returning-dryrun media_buy_id=%s",
+                getattr(simulated_response, "media_buy_id", None),
+            )
             return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
 
         # Call adapter using shared creation logic
@@ -4379,6 +4397,11 @@ async def _create_media_buy_impl(
         )
 
         _buy_result = CreateMediaBuyResult(response=modified_response, status=AdcpTaskStatus.completed.value)
+        # TEMP DEBUG (#1544) — remove after diagnosis
+        logger.warning(
+            "[E2E-DBG-SRV] returning-real media_buy_id=%s",
+            getattr(getattr(_buy_result, "response", None), "media_buy_id", None),
+        )
         return _cache_and_return(_buy_result, req, identity, request_hash)
 
     except AdCPError as adcp_err:

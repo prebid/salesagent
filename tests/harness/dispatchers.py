@@ -19,9 +19,12 @@ from __future__ import annotations
 
 import copy
 import json
+import logging  # TEMP DEBUG (#1544) — remove after diagnosis
 from typing import TYPE_CHECKING, Any
 
 from tests.harness.transport import Transport, TransportResult
+
+_e2e_dbg_logger = logging.getLogger(__name__)  # TEMP DEBUG (#1544) — remove after diagnosis
 
 if TYPE_CHECKING:
     from tests.harness._base import BaseTestEnv
@@ -324,8 +327,34 @@ class RestE2EDispatcher:
 
         body = env.build_rest_body(**kwargs)
 
+        # TEMP DEBUG (#1544) — remove after diagnosis
+        _dbg_body = body if isinstance(body, dict) else {}
+        _e2e_dbg_logger.warning(
+            "[E2E-DBG] client-send scenario=%s method=%s url=%s x-dry-run=%s idempotency_key=%s po_number=%s",
+            getattr(env, "_e2e_scenario_id", None) or getattr(env, "scenario_name", None) or type(env).__name__,
+            method,
+            endpoint,
+            headers.get("x-dry-run"),
+            _dbg_body.get("idempotency_key"),
+            _dbg_body.get("po_number"),
+        )
+
         with e2e_client(env) as client:
             response = getattr(client, method)(endpoint, json=body, headers=headers)
+
+        # TEMP DEBUG (#1544) — remove after diagnosis
+        try:
+            _dbg_json = response.json()
+        except Exception:
+            _dbg_json = None
+        _dbg_json = _dbg_json if isinstance(_dbg_json, dict) else None
+        _e2e_dbg_logger.warning(
+            "[E2E-DBG] client-recv status=%s media_buy_id=%s body_keys=%s raw_media_buy_id_field=%s",
+            response.status_code,
+            (_dbg_json or {}).get("media_buy_id"),
+            list(_dbg_json.keys()) if _dbg_json is not None else None,
+            (_dbg_json or {}).get("media_buy_id"),
+        )
 
         envelope = {
             "transport": "e2e_rest",
