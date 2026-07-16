@@ -96,9 +96,9 @@ class TestSortOrderByName:
     """T-UC-005-inv10: Results sorted by name.
 
     Behavioral contract at creative_formats.py:337. Refactoring during
-    migration could silently reorder results. The pinned SDK 6.6.0 Format model
-    OMITS the `type` field that AdCP 3.1.1 DEFINES (spec/SDK divergence, #1660),
-    so sorting is now by name only.
+    migration could silently reorder results. The Format model's `type`/FormatCategory
+    field was removed from the AdCP spec in the adcp 3.10->3.12 migration, so sorting
+    is now by name only.
     """
 
     def test_sort_order_by_name(self):
@@ -164,11 +164,16 @@ class TestSortOrderByName:
 # ---------------------------------------------------------------------------
 
 
-class TestTypeFilterOmittedBySdk:
-    """T-UC-005-inv2-violated: SDK 6.6.0 omits the `type` filter AdCP 3.1.1 defines (#1660)."""
+class TestTypeFilterIsCreativeAgentRoleBoundary:
+    """T-UC-005-inv2-violated: the media-buy request has no `type` filter (creative-agent role boundary, SDK #971)."""
 
     def test_type_filter_rejected(self):
-        """type= parameter is no longer accepted on ListCreativeFormatsRequest."""
+        """type= parameter is not accepted on the media-buy ListCreativeFormatsRequest.
+
+        The `type` filter (audio/video/display/dooh) is a creative-agent-role field by
+        design (SDK adcp-client-python#971 role boundary), not part of this media-buy
+        contract, so extra=forbid rejects it.
+        """
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError, match="type"):
@@ -313,11 +318,11 @@ class TestAssetTypesFilterChecksGroupAssets:
 # ---------------------------------------------------------------------------
 
 
-class TestPartitionTypeFilterOmittedBySdk:
-    """T-UC-005-partition-type-filter: SDK 6.6.0 omits the `type` filter AdCP 3.1.1 defines (#1660)."""
+class TestPartitionTypeFilterIsCreativeAgentRoleBoundary:
+    """T-UC-005-partition-type-filter: the media-buy request has no `type` filter (creative-agent role boundary, SDK #971)."""
 
     def test_type_filter_no_longer_accepted(self):
-        """type= parameter is not accepted — SDK 6.6.0 ListCreativeFormatsRequest omits it (AdCP 3.1.1 defines it; #1660)."""
+        """type= is not accepted on the media-buy request — `type` is a creative-agent-role field by design (SDK adcp-client-python#971 role boundary)."""
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError, match="type"):

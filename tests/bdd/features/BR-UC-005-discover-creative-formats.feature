@@ -402,18 +402,16 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F2: Error explains minItems violation
     # POST-F3: Suggestion for recovery
 
-  @T-UC-005-ext-b-disclosure-dupes @UC-005-EXT-B-12 @extension @ext-b @error @post-f1 @post-f2 @post-f3
-  Scenario: Duplicate disclosure positions
-    Given the Buyer has tenant context
+  @T-UC-005-ext-b-disclosure-dupes @UC-005-EXT-B-12 @extension @ext-b @post-s1
+  Scenario: Duplicate disclosure positions are silently deduplicated
+    Given a seller with formats supporting various disclosure positions
     When the Buyer Agent requests formats with disclosure_positions filter ["prominent", "prominent"]
-    Then the operation should fail
-    And the error code should be "DISCLOSURE_POSITIONS_DUPLICATES"
-    And the error message should indicate duplicate values are not allowed
-    And the error should include a "suggestion" field
-    And the suggestion should advise removing duplicate positions
-    # POST-F1: Buyer knows the operation failed
-    # POST-F2: Error explains uniqueItems violation
-    # POST-F3: Suggestion for recovery
+    Then the list_creative_formats operation should succeed
+    And the disclosure_positions filter should be deduplicated to ["prominent"]
+    # AdCP 3.1.1 marks disclosure_positions uniqueItems:true; the pinned adcp==6.6.0 codegen
+    # drops that constraint (SDK adcp-client-python#971 — a real codegen bug). Our request
+    # boundary restores it with an order-preserving SILENT dedup (non-breaking), mirroring
+    # the SDK team's upstream fix. Duplicates are removed, not rejected.
     # --- ext-b: Output Format IDs Validation Errors (NEW) ---
 
   @T-UC-005-ext-b-persistence-invalid @extension @ext-b @error @post-f1 @post-f2 @post-f3
@@ -444,18 +442,16 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F3: Suggestion for recovery
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
-  @T-UC-005-ext-b-persistence-dupes @extension @ext-b @error @post-f1 @post-f2 @post-f3
-  Scenario: Duplicate disclosure persistence modes
-    Given the Buyer has tenant context
+  @T-UC-005-ext-b-persistence-dupes @extension @ext-b @post-s1
+  Scenario: Duplicate disclosure persistence modes are silently deduplicated
+    Given a seller with formats supporting various disclosure positions
     When the Buyer Agent requests formats with disclosure_persistence filter ["continuous", "continuous"]
-    Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
-    And the error message should indicate duplicate values are not allowed
-    And the error should include a "suggestion" field
-    And the suggestion should advise removing duplicate persistence modes
-    # POST-F1: Buyer knows the operation failed
-    # POST-F2: Error explains uniqueItems violation
-    # POST-F3: Suggestion for recovery
+    Then the list_creative_formats operation should succeed
+    And the disclosure_persistence filter should be deduplicated to ["continuous"]
+    # AdCP 3.1.1 marks disclosure_persistence uniqueItems:true; the pinned adcp==6.6.0 codegen
+    # drops that constraint (SDK adcp-client-python#971 — a real codegen bug). Our request
+    # boundary restores it with an order-preserving SILENT dedup (non-breaking), mirroring
+    # the SDK team's upstream fix. Duplicates are removed, not rejected.
     # --- ext-b: Output Format IDs Validation Errors (NEW) ---
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
@@ -669,7 +665,12 @@ Feature: BR-UC-005 Discover Creative Formats
       | partition            | expected |
       | unknown_position     | invalid  |
       | empty_array          | invalid  |
-      | duplicate_positions  | invalid  |
+
+    # Duplicates are silently deduped (AdCP 3.1.1 uniqueItems restored; SDK #971), so a
+    # duplicate array is a VALID request, not a rejection.
+    Examples: Deduplicated partitions
+      | partition            | expected |
+      | duplicate_positions  | valid    |
 
   @T-UC-005-partition-disclosure-persistence @partition @disclosure_persistence
   Scenario Outline: Disclosure persistence filter partition - <partition>
@@ -844,7 +845,8 @@ Feature: BR-UC-005 Discover Creative Formats
       | format has no supported_disclosure_positions (excluded)  | valid    |
       | empty array []                                          | invalid  |
       | unknown position string 'sidebar'                       | invalid  |
-      | duplicate positions ['prominent','prominent']           | invalid  |
+      # Duplicates silently deduped (AdCP 3.1.1 uniqueItems restored; SDK #971) -> VALID
+      | duplicate positions ['prominent','prominent']           | valid    |
 
   @T-UC-005-boundary-disclosure-persistence @boundary @disclosure_persistence
   Scenario Outline: Disclosure persistence filter boundary - <boundary_point>
@@ -912,11 +914,12 @@ Feature: BR-UC-005 Discover Creative Formats
       | dooh          | valid    |
       | not_provided  | valid    |
 
-    # Type filter REMOVED in adcp 3.12 — ListCreativeFormatsRequest has no
-    # 'type' field, so every value dispatches unfiltered and production returns
-    # the full catalog. The former 'unknown_value -> invalid' rejection no longer
-    # exists; reconciled to valid (success). salesagent-33r0.
-    Examples: Formerly-invalid partitions (filter removed in 3.12, now valid)
+    # Our list_creative_formats tool uses the media-buy ListCreativeFormatsRequest, which
+    # has no 'type' field — the `type` filter is a creative-agent-role field by design (SDK
+    # adcp-client-python#971 role boundary), not part of this media-buy contract. So every
+    # value dispatches unfiltered and production returns the full catalog; the former
+    # 'unknown_value -> invalid' rejection does not apply here (reconciled to valid).
+    Examples: No type filter on the media-buy request (role boundary — all dispatch unfiltered)
       | partition      | expected |
       | unknown_value  | valid    |
 

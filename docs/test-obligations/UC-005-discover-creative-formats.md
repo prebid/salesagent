@@ -470,15 +470,21 @@ These verify ListCreativeFormatsRequest/Response roundtrip against adcp 3.6.0 sc
 **And** the error message indicates the array must not be empty
 **Priority** P2 -- validation error contract
 
-#### Scenario: Duplicate disclosure positions
+#### Scenario: Duplicate disclosure positions are silently deduplicated
 **Obligation ID** UC-005-EXT-B-12
 **Layer** schema
 
 **Given** the Seller Agent is operational
 **When** the Buyer calls `list_creative_formats` with duplicate values in `disclosure_positions`
-**Then** the response is an error with code `DISCLOSURE_POSITIONS_DUPLICATES`
-**And** the error message identifies the duplicate values
-**Priority** P2 -- validation error contract
+**Then** the duplicate values are silently removed (order-preserving) and the request succeeds
+**And** no error is raised
+**Priority** P2 -- schema coercion contract
+
+> AdCP 3.1.1 marks `disclosure_positions` with `uniqueItems: true`, but the
+> pinned `adcp==6.6.0` codegen drops that constraint. Per the SDK team's official
+> triage of adcontextprotocol/adcp-client-python#971 this is a real codegen bug,
+> fixed upstream with an order-preserving silent dedup (non-breaking) — NOT a
+> rejection. Our request boundary mirrors that dedup pending the SDK release.
 
 #### Scenario: Empty output_format_ids array
 **Obligation ID** UC-005-EXT-B-13

@@ -61,7 +61,9 @@ class TestListCreativeFormatsNewFilters:
             min_height=50,
             max_height=300,
         )
-        # SDK 6.6.0 omits the `type` filter from ListCreativeFormatsRequest (AdCP 3.1.1 defines it; #1660)
+        # The media-buy ListCreativeFormatsRequest has no `type` filter by design —
+        # `type` (audio/video/display/dooh) belongs to the creative-agent-role request
+        # (ListCreativeFormatsRequestCreativeAgent); a role boundary per SDK #971 triage.
         assert req.is_responsive is False
         assert req.name_search == "leaderboard"
         assert req.asset_types is not None
@@ -106,11 +108,71 @@ class TestListCreativeFormatsNewFilters:
             is_responsive=True,
             name_search="banner",
         )
-        # SDK 6.6.0 omits the `type` filter (AdCP 3.1.1 defines it; #1660); format_ids should be None
+        # The media-buy request has no `type` filter by design (role boundary, SDK #971
+        # triage); format_ids should be None
         assert req.format_ids is None
         # New filters should be set
         assert req.is_responsive is True
         assert req.name_search == "banner"
+
+
+class TestDisclosureFilterUniqueItemsDedup:
+    """Duplicate disclosure_positions / disclosure_persistence are silently deduped.
+
+    The authoritative AdCP 3.1.1 list-creative-formats-request schema marks both
+    fields with ``uniqueItems: true``, but datamodel-code-generator drops that
+    constraint in the pinned ``adcp==6.6.0`` models. Our request boundary restores
+    it with an order-preserving silent dedup, mirroring the SDK team's fix for
+    adcontextprotocol/adcp-client-python#971 (real codegen bug; non-breaking dedup).
+    """
+
+    def test_duplicate_disclosure_positions_are_deduped_order_preserving(self):
+        req = ListCreativeFormatsRequest(disclosure_positions=["footer", "prominent", "footer", "prominent"])
+        assert req.disclosure_positions is not None
+        assert [p.value for p in req.disclosure_positions] == ["footer", "prominent"]
+
+    def test_duplicate_disclosure_persistence_are_deduped_order_preserving(self):
+        req = ListCreativeFormatsRequest(disclosure_persistence=["continuous", "continuous", "initial"])
+        assert req.disclosure_persistence is not None
+        assert [p.value for p in req.disclosure_persistence] == ["continuous", "initial"]
+
+    def test_dedup_is_silent_and_non_breaking(self):
+        """Duplicates never raise — dedup succeeds and the request is usable."""
+        req = ListCreativeFormatsRequest(
+            disclosure_positions=["prominent", "prominent"],
+            disclosure_persistence=["initial", "initial"],
+        )
+        assert [p.value for p in req.disclosure_positions] == ["prominent"]
+        assert [p.value for p in req.disclosure_persistence] == ["initial"]
+
+    def test_unique_disclosure_filters_are_preserved_unchanged(self):
+        req = ListCreativeFormatsRequest(
+            disclosure_positions=["prominent", "footer", "audio"],
+        )
+        assert [p.value for p in req.disclosure_positions] == ["prominent", "footer", "audio"]
+
+    def test_none_disclosure_filters_stay_none(self):
+        req = ListCreativeFormatsRequest()
+        assert req.disclosure_positions is None
+        assert req.disclosure_persistence is None
+
+
+class TestMediaBuyRequestHasNoTypeFilter:
+    """Role boundary: the media-buy list_creative_formats request omits `type` by design.
+
+    Per the SDK team's #971 triage the `type` filter (audio/video/display/dooh) lives on
+    the creative-agent-role request (``ListCreativeFormatsRequestCreativeAgent``), NOT the
+    media-buy request our tool uses. This is a role boundary, not an omission or a removed
+    spec feature.
+    """
+
+    def test_media_buy_request_model_has_no_type_field(self):
+        assert "type" not in ListCreativeFormatsRequest.model_fields
+
+    def test_library_media_buy_request_also_has_no_type_field(self):
+        from adcp import ListCreativeFormatsRequest as LibraryRequest
+
+        assert "type" not in LibraryRequest.model_fields
 
 
 class TestListCreativeFormatsMCPToolSignature:

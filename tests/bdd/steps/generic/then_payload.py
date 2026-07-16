@@ -503,12 +503,13 @@ def _assert_filter_content(ctx: dict, field: str, label: str) -> None:
     was_narrowed = bool(registry) and returned_names != registry_names
 
     if field == "type":
-        # SDK 6.6.0 OMITS the `type` filter (AdCP 3.1.1 defines it; spec/SDK
-        # divergence, #1660) -- all partitions dispatch unfiltered requests so
-        # the result should equal the full catalog.
+        # The media-buy ListCreativeFormatsRequest has no `type` filter -- that filter
+        # (audio/video/display/dooh) is a creative-agent-role field by design (SDK
+        # adcp-client-python#971 role boundary), so every type partition dispatches an
+        # unfiltered request and the result should equal the full catalog.
         assert not was_narrowed or len(formats) == 0, (
-            f"{label} 'type': the SDK 6.6.0 request model omits the type filter so the "
-            f"result should equal the full registry. Got {len(formats)} "
+            f"{label} 'type': the media-buy request has no type filter (creative-agent role "
+            f"boundary) so the result should equal the full registry. Got {len(formats)} "
             f"formats vs {len(registry)} in registry. "
             f"Missing: {registry_names - returned_names}"
         )
@@ -680,3 +681,48 @@ def then_boundary_handling_result(ctx: dict, field: str, expected: str) -> None:
     if expected == "valid":
         _assert_returned_formats_subset_of_registry(ctx, field, label="Boundary")
         _assert_filter_content(ctx, field, label="Boundary")
+
+
+# -- Disclosure filter dedup (uniqueItems restoration, SDK adcp-client-python#971) ----
+
+
+@then("the list_creative_formats operation should succeed")
+def then_lcf_operation_succeeds(ctx: dict) -> None:
+    """Assert list_creative_formats completed without error and returned a formats response.
+
+    Used by the disclosure dedup scenarios: a duplicate filter is silently deduped
+    (non-breaking), so the operation SUCCEEDS rather than being rejected.
+    """
+    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a ListCreativeFormatsResponse but ctx['response'] is absent"
+    assert isinstance(resp.formats, list), (
+        f"Expected a 'formats' list on the response, got {type(getattr(resp, 'formats', None)).__name__}"
+    )
+
+
+def _assert_disclosure_filter_deduped(ctx: dict, field: str, expected_json: str) -> None:
+    """Assert the stashed request's disclosure filter was deduped order-preserving.
+
+    The request is constructed via the production ``ListCreativeFormatsRequest`` schema,
+    whose boundary validator restores the AdCP 3.1.1 ``uniqueItems: true`` intent dropped
+    by the pinned SDK codegen (mirrors the SDK #971 dedup fix).
+    """
+    import json
+
+    expected = json.loads(expected_json)
+    req = ctx.get("dispatched_request")
+    assert req is not None, f"Expected the dispatched request to be stashed for the '{field}' dedup assertion"
+    values = getattr(req, field) or []
+    actual = [v.value if isinstance(v, Enum) else str(v) for v in values]
+    assert actual == expected, f"Expected '{field}' deduped to {expected} (order-preserving), got {actual}"
+
+
+@then(parsers.parse("the disclosure_positions filter should be deduplicated to {expected}"))
+def then_disclosure_positions_deduped(ctx: dict, expected: str) -> None:
+    _assert_disclosure_filter_deduped(ctx, "disclosure_positions", expected)
+
+
+@then(parsers.parse("the disclosure_persistence filter should be deduplicated to {expected}"))
+def then_disclosure_persistence_deduped(ctx: dict, expected: str) -> None:
+    _assert_disclosure_filter_deduped(ctx, "disclosure_persistence", expected)

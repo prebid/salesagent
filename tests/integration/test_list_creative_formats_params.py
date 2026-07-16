@@ -101,9 +101,9 @@ def test_filtering_by_format_ids(integration_db):
 def test_filtering_combined(integration_db):
     """Test that multiple filters work together.
 
-    The pinned SDK 6.6.0 request model OMITS the `type` filter that AdCP 3.1.1
-    DEFINES (spec/SDK divergence, #1660), so min_width=500 now returns all formats
-    with width >= 500 regardless of type.
+    The media-buy request has no `type` filter (creative-agent-role field by design,
+    SDK adcp-client-python#971 role boundary), so min_width=500 returns all formats
+    with width >= 500 regardless of category.
     """
     formats = [
         _fmt(
@@ -330,7 +330,8 @@ def test_new_filters_combined_with_existing(integration_db):
         TenantFactory(tenant_id="test_tenant")
         env.set_registry_formats(formats)
 
-        # Combine dimension filter (SDK 6.6.0 omits the `type` filter AdCP 3.1.1 defines, #1660)
+        # Dimension filter only (the media-buy request has no `type` filter — creative-agent
+        # role boundary, SDK adcp-client-python#971)
         req = ListCreativeFormatsRequest(min_width=500)
         response = env.call_impl(req=req)
         assert len(response.formats) == 2

@@ -192,33 +192,32 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME(beads-dul): disclosure_positions filter not implemented in production
     # Note: violated/nofield pass vacuously (field rejected at schema level)
     "T-UC-005-inv-049-8-holds": "disclosure_positions filter not implemented",
-    # ── OWNER-APPROVED TEMPORARY EXCEPTION (branch director) — tracked prebid/salesagent#1660 ──
-    # The UC-005 `type`/uniqueItems xfails below remain SUPPRESSED conformance
-    # failures under the repo zero-tolerance test policy; the implementation is NOT
-    # claimed to conform. They are kept pending the upstream SDK codegen fix
-    # adcontextprotocol/adcp-client-python#971; final prebid-maintainer sign-off is
-    # required at PR review. This designation sits on top of the SDK-codegen-
-    # divergence rationale below and changes no xfail membership or strict flag.
-    # AdCP 3.1.1 DEFINES a `type` filter on list_creative_formats (enum
-    # audio/video/display/dooh) — authoritative schema
-    # dist/schemas/3.1.1/creative/list-creative-formats-request.json. The pinned SDK
-    # adcp==6.6.0 generated its ListCreativeFormatsRequest model from the sibling
-    # media-buy variant, which omits `type`, so the generated request cannot carry a
-    # `type` filter (verified: `type` not in ListCreativeFormatsRequest.model_fields).
-    # These scenarios exercise a real spec feature the pinned model can't honor — an
-    # SDK code-generation divergence (adcontextprotocol/adcp-client-python#971,
-    # prebid/salesagent#1660), NOT a removed/absent spec feature. These xfails predate
-    # #1544; this PR neither adds nor broadens them, it only corrects the previously
-    # inverted rationale. Under the repo zero-tolerance test policy they remain
-    # SUPPRESSED conformance failures — the implementation is NOT claimed to conform;
-    # disposition (keep the legacy xfail vs a local boundary model restoring the `type`
-    # filter, then graduate the scenarios) is a maintainer decision tracked in #1660.
-    "T-UC-005-main-filtered": "SDK 6.6.0 model omits the AdCP 3.1.1 `type` filter — SDK-generation divergence, spec feature unimplemented (#1660)",
-    "T-UC-005-inv-031-1-holds": "SDK 6.6.0 model omits the AdCP 3.1.1 `type` filter — combined type+asset_types AND filter not possible (#1660)",
-    "T-UC-005-inv-031-1-violated": "SDK 6.6.0 model omits the AdCP 3.1.1 `type` filter — combined type+asset_types AND filter not possible (#1660)",
-    "T-UC-005-inv-031-2-holds": "SDK 6.6.0 model omits the AdCP 3.1.1 `type` field — sort by type then name not possible (#1660)",
-    "T-UC-005-inv-049-1-holds": "SDK 6.6.0 model omits the AdCP 3.1.1 `type` filter — SDK-generation divergence (#1660)",
-    "T-UC-005-inv-049-1-violated": "SDK 6.6.0 model omits the AdCP 3.1.1 `type` filter — SDK-generation divergence (#1660)",
+    # ── UC-005 `type` scenarios: creative-agent ROLE BOUNDARY (not an SDK omission) ──
+    # Per the SDK team's official triage of adcontextprotocol/adcp-client-python#971, the
+    # `type` filter (audio/video/display/dooh) is INTENTIONALLY absent from the media-buy
+    # ListCreativeFormatsRequest — it lives on the creative-agent-role request
+    # ListCreativeFormatsRequestCreativeAgent. That is a role boundary BY DESIGN, NOT a
+    # codegen bug and NOT a removed spec feature. Our list_creative_formats tool uses the
+    # media-buy request (verified: `type` not in ListCreativeFormatsRequest.model_fields),
+    # so these scenarios exercise a filter that is not part of our contract by design.
+    #
+    # Correct disposition (per #971 triage) is to RETIRE/REFRAME these as a role-boundary
+    # negative assertion. That retirement is NOT applied here because these three scenarios
+    # are coupled to graded obligation contracts (UC-005-MAIN-MCP-05 filter-by-type,
+    # UC-005-MAIN-MCP-16 combined-with-type, UC-005-MAIN-MCP-04 sort-by-type) that still
+    # encode the pre-removal type behavior; reconciling those obligation contracts (and
+    # regenerating the compiled feature via scripts/compile_bdd.py) is a maintainer-level
+    # change beyond the #971 filter authority. They are kept as honest, NON-owner-approved
+    # xfails until that obligation reconciliation lands. (The two DEDICATED type-filter
+    # scenario outlines with no obligation coupling — partition/boundary-type-filter — are
+    # addressed in the selective-xfail section below.)
+    "T-UC-005-main-filtered": "media-buy list_creative_formats has no `type` filter (creative-agent role boundary, SDK #971 triage); scenario tests a filter absent from our contract by design",
+    "T-UC-005-inv-031-1-holds": "media-buy request has no `type` filter (creative-agent role boundary, SDK #971); type+asset_types AND combination not expressible on our contract",
+    "T-UC-005-inv-031-1-violated": "media-buy request has no `type` filter (creative-agent role boundary, SDK #971); type+asset_types AND combination not expressible on our contract",
+    # inv-031-2 is a SORT scenario, a DIFFERENT truth: the Format MODEL `type`/FormatCategory
+    # field was genuinely removed from the AdCP spec in the adcp 3.10->3.12 migration, so
+    # sort-by-type is no longer applicable (production sorts by name). Not a role boundary.
+    "T-UC-005-inv-031-2-holds": "Format model `type`/FormatCategory field removed from AdCP spec (adcp 3.10->3.12 migration); sort-by-type no longer applicable (production sorts by name)",
     # Un-graduated: T-UC-005-sandbox-happy — sandbox=True not set on response (all transports)
     "T-UC-005-sandbox-happy": "sandbox mode not implemented in list_creative_formats response — spec-production gap",
     # Un-graduated: T-UC-005-sandbox-validation — sandbox validation not triggered (all transports)
@@ -237,16 +236,25 @@ _XFAIL_TAGS: dict[str, str] = {
     # Steps now dispatch through harness — all 34 tests pass across 4 transports.
     # FIXME(beads-dul): suggestion field not in production error model
     # NOTE(ah98 red-step inspection, 2026-07-06): NOT graduatable as-is — the
-    # When step no-ops because the pinned SDK 6.6.0 model omits the AdCP 3.1.1
-    # `type` filter (SDK-generation divergence, #1660), so the scenario
-    # fails on "operation should fail", not on the missing suggestion.
+    # When step dispatches unfiltered because the media-buy ListCreativeFormatsRequest
+    # has no `type` filter (creative-agent role boundary by design, SDK #971 triage),
+    # so the scenario fails on "operation should fail", not on the missing suggestion.
     # Suggestion parity for list_creative_formats is pinned instead by
     # tests/integration/test_request_validation_suggestion_parity.py.
     "T-UC-005-ext-b": "suggestion field not implemented in error responses",
     # FIXME(beads-dul): disclosure validation errors not implemented
+    # NOTE: -dupes GRADUATED — duplicate disclosure_positions/persistence are now silently
+    # deduped order-preserving at the request boundary (AdCP 3.1.1 uniqueItems restored,
+    # mirroring the SDK adcp-client-python#971 dedup fix), so those scenarios PASS.
     "T-UC-005-ext-b-disclosure-invalid": "disclosure_positions validation not implemented",
     "T-UC-005-ext-b-disclosure-empty": "disclosure_positions validation not implemented",
-    "T-UC-005-ext-b-disclosure-dupes": "disclosure_positions validation not implemented",
+    # Persistence variants share the same pre-existing gap as the positions variants above:
+    # production raises a generic VALIDATION_ERROR (Pydantic enum/minItems) without the
+    # spec-specific error code or a buyer-facing `suggestion` field. NOT dedup-related
+    # (dedup graduated); these are the specific-error-code/suggestion gap. They became
+    # runnable once the disclosure_persistence filter When step landed for the dedup work.
+    "T-UC-005-ext-b-persistence-invalid": "disclosure_persistence specific error code/suggestion not implemented",
+    "T-UC-005-ext-b-persistence-empty": "disclosure_persistence specific error code/suggestion not implemented",
     # FIXME(beads-dul): specific error codes (OUTPUT_FORMAT_IDS_EMPTY etc.)
     # not produced by production — Pydantic gives generic VALIDATION_ERROR
     "T-UC-005-ext-b-output-empty": "specific validation error codes not implemented",
@@ -425,38 +433,28 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         "Pre-existing UC-003 targeting-overlay validation gaps (not da07): pydantic "
         "extra='forbid' / GeoProximity coordinate modes / frequency_cap / keyword-dup / device_type overlap",
     ),
-    (
-        "T-UC-005-partition-disclosure",
-        {"duplicate_positions"},
-        "disclosure_positions filter/validation not implemented",
-    ),
-    # Graduated: all_positions, no_matching_formats on impl (disclosure filter now partially works)
-    # Non-impl transports still fail — handled in transport-aware section below.
-    # MCP-specific disclosure xfails are in _MCP_SELECTIVE_XFAIL
-    (
-        "T-UC-005-boundary-disclosure",
-        {"duplicate positions"},
-        "disclosure_positions filter/validation not implemented",
-    ),
-    # Graduated: "all 8 positions", "format has no" on impl (disclosure filter now partially works)
-    # Non-impl transports still fail — handled in transport-aware section below.
-    # MCP-specific boundary disclosure xfails are in _MCP_SELECTIVE_XFAIL
-    # ── OWNER-APPROVED TEMPORARY EXCEPTION (branch director) — tracked prebid/salesagent#1660 ──
-    # The UC-005 `type`-filter selective xfails below remain SUPPRESSED conformance
-    # failures (repo zero-tolerance policy); the implementation is NOT claimed to
-    # conform. Kept pending upstream SDK codegen fix adcp-client-python#971; final
-    # prebid-maintainer sign-off at PR review. No xfail membership / strict-flag change.
-    # SDK 6.6.0 model omits the AdCP 3.1.1 `type` filter — only "invalid" examples fail
-    # (valid rows dispatch unfiltered and pass)
+    # Graduated: the duplicate_positions partition/boundary examples now PASS — duplicate
+    # disclosure_positions are silently deduped order-preserving at the request boundary
+    # (AdCP 3.1.1 uniqueItems restored, mirroring the SDK adcp-client-python#971 fix), so a
+    # duplicate array is a VALID request. The remaining invalid examples (unknown_position,
+    # empty_array) are rejected at the enum/minItems schema level and pass genuinely.
+    # UC-005 `type`-filter dedicated outlines: the media-buy ListCreativeFormatsRequest has
+    # NO `type` filter — it is a creative-agent-role field by design (SDK adcp-client-python#971
+    # triage), NOT an SDK omission of a media-buy feature. Only the "invalid" example rows fail:
+    # they expect production to REJECT an invalid type value, but with no type field to validate,
+    # the request dispatches unfiltered and succeeds. The "valid" rows dispatch unfiltered and
+    # pass. These two outlines carry no obligation coupling (obligation_id: null), so the correct
+    # disposition is a role-boundary reframe/retire; that is surfaced for maintainer sign-off
+    # (it requires regenerating the compiled feature via scripts/compile_bdd.py).
     (
         "T-UC-005-partition-type-filter",
         {"invalid_type"},
-        "SDK 6.6.0 model omits the AdCP 3.1.1 `type` filter — invalid type not rejected (SDK-generation divergence, #1660)",
+        "media-buy list_creative_formats has no `type` filter (creative-agent role boundary, SDK #971); an invalid type value cannot be rejected because the field does not exist on our contract",
     ),
     (
         "T-UC-005-boundary-type-filter",
         {"invalid type (rejected)"},
-        "SDK 6.6.0 model omits the AdCP 3.1.1 `type` filter — invalid type not rejected (SDK-generation divergence, #1660)",
+        "media-buy list_creative_formats has no `type` filter (creative-agent role boundary, SDK #971); an invalid type value cannot be rejected because the field does not exist on our contract",
     ),
     # Graduated: T-UC-005-boundary-asset-types (all 4 transports pass — brief/catalog now in enum)
     # Graduated: T-UC-005-partition-agent-type, T-UC-005-boundary-agent-type,
@@ -485,9 +483,9 @@ _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = []
 # In-process REST now serializes the request body and filters for real, so these
 # UC-005 filter scenarios pass on [rest] like every other transport. The only
 # UC-005 filter tags that still cannot hold are not REST-specific: inv-031-1-holds
-# / inv-031-1-violated stay xfailed via _XFAIL_TAGS because the pinned SDK 6.6.0
-# model omits the AdCP 3.1.1 `type` filter for ALL transports (SDK-generation
-# divergence, #1660 — not a REST body issue).
+# / inv-031-1-violated stay xfailed via _XFAIL_TAGS because the media-buy
+# ListCreativeFormatsRequest has no `type` filter for ANY transport (creative-agent
+# role boundary by design, SDK #971 triage — not a REST body issue).
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -503,55 +501,29 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         is_impl = "[impl]" in nodeid or "[impl-" in nodeid
         is_e2e_rest = "[e2e_rest]" in nodeid or "[e2e_rest-" in nodeid
 
-        # ── OWNER-APPROVED TEMPORARY EXCEPTION (branch director) — tracked prebid/salesagent#1660 ──
-        # The UC-005 `type`/uniqueItems e2e_rest xfails weakened below remain
-        # SUPPRESSED conformance failures (repo zero-tolerance policy); the
-        # implementation is NOT claimed to conform. Kept pending upstream SDK codegen
-        # fix adcp-client-python#971; final prebid-maintainer sign-off at PR review.
-        # No xfail membership or strict-flag changes here.
-        # uc005 type-filter / disclosure-validation scenarios cannot hold as strict
-        # xfails over e2e_rest — but NOT because the body is dropped (build_rest_body
-        # now serializes the request and the live server observes the filters). The
-        # remaining gaps are transport-independent SDK-generation divergences that the
-        # in-process transports xfail strict=True. BOTH features ARE part of
-        # authoritative AdCP 3.1.1:
-        #   * `type` filter (enum audio/video/display/dooh) is DEFINED in
-        #     dist/schemas/3.1.1/creative/list-creative-formats-request.json, but the
-        #     pinned SDK adcp==6.6.0 generated its ListCreativeFormatsRequest from the
-        #     sibling media-buy variant, which omits `type` — so the generated request
-        #     cannot carry a `type` filter (verified: `type` not in model_fields).
-        #   * disclosure_positions / disclosure_persistence carry uniqueItems:true in
-        #     the authoritative 3.1.1 schema, but the SDK generates them as plain
-        #     list[...] with no uniqueItems constraint (verified: duplicate positions
-        #     accepted), so production does not validate uniqueness.
-        # These are SDK code-generation divergences from real 3.1.1 features
-        # (adcontextprotocol/adcp-client-python#971, prebid/salesagent#1660), NOT
-        # removed/absent spec features. Under the repo zero-tolerance test policy they
-        # remain SUPPRESSED conformance failures — the implementation is NOT claimed to
-        # conform; the disposition (keep the legacy xfail vs add a local boundary model
-        # that restores the fields + validation, then graduate the scenarios) is a
-        # maintainer decision tracked in #1660. These xfails predate #1544; this PR
-        # neither adds nor broadens them, it only corrects the previously inverted
-        # rationale. Against the live Docker server these scenarios pass vacuously
-        # (valid rows dispatch unfiltered) rather than failing deterministically, so
-        # strict=True would XPASS — weaken to strict=False to tolerate either outcome.
+        # UC-005 `type`-filter scenarios over e2e_rest: the media-buy
+        # ListCreativeFormatsRequest has no `type` filter — it is a creative-agent-role
+        # field by design (SDK adcp-client-python#971 triage), NOT an SDK omission and NOT
+        # a removed spec feature. In-process transports xfail these strict=True (the field
+        # is absent on our contract for ALL transports); against the live Docker server the
+        # request dispatches unfiltered and the scenario passes vacuously (valid rows), so a
+        # strict xfail would XPASS there — weaken to strict=False to tolerate either outcome.
+        # (Disclosure dedup GRADUATED — those scenarios now pass on every transport, including
+        # e2e_rest where the server re-parses with the same dedup boundary — so they are no
+        # longer listed here.)
         uc005_filter_e2e_untestable = {
-            # `type` filter — real AdCP 3.1.1 feature the SDK 6.6.0 model omits (#1660)
+            # `type` filter — creative-agent-role field, absent from our media-buy contract
+            # by design (SDK #971 role boundary)
             "T-UC-005-inv-031-1-violated",
             "T-UC-005-partition-type-filter",
             "T-UC-005-boundary-type-filter",
-            # disclosure_positions uniqueItems — real 3.1.1 constraint the SDK 6.6.0
-            # generated model does not enforce (#1660)
-            "T-UC-005-partition-disclosure",
-            "T-UC-005-boundary-disclosure",
         }
         uc005_filter_e2e_reason = (
-            "e2e_rest: the `type` filter (AdCP 3.1.1 creative list-creative-formats-request, "
-            "enum audio/video/display/dooh) is omitted by the pinned SDK 6.6.0 model, and "
-            "disclosure_positions uniqueItems (also 3.1.1) is not enforced by the generated "
-            "model — SDK-generation divergences (#1660), NOT absent spec features. These "
-            "transport-independent gaps pass vacuously over the live server, so the strict "
-            "in-process xfail cannot hold here"
+            "e2e_rest: the `type` filter (audio/video/display/dooh) is a creative-agent-role "
+            "field absent from the media-buy ListCreativeFormatsRequest by design (SDK "
+            "adcp-client-python#971 role boundary), NOT an SDK omission or removed spec "
+            "feature. It dispatches unfiltered and passes vacuously over the live server, so "
+            "the strict in-process xfail cannot hold here"
         )
 
         # Graduated: UC-005 creative agent type/asset_type filter tests now pass —

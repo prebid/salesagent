@@ -398,8 +398,9 @@ class CreativeAgentRegistry:
                 typed_asset_types = [AssetType(at) for at in asset_types]
 
             # Build request parameters
-            # Note: the pinned SDK 6.6.0 ListCreativeFormatsRequest OMITS the `type`
-            # filter that AdCP 3.1.1 DEFINES (spec/SDK codegen divergence, #1660);
+            # Note: the media-buy ListCreativeFormatsRequest has no `type` filter — that
+            # filter (audio/video/display/dooh) is a creative-agent-role field by design
+            # (SDK adcp-client-python#971 triage), not part of this media-buy contract;
             # formats are categorized structurally here via assets[].asset_type.
             request = ListCreativeFormatsRequest(
                 max_width=max_width,

@@ -193,9 +193,9 @@ class TestInvalidFormatCategoryEnum:
     def test_unknown_field_rejected(self, integration_db):
         """UC-005-EXT-B-01: unknown fields are rejected by extra=forbid.
 
-        The pinned SDK 6.6.0 ListCreativeFormatsRequest OMITS the `type` field that
-        AdCP 3.1.1 DEFINES (spec/SDK codegen divergence, #1660). Passing it now
-        triggers extra_forbidden validation error.
+        The media-buy ListCreativeFormatsRequest has no `type` field — that filter is a
+        creative-agent-role field by design (SDK adcp-client-python#971 role boundary), not
+        part of this media-buy contract — so passing it triggers an extra_forbidden error.
         """
         with pytest.raises(ValidationError):
             ListCreativeFormatsRequest(type="display")
@@ -203,9 +203,9 @@ class TestInvalidFormatCategoryEnum:
     def test_valid_filters_via_mcp_works(self, integration_db):
         """UC-005-EXT-B-01: MCP wrapper correctly handles valid filter parameters.
 
-        The pinned SDK 6.6.0 request model OMITS the `type` filter that AdCP 3.1.1
-        DEFINES (spec/SDK divergence, #1660). Verify the MCP wrapper handles the
-        remaining valid filters (e.g., name_search) without error.
+        The media-buy request has no `type` filter (creative-agent-role field by design,
+        SDK adcp-client-python#971 role boundary). Verify the MCP wrapper handles the
+        supported media-buy filters (e.g., name_search) without error.
         """
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
@@ -221,8 +221,8 @@ class TestInvalidFormatCategoryEnum:
 
         Ensures the validation correctly accepts valid ListCreativeFormatsRequest construction.
         """
-        # SDK 6.6.0 OMITS the `type` filter from ListCreativeFormatsRequest —
-        # AdCP 3.1.1 DEFINES it (spec/SDK divergence, #1660)
+        # The media-buy ListCreativeFormatsRequest has no `type` filter (creative-agent-role
+        # field by design, SDK adcp-client-python#971 role boundary)
         req = ListCreativeFormatsRequest()
         assert req is not None
 

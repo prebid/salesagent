@@ -99,17 +99,17 @@ def when_send_a2a(ctx: dict) -> None:
 
 @when(parsers.parse('the Buyer Agent sends a list_creative_formats task via A2A with type filter "{type_filter}"'))
 def when_send_a2a_type_filter(ctx: dict, type_filter: str) -> None:
-    # SDK 6.6.0 codegen OMITS the `type` filter — AdCP 3.1.1 DEFINES it (spec/SDK
-    # divergence: adcp-client-python#971, prebid/salesagent#1660); the generated
-    # request model cannot carry it, so dispatch unfiltered pending the SDK fix.
+    # The media-buy ListCreativeFormatsRequest has no `type` filter — that filter is a
+    # creative-agent-role field by design (SDK adcp-client-python#971 role boundary), not
+    # part of this media-buy contract; dispatch unfiltered.
     when_send_a2a_no_filters(ctx)
 
 
 @when(parsers.parse('the Buyer Agent sends a list_creative_formats task via A2A with type "{type_value}"'))
 def when_send_a2a_type_value(ctx: dict, type_value: str) -> None:
-    # SDK 6.6.0 codegen OMITS the `type` filter — AdCP 3.1.1 DEFINES it (spec/SDK
-    # divergence: adcp-client-python#971, prebid/salesagent#1660); the generated
-    # request model cannot carry it, so dispatch unfiltered pending the SDK fix.
+    # The media-buy ListCreativeFormatsRequest has no `type` filter — that filter is a
+    # creative-agent-role field by design (SDK adcp-client-python#971 role boundary), not
+    # part of this media-buy contract; dispatch unfiltered.
     when_send_a2a_no_filters(ctx)
 
 
@@ -128,9 +128,9 @@ def when_call_mcp(ctx: dict) -> None:
 
 @when(parsers.parse('the Buyer Agent calls list_creative_formats MCP tool with type "{type_value}"'))
 def when_call_mcp_type(ctx: dict, type_value: str) -> None:
-    # SDK 6.6.0 codegen OMITS the `type` filter — AdCP 3.1.1 DEFINES it (spec/SDK
-    # divergence: adcp-client-python#971, prebid/salesagent#1660); the generated
-    # request model cannot carry it, so dispatch unfiltered pending the SDK fix.
+    # The media-buy ListCreativeFormatsRequest has no `type` filter — that filter is a
+    # creative-agent-role field by design (SDK adcp-client-python#971 role boundary), not
+    # part of this media-buy contract; dispatch unfiltered.
     when_call_mcp_no_filters(ctx)
 
 
@@ -169,8 +169,8 @@ def when_send_request_invalid_dimensions(ctx: dict) -> None:
 
 @when(parsers.parse('the Buyer Agent requests formats with type "{fmt_type}" and asset_types {asset_types}'))
 def when_request_type_and_asset(ctx: dict, fmt_type: str, asset_types: str) -> None:
-    # SDK 6.6.0 codegen OMITS the `type` filter from ListCreativeFormatsRequest —
-    # AdCP 3.1.1 DEFINES it (spec/SDK divergence, #1660); only asset_types applies.
+    # The media-buy ListCreativeFormatsRequest has no `type` filter (creative-agent-role
+    # field by design, SDK adcp-client-python#971 role boundary); only asset_types applies.
     parsed_assets = json.loads(asset_types)
     try:
         req = ListCreativeFormatsRequest(asset_types=parsed_assets)
@@ -198,8 +198,8 @@ def when_request_asset_types_and_name_search(ctx: dict, asset_types: str, name_s
 @when(parsers.parse('the Buyer Agent requests formats with type filter "{fmt_type}"'))
 @when(parsers.parse('the Buyer Agent requests formats with type "{fmt_type}"'))
 def when_request_type_filter(ctx: dict, fmt_type: str) -> None:
-    # SDK 6.6.0 codegen OMITS the `type` filter from ListCreativeFormatsRequest —
-    # AdCP 3.1.1 DEFINES it (spec/SDK divergence, #1660); dispatch unfiltered.
+    # The media-buy ListCreativeFormatsRequest has no `type` filter (creative-agent-role
+    # field by design, SDK adcp-client-python#971 role boundary); dispatch unfiltered.
     _call(ctx)
 
 
@@ -267,6 +267,20 @@ def when_request_disclosure_positions(ctx: dict, filter_value: str) -> None:
     parsed = json.loads(filter_value)
     try:
         req = ListCreativeFormatsRequest(disclosure_positions=parsed)
+        # Stash the constructed request so dedup (uniqueItems restoration, SDK #971)
+        # can be asserted at the boundary independent of the wire response.
+        ctx["dispatched_request"] = req
+        _call(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+@when(parsers.parse("the Buyer Agent requests formats with disclosure_persistence filter {filter_value}"))
+def when_request_disclosure_persistence(ctx: dict, filter_value: str) -> None:
+    parsed = json.loads(filter_value)
+    try:
+        req = ListCreativeFormatsRequest(disclosure_persistence=parsed)
+        ctx["dispatched_request"] = req
         _call(ctx, req=req)
     except Exception as exc:
         ctx["error"] = exc
@@ -308,9 +322,10 @@ def when_request_input_format_ids(ctx: dict, filter_value: str) -> None:
 def _partition_type(ctx: dict, partition: str) -> None:
     """Map type partition label to filter and call harness.
 
-    The pinned SDK 6.6.0 ListCreativeFormatsRequest OMITS the `type` filter that
-    AdCP 3.1.1 DEFINES (spec/SDK codegen divergence, #1660), so all partitions
-    dispatch an unfiltered request pending the SDK fix.
+    The media-buy ListCreativeFormatsRequest has no `type` filter — that filter
+    (audio/video/display/dooh) is a creative-agent-role field by design (SDK
+    adcp-client-python#971 role boundary), not part of this media-buy contract, so all
+    partitions dispatch an unfiltered request.
     """
     _call(ctx)
 
@@ -760,23 +775,24 @@ def when_boundary_input_ids(ctx: dict, boundary_point: str) -> None:
 
 # ── Creative agent format queries (partition / boundary) ─────────────
 # These test creative-agent-specific format filtering through the same
-# list_creative_formats harness. The pinned SDK 6.6.0 request model OMITS the
-# `type` filter that AdCP 3.1.1 DEFINES (spec/SDK divergence, #1660), so type
-# partitions dispatch unfiltered. Asset type partitions map to
-# the asset_types filter on ListCreativeFormatsRequest.
+# list_creative_formats harness. The media-buy ListCreativeFormatsRequest has no
+# `type` filter — that filter (audio/video/display/dooh) is a creative-agent-role
+# field by design (SDK adcp-client-python#971 triage), not part of the media-buy
+# contract our tool exposes — so type partitions dispatch unfiltered. Asset type
+# partitions map to the asset_types filter on ListCreativeFormatsRequest.
 
 
 def _partition_agent_type(ctx: dict, partition: str) -> None:
-    """Creative agent type filter — OMITTED by SDK 6.6.0, all dispatch unfiltered.
+    """Creative agent type filter — absent from the media-buy request, all dispatch unfiltered.
 
-    The pinned SDK 6.6.0 ``ListCreativeFormatsRequest`` has no ``type`` field —
-    AdCP 3.1.1 DEFINES that filter but the generated model OMITS it (spec/SDK
-    codegen divergence, #1660), so EVERY type partition — including the
-    former 'unknown_value'/'native' rejection cases — carries no field to land on
-    and dispatches the same unfiltered request through the wire. Production no
-    longer rejects any value; it returns the full catalog. The previous code
+    The media-buy ``ListCreativeFormatsRequest`` has no ``type`` field: the `type`
+    filter (audio/video/display/dooh) is a creative-agent-role field by design (SDK
+    adcp-client-python#971 role boundary), NOT an omission of a media-buy feature. So
+    EVERY type partition — including the former 'unknown_value'/'native' rejection
+    cases — carries no field to land on and dispatches the same unfiltered request
+    through the wire. Production returns the full catalog. The previous code
     constructed a test-side ``ValueError`` to fake a rejection production never
-    performs. With the filter absent from the pinned SDK model, these reconcile to
+    performs. With the filter absent from the media-buy contract, these reconcile to
     SUCCESS: dispatch unfiltered via the wire (_call) and let production emit the
     real result. #1417.
     """

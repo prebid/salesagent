@@ -423,9 +423,9 @@ def _list_creative_formats_impl(
                 if getattr(f, attr) and {format_id_identity(fid) for fid in getattr(f, attr)} & requested
             ]
 
-    # Sort formats by name for consistent ordering
-    # (the pinned SDK 6.6.0 Format model OMITS the `type` field that AdCP 3.1.1
-    # DEFINES — spec/SDK codegen divergence, #1660 — so sort-by-type is unavailable)
+    # Sort formats by name for consistent ordering.
+    # (The Format model's `type`/FormatCategory field was removed from the AdCP spec in the
+    # adcp 3.10->3.12 migration, so sort-by-type is no longer applicable — name is the sort key.)
     formats.sort(key=lambda f: f.name or "")
 
     # Ensure backward compatibility: populate both assets and assets_required

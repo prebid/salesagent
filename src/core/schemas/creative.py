@@ -516,11 +516,36 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
         return msg
 
 
+def _coerce_to_unique_enum_list(value: list[Any] | None) -> list[Any] | None:
+    """Order-preserving silent dedup mirroring the SDK's ``coerce_to_unique_enum_list``.
+
+    The authoritative AdCP 3.1.1 list-creative-formats-request schema marks both
+    ``disclosure_positions`` and ``disclosure_persistence`` with ``uniqueItems: true``,
+    but datamodel-code-generator drops that constraint when generating the pinned
+    ``adcp==6.6.0`` models (verified: duplicate enum values are accepted un-deduped).
+    The SDK team's official triage of adcontextprotocol/adcp-client-python#971 confirms
+    this is a real codegen bug (not a spec change) and fixes it upstream with an
+    order-preserving silent dedup (``dict.fromkeys``), which is non-breaking.
+
+    This mirrors that upstream fix at our request boundary pending the SDK release:
+    duplicates are silently removed, first-seen order preserved, and the request
+    still succeeds. ``dict.fromkeys`` is order-preserving on Python 3.7+.
+    """
+    if value is None:
+        return value
+    return list(dict.fromkeys(value))
+
+
 class ListCreativeFormatsRequest(LibraryListCreativeFormatsRequest):
     """Extends library ListCreativeFormatsRequest from AdCP spec.
 
     Inherits all AdCP-compliant fields from adcp library,
     ensuring we stay in sync with spec updates.
+
+    Note: this is the media-buy-role request model. It intentionally has no ``type``
+    filter (audio/video/display/dooh) — that filter belongs to the creative-agent-role
+    request ``ListCreativeFormatsRequestCreativeAgent``, a role boundary by design per
+    the SDK team's #971 triage — not an omission or a removed spec feature.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -530,6 +555,16 @@ class ListCreativeFormatsRequest(LibraryListCreativeFormatsRequest):
     def upgrade_legacy_format_ids(cls, values: dict) -> dict:
         """Convert dict format_ids to FormatId objects (AdCP v2.4 compliance)."""
         return _upgrade_legacy_format_ids(values)
+
+    @field_validator("disclosure_positions", "disclosure_persistence")
+    @classmethod
+    def _dedup_unique_disclosure_filters(cls, value: list[Any] | None) -> list[Any] | None:
+        """Restore the AdCP 3.1.1 ``uniqueItems: true`` intent dropped by SDK codegen.
+
+        Mirrors the SDK's order-preserving silent dedup fix for
+        adcontextprotocol/adcp-client-python#971 on both disclosure filter fields.
+        """
+        return _coerce_to_unique_enum_list(value)
 
 
 class ListCreativeFormatsResponse(NestedModelSerializerMixin, LibraryListCreativeFormatsResponse):
