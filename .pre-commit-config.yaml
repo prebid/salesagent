@@ -65,6 +65,14 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
+      - id: ruff-complexity-no-regression
+        name: "Check ruff complexity counts C901/PLR0912/PLR0915 (no regression)"
+        entry: uv run python .pre-commit-hooks/check_ruff_complexity_count.py
+        language: system
+        files: '^src/.*\.py$'
+        pass_filenames: false
+        stages: [pre-push]
+
       - id: adcp-contract-tests
         name: Verify AdCP protocol compliance
         entry: uv run pytest tests/unit/test_adcp_contract.py -v --tb=short
