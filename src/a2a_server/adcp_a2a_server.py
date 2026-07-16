@@ -1374,10 +1374,10 @@ class AdCPRequestHandler(RequestHandler):
             step = repo.get_by_external_task_id(task_id, principal_id=identity.principal_id)
             if step is None:
                 return None
-            # cancel_if_cancellable (NOT cancel_if_nonterminal) refuses to cancel an
-            # ``approved`` OR ``in_progress`` step: once approved (or once execution has
-            # started its adapter side-effects), irreversible ad-server work is underway,
-            # so a cancel must not strand a real order behind a canceled task.
+            # cancel_if_cancellable refuses to cancel an ``approved`` OR ``in_progress`` step:
+            # once approved (or once execution has started its adapter side-effects), irreversible
+            # ad-server work is underway, so a cancel must not strand a real order behind a
+            # canceled task.
             if not repo.cancel_if_cancellable(step.step_id, completed_at=datetime.now(UTC)):
                 session.rollback()
                 fresh = repo.get_by_step_id(step.step_id)

@@ -15,8 +15,10 @@ from src.core.database.repositories.workflow import (
 )
 
 # Hardcoded expectations (NOT derived from the production constants) so a drift in the
-# source set is caught, not mirrored.
-_CANCELLABLE = {"pending", "requires_approval", "pending_approval"}
+# source set is caught, not mirrored. ``approval`` is the legacy adapter-emitted alias of
+# ``requires_approval`` (a pre-side-effect awaiting-decision state) — cancellable for the same
+# reason, and carried here until the alias is normalized away (#1659).
+_CANCELLABLE = {"pending", "requires_approval", "pending_approval", "approval"}
 # Non-terminal statuses that are nonetheless NOT cancellable because irreversible external
 # work has committed (``approved``) or is underway (``in_progress``).
 _NONCANCELLABLE_NONTERMINAL = {"in_progress", "approved"}
@@ -29,7 +31,7 @@ _TERMINAL = {"completed", "rejected", "failed", "canceled"}
 _APPROVABLE = {"requires_approval", "pending_approval", "approval"}
 
 
-def test_cancellable_set_is_exactly_the_three_pre_sideeffect_statuses():
+def test_cancellable_set_is_exactly_the_pre_sideeffect_statuses():
     assert CANCELLABLE_STEP_STATUSES == _CANCELLABLE
 
 

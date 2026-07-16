@@ -38,9 +38,13 @@ TERMINAL_STEP_STATUSES = frozenset({"completed", "rejected", "failed", "canceled
 #     adapter/business side-effects (media_buy_create.py, media_buy_update.py), so it marks
 #     that irreversible work is already underway; cancelling then would strand external
 #     state behind a canceled task.
+# ``approval`` is the legacy adapter-emitted awaiting-decision alias of ``requires_approval``
+# (GAM/Broadstreet/base_workflow — see APPROVABLE_STEP_STATUSES below): a pre-side-effect state,
+# so it is cancellable for the same reason ``requires_approval`` is. (Normalizing the alias away
+# is tracked in #1659; until then it is carried in BOTH the cancellable and approvable sets.)
 # Terminal statuses are (trivially) excluded too. A cancel is only accepted while the step is
 # still purely pending human/forecasting action, before any side-effects have run.
-CANCELLABLE_STEP_STATUSES = frozenset({"pending", "requires_approval", "pending_approval"})
+CANCELLABLE_STEP_STATUSES = frozenset({"pending", "requires_approval", "pending_approval", "approval"})
 
 # Statuses a step can be approved or rejected FROM — i.e. it is still awaiting a human
 # decision and no irreversible execution has started. Approval/rejection is a compare-and-set
@@ -537,14 +541,15 @@ class WorkflowRepository:
     def cancel_if_cancellable(self, step_id: str, *, completed_at: datetime) -> bool:
         """Atomically cancel a step IFF it is in a CANCELLABLE status.
 
-        The buyer-facing cancel primitive (A2A ``tasks/cancel``). Unlike
-        ``cancel_if_nonterminal``, this refuses to cancel a step once irreversible
-        external work has begun — CANCELLABLE_STEP_STATUSES excludes both
-        ``approved`` (admin-approve commits it before order creation) and
-        ``in_progress`` (the create/update paths persist it before their adapter
-        side-effects), as well as all terminal states — so a cancel can never strand
-        a real order behind a canceled task. Returns True when canceled, False when
-        the step is absent or not in a cancellable status. Does NOT commit.
+        The buyer-facing cancel primitive (A2A ``tasks/cancel``). It refuses to cancel a step
+        once irreversible external work has begun — CANCELLABLE_STEP_STATUSES excludes both
+        ``approved`` (admin-approve commits it before order creation) and ``in_progress`` (the
+        create/update paths persist it before their adapter side-effects), as well as all
+        terminal states — so a cancel can never strand a real order behind a canceled task. The
+        atomicity is a single conditional UPDATE (``_atomic_transition``): the guard is
+        re-evaluated against committed state, so competing writers are safe in either ordering.
+        Returns True when canceled, False when the step is absent or not in a cancellable status.
+        Does NOT commit.
         """
         return (
             self._atomic_transition(
@@ -555,13 +560,3 @@ class WorkflowRepository:
             )
             is not None
         )
-
-    def cancel_if_nonterminal(self, step_id: str, *, completed_at: datetime) -> bool:
-        """Atomically transition a step to ``canceled`` iff it is not already terminal.
-
-        Lower-level terminal-guard specialization (used by repository-level race
-        tests). Production cancel goes through ``cancel_if_cancellable``, which is
-        stricter (refuses ``approved``). Returns True when canceled, False when the
-        step is absent or already terminal. Does NOT commit.
-        """
-        return self.transition_if_nonterminal(step_id, status="canceled", completed_at=completed_at) is not None
