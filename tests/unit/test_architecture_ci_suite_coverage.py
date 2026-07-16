@@ -16,6 +16,7 @@ CI job, or a broken suite can silently land on main again.
 from pathlib import Path
 
 import pytest
+import yaml
 
 from scripts.ci.workflow_helpers import load_ci_workflow
 
@@ -25,6 +26,12 @@ REQUIRED_SUMMARY_GATES = frozenset({"unit-tests", "integration-tests", "e2e-test
 
 _FREE_DISK_USES = "./.github/actions/_free-disk"
 _FREE_DISK_ACTION = Path(__file__).resolve().parents[2] / ".github" / "actions" / "_free-disk" / "action.yml"
+_E2E_COMPOSE = Path(__file__).resolve().parents[2] / "docker-compose.e2e.yml"
+
+
+def _is_adcp_testing_true(value: object) -> bool:
+    """GHA env is always a string at runtime; YAML may parse unquoted ``true`` as bool."""
+    return value is True or str(value).lower() == "true"
 
 
 def _find_free_disk_step(steps: list) -> tuple[int, dict]:
@@ -43,6 +50,13 @@ def _assert_free_disk_action_reclaims_runner() -> None:
     assert text.strip(), f"{_FREE_DISK_ACTION} must not be empty (vacuous pass)."
     assert "/usr/share/dotnet" in text, "_free-disk must remove /usr/share/dotnet."
     assert "docker builder prune" in text, "_free-disk must prune the Docker builder cache."
+
+
+def _load_e2e_compose() -> dict:
+    assert _E2E_COMPOSE.is_file(), f"missing {_E2E_COMPOSE}"
+    data = yaml.safe_load(_E2E_COMPOSE.read_text(encoding="utf-8"))
+    assert isinstance(data, dict) and data.get("services"), f"{_E2E_COMPOSE} must declare services."
+    return data
 
 
 class TestCISuiteCoverage:
@@ -252,9 +266,16 @@ class TestCISuiteCoverage:
 
         Regression: clearing ADCP_TESTING forced docker_services_e2e into the
         standalone build+up path inside pytest setup, which pytest-timeout=300
-        killed on cold runners (~40 setup ERRORs).
+        killed on cold runners (~40 setup ERRORs). Inheritance alone is not
+        durable — the pytest step must pin ADCP_TESTING=true (#1669).
         """
-        job = load_ci_workflow()["jobs"]["e2e-tests"]
+        workflow = load_ci_workflow()
+        workflow_env = workflow.get("env") or {}
+        assert _is_adcp_testing_true(workflow_env.get("ADCP_TESTING")), (
+            "workflow env must set ADCP_TESTING true (pytest inherits when step omits it)."
+        )
+
+        job = workflow["jobs"]["e2e-tests"]
         steps = job.get("steps", [])
         assert steps, "e2e-tests must declare steps (empty job is a vacuous pass)."
 
@@ -268,20 +289,26 @@ class TestCISuiteCoverage:
         prestart_env = prestart.get("env") or {}
         assert "creative-agent-stack.sh build" in prestart_run, "Pre-start must build the pinned creative-agent image."
         assert "up -d --wait" in prestart_run, "Pre-start must use compose up --wait (healthcheck gate)."
-        assert prestart_env.get("ADCP_TESTING") == "true", "Pre-start must set ADCP_TESTING=true."
+        assert "--wait-timeout 600" in prestart_run, "Pre-start must budget --wait-timeout 600 for migrations."
+        assert "curl -sf" in prestart_run and "/health" in prestart_run, (
+            "Pre-start must curl /health after up --wait (post-up readiness check)."
+        )
+        assert _is_adcp_testing_true(prestart_env.get("ADCP_TESTING")), "Pre-start must set ADCP_TESTING=true."
 
         pytest_steps = [
             s for s in steps if "pytest" in str(s.get("uses", "")).lower() or "tests/e2e" in str(s.get("with", {}))
         ]
         assert pytest_steps, "e2e-tests must invoke pytest on tests/e2e/."
         pytest_env = pytest_steps[0].get("env") or {}
-        # Absent inherits workflow ADCP_TESTING: true. Explicit values must stay true —
-        # empty/false forces docker_services_e2e into cold-build under pytest-timeout.
-        if "ADCP_TESTING" in pytest_env:
-            assert pytest_env["ADCP_TESTING"] == "true", (
-                f"e2e-tests pytest must keep ADCP_TESTING=true (got {pytest_env['ADCP_TESTING']!r}); "
-                "empty/false forces fixture cold-build under pytest-timeout."
-            )
+        # Explicit pin — do not treat "key absent → inherits workflow" as sufficient.
+        assert "ADCP_TESTING" in pytest_env, (
+            "e2e-tests pytest must set ADCP_TESTING explicitly "
+            "(absent key makes the inheritance path untested / vacuous)."
+        )
+        assert _is_adcp_testing_true(pytest_env["ADCP_TESTING"]), (
+            f"e2e-tests pytest must keep ADCP_TESTING=true (got {pytest_env['ADCP_TESTING']!r}); "
+            "empty/false forces fixture cold-build under pytest-timeout."
+        )
         extra = str(pytest_steps[0].get("with", {}).get("extra_args", ""))
         assert "--timeout=300" in extra, "e2e-tests must keep per-test --timeout=300 on test bodies."
 
@@ -293,6 +320,38 @@ class TestCISuiteCoverage:
         )
         assert free_idx < pre_idx < pytest_idx, (
             f"Order must be Free disk → pre-start → pytest (got {free_idx}, {pre_idx}, {pytest_idx})."
+        )
+
+    @pytest.mark.arch_guard
+    def test_e2e_compose_proxy_waits_for_adcp_healthy(self):
+        """Proxy must not race adcp start_period under ``compose up --wait`` (#1669).
+
+        Regression: proxy healthcheck (~50s, no start_period) could fail with 502
+        while adcp was still inside its 60s start_period; ``up --wait`` flaked.
+        """
+        services = _load_e2e_compose()["services"]
+        assert "adcp-server" in services and "proxy" in services, (
+            "docker-compose.e2e.yml must declare adcp-server and proxy."
+        )
+        adcp_hc = services["adcp-server"].get("healthcheck") or {}
+        proxy = services["proxy"]
+        proxy_deps = proxy.get("depends_on") or {}
+        proxy_hc = proxy.get("healthcheck") or {}
+
+        assert adcp_hc.get("start_period"), "adcp-server healthcheck must declare start_period."
+        # Mapping form with condition — list form ``- adcp-server`` is the race.
+        assert isinstance(proxy_deps, dict), (
+            f"proxy depends_on must be a mapping with condition: service_healthy (got {type(proxy_deps).__name__})."
+        )
+        adcp_dep = proxy_deps.get("adcp-server") or {}
+        assert isinstance(adcp_dep, dict) and adcp_dep.get("condition") == "service_healthy", (
+            f"proxy must depends_on adcp-server with condition: service_healthy (got {adcp_dep!r})."
+        )
+        assert proxy_hc.get("start_period"), (
+            "proxy healthcheck must declare start_period (nginx warm-up after adcp is up)."
+        )
+        assert int(str(proxy_hc.get("retries", 0))) >= 12, (
+            f"proxy healthcheck retries must be >= 12 (got {proxy_hc.get('retries')!r})."
         )
 
     @pytest.mark.arch_guard
@@ -321,7 +380,7 @@ class TestCISuiteCoverage:
         env = run_step.get("env") or {}
         assert env.get("PGDATA_TMPFS_SIZE") == "2g", (
             "bdd-in-network must set PGDATA_TMPFS_SIZE=2g "
-            "(serial leg; default 10g wastes RAM / contributes to pressure)."
+            "(serial leg; default 10g wastes RAM — tmpfs size= is a RAM ceiling)."
         )
         assert "run_all_tests.sh bdd_e2e" in str(run_step.get("run", "")), (
             "bdd-in-network must invoke ./run_all_tests.sh bdd_e2e."

@@ -315,7 +315,8 @@ jobs:
       # No coverage: the server under test runs inside Docker, so host-side
       # coverage would measure the client harness, not src/.
       # --timeout=300 applies to test bodies; session setup is verify-only when
-      # ADCP_TESTING=true (workflow env) and the stack is already up.
+      # ADCP_TESTING=true and the stack is already up. Pin on this step — do not
+      # rely on workflow-env inheritance alone (#1669).
       - uses: ./.github/actions/_pytest
         with:
           paths: tests/e2e/
@@ -330,6 +331,7 @@ jobs:
           extra_args: --timeout=300 -o timeout_func_only=true
         env:
           DATABASE_URL: ""
+          ADCP_TESTING: "true"
           ADCP_SALES_PORT: 8080
           POSTGRES_PORT: 5435
           DOCKER_BUILDKIT: 1
@@ -395,7 +397,8 @@ jobs:
           # the pin-keyed ghcr pull (~5m faster) over building from source.
           CREATIVE_AGENT_GHCR_IMAGE: ghcr.io/${{ github.repository }}/adcp-creative-agent
           # Serial e2e_rest leg — no xdist fan-out; default 10g tmpfs wastes RAM
-          # on ubuntu-latest and contributes to ENOSPC pressure (#1662).
+          # on ubuntu-latest. Cap is a RAM ceiling (tmpfs size=), not host-disk
+          # headroom; ENOSPC on the runner is handled by _free-disk (#1662).
           PGDATA_TMPFS_SIZE: 2g
           # No host uvx in this job (no _setup-env); the dedicated Security
           # Audit check owns the uv-secure scan.
