@@ -11,7 +11,7 @@ to help buyer agents decide whether to retry, fix, or abandon a request.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
 from pydantic import BaseModel
@@ -1065,14 +1065,36 @@ _SANITIZED_TRANSIENT_SUGGESTION = "Retry the request later; if the problem persi
 _SANITIZED_TERMINAL_SUGGESTION = (
     "This request cannot be retried; the seller must resolve the issue before it can succeed. Contact the seller."
 )
+_SANITIZED_CORRECTABLE_SUGGESTION = (
+    "The request could not be completed as submitted; review and adjust the request before resubmitting."
+)
+
+# Exhaustive over ``RecoveryHint`` — one static, internals-free suggestion per recovery class so
+# the guidance can never contradict the emitted ``recovery``. A missing/extra key is caught by
+# ``test_..._suggestion_table_covers_all_recovery_hints``.
+_SUGGESTION_BY_RECOVERY: dict[RecoveryHint, str] = {
+    "transient": _SANITIZED_TRANSIENT_SUGGESTION,
+    "correctable": _SANITIZED_CORRECTABLE_SUGGESTION,
+    "terminal": _SANITIZED_TERMINAL_SUGGESTION,
+}
 
 
 def _sanitized_suggestion_for(recovery: RecoveryHint) -> str:
-    """Static, internals-free guidance whose retry semantics match ``recovery``: no-retry
-    escalation for ``terminal`` internal errors (seller-side misconfiguration the buyer can't
-    resolve), retry guidance otherwise. Keyed on the SAME ``recovery`` the sanitized error will
-    carry so the suggestion can't contradict it."""
-    return _SANITIZED_TERMINAL_SUGGESTION if recovery == "terminal" else _SANITIZED_TRANSIENT_SUGGESTION
+    """Static, internals-free guidance matching ``recovery``: retry for ``transient``, adjust-and-
+    resubmit for ``correctable``, no-retry/escalation for ``terminal``. Keyed on the SAME
+    ``recovery`` the sanitized error carries so the suggestion can't contradict it."""
+    return _SUGGESTION_BY_RECOVERY[recovery]
+
+
+def _canonical_recovery_for(wire_code: str) -> RecoveryHint:
+    """The pinned canonical recovery for a wire code (SERVICE_UNAVAILABLE→transient,
+    CONFIGURATION_ERROR→terminal, …). Internal/infra errors emit the recovery their CODE mandates,
+    NOT a possibly-inconsistent instance override — a sanitized SERVICE_UNAVAILABLE tagged
+    ``terminal``/``correctable`` (or a CONFIGURATION_ERROR tagged ``transient``) is self-
+    contradictory on the wire. Unknown codes are coerced to SERVICE_UNAVAILABLE by the caller, so
+    they resolve to ``transient`` here too."""
+    meta = WIRE_STANDARD_CODES.get(wire_code)
+    return cast(RecoveryHint, meta["recovery"]) if meta else "transient"
 
 
 def safe_adcp_error(exc: Exception) -> AdCPError:
@@ -1087,16 +1109,17 @@ def safe_adcp_error(exc: Exception) -> AdCPError:
 
     - INTERNAL/INFRA errors (``wire_error_code in INTERNAL_WIRE_CODES`` — the SERVICE_UNAVAILABLE
       family AND terminal ``CONFIGURATION_ERROR``): the message is replaced with a controlled
-      generic one while the wire code + recovery + status + context are PRESERVED (accurate
-      retry semantics); ``details``/``field`` are dropped and the suggestion is replaced with
-      static guidance whose retry semantics MATCH the preserved recovery — a terminal
-      CONFIGURATION_ERROR gets no-retry/escalation guidance, not "retry later". The raw message
-      is expected to have been logged server-side already.
+      generic one while the wire code + status + context are preserved; ``details``/``field`` are
+      dropped. Recovery is NORMALIZED to the wire code's canonical value (SERVICE_UNAVAILABLE→
+      transient, CONFIGURATION_ERROR→terminal), NOT a possibly-inconsistent instance override, and
+      the suggestion is derived from that recovery — so code, recovery, and suggestion always
+      agree. The raw message is expected to have been logged server-side already.
     - CLIENT-CORRECTABLE typed errors (VALIDATION_ERROR, ``*_NOT_FOUND``, AUTH_*,
       POLICY_VIOLATION, BUDGET_*, RATE_LIMITED, …) carry a message the buyer needs to fix their
       request → pass through unchanged.
     - A wire code that is not even in ``WIRE_STANDARD_CODES`` (internal-only) must never reach a
-      subscriber: it is coerced to ``SERVICE_UNAVAILABLE`` and its message scrubbed.
+      subscriber: it is coerced to ``SERVICE_UNAVAILABLE`` (canonical recovery transient) and its
+      message scrubbed.
     - UNTYPED exceptions → generic base ``AdCPError``; ``str(exc)`` never reaches the wire.
     """
     if not isinstance(exc, AdCPError):
@@ -1110,29 +1133,29 @@ def safe_adcp_error(exc: Exception) -> AdCPError:
     wire_code = exc.wire_error_code
     if wire_code in INTERNAL_WIRE_CODES:
         # Internal/infra — scrub the (possibly internals-bearing) message; keep the wire code +
-        # recovery so the buyer still gets accurate retry semantics; drop details/field and
-        # replace the suggestion (raise-site suggestions can interpolate internals too) with
-        # guidance matching the PRESERVED recovery — terminal CONFIGURATION_ERROR must not say
-        # "retry later".
+        # status + context; drop details/field. Recovery is NORMALIZED to the code's canonical
+        # value (an instance override can disagree with the code — a SERVICE_UNAVAILABLE tagged
+        # correctable/terminal is self-contradictory), and the suggestion follows that recovery.
+        recovery = _canonical_recovery_for(wire_code)
         return AdCPError.synthesize(
             _SANITIZED_INTERNAL_MESSAGE,
             error_code=exc.error_code,
             status_code=exc.status_code,
-            recovery=exc.recovery,
-            suggestion=_sanitized_suggestion_for(exc.recovery),
+            recovery=recovery,
+            suggestion=_sanitized_suggestion_for(recovery),
             context=exc.context,
         )
     if wire_code not in WIRE_STANDARD_CODES:
         # An internal-only code the wire doesn't model: coerce to SERVICE_UNAVAILABLE and scrub,
-        # so a subscriber never receives a non-standard code or an internals-bearing message.
-        # Marked terminal (the buyer can't model an unknown internal fault), so the suggestion
-        # is the no-retry one.
+        # so a subscriber never receives a non-standard code or an internals-bearing message. Its
+        # canonical recovery is transient, so code + recovery + suggestion agree.
+        recovery = _canonical_recovery_for("SERVICE_UNAVAILABLE")
         return AdCPError.synthesize(
             _SANITIZED_INTERNAL_MESSAGE,
             error_code="SERVICE_UNAVAILABLE",
             status_code=exc.status_code,
-            recovery="terminal",
-            suggestion=_sanitized_suggestion_for("terminal"),
+            recovery=recovery,
+            suggestion=_sanitized_suggestion_for(recovery),
             context=exc.context,
         )
     return exc

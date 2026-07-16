@@ -352,6 +352,56 @@ class TestSafeAdcpErrorSuggestionMatchesRecovery:
         assert "hunter2" not in safe.suggestion
         assert "hunter2" not in safe.message
 
+    def test_unknown_internal_code_coerces_to_transient_service_unavailable(self):
+        """An internal code the wire doesn't model coerces to SERVICE_UNAVAILABLE — whose canonical
+        recovery is transient. The fallback must NOT emit SERVICE_UNAVAILABLE paired with terminal
+        (the code and recovery would disagree); it emits transient + retry guidance."""
+        from src.core.exceptions import AdCPError, safe_adcp_error
+
+        safe = safe_adcp_error(AdCPError.synthesize("secret", error_code="UNKNOWN_INTERNAL", recovery="correctable"))
+
+        assert safe.wire_error_code == "SERVICE_UNAVAILABLE"
+        assert safe.recovery == "transient", "SERVICE_UNAVAILABLE's canonical recovery is transient, not terminal"
+        assert "retry" in safe.suggestion.lower()
+        assert "secret" not in safe.message and "secret" not in safe.suggestion
+
+    def test_internal_error_recovery_normalized_to_canonical_not_instance_override(self):
+        """A raise site can tag an internal error with a recovery that contradicts its wire code
+        (AdCPAdapterError → SERVICE_UNAVAILABLE, but recovery='correctable'). The sanitizer
+        NORMALIZES recovery to the code's canonical value so code + recovery + suggestion agree —
+        the buyer never sees SERVICE_UNAVAILABLE + correctable + a 'retry later' suggestion."""
+        from src.core.exceptions import AdCPAdapterError, safe_adcp_error
+
+        safe = safe_adcp_error(AdCPAdapterError("db pool: postgresql://svc:hunter2@h/db", recovery="correctable"))
+
+        assert safe.wire_error_code == "SERVICE_UNAVAILABLE"
+        assert safe.recovery == "transient", "recovery must be normalized to the code's canonical value"
+        assert "retry" in safe.suggestion.lower()
+        assert "hunter2" not in safe.message and "hunter2" not in safe.suggestion
+
+    def test_suggestion_table_covers_all_recovery_hints(self):
+        """The suggestion table must be exhaustive over RecoveryHint — a new recovery value added
+        without a suggestion would KeyError at runtime instead of silently mis-guiding."""
+        from typing import get_args
+
+        from src.core.exceptions import RecoveryHint, _sanitized_suggestion_for
+
+        for recovery in get_args(RecoveryHint):
+            assert _sanitized_suggestion_for(recovery), f"no sanitized suggestion for recovery={recovery!r}"
+
+    def test_three_way_suggestion_semantics(self):
+        """Each recovery class gets guidance matching its semantics: transient→retry,
+        correctable→adjust/resubmit (NOT retry-later), terminal→no-retry."""
+        from src.core.exceptions import _sanitized_suggestion_for
+
+        assert "retry" in _sanitized_suggestion_for("transient").lower()
+        assert "retry" not in _sanitized_suggestion_for("terminal").lower()
+        correctable = _sanitized_suggestion_for("correctable").lower()
+        assert "retry" not in correctable, "correctable is not a retry-later case"
+        assert any(word in correctable for word in ("adjust", "resubmit", "review")), (
+            "correctable must give correction guidance, not silence"
+        )
+
 
 # ---------------------------------------------------------------------------
 # A2A Boundary: AdCPError → A2AError with proper JSON-RPC error code
