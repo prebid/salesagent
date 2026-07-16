@@ -224,6 +224,52 @@ class TestCISuiteCoverage:
         )
 
     @pytest.mark.arch_guard
+    def test_e2e_job_prestarts_stack_with_adcp_testing(self):
+        """E2E CI must pre-start compose; pytest must not cold-build under --timeout (#1667).
+
+        Regression: clearing ADCP_TESTING forced docker_services_e2e into the
+        standalone build+up path inside pytest setup, which pytest-timeout=300
+        killed on cold runners (~40 setup ERRORs).
+        """
+        job = load_ci_workflow()["jobs"]["e2e-tests"]
+        steps = job.get("steps", [])
+        assert steps, "e2e-tests must declare steps (empty job is a vacuous pass)."
+
+        step_names = [s.get("name") for s in steps]
+        assert "Build and start E2E stack" in step_names, "e2e-tests must pre-start the compose stack before pytest."
+        assert "Free disk space" in step_names, "e2e-tests must free disk before image build."
+
+        prestart = next(s for s in steps if s.get("name") == "Build and start E2E stack")
+        prestart_run = str(prestart.get("run", ""))
+        prestart_env = prestart.get("env") or {}
+        assert "creative-agent-stack.sh build" in prestart_run, "Pre-start must build the pinned creative-agent image."
+        assert "up -d --wait" in prestart_run, "Pre-start must use compose up --wait (healthcheck gate)."
+        assert prestart_env.get("ADCP_TESTING") == "true", "Pre-start must set ADCP_TESTING=true."
+
+        pytest_steps = [
+            s for s in steps if "pytest" in str(s.get("uses", "")).lower() or "tests/e2e" in str(s.get("with", {}))
+        ]
+        assert pytest_steps, "e2e-tests must invoke pytest on tests/e2e/."
+        pytest_env = pytest_steps[0].get("env") or {}
+        # Must NOT clear workflow ADCP_TESTING — empty string forces fixture cold build.
+        assert pytest_env.get("ADCP_TESTING", "true") != "", (
+            "e2e-tests must not set ADCP_TESTING to empty (fixture cold-build under pytest-timeout)."
+        )
+        extra = str(pytest_steps[0].get("with", {}).get("extra_args", ""))
+        assert "--timeout=300" in extra, "e2e-tests must keep per-test --timeout=300 on test bodies."
+
+        free_idx = step_names.index("Free disk space")
+        pre_idx = step_names.index("Build and start E2E stack")
+        pytest_idx = next(
+            i
+            for i, s in enumerate(steps)
+            if "pytest" in str(s.get("uses", "")).lower() or "tests/e2e" in str(s.get("with", {}))
+        )
+        assert free_idx < pre_idx < pytest_idx, (
+            f"Order must be Free disk → pre-start → pytest (got {free_idx}, {pre_idx}, {pytest_idx})."
+        )
+
+    @pytest.mark.arch_guard
     def test_bdd_and_e2e_run_on_pull_request(self):
         """The gate is worthless if it doesn't run on PRs.
 

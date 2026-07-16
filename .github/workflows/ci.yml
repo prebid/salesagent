@@ -252,12 +252,16 @@ jobs:
         run: ./scripts/creative-agent-stack.sh down
 
   e2e-tests:
+    # #1667 / #1666: CI owns build+up (with healthchecks); pytest only verifies.
+    # Do NOT clear ADCP_TESTING — empty forces docker_services_e2e into the
+    # standalone cold-build path under pytest --timeout=300 (setup ENOSPC/timeouts).
     name: E2E Tests
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read # pull adcp-creative-agent from ghcr.io (publish runs on main via publish-creative-agent.yml)
-    timeout-minutes: 25
+    # 40m: pre-start compose --wait + migrations + pytest bodies (#1667); 25m too tight.
+    timeout-minutes: 40
     steps:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
@@ -278,16 +282,52 @@ jobs:
           echo '#!/bin/bash' | sudo tee /usr/local/bin/docker-compose
           echo 'exec docker compose "$@"' | sudo tee -a /usr/local/bin/docker-compose
           sudo chmod +x /usr/local/bin/docker-compose
+      # Image build + compose layers need headroom on ubuntu-latest (#1662 class).
+      - name: Free disk space
+        run: |
+          set -eux
+          df -h
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost \
+            /usr/share/swift \
+            || true
+          docker builder prune -af 2>/dev/null || true
+          df -h
       - name: Clean up lingering containers
         run: |
           docker ps -q | xargs -r docker kill || true
+          docker compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml down -v 2>/dev/null || true
           docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
           docker compose down -v 2>/dev/null || true
           docker container prune -f 2>/dev/null || true
           docker network prune -f 2>/dev/null || true
           docker volume prune -f 2>/dev/null || true
+      - name: Build and start E2E stack
+        env:
+          ADCP_SALES_PORT: 8080
+          POSTGRES_PORT: 5435
+          ADCP_TESTING: "true"
+          DELIVERY_WEBHOOK_INTERVAL: "5"
+          DOCKER_BUILDKIT: 1
+          COMPOSE_DOCKER_CLI_BUILD: 1
+        run: |
+          set -eux
+          ./scripts/creative-agent-stack.sh build
+          docker compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml build
+          # --wait gates postgres, creative-agent, adcp-server, proxy healthchecks
+          # (creative-agent hard gate for all E2E — #1666). Budget covers migrations.
+          docker compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml \
+            up -d --wait --wait-timeout 600
+          curl -sf "http://127.0.0.1:${ADCP_SALES_PORT}/health"
+          docker compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml ps
       # No coverage: the server under test runs inside Docker, so host-side
       # coverage would measure the client harness, not src/.
+      # --timeout=300 applies to test bodies; session setup is verify-only when
+      # ADCP_TESTING=true (workflow env) and the stack is already up.
       - uses: ./.github/actions/_pytest
         with:
           paths: tests/e2e/
@@ -301,8 +341,6 @@ jobs:
           # now surfaces as the job timeout instead.
           extra_args: --timeout=300 -o timeout_func_only=true
         env:
-          # Override workflow env — conftest starts docker-compose.e2e.yml (legacy test.yml parity).
-          ADCP_TESTING: ""
           DATABASE_URL: ""
           ADCP_SALES_PORT: 8080
           POSTGRES_PORT: 5435
@@ -313,7 +351,9 @@ jobs:
           CREATIVE_AGENT_GHCR_IMAGE: ghcr.io/${{ github.repository }}/adcp-creative-agent
       - name: Cleanup Docker services
         if: always()
-        run: docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
+        run: |
+          docker compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml down -v 2>/dev/null || true
+          docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
 
   bdd-in-network:
     # The 5th BDD transport (e2e_rest: real HTTP through nginx to the live
