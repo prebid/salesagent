@@ -8,7 +8,11 @@ def assert_resolve_auth_dep_passes_token(auth_token: str = "pre-extracted-token"
 
     Shared assertion used by multiple test files to verify the token passthrough
     contract: the pre-extracted token must be forwarded without redundant
-    re-extraction from headers.
+    re-extraction from headers. The boundary also forwards the extracted
+    testing_context (AdCPTestContext.from_headers) so the live REST server
+    honors proprietary X-* test headers (X-Dry-Run, X-Mock-Time, …) in parity
+    with the MCP and A2A boundaries; a plain (non-test) request carries no such
+    headers, so from_headers yields None here.
     """
     from unittest.mock import patch
 
@@ -34,6 +38,7 @@ def assert_resolve_auth_dep_passes_token(auth_token: str = "pre-extracted-token"
         auth_token=auth_token,
         require_valid_token=False,
         protocol="rest",
+        testing_context=None,
     )
 
 
