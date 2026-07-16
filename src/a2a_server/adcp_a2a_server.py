@@ -8,7 +8,8 @@ import copy
 import json
 import logging
 import uuid
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
+from contextlib import contextmanager
 
 # Import core functions for direct calls (raw functions without FastMCP decorators)
 from datetime import UTC, datetime
@@ -1257,7 +1258,7 @@ class AdCPRequestHandler(RequestHandler):
         # artifacts) beats the durable WORKING skeleton.
         return owned if owned is not None else durable
 
-    def _durable_lookup_identity(self, context: ServerCallContext | None):
+    def _durable_lookup_identity(self, context: ServerCallContext | None) -> ResolvedIdentity | None:
         """Resolve the caller's identity for a durable (cross-process) task lookup.
 
         A restart-surviving lookup needs a tenant AND principal scope, so identity
@@ -1274,6 +1275,29 @@ class AdCPRequestHandler(RequestHandler):
             return None
         return identity
 
+    @contextmanager
+    def _owned_durable_step(
+        self, task_id: str, identity: ResolvedIdentity | None
+    ) -> Iterator[tuple[Any, Any, Any] | None]:
+        """Shared preamble for durable (cross-process) task ops carrying an outer ``task_*`` id.
+
+        Identity guard → tenant-scoped session + ``WorkflowRepository`` → the principal-owned step
+        carrying ``task_id``. Yields ``(session, repo, step)``, or ``None`` when identity is
+        unresolved/non-owning or no persisted step matches. The caller performs any mutation and
+        ``commit()``/``rollback()`` inside the ``with`` block (the session stays open for its body).
+        """
+        if identity is None or identity.tenant_id is None or identity.principal_id is None:
+            yield None
+            return
+
+        from src.core.database.database_session import get_db_session
+        from src.core.database.repositories.workflow import WorkflowRepository
+
+        with get_db_session() as session:
+            repo = WorkflowRepository(session, identity.tenant_id)
+            step = repo.get_by_external_task_id(task_id, principal_id=identity.principal_id)
+            yield (session, repo, step) if step is not None else None
+
     def _durable_task_from_step(self, task_id: str, identity: ResolvedIdentity | None) -> Task | None:
         """Rebuild a terminal Task from the workflow step that stored this transport id.
 
@@ -1281,18 +1305,10 @@ class AdCPRequestHandler(RequestHandler):
         the lookup is tenant+principal-scoped, so an unresolved or non-owning identity
         yields None. Callers resolve identity once and pass it here.
         """
-        if identity is None or identity.tenant_id is None or identity.principal_id is None:
-            return None
-
-        from src.core.database.database_session import get_db_session
-        from src.core.database.repositories.workflow import WorkflowRepository
-
-        with get_db_session() as session:
-            step = WorkflowRepository(session, identity.tenant_id).get_by_external_task_id(
-                task_id, principal_id=identity.principal_id
-            )
-            if step is None:
+        with self._owned_durable_step(task_id, identity) as owned:
+            if owned is None:
                 return None
+            _session, _repo, step = owned
             state = self._STEP_STATUS_TO_TASK_STATE.get(step.status, TaskState.TASK_STATE_WORKING)
             task = Task(id=task_id, context_id=step.context_id, status=TaskStatus(state=state))
             if step.response_data:
@@ -1363,17 +1379,10 @@ class AdCPRequestHandler(RequestHandler):
         our read cannot be overwritten — the zero-row outcome is reported as
         ``TaskNotCancelableError`` with the fresh status, and the decision stands.
         """
-        if identity is None or identity.tenant_id is None or identity.principal_id is None:
-            return None
-
-        from src.core.database.database_session import get_db_session
-        from src.core.database.repositories.workflow import WorkflowRepository
-
-        with get_db_session() as session:
-            repo = WorkflowRepository(session, identity.tenant_id)
-            step = repo.get_by_external_task_id(task_id, principal_id=identity.principal_id)
-            if step is None:
+        with self._owned_durable_step(task_id, identity) as owned:
+            if owned is None:
                 return None
+            session, repo, step = owned
             # cancel_if_cancellable refuses to cancel an ``approved`` OR ``in_progress`` step:
             # once approved (or once execution has started its adapter side-effects), irreversible
             # ad-server work is underway, so a cancel must not strand a real order behind a

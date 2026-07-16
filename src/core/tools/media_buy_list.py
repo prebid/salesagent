@@ -459,7 +459,7 @@ def _resolve_status_filter(
     # internal) so the error is correctable, but never interpolates a raw caught
     # exception (str(e)), which could carry internals.
     resolved: set[MediaBuyStatus] = set()
-    invalid: list = []
+    invalid: list[str] = []
     for s in raw:
         try:
             resolved.add(MediaBuyStatus(s))

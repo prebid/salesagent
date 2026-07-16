@@ -122,7 +122,7 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
     def test_config_error_scrubs_secret_from_webhook_payload(self):
         """``AdCPConfigurationError`` (wire code CONFIGURATION_ERROR) is terminal-internal and
         also scrubbed — its decryption-failure raise sites can interpolate a secret. Before the
-        shared-policy fix this leg passed through unscrubbed (Codex #3)."""
+        shared-policy fix this leg passed through unscrubbed."""
         cm, mock_update = _new_ctx_manager_with_mocked_update()
         secret = "postgresql://svc:hunter2@db.internal/prod"
 

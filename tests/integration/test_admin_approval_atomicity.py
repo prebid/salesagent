@@ -9,7 +9,7 @@ as a conflict: no overwrite, and no ``execute_approved_media_buy``.
 """
 
 import uuid
-from unittest.mock import ANY, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -117,7 +117,7 @@ class TestOperationsApproveAtomicity:
                 follow_redirects=False,
             )
 
-        mock_claim.assert_called_once_with(ANY)
+        mock_claim.assert_called_once_with(step_id)
         mock_execute.assert_not_called()
         assert _status(tenant_id, step_id) == "requires_approval", "refused claim must not overwrite the step"
         assert resp.status_code in (302, 303)

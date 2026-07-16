@@ -652,7 +652,7 @@ class TestA2ASkillInvocation:
         assert self._step_status(tenant_id, pending) == "canceled"
 
     async def test_cancel_if_cancellable_accepts_legacy_approval_step(self, handler, sample_tenant, sample_principal):
-        """[Codex #5] The legacy adapter-emitted ``approval`` status (GAM/Broadstreet/base_workflow)
+        """The legacy adapter-emitted ``approval`` status (GAM/Broadstreet/base_workflow)
         is a pre-side-effect awaiting-decision alias of ``requires_approval``, so it is cancellable
         for the same reason — a buyer can cancel an awaiting-approval order before any ad-server work
         begins. It's approvable AND cancellable (was approvable-but-not-cancellable)."""

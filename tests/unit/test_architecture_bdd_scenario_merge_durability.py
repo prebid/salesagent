@@ -185,7 +185,7 @@ def test_registry_is_bijection_with_marked_scenarios():
 
 
 def test_is_spec_artifact_ref_discriminates_source_from_requirement_id():
-    """[Codex] Self-test for the scenario-discovery discriminator so a silently-degraded
+    """Self-test for the scenario-discovery discriminator so a silently-degraded
     ``_is_spec_artifact_ref`` (a broken regex, a traceability-schema drift) can't empty the
     candidate set and let the set-equality guards below pass vacuously — the guard "passes when
     the candidate set is empty" only in its stale direction. Mirrors the committed known-bad/good

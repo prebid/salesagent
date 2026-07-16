@@ -612,7 +612,7 @@ class TestA2ARegistryContract:
         )
 
     def test_discovery_metadata_matches_production(self):
-        """[Codex #4] The HAND-AUTHORED ``discovery`` flags must equal production's
+        """The HAND-AUTHORED ``discovery`` flags must equal production's
         ``DISCOVERY_SKILLS`` frozenset. The auth-boundary tests derive their partitions from the
         oracle, so without this pin they would move in lockstep with production and a skill
         wrongly flipped into (or out of) the no-auth discovery set would still pass. Combined with
