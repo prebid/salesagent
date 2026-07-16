@@ -94,6 +94,28 @@ class WorkflowRepository:
             )
         ).first()
 
+    def get_approvable_step_for_object(self, object_type: str, object_id: str) -> WorkflowStep | None:
+        """The workflow step awaiting a decision for a mapped business object (tenant-scoped).
+
+        Joins ObjectWorkflowMapping and filters status to APPROVABLE_STEP_STATUSES — the
+        canonical awaiting-decision set (including the legacy ``approval`` alias emitted by the
+        adapter workflow producers). The admin media-buy detail approve/reject route uses this
+        so its prefilter matches the ``claim_approval`` / ``reject_if_approvable`` source-state
+        guard; an inline ``{requires_approval, pending_approval}`` filter previously dropped
+        legacy ``approval`` steps before they could reach the CAS. Returns the first match or None.
+        """
+        return self._session.scalars(
+            select(WorkflowStep)
+            .join(ObjectWorkflowMapping, WorkflowStep.step_id == ObjectWorkflowMapping.step_id)
+            .join(DBContext, WorkflowStep.context_id == DBContext.context_id)
+            .where(
+                DBContext.tenant_id == self._tenant_id,
+                ObjectWorkflowMapping.object_type == object_type,
+                ObjectWorkflowMapping.object_id == object_id,
+                WorkflowStep.status.in_(APPROVABLE_STEP_STATUSES),
+            )
+        ).first()
+
     def get_by_external_task_id(self, external_task_id: str, *, principal_id: str) -> WorkflowStep | None:
         """Get the workflow step carrying a given transport outer task id.
 

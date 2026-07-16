@@ -103,7 +103,6 @@ def media_buy_detail(tenant_id, media_buy_id):
         CreativeAssignment,
         Principal,
         Product,
-        WorkflowStep,
     )
 
     try:
@@ -173,20 +172,14 @@ def media_buy_detail(tenant_id, media_buy_id):
             ctx_manager = ContextManager()
             workflow_steps = ctx_manager.get_object_lifecycle("media_buy", media_buy_id, tenant_id=tenant_id)
 
-            # Find if there's a pending approval step
-            pending_approval_step = None
-            for step in workflow_steps:
-                if step.get("status") in ["requires_approval", "pending_approval"]:
-                    # Get the full workflow step for approval actions (tenant-scoped via Context join)
-                    from src.core.database.models import Context as DBContext
-
-                    stmt = (
-                        select(WorkflowStep)
-                        .join(DBContext)
-                        .where(DBContext.tenant_id == tenant_id, WorkflowStep.step_id == step["step_id"])
-                    )
-                    pending_approval_step = db_session.scalars(stmt).first()
-                    break
+            # Find the step awaiting a decision for this media buy, via the repository so the
+            # canonical APPROVABLE_STEP_STATUSES (incl. the legacy ``approval`` alias) is used —
+            # the same set the approve/reject route and the atomic claim/reject methods use.
+            # An inline {requires_approval, pending_approval} filter here would hide the approval
+            # UI for legacy ``approval`` steps that the POST route can in fact action.
+            pending_approval_step = WorkflowRepository(db_session, tenant_id).get_approvable_step_for_object(
+                "media_buy", media_buy_id
+            )
 
             # Get computed readiness state (not just raw database status)
             from src.admin.services.media_buy_readiness_service import MediaBuyReadinessService
@@ -316,27 +309,19 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
     from sqlalchemy.orm import attributes
 
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import Context as DBContext
-    from src.core.database.models import ObjectWorkflowMapping, WorkflowStep
 
     try:
         action = request.form.get("action")  # "approve" or "reject"
         reason = request.form.get("reason", "")
 
         with get_db_session() as db_session:
-            # Find the pending approval workflow step for this media buy (tenant-scoped via Context join)
-            stmt = (
-                select(WorkflowStep)
-                .join(ObjectWorkflowMapping, WorkflowStep.step_id == ObjectWorkflowMapping.step_id)
-                .join(DBContext)
-                .filter(
-                    DBContext.tenant_id == tenant_id,
-                    ObjectWorkflowMapping.object_type == "media_buy",
-                    ObjectWorkflowMapping.object_id == media_buy_id,
-                    WorkflowStep.status.in_(["requires_approval", "pending_approval"]),
-                )
-            )
-            step = db_session.scalars(stmt).first()
+            # Find the workflow step awaiting a decision for this media buy, via the repository
+            # so the lookup uses the CANONICAL APPROVABLE_STEP_STATUSES (incl. the legacy
+            # ``approval`` alias GAM/Broadstreet emit) — the same source set the atomic
+            # claim_approval/reject_if_approvable methods guard on. An inline
+            # {requires_approval, pending_approval} filter here would drop legacy ``approval``
+            # steps before they ever reached the claim/reject below.
+            step = WorkflowRepository(db_session, tenant_id).get_approvable_step_for_object("media_buy", media_buy_id)
 
             if not step:
                 flash("No pending approval found for this media buy", "warning")

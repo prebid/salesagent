@@ -122,6 +122,45 @@ class TestOperationsApproveAtomicity:
         assert _status(tenant_id, step_id) == "requires_approval", "refused claim must not overwrite the step"
         assert resp.status_code in (302, 303)
 
+    def test_media_buy_detail_approves_legacy_approval_status_step(self, client, sample_tenant, sample_principal):
+        """[Round-21] The media-buy detail approve route finds and approves a legacy ``approval``
+        step — its lookup previously prefiltered on {requires_approval, pending_approval} only and
+        returned 'No pending approval found' before reaching the canonical claim."""
+        tenant_id = sample_tenant["tenant_id"]
+        _auth(client, tenant_id)
+        media_buy_id = f"mb_{uuid.uuid4().hex[:8]}"
+        step_id = _make_step(tenant_id, sample_principal["principal_id"], "approval", media_buy_id=media_buy_id)
+
+        resp = client.post(
+            f"/tenant/{tenant_id}/media-buy/{media_buy_id}/approve",
+            data={"action": "approve"},
+            follow_redirects=False,
+        )
+
+        assert resp.status_code in (200, 302, 303)
+        assert _status(tenant_id, step_id) == "approved", (
+            "a legacy approval step must be approvable via the detail route"
+        )
+
+    def test_media_buy_detail_rejects_legacy_approval_status_step(self, client, sample_tenant, sample_principal):
+        """[Round-21] The media-buy detail reject action (same route, action=reject) rejects a
+        legacy ``approval`` step through the canonical reject_if_approvable."""
+        tenant_id = sample_tenant["tenant_id"]
+        _auth(client, tenant_id)
+        media_buy_id = f"mb_{uuid.uuid4().hex[:8]}"
+        step_id = _make_step(tenant_id, sample_principal["principal_id"], "approval", media_buy_id=media_buy_id)
+
+        resp = client.post(
+            f"/tenant/{tenant_id}/media-buy/{media_buy_id}/approve",
+            data={"action": "reject", "reason": "no"},
+            follow_redirects=False,
+        )
+
+        assert resp.status_code in (200, 302, 303)
+        assert _status(tenant_id, step_id) == "rejected", (
+            "a legacy approval step must be rejectable via the detail route"
+        )
+
 
 class TestApprovalClaimCompareAndSet:
     """[Round-19] claim_approval / reject_if_approvable are source-state-guarded compare-and-sets.
@@ -186,6 +225,25 @@ class TestApprovalClaimCompareAndSet:
         with WorkflowUoW(tenant_id) as uow:
             assert uow.workflows.reject_if_approvable(to_reject, error_message="no") is not None
         assert _status(tenant_id, to_reject) == "rejected"
+
+    def test_get_approvable_step_for_object_uses_canonical_set(self, sample_tenant, sample_principal):
+        """[Round-21] get_approvable_step_for_object finds a mapped step in ANY canonical
+        approvable status — including the legacy ``approval`` alias — and returns None once the
+        step is no longer approvable (so the admin media-buy detail lookup matches the CAS guard)."""
+        tenant_id = sample_tenant["tenant_id"]
+        principal_id = sample_principal["principal_id"]
+        for status in ("requires_approval", "pending_approval", "approval"):
+            mb = f"mb_{uuid.uuid4().hex[:8]}"
+            step_id = _make_step(tenant_id, principal_id, status, media_buy_id=mb)
+            with WorkflowUoW(tenant_id) as uow:
+                found = uow.workflows.get_approvable_step_for_object("media_buy", mb)
+                # Read attributes INSIDE the session (the ORM object detaches on exit).
+                assert found is not None and found.step_id == step_id, f"a {status} step must be found"
+        # A step that is no longer awaiting a decision is not returned.
+        mb_done = f"mb_{uuid.uuid4().hex[:8]}"
+        _make_step(tenant_id, principal_id, "approved", media_buy_id=mb_done)
+        with WorkflowUoW(tenant_id) as uow:
+            assert uow.workflows.get_approvable_step_for_object("media_buy", mb_done) is None
 
 
 class TestWorkflowsRouteConflict:
