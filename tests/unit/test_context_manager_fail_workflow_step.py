@@ -139,27 +139,30 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
         )
 
     @pytest.mark.parametrize(
-        "exc_factory",
+        ("exc_factory", "expected_code"),
         [
-            pytest.param(lambda s: ValueError(s), id="ValueError"),
-            pytest.param(lambda s: PermissionError(s), id="PermissionError"),
+            pytest.param(lambda s: ValueError(s), "VALIDATION_ERROR", id="ValueError"),
+            pytest.param(lambda s: PermissionError(s), "AUTH_REQUIRED", id="PermissionError"),
         ],
     )
-    def test_untyped_valueerror_permissionerror_scrub_secret_from_webhook_payload(self, exc_factory):
-        """Untyped ``ValueError``/``PermissionError`` must be scrubbed on the webhook path.
+    def test_untyped_valueerror_permissionerror_scrub_secret_from_webhook_payload(self, exc_factory, expected_code):
+        """Untyped ``ValueError``/``PermissionError`` on the webhook path: message scrubbed, but the
+        SEMANTIC code matches what the synchronous boundary emits (webhook↔sync parity).
 
-        These are the adversarial siblings of the RuntimeError case: ``normalize_to_adcp_error``
-        maps ``ValueError`` → *trusted* ``AdCPValidationError`` and ``PermissionError`` →
-        ``AdCPAuthorizationError``, both client-correctable, so pre-normalizing before
-        ``safe_adcp_error`` would let their raw ``str(exc)`` (a connection string / token) pass
-        through the scrub. ``_create_media_buy_impl`` funnels every untyped post-step exception
-        here, and adapters raise ``ValueError`` freely, so this path is reachable.
+        Two properties, both from the reviewer's finding:
+        1. Message trust — the raw ``str(exc)`` (a connection string / token / SQL) is scrubbed,
+           because these are raw built-ins (untrusted provenance).
+        2. Semantic parity — the persisted wire code is VALIDATION_ERROR / AUTH_REQUIRED (the code
+           the synchronous transport also emits for the same exception via
+           ``normalize_to_adcp_error``), NOT a divergent SERVICE_UNAVAILABLE. Otherwise a buyer
+           watching both channels sees two different codes for one failure.
 
-        Authored INDEPENDENTLY of ``safe_adcp_error``: it asserts the literal secret is absent
-        from BOTH ``error_message`` and the serialized ``response_data`` — it does not reconstruct
-        the expected envelope through the same policy under test, so a shared regression can't hide
-        the leak.
+        Authored INDEPENDENTLY of ``safe_adcp_error``: secret-absence is asserted against the literal
+        payload, and the parity code is checked against ``normalize_to_adcp_error`` (the shared
+        semantic mapping), not reconstructed through the sanitizer under test.
         """
+        from src.core.exceptions import normalize_to_adcp_error
+
         # Record the persisted payload via a plain callable (not a Mock) so the assertions can do
         # substring-absence checks on the ACTUAL emitted values without the assert_called_once() +
         # call_args split-assertion pattern the weak-mock guard forbids.
@@ -177,6 +180,10 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
         for leak in ("hunter2", "postgresql://", "db.internal", "TOKEN=abc123", "SELECT", "principals"):
             assert leak not in serialized, f"secret fragment {leak!r} leaked into webhook response_data"
             assert leak not in payload["error_message"], f"secret fragment {leak!r} leaked into error_message"
+        # Webhook↔sync semantic parity: the persisted code equals the synchronous boundary's code.
+        persisted_code = payload["response_data"]["adcp_error"]["code"]
+        assert persisted_code == expected_code
+        assert persisted_code == normalize_to_adcp_error(exc_factory(secret)).wire_error_code
 
 
 class TestFailWorkflowStepForExceptionAuditFailureNonFatal:

@@ -153,6 +153,48 @@ async def test_explicit_skill_untyped_crash_scrubs_secret_from_failed_task():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exc_factory", "expected_code"),
+    [
+        pytest.param(lambda s: ValueError(s), "VALIDATION_ERROR", id="ValueError"),
+        pytest.param(lambda s: PermissionError(s), "AUTH_REQUIRED", id="PermissionError"),
+    ],
+)
+async def test_explicit_skill_raw_builtin_scrubs_secret_but_keeps_semantic_code(exc_factory, expected_code):
+    """A raw ``ValueError``/``PermissionError`` raised INSIDE a skill returns a failed Task whose
+    envelope keeps the SEMANTIC code the synchronous boundaries emit (VALIDATION_ERROR /
+    AUTH_REQUIRED) but is scrubbed of the raw ``str(e)``.
+
+    This patches the SKILL (``_handle_get_products_skill``), NOT ``_handle_explicit_skill``, so the
+    exception flows through the real normalization seam at ``_handle_explicit_skill`` — the seam the
+    prior secret test bypassed by patching ``_handle_explicit_skill`` itself. Before the
+    provenance-vs-semantics split, that seam normalized the built-in to a *trusted*
+    ``AdCPValidationError``/``AdCPAuthorizationError`` and its raw message survived to the wire.
+    """
+    handler, ctx = _make_handler()
+    params = SendMessageRequest(message=create_a2a_message_with_skill("get_products", {"brief": "video"}))
+    secret = "postgresql://svc:hunter2@db.internal/prod SELECT * FROM principals"
+
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY):
+        with patch.object(
+            handler, "_handle_get_products_skill", new_callable=AsyncMock, side_effect=exc_factory(secret)
+        ):
+            result = await handler.on_message_send(params, context=ctx)
+
+    assert isinstance(result, Task), f"expected a returned failed Task, got {type(result).__name__}"
+    assert result.status.state == TaskState.TASK_STATE_FAILED
+    artifact = result.artifacts[0]
+    envelope = extract_data_from_artifact(artifact)
+    text_parts = [p.text for p in artifact.parts if p.HasField("text")]
+    client_facing = json.dumps(envelope) + " " + " ".join(text_parts)
+    for leak in ("hunter2", "postgresql://", "db.internal", "SELECT", "principals"):
+        assert leak not in client_facing, f"raw exception leaked to client ({leak!r}): {client_facing}"
+    # SEMANTIC code preserved (matches the synchronous boundary), message scrubbed.
+    assert envelope["errors"][0]["code"] == expected_code
+    assert "internal error" in envelope["errors"][0]["message"].lower()
+
+
+@pytest.mark.asyncio
 async def test_unknown_skill_records_boundary_error_exactly_once():
     """An unknown skill emits exactly one boundary-observability record.
 

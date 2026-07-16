@@ -1822,17 +1822,14 @@ class AdCPRequestHandler(RequestHandler):
             # Re-raise A2AError as-is (already properly formatted)
             raise
         except (AdCPError, ValueError, PermissionError) as e:
-            # Map to the SEMANTIC typed error the buyer's contract expects — the same
-            # mapping MCP/REST apply: ``ValueError → AdCPValidationError`` (VALIDATION_ERROR,
-            # correctable), ``PermissionError → AdCPAuthorizationError`` (AUTH_REQUIRED), a
-            # native ``AdCPError`` passes through unchanged — then re-raise so the outer
-            # dispatcher wraps it into a failed Task. Wire-MESSAGE sanitization is NOT done
-            # here; it happens once at the envelope boundary (``_build_error_envelope`` →
-            # ``_safe_adcp_error``), which scrubs ONLY the internal-error bucket
-            # (``wire_error_code == "SERVICE_UNAVAILABLE"`` — untyped crashes that normalize
-            # to a base ``AdCPError`` here, and ``AdCPAdapterError(str(e))``) while preserving
-            # client-correctable messages. Keeping the semantic class here means the wire
-            # code stays VALIDATION_ERROR / AUTH_REQUIRED, not a blanket internal error.
+            # SANITIZE HERE so exception PROVENANCE (raw built-in vs explicitly-typed) is decided
+            # before the outer envelope build. ``safe_adcp_error`` keeps the SEMANTIC code the
+            # buyer's contract expects — ``ValueError`` → VALIDATION_ERROR, ``PermissionError`` →
+            # AUTH_REQUIRED, native ``AdCPError`` unchanged — but SCRUBS a raw built-in's untrusted
+            # ``str(e)`` (a connection string / token), because re-raising the *normalized* typed
+            # error here would hand the outer sanitizer a trusted ``AdCPValidationError`` and let
+            # the secret survive. ``record_boundary_error`` gets the un-sanitized semantic error so
+            # server-side observability still sees the raw message.
             #
             # Defensive about identity shape — test fixtures sometimes pass a string or
             # partially-built identity; record_boundary_error handles None internally.
@@ -1845,8 +1842,9 @@ class AdCPRequestHandler(RequestHandler):
                 principal_id=getattr(identity, "principal_id", None) or "anonymous",
             )
 
-            if normalized is not e:
-                raise normalized from e
+            sanitized = safe_adcp_error(e)
+            if sanitized is not e:
+                raise sanitized from e
             raise
         # Untyped exceptions fall through to the dispatcher's `except Exception`
         # at the call site, which routes them through `_build_failed_skill_result`

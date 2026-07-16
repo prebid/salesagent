@@ -409,19 +409,25 @@ class TestSafeAdcpErrorSuggestionMatchesRecovery:
 
 
 class TestA2AHandlerExplicitSkillReraises:
-    """``_handle_explicit_skill`` re-raises typed AdCPError verbatim.
+    """``_handle_explicit_skill`` re-raises a WIRE-SAFE error (provenance decided at the seam).
 
-    This class verifies the handler-internal contract: the skill dispatcher
-    catches the typed exception, audits the workflow step, and re-raises so
-    the OUTER ``on_message_send`` boundary wraps the failure into a Task
-    artifact carrying the two-layer envelope DataPart.
+    This class verifies the handler-internal contract: the skill dispatcher catches the
+    exception, audits, and re-raises via ``safe_adcp_error`` so the OUTER ``on_message_send``
+    boundary wraps a failure that is ALREADY sanitized:
+
+    - CLIENT-CORRECTABLE typed errors (``AdCPValidationError``, ``AdCPNotFoundError``, …) re-raise
+      VERBATIM — their controlled buyer-facing message is preserved.
+    - INTERNAL typed errors (``AdCPAdapterError``/``AdCPServiceUnavailableError`` → SERVICE_UNAVAILABLE,
+      terminal ``CONFIGURATION_ERROR``) are SCRUBBED at the seam — re-raised as a wire-safe base
+      ``AdCPError`` with a generic message (a raise site can interpolate a secret).
+    - RAW built-ins (``ValueError``/``PermissionError``) keep their SEMANTIC code (VALIDATION_ERROR /
+      AUTH_REQUIRED — the same the synchronous boundaries emit) but their untrusted ``str(e)`` is
+      scrubbed. Re-raising the *normalized typed* error here instead would hand the outer sanitizer
+      a trusted ``AdCPValidationError`` and let the secret survive.
 
     Wire-envelope coverage for the A2A boundary lives in
-    ``tests/integration/test_a2a_error_responses.py`` — those tests drive
-    ``handler.on_message_send(...)`` and assert on ``result.artifacts[0]``
-    (the gold-standard pattern). The tests in this class stop at the
-    handler-internal re-raise so they're cheap unit-level pins for the
-    re-raise contract; they do NOT validate the envelope reaches the wire.
+    ``tests/integration/test_a2a_error_responses.py`` and the public failed-Task tests in
+    ``tests/unit/test_a2a_error_routing.py``.
     """
 
     @pytest.mark.asyncio
@@ -443,22 +449,56 @@ class TestA2AHandlerExplicitSkillReraises:
             assert exc_info.value.recovery == "correctable"
 
     @pytest.mark.asyncio
-    @pytest.mark.asyncio
-    async def test_adcp_adapter_propagates_for_dispatcher_wrap(self):
-        """AdCPAdapterError propagates with transient recovery."""
+    async def test_adcp_adapter_scrubbed_at_seam(self):
+        """AdCPAdapterError (internal → SERVICE_UNAVAILABLE) is scrubbed at the seam.
+
+        Its raise sites do ``AdCPAdapterError(f"...: {e}")`` where ``e`` can bear a connection
+        string, so the seam must not re-raise the raw message. Recovery stays transient (the
+        code's canonical value)."""
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+        from src.core.exceptions import AdCPError
 
         handler = AdCPRequestHandler()
 
         async def mock_skill(params, token):
-            raise AdCPAdapterError("GAM down")
+            raise AdCPAdapterError("GAM down: postgresql://svc:hunter2@db/prod")
 
         with patch.object(handler, "_handle_get_products_skill", mock_skill):
-            with pytest.raises(AdCPAdapterError) as exc_info:
+            with pytest.raises(AdCPError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
-            assert "GAM down" in exc_info.value.message
+            assert "hunter2" not in exc_info.value.message and "GAM down" not in exc_info.value.message
+            assert exc_info.value.wire_error_code == "SERVICE_UNAVAILABLE"
             assert exc_info.value.recovery == "transient"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("exc_factory", "expected_code"),
+        [
+            pytest.param(lambda s: ValueError(s), "VALIDATION_ERROR", id="ValueError"),
+            pytest.param(lambda s: PermissionError(s), "AUTH_REQUIRED", id="PermissionError"),
+        ],
+    )
+    async def test_raw_builtin_keeps_semantic_code_but_scrubs_message(self, exc_factory, expected_code):
+        """A raw ``ValueError``/``PermissionError`` raised in a skill keeps the SEMANTIC code the
+        synchronous boundaries emit (VALIDATION_ERROR / AUTH_REQUIRED) but has its untrusted
+        ``str(e)`` scrubbed — the seam must not re-raise a normalized typed error carrying the
+        secret."""
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+        from src.core.exceptions import AdCPError
+
+        handler = AdCPRequestHandler()
+        secret = "postgresql://svc:hunter2@db.internal/prod"
+
+        async def mock_skill(params, token):
+            raise exc_factory(secret)
+
+        with patch.object(handler, "_handle_get_products_skill", mock_skill):
+            with pytest.raises(AdCPError) as exc_info:
+                await handler._handle_explicit_skill("get_products", {}, "token")
+
+            assert exc_info.value.wire_error_code == expected_code
+            assert "hunter2" not in exc_info.value.message
 
     @pytest.mark.asyncio
     async def test_server_error_still_passes_through(self):
@@ -1239,15 +1279,17 @@ class TestRecoveryRoundtrip:
 
     @pytest.mark.asyncio
     async def test_a2a_handler_explicit_skill_reraises_all_subclasses(self):
-        """All 11 AdCPError subclasses propagate verbatim from ``_handle_explicit_skill``.
+        """Recovery is preserved for every AdCPError subclass through ``_handle_explicit_skill``,
+        but INTERNAL subclasses are scrubbed at the seam (generic message, wire SERVICE_UNAVAILABLE)
+        while CLIENT-CORRECTABLE subclasses re-raise verbatim (original type + message).
 
-        Scope: handler-internal re-raise. The outer ``on_message_send``
-        boundary wraps the propagated exception into a Task artifact
-        carrying the two-layer envelope; that wire-level coverage is in
+        Scope: handler-internal re-raise. The outer ``on_message_send`` boundary wraps the
+        propagated exception into a Task artifact; wire-level coverage is in
         ``tests/integration/test_a2a_error_responses.py``.
         """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
         from src.core.exceptions import (
+            _SANITIZED_INTERNAL_MESSAGE,
             AdCPAdapterError,
             AdCPBudgetExhaustedError,
             AdCPConflictError,
@@ -1259,30 +1301,39 @@ class TestRecoveryRoundtrip:
             AdCPValidationError,
         )
 
+        # Recovery matches the pinned classification of the WIRE code (salesagent-nr2q). The
+        # SERVICE_UNAVAILABLE trio is the internal bucket — scrubbed at the seam; the rest are
+        # client-correctable and re-raise verbatim.
         cases = [
-            # Recovery matches the pinned classification of the WIRE code (salesagent-nr2q).
-            (AdCPError, "internal", "transient"),
-            (AdCPValidationError, "bad", "correctable"),
-            (AdCPNotFoundError, "missing", "correctable"),
-            (AdCPConflictError, "dup", "transient"),
-            (AdCPGoneError, "expired", "correctable"),
-            (AdCPBudgetExhaustedError, "broke", "terminal"),
-            (AdCPRateLimitError, "slow", "transient"),
-            (AdCPAdapterError, "down", "transient"),
-            (AdCPServiceUnavailableError, "offline", "transient"),
+            (AdCPError, "internal", "transient", True),
+            (AdCPValidationError, "bad", "correctable", False),
+            (AdCPNotFoundError, "missing", "correctable", False),
+            (AdCPConflictError, "dup", "transient", False),
+            (AdCPGoneError, "expired", "correctable", False),
+            (AdCPBudgetExhaustedError, "broke", "terminal", False),
+            (AdCPRateLimitError, "slow", "transient", False),
+            (AdCPAdapterError, "down", "transient", True),
+            (AdCPServiceUnavailableError, "offline", "transient", True),
         ]
 
         handler = AdCPRequestHandler()
 
-        for exc_class, msg, expected_recovery in cases:
+        for exc_class, msg, expected_recovery, scrubbed in cases:
 
             async def mock_skill(params, token, klass=exc_class, message=msg):
                 raise klass(message)
 
             with patch.object(handler, "_handle_get_products_skill", mock_skill):
-                with pytest.raises(exc_class) as exc_info:
+                with pytest.raises(AdCPError) as exc_info:
                     await handler._handle_explicit_skill("get_products", {}, "token")
-                assert exc_info.value.recovery == expected_recovery
+                raised = exc_info.value
+                assert raised.recovery == expected_recovery, f"{exc_class.__name__}: recovery"
+                if scrubbed:
+                    assert raised.message == _SANITIZED_INTERNAL_MESSAGE, f"{exc_class.__name__}: not scrubbed"
+                    assert raised.wire_error_code == "SERVICE_UNAVAILABLE", f"{exc_class.__name__}: wire code"
+                else:
+                    assert isinstance(raised, exc_class), f"{exc_class.__name__}: client-correctable must be verbatim"
+                    assert raised.message == msg, f"{exc_class.__name__}: message must be preserved"
 
     def test_rest_roundtrip_all_subclasses(self):
         """All 11 AdCPError subclasses: raise -> REST handler -> JSON body -> verify recovery."""

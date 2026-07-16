@@ -25,7 +25,7 @@ SCAN_DIRS = [REPO_ROOT / "src" / "core", REPO_ROOT / "src" / "adapters"]
 # AdCPError.synthesize(). Keyed by (relative_path, enclosing_function_name) so the
 # allowlist survives line-number shifts. This cap is exactly two.
 KNOWN_VIOLATIONS = {
-    ("src/core/exceptions.py", "safe_adcp_error"),
+    ("src/core/exceptions.py", "_scrubbed_error"),
     ("src/core/tool_error_logging.py", "handle_tool_error"),
 }
 

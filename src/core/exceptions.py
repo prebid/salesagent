@@ -1097,65 +1097,78 @@ def _canonical_recovery_for(wire_code: str) -> RecoveryHint:
     return cast(RecoveryHint, meta["recovery"]) if meta else "transient"
 
 
+def _scrubbed_error(*, error_code: str, recovery: RecoveryHint, status_code: int, context: Any) -> AdCPError:
+    """A wire-safe ``AdCPError`` carrying the given code/recovery but the SANITIZED generic message
+    and a recovery-matched suggestion, with ``details``/``field`` dropped. The single scrub
+    constructor for ``safe_adcp_error`` so message replacement can't drift between call sites."""
+    return AdCPError.synthesize(
+        _SANITIZED_INTERNAL_MESSAGE,
+        error_code=error_code,
+        status_code=status_code,
+        recovery=recovery,
+        suggestion=_sanitized_suggestion_for(recovery),
+        context=context,
+    )
+
+
 def safe_adcp_error(exc: Exception) -> AdCPError:
     """Return a wire-safe ``AdCPError`` — THE single sanitization policy for every buyer-facing
     boundary (A2A failed-Task / JSON-RPC ``InternalError``, and the webhook push path via
     ``ContextManager.audit_workflow_step_failure``; MCP/REST adoption tracked in #1587).
 
-    Message safety is decided by ERROR CLASS, not by whether the error is typed — a *typed*
-    ``AdCPError`` can still carry an interpolated ``str(exc)`` (e.g. reachable handlers do
-    ``AdCPAdapterError(f"...: {e}")`` where ``e`` is a broadly-caught DB/adapter exception
-    bearing a connection string).
+    Two ORTHOGONAL decisions, deliberately kept separate — conflating them is what leaked secrets
+    (a raw ``ValueError`` pre-normalized to a *trusted* ``AdCPValidationError`` whose raw message
+    then survived):
 
-    - INTERNAL/INFRA errors (``wire_error_code in INTERNAL_WIRE_CODES`` — the SERVICE_UNAVAILABLE
-      family AND terminal ``CONFIGURATION_ERROR``): the message is replaced with a controlled
-      generic one while the wire code + status + context are preserved; ``details``/``field`` are
-      dropped. Recovery is NORMALIZED to the wire code's canonical value (SERVICE_UNAVAILABLE→
-      transient, CONFIGURATION_ERROR→terminal), NOT a possibly-inconsistent instance override, and
-      the suggestion is derived from that recovery — so code, recovery, and suggestion always
-      agree. The raw message is expected to have been logged server-side already.
-    - CLIENT-CORRECTABLE typed errors (VALIDATION_ERROR, ``*_NOT_FOUND``, AUTH_*,
-      POLICY_VIOLATION, BUDGET_*, RATE_LIMITED, …) carry a message the buyer needs to fix their
-      request → pass through unchanged.
-    - A wire code that is not even in ``WIRE_STANDARD_CODES`` (internal-only) must never reach a
-      subscriber: it is coerced to ``SERVICE_UNAVAILABLE`` (canonical recovery transient) and its
-      message scrubbed.
-    - UNTYPED exceptions → generic base ``AdCPError``; ``str(exc)`` never reaches the wire.
+    1. SEMANTIC code/recovery — from ``normalize_to_adcp_error`` (``ValueError`` →
+       VALIDATION_ERROR, ``PermissionError`` → AUTH_REQUIRED, native ``AdCPError`` unchanged). This
+       is the SAME mapping the synchronous MCP/REST/A2A boundaries apply, so a webhook audit and
+       the synchronous response for the SAME exception emit the SAME code — no divergence.
+    2. MESSAGE trust — from the ORIGINAL exception's PROVENANCE. A raw built-in's ``str(exc)`` is
+       UNTRUSTED (it can embed a connection string / token / SQL) and is SCRUBBED even when its
+       semantic code is client-correctable; only an explicitly-raised typed ``AdCPError`` carries a
+       controlled buyer-facing message worth preserving.
+
+    Concretely:
+    - INTERNAL/INFRA codes (``wire_error_code in INTERNAL_WIRE_CODES`` — SERVICE_UNAVAILABLE family
+      + terminal CONFIGURATION_ERROR): message scrubbed regardless of provenance (a typed
+      ``AdCPAdapterError(f"...: {e}")`` can interpolate a secret too); recovery normalized to the
+      wire code's canonical value; suggestion derived from that recovery.
+    - A wire code not in ``WIRE_STANDARD_CODES`` (internal-only): coerced to SERVICE_UNAVAILABLE and
+      scrubbed.
+    - A CLIENT-CORRECTABLE standard code (VALIDATION_ERROR, ``*_NOT_FOUND``, AUTH_*, …): the
+      message is kept ONLY when the ORIGINAL exception is a typed ``AdCPError`` (trusted
+      provenance); a RAW built-in that merely *normalized* to such a code keeps the semantic
+      code/recovery but has its untrusted message scrubbed.
     """
-    if not isinstance(exc, AdCPError):
-        # Untyped → generic base error; its recovery is the base default (transient), so the
-        # suggestion is picked for that same recovery.
-        return AdCPError(
-            _SANITIZED_INTERNAL_MESSAGE,
-            suggestion=_sanitized_suggestion_for(AdCPError._default_recovery),
-        )
+    # (1) SEMANTIC code/recovery — the mapping the synchronous boundaries also apply.
+    normalized = normalize_to_adcp_error(exc)
+    wire_code = normalized.wire_error_code
 
-    wire_code = exc.wire_error_code
     if wire_code in INTERNAL_WIRE_CODES:
-        # Internal/infra — scrub the (possibly internals-bearing) message; keep the wire code +
-        # status + context; drop details/field. Recovery is NORMALIZED to the code's canonical
-        # value (an instance override can disagree with the code — a SERVICE_UNAVAILABLE tagged
-        # correctable/terminal is self-contradictory), and the suggestion follows that recovery.
-        recovery = _canonical_recovery_for(wire_code)
-        return AdCPError.synthesize(
-            _SANITIZED_INTERNAL_MESSAGE,
-            error_code=exc.error_code,
-            status_code=exc.status_code,
-            recovery=recovery,
-            suggestion=_sanitized_suggestion_for(recovery),
-            context=exc.context,
+        return _scrubbed_error(
+            error_code=normalized.error_code,
+            recovery=_canonical_recovery_for(wire_code),
+            status_code=normalized.status_code,
+            context=normalized.context,
         )
     if wire_code not in WIRE_STANDARD_CODES:
-        # An internal-only code the wire doesn't model: coerce to SERVICE_UNAVAILABLE and scrub,
-        # so a subscriber never receives a non-standard code or an internals-bearing message. Its
-        # canonical recovery is transient, so code + recovery + suggestion agree.
-        recovery = _canonical_recovery_for("SERVICE_UNAVAILABLE")
-        return AdCPError.synthesize(
-            _SANITIZED_INTERNAL_MESSAGE,
+        # An internal-only code the wire doesn't model: coerce to SERVICE_UNAVAILABLE + scrub.
+        return _scrubbed_error(
             error_code="SERVICE_UNAVAILABLE",
-            status_code=exc.status_code,
-            recovery=recovery,
-            suggestion=_sanitized_suggestion_for(recovery),
-            context=exc.context,
+            recovery=_canonical_recovery_for("SERVICE_UNAVAILABLE"),
+            status_code=normalized.status_code,
+            context=normalized.context,
         )
-    return exc
+    # (2) MESSAGE trust — client-correctable standard code.
+    if isinstance(exc, AdCPError):
+        # Explicitly-raised typed error → controlled buyer-facing message, pass through unchanged.
+        return exc
+    # A RAW built-in that normalized to a client-correctable code: keep that SEMANTIC code/recovery
+    # (so webhook and synchronous responses agree) but SCRUB the untrusted ``str(exc)`` message.
+    return _scrubbed_error(
+        error_code=normalized.error_code,
+        recovery=normalized.recovery,
+        status_code=normalized.status_code,
+        context=normalized.context,
+    )
