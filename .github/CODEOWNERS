@@ -46,6 +46,8 @@
 /tests/factories/                        @chrishuie
 /.duplication-baseline                   @chrishuie
 /.type-ignore-baseline                   @chrishuie
+/.ruff-complexity-baseline               @chrishuie
+/.mypy-untyped-defs-baseline             @chrishuie
 /.coverage-baseline                      @chrishuie
 /.guard-baselines/                       @chrishuie
 /tests/unit/.allowlist-*.json            @chrishuie
