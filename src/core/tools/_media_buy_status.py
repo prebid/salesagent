@@ -146,6 +146,13 @@ SERVING_PERSISTED_STATUSES: frozenset[str] = frozenset(
     k for k, v in PERSISTED_STATUS_TO_CANONICAL.items() if v == CANONICAL_SERVING
 )
 
+# The legacy serving aliases (everything serving EXCEPT the modern "active") the
+# STATUS SCHEDULER migrates to canonical "active"/"completed" once serving —
+# purely date-gated (already approved), no creative check. Lives here beside the
+# set it derives from so the scheduler can't drift a partial copy (#1556 class);
+# membership pinned in test_media_buy_status_consistency.py.
+LEGACY_SERVING_ALIASES: frozenset[str] = SERVING_PERSISTED_STATUSES - {"active"}
+
 # Persisted pre-serving states the STATUS SCHEDULER may auto-promote to "active"
 # once the flight starts (and creatives are approved). Derived from the map (all
 # -> "pending_start") MINUS the human-approval gates that must NEVER be

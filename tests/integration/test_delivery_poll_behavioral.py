@@ -107,7 +107,7 @@ class TestWebhookNotificationTypeScheduled:
             # The synchronous poll for the same buy carries none of the
             # webhook-only fields (#1570).
             response = env.call_impl(media_buy_ids=[buy.media_buy_id])
-            assert_omits_webhook_only_fields(response.model_dump(mode="json"))
+            assert_omits_webhook_only_fields(response.model_dump(mode="json"), context="scheduled webhook poll")
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +148,7 @@ class TestWebhookNotificationTypeFinal:
             response = env.call_impl(media_buy_ids=[buy.media_buy_id])
             dumped = response.model_dump(mode="json")
             assert dumped["media_buy_deliveries"][0]["status"] == "completed"
-            assert_omits_webhook_only_fields(dumped)
+            assert_omits_webhook_only_fields(dumped, context="final webhook poll")
 
 
 @pytest.mark.requires_db
@@ -195,7 +195,7 @@ class TestSimulationReachesFinalThroughRealHook:
 
             dumped = response.model_dump(mode="json")
             assert dumped["media_buy_deliveries"][0]["status"] == "completed"
-            assert_omits_webhook_only_fields(dumped)
+            assert_omits_webhook_only_fields(dumped, context="mock-time completed poll")
 
     def test_mock_time_in_flight_reports_active(self, integration_db):
         """The in-flight companion: simulated clock inside the window -> active."""
@@ -225,7 +225,7 @@ class TestSimulationReachesFinalThroughRealHook:
 
             dumped = response.model_dump(mode="json")
             assert dumped["media_buy_deliveries"][0]["status"] == "active"
-            assert_omits_webhook_only_fields(dumped)
+            assert_omits_webhook_only_fields(dumped, context="mock-time active poll")
 
 
 # ---------------------------------------------------------------------------

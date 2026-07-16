@@ -19,6 +19,7 @@ from adcp.types import MediaBuyStatus
 
 from src.core.tools._media_buy_status import (
     CANONICAL_STATUSES,
+    LEGACY_SERVING_ALIASES,
     NO_MORE_DATA_STATUSES,
     PENDING_PERSISTED_STATUSES,
     PERSISTED_STATUS_TO_CANONICAL,
@@ -145,6 +146,16 @@ class TestCanonicalVocabularyPinnedToSdk:
         failing test unless the membership itself is pinned.
         """
         assert SERVING_PERSISTED_STATUSES == {"active", "approved", "ready", "scheduled"}
+
+    def test_legacy_serving_aliases_membership_is_pinned(self):
+        """Pin the legacy serving aliases the status scheduler migrates to "active".
+
+        Derived as SERVING_PERSISTED_STATUSES - {"active"} and consumed by
+        media_buy_status_scheduler.py. Pin the membership so a map change that
+        added/removed a serving alias can't silently change which legacy rows the
+        scheduler migrates (#1556 class — same as the SERVING pin above).
+        """
+        assert LEGACY_SERVING_ALIASES == {"approved", "ready", "scheduled"}
 
     def test_pending_persisted_statuses_membership_is_pinned(self):
         """Pin the exact PENDING_PERSISTED_STATUSES set (the status scheduler's promote gate).

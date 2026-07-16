@@ -2451,9 +2451,9 @@ class TestTimeSimulationReachesFinalNotification:
 
         assert response.media_buy_deliveries[0].status == "completed"
         # The status feeds the webhook path's "final" derivation (pinned once by
-        # test_no_more_data_status_is_final); the poll itself carries no
-        # notification_type (#1570).
-        assert "notification_type" not in response.model_dump(mode="json")
+        # test_no_more_data_status_is_final); the poll itself carries NONE of the
+        # webhook-only fields (#1570) — enforced via the shared full-set oracle.
+        assert_omits_webhook_only_fields(response.model_dump(mode="json"), context="simulated-clock poll")
 
     def test_mid_flight_mock_time_via_from_headers_does_not_raise(self):
         """A mid-flight X-Mock-Time through the real header boundary succeeds.
@@ -2486,7 +2486,7 @@ class TestTimeSimulationReachesFinalNotification:
         )
 
         assert response.media_buy_deliveries[0].status == "active"
-        assert "notification_type" not in response.model_dump(mode="json")
+        assert_omits_webhook_only_fields(response.model_dump(mode="json"), context="mock-time poll")
 
     def test_jump_to_event_only_does_not_raise(self):
         """jump_to_event with no mock_time hits the real hook without a TypeError.
