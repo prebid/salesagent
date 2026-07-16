@@ -76,7 +76,11 @@ from tests.helpers.adcp_factories import (
     create_test_property,
     create_test_property_dict,
 )
-from tests.helpers.envelope_assertions import assert_envelope_shape, error_envelope_for_raw_a2a_env
+from tests.helpers.envelope_assertions import (
+    assert_envelope_shape,
+    assert_no_raw_validation_leak,
+    error_envelope_for_raw_a2a_env,
+)
 from tests.helpers.idempotency_seeds import (
     make_active_cached_success,
     seed_cached_success,
@@ -89,6 +93,7 @@ __all__ = [
     "assert_resolve_auth_dep_passes_token",
     # Envelope assertions
     "assert_envelope_shape",
+    "assert_no_raw_validation_leak",
     "error_envelope_for_raw_a2a_env",
     # Idempotency cache seeding
     "make_active_cached_success",

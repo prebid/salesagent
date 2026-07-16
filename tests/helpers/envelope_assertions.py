@@ -43,6 +43,12 @@ def error_envelope_for_raw_a2a_env(result: TransportResult, transport: Transport
     return result.synthesized_error_envelope
 
 
+def assert_no_raw_validation_leak(message: str) -> None:
+    """Assert a buyer-facing validation message omits raw Pydantic internals."""
+    assert "input_value" not in message, f"raw Pydantic input leaked into validation message: {message!r}"
+    assert "errors.pydantic.dev" not in message, f"Pydantic documentation URL leaked into message: {message!r}"
+
+
 def assert_envelope_shape(
     target: Any,
     code: str,

@@ -8,8 +8,11 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.core.exceptions import AdCPValidationError
 from src.core.mcp_compat_middleware import RequestCompatMiddleware
 from src.core.request_compat import NormalizationResult
+from src.core.tool_error_logging import AdCPToolError
+from tests.helpers import assert_envelope_shape, assert_no_raw_validation_leak
 
 
 @pytest.fixture()
@@ -25,6 +28,7 @@ def _make_context(tool_name: str, arguments: dict | None):
 
     ctx = MagicMock()
     ctx.message = message
+    ctx.fastmcp_context = None
     # .copy() should return a new context with the replaced message
     ctx.copy = MagicMock(side_effect=lambda **kw: _make_copied_context(ctx, **kw))
     return ctx
@@ -36,6 +40,26 @@ def _make_copied_context(original, **kwargs):
     copied.message = kwargs.get("message", original.message)
     copied.copy = original.copy
     return copied
+
+
+def _typeadapter_validation_error(tool_name: str, line_error: dict):
+    """Build the same pydantic ValidationError shape FastMCP TypeAdapter raises."""
+    from pydantic import ValidationError
+
+    return ValidationError.from_exception_data(
+        title=f"call[{tool_name}]",
+        line_errors=[line_error],
+    )
+
+
+class _ValidationErrorRecord:
+    """Matcher that pins the typed boundary error passed to the recorder."""
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, AdCPValidationError) and other.error_code == "VALIDATION_ERROR"
+
+    def __repr__(self) -> str:
+        return "AdCPValidationError(error_code='VALIDATION_ERROR')"
 
 
 class TestMiddlewareCallsNormalizer:
@@ -289,6 +313,93 @@ class TestShouldRetry:
         exc = RuntimeError("unexpected")
         with patch("src.core.config.is_production", return_value=True):
             assert middleware._should_retry(exc) is False
+
+
+class TestTypeAdapterValidationEnvelope:
+    """FastMCP TypeAdapter validation errors become AdCP wire envelopes."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tool_name", "arguments", "line_error", "field", "message"),
+        [
+            (
+                "list_creatives",
+                {"filters": {"statuses": []}},
+                {
+                    "type": "too_short",
+                    "loc": ("filters", "statuses"),
+                    "input": [],
+                    "ctx": {"field_type": "List", "min_length": 1, "actual_length": 0},
+                },
+                "filters.statuses",
+                "List should have at least 1 item",
+            ),
+            (
+                "list_creatives",
+                {"filters": {"format_ids": [{}]}},
+                {
+                    "type": "missing",
+                    "loc": ("filters", "format_ids", 0, "agent_url"),
+                    "input": {},
+                },
+                "filters.format_ids[0].agent_url",
+                "Field required",
+            ),
+        ],
+    )
+    async def test_typeadapter_validation_errors_are_adcp_tool_errors(
+        self, middleware, tool_name, arguments, line_error, field, message
+    ):
+        ctx = _make_context(tool_name, arguments)
+        validation_error = _typeadapter_validation_error(tool_name, line_error)
+        call_next = AsyncMock(side_effect=validation_error)
+
+        with patch("src.core.config.is_production", return_value=False):
+            with pytest.raises(AdCPToolError) as exc_info:
+                await middleware.on_call_tool(ctx, call_next)
+
+        assert_envelope_shape(
+            exc_info.value,
+            "VALIDATION_ERROR",
+            recovery="correctable",
+            message_substr=message,
+            check_mcp_tool_error=True,
+        )
+        assert exc_info.value.envelope["errors"][0]["field"] == field
+        wire_message = exc_info.value.envelope["errors"][0]["message"]
+        assert_no_raw_validation_leak(wire_message)
+
+    @pytest.mark.asyncio
+    async def test_typeadapter_validation_errors_are_recorded_at_mcp_boundary(self, middleware):
+        ctx = _make_context("list_creatives", {"filters": {"statuses": []}})
+        identity = MagicMock(tenant_id="tenant-1", principal_id="buyer-1")
+        ctx.fastmcp_context = MagicMock()
+        ctx.fastmcp_context.get_state = AsyncMock(return_value=identity)
+        validation_error = _typeadapter_validation_error(
+            "list_creatives",
+            {
+                "type": "too_short",
+                "loc": ("filters", "statuses"),
+                "input": [],
+                "ctx": {"field_type": "List", "min_length": 1, "actual_length": 0},
+            },
+        )
+
+        with (
+            patch("src.core.config.is_production", return_value=False),
+            patch("src.core.mcp_compat_middleware.record_boundary_error") as record_error,
+            pytest.raises(AdCPToolError),
+        ):
+            await middleware.on_call_tool(ctx, AsyncMock(side_effect=validation_error))
+
+        ctx.fastmcp_context.get_state.assert_awaited_once_with("identity")
+        record_error.assert_called_once_with(
+            "mcp",
+            "list_creatives",
+            _ValidationErrorRecord(),
+            tenant_id="tenant-1",
+            principal_id="buyer-1",
+        )
 
 
 class TestMiddlewareEdgeCases:
