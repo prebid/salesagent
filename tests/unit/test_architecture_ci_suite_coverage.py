@@ -13,6 +13,8 @@ No allowlist — zero tolerance. Every locally-run suite must have a gating
 CI job, or a broken suite can silently land on main again.
 """
 
+from pathlib import Path
+
 import pytest
 
 from scripts.ci.workflow_helpers import load_ci_workflow
@@ -20,6 +22,27 @@ from scripts.ci.workflow_helpers import load_ci_workflow
 # Suite jobs that must appear in summary.needs — a suite that runs but is absent
 # from summary.needs leaves CI green on its failure (PR #1299 silent-breakage class).
 REQUIRED_SUMMARY_GATES = frozenset({"unit-tests", "integration-tests", "e2e-tests", "bdd-tests", "admin-ui-tests"})
+
+_FREE_DISK_USES = "./.github/actions/_free-disk"
+_FREE_DISK_ACTION = Path(__file__).resolve().parents[2] / ".github" / "actions" / "_free-disk" / "action.yml"
+
+
+def _find_free_disk_step(steps: list) -> tuple[int, dict]:
+    """Locate the shared _free-disk composite step (name may be present for CI UI)."""
+    for i, step in enumerate(steps):
+        uses = str(step.get("uses", "")).rstrip("/")
+        if uses.endswith("_free-disk"):
+            return i, step
+    raise AssertionError(f"job must include uses: {_FREE_DISK_USES} (single source for runner reclaim).")
+
+
+def _assert_free_disk_action_reclaims_runner() -> None:
+    """Contract lives in the composite — not duplicated inline run blocks."""
+    assert _FREE_DISK_ACTION.is_file(), f"missing {_FREE_DISK_ACTION}"
+    text = _FREE_DISK_ACTION.read_text(encoding="utf-8")
+    assert text.strip(), f"{_FREE_DISK_ACTION} must not be empty (vacuous pass)."
+    assert "/usr/share/dotnet" in text, "_free-disk must remove /usr/share/dotnet."
+    assert "docker builder prune" in text, "_free-disk must prune the Docker builder cache."
 
 
 class TestCISuiteCoverage:
@@ -237,7 +260,8 @@ class TestCISuiteCoverage:
 
         step_names = [s.get("name") for s in steps]
         assert "Build and start E2E stack" in step_names, "e2e-tests must pre-start the compose stack before pytest."
-        assert "Free disk space" in step_names, "e2e-tests must free disk before image build."
+        free_idx, _ = _find_free_disk_step(steps)
+        _assert_free_disk_action_reclaims_runner()
 
         prestart = next(s for s in steps if s.get("name") == "Build and start E2E stack")
         prestart_run = str(prestart.get("run", ""))
@@ -251,14 +275,16 @@ class TestCISuiteCoverage:
         ]
         assert pytest_steps, "e2e-tests must invoke pytest on tests/e2e/."
         pytest_env = pytest_steps[0].get("env") or {}
-        # Must NOT clear workflow ADCP_TESTING — empty string forces fixture cold build.
-        assert pytest_env.get("ADCP_TESTING", "true") != "", (
-            "e2e-tests must not set ADCP_TESTING to empty (fixture cold-build under pytest-timeout)."
-        )
+        # Absent inherits workflow ADCP_TESTING: true. Explicit values must stay true —
+        # empty/false forces docker_services_e2e into cold-build under pytest-timeout.
+        if "ADCP_TESTING" in pytest_env:
+            assert pytest_env["ADCP_TESTING"] == "true", (
+                f"e2e-tests pytest must keep ADCP_TESTING=true (got {pytest_env['ADCP_TESTING']!r}); "
+                "empty/false forces fixture cold-build under pytest-timeout."
+            )
         extra = str(pytest_steps[0].get("with", {}).get("extra_args", ""))
         assert "--timeout=300" in extra, "e2e-tests must keep per-test --timeout=300 on test bodies."
 
-        free_idx = step_names.index("Free disk space")
         pre_idx = step_names.index("Build and start E2E stack")
         pytest_idx = next(
             i
@@ -282,18 +308,14 @@ class TestCISuiteCoverage:
         assert steps, "bdd-in-network must declare steps (empty job is a vacuous pass)."
 
         step_names = [s.get("name") for s in steps]
-        assert "Free disk space" in step_names, "bdd-in-network must include a 'Free disk space' step before compose."
         assert "Run BDD suite in-network" in step_names, "bdd-in-network must run ./run_all_tests.sh bdd_e2e."
-        free_idx = step_names.index("Free disk space")
+        free_idx, _ = _find_free_disk_step(steps)
+        _assert_free_disk_action_reclaims_runner()
         run_idx = step_names.index("Run BDD suite in-network")
         assert free_idx < run_idx, (
             "Free disk space must run before 'Run BDD suite in-network' "
             f"(found Free disk at {free_idx}, run at {run_idx})."
         )
-
-        free_run = str(steps[free_idx].get("run", ""))
-        assert "/usr/share/dotnet" in free_run, "Free disk space must remove /usr/share/dotnet."
-        assert "docker builder prune" in free_run, "Free disk space must prune the Docker builder cache."
 
         run_step = steps[run_idx]
         env = run_step.get("env") or {}
