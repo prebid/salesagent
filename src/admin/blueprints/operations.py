@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from typing import Any
 
 from flask import Blueprint, request
 from sqlalchemy import select
@@ -16,6 +17,12 @@ from src.admin.utils import require_auth, require_tenant_access
 from src.core.database.repositories.media_buy import MediaBuyRepository
 
 logger = logging.getLogger(__name__)
+
+
+def _as_request_dict(value: dict[str, Any] | str | None) -> dict[str, Any]:
+    """Narrow JSONType (dict|str|None) to a dict for .get() / echo_context."""
+    return value if isinstance(value, dict) else {}
+
 
 # Create blueprint
 operations_bp = Blueprint("operations", __name__)
@@ -346,12 +353,14 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 flash("No pending approval found for this media buy", "warning")
                 return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
-            # Extract step data to dict to avoid detached instance errors after commit/nested sessions
+            # Extract step data to dict to avoid detached instance errors after commit/nested sessions.
+            # JSONType columns are typed as dict|str|None; narrow before echo_context / .get().
+            request_data = _as_request_dict(step.request_data)
             step_data = {
                 "step_id": step.step_id,
                 "context_id": step.context_id,
                 "tool_name": step.tool_name,
-                "request_data": step.request_data or {},
+                "request_data": request_data,
             }
 
             # Get user info for audit

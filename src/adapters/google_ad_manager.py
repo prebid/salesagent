@@ -835,30 +835,7 @@ class GoogleAdManager(AdServerAdapter):
             if package.targeting_overlay:
                 package_targeting[package.package_id] = self._build_targeting(package.targeting_overlay)
 
-        # Build placement_targeting_map from all products' impl_configs (adcp#208)
-        # This maps placement_id → targeting_name for creative-level targeting
-        self._placement_targeting_map.clear()  # Reset for this order
-        for _pid, prod_info in products_map.items():
-            if not prod_info or not isinstance(prod_info, dict):
-                continue
-            prod_impl_config = cast(dict[str, Any], prod_info.get("implementation_config", {}) or {})
-            placement_targeting = cast(list[dict[str, Any]], prod_impl_config.get("placement_targeting", []))
-            for pt in placement_targeting:
-                placement_id = pt.get("placement_id")
-                targeting_name = pt.get("targeting_name")
-                if placement_id and targeting_name:
-                    # Warn if there's a collision from different products
-                    if placement_id in self._placement_targeting_map:
-                        existing = self._placement_targeting_map[placement_id]
-                        if existing != targeting_name:
-                            self.log(
-                                f"[yellow]Warning: placement_id '{placement_id}' has conflicting "
-                                f"targeting_names: '{existing}' vs '{targeting_name}'. Using '{targeting_name}'[/yellow]"
-                            )
-                    self._placement_targeting_map[placement_id] = targeting_name
-
-        if self._placement_targeting_map:
-            self.log(f"Built placement_targeting_map with {len(self._placement_targeting_map)} placements")
+        self._build_placement_targeting_map(products_map)
 
         # Create line items for each package
         try:
@@ -880,54 +857,7 @@ class GoogleAdManager(AdServerAdapter):
             # NOTE: platform_line_item_id persistence is handled by media_buy_create.py
             # after response object is returned. See CreateMediaBuySuccess._platform_line_item_ids mapping.
 
-            # Approve the order now that it has line items
-            # GAM requires line items to exist before an order can be APPROVED
-            # Try once - if forecasting not ready, start background task
-            self.log(f"[cyan]Attempting to approve GAM Order {order_id} (max_retries=1)[/cyan]")
-            try:
-                approval_success = self.orders_manager.approve_order(order_id, max_retries=1)
-                if approval_success:
-                    self.log(f"✓ Approved GAM Order {order_id}")
-                else:
-                    # Approval failed (likely NO_FORECAST_YET) - start background polling
-                    self.log(
-                        f"[yellow]Order {order_id} forecasting not ready - starting background approval task[/yellow]"
-                    )
-
-                    # Get webhook URL from push notification config
-                    # Note: push_notification_config is not part of AdCP library's CreateMediaBuyRequest
-                    # Use getattr for backward compatibility with internal extensions
-                    webhook_url = None
-                    push_config = getattr(request, "push_notification_config", None)
-                    if push_config:
-                        webhook_url = (
-                            push_config.get("url")
-                            if isinstance(push_config, dict)
-                            else getattr(push_config, "url", None)
-                        )
-
-                    # Get principal_id from adapter's principal object
-                    principal_id = self.principal.principal_id if hasattr(self.principal, "principal_id") else "unknown"
-
-                    # Start background approval polling task
-                    from src.services.order_approval_service import start_order_approval_background
-
-                    try:
-                        approval_id = start_order_approval_background(
-                            order_id=order_id,
-                            media_buy_id=order_id,  # In automatic mode, media_buy_id = order_id
-                            tenant_id=self.tenant_id,
-                            principal_id=principal_id,
-                            webhook_url=webhook_url,
-                            max_attempts=12,  # 2 minutes with 10 second intervals
-                            poll_interval_seconds=10,
-                        )
-                        self.log(f"✓ Started background approval polling (job: {approval_id})")
-                    except ValueError as e:
-                        self.log(f"[red]Failed to start background approval: {e}[/red]")
-            except Exception as approval_error:
-                # Non-fatal error - order and line items were created successfully
-                self.log(f"[yellow]Warning: Could not approve order {order_id}: {approval_error}[/yellow]")
+            self._approve_order_or_start_background(order_id, request)
 
         except AdCPError:
             raise
@@ -941,62 +871,105 @@ class GoogleAdManager(AdServerAdapter):
             raise AdCPLineItemError(error_msg)
 
         # Check if activation approval is needed (guaranteed line items require human approval)
-        has_guaranteed, item_types = self._check_order_has_guaranteed_items(order_id)
+        has_guaranteed, _item_types = self._check_order_has_guaranteed_items(order_id)
+        workflow_step_id = None
         if has_guaranteed:
             self.log("[yellow]Order contains guaranteed line items - creating activation workflow step[/yellow]")
+            workflow_step_id = self.workflow_manager.create_activation_workflow_step(order_id, packages)
 
-            step_id = self.workflow_manager.create_activation_workflow_step(order_id, packages)
-
-            # Create response and attach platform_line_item_id mapping for database persistence
-            # This mapping is used by media_buy_create.py to update MediaPackage records
-            response = self._build_create_success(
-                request,
-                order_id,
-                packages,
-                creative_deadline_days=None,
-                workflow_step_id=step_id,
-            )
-
-            # Store platform_line_item_id mapping as a non-standard attribute
-            # This survives Pydantic validation since it's set after construction
-            # Build mapping from parallel arrays: packages (with package_id) and line_item_ids
-            platform_line_item_ids = {}
-            for package, line_item_id in zip(packages, line_item_ids, strict=False):
-                platform_line_item_ids[package.package_id] = line_item_id
-
-            self.log(f"[DEBUG] Guaranteed path: Created platform_line_item_ids mapping: {platform_line_item_ids}")
-
-            # Attach to response object (bypass Pydantic validation)
-            object.__setattr__(response, "_platform_line_item_ids", platform_line_item_ids)
-            self.log("[DEBUG] Attached _platform_line_item_ids to response object")
-            self.log(f"[DEBUG] Verify attribute exists: {hasattr(response, '_platform_line_item_ids')}")
-
-            return response
-
-        # Create response and store platform_line_item_id mapping for database persistence
-        # This mapping is used by media_buy_create.py to update MediaPackage records
+        # Create response and attach platform_line_item_id mapping for database persistence.
+        # This mapping is used by media_buy_create.py to update MediaPackage records.
         response = self._build_create_success(
             request,
             order_id,
             packages,
             creative_deadline_days=None,
+            workflow_step_id=workflow_step_id,
         )
-
-        # Store platform_line_item_id mapping as a non-standard attribute
-        # This survives Pydantic validation since it's set after construction
-        # Build mapping from parallel arrays: packages (with package_id) and line_item_ids
-        platform_line_item_ids = {}
-        for package, line_item_id in zip(packages, line_item_ids, strict=False):
-            platform_line_item_ids[package.package_id] = line_item_id
-
-        self.log(f"[DEBUG] Created platform_line_item_ids mapping: {platform_line_item_ids}")
-
-        # Attach to response object (bypass Pydantic validation)
-        object.__setattr__(response, "_platform_line_item_ids", platform_line_item_ids)
-        self.log("[DEBUG] Attached _platform_line_item_ids to response object")
-        self.log(f"[DEBUG] Verify attribute exists: {hasattr(response, '_platform_line_item_ids')}")
-
+        self._attach_platform_line_item_ids(response, packages, line_item_ids)
         return response
+
+    def _build_placement_targeting_map(self, products_map: dict) -> None:
+        """Populate ``self._placement_targeting_map`` (placement_id → targeting_name) from products (adcp#208)."""
+        self._placement_targeting_map.clear()  # Reset for this order
+        for _pid, prod_info in products_map.items():
+            if not prod_info or not isinstance(prod_info, dict):
+                continue
+            prod_impl_config = cast(dict[str, Any], prod_info.get("implementation_config", {}) or {})
+            placement_targeting = cast(list[dict[str, Any]], prod_impl_config.get("placement_targeting", []))
+            for pt in placement_targeting:
+                placement_id = pt.get("placement_id")
+                targeting_name = pt.get("targeting_name")
+                if not (placement_id and targeting_name):
+                    continue
+                existing = self._placement_targeting_map.get(placement_id)
+                if existing and existing != targeting_name:
+                    self.log(
+                        f"[yellow]Warning: placement_id '{placement_id}' has conflicting "
+                        f"targeting_names: '{existing}' vs '{targeting_name}'. Using '{targeting_name}'[/yellow]"
+                    )
+                self._placement_targeting_map[placement_id] = targeting_name
+
+        if self._placement_targeting_map:
+            self.log(f"Built placement_targeting_map with {len(self._placement_targeting_map)} placements")
+
+    def _approve_order_or_start_background(self, order_id: str, request: CreateMediaBuyRequest) -> None:
+        """Approve the order (line items now exist); on NO_FORECAST_YET start background polling. Non-fatal."""
+        # GAM requires line items to exist before an order can be APPROVED.
+        # Try once - if forecasting not ready, start a background task.
+        self.log(f"[cyan]Attempting to approve GAM Order {order_id} (max_retries=1)[/cyan]")
+        try:
+            if self.orders_manager.approve_order(order_id, max_retries=1):
+                self.log(f"✓ Approved GAM Order {order_id}")
+                return
+
+            # Approval failed (likely NO_FORECAST_YET) - start background polling
+            self.log(f"[yellow]Order {order_id} forecasting not ready - starting background approval task[/yellow]")
+
+            # Get webhook URL from push notification config.
+            # push_notification_config is not part of AdCP library's CreateMediaBuyRequest;
+            # use getattr for backward compatibility with internal extensions.
+            webhook_url = None
+            push_config = getattr(request, "push_notification_config", None)
+            if push_config:
+                webhook_url = (
+                    push_config.get("url") if isinstance(push_config, dict) else getattr(push_config, "url", None)
+                )
+
+            principal_id = self.principal.principal_id if hasattr(self.principal, "principal_id") else "unknown"
+
+            from src.services.order_approval_service import start_order_approval_background
+
+            try:
+                approval_id = start_order_approval_background(
+                    order_id=order_id,
+                    media_buy_id=order_id,  # In automatic mode, media_buy_id = order_id
+                    tenant_id=self.tenant_id,
+                    principal_id=principal_id,
+                    webhook_url=webhook_url,
+                    max_attempts=12,  # 2 minutes with 10 second intervals
+                    poll_interval_seconds=10,
+                )
+                self.log(f"✓ Started background approval polling (job: {approval_id})")
+            except ValueError as e:
+                self.log(f"[red]Failed to start background approval: {e}[/red]")
+        except Exception as approval_error:
+            # Non-fatal - order and line items were created successfully
+            self.log(f"[yellow]Warning: Could not approve order {order_id}: {approval_error}[/yellow]")
+
+    def _attach_platform_line_item_ids(
+        self, response: CreateMediaBuyResponse, packages: list[MediaPackage], line_item_ids: list
+    ) -> None:
+        """Attach the package_id → platform_line_item_id mapping used by media_buy_create.py for persistence."""
+        # Non-standard attribute set after construction so it survives Pydantic validation.
+        platform_line_item_ids = {
+            package.package_id: line_item_id for package, line_item_id in zip(packages, line_item_ids, strict=False)
+        }
+        self.log(f"[DEBUG] Created platform_line_item_ids mapping: {platform_line_item_ids}")
+        object.__setattr__(response, "_platform_line_item_ids", platform_line_item_ids)
+        self.log(
+            f"[DEBUG] Attached _platform_line_item_ids; attribute exists: {hasattr(response, '_platform_line_item_ids')}"
+        )
 
     def archive_order(self, order_id: str) -> bool:
         """Archive a GAM order for cleanup purposes (delegated to orders manager)."""
