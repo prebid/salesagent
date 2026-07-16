@@ -608,13 +608,18 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
 
     # adcp 6.6 (spec 3.1.1) made status/revision required on the update success envelope.
     # ``status`` is invariant for a synchronously applied update, so its spec-correct default
-    # lives here. ``revision`` is overridden back to NULLABLE (adcp 6.6 types it non-null int):
-    # it is the persisted monotonic counter bumped by MediaBuyRepository on every successful
-    # mutation and is set explicitly by the update path; the twin rationale on
-    # CreateMediaBuySuccess applies. 3.1.1 update-media-buy-response oneOf[0] lists revision
-    # (prose/schema divergence historically tracked in #1564; re-grounded to 3.1.1).
+    # lives here. ``revision`` is NON-nullable, mirroring CreateMediaBuySuccess: 3.1.1
+    # update-media-buy-response oneOf[0] requires it present as a non-null int >= 1 (verified:
+    # the pinned adcp 6.6 UpdateMediaBuySuccessResponse types revision as a required, non-null
+    # int), and — unlike confirmed_at on the create arm — it has NO spec-sanctioned null arm.
+    # A nullable revision left None would serialize OMITTED (exclude_none), leaving the body
+    # missing a REQUIRED key — non-conformant. So it defaults to the spec-minimum revision 1;
+    # every wire-emitting update path (dry-run / pause-resume / finalizer) passes the real
+    # persisted revision explicitly, overriding the default (adapter-layer builders leave the
+    # default; the tool rebuilds the wire success with the persisted counter).
+    # (prose/schema divergence historically tracked in #1564; re-grounded to 3.1.1.)
     status: Literal["completed"] = "completed"
-    revision: int | None = None
+    revision: int = 1
 
     # Override affected_packages to use our extended AffectedPackage type
     # This allows us to include internal tracking fields (changes_applied, buyer_package_ref)

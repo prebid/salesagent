@@ -398,8 +398,9 @@ class CreativeAgentRegistry:
                 typed_asset_types = [AssetType(at) for at in asset_types]
 
             # Build request parameters
-            # Note: type_filter (FormatCategory) removed in adcp 3.12 — formats are
-            # categorized structurally via assets[].asset_type, not a top-level enum.
+            # Note: the pinned SDK 6.6.0 ListCreativeFormatsRequest OMITS the `type`
+            # filter that AdCP 3.1.1 DEFINES (spec/SDK codegen divergence, #1660);
+            # formats are categorized structurally here via assets[].asset_type.
             request = ListCreativeFormatsRequest(
                 max_width=max_width,
                 max_height=max_height,

@@ -64,7 +64,7 @@ class TestCombinedFilters:
 
         Given diverse formats, only formats with image assets and
         at least one render width <= 728 are returned.
-        The type filter was removed in adcp 3.12.
+        The pinned SDK 6.6.0 request model omits the `type` filter that AdCP 3.1.1 defines (spec/SDK divergence, #1660).
         """
         # Image asset, width 300 -- SHOULD MATCH
         display_small_image = _make_format(

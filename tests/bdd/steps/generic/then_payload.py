@@ -503,10 +503,11 @@ def _assert_filter_content(ctx: dict, field: str, label: str) -> None:
     was_narrowed = bool(registry) and returned_names != registry_names
 
     if field == "type":
-        # type filter was removed in adcp 3.12 -- all partitions dispatch
-        # unfiltered requests so the result should equal the full catalog.
+        # SDK 6.6.0 OMITS the `type` filter (AdCP 3.1.1 defines it; spec/SDK
+        # divergence, #1660) -- all partitions dispatch unfiltered requests so
+        # the result should equal the full catalog.
         assert not was_narrowed or len(formats) == 0, (
-            f"{label} 'type': type filter was removed in adcp 3.12 so the "
+            f"{label} 'type': the SDK 6.6.0 request model omits the type filter so the "
             f"result should equal the full registry. Got {len(formats)} "
             f"formats vs {len(registry)} in registry. "
             f"Missing: {registry_names - returned_names}"

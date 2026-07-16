@@ -1762,7 +1762,7 @@ class TestListCreativeFormatsFiltering:
             is_standard=True,
         )
 
-        # type filter removed in adcp 3.12, returns all formats
+        # SDK 6.6.0 omits the `type` filter (AdCP 3.1.1 defines it; #1660), returns all formats
         req = ListCreativeFormatsRequest()
         result = self._call_impl([display, video], req)
         assert len(result) == 2
@@ -4631,7 +4631,7 @@ class TestA2ATransportGaps:
         identity = PrincipalFactory.make_identity(
             principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
         )
-        # type filter removed in adcp 3.12
+        # SDK 6.6.0 omits the `type` filter (AdCP 3.1.1 defines it; #1660)
         req = ListCreativeFormatsRequest()
 
         with patch("src.core.tools.creative_formats._list_creative_formats_impl") as mock_impl:

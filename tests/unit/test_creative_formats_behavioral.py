@@ -96,8 +96,9 @@ class TestSortOrderByName:
     """T-UC-005-inv10: Results sorted by name.
 
     Behavioral contract at creative_formats.py:337. Refactoring during
-    migration could silently reorder results. In adcp 3.12, type was removed
-    from Format, so sorting is now by name only.
+    migration could silently reorder results. The pinned SDK 6.6.0 Format model
+    OMITS the `type` field that AdCP 3.1.1 DEFINES (spec/SDK divergence, #1660),
+    so sorting is now by name only.
     """
 
     def test_sort_order_by_name(self):
@@ -163,8 +164,8 @@ class TestSortOrderByName:
 # ---------------------------------------------------------------------------
 
 
-class TestTypeFilterRemovedInAdcp312:
-    """T-UC-005-inv2-violated: Type filter removed in adcp 3.12."""
+class TestTypeFilterOmittedBySdk:
+    """T-UC-005-inv2-violated: SDK 6.6.0 omits the `type` filter AdCP 3.1.1 defines (#1660)."""
 
     def test_type_filter_rejected(self):
         """type= parameter is no longer accepted on ListCreativeFormatsRequest."""
@@ -312,11 +313,11 @@ class TestAssetTypesFilterChecksGroupAssets:
 # ---------------------------------------------------------------------------
 
 
-class TestPartitionTypeFilterRemovedInAdcp312:
-    """T-UC-005-partition-type-filter: type filter removed in adcp 3.12."""
+class TestPartitionTypeFilterOmittedBySdk:
+    """T-UC-005-partition-type-filter: SDK 6.6.0 omits the `type` filter AdCP 3.1.1 defines (#1660)."""
 
     def test_type_filter_no_longer_accepted(self):
-        """type= parameter is no longer accepted on ListCreativeFormatsRequest in adcp 3.12."""
+        """type= parameter is not accepted — SDK 6.6.0 ListCreativeFormatsRequest omits it (AdCP 3.1.1 defines it; #1660)."""
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError, match="type"):

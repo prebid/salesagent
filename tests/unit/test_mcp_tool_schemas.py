@@ -135,7 +135,7 @@ class TestMCPToolTypedSchemas:
         sig = inspect.signature(list_creative_formats)
         params = sig.parameters
 
-        # type parameter removed in adcp 3.12
+        # SDK 6.6.0 omits the `type` parameter that AdCP 3.1.1 defines (#1660)
 
         # Check format_ids uses FormatId type (alias for FormatReferenceStructuredObject in adcp 4.3)
         annotation_str = str(params["format_ids"].annotation)

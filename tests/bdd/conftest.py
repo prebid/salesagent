@@ -192,6 +192,13 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME(beads-dul): disclosure_positions filter not implemented in production
     # Note: violated/nofield pass vacuously (field rejected at schema level)
     "T-UC-005-inv-049-8-holds": "disclosure_positions filter not implemented",
+    # ── OWNER-APPROVED TEMPORARY EXCEPTION (branch director) — tracked prebid/salesagent#1660 ──
+    # The UC-005 `type`/uniqueItems xfails below remain SUPPRESSED conformance
+    # failures under the repo zero-tolerance test policy; the implementation is NOT
+    # claimed to conform. They are kept pending the upstream SDK codegen fix
+    # adcontextprotocol/adcp-client-python#971; final prebid-maintainer sign-off is
+    # required at PR review. This designation sits on top of the SDK-codegen-
+    # divergence rationale below and changes no xfail membership or strict flag.
     # AdCP 3.1.1 DEFINES a `type` filter on list_creative_formats (enum
     # audio/video/display/dooh) — authoritative schema
     # dist/schemas/3.1.1/creative/list-creative-formats-request.json. The pinned SDK
@@ -434,6 +441,11 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # Graduated: "all 8 positions", "format has no" on impl (disclosure filter now partially works)
     # Non-impl transports still fail — handled in transport-aware section below.
     # MCP-specific boundary disclosure xfails are in _MCP_SELECTIVE_XFAIL
+    # ── OWNER-APPROVED TEMPORARY EXCEPTION (branch director) — tracked prebid/salesagent#1660 ──
+    # The UC-005 `type`-filter selective xfails below remain SUPPRESSED conformance
+    # failures (repo zero-tolerance policy); the implementation is NOT claimed to
+    # conform. Kept pending upstream SDK codegen fix adcp-client-python#971; final
+    # prebid-maintainer sign-off at PR review. No xfail membership / strict-flag change.
     # SDK 6.6.0 model omits the AdCP 3.1.1 `type` filter — only "invalid" examples fail
     # (valid rows dispatch unfiltered and pass)
     (
@@ -491,6 +503,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         is_impl = "[impl]" in nodeid or "[impl-" in nodeid
         is_e2e_rest = "[e2e_rest]" in nodeid or "[e2e_rest-" in nodeid
 
+        # ── OWNER-APPROVED TEMPORARY EXCEPTION (branch director) — tracked prebid/salesagent#1660 ──
+        # The UC-005 `type`/uniqueItems e2e_rest xfails weakened below remain
+        # SUPPRESSED conformance failures (repo zero-tolerance policy); the
+        # implementation is NOT claimed to conform. Kept pending upstream SDK codegen
+        # fix adcp-client-python#971; final prebid-maintainer sign-off at PR review.
+        # No xfail membership or strict-flag changes here.
         # uc005 type-filter / disclosure-validation scenarios cannot hold as strict
         # xfails over e2e_rest — but NOT because the body is dropped (build_rest_body
         # now serializes the request and the live server observes the filters). The

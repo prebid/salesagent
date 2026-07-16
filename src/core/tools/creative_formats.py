@@ -424,7 +424,8 @@ def _list_creative_formats_impl(
             ]
 
     # Sort formats by name for consistent ordering
-    # (type field removed in adcp 3.12)
+    # (the pinned SDK 6.6.0 Format model OMITS the `type` field that AdCP 3.1.1
+    # DEFINES — spec/SDK codegen divergence, #1660 — so sort-by-type is unavailable)
     formats.sort(key=lambda f: f.name or "")
 
     # Ensure backward compatibility: populate both assets and assets_required

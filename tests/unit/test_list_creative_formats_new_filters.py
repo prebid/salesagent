@@ -61,7 +61,7 @@ class TestListCreativeFormatsNewFilters:
             min_height=50,
             max_height=300,
         )
-        # type removed from ListCreativeFormatsRequest in adcp 3.12
+        # SDK 6.6.0 omits the `type` filter from ListCreativeFormatsRequest (AdCP 3.1.1 defines it; #1660)
         assert req.is_responsive is False
         assert req.name_search == "leaderboard"
         assert req.asset_types is not None
@@ -106,7 +106,7 @@ class TestListCreativeFormatsNewFilters:
             is_responsive=True,
             name_search="banner",
         )
-        # type removed in adcp 3.12, format_ids should be None
+        # SDK 6.6.0 omits the `type` filter (AdCP 3.1.1 defines it; #1660); format_ids should be None
         assert req.format_ids is None
         # New filters should be set
         assert req.is_responsive is True

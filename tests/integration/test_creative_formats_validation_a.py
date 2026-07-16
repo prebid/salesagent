@@ -193,8 +193,9 @@ class TestInvalidFormatCategoryEnum:
     def test_unknown_field_rejected(self, integration_db):
         """UC-005-EXT-B-01: unknown fields are rejected by extra=forbid.
 
-        The type field was removed in adcp 3.12. Passing it now triggers
-        extra_forbidden validation error.
+        The pinned SDK 6.6.0 ListCreativeFormatsRequest OMITS the `type` field that
+        AdCP 3.1.1 DEFINES (spec/SDK codegen divergence, #1660). Passing it now
+        triggers extra_forbidden validation error.
         """
         with pytest.raises(ValidationError):
             ListCreativeFormatsRequest(type="display")
@@ -202,8 +203,9 @@ class TestInvalidFormatCategoryEnum:
     def test_valid_filters_via_mcp_works(self, integration_db):
         """UC-005-EXT-B-01: MCP wrapper correctly handles valid filter parameters.
 
-        The type filter was removed in adcp 3.12. Verify the MCP wrapper
-        handles remaining valid filters (e.g., name_search) without error.
+        The pinned SDK 6.6.0 request model OMITS the `type` filter that AdCP 3.1.1
+        DEFINES (spec/SDK divergence, #1660). Verify the MCP wrapper handles the
+        remaining valid filters (e.g., name_search) without error.
         """
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
@@ -219,7 +221,8 @@ class TestInvalidFormatCategoryEnum:
 
         Ensures the validation correctly accepts valid ListCreativeFormatsRequest construction.
         """
-        # type filter was removed from ListCreativeFormatsRequest in adcp 3.12
+        # SDK 6.6.0 OMITS the `type` filter from ListCreativeFormatsRequest —
+        # AdCP 3.1.1 DEFINES it (spec/SDK divergence, #1660)
         req = ListCreativeFormatsRequest()
         assert req is not None
 
