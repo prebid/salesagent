@@ -304,22 +304,45 @@ class TestMCPBoundaryAdCPErrorTranslation:
         )
 
 
-def _uncovered_correctable_targets(registry, sanitized_by_code, internal_codes, standard_codes):
-    """Registry entries whose CLIENT-CORRECTABLE target code has no ``sanitized_by_code`` entry.
+def _representative_exception(exc_type):
+    """A representative instance of ``exc_type`` for invoking a registry factory.
 
-    Pure over its inputs (not the module globals) so the same logic grades both the real
-    ``_BUILTIN_NORMALIZATION`` (must be empty) and a known-bad synthetic registry (must be
-    non-empty). Reads each entry's ``target_class`` — the 2nd tuple element — so it covers EVERY
-    normalizer, including a SPECIAL one with a custom structured factory, not only the plain
-    ``target_class(str(exc))`` entries. Internal-bucket / non-standard targets are exempt.
+    Pydantic ``ValidationError`` has no plain ``(msg)`` constructor, so it is built by triggering
+    a real schema failure; every other built-in accepts a message string.
+    """
+    from pydantic import BaseModel, ValidationError
+
+    if issubclass(exc_type, ValidationError):
+
+        class _Probe(BaseModel):
+            value: int
+
+        try:
+            _Probe(value="not-an-int")
+        except ValidationError as ve:
+            return ve
+        raise AssertionError("failed to build a representative ValidationError")
+    return exc_type("probe")
+
+
+def _uncovered_correctable_targets(registry, sanitized_by_code, internal_codes, standard_codes):
+    """Registry factories whose CLIENT-CORRECTABLE target code has no ``sanitized_by_code`` entry.
+
+    The target wire code is derived by INVOKING each ``factory`` on a representative exception —
+    the factory is the ONLY authority, so the guard can never diverge from what normalization
+    actually returns at runtime (there is no separate declared class to drift from). Pure over its
+    inputs so the same logic grades both the real ``_BUILTIN_NORMALIZATION`` (must be empty) and a
+    known-bad synthetic registry (must be non-empty). Internal-bucket / non-standard targets are
+    exempt (the generic internal message is correct there).
     """
     uncovered = []
-    for _exc_type, target_class, _factory in registry:
-        wire_code = target_class("x").wire_error_code
+    for exc_type, factory in registry:
+        produced = factory(_representative_exception(exc_type))
+        wire_code = produced.wire_error_code
         if wire_code in internal_codes or wire_code not in standard_codes:
             continue
         if wire_code not in sanitized_by_code:
-            uncovered.append((target_class.__name__, wire_code))
+            uncovered.append((type(produced).__name__, wire_code))
     return uncovered
 
 
@@ -455,12 +478,12 @@ class TestSafeAdcpErrorSuggestionMatchesRecovery:
     def test_sanitized_category_registry_covers_all_correctable_builtin_targets(self):
         """Completeness guard reconciling ``_BUILTIN_NORMALIZATION`` with ``_SANITIZED_BY_WIRE_CODE``.
 
-        EVERY raw-exception normalizer — including the SPECIAL Pydantic ``ValidationError`` entry
-        with its structured factory — is in the one registry, and each one whose target is a
-        client-correctable standard code must have a category ``(message, suggestion)`` entry.
-        Otherwise a future mapping (e.g. ``KeyError → AdCPNotFoundError``, or another special
-        normalizer) would silently fall back to the misleading generic 'internal error occurred'
-        message when scrubbed. Internal-bucket / non-standard targets are exempt.
+        The target code is derived by INVOKING each entry's factory (the sole authority), so the
+        guard tracks what normalization actually returns at runtime — it can't drift from a separate
+        declared class. Every normalizer whose target is a client-correctable standard code must
+        have a category ``(message, suggestion)`` entry; otherwise a scrubbed built-in would fall
+        back to the misleading generic 'internal error occurred'. Internal-bucket / non-standard
+        targets are exempt.
         """
         from src.core.exceptions import (
             _BUILTIN_NORMALIZATION,
@@ -478,12 +501,16 @@ class TestSafeAdcpErrorSuggestionMatchesRecovery:
             f"occurred'): {uncovered}. Add a category (message, suggestion) for each code."
         )
 
-    def test_uncovered_detector_flags_a_special_normalizer(self):
-        """Known-bad self-test: the detector must catch a SPECIAL normalizer (custom structured
-        factory, like the Pydantic branch) whose target code lacks a category entry — not only a
-        plain tuple entry. This is what makes the completeness guard above non-vacuous: without it,
-        a degraded detector that silently skipped custom-factory entries would pass green while a
-        special normalizer restored the misleading internal-error fallback.
+    def test_uncovered_detector_reads_factory_output_not_declared_metadata(self):
+        """Known-bad self-test: the detector derives the target code from the FACTORY's ACTUAL
+        return value, so a factory returning an uncovered correctable code is flagged.
+
+        This closes the drift hole the previous two-authority design had: an entry used to carry a
+        declared target class (read by the guard) separately from the factory (used at runtime), so
+        a factory could return a different code while the guard stayed green. Here the ONLY input is
+        the factory — a factory returning ``AdCPNotFoundError`` (wire INVALID_REQUEST, uncovered) is
+        flagged even though nothing 'declares' that code, and a factory whose custom construction
+        returns a covered code (VALIDATION_ERROR) is not.
         """
         from src.core.exceptions import (
             _SANITIZED_BY_WIRE_CODE,
@@ -493,27 +520,31 @@ class TestSafeAdcpErrorSuggestionMatchesRecovery:
             AdCPValidationError,
         )
 
-        def _special_factory(exc):
-            # Mirrors the Pydantic branch's shape: a custom structured constructor, NOT
-            # ``target_class(str(exc))``.
+        # A SPECIAL (custom structured) factory returning an UNCOVERED correctable code. Note there
+        # is no declared class — the detector only sees what the factory actually produces.
+        def _uncovered_factory(exc):
             return AdCPNotFoundError("resource missing", field="id", details={"probe": str(exc)})
 
-        # AdCPNotFoundError → wire INVALID_REQUEST: client-correctable, standard, and (correctly)
-        # ABSENT from _SANITIZED_BY_WIRE_CODE today — so a normalizer targeting it must be flagged.
+        # A special factory returning a COVERED code (control) — structured construction, but its
+        # output (VALIDATION_ERROR) has a category entry, so it must NOT be flagged.
+        def _covered_special_factory(exc):
+            return AdCPValidationError("bad field", field="x", details={"probe": str(exc)})
+
         assert "INVALID_REQUEST" not in _SANITIZED_BY_WIRE_CODE, "test premise: INVALID_REQUEST is uncovered"
         known_bad_registry = (
-            (KeyError, AdCPNotFoundError, _special_factory),
-            (ValueError, AdCPValidationError, lambda exc: AdCPValidationError(str(exc))),  # covered control
+            (KeyError, _uncovered_factory),
+            (LookupError, _covered_special_factory),  # covered control
         )
 
         uncovered = _uncovered_correctable_targets(
             known_bad_registry, _SANITIZED_BY_WIRE_CODE, INTERNAL_WIRE_CODES, WIRE_STANDARD_CODES
         )
         assert ("AdCPNotFoundError", "INVALID_REQUEST") in uncovered, (
-            "detector must flag a special-factory normalizer whose correctable target is uncovered"
+            "detector must flag a factory whose actual output is an uncovered correctable code"
         )
-        # The covered control (VALIDATION_ERROR) must NOT be flagged.
-        assert all(code != "VALIDATION_ERROR" for _name, code in uncovered)
+        assert all(code != "VALIDATION_ERROR" for _name, code in uncovered), (
+            "a factory returning a covered code must NOT be flagged"
+        )
 
 
 # ---------------------------------------------------------------------------

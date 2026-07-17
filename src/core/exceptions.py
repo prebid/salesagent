@@ -1087,16 +1087,17 @@ def _normalize_pydantic_validation_error(exc: ValidationError) -> AdCPError:
 # (``test_sanitized_category_registry_covers_all_correctable_builtin_targets``), which pins every
 # CLIENT-CORRECTABLE target code into ``_SANITIZED_BY_WIRE_CODE`` — so a future mapping (e.g.
 # ``KeyError → AdCPNotFoundError``, or another SPECIAL normalizer) can't silently fall through to
-# the misleading generic internal message when scrubbed. Each entry is
-# ``(builtin_type, target_class, factory)``: ``target_class`` exposes the wire code to the guard,
-# and ``factory`` builds the instance (a plain ``target_class(str(exc))`` OR a custom structured
-# constructor). The Pydantic ``ValidationError`` entry is listed FIRST because it IS-A ``ValueError``
-# and needs the structured factory; first ``isinstance`` match wins.
-_BuiltinNormalizer = tuple[type[Exception], type["AdCPError"], "Callable[[Any], AdCPError]"]
+# the misleading generic internal message when scrubbed. Each entry is ``(builtin_type, factory)``:
+# the FACTORY is the only authority for the target code — there is no separate declared class that
+# could drift from what the factory actually returns. The guard derives the target by INVOKING the
+# factory on a representative exception. A factory is either a plain ``adcp_class(str(exc))`` OR a
+# custom structured constructor (the Pydantic entry). ``ValidationError`` is listed FIRST because it
+# IS-A ``ValueError`` and needs the structured factory; first ``isinstance`` match wins.
+_BuiltinNormalizer = tuple[type[Exception], "Callable[[Any], AdCPError]"]
 _BUILTIN_NORMALIZATION: tuple[_BuiltinNormalizer, ...] = (
-    (ValidationError, AdCPValidationError, _normalize_pydantic_validation_error),
-    (ValueError, AdCPValidationError, lambda exc: AdCPValidationError(str(exc))),
-    (PermissionError, AdCPAuthorizationError, lambda exc: AdCPAuthorizationError(str(exc))),
+    (ValidationError, _normalize_pydantic_validation_error),
+    (ValueError, lambda exc: AdCPValidationError(str(exc))),
+    (PermissionError, lambda exc: AdCPAuthorizationError(str(exc))),
 )
 
 
@@ -1112,7 +1113,7 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
     """
     if isinstance(exc, AdCPError):
         return exc
-    for exc_type, _target_class, factory in _BUILTIN_NORMALIZATION:
+    for exc_type, factory in _BUILTIN_NORMALIZATION:
         if isinstance(exc, exc_type):
             return factory(exc)
     return AdCPError(str(exc) or type(exc).__name__)
