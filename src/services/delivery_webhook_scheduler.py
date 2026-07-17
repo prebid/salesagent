@@ -41,6 +41,13 @@ logger = logging.getLogger(__name__)
 # Configurable via env var for testing
 SLEEP_INTERVAL_SECONDS = int(os.getenv("DELIVERY_WEBHOOK_INTERVAL") or "3600")
 
+# Lease for the best-effort atomic "final webhook" claim (#1575). A claim older
+# than this is treated as stale (crashed/failed worker) and can be re-claimed, so
+# a stuck claim never strands the final. Comfortably longer than a real send
+# (seconds) so an in-flight send is never reclaimed, and shorter than the hourly
+# batch so a failed/crashed final is retried on the next batch.
+FINAL_WEBHOOK_CLAIM_LEASE = timedelta(minutes=15)
+
 
 class DeliveryWebhookScheduler:
     """Scheduler for sending delivery reports via webhooks."""
@@ -184,8 +191,10 @@ class DeliveryWebhookScheduler:
             logger.error(f"Error manually triggering report for {media_buy_id}: {e}", exc_info=True)
             return False
 
-    def _dedup_skips_send(self, delivery_repo: DeliveryRepository, media_buy: Any, *, force: bool) -> bool:
-        """BEST-EFFORT de-dup decision — True if this delivery webhook should be skipped.
+    def _should_skip_send(
+        self, session: Any, delivery_repo: DeliveryRepository, media_buy: Any, *, force: bool
+    ) -> bool:
+        """BEST-EFFORT skip decision — True if this delivery webhook should NOT be sent.
 
         NOT a hard exactly-once guarantee.
           - final: skip if a SUCCESSFUL "final" was already logged for this buy.
@@ -194,21 +203,30 @@ class DeliveryWebhookScheduler:
             *successful* final, so a retry after a FAILED final still goes through,
             and it fires regardless of the 24h window (so the status scheduler
             flipping the buy to persisted "completed" ~60s after flight end, before
-            this hourly batch, can't leave the spec-required final unsent).
+            this hourly batch, can't leave the spec-required final unsent). If no
+            successful final exists yet, atomically CLAIM the final (see
+            _claim_final_webhook) so two concurrent workers can't both send it — the
+            loser skips.
           - scheduled: 24h rolling dedup, bypassed by ``force`` so an operator can
             re-send a fresh periodic report on demand.
 
-        This is a READ-then-send check with no atomic reservation, so it does NOT
-        guarantee exactly-once: two concurrent workers can both observe "no final"
-        and both send, and a crash (or swallowed log-write) between a successful
-        POST and the log write leaves no record so a later batch re-sends. A durable
-        exactly-once final (atomic reserve + sequence allocation, e.g. an outbox) is
-        tracked in #1606; until then this is explicitly best-effort.
+        The atomic claim closes the CONCURRENCY duplicate. What remains best-effort
+        is the crash window: a crash (or swallowed log-write) between a successful
+        POST and the success-log write leaves no record, so once the claim's lease
+        expires a later batch re-sends. A durable exactly-once final (reserve +
+        sequence allocation before the side effect, e.g. an outbox) is tracked in
+        #1606.
         """
         is_final = resolve_canonical_status(media_buy, datetime.now(UTC).date()) == CANONICAL_COMPLETED
         if is_final:
             if delivery_repo.has_successful_final(media_buy.media_buy_id, task_type="media_buy_delivery"):
                 logger.info("Final delivery webhook already sent for media buy %s – skipping", media_buy.media_buy_id)
+                return True
+            if not self._claim_final_webhook(session, media_buy):
+                logger.info(
+                    "Final delivery webhook for media buy %s is claimed by another worker – skipping",
+                    media_buy.media_buy_id,
+                )
                 return True
             return False
         if force:
@@ -225,6 +243,23 @@ class DeliveryWebhookScheduler:
             )
             return True
         return False
+
+    def _claim_final_webhook(self, session: Any, media_buy: Any) -> bool:
+        """Atomically claim the buy's ONE final webhook. True if THIS worker won.
+
+        Best-effort concurrency guard (#1575): a conditional UPDATE that wins only
+        when the claim is unset or stale (older than FINAL_WEBHOOK_CLAIM_LEASE, so a
+        crashed worker's claim self-heals). Runs on the caller's ``session`` and
+        COMMITS it so the claim is immediately visible to a racing worker (whose
+        UPDATE then matches 0 rows and loses). Does NOT close the crash-after-POST
+        window — #1606.
+        """
+        now = datetime.now(UTC)
+        won = MediaBuyRepository(session, media_buy.tenant_id).try_claim_final_webhook(
+            media_buy.media_buy_id, now=now, stale_before=now - FINAL_WEBHOOK_CLAIM_LEASE
+        )
+        session.commit()
+        return won
 
     async def _send_report_for_media_buy(
         self, media_buy: Any, reporting_webhook: dict, session: Any, force: bool = False
@@ -265,9 +300,10 @@ class DeliveryWebhookScheduler:
             start_date_obj = datetime.now(UTC).date() - timedelta(days=1)
             end_date_obj = datetime.now(UTC)
 
-            # Best-effort de-duplication (final-ever gate + 24h scheduled dedup).
-            # See _dedup_skips_send — this is a read-check, NOT exactly-once (#1606).
-            if self._dedup_skips_send(delivery_repo, media_buy, force=force):
+            # Best-effort de-dup + atomic concurrency claim for the final. See
+            # _should_skip_send — closes the concurrency duplicate; the crash-after-
+            # POST window remains and is tracked in #1606.
+            if self._should_skip_send(session, delivery_repo, media_buy, force=force):
                 return False
 
             # Fetch delivery metrics

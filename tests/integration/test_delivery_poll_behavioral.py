@@ -255,6 +255,7 @@ class TestFinalWebhookSurvivesStatusHandoff:
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             # A serving buy (persisted "active") whose flight has ENDED.
             buy = _serving_webhook_buy(env, flight="completed")
+            mb_id = buy.media_buy_id
 
             # 1) Status scheduler runs first (its real transition), flipping the
             #    ended buy to persisted "completed" — the exact state that used to
@@ -270,7 +271,7 @@ class TestFinalWebhookSurvivesStatusHandoff:
             wires = await env.run_delivery_batch()
             assert len(wires) == 1, "the just-completed buy must still receive a delivery webhook"
             assert wires[0]["result"]["notification_type"] == "final"
-            assert wires[0]["result"]["media_buy_deliveries"][0]["media_buy_id"] == buy.media_buy_id
+            assert wires[0]["result"]["media_buy_deliveries"][0]["media_buy_id"] == mb_id
 
             # 3) A subsequent batch does NOT re-send the final (best-effort per-buy gate).
             assert await env.run_delivery_batch() == [], "the delivered final must not be re-sent by a later batch"
@@ -324,6 +325,68 @@ class TestForceDoesNotDuplicateDeliveredFinal:
 
             assert delivered is False, "a manual force trigger must not re-send an already-delivered final"
             mock_send.assert_not_awaited()
+
+
+@pytest.mark.requires_db
+class TestConcurrentFinalWebhookClaim:
+    """The final webhook is serialized across concurrent workers by an atomic claim.
+
+    Two workers that both observe "no final logged" must not both send: the first to
+    win the conditional-UPDATE claim sends, the loser skips. A stale claim (crashed
+    worker) self-heals and the final is re-sent rather than stranded. This closes the
+    concurrency duplicate (#1575); the crash-after-POST window remains and is deferred
+    to #1606.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
+    """
+
+    @pytest.mark.asyncio
+    async def test_fresh_claim_held_by_another_worker_blocks_the_batch(self, integration_db):
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            buy = _serving_webhook_buy(env, flight="completed")
+            # Simulate a concurrent worker that claimed the final moments ago.
+            session = env.get_session()
+            buy.final_webhook_claimed_at = datetime.now(UTC)
+            session.commit()
+
+            assert await env.run_delivery_batch() == [], "a fresh claim held by another worker must block the send"
+
+    @pytest.mark.asyncio
+    async def test_stale_claim_is_reclaimed_and_final_sent(self, integration_db):
+        from src.services.delivery_webhook_scheduler import FINAL_WEBHOOK_CLAIM_LEASE
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            buy = _serving_webhook_buy(env, flight="completed")
+            # A crashed worker's claim, older than the lease -> reclaimable.
+            session = env.get_session()
+            buy.final_webhook_claimed_at = datetime.now(UTC) - FINAL_WEBHOOK_CLAIM_LEASE - timedelta(minutes=1)
+            session.commit()
+
+            wires = await env.run_delivery_batch()
+            assert len(wires) == 1, "a stale claim must be reclaimed so the final is not stranded"
+            assert wires[0]["result"]["notification_type"] == "final"
+
+    def test_repo_claim_serializes_concurrent_callers(self, integration_db):
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            buy = _serving_webhook_buy(env, flight="completed")
+            repo = MediaBuyRepository(env.get_session(), "t1")
+            now = datetime.now(UTC)
+            fresh_cutoff = now - timedelta(minutes=15)
+
+            # First caller wins the claim; a second concurrent caller (same fresh
+            # cutoff) loses it — the atomic UPDATE matches exactly one of them.
+            assert repo.try_claim_final_webhook(buy.media_buy_id, now=now, stale_before=fresh_cutoff) is True
+            assert repo.try_claim_final_webhook(buy.media_buy_id, now=now, stale_before=fresh_cutoff) is False
+            # A caller whose cutoff post-dates the claim (claim now stale) reclaims it.
+            assert (
+                repo.try_claim_final_webhook(buy.media_buy_id, now=now, stale_before=now + timedelta(minutes=1)) is True
+            )
 
 
 # ---------------------------------------------------------------------------

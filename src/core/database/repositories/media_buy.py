@@ -16,7 +16,7 @@ import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session, joinedload
 
 from src.core.database.models import MediaBuy, MediaPackage
@@ -49,6 +49,36 @@ class MediaBuyRepository:
     @property
     def tenant_id(self) -> str:
         return self._tenant_id
+
+    def try_claim_final_webhook(
+        self, media_buy_id: str, *, now: datetime.datetime, stale_before: datetime.datetime
+    ) -> bool:
+        """Atomically claim this buy's FINAL delivery webhook. True if THIS caller won.
+
+        Best-effort concurrency guard (#1575): a single conditional UPDATE that sets
+        ``final_webhook_claimed_at = now`` only when it is unset OR older than
+        ``stale_before`` (so a crashed worker's claim self-heals once stale rather
+        than stranding the final forever). Two concurrent workers race on the same
+        row; exactly one UPDATE matches and RETURNs the id — the loser matches 0 rows
+        and skips the send. The caller MUST commit for the claim to be visible to
+        other transactions. This does NOT close the crash-after-POST duplicate window
+        (the POST precedes the success-log write); a durable exactly-once final
+        (outbox) is tracked in #1606.
+        """
+        claimed_id = self._session.execute(
+            update(MediaBuy)
+            .where(
+                MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.media_buy_id == media_buy_id,
+                or_(
+                    MediaBuy.final_webhook_claimed_at.is_(None),
+                    MediaBuy.final_webhook_claimed_at < stale_before,
+                ),
+            )
+            .values(final_webhook_claimed_at=now)
+            .returning(MediaBuy.media_buy_id)
+        ).scalar_one_or_none()
+        return claimed_id is not None
 
     # ------------------------------------------------------------------
     # Single MediaBuy lookups
