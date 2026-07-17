@@ -32,7 +32,7 @@ def test_tenant_isolation_with_subdomain_and_cross_tenant_token(integration_db):
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Principal as ModelPrincipal
     from src.core.database.models import Tenant
-    from src.core.exceptions import AdCPAuthenticationError
+    from src.core.exceptions import INVALID_TOKEN_MESSAGE, AdCPAuthenticationError
 
     # Create two tenants
     with get_db_session() as session:
@@ -87,9 +87,11 @@ def test_tenant_isolation_with_subdomain_and_cross_tenant_token(integration_db):
         with pytest.raises((ToolError, AdCPAuthenticationError)) as exc_info:
             get_principal_from_context(mock_context)
 
-        # Verify the error message mentions the tenant
+        # Cross-tenant token is rejected, but the message must not disclose the
+        # tenant id; the buyer sees only the generic invalid-token message.
         error_str = str(exc_info.value)
-        assert "tenant_wonderstruck" in error_str
+        assert "tenant_wonderstruck" not in error_str
+        assert INVALID_TOKEN_MESSAGE in error_str
 
 
 @pytest.mark.requires_db

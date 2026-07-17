@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
-from src.core.exceptions import AdCPAuthenticationError
+from src.core.exceptions import INVALID_TOKEN_MESSAGE, AdCPAuthenticationError
 
 
 @pytest.mark.requires_db
@@ -152,8 +152,13 @@ def test_cross_tenant_token_rejected(integration_db):
         with pytest.raises((ToolError, AdCPAuthenticationError)) as exc_info:
             get_principal_from_context(context)
 
+        # The cross-tenant token is rejected, but the buyer-facing message must not
+        # disclose either tenant id (detected or the token's own); the buyer sees
+        # only the generic invalid-token message.
         error_str = str(exc_info.value)
-        assert "tenant_test_agent" in error_str
+        assert "tenant_test_agent" not in error_str
+        assert "tenant_wonderstruck" not in error_str
+        assert INVALID_TOKEN_MESSAGE in error_str
 
 
 @pytest.mark.requires_db
