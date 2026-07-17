@@ -79,6 +79,12 @@ EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
     "'T-UC-004-dim-sortby-fallback' in marker_names and is_e2e_rest",
     "(is_rest or is_e2e_rest) and 'T-UC-019-boundary-principal' in marker_names",
     "(is_rest or is_e2e_rest) and 'T-UC-019-ext-a' in marker_names",
+    # Added with the #1585 merge: upstream graduated T-UC-019-ext-d (6szx) validating
+    # only impl/a2a/mcp; the REST get_media_buys route is #1544's addition (absent
+    # upstream), and it rejects a mistyped field at FastAPI body-parse as INVALID_REQUEST
+    # (structural) rather than the VALIDATION_ERROR the scenario pins — a deferred
+    # value-vs-structural reclassification (salesagent-meho), so REST/e2e_rest stay xfailed.
+    "(is_rest or is_e2e_rest) and 'T-UC-019-ext-d' in marker_names",
     "(is_rest or is_e2e_rest) and 'T-UC-019-partition-principal-invalid' in marker_names",
     "_samp_is_named and (is_rest or is_e2e_rest)",
     "is_e2e_rest",

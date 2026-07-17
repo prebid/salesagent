@@ -21,6 +21,7 @@ from tests.bdd.steps.domain._media_buy_steps_shared import (
     resolve_media_buy_id,
 )
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic.then_error import _wire_code, _wire_error_object, _wire_suggestion
 from tests.factories import (
     CreativeAssignmentFactory,
     CreativeFactory,
@@ -932,6 +933,40 @@ def given_principal_owns_mb_simple(ctx: dict, principal_id: str, mb_id: str) -> 
 # then_status_handles_missing_date are removed with them.
 
 
+def _seed_account_for_principal(ctx: dict, *, sandbox: bool) -> None:
+    """Seed a real Account (sandbox or production) reachable by the scenario principal.
+
+    get_media_buys carries no account parameter on the request (production
+    rejects account filtering with ACCOUNT_FILTER_NOT_SUPPORTED and instructs
+    "the seller infers the account from the auth token"), so "the request
+    targets a <kind> account" means: the account the identity resolves to has
+    that sandbox flag. Seeding the Account + AgentAccountAccess rows makes the
+    premise real at the data layer — a future sandbox short-circuit keyed off
+    the principal's account (BR-RULE-209) is then actually exercised, instead
+    of the Given being an inert ctx flag (6szx graduation inspection).
+    """
+    from tests.factories.account import AccountFactory, AgentAccountAccessFactory
+
+    env = ctx["env"]
+    account = AccountFactory(tenant=ctx["tenant"], sandbox=sandbox)
+    AgentAccountAccessFactory(tenant=ctx["tenant"], principal=ctx["principal"], account=account)
+    env._commit_factory_data()
+    ctx["sandbox"] = sandbox
+    ctx["account"] = account
+
+
+@given(parsers.parse("the request targets a sandbox account"))
+def given_sandbox_account(ctx: dict) -> None:
+    """Seed a sandbox account for the principal (the token infers the account)."""
+    _seed_account_for_principal(ctx, sandbox=True)
+
+
+@given(parsers.parse("the request targets a production account"))
+def given_production_account(ctx: dict) -> None:
+    """Seed a production (non-sandbox) account for the principal."""
+    _seed_account_for_principal(ctx, sandbox=False)
+
+
 @given("an authenticated identity with no principal_id")
 def given_identity_no_principal(ctx: dict) -> None:
     """Simulate an identity resolved but with no principal_id.
@@ -1552,7 +1587,26 @@ def then_no_error_in_response(ctx: dict) -> None:
 
 @then(parsers.parse('the operation should fail with error code "{code}"'))
 def then_fail_with_code(ctx: dict, code: str) -> None:
-    """Assert operation failed with specific error code."""
+    """Assert operation failed with specific error code — wire-first, typed fallback.
+
+    On a wire transport (A2A here; MCP wire capture is pending the
+    _run_mcp_client upgrade of MediaBuyListEnv) the code is read from the real
+    two-layer envelope, and BOTH layers must agree (envelope-level
+    ``adcp_error.code`` and payload-level ``errors[0].code``). No-wire runs
+    fall back to the typed production exception. Cannot use
+    ``result.assert_wire_error`` unconditionally: this step also grades
+    locally-tracked non-canonical codes (e.g. ACCOUNT_FILTER_NOT_SUPPORTED)
+    absent from the pinned error-code enum.
+    """
+    wire_code = _wire_code(ctx)
+    if wire_code is not None:
+        assert wire_code == code, f"Expected wire adcp_error.code '{code}', got '{wire_code}'"
+        payload_error = _wire_error_object(ctx) or {}
+        assert payload_error.get("code") == code, (
+            f"Two-layer envelope disagreement: adcp_error.code={code!r} but "
+            f"errors[0].code={payload_error.get('code')!r}"
+        )
+        return
     error = ctx.get("error")
     assert error is not None, "Expected an error but none found"
     from src.core.exceptions import AdCPError
@@ -1574,45 +1628,76 @@ def then_error_identity_required(ctx: dict) -> None:
     )
 
 
-@then(parsers.parse('the error should include a "recovery" field indicating terminal failure'))
-def then_error_recovery_terminal(ctx: dict) -> None:
-    """Assert error has terminal recovery classification."""
+def _assert_error_recovery(ctx: dict, expected: str) -> None:
+    """Assert the error's recovery classification — wire-first, typed fallback.
+
+    On a wire transport the ``recovery`` field is read from the real envelope's
+    error object (the buyer-facing retry semantics per error.json); no-wire
+    runs fall back to the typed production exception.
+    """
+    wire = _wire_error_object(ctx)
+    if wire is not None:
+        assert wire.get("recovery") == expected, (
+            f"Expected wire recovery='{expected}', got {wire.get('recovery')!r} on wire code {wire.get('code')!r}"
+        )
+        return
     error = ctx.get("error")
     assert error is not None, "Expected an error"
     from src.core.exceptions import AdCPError
 
     assert isinstance(error, AdCPError), f"Expected AdCPError with recovery field, got {type(error).__name__}: {error}"
-    assert error.recovery == "terminal", f"Expected terminal recovery, got '{error.recovery}'"
+    assert error.recovery == expected, f"Expected {expected} recovery, got '{error.recovery}'"
+
+
+@then(parsers.parse('the error should include a "recovery" field indicating terminal failure'))
+def then_error_recovery_terminal(ctx: dict) -> None:
+    """Assert error has terminal recovery classification."""
+    _assert_error_recovery(ctx, "terminal")
+
+
+def _current_suggestion(ctx: dict) -> str:
+    """Resolve the buyer-facing error suggestion — wire-first, typed fallback.
+
+    On a wire transport the suggestion is read from the real envelope at the
+    protocol top level (STRICT error.json conformance — a suggestion buried in
+    ``details`` does not count, #1417); no-wire runs fall back to the typed
+    production exception's top-level attribute. Fails when the suggestion is
+    missing or empty — never a silent escape.
+    """
+    suggestion = _wire_suggestion(ctx)
+    if suggestion is None:
+        error = ctx.get("error")
+        assert error is not None, "Expected an error"
+        from src.core.exceptions import AdCPError
+
+        assert isinstance(error, AdCPError), (
+            f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
+        )
+        # STRICT error.json conformance: top-level attribute only (#1417).
+        suggestion = error.suggestion
+    assert isinstance(suggestion, str) and suggestion.strip(), (
+        f"Expected non-empty top-level suggestion string, got {suggestion!r}"
+    )
+    return suggestion
+
+
+def _assert_suggestion_contains_any(ctx: dict, options: list[str]) -> None:
+    """Assert the buyer-facing suggestion contains at least one of the options."""
+    suggestion = _current_suggestion(ctx)
+    lowered = suggestion.lower()
+    assert any(t.lower() in lowered for t in options), f"Expected one of {options!r} in suggestion: {suggestion}"
 
 
 @then(parsers.parse('the suggestion should contain "{text1}" or "{text2}"'))
 def then_suggestion_contains_either(ctx: dict, text1: str, text2: str) -> None:
     """Assert suggestion contains one of the specified texts."""
-    error = ctx.get("error")
-    assert error is not None, "Expected an error"
-    from src.core.exceptions import AdCPError
-
-    assert isinstance(error, AdCPError), f"Expected AdCPError, got {type(error).__name__}: {error}"
-    # STRICT error.json conformance: top-level attribute only (#1417).
-    suggestion = str(error.suggestion or "").lower()
-    assert text1.lower() in suggestion or text2.lower() in suggestion, (
-        f"Expected '{text1}' or '{text2}' in suggestion: {error.suggestion}"
-    )
+    _assert_suggestion_contains_any(ctx, [text1, text2])
 
 
 @then(parsers.parse('the suggestion should contain "{text1}" or "{text2}" or "{text3}"'))
 def then_suggestion_contains_any_of_three(ctx: dict, text1: str, text2: str, text3: str) -> None:
     """Assert suggestion contains one of three specified texts."""
-    error = ctx.get("error")
-    assert error is not None, "Expected an error"
-    from src.core.exceptions import AdCPError
-
-    assert isinstance(error, AdCPError), f"Expected AdCPError, got {type(error).__name__}: {error}"
-    # STRICT error.json conformance: top-level attribute only (#1417).
-    suggestion = str(error.suggestion or "").lower()
-    assert any(t.lower() in suggestion for t in [text1, text2, text3]), (
-        f"Expected one of '{text1}', '{text2}', '{text3}' in suggestion: {error.suggestion}"
-    )
+    _assert_suggestion_contains_any(ctx, [text1, text2, text3])
 
 
 @then(parsers.parse('the media buy "{mb_id}" should have status "{expected_status}"'))
@@ -1638,14 +1723,21 @@ def then_error_field_validation(ctx: dict) -> None:
     specific field names or paths (media_buy_ids, status_filter, buyer_refs, etc.),
     not just generic words like "type" or "expected" that appear in any error.
     """
-    error = ctx.get("error")
-    assert error is not None, "Expected a validation error"
-    msg = str(error)
-    # Require actual field names from GetMediaBuysRequest schema
+    # Require actual field names from GetMediaBuysRequest schema.
     field_names = ("media_buy_ids", "status_filter", "buyer_refs", "account_id")
-    assert any(field_name in msg.lower() for field_name in field_names), (
-        f"Expected field-level validation details (containing actual field names like "
-        f"{field_names}) in error message, got: {msg}"
+    wire = _wire_error_object(ctx)
+    if wire is not None:
+        # Wire-first: the buyer-facing message and the structured ``field``
+        # selector must reference an actual request schema field.
+        text = f"{wire.get('message', '')} {wire.get('field', '')}".lower()
+        source = f"wire error object {wire!r}"
+    else:
+        error = ctx.get("error")
+        assert error is not None, "Expected a validation error"
+        text = str(error).lower()
+        source = f"error message {error}"
+    assert any(field_name in text for field_name in field_names), (
+        f"Expected field-level validation details (containing actual field names like {field_names}) in {source}"
     )
 
 
@@ -1656,38 +1748,17 @@ def then_error_recovery_correctable(ctx: dict) -> None:
     The step text explicitly says "correctable failure" — the recovery field
     must be exactly "correctable" (not "retryable" or other values).
     """
-    error = ctx.get("error")
-    assert error is not None, "Expected an error but got none"
-    from src.core.exceptions import AdCPError
-
-    assert isinstance(error, AdCPError), f"Expected AdCPError with recovery field, got {type(error).__name__}: {error}"
-    assert error.recovery == "correctable", (
-        f"Expected recovery='correctable' (step says 'correctable failure'), "
-        f"got recovery='{error.recovery!r}' on error code '{error.error_code}'"
-    )
+    _assert_error_recovery(ctx, "correctable")
 
 
 @then(parsers.parse('the error should include a "suggestion" field'))
 def then_error_has_suggestion(ctx: dict) -> None:
-    """Assert error includes a suggestion field with actionable content.
+    """Assert error includes a non-empty suggestion — wire-first, typed fallback.
 
     Step text: 'the error should include a "suggestion" field'.
-    The error must be an AdCPError with a details dict containing a non-empty
-    suggestion string. No xfail escape — if production omits the suggestion,
-    the test must fail.
+    No xfail escape — if production omits the suggestion, the test must fail.
     """
-    error = ctx.get("error")
-    assert error is not None, "Expected an error"
-    from src.core.exceptions import AdCPError
-
-    assert isinstance(error, AdCPError), (
-        f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
-    )
-    # STRICT error.json conformance: top-level attribute only (#1417).
-    suggestion = error.suggestion
-    assert isinstance(suggestion, str) and suggestion.strip(), (
-        f"Expected non-empty top-level suggestion string, got {suggestion!r}"
-    )
+    _current_suggestion(ctx)
 
 
 @then(parsers.parse('the error message should contain "{fragment}"'))
@@ -2121,12 +2192,17 @@ def then_no_sandbox_field(ctx: dict) -> None:
 
 @then("the response should indicate a validation error")
 def then_validation_error(ctx: dict) -> None:
-    """Assert response indicates a validation error.
+    """Assert response indicates a validation error — wire-first.
 
-    Step text says 'indicate a validation error' — must verify either:
-    1. An exception was raised with validation-related keywords, OR
-    2. Response.errors contains validation-related content.
+    On a wire transport the buyer-facing code must be exactly VALIDATION_ERROR
+    (the pinned error-code enum's canonical request-validation code). No-wire
+    fallback: either a raised exception with validation-related keywords, or
+    response.errors containing validation-related content.
     """
+    wire_code = _wire_code(ctx)
+    if wire_code is not None:
+        assert wire_code == "VALIDATION_ERROR", f"Expected wire code VALIDATION_ERROR, got {wire_code!r}"
+        return
 
     error = ctx.get("error")
     if error:
@@ -2154,7 +2230,18 @@ def then_validation_error(ctx: dict) -> None:
 
 @then("the error should be a real validation error, not simulated")
 def then_real_validation_error(ctx: dict) -> None:
-    """Assert error is a real validation error (not simulated sandbox response)."""
+    """Assert error is a real validation error (not simulated sandbox response).
+
+    Wire-first: a "real" validation error is an actual wire REJECTION — a
+    two-layer error envelope carrying VALIDATION_ERROR with correctable
+    recovery (BR-RULE-209 INV-7: sandbox inputs are validated like production;
+    a simulated sandbox response would come back as a success payload instead).
+    No-wire fallback: the typed production exception.
+    """
+    result = ctx.get("result")
+    if result is not None and result.wire_error_envelope is not None:
+        result.assert_wire_error("VALIDATION_ERROR")
+        return
 
     error = ctx.get("error")
     assert error is not None, "Expected a real validation error but no error was raised"
@@ -2172,21 +2259,13 @@ def then_error_suggestion_for_fix(ctx: dict) -> None:
 
     Step text: 'suggestion for how to fix the issue' — the suggestion must be
     a non-empty string with enough content to be actionable (at least 5 chars).
-    No xfail escape — if production omits suggestions, the test must fail.
+    Wire-first, typed fallback (see _current_suggestion). No xfail escape —
+    if production omits suggestions, the test must fail.
     """
-    error = ctx.get("error")
-    assert error is not None, "Expected an error to check suggestion on"
-    from src.core.exceptions import AdCPError
-
-    assert isinstance(error, AdCPError), (
-        f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
-    )
-    # STRICT error.json conformance: top-level attribute only (#1417).
-    suggestion = error.suggestion
-    assert isinstance(suggestion, str) and len(suggestion.strip()) >= 5, (
-        f"Expected actionable top-level suggestion string (>= 5 chars), "
-        f"got {suggestion!r}. Step claims 'how to fix the issue' — suggestion "
-        f"must contain meaningful guidance."
+    suggestion = _current_suggestion(ctx)
+    assert len(suggestion.strip()) >= 5, (
+        f"Expected actionable suggestion string (>= 5 chars), got {suggestion!r}. "
+        f"Step claims 'how to fix the issue' — suggestion must contain meaningful guidance."
     )
 
 
