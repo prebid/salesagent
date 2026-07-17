@@ -14,10 +14,7 @@ import uuid
 from time import sleep
 from typing import Any
 
-import psycopg2
 import pytest
-from fastmcp.client import Client
-from fastmcp.client.transports import StreamableHttpTransport
 
 from tests.e2e._webhook_capture import WebhookCaptureHandler, run_webhook_capture_server
 from tests.e2e.adcp_request_builder import (
@@ -26,7 +23,12 @@ from tests.e2e.adcp_request_builder import (
     get_test_date_range,
     parse_tool_result,
 )
-from tests.e2e.utils import force_approve_media_buy_in_db, wait_for_server_readiness
+from tests.e2e.utils import (
+    force_approve_media_buy_in_db,
+    make_mcp_client,
+    set_live_adapter_behavior,
+    wait_for_server_readiness,
+)
 
 
 class DeliveryWebhookReceiver(WebhookCaptureHandler):
@@ -44,36 +46,6 @@ def delivery_webhook_server():
 
 class TestDailyDeliveryWebhookFlow:
     """Blueprint E2E test for daily delivery webhooks."""
-
-    def setup_adapter_config(self, live_server):
-        """Configure adapter for auto-approval (needs active media buy for delivery scheduler)."""
-        try:
-            conn = psycopg2.connect(live_server["postgres"])
-            cursor = conn.cursor()
-
-            # Ensure ci-test tenant has mock manual approval disabled
-            cursor.execute("SELECT tenant_id FROM tenants WHERE subdomain = 'ci-test'")
-            tenant_row = cursor.fetchone()
-            if tenant_row:
-                tenant_id = tenant_row[0]
-                cursor.execute(
-                    """
-                    INSERT INTO adapter_config (tenant_id, adapter_type, mock_manual_approval_required)
-                    VALUES (%s, 'mock', false)
-                    ON CONFLICT (tenant_id)
-                    DO UPDATE SET mock_manual_approval_required = false, adapter_type = 'mock'
-                """,
-                    (tenant_id,),
-                )
-                conn.commit()
-                print(f"Updated adapter config for tenant {tenant_id}: manual_approval=False")
-            else:
-                print("Warning: ci-test tenant not found for adapter config update")
-
-            cursor.close()
-            conn.close()
-        except Exception as e:
-            print(f"Failed to update adapter config: {e}")
 
     async def discover_product(self, client):
         """Phase 1: Product discovery (get_products)."""
@@ -165,20 +137,12 @@ class TestDailyDeliveryWebhookFlow:
         3. Get delivery metrics explicitly via get_media_buy_delivery
         4. Wait for scheduled delivery_report webhook and inspect payload
         """
-        self.setup_adapter_config(live_server)
-
-        headers = {
-            "x-adcp-auth": test_auth_token,
-            "x-adcp-tenant": "ci-test",  # Explicit tenant selection for E2E tests
-        }
-        print("live_server")
-        print(live_server)
-        transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
+        set_live_adapter_behavior(live_server, manual_approval_required=False)
 
         # Wait for server readiness
         wait_for_server_readiness(live_server["mcp"])
 
-        async with Client(transport=transport) as client:
+        async with make_mcp_client(live_server, token=test_auth_token) as client:
             # 1. Discover Product
             product_id, pricing_option_id, format_ids = await self.discover_product(client)
 

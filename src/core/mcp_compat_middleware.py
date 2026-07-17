@@ -1,7 +1,8 @@
 """FastMCP middleware for AdCP backward-compatibility normalization.
 
-Translates deprecated field names, strips unknown fields, and provides
-a production-mode fallback for TypeAdapter structural validation errors.
+Translates deprecated field names, strips unknown fields, and converts FastMCP
+TypeAdapter validation failures into AdCP envelopes in every environment. In
+production, it first retries structural failures after schema-aware deep stripping.
 Runs after MCPAuthMiddleware.
 """
 
@@ -13,8 +14,11 @@ from typing import Any
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.tools.tool import ToolResult
 from mcp.types import CallToolRequestParams
+from pydantic import ValidationError
 
+from src.core.exceptions import normalize_to_adcp_error
 from src.core.request_compat import deep_strip_to_schema, normalize_request_params, strip_unknown_params
+from src.core.tool_error_logging import _translate_to_tool_error, record_boundary_error
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +29,11 @@ class RequestCompatMiddleware(Middleware):
     Three-stage pipeline:
     1. Translate deprecated field names via normalize_request_params()
     2. Strip fields not in the tool's JSON Schema via strip_unknown_params()
-    3. (Production only) If TypeAdapter rejects the arguments with a structural
-       validation error, erase complex types to raw dicts via JSON round-trip
-       and retry. This lets our Pydantic models (with extra='ignore') be the
-       sole validation gate — matching A2A and REST behavior.
+    3. If TypeAdapter rejects the arguments, always translate and record the
+       failure as an AdCP validation envelope. In production only, first deep-
+       strip schema-unknown nested fields and retry when that changes the input.
+       This lets our Pydantic models (with extra='ignore') remain the validation
+       gate for forward-compatible fields while preserving typed failures in dev.
 
     The fallback only catches TypeAdapter ValidationErrors (structural type
     mismatches). Business logic errors from the tool function propagate normally.
@@ -83,32 +88,58 @@ class RequestCompatMiddleware(Middleware):
         try:
             return await call_next(context)
         except Exception as exc:
-            if not self._should_retry(exc):
+            if not self._is_typeadapter_validation_error(exc):
                 raise
 
-            # Deep-strip unknown fields at every nesting level using the tool's
-            # JSON Schema. TypeAdapter rejects unknown fields in objects with
-            # additionalProperties: false. Our Pydantic models (extra='ignore')
-            # would accept them — stripping bridges the gap.
-            tool_schema = await self._get_tool_schema(context, tool_name)
-            if tool_schema is None:
-                raise  # Can't strip without schema — let the error propagate
+            if self._should_retry(exc):
+                # Deep-strip unknown fields at every nesting level using the tool's
+                # JSON Schema. TypeAdapter rejects unknown fields in objects with
+                # additionalProperties: false. Our Pydantic models (extra='ignore')
+                # would accept them — stripping bridges the gap.
+                tool_schema = await self._get_tool_schema(context, tool_name)
+                if tool_schema is not None:
+                    stripped = deep_strip_to_schema(normalized, tool_schema)
+                    if stripped != normalized:
+                        logger.warning(
+                            "TypeAdapter rejected %s — retrying with deep-stripped arguments "
+                            "(production forward-compat): %s",
+                            tool_name,
+                            _summarize_error(exc),
+                        )
+                        stripped_message = CallToolRequestParams(
+                            name=tool_name,
+                            arguments=stripped,
+                        )
+                        stripped_context = context.copy(message=stripped_message)
+                        try:
+                            return await call_next(stripped_context)
+                        except Exception as retry_exc:
+                            if not self._is_typeadapter_validation_error(retry_exc):
+                                raise
+                            exc = retry_exc
 
-            stripped = deep_strip_to_schema(normalized, tool_schema)
-            if stripped == normalized:
-                raise  # Stripping didn't change anything — no point retrying
-
-            logger.warning(
-                "TypeAdapter rejected %s — retrying with deep-stripped arguments (production forward-compat): %s",
+            # Normalize once for the audit record, then pass the raw exception to
+            # _translate_to_tool_error so the emitted AdCPToolError keeps it as
+            # __cause__. The translator intentionally normalizes it a second time.
+            typed = normalize_to_adcp_error(exc)
+            tenant_id = None
+            principal_id = None
+            if context.fastmcp_context is not None:
+                try:
+                    identity = await context.fastmcp_context.get_state("identity")
+                    if identity is not None:
+                        tenant_id = identity.tenant_id
+                        principal_id = identity.principal_id
+                except Exception:
+                    logger.debug("Could not read MCP identity for validation error logging", exc_info=True)
+            record_boundary_error(
+                "mcp",
                 tool_name,
-                _summarize_error(exc),
+                typed,
+                tenant_id=tenant_id,
+                principal_id=principal_id,
             )
-            stripped_message = CallToolRequestParams(
-                name=tool_name,
-                arguments=stripped,
-            )
-            stripped_context = context.copy(message=stripped_message)
-            return await call_next(stripped_context)
+            _translate_to_tool_error(exc)
 
     @staticmethod
     def _should_retry(exc: Exception) -> bool:
@@ -123,15 +154,12 @@ class RequestCompatMiddleware(Middleware):
         """
         from src.core.config import is_production
 
-        if not is_production():
-            return False
+        return is_production() and RequestCompatMiddleware._is_typeadapter_validation_error(exc)
 
-        from pydantic import ValidationError
-
-        if not isinstance(exc, ValidationError):
-            return False
-
-        return exc.title.startswith("call[")
+    @staticmethod
+    def _is_typeadapter_validation_error(exc: Exception) -> bool:
+        """Return True for FastMCP TypeAdapter validation failures."""
+        return isinstance(exc, ValidationError) and exc.title.startswith("call[")
 
     async def _get_tool_schema(
         self,

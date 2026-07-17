@@ -25,10 +25,14 @@ _TOOLS_DIR = Path(__file__).resolve().parents[2] / "src" / "core" / "tools"
 # (file, impl_func, expected_result_type, {bare_domain_return_types})
 # #1417: extended from update-only to also pin the create path.
 _IMPLS = [
+    # adcp 6.6 (spec 3.1.1): the manual-approval branch returns the bare
+    # UpdateMediaBuySubmitted oneOf variant — it IS a protocol envelope
+    # (status const "submitted" + required task_id), so TaskStatus still
+    # reaches the wire without the wrapper. Success/Error stay wrapped.
     (
         "media_buy_update.py",
         "_update_media_buy_impl",
-        "UpdateMediaBuyResult",
+        "UpdateMediaBuyResult | UpdateMediaBuySubmitted",
         {"UpdateMediaBuySuccess", "UpdateMediaBuyError"},
     ),
     (
