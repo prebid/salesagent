@@ -4430,7 +4430,7 @@ async def create_media_buy(
         Field(
             description=(
                 "Accepted for AdCP 3.1.1 compatibility; pause-on-create is NOT yet honored — "
-                "delivery starts per start_time regardless of this flag"
+                "the buy delivers as if paused=false. Tracked in #1619."
             )
         ),
     ] = None,
@@ -4522,7 +4522,7 @@ async def create_media_buy_raw(
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     account: AccountReference | None = None,  # A2A/REST send dicts; coerced by CreateMediaBuyRequest
     idempotency_key: str | None = None,
-    paused: bool | None = None,  # AdCP 3.1.1 compatibility; pause-on-create NOT yet honored (PR #1567 follow-up)
+    paused: bool | None = None,  # AdCP 3.1.1 compatibility; pause-on-create NOT yet honored (tracked in #1619)
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
     raw_wire_payload: dict[str, Any] | None = None,

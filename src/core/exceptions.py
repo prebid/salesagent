@@ -14,10 +14,10 @@ import logging
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Mapping, Sequence
 
     from adcp.types import ContextObject
 
@@ -427,12 +427,12 @@ class AdCPValidationError(AdCPError):
 
 
 class AdCPInvalidRequestError(AdCPValidationError):
-    """A request value is well-formed but semantically invalid (400 → INVALID_REQUEST).
+    """A structurally invalid request graded as INVALID_REQUEST by the storyboard (400).
 
-    Distinct from the schema-level VALIDATION_ERROR: the value passes type/shape
-    validation but is invalid in context (e.g. start_time in the past, end_time
-    before start_time). Carries the INVALID_REQUEST standard wire code as class
-    identity; inherits 400 + correctable from AdCPValidationError.
+    Distinct from operation-level VALIDATION_ERROR failures. The AdCP storyboard
+    defines the code per operation, so callers must use the exception class graded
+    for that scenario rather than inferring the code from validation phase alone.
+    Inherits 400 + correctable from AdCPValidationError.
     """
 
     _default_error_code: ClassVar[str] = "INVALID_REQUEST"
@@ -1026,12 +1026,58 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
     return envelope
 
 
+# Canonical buyer-facing suggestions from error-code.json enumMetadata (AdCP 3.1.1):
+# each code carries its own default hint, so a VALIDATION_ERROR must not borrow
+# INVALID_REQUEST's text.
+INVALID_REQUEST_SUGGESTION = "check request parameters and fix"
+VALIDATION_ERROR_SUGGESTION = "review error details and fix field values"
+
+
+def first_validation_error_field(validation_error: ValidationError) -> str | None:
+    """Return the bracket-notation path of the first Pydantic error, or ``None``.
+
+    Lets a transport boundary attach a structured ``field`` to the
+    ``AdCPValidationError`` it raises, so the wire envelope carries the offending
+    field path instead of only the rendered message. List indices render as
+    ``[i]`` so boundary-derived paths such as ``packages[0].budget`` align with
+    the ``packages[].budget`` field strings raised by the implementation layer.
+    """
+    errors = validation_error.errors()
+    if not errors:
+        return None
+    parts: list[str] = []
+    for loc in errors[0]["loc"]:
+        if isinstance(loc, int):
+            parts.append(f"[{loc}]")
+        elif parts:
+            parts.append(f".{loc}")
+        else:
+            parts.append(str(loc))
+    return "".join(parts)
+
+
+def build_validation_error_details(errors: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Project Pydantic errors into the buyer-safe structured detail shape."""
+    return {
+        "validation_errors": [
+            {
+                "loc": list(error.get("loc", ())),
+                "msg": error.get("msg"),
+                "type": error.get("type"),
+            }
+            for error in errors
+        ]
+    }
+
+
 # Ordered registry mapping a raw built-in exception type → the typed AdCPError it normalizes to.
 # The SINGLE SOURCE OF TRUTH for ``normalize_to_adcp_error`` AND the completeness guard
 # (``test_error_boundary_translation`` / ``test_sanitized_category_registry_covers_...``) that pins
 # every CLIENT-CORRECTABLE target code into ``_SANITIZED_BY_WIRE_CODE`` — so a future mapping (e.g.
 # ``KeyError → AdCPNotFoundError``) can't silently fall through to the misleading generic internal
-# message when scrubbed. Order matters: first isinstance match wins (as the old if-chain did).
+# message when scrubbed. The Pydantic ``ValidationError`` branch (structured field/details) is
+# handled explicitly BEFORE this loop — it IS-A ``ValueError`` but needs richer construction than
+# the plain ``adcp_class(str(exc))`` form. Order matters: first isinstance match wins.
 _BUILTIN_NORMALIZATION: tuple[tuple[type[Exception], type[AdCPError]], ...] = (
     (ValueError, AdCPValidationError),
     (PermissionError, AdCPAuthorizationError),
@@ -1042,13 +1088,25 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
     """Normalize untyped exceptions to typed AdCPError subclasses.
 
     Single source of truth for the wrapping applied at all three transport
-    boundaries (MCP, A2A, REST).  Already-typed ``AdCPError`` passes through
-    unchanged.  ``ValueError`` maps to ``AdCPValidationError``,
-    ``PermissionError`` to ``AdCPAuthorizationError`` (see ``_BUILTIN_NORMALIZATION``),
-    and anything else wraps in base ``AdCPError`` (INTERNAL_ERROR).
+    boundaries (MCP, A2A, REST). Already-typed ``AdCPError`` passes through
+    unchanged. Pydantic ``ValidationError`` maps to a structured, sanitized
+    ``AdCPValidationError`` (field + details); other ``ValueError`` instances map to the plain
+    validation error and ``PermissionError`` to ``AdCPAuthorizationError`` (both via
+    ``_BUILTIN_NORMALIZATION``), and anything else wraps in base ``AdCPError`` (INTERNAL_ERROR).
     """
     if isinstance(exc, AdCPError):
         return exc
+    if isinstance(exc, ValidationError):
+        # Pydantic schema failure → structured, sanitized validation error. Checked BEFORE the
+        # registry because ``ValidationError`` IS-A ``ValueError``; the plain ``str(exc)`` form
+        # would drop the field/details.
+        errors = exc.errors()
+        return AdCPValidationError(
+            errors[0].get("msg") if errors else "Request failed schema validation",
+            field=first_validation_error_field(exc),
+            suggestion=VALIDATION_ERROR_SUGGESTION,
+            details=build_validation_error_details(errors),
+        )
     for exc_type, adcp_class in _BUILTIN_NORMALIZATION:
         if isinstance(exc, exc_type):
             return adcp_class(str(exc))

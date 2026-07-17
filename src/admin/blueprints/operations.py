@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from typing import Any
 
 from adcp import Error, create_a2a_webhook_payload, create_mcp_webhook_payload
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
@@ -21,6 +22,12 @@ from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
+
+
+def _as_request_dict(value: dict[str, Any] | str | None) -> dict[str, Any]:
+    """Narrow JSONType (dict|str|None) to a dict for .get() / echo_context."""
+    return value if isinstance(value, dict) else {}
+
 
 # Create blueprint
 operations_bp = Blueprint("operations", __name__)
@@ -334,12 +341,14 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 flash("The selected approval is missing or no longer pending for this media buy", "warning")
                 return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
-            # Extract step data to dict to avoid detached instance errors after commit/nested sessions
+            # Extract step data to dict to avoid detached instance errors after commit/nested sessions.
+            # JSONType columns are typed as dict|str|None; narrow before echo_context / .get().
+            request_data = _as_request_dict(step.request_data)
             step_data = {
                 "step_id": step.step_id,
                 "context_id": step.context_id,
                 "tool_name": step.tool_name,
-                "request_data": step.request_data or {},
+                "request_data": request_data,
             }
 
             # Get user info for audit
@@ -355,7 +364,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
             media_buy_data = None
             if media_buy:
                 # Get push_notification_config from workflow step request_data (same pattern as sync_creatives)
-                push_config = step.request_data.get("push_notification_config") or {} if step.request_data else {}
+                push_config = request_data.get("push_notification_config") or {}
                 media_buy_data = {
                     "principal_id": media_buy.principal_id,
                     "push_notification_url": push_config.get("url"),
@@ -494,7 +503,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
 
                         # Echo the buyer's request context (shared helper, also used by
                         # the creative approval webhook in blueprints/creatives.py).
-                        approve_context = echo_context(step_data["request_data"])
+                        approve_context = echo_context(request_data)
 
                         # The buy IS committed at this point, so a confirmed Success
                         # (status/confirmed_at/revision from the subclass defaults) is
