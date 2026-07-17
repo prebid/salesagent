@@ -31,22 +31,30 @@ from tests.bdd.steps.generic._dispatch import dispatch_request
 # ── context echo helpers (BR-RULE-043 / POST-S9) ─────────────────────
 
 
+_CONTEXT_ABSENT = object()  # sentinel: the `context` key is not present on the wire body
+
+
 def _response_context(ctx: dict) -> object:
     """The echoed context as a plain JSON value, read from the REAL wire body.
 
-    Prefers ``ctx['wire_response']`` (the serialized success body actually sent to
-    the buyer on MCP/A2A/REST) so the assertion catches a serialization regression,
-    not just the typed payload. Falls back to serializing the typed payload's
-    ``context`` when the transport did not stash a wire body.
+    When a wire body exists (REST/MCP/A2A) it is the SOLE authority — a missing
+    echo must surface to the assertion, never be silently patched from the typed
+    payload. A wire body that OMITS ``context`` returns the ``_CONTEXT_ABSENT``
+    sentinel; a wire body carrying ``"context": null`` returns ``None``. The two
+    are distinct: callers must not treat an explicit null as an omitted field.
+
+    Only when NO wire body was stashed (IMPL, which has no wire by definition) does
+    it fall back to the typed payload.
     """
     wire = ctx.get("wire_response")
-    if isinstance(wire, dict) and "context" in wire:
-        return wire["context"]
+    if isinstance(wire, dict):
+        return wire["context"] if "context" in wire else _CONTEXT_ABSENT
+    # No wire body (IMPL only): fall back to the typed payload.
     resp = ctx.get("response")
     assert resp is not None, f"Expected a capabilities response, got error: {ctx.get('error')!r}"
     context = getattr(resp, "context", None)
     if context is None:
-        return None
+        return _CONTEXT_ABSENT
     return context.model_dump(mode="json") if hasattr(context, "model_dump") else context
 
 
@@ -388,7 +396,11 @@ def then_response_context_equals(ctx: dict, ctx_json: str) -> None:
 
 @then("the response should not contain a context field")
 def then_response_no_context(ctx: dict) -> None:
-    """Context absence in the request must be echoed as absence (INV-2)."""
+    """Context absence in the request must be echoed as true absence (INV-2).
+
+    The field must be OMITTED, not present-as-null: ``{"context": null}`` on the
+    wire is a *present* field and violates 'should not contain a context field'.
+    """
     assert ctx.get("response") is not None, f"Expected a success response, got error: {ctx.get('error')!r}"
     actual = _response_context(ctx)
-    assert actual is None, f"Expected no context on the response, got {actual!r}"
+    assert actual is _CONTEXT_ABSENT, f"Expected the context field to be absent, got {actual!r}"

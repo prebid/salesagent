@@ -319,12 +319,21 @@ class TestGetAdcpCapabilitiesProtocolFiltering:
 class TestParseProtocolsQuery:
     """REST ``protocols`` query param normalization (repeated or CSV) (#1546)."""
 
-    def test_none_and_empty_mean_no_filter(self):
+    def test_absent_param_means_no_filter(self):
+        """An absent param (None) or a genuinely empty list means 'no filter' (full set)."""
         from src.routes.api_v1 import _parse_protocols_query
 
         assert _parse_protocols_query(None) is None
         assert _parse_protocols_query([]) is None
-        assert _parse_protocols_query([""]) is None
+
+    def test_present_but_blank_is_validation_error(self):
+        """``?protocols=`` (present but blank → [""]) is an explicit empty selection,
+        not 'no filter' — it must be a VALIDATION_ERROR, never the full set (#1546 re-review)."""
+        from src.core.exceptions import AdCPValidationError
+        from src.routes.api_v1 import _parse_protocols_query
+
+        with pytest.raises(AdCPValidationError):
+            _parse_protocols_query([""])
 
     def test_repeated_params(self):
         from src.routes.api_v1 import _parse_protocols_query

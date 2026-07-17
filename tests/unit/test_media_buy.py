@@ -1666,6 +1666,27 @@ class TestUpdateMediaBuySchemaCompliance:
         req = UpdateMediaBuyRequest(media_buy_id="mb_1", packages=[])
         assert req.media_buy_id == "mb_1"
 
+    def test_build_update_request_rejects_supplied_revision_fail_loud(self):
+        """A supplied `revision` is rejected fail-loud — optimistic concurrency is not
+        implemented, so a stale-write guard must NOT be silently dropped (#1546 re-review).
+
+        _build_update_request is the single boundary every transport (MCP/A2A/REST)
+        routes through, so rejecting here makes the failure consistent everywhere
+        instead of the prior split (MCP/A2A silently succeeded, REST returned 400).
+        """
+        from src.core.exceptions import AdCPInvalidRequestError
+        from src.core.tools.media_buy_update import _build_update_request
+
+        # A well-formed revision is still rejected: we cannot honor CONFLICT-on-mismatch.
+        with pytest.raises(AdCPInvalidRequestError):
+            _build_update_request(media_buy_id="mb_1", paused=True, revision=5)
+        with pytest.raises(AdCPInvalidRequestError):
+            _build_update_request(media_buy_id="mb_1", paused=True, revision="5")
+
+        # Absent revision (the normal case) still builds a valid request.
+        req = _build_update_request(media_buy_id="mb_1", paused=True, revision=None)
+        assert req.media_buy_id == "mb_1"
+
     def test_update_request_parses_iso_datetime_strings(self):
         """UC-003-S02: ISO datetime strings parsed in pre-validator.
 

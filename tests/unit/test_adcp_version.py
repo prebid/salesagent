@@ -53,10 +53,12 @@ def test_major_version_is_current_pinned_major():
 def test_supported_versions_derived_from_sdk_spec_pin():
     """supported_versions is the release-precision form of the SDK pin: PATCH dropped, prerelease preserved.
 
-    core/version-envelope.json (v3.1.0-beta.3) constrains the wire value to
+    The repo currently pins AdCP 3.1.1 (adcp 6.6.0), which normalizes to "3.1".
+    core/version-envelope.json constrains the wire value to
     ``^\\d+\\.\\d+(-[a-zA-Z0-9.-]+)?$`` — MAJOR.MINOR with an optional prerelease,
-    never a PATCH. So the full-semver pin "3.1.0-beta.3" normalizes to
-    "3.1-beta.3": the ``.0`` patch is dropped, the ``-beta.3`` prerelease kept.
+    never a PATCH. The prerelease branch is exercised with an illustrative
+    full-semver value "3.1.0-beta.3", which normalizes to "3.1-beta.3": the
+    ``.0`` patch is dropped, the ``-beta.3`` prerelease kept.
     """
     m = re.fullmatch(r"(\d+)\.(\d+)\.\d+(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?", adcp.get_adcp_spec_version())
     assert m is not None
@@ -202,7 +204,7 @@ def test_malformed_sdk_spec_pin_raises_typed_configuration_error(monkeypatch, ma
 
 
 class TestValidateAdcpVersionPins:
-    """Version negotiation per core/version-envelope.json (v3.1.0-beta.3, #1512 Tier 2)."""
+    """Version negotiation per core/version-envelope.json (AdCP 3.1.1 / adcp 6.6.0, #1512 Tier 2)."""
 
     def test_supported_major_passes(self):
         validate_adcp_version_pins({"adcp_major_version": adcp_major_version(), "brief": "ads"})

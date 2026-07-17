@@ -1285,6 +1285,14 @@ class AdCPRequestHandler(RequestHandler):
             if not url:
                 raise InvalidParamsError(message="Missing required parameter: url")
 
+            # SSRF: validate the buyer-supplied callback URL before persisting it.
+            # This is a public authenticated A2A entry point; without this gate a
+            # metadata/loopback URL could be stored and later POSTed to by the
+            # delivery path. Same env-gated gate the media-buy callback path uses.
+            _url_ok, _url_error = WebhookURLValidator.validate_callback_url(url)
+            if not _url_ok:
+                raise InvalidParamsError(message=f"Invalid callback url: {_url_error}")
+
             auth_type = None
             auth_token_value = None
             if params.HasField("authentication"):

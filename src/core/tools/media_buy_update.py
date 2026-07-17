@@ -1433,12 +1433,27 @@ def _build_update_request(
     reporting_webhook: Any = None,
     ext: Any = None,
     idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
+    revision: int | str | None = None,
 ) -> UpdateMediaBuyRequest:
     """Build UpdateMediaBuyRequest from flat parameters.
 
     Handles deprecated field mapping and budget object construction.
     Used by both MCP wrapper and A2A raw function.
     """
+    # Optimistic-concurrency control is not implemented by this agent (the engine
+    # lives on branch feat/adcp-idempotency-concurrency). update-media-buy-request.json
+    # (3.1.1) requires a `revision` mismatch to return CONFLICT atomically with the
+    # write; since we cannot honor that, reject ANY supplied `revision` fail-loud on
+    # every transport (MCP/A2A/REST all route through here) rather than silently drop
+    # the buyer's stale-write guard and perform an unprotected update.
+    if revision is not None:
+        raise AdCPInvalidRequestError(
+            "This seller does not support optimistic-concurrency control via `revision`; the update was not applied.",
+            suggestion=(
+                "Retry the update without a `revision` field, or re-read the media buy's current state before updating."
+            ),
+        )
+
     # Handle deprecated field names
     effective_start = start_time or flight_start_date
     effective_end = end_time or flight_end_date
@@ -1531,6 +1546,10 @@ async def update_media_buy(
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
+    revision: Annotated[
+        int | str | None,
+        Field(description="Optimistic-concurrency revision. Not supported by this seller; rejected if supplied."),
+    ] = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Update a media buy with campaign-level and/or package-level changes.
@@ -1581,6 +1600,7 @@ async def update_media_buy(
         reporting_webhook=reporting_webhook,
         ext=ext,
         idempotency_key=idempotency_key,
+        revision=revision,
     )
     # Read identity and context_id pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
@@ -1610,6 +1630,7 @@ def update_media_buy_raw(
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     idempotency_key: str | None = None,  # AdCP idempotency key for retry safety
+    revision: int | str | None = None,  # optimistic concurrency — rejected if supplied (unsupported)
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -1659,6 +1680,7 @@ def update_media_buy_raw(
         reporting_webhook=reporting_webhook,
         ext=ext,
         idempotency_key=idempotency_key,
+        revision=revision,
     )
     if identity is None:
         identity = resolve_identity_from_context(ctx, require_valid_token=True)

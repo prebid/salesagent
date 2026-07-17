@@ -195,12 +195,19 @@ ADCP_ENVELOPE_FIELDS: frozenset[str] = frozenset(
         # every AdCP request schema carries additionalProperties: true, and
         # building/by-layer/L1/security.mdx § Idempotency requires sellers to
         # accept requests carrying idempotency_key ("no rejecting on undeclared
-        # envelope fields"). revision/push_notification_config are per-task
-        # request fields (not universal envelope), tolerated on the same basis.
-        # Tools that declare these (e.g. create_media_buy's idempotency_key)
-        # still receive them.
+        # envelope fields"). push_notification_config is a per-task request field
+        # (not universal envelope), tolerated on the same basis. Tools that
+        # declare these (e.g. create_media_buy's idempotency_key) still receive them.
         "idempotency_key",
-        "revision",
+        # NOTE: `revision` is deliberately NOT tolerated. It is an optimistic-
+        # concurrency control (update-media-buy-request.json, 3.1.1): a mismatch
+        # MUST return CONFLICT, atomically with the write. This agent does not
+        # implement that (the concurrency engine lives on branch
+        # feat/adcp-idempotency-concurrency). Silently stripping `revision` would
+        # drop the buyer's stale-write guard and perform an unprotected update the
+        # buyer believed was guarded. Instead, update_media_buy declares `revision`
+        # and rejects any supplied value fail-loud on every transport, so the
+        # buyer learns the guard is unavailable rather than getting a false success.
     }
 )
 
@@ -239,7 +246,7 @@ def strip_undeclared_envelope_fields(
     """Strip standard AdCP envelope fields the target tool does not declare.
 
     The ``ADCP_ENVELOPE_FIELDS`` (context / ext / push_notification_config /
-    idempotency_key / revision) are envelope framing that AdCP SDK clients may
+    idempotency_key) are envelope framing that AdCP SDK clients may
     send on any request. A tool that declares one receives it; a tool that
     does not would otherwise reject it under FastMCP's strict per-tool
     arg-validation. Strip only the undeclared ones, in all environments. When

@@ -411,8 +411,12 @@ async def get_adcp_capabilities(
 
     summary = "\n".join(summary_parts)
 
-    # Return ToolResult with human-readable text and structured data
-    return ToolResult(content=summary, structured_content=response)
+    # Return ToolResult with human-readable text and structured data.
+    # Serialize via the response model's own model_dump so the MCP wire matches the
+    # AdCP-canonical shape REST/A2A emit — in particular it OMITS an absent `context`
+    # (INV-2: context absence echoed as absence) rather than FastMCP's object
+    # serialization, which would emit `context: null` (a present field).
+    return ToolResult(content=summary, structured_content=response.model_dump(mode="json"))
 
 
 async def get_adcp_capabilities_raw(

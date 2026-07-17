@@ -275,6 +275,10 @@ class UpdateMediaBuyBody(_VersionedBody):
     reporting_webhook: dict[str, Any] | None = None
     ext: dict[str, Any] | None = None
     idempotency_key: str | None = None
+    # Declared (int | str | None so a wrong-typed value reaches the wrapper's guard
+    # rather than a bare 422) so a supplied revision is rejected fail-loud, consistent
+    # with MCP/A2A — optimistic concurrency is not implemented (see media_buy_update).
+    revision: int | str | None = None
 
 
 class GetMediaBuyDeliveryBody(_VersionedBody):
@@ -424,14 +428,28 @@ def _parse_protocols_query(raw: list[str] | None) -> list[str] | None:
     """Normalize the ``protocols`` query param into a flat list (or None for no filter).
 
     Accepts both repeated (``?protocols=a&protocols=b``) and CSV (``?protocols=a,b``)
-    forms — each element is split on commas and trimmed. An absent or all-blank value
-    means "no filter" (None); the raw strings are validated against the ``Protocol``
-    enum downstream when the request model is built.
+    forms — each element is split on commas and trimmed. An ABSENT param (``raw`` is
+    None) means "no filter" (None → full capability set). A PRESENT-but-empty param
+    (``?protocols=``) is an explicit empty filter, NOT "no filter": per the request
+    model's minItems=1 it is a VALIDATION_ERROR, so the buyer does not silently get
+    the full set back after asking for an empty selection. Non-blank strings are
+    validated against the ``Protocol`` enum downstream when the request model is built.
     """
     if not raw:
+        # Absent param (FastAPI yields None) or a genuinely empty list → no filter.
         return None
     parsed = [p.strip() for item in raw for p in item.split(",") if p.strip()]
-    return parsed or None
+    if not parsed:
+        # The param was PRESENT but carried only blank tokens (``?protocols=`` →
+        # ``[""]``) — an explicit empty selection, not "no filter". Per the request
+        # model's minItems=1 this is a VALIDATION_ERROR, so the buyer does not
+        # silently receive the full capability set after asking for an empty one.
+        raise AdCPValidationError(
+            "protocols query parameter was provided but empty.",
+            field="protocols",
+            suggestion="Omit ?protocols to receive all capabilities, or name at least one protocol.",
+        )
+    return parsed
 
 
 @router.get("/capabilities", dependencies=[Depends(_version_after_resolve)])
@@ -596,6 +614,7 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         reporting_webhook=reporting_webhook,
         ext=body.ext,
         idempotency_key=body.idempotency_key,
+        revision=body.revision,
         identity=identity,
     )
     return response.model_dump(mode="json")

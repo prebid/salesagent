@@ -696,7 +696,14 @@ async def sync_accounts(
     dry_run: Annotated[bool | None, Field(description="Preview sync results without making changes")] = None,
     context: ContextObject | None = None,
     idempotency_key: Annotated[
-        str | None, Field(description="Client-generated idempotency key for safe retries (AdCP)")
+        str | None,
+        Field(
+            description=(
+                "Client-generated idempotency key (AdCP). Accepted, but this seller does NOT "
+                "deduplicate retries — sync_accounts is not idempotent here, so a repeated "
+                "request re-executes. Retry-safe dedup lives on feat/adcp-idempotency-concurrency."
+            )
+        ),
     ] = None,
     ctx: Context | ToolContext | None = None,
 ) -> Any:
@@ -710,9 +717,11 @@ async def sync_accounts(
         delete_missing: Deactivate accounts not in the list.
         dry_run: Preview changes without persisting.
         context: Application-level context per AdCP spec.
-        idempotency_key: Client-generated idempotency key. Declared here so the
-            envelope-tolerance middleware does not strip it, and forwarded verbatim
-            so a retry carrying the same key is not fabricated a fresh UUID (#1512).
+        idempotency_key: Client-generated idempotency key. Declared here only so the
+            envelope-tolerance middleware does not strip it. NOTE: sync_accounts does
+            NOT implement idempotent replay/dedup (that engine lives on branch
+            feat/adcp-idempotency-concurrency), so this key is accepted but has no
+            effect — a retry re-executes rather than replaying the first result.
         ctx: FastMCP context for authentication.
 
     Returns:
@@ -723,7 +732,9 @@ async def sync_accounts(
         delete_missing=delete_missing,
         dry_run=dry_run,
         context=context,
-        # Preserve the buyer's key; only synthesize one when the client omitted it.
+        # The SDK request model requires idempotency_key; synthesize one when the
+        # client omits it purely to satisfy construction. It has no dedup effect
+        # (see the note above) — sync_accounts is not idempotent on this branch.
         idempotency_key=idempotency_key or str(uuid.uuid4()),
     )
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
