@@ -951,9 +951,10 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent queries creative agent formats at type boundary "<boundary_point>"
     Then the creative agent type handling should be <expected>
 
-    # Type filter REMOVED in adcp 3.12 — no 'type' field on the request, so
-    # 'native' dispatches unfiltered like every other value; production no longer
-    # rejects it. Reconciled to valid (success). salesagent-33r0.
+    # The media-buy list_creative_formats request has no 'type' field — 'type' is a
+    # creative-agent-role field (intentional AdCP role boundary, adcp-client-python#971
+    # triage), not part of this request — so 'native' dispatches unfiltered; production
+    # no longer rejects it. Reconciled to valid (success).
     Examples:
       | boundary_point                                                  | expected |
       | audio (first enum value)                                        | valid    |
