@@ -188,9 +188,7 @@ class TestBuildPackageRowNumericCoercion:
     def test_materialize_tolerates_malformed_legacy_budget(self):
         # A pre-dual-write buy with a garbage scalar budget / bool bid_price must
         # materialize to None columns, not raise InvalidOperation (a 500).
-        repo, session = _repo_with_raw_packages(
-            [{"package_id": "pkg-bad", "budget": "garbage", "bid_price": True}]
-        )
+        repo, session = _repo_with_raw_packages([{"package_id": "pkg-bad", "budget": "garbage", "bid_price": True}])
         package = repo.materialize_package("mb-1", "pkg-bad")
         assert package is not None
         assert package.budget is None
