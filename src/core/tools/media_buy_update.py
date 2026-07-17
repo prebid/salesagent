@@ -568,14 +568,13 @@ def _update_media_buy_impl(
                     ):
                         continue
                     # Read-only config access (row or raw_request) — this
-                    # validator runs before the dry_run gate, so no writes.
-                    package_config = uow.media_buys.get_package_config(req.media_buy_id, pkg_update.package_id)
-                    if package_config is None:
+                    # validator runs before the dry_run gate, so no writes. Shared
+                    # helper (same as the creative_ids / creative_assignments
+                    # paths) so raw_request-tolerant resolution can't drift here;
+                    # req.media_buy_id, matching this validator's other reads.
+                    product = _resolve_package_product(uow, req.media_buy_id, pkg_update.package_id)
+                    if product is None:
                         continue
-                    package_product_id = package_config.get("product_id")
-                    if not package_product_id:
-                        continue
-                    product = uow.products.get_by_id(package_product_id)
                     violation = validate_property_targeting_allowed(product, pkg_update.targeting_overlay)
                     if violation:
                         property_targeting_violations.append(violation)

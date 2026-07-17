@@ -36,15 +36,16 @@ that contract end to end:
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
 
 from src.core.database.models import CreativeAssignment as DBAssignment
-from src.core.exceptions import AdCPCreativeRejectedError
+from src.core.exceptions import AdCPCreativeRejectedError, AdCPValidationError
 from src.core.schemas import UpdateMediaBuyError, UpdateMediaBuyRequest
 from src.core.tools.media_buy_update import _update_media_buy_impl
-from tests.factories import CreativeFactory, MediaBuyFactory
+from tests.factories import CreativeFactory, MediaBuyFactory, PricingOptionFactory, ProductFactory
 from tests.helpers.adcp_factories import create_test_format
 from tests.integration.conftest import seed_error_test_tenant
 from tests.integration.media_buy_helpers import _make_create_request
@@ -327,3 +328,44 @@ class TestPackageGuardRawRequestFallback:
         )
         with pytest.raises(AdCPCreativeRejectedError, match="not supported"):
             _update_media_buy_impl(req=update_req, identity=identity)
+
+    def test_property_targeting_validation_fires_on_raw_request_only_buy(self, _seeded):
+        """The property_targeting validation the get_package_config swap newly runs
+        on legacy buys actually FIRES. A raw_request-only buy whose raw package
+        carries a product_id now resolves the product, so a property_list overlay
+        against a product with property_targeting_allowed=False is rejected instead
+        of silently allowed. This is the pricing/targeting-validator counterpart to
+        the creative-format oracle above — the third _resolve_package_product site
+        (this validator) was the un-migrated inline copy, so it needs its own pin.
+
+        Deletion oracle: with the old ``get_package(...) is None`` skip path this
+        validator never ran on a raw_request-only buy and the update succeeded.
+        """
+        identity = _seeded["identity"]
+        product = ProductFactory(
+            tenant=_seeded["tenant"],
+            product_id="prod_no_pta_legacy",
+            property_targeting_allowed=False,
+        )
+        PricingOptionFactory(product=product, pricing_model="cpm", rate=Decimal("5.00"), is_fixed=True)
+
+        media_buy = _seed_raw_request_only_buy(
+            _seeded,
+            media_buy_id="mb_raw_only_pta",
+            package_id="pkg_legacy_pta",
+            impressions=90000,
+            product_id="prod_no_pta_legacy",
+        )
+
+        update_req = UpdateMediaBuyRequest(
+            media_buy_id=media_buy.media_buy_id,
+            packages=[
+                {
+                    "package_id": "pkg_legacy_pta",
+                    "targeting_overlay": {"property_list": {"agent_url": "https://gov.example", "list_id": "v1"}},
+                }
+            ],
+        )
+        with pytest.raises(AdCPValidationError) as excinfo:
+            _update_media_buy_impl(req=update_req, identity=identity)
+        assert excinfo.value.field == "packages[].targeting_overlay.property_list"
