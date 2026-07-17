@@ -301,29 +301,32 @@ class TestA2ARequestHandler:
             assert callable(method), f"Method {method_name} is not callable"
 
     @pytest.mark.asyncio
-    async def test_on_get_task_unknown_id_raises_task_not_found(self):
-        """tasks/get for an unknown task id raises TaskNotFoundError (A2A -32001),
-        not the generic internal error a bare None return produces. (Assert on
-        str(exc) / the wire error code, not exc.code — the exception has none.)"""
+    @pytest.mark.parametrize(
+        "request_cls_name, method_name",
+        [("GetTaskRequest", "on_get_task"), ("CancelTaskRequest", "on_cancel_task")],
+    )
+    async def test_unknown_task_id_raises_task_not_found(self, request_cls_name, method_name):
+        """An unknown task id raises TaskNotFoundError, not the generic internal
+        error a bare None return produces — cancel is the same not-found condition
+        as get, and both route through the shared ``_get_task_or_raise``.
+
+        Fast smoke check on the raise only. It does NOT prove the wire code: the
+        exception carries no code, and on this app's v0.3-compat dispatch path the
+        client actually sees -32603 (see #1670 and the xfail'd live-server test in
+        TestA2AServerIntegration). Assert on str(exc), not exc.code — there is none.
+
+        Parametrized over both entry points so the shared assertion cannot drift
+        between two byte-identical copies.
+        """
         from unittest.mock import MagicMock
 
-        from a2a.types import GetTaskRequest, TaskNotFoundError
+        import a2a.types as a2a_types
+        from a2a.types import TaskNotFoundError
 
+        request_cls = getattr(a2a_types, request_cls_name)
         with pytest.raises(TaskNotFoundError) as exc:
-            await self.handler.on_get_task(GetTaskRequest(id="task_does_not_exist"), MagicMock())
+            await getattr(self.handler, method_name)(request_cls(id="task_does_not_exist"), MagicMock())
         assert "task_does_not_exist" in str(exc.value)  # the requested id is surfaced
-
-    @pytest.mark.asyncio
-    async def test_on_cancel_task_unknown_id_raises_task_not_found(self):
-        """tasks/cancel for an unknown task id is the same not-found condition as
-        get — it must raise TaskNotFoundError, not silently no-op to None."""
-        from unittest.mock import MagicMock
-
-        from a2a.types import CancelTaskRequest, TaskNotFoundError
-
-        with pytest.raises(TaskNotFoundError) as exc:
-            await self.handler.on_cancel_task(CancelTaskRequest(id="task_does_not_exist"), MagicMock())
-        assert "task_does_not_exist" in str(exc.value)
 
     def test_handler_has_skill_methods(self):
         """Test that handler has skill-specific methods."""
@@ -356,6 +359,49 @@ class TestA2ARequestHandler:
 
 class TestA2AServerIntegration:
     """Integration tests for complete A2A server setup."""
+
+    @pytest.mark.integration
+    @pytest.mark.xfail(
+        reason="v0.3 compat adapter maps A2AError to -32603; see #1670",
+        strict=True,
+    )
+    def test_tasks_get_unknown_id_returns_task_not_found_code_on_the_wire(self):
+        """The deliverable of the TaskNotFoundError change is what an A2A client
+        SEES: JSON-RPC error code -32001. That code is not carried by the
+        exception — it is synthesized downstream — so the direct-call test in
+        TestA2ARequestHandler cannot prove it. This POSTs the real request to the
+        running /a2a endpoint and grades the code on the wire.
+
+        STRICT xfail against #1670: this app builds its A2A routes with
+        enable_v0_3_compat=True (src/app.py:302), so requests dispatch through
+        a2a.compat.v0_3.jsonrpc_adapter, whose handle_request ends in a bare
+        `except Exception -> CoreInternalError` with no A2AError->code mapping —
+        the mapping the SDK's own main dispatcher performs. Both raising
+        TaskNotFoundError and returning None yield -32603 there, so this is not
+        fixable at the handler.
+
+        Strict on purpose: an a2a-sdk bump that closes the gap makes this XPASS,
+        which strict turns into a loud failure so the xfail is removed and -32001
+        is locked in. A non-strict xfail would let the fix land silently and rot
+        the marker — the same "green suite lies" shape the tripwire exists to
+        prevent.
+        """
+        try:
+            response = requests.post(
+                f"{_a2a_base_url()}/a2a",
+                json={"jsonrpc": "2.0", "id": 1, "method": "tasks/get", "params": {"id": "task_does_not_exist"}},
+                timeout=5,
+            )
+        except requests.exceptions.ConnectionError:
+            pytest.skip(f"A2A server not running at {_a2a_base_url()}")
+
+        assert response.status_code == 200, f"JSON-RPC errors ride a 200 envelope: {response.status_code}"
+        body = response.json()
+        assert "error" in body, f"unknown task id must produce a JSON-RPC error: {body}"
+        assert body["error"]["code"] == -32001, (
+            f"A2A spec defines -32001 (TaskNotFoundError) for an unknown task id, got "
+            f"{body['error']['code']} — see #1670"
+        )
 
     @pytest.mark.integration
     def test_server_discovery_flow(self):

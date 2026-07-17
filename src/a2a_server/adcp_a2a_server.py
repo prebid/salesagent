@@ -1034,13 +1034,27 @@ class AdCPRequestHandler(RequestHandler):
         yield result
 
     def _get_task_or_raise(self, task_id: str) -> Task:
-        """Return the in-memory task, or raise ``TaskNotFoundError`` (JSON-RPC -32001).
+        """Return the in-memory task, or raise ``TaskNotFoundError``.
 
-        A bare ``None`` return makes the SDK emit a generic internal error; the
-        A2A spec defines ``TaskNotFoundError`` for an unknown task id, which A2A
-        clients can react to precisely. The requested id rides both the message
-        and structured ``data`` so clients can read it programmatically. Shared
-        by ``on_get_task`` and ``on_cancel_task`` so both surface the same code.
+        A bare ``None`` return makes the SDK synthesize a generic internal error;
+        the A2A spec defines ``TaskNotFoundError`` for an unknown task id, so
+        raising it is the correct thing to do here and is what an A2A client
+        should be able to react to precisely.
+
+        What a client sees TODAY is still ``-32603``, not the spec's ``-32001``:
+        this app builds its A2A routes with ``enable_v0_3_compat=True``
+        (``src/app.py:302``), so requests dispatch through
+        ``a2a.compat.v0_3.jsonrpc_adapter``, whose ``handle_request`` ends in a
+        bare ``except Exception -> CoreInternalError`` with no ``A2AError -> code``
+        mapping — the mapping the SDK's own main dispatcher performs. Returning
+        ``None`` produces the same ``-32603`` there, so the code cannot be fixed
+        at this layer (#1670). Raising the right type is still correct and is what
+        will surface ``-32001`` the moment that gap closes; the xfail'd
+        live-server test pins the current reality.
+
+        The requested id rides both the message and structured ``data`` so clients
+        can read it programmatically. Shared by ``on_get_task`` and
+        ``on_cancel_task`` so both surface the same error.
         """
         task = self.tasks.get(task_id)
         if task is None:
@@ -1054,8 +1068,8 @@ class AdCPRequestHandler(RequestHandler):
     ) -> Task:
         """Handle 'tasks/get' method to retrieve task status.
 
-        Raises ``TaskNotFoundError`` (-32001) for an unknown task id — see
-        ``_get_task_or_raise``.
+        Raises ``TaskNotFoundError`` for an unknown task id — see
+        ``_get_task_or_raise`` (and #1670 for why the wire code is still -32603).
         """
         return self._get_task_or_raise(params.id)
 
@@ -1066,13 +1080,15 @@ class AdCPRequestHandler(RequestHandler):
     ) -> Task:
         """Handle 'tasks/cancel' method to cancel a task.
 
-        Raises ``TaskNotFoundError`` (-32001) for an unknown task id — cancelling
-        a task that does not exist is the same not-found condition as get, not a
-        silent no-op.
+        Raises ``TaskNotFoundError`` for an unknown task id — cancelling a task
+        that does not exist is the same not-found condition as get, not a silent
+        no-op. See ``_get_task_or_raise`` (and #1670 for why the wire code is
+        still -32603).
         """
         task = self._get_task_or_raise(params.id)
+        # CopyFrom mutates the stored Task in place — self.tasks already holds
+        # this exact reference, so re-storing it would rebind the same object.
         task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_CANCELED))
-        self.tasks[params.id] = task
         return task
 
     async def on_list_tasks(
