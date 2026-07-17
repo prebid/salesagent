@@ -112,15 +112,6 @@ def _assert_placements_sorted_by(packages: list[Any], metric: str, *, fallback: 
         pytest.xfail("PRODUCTION GAP: no packages have by_placement data to verify sort")
 
 
-def _resolve_media_buy_id(ctx: dict, mb_id: str) -> str:
-    """Resolve a Gherkin media-buy alias (e.g., 'mb-001') to its DB id.
-
-    Currently identity since _ensure_media_buy_in_db stores the alias as-is.
-    Indirection retained for future tests that may need separate aliasing.
-    """
-    return ctx.get("media_buy_id_aliases", {}).get(mb_id, mb_id)
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — media buy setup and adapter configuration
 # ═══════════════════════════════════════════════════════════════════════
@@ -2923,10 +2914,11 @@ def _assert_wire_rejection(ctx: dict, field: str) -> None:
         code = layer.get("code")
         recovery = layer.get("recovery")
         # SERVICE_UNAVAILABLE must be excluded too: ERROR_CODE_MAPPING remaps
-        # INTERNAL_ERROR to SERVICE_UNAVAILABLE — a server fault would otherwise
-        # pass as a field rejection. (#1420 should-fix) CONFIGURATION_ERROR now
-        # passes through untranslated (salesagent-nr2q) and is likewise a
-        # seller-side fault, never a field rejection.
+        # INTERNAL_ERROR to SERVICE_UNAVAILABLE, and the base AdCPError default
+        # recovery is "terminal" — so a {SERVICE_UNAVAILABLE, terminal} server fault
+        # would otherwise pass as a field rejection. (#1420 should-fix)
+        # CONFIGURATION_ERROR now passes through untranslated (salesagent-nr2q) and is
+        # likewise a seller-side fault, never a field rejection.
         assert code and code not in {"INTERNAL_ERROR", "SERVICE_UNAVAILABLE", "CONFIGURATION_ERROR", "AUTH_REQUIRED"}, (
             f"Invalid {field}: expected a client rejection on the wire, got code={code!r} "
             f"— a server crash or auth failure is not a field rejection. Envelope: {envelope}"

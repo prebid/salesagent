@@ -386,9 +386,9 @@ class TestHighRiskA2A:
                 identity=mock_identity,
             )
 
-        # Validation error mentions the required fields
-        msg = str(exc_info.value)
-        assert "media_buy_id" in msg or "performance_data" in msg
+        assert "media_buy_id" in exc_info.value.message
+        assert "performance_data" in exc_info.value.message
+        assert exc_info.value.field == "media_buy_id"
         assert exc_info.value.error_code == "VALIDATION_ERROR"
 
     # H9 ---------------------------------------------------------------
