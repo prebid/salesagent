@@ -5,16 +5,20 @@
 # IDs for the same advisory can differ by tool/vendor namespace — both are
 # listed here for cross-reference. Format: GHSA/PYSEC == CVE.
 #
-# Active suppressions:
-#
-# - MAL-2026-4750: fastapi 0.136.3 — Amazon Inspector flagged an undocumented
-#   'fastar' dep in the [standard] optional group. The OSV advisory was
-#   WITHDRAWN on 2026-05-26 (same day it was published); 'fastar' was an
-#   internal tooling artefact, not a supply-chain injection. Both uv-secure
-#   and pip-audit lag the OSV withdrawal by hours/days — suppress until
-#   their databases catch up.
+# Active suppressions: (none)
 #
 # Previously ignored, now resolved:
+#
+# - PYSEC-2026-89 / CVE-2025-69534 / GHSA-5wmx-573v-2qwq: Python-Markdown
+#   OSV affected-range malformed; we are on Markdown >= 3.8.1. Removed 2026-07
+#   when uv-secure stopped flagging without ignore (#1557).
+#
+# - PYSEC-2025-183 / CVE-2025-45768: PyJWT disputed weak-signing-key advisory;
+#   inapplicable (OIDC decode only, no app signing keys). Removed 2026-07 when
+#   uv-secure stopped flagging without ignore (#1558).
+#
+# - MAL-2026-4750: fastapi 'fastar' dep — OSV advisory withdrawn 2026-05-26.
+#   Removed 2026-07 when uv-secure and pip-audit stopped flagging (#1559).
 #
 # - GHSA-cqp8-fcvh-x7r3 == CVE-2026-46678: pydantic-ai deserialization RCE.
 #   Resolved: pydantic-ai bumped to >=1.99.0 (PR 2). fastmcp was intentionally
@@ -26,7 +30,7 @@
 #   Resolved: fastapi bumped to >=0.133.0 (starlette 1.0+ support) (PR 2).
 
 # uv-secure supports GHSA/PYSEC/MAL identifiers.
-UV_SECURE_IGNORED_VULNS="PYSEC-2026-89,PYSEC-2025-183,MAL-2026-4750"
+UV_SECURE_IGNORED_VULNS=""
 
 # pip-audit supports CVE, GHSA, PYSEC, and MAL IDs.
-PIP_AUDIT_IGNORED_VULNS="MAL-2026-4750"
+PIP_AUDIT_IGNORED_VULNS=""

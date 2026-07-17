@@ -45,11 +45,49 @@ from pydantic import ValidationError
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas import GetProductsResponse
 from tests.factories import PrincipalFactory
+from tests.helpers.capture_wrapper_req import capture_req_via_wrapper
 
 
 def _mock_response() -> GetProductsResponse:
     """Build a minimal GetProductsResponse for testing wrapper logic."""
     return GetProductsResponse(products=[])
+
+
+def _capture_req_via_get_products(brand):
+    """Run the real MCP get_products wrapper with `brand`; return the req handed to the impl."""
+    from src.core.tools.products import get_products
+
+    return capture_req_via_wrapper(
+        impl_patch_target="src.core.tools.products._get_products_impl",
+        wrapper=get_products,
+        stub_response=GetProductsResponse(products=[]),
+        wrapper_kwargs={"brand": brand, "brief": "ads"},
+    )
+
+
+def test_mcp_get_products_coerces_string_url_brand_before_impl():
+    """#1324: brand='https://test.example' reaches the impl as BrandReference(domain='test.example')."""
+    req = _capture_req_via_get_products("https://test.example")
+    assert req.brand is not None
+    assert req.brand.domain == "test.example"
+
+
+def test_mcp_get_products_string_and_dict_brand_identical_downstream():
+    """#1324 contract item 3: string shorthand and dict form produce the identical brand at the impl."""
+    from_string = _capture_req_via_get_products("https://test.example")
+    from_dict = _capture_req_via_get_products({"domain": "test.example"})
+    assert from_string.brand is not None and from_dict.brand is not None
+    assert from_string.brand.domain == from_dict.brand.domain == "test.example"
+
+
+def test_mcp_get_products_malformed_brand_raises_validation_error():
+    """Malformed explicit brand must not coerce to None (misleading require_brand policy error)."""
+    mock_ctx = MagicMock(spec=Context)
+    mock_ctx.get_state = AsyncMock(return_value=None)
+    from src.core.tools.products import get_products
+
+    with pytest.raises(AdCPValidationError, match="Invalid brand"):
+        asyncio.run(get_products(brand="https://[", brief="ads", ctx=mock_ctx))
 
 
 # ---------------------------------------------------------------------------

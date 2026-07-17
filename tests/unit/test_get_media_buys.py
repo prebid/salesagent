@@ -164,7 +164,7 @@ class TestComputeStatus:
 
     def test_paused_flag_overrides_active_window(self):
         """Regression (salesagent-36d): is_paused True reports paused even when
-        the flight window covers today, mirroring _internal_status_for_buy."""
+        the flight window covers today, via the shared resolve_canonical_status."""
         buy = make_media_buy(
             start_date=date(2025, 1, 1),
             end_date=date(2025, 12, 31),
@@ -235,6 +235,22 @@ class TestResolveStatusFilter:
 
         result = _resolve_status_filter(StatusFilter([MediaBuyStatus.pending_start]))
         assert result == {MediaBuyStatus.pending_start}
+
+    def test_invalid_value_raises_validation_error(self):
+        """An unknown status_filter value is a bad request, not a 500.
+
+        On the wire the filter arrives as bare strings; an unmapped value must
+        surface as VALIDATION_ERROR (recovery correctable), never let the
+        underlying ValueError escape as an INTERNAL_ERROR/500.
+        """
+        from src.core.exceptions import AdCPValidationError
+
+        with pytest.raises(AdCPValidationError) as exc_info:
+            _resolve_status_filter(["active", "expired"])  # "expired" is not a MediaBuyStatus
+        assert exc_info.value.error_code == "VALIDATION_ERROR"
+        # A single bare invalid string is rejected the same way.
+        with pytest.raises(AdCPValidationError):
+            _resolve_status_filter("not_a_status")
 
 
 class TestFetchTargetMediaBuys:
@@ -416,7 +432,7 @@ class TestGetMediaBuysImpl:
         from src.core.exceptions import AdCPAuthenticationError
 
         req = self._make_request()
-        with pytest.raises(AdCPAuthenticationError, match="Identity is required"):
+        with pytest.raises(AdCPAuthenticationError, match="Authentication required"):
             _get_media_buys_impl(req, None)
 
 

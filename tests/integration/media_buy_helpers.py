@@ -61,3 +61,24 @@ def _get_tenant_dict(tenant_id: str) -> dict[str, Any]:
             "slack_webhook_url": getattr(tenant, "slack_webhook_url", None),
             "slack_audit_webhook_url": getattr(tenant, "slack_audit_webhook_url", None),
         }
+
+
+def resolve_media_buy_id_from_task(task_id: str) -> str:
+    """Resolve the persisted media_buy_id from a submitted response's task_id.
+
+    Spec 3.1.1: a pending-approval create returns the CreateMediaBuySubmitted
+    envelope (task_id only, no media_buy_id) — the buy is located via the
+    ObjectWorkflowMapping the create path links to the workflow step
+    (PR #1567 round-2 item 2). Fails loud when no mapping exists.
+    """
+    from src.core.database.models import ObjectWorkflowMapping
+
+    with get_db_session() as session:
+        mapping = session.scalars(
+            select(ObjectWorkflowMapping).where(
+                ObjectWorkflowMapping.step_id == task_id,
+                ObjectWorkflowMapping.object_type == "media_buy",
+            )
+        ).first()
+    assert mapping is not None, f"submitted create must map workflow step {task_id!r} to a media buy"
+    return mapping.object_id

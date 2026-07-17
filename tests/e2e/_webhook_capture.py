@@ -22,11 +22,20 @@ class WebhookCaptureHandler(BaseHTTPRequestHandler):
 
     Subclass it and give the subclass its own ``received_webhooks`` list so
     captures don't bleed across suites (``do_POST`` reads ``self.received_webhooks``,
-    which resolves to the subclass attribute). The a2a status-notification handler
-    genuinely differs and is intentionally not folded in here.
+    which resolves to the subclass attribute). Handlers that store more than the
+    raw payload (e.g. the a2a status-notification classifier) override
+    :meth:`record` — the HTTP framing is never copied.
     """
 
     received_webhooks: list = []
+
+    def record(self, payload):
+        """Map an inbound JSON payload to the entry appended to ``received_webhooks``.
+
+        Subclass hook. A raised exception is answered with a 500 and is visible
+        to the test via the sender's delivery failure — never swallowed here.
+        """
+        return payload
 
     def do_POST(self):
         """Handle POST requests (webhook notifications)."""
@@ -34,7 +43,7 @@ class WebhookCaptureHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(content_length)
 
         try:
-            self.received_webhooks.append(json.loads(body.decode("utf-8")))
+            self.received_webhooks.append(self.record(json.loads(body.decode("utf-8"))))
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()

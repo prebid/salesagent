@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import warnings
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from tests.unit._architecture_helpers import (
     assert_anchor_consistency,
     assert_violations_match_allowlist,
     iter_call_expressions,
+    iter_git_tracked_files,
     postgres_image_ref,
     postgres_tag_pattern_map,
     uv_version_pattern_map,
@@ -124,3 +126,50 @@ def test_assert_anchor_consistency_flags_intra_file_drift() -> None:
 
     with pytest.raises(AssertionError, match="postgres image drift"):
         assert_anchor_consistency(sources, postgres_tag_pattern_map(), label="postgres image")
+
+
+# ---------------------------------------------------------------------------
+# iter_git_tracked_files fallback (PR #1567 round-3): the filesystem-walk
+# fallback must be LOUD (RuntimeWarning) and hermetic w.r.t. untracked local
+# dirs (.claude/ notes were producing spurious version-anchor guard failures
+# in the in-network container, where the bind-mounted worktree's .git
+# back-reference is unreachable and the fallback engages).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.arch_guard
+def test_git_unavailable_fallback_warns_and_prunes_claude(tmp_path: Path) -> None:
+    """Positive fixture: no git metadata -> fallback engages loudly, .claude pruned."""
+    (tmp_path / "kept.py").write_text("x = 1\n", encoding="utf-8")
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    (claude_dir / "notes.md").write_text("untracked local notes\n", encoding="utf-8")
+
+    with pytest.warns(RuntimeWarning, match="git ls-files.*failed.*falling back"):
+        files = list(iter_git_tracked_files(tmp_path))
+
+    names = {f.relative_to(tmp_path).as_posix() for f in files}
+    assert "kept.py" in names, f"fallback walk must yield regular files, got {sorted(names)}"
+    assert not any(n.startswith(".claude/") for n in names), (
+        f"fallback walk must prune .claude/ (untracked local notes leak into guard scans), got {sorted(names)}"
+    )
+
+
+@pytest.mark.arch_guard
+def test_git_available_never_engages_fallback(tmp_path: Path) -> None:
+    """Negative fixture: working git -> tracked files only, no fallback warning."""
+    import subprocess
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "tracked.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "untracked.py").write_text("y = 2\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.py"], cwd=tmp_path, check=True)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        files = list(iter_git_tracked_files(tmp_path))
+
+    names = {f.relative_to(tmp_path).as_posix() for f in files}
+    assert names == {"tracked.py"}, (
+        f"with working git the helper must yield exactly the tracked set (hermetic), got {sorted(names)}"
+    )

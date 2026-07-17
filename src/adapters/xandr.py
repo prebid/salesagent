@@ -505,7 +505,7 @@ class XandrAdapter(AdServerAdapter):
                 raise ValueError("Advertiser ID is required for Xandr operations")
 
             # campaign_name is no longer on CreateMediaBuyRequest per AdCP spec
-            # Use brand domain or buyer_ref as fallback
+            # Use brand domain as fallback
             campaign_name = None
             if hasattr(request, "brand") and request.brand:
                 brand = request.brand
@@ -933,7 +933,7 @@ class XandrAdapter(AdServerAdapter):
                 "total_spend": 0.0,
                 "total_revenue": 0.0,
                 "video_starts": 0,
-                "video_completions": 0,
+                "completed_views": 0,
                 "by_insertion_order": {},
                 "by_day": {},
             }
@@ -948,7 +948,9 @@ class XandrAdapter(AdServerAdapter):
                 summary["total_spend"] += row.get("media_cost", 0)
                 summary["total_revenue"] += row.get("booked_revenue", 0)
                 summary["video_starts"] += row.get("video_starts", 0)
-                summary["video_completions"] += row.get("video_completions", 0)
+                # External Xandr report column is named "video_completions"; the
+                # spec-aligned internal metric name is "completed_views".
+                summary["completed_views"] += row.get("video_completions", 0)
 
                 # Group by IO
                 io_id = str(row.get("insertion_order_id"))
@@ -985,7 +987,7 @@ class XandrAdapter(AdServerAdapter):
                 else 0
             )
             summary["completion_rate"] = (
-                (summary["video_completions"] / summary["video_starts"]) if summary["video_starts"] > 0 else 0
+                (summary["completed_views"] / summary["video_starts"]) if summary["video_starts"] > 0 else 0
             )
 
             return summary
@@ -1048,7 +1050,9 @@ class XandrAdapter(AdServerAdapter):
                 clicks = row.get("clicks", 0)
                 spend = row.get("media_cost", 0)
                 video_starts = row.get("video_starts", 0)
-                video_completions = row.get("video_completions", 0)
+                # External Xandr report column is named "video_completions"; the
+                # spec-aligned internal metric name is "completed_views".
+                completed_views = row.get("video_completions", 0)
                 viewable_imps = row.get("viewability_viewed_impressions", 0)
                 measured_imps = row.get("viewability_measurement_impressions", 0)
 
@@ -1064,8 +1068,8 @@ class XandrAdapter(AdServerAdapter):
                         "cpm": (spend / impressions * 1000) if impressions > 0 else 0,
                         "ctr": (clicks / impressions) if impressions > 0 else 0,
                         "video_starts": video_starts,
-                        "video_completions": video_completions,
-                        "completion_rate": (video_completions / video_starts) if video_starts > 0 else 0,
+                        "completed_views": completed_views,
+                        "completion_rate": (completed_views / video_starts) if video_starts > 0 else 0,
                         "viewability_rate": (viewable_imps / measured_imps) if measured_imps > 0 else 0,
                     }
                 )

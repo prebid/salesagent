@@ -15,6 +15,8 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
+from tests.bdd.steps._outcome_helpers import _require_response
+from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.given_media_buy import _resolve_date_token
 
@@ -48,6 +50,15 @@ def _resolve_package_id(ctx: dict, label: str) -> str:
     return ctx.get("package_labels", {}).get(label, label)
 
 
+def _resolve_media_buy_id(ctx: dict, label: str) -> str:
+    """Resolve a Gherkin media buy label to the real media_buy_id.
+
+    Falls back to returning the label itself for scenarios where the label
+    matches the real ID (e.g. when the conftest doesn't set media_buy_labels).
+    """
+    return ctx.get("media_buy_labels", {}).get(label, label)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — Background + request construction
 # ═══════════════════════════════════════════════════════════════════════
@@ -61,6 +72,29 @@ def given_buyer_owns_media_buy(ctx: dict) -> None:
     AND database persistence to prevent phantom media buys that exist only in
     test state.  Uses MediaBuyRepository (not raw select) per repository pattern.
     """
+    _verify_existing_media_buy(ctx)
+
+
+@given(parsers.parse('the Buyer owns an existing media buy with media_buy_id "{media_buy_id}"'))
+def given_buyer_owns_media_buy_by_id(ctx: dict, media_buy_id: str) -> None:
+    """Verify the existing media buy is in ctx, persisted in DB, and register its label.
+
+    The media_buy_id from Gherkin (e.g. "mb_existing") is a label — the actual
+    factory-generated ID may differ (label mechanism), or the UC-003 harness may
+    seed the literal id (PR #1567 MediaBuyDualEnv), in which case the label maps
+    to itself. This step registers the label mapping so subsequent steps
+    (update_kwargs, assertions) can use the Gherkin label, and the shared verify
+    checks DB persistence by the real id so a mis-seeded / phantom media buy
+    fails loudly here rather than deep in the update path.
+    """
+    _verify_existing_media_buy(ctx)
+    mb = ctx["existing_media_buy"]
+    # Register the Gherkin label → real media_buy_id mapping
+    ctx.setdefault("media_buy_labels", {})[media_buy_id] = mb.media_buy_id
+
+
+def _verify_existing_media_buy(ctx: dict) -> None:
+    """Shared verification: existing_media_buy is in ctx and persisted in DB."""
     from src.core.database.repositories.media_buy import MediaBuyRepository
 
     mb = ctx.get("existing_media_buy")
@@ -76,6 +110,53 @@ def given_buyer_owns_media_buy(ctx: dict) -> None:
         f"Media buy '{mb.media_buy_id}' not found in DB for tenant '{tenant.tenant_id}' — "
         "step claims 'Buyer owns an existing media buy' but it is not persisted"
     )
+
+
+def _assert_wire_field_equals(ctx: dict, field: str, expected: str) -> None:
+    """Assert a REAL wire field equals the expected value (strict equality).
+
+    Reads ctx['wire_response'] (the buyer-facing body), not the reconstructed
+    payload. Shared dumb value comparator for the wire value-pin steps."""
+    from tests.bdd.steps._outcome_helpers import wire_dict
+
+    wire = wire_dict(ctx)
+    actual = wire.get(field)
+    assert actual == expected, f"Expected wire {field} '{expected}', got {actual!r} (wire keys: {sorted(wire)})"
+
+
+@then(parsers.parse('the wire media_buy_status should be "{status}"'))
+def then_wire_media_buy_status_value(ctx: dict, status: str) -> None:
+    """Assert the REAL wire ``media_buy_status`` equals the expected DOMAIN status.
+
+    Used to pin that a persisted status whose name differs from its AdCP
+    value (e.g. 'scheduled') is normalized to the correct domain MediaBuyStatus on
+    the update response (#1417)."""
+    _assert_wire_field_equals(ctx, "media_buy_status", status)
+
+
+@then(parsers.parse('the wire status should be "{status}"'))
+def then_wire_status_value(ctx: dict, status: str) -> None:
+    """Assert the REAL wire top-level ``status`` equals the expected PROTOCOL TaskStatus.
+
+    The GA 3.1.0 storyboard pending_creatives_to_start.yaml grades top-level
+    ``status`` = field_value 'completed' on synchronous create/update success
+    (protocol-envelope.json required: [status]) — a different namespace from
+    the domain ``media_buy_status``."""
+    _assert_wire_field_equals(ctx, "status", status)
+
+
+@then(parsers.parse('the wire valid_actions should include "{action}"'))
+def then_wire_valid_actions_include(ctx: dict, action: str) -> None:
+    """Assert the REAL wire ``valid_actions`` list contains the expected action.
+
+    valid_actions must be derived from the NORMALIZED AdCP status, so a persisted
+    'scheduled' buy reports pending_start's actions (not [] from the raw string)
+    (#1417)."""
+    from tests.bdd.steps._outcome_helpers import wire_dict
+
+    wire = wire_dict(ctx)
+    actions = wire.get("valid_actions") or []
+    assert action in actions, f"Expected '{action}' in wire valid_actions, got {actions!r}"
 
 
 @given(parsers.parse('the media buy is in "{status}" status'))
@@ -95,6 +176,20 @@ def given_media_buy_status(ctx: dict, status: str) -> None:
     )
     # Precondition mutation: set status and persist to DB
     mb.status = status
+    # A pre-start status must be internally consistent with the flight window:
+    # the shared status taxonomy (#1545) date-refines generic serving aliases,
+    # so a "scheduled" buy whose factory-default flight already started would
+    # honestly refine to active. Move the window to the future so the seeded
+    # precondition means what the scenario says (awaiting start).
+    if status in ("scheduled", "pending_start"):
+        from datetime import date, timedelta
+
+        mb.start_date = date.today() + timedelta(days=7)
+        mb.end_date = date.today() + timedelta(days=37)
+        # start_time/end_time take precedence over the dates in the shared
+        # resolver — clear any seeded past timestamps so the future window holds.
+        mb.start_time = None
+        mb.end_time = None
     env = ctx["env"]
     env._commit_factory_data()
 
@@ -158,6 +253,7 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
         "packages",
         "budget",
         "idempotency_key",
+        "invoice_recipient",
     }
     kwargs = _ensure_update_defaults(ctx)
     clock = ctx["env"].clock
@@ -173,7 +269,8 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
             f"Add handling for '{field}' if it's a valid UpdateMediaBuyRequest field."
         )
         if field == "media_buy_id":
-            kwargs["media_buy_id"] = value
+            # Resolve Gherkin label (e.g. "mb_existing") to real factory ID
+            kwargs["media_buy_id"] = _resolve_media_buy_id(ctx, value)
         elif field == "paused":
             kwargs["paused"] = value.lower() == "true"
         elif field == "start_time":
@@ -188,6 +285,26 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
             # Expand <N character string> placeholders (e.g. "<256 character string>")
             length_match = re.match(r"<(\d+)\s*char(?:acter)?\s*string>", value)
             kwargs["idempotency_key"] = "x" * int(length_match.group(1)) if length_match else value
+        elif field == "invoice_recipient":
+            # BusinessEntity requires legal_name; the override is rejected by production
+            # only when authorized — that authorization check is a production gap
+            # (#1417), so the scenario is xfailed (T-UC-003-ext-t).
+            kwargs["invoice_recipient"] = {"legal_name": value}
+
+
+@given(parsers.parse('the invoice_recipient "{recipient}" is not authorized for this account'))
+def given_invoice_recipient_not_authorized(ctx: dict, recipient: str) -> None:
+    """Precondition: the invoice_recipient is not authorized for the account.
+
+    No authorization record links this recipient to the account, so an
+    authorized-invoice-recipient check would reject the update. Production does
+    not yet implement that check (BR-RULE-214, #1417), so the scenario
+    is xfailed (T-UC-003-ext-t) until production catches up. Assert the request
+    carries the override so the resolution path is exercised when implemented.
+    """
+    assert ctx.get("update_kwargs", {}).get("invoice_recipient") is not None, (
+        "update_kwargs must carry invoice_recipient for the authorization check"
+    )
 
 
 @given("the request does NOT include start_time, end_time, or paused fields")
@@ -202,15 +319,12 @@ def given_request_omits_start_end_paused(ctx: dict) -> None:
         kwargs.pop(field, None)
 
 
-@given("the request does NOT include an idempotency_key")
-def given_request_omits_idempotency_key(ctx: dict) -> None:
-    """Declarative guard — ensure idempotency_key is NOT in update_kwargs.
-
-    The default update_kwargs only contains media_buy_id, so idempotency_key is
-    already absent. This step explicitly strips it in case prior Given steps added it.
-    """
-    kwargs = _ensure_update_defaults(ctx)
-    kwargs.pop("idempotency_key", None)
+# Step "the request does NOT include an idempotency_key" is owned by
+# tests/bdd/steps/domain/uc002_create_media_buy.py (canonical, shared across
+# UC-002/003) to avoid a cross-module shadow now that this module is registered.
+# No graded UC-003 scenario uses that text; when the dormant UC-003 idempotency
+# scenarios graduate (PR #1567 follow-up) they need an update-kwargs strip under
+# a distinct step text (create/update behaviours genuinely differ).
 
 
 @given("the request does not include any updatable fields")
@@ -232,7 +346,11 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
     """Add a package update to the request from a data table."""
     import json
 
-    _supported_pkg_fields = {"package_id", "budget", "paused", "targeting_overlay"}
+    # product_id is intentionally accepted here so the immutable-field override
+    # reaches production. AdCPPackageUpdate forbids it (extra=forbid), so it is
+    # rejected — currently as VALIDATION_ERROR rather than the spec-expected
+    # INVALID_REQUEST (BR-RULE-198), so T-UC-003-ext-w is xfailed (#1417).
+    _supported_pkg_fields = {"package_id", "budget", "paused", "targeting_overlay", "product_id"}
     kwargs = _ensure_update_defaults(ctx)
     pkg_update: dict[str, Any] = {}
     # Skip header row if present (pytest-bdd datatables include header as first row)
@@ -252,6 +370,8 @@ def given_package_update_with_table(ctx: dict, datatable: list[list[str]]) -> No
             pkg_update["paused"] = value.lower() == "true"
         elif field == "targeting_overlay":
             pkg_update["targeting_overlay"] = json.loads(value)
+        elif field == "product_id":
+            pkg_update["product_id"] = value
     assert pkg_update, "Datatable produced empty package update — check table format"
     kwargs["packages"] = [pkg_update]
 
@@ -345,12 +465,6 @@ def given_daily_spend_ok(ctx: dict) -> None:
                         "but existing packages violate the constraint"
                     )
     ctx.setdefault("daily_spend_validated", True)
-
-
-@given(parsers.parse('the buyer_ref "{buyer_ref}" resolves to the existing media buy'))
-def given_buyer_ref_resolves(ctx: dict, buyer_ref: str) -> None:
-    """buyer_ref removed in adcp 3.12. Verify media buy exists."""
-    assert ctx.get("existing_media_buy") is not None, "No existing_media_buy in ctx"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -461,15 +575,18 @@ def given_placement_ids_valid(ctx: dict) -> None:
         "No product in ctx (neither 'default_product' nor 'existing_product') — "
         "step claims placements are 'valid for the product' but no product exists to validate against"
     )
-    # Verify product does not have restrictive placement config that would reject these
-    allowed = getattr(product, "allowed_placement_ids", None)
+    # Verify product does not have restrictive placement config that would reject these.
+    # The model column is `placements` (list of dicts with placement_id); when set it
+    # restricts the valid placement ids, when None/empty all placements are allowed.
+    placements = getattr(product, "placements", None)
+    allowed = {p.get("placement_id") for p in placements if isinstance(p, dict)} if placements else None
     if allowed is not None:
         invalid = [p for p in pids if p not in allowed]
         assert not invalid, (
             f"Placement IDs {invalid} are not in product's allowed placements {allowed} — "
             "step claims 'all placement_ids are valid for the product'"
         )
-    # When product has no allowed_placement_ids restriction, all placements are
+    # When product has no placements restriction, all placements are
     # valid by definition — this is correct AdCP semantics (no restriction = all allowed).
     # Log which path was taken for debugging.
     ctx.setdefault("placement_validation_path", "unrestricted" if allowed is None else "restricted")
@@ -673,6 +790,7 @@ def when_send_update_request(ctx: dict) -> None:
     """Build UpdateMediaBuyRequest and dispatch through harness."""
     from pydantic import ValidationError
 
+    from src.core.exceptions import AdCPError
     from src.core.schemas import UpdateMediaBuyRequest
 
     update_kwargs = ctx.get("update_kwargs", {})
@@ -689,6 +807,12 @@ def when_send_update_request(ctx: dict) -> None:
     except ValidationError as e:
         # Schema validation rejects the request before production code runs.
         # Store as ctx["error"] so Then steps can assert on it.
+        ctx["error"] = e
+        return
+    except AdCPError as e:
+        # A schema-level validator raised a typed AdCP error (e.g. the immutable
+        # package-field guard → INVALID_REQUEST). It propagates as-is (not wrapped
+        # in ValidationError), so capture it the same way for the Then steps.
         ctx["error"] = e
         return
 
@@ -1008,6 +1132,68 @@ def then_response_has_errors_array(ctx: dict) -> None:
     assert error.message, f"Promoted error missing required 'message' field: {error!r}"
 
 
+def _submitted_wire_dict(ctx: dict) -> dict[str, Any]:
+    """Return the success-path response as the buyer sees it on the serialized wire.
+
+    REST/A2A/MCP expose the real success-path wire dict via ``ctx["wire_response"]``
+    (stashed by the dispatcher). IMPL has no wire, so serialize the typed payload
+    through the production serializer — the same path that produces wire bytes for
+    the other transports. A real-wire transport that did NOT stash wire_response is
+    a loud failure, not a silent fallback to the typed model (which would let the
+    UpdateMediaBuySubmitted assertions pass vacuously). Mirrors
+    tests/bdd/steps/domain/uc005_format_id_shape.py::_serialized_formats.
+    """
+    from tests.harness.transport import Transport
+
+    wire = ctx.get("wire_response")
+    transport = ctx.get("transport")
+    if wire is None and transport not in (None, Transport.IMPL):
+        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
+    if wire is not None:
+        return wire
+    return _require_response(ctx).model_dump(mode="json")
+
+
+@then("the response should contain a task_id")
+def then_response_contains_task_id(ctx: dict) -> None:
+    """Assert the submitted envelope carries a non-empty task_id on the real wire.
+
+    POST-S8: the buyer receives a task_id to poll tasks/get. Graded on the
+    serialized wire (ctx['wire_response']) so an A2A/MCP/REST regression that
+    drops task_id is caught — not on the coerced typed payload.
+    """
+    data = _submitted_wire_dict(ctx)
+    task_id = data.get("task_id")
+    assert isinstance(task_id, str) and task_id, (
+        f"Submitted response must carry a non-empty task_id on the wire, got {task_id!r} (wire keys: {sorted(data)})"
+    )
+
+
+def _assert_a2a_submitted_task_has_no_artifacts(ctx: dict) -> None:
+    """Defense-in-depth for the A2A submitted case: grade the REAL protobuf Task.
+
+    On A2A a submitted outcome is conveyed via the Task state and the transport
+    clears artifacts (``del task.artifacts[:]``), so the NOT-contain checks over
+    the synthesized wire dict are architecturally vacuous on that transport.
+    Assert on ``env.last_a2a_task`` (the actual transport object, stashed by the
+    dispatcher) that no artifact leaked — mirroring the update path's guard
+    (test_a2a_update_media_buy_submitted_guard.py). PR #1567 round-3.
+    """
+    from tests.harness.transport import Transport
+
+    if ctx.get("transport") is not Transport.A2A:
+        return
+    if (ctx.get("wire_response") or {}).get("status") != "submitted":
+        return
+    env = ctx.get("env")
+    task = getattr(env, "last_a2a_task", None)
+    assert task is not None, "A2A submitted case must stash the real Task (env.last_a2a_task)"
+    assert not task.artifacts, (
+        f"A2A submitted Task must carry NO artifacts (submitted is conveyed via the Task "
+        f"state; an artifact would leak a premature result), got {task.artifacts!r}"
+    )
+
+
 @then(parsers.parse('the response should NOT contain "{field_name}" field'))
 def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
     """Assert the response does NOT contain a given field.
@@ -1015,19 +1201,24 @@ def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
     BR-RULE-018 INV-1/INV-2: Success responses must not contain error fields,
     and error responses must not contain success-specific fields. Handles both
     directions by checking ctx['response'] (success) first, then error_response/error.
+
+    The success-path check reads the REAL serialized wire (``ctx["wire_response"]``
+    via ``_submitted_wire_dict``), not ``response.model_dump()``: media_buy_id and
+    implementation_date are not declared on UpdateMediaBuySubmitted, so a
+    model-level check passes vacuously and can never catch a wire regression (e.g.
+    the A2A submitted reconstruction leaking a field). Absent-or-null on the wire
+    satisfies "does NOT contain" (a null field is not conveyed); a real value is a
+    contract violation. This is the Core Invariant / Design-Refinement Q5.
     """
-    # Success-path response
+    # Success-path response — assert against the buyer-facing serialized wire.
     response = ctx.get("response")
     if response is not None:
-        if hasattr(response, "model_dump"):
-            data = response.model_dump(exclude_none=True)
-        elif isinstance(response, dict):
-            data = {k: v for k, v in response.items() if v is not None}
-        else:
-            data = {}
-        assert field_name not in data, (
-            f"Response should NOT contain '{field_name}' field (BR-RULE-018), but found: {data.get(field_name)!r}"
+        data = _submitted_wire_dict(ctx)
+        assert data.get(field_name) is None, (
+            f"Response should NOT contain '{field_name}' field on the wire (BR-RULE-018), "
+            f"but found: {data.get(field_name)!r}"
         )
+        _assert_a2a_submitted_task_has_no_artifacts(ctx)
         return
     # Error-path response (BR-RULE-018 INV-2)
     error_resp = ctx.get("error_response")
@@ -1237,8 +1428,6 @@ def given_update_request_with_identification(ctx: dict, id_config: str) -> None:
 
     id_config formats:
     - 'media_buy_id=<existing>' — use the existing media buy's ID
-    - 'buyer_ref=my_ref_01' — set buyer_ref only (ensure mb has this ref)
-    - 'media_buy_id=<existing>,buyer_ref=Y' — set both (ambiguous — expect error)
     - '<none>' — set neither (expect error)
     """
     kwargs: dict[str, Any] = {}
@@ -1785,7 +1974,8 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
             "Scenario requires '(product unsupported)' but no product found in ctx or DB — "
             "ensure a Given step sets ctx['default_product'] or the harness creates a product"
         )
-        product.supports_placement_targeting = False
+        # The model column is `placements`; clearing it disables placement-level targeting.
+        product.placements = None
         env._commit_factory_data()
 
     pkg["creative_assignments"] = [assignment]
@@ -1842,6 +2032,18 @@ def given_request_includes_fields(ctx: dict, update_fields: str) -> None:
         kwargs["paused"] = False
         kwargs["start_time"] = "2026-05-01T00:00:00Z"
         kwargs["end_time"] = "2026-07-01T00:00:00Z"
+    elif "new_packages" in stripped:
+        # A complete package-request added mid-flight. Production has no
+        # midflight-additions capability check (BR-RULE-217 -> UNSUPPORTED_FEATURE),
+        # so it accepts new_packages unhandled instead of rejecting — T-UC-003-ext-u
+        # is xfailed (#1417).
+        kwargs["new_packages"] = [
+            {
+                "product_id": "guaranteed_display",
+                "budget": 5000.0,
+                "pricing_option_id": "cpm_usd_fixed",
+            }
+        ]
     else:
         raise ValueError(f"Unknown update_fields pattern: {stripped}")
 
@@ -2049,15 +2251,14 @@ def given_media_buy_owned_by_principal(ctx: dict, owner_id: str) -> None:
 
 @given(parsers.parse("the authenticated principal is {principal}"))
 def given_authenticated_principal(ctx: dict, principal: str) -> None:
-    """Set the authenticated principal for the request.
+    """Set the authenticated principal for the request via the shared helper.
 
-    Updates the env's identity to use the specified principal_id.
+    ``authenticate_env_as`` owns the switch, the canonical ``ctx["principal_id"]``,
+    and the identity post-condition. Currently dormant — see the note on
+    ``given_buyer_authenticated_as`` / ``steps/generic/_auth.py``; retained on the
+    shared helper so the DRY convention holds when UC-003 is activated.
     """
-    principal_id = principal.strip()
-    env = ctx["env"]
-    env._identity_cache.clear()
-    env._principal_id = principal_id
-    ctx["principal_override"] = principal_id
+    authenticate_env_as(ctx, principal.strip())
 
 
 # ═══════════════════════════════════════════════════════════════════════

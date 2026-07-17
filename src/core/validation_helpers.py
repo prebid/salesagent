@@ -13,27 +13,50 @@ from contextlib import contextmanager
 
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import (
+    AdCPValidationError,
+    build_validation_error_details,
+)
+from src.core.exceptions import (
+    first_validation_error_field as first_validation_error_field,
+)
 
 logger = logging.getLogger(__name__)
 
 
 @contextmanager
-def adcp_validation_boundary() -> Iterator[None]:
+def adcp_validation_boundary(context: str = "parameters", field: str | None = None) -> Iterator[None]:
     """Translate a Pydantic ``ValidationError`` into a typed ``AdCPValidationError``.
 
-    A2A skill handlers validate buyer parameters at the transport boundary. A raw
-    ``ValidationError`` leaking from ``model_validate`` (or a typed-model constructor)
-    would surface as an untyped error — and the outer dispatcher only builds the
-    two-layer error envelope for ``AdCPError`` subclasses, so the buyer would lose
-    the real code/recovery. Wrapping the construction in this boundary gives every
-    handler the same ``Invalid parameters: ...`` message plus a structured ``field``
-    path, instead of a hand-copied try/except per handler.
+    Transport wrappers and skill handlers validate buyer parameters at the
+    boundary. A raw ``ValidationError`` leaking from ``model_validate`` (or a
+    typed-model constructor) would surface as an untyped error — and the outer
+    dispatcher only builds the two-layer error envelope for ``AdCPError``
+    subclasses, so the buyer would lose the real code/recovery. This boundary is
+    the SINGLE translation point (#1417): every rejection carries the
+    buyer-friendly ``format_validation_error`` message, the structured ``field``
+    path, and error.json's top-level ``suggestion`` — no tool hand-rolls its own
+    try/except copy.
+
+    ``context`` names what was invalid in the message (e.g. ``"get_products
+    request"``); the default renders the ``Invalid parameters`` prefix existing
+    wire assertions rely on.
+
+    ``field`` pins the reported request field when the failing model is nested
+    under a named request field: coercing a ``BrandReference`` reports
+    ``field="brand"``, not the nested pydantic location (e.g. ``industries``).
+    When ``None`` (default) the field is derived from the validation error.
     """
     try:
         yield
     except ValidationError as e:
-        raise AdCPValidationError(f"Invalid parameters: {e}", field=first_validation_error_field(e)) from e
+        errors = e.errors()
+        raise AdCPValidationError(
+            format_validation_error(e, context=context),
+            field=field if field is not None else first_validation_error_field(e),
+            suggestion=suggest_validation_fix(e),
+            details=build_validation_error_details(errors),
+        ) from e
 
 
 def run_async_in_sync_context(coroutine):
@@ -55,10 +78,19 @@ def run_async_in_sync_context(coroutine):
     if not asyncio.iscoroutine(coroutine):
         raise TypeError(f"Expected coroutine, got {type(coroutine)}")
 
+    # Loop DETECTION only inside this try. The coroutine must execute OUTSIDE
+    # it: a RuntimeError raised BY the coroutine (e.g. httpx/anyio "Event loop
+    # is closed") re-raised out of future.result() would otherwise be misread
+    # as "no running loop" and the already-CONSUMED coroutine re-run on a fresh
+    # loop — mangling the real error into "cannot reuse already awaited
+    # coroutine" (salesagent-mpo1).
     try:
-        # Check if there's already a running event loop
         asyncio.get_running_loop()
+        in_async_context = True
+    except RuntimeError:
+        in_async_context = False
 
+    if in_async_context:
         # We're in an async context, run in thread pool to avoid nested loop error
         # Create a new event loop in the thread to run the coroutine
         def run_in_thread():
@@ -72,14 +104,14 @@ def run_async_in_sync_context(coroutine):
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(run_in_thread)
             return future.result()
-    except RuntimeError:
-        # No running loop, safe to create one
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(coroutine)
-        finally:
-            loop.close()
+
+    # No running loop, safe to create one
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coroutine)
+    finally:
+        loop.close()
 
 
 def safe_parse_json_field(field_value, field_name="field", default=None):
@@ -113,29 +145,6 @@ def safe_parse_json_field(field_value, field_name="field", default=None):
     else:
         logger.warning(f"Unexpected type for {field_name}: {type(field_value)}")
         return default if default is not None else {}
-
-
-def first_validation_error_field(validation_error: ValidationError) -> str | None:
-    """Return the bracket-notation field path of the first Pydantic error, or ``None``.
-
-    Lets a transport boundary attach a structured ``field`` to the
-    ``AdCPValidationError`` it raises, so the wire envelope carries the offending
-    field path (e.g. ``packages[0].budget``) instead of only the rendered message.
-    List indices render as ``[i]`` so the boundary-derived path matches the
-    hand-rolled ``field=`` strings raised inside the _impl layer (``packages[].budget``).
-    """
-    errors = validation_error.errors()
-    if not errors:
-        return None
-    parts: list[str] = []
-    for loc in errors[0]["loc"]:
-        if isinstance(loc, int):
-            parts.append(f"[{loc}]")
-        elif parts:
-            parts.append(f".{loc}")
-        else:
-            parts.append(str(loc))
-    return "".join(parts)
 
 
 def package_field_path(attr: str) -> str:
@@ -211,3 +220,34 @@ def format_validation_error(validation_error: ValidationError, context: str = "r
     )
 
     return error_msg
+
+
+def suggest_validation_fix(validation_error: ValidationError) -> str:
+    """Derive a single buyer-facing correction hint from a Pydantic ValidationError.
+
+    Produces the actionable ``suggestion`` companion to
+    ``format_validation_error``'s diagnostic message, so request-validation
+    rejections carry a non-empty wire ``suggestion`` (AdCP POST-F3: the buyer
+    must learn how to fix the request). The hint names the offending field(s)
+    and the corrective action, keyed off the Pydantic error ``type``:
+
+    * ``missing``        → provide the required field
+    * ``string_pattern_mismatch`` / ``string_too_short`` / ``string_too_long`` → fix the value to satisfy the constraint
+    * ``extra_forbidden`` → remove the unrecognized field
+    * anything else      → correct the field per the AdCP spec
+    """
+    errors = validation_error.errors()
+    if not errors:
+        return "Correct the request to match the AdCP specification and resend."
+
+    first = errors[0]
+    field_path = ".".join(str(loc) for loc in first.get("loc", ())) or "request"
+    error_type = first.get("type", "")
+
+    if "missing" in error_type:
+        return f"Provide the required '{field_path}' field and resend the request."
+    if "extra_forbidden" in error_type:
+        return f"Remove the unrecognized '{field_path}' field; it is not part of the AdCP request schema."
+    if error_type.startswith("string_pattern_mismatch") or "too_short" in error_type or "too_long" in error_type:
+        return f"Provide a valid '{field_path}' value that satisfies the AdCP field constraints and resend."
+    return f"Correct the '{field_path}' field to match the AdCP specification and resend."

@@ -11,17 +11,9 @@ Two layers of guarantee:
 1. **Rejected on every wire transport** (a2a/mcp/rest) — the malformed filter never
    degrades to "return everything".
 2. **Spec two-layer ``VALIDATION_ERROR`` envelope with a recovery suggestion**
-   (POST-F3) on REST and A2A, which coerce the wire dict through the shared
-   ``coerce_creative_filters`` helper.
-
-MCP is intentionally excluded from layer 2: it types the tool param as
-``CreativeFilters`` (required by the wrapper-typed-params guard), so FastMCP's
-TypeAdapter rejects ``concept_ids=[]`` *before* the tool body runs — a raw input
-ValidationError, not an ``AdCPError`` the MCP boundary could wrap into the envelope.
-Translating FastMCP TypeAdapter input errors into the two-layer envelope is a
-pre-existing, tool-agnostic MCP-boundary concern (it affects every typed param,
-not just concept_ids) and is tracked separately in #1507. Layer 1 still pins that
-MCP rejects the malformed filter.
+   (POST-F3) on every wire transport. REST and A2A coerce the wire dict through
+   the shared ``coerce_creative_filters`` helper; MCP catches FastMCP TypeAdapter
+   validation at the boundary and emits the same AdCP envelope.
 
 Spec: ``core/creative-filters.json`` (concept_ids ``minItems: 1``) + the BR-UC-018
 ext-c contract (validation failure → VALIDATION_ERROR + suggestion).
@@ -38,9 +30,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # Wire transports only — IMPL has no wire envelope (and the dict→CreativeFilters
 # coercion under test happens at the transport boundary, not in _impl).
 _ALL_WIRE = [Transport.A2A, Transport.MCP, Transport.REST]
-# Transports whose dict→CreativeFilters coercion runs through coerce_creative_filters
-# (and therefore emit the spec envelope + suggestion). See module docstring re: MCP.
-_HELPER_WIRE = [Transport.A2A, Transport.REST]
 
 
 def _seed_authenticated_principal(env: CreativeListEnv):
@@ -54,7 +43,7 @@ def _seed_authenticated_principal(env: CreativeListEnv):
 
 
 class TestConceptIdsFilterValidation:
-    """Malformed concept_ids filter is rejected, with a spec envelope on REST/A2A."""
+    """Malformed concept_ids filter is rejected, with a spec envelope on every wire transport."""
 
     @pytest.mark.parametrize("transport", _ALL_WIRE)
     def test_empty_concept_ids_array_is_rejected(self, integration_db, transport):
@@ -69,9 +58,9 @@ class TestConceptIdsFilterValidation:
                 f"got payload {result.payload!r}"
             )
 
-    @pytest.mark.parametrize("transport", _HELPER_WIRE)
+    @pytest.mark.parametrize("transport", _ALL_WIRE)
     def test_empty_concept_ids_emits_validation_envelope(self, integration_db, transport):
-        """REST/A2A surface the two-layer VALIDATION_ERROR envelope with a suggestion."""
+        """Wire transports surface the two-layer VALIDATION_ERROR envelope with a suggestion."""
         with CreativeListEnv() as env:
             _seed_authenticated_principal(env)
 
@@ -117,8 +106,8 @@ class TestNonScalarConceptValueDropped:
     for the _coerce_concept_value non-scalar branch (the symmetric half of the
     numeric-coercion fix: reverting `return None` to a passthrough 500s the listing)."""
 
-    def test_non_scalar_concept_value_is_dropped(self, integration_db, caplog):
-        import logging
+    def test_non_scalar_concept_value_is_dropped(self, integration_db):
+        from unittest.mock import patch
 
         from tests.factories import CreativeFactory
 
@@ -131,7 +120,11 @@ class TestNonScalarConceptValueDropped:
                 status="approved",
                 data={"assets": {}, "concept_id": ["x"], "concept_name": {"k": "v"}},
             )
-            with caplog.at_level(logging.WARNING):
+            # Assert the code EMITS the warning by patching the module logger, not by
+            # capturing log records: the REST path runs in-process, so the patch applies,
+            # and this is immune to the tox/integration logging config (levels, handlers,
+            # propagation, logging.disable) that suppressed capture-based approaches.
+            with patch("src.core.tools.creatives.listing.logger") as mock_logger:
                 result = env.call_via(Transport.REST)
 
             assert not result.is_error, f"non-scalar concept value crashed the listing: {result.error!r}"
@@ -140,7 +133,10 @@ class TestNonScalarConceptValueDropped:
             assert "concept_id" not in creative
             assert "concept_name" not in creative
             # Observability (No Quiet Failures): the drop is surfaced in logs, not silent.
-            assert "Dropping non-scalar concept value" in caplog.text
+            warnings_logged = " ".join(str(c) for c in mock_logger.warning.call_args_list)
+            assert "Dropping non-scalar concept value" in warnings_logged, (
+                f"expected the non-scalar drop warning; logger.warning calls: {mock_logger.warning.call_args_list}"
+            )
 
 
 class TestSellerConceptEnrichmentIsFilterable:

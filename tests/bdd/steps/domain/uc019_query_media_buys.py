@@ -15,6 +15,7 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic.then_error import _wire_code, _wire_error_object, _wire_suggestion
 from tests.factories import (
     CreativeAssignmentFactory,
     CreativeFactory,
@@ -59,57 +60,6 @@ def _resolve_media_buy_id(ctx: dict, label: str) -> str:
 def _resolve_media_buy_ids(ctx: dict, labels: list[str]) -> list[str]:
     """Resolve a list of Gherkin labels to real database media_buy_ids."""
     return [_resolve_media_buy_id(ctx, label) for label in labels]
-
-
-def _create_media_buy_with_null_dates(
-    ctx: dict, principal_id: str, mb_id: str, *, null_start: bool, null_end: bool
-) -> None:
-    """Create a media buy with null date fields, handling the NOT NULL constraint.
-
-    MediaBuy.start_date and end_date are NOT NULL in the DB schema. When the
-    scenario requires null dates (BR-RULE-150 missing-date edge case), the
-    factory commit raises IntegrityError. We catch it, rollback, and store a
-    structured AdCPValidationError in ctx["error"] representing the constraint
-    violation — this is what production _should_ return per BR-RULE-150.
-    """
-    from sqlalchemy.exc import IntegrityError
-
-    from src.core.exceptions import AdCPValidationError
-
-    _register_principal(ctx, principal_id)
-    env = ctx["env"]
-    real_id = _generate_unique_id(mb_id)
-
-    factory_kwargs: dict[str, Any] = {
-        "tenant": ctx["tenant"],
-        "principal": ctx["principal"],
-        "media_buy_id": real_id,
-        "status": "active",
-    }
-    if null_start:
-        factory_kwargs["start_date"] = None
-        factory_kwargs["start_time"] = None
-    if null_end:
-        factory_kwargs["end_date"] = None
-        factory_kwargs["end_time"] = None
-
-    try:
-        mb = MediaBuyFactory(**factory_kwargs)
-        env._commit_factory_data()
-        _register_media_buy(ctx, mb_id, mb)
-    except IntegrityError:
-        env._session.rollback()
-        missing = []
-        if null_start:
-            missing.extend(["start_date", "start_time"])
-        if null_end:
-            missing.extend(["end_date", "end_time"])
-        ctx["error"] = AdCPValidationError(
-            f"Cannot compute status: missing {', '.join(missing)}",
-            details={"suggestion": f"Provide {' or '.join(missing)} to enable status computation"},
-            recovery="correctable",
-        )
-        ctx.setdefault("media_buy_labels", {})[mb_id] = real_id
 
 
 def _register_principal(ctx: dict, label: str) -> None:
@@ -228,6 +178,116 @@ def given_today_is(ctx: dict, today_str: str) -> None:
     ctx.setdefault("_patchers", []).append(patcher)
 
 
+# Pre-flight window (far future) for persisted-status seeds that carry no
+# explicit dates: keeps the persisted value stable regardless of the real clock.
+# INV-8/9/10 assert the raw persisted→canonical mapping with no flight
+# refinement, so a pre-flight window is invisible to the resolver (those statuses
+# are terminal or non-serving, never date-refined) while making the seed
+# self-consistent (a pending buy is legitimately pre-flight).
+_UC019_PERSISTED_SEED_WINDOW = (date(2099, 1, 1), date(2099, 12, 31))
+
+
+def _seed_media_buy_with_persisted_status(
+    ctx: dict,
+    principal_id: str,
+    mb_id: str,
+    persisted: str,
+    *,
+    is_paused: bool = False,
+) -> None:
+    """Seed a media buy carrying a specific persisted (internal) status column.
+
+    Mirrors given_multiple_buys_various_statuses in uc004 (the reviewer's
+    template): the persisted status is written verbatim so get_media_buys
+    exercises the real PERSISTED_STATUS_TO_CANONICAL mapping. Dates default to a
+    pre-flight window; scenarios that need a specific flight phase override them
+    via the "has start_date/end_date" modifier step.
+    """
+    _register_principal(ctx, principal_id)
+    env = ctx["env"]
+    real_id = _generate_unique_id(mb_id)
+    start, end = _UC019_PERSISTED_SEED_WINDOW
+    mb = MediaBuyFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        media_buy_id=real_id,
+        status=persisted,
+        is_paused=is_paused,
+        start_date=start,
+        end_date=end,
+    )
+    env._commit_factory_data()
+    _register_media_buy(ctx, mb_id, mb)
+
+
+@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with persisted status "{persisted}"'))
+def given_owns_media_buy_persisted_status(ctx: dict, principal_id: str, mb_id: str, persisted: str) -> None:
+    """Seed a buy with a persisted status (INV-7/8/9/10 taxonomy mapping)."""
+    _seed_media_buy_with_persisted_status(ctx, principal_id, mb_id, persisted)
+
+
+def _seed_simple_media_buy(ctx: dict, principal_id: str, mb_id: str, status: str = "active") -> Any:
+    """Register the principal, seed a media buy (default mid-flight window) under a
+    unique id, and register its Gherkin label. Shared by the plain and
+    with-status Given steps so the seed+register block lives in one place.
+    """
+    _register_principal(ctx, principal_id)
+    env = ctx["env"]
+    real_id = _generate_unique_id(mb_id)
+    mb = MediaBuyFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        media_buy_id=real_id,
+        status=status,
+    )
+    env._commit_factory_data()
+    _register_media_buy(ctx, mb_id, mb)
+    return mb
+
+
+@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with status "{status}"'))
+def given_owns_media_buy_with_status(ctx: dict, principal_id: str, mb_id: str, status: str) -> None:
+    """Seed a buy carrying a specific status and REGISTER its label.
+
+    Without this specific binding the greedy generic step (`owns media buy
+    "{mb_id}"`) captured the trailing ` with status "…"` into mb_id, registering
+    a garbled label so a later by-ID query couldn't resolve it (INV-5). Default
+    (mid-flight) window: "active" stays active; terminal states pass through.
+    """
+    _seed_simple_media_buy(ctx, principal_id, mb_id, status)
+
+
+@given(
+    parsers.parse(
+        'the principal "{principal_id}" owns media buy "{mb_id}" '
+        'with persisted status "{persisted}" and is_paused {flag}'
+    )
+)
+def given_owns_media_buy_persisted_status_paused(
+    ctx: dict, principal_id: str, mb_id: str, persisted: str, flag: str
+) -> None:
+    """Seed a buy with a persisted status and explicit is_paused (INV-6/INV-11)."""
+    _seed_media_buy_with_persisted_status(
+        ctx, principal_id, mb_id, persisted, is_paused=(flag.strip().lower() == "true")
+    )
+
+
+@given(parsers.parse('media buy "{mb_id}" has start_date "{start}" and end_date "{end}"'))
+def given_media_buy_has_dates(ctx: dict, mb_id: str, start: str, end: str) -> None:
+    """Override the flight window on an already-seeded buy (INV-6/7/11 modifier)."""
+    from sqlalchemy import select
+
+    from src.core.database.models import MediaBuy as DBMediaBuy
+
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+    env = ctx["env"]
+    row = env._session.scalars(select(DBMediaBuy).filter_by(media_buy_id=real_id)).first()
+    assert row is not None, f"Media buy '{mb_id}' (real_id={real_id}) not seeded before setting its dates"
+    row.start_date = date.fromisoformat(start)
+    row.end_date = date.fromisoformat(end)
+    env._session.commit()
+
+
 @given(parsers.parse('the principal "{principal_id}" owns media buys "{mb1}", "{mb2}", and "{mb3}"'))
 def given_principal_owns_multiple(ctx: dict, principal_id: str, mb1: str, mb2: str, mb3: str) -> None:
     """Create 3 media buys, verifying principal_id consistency."""
@@ -243,22 +303,6 @@ def given_principal_owns_multiple(ctx: dict, principal_id: str, mb1: str, mb2: s
         )
         _register_media_buy(ctx, label, mb)
     env._commit_factory_data()
-
-
-@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with buyer_ref "{ref}"'))
-def given_principal_owns_with_ref(ctx: dict, principal_id: str, mb_id: str, ref: str) -> None:
-    """Create a media buy (buyer_ref removed in adcp 3.12, creates without it)."""
-    _register_principal(ctx, principal_id)
-    env = ctx["env"]
-    real_id = _generate_unique_id(mb_id)
-    mb = MediaBuyFactory(
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        media_buy_id=real_id,
-        status="active",
-    )
-    env._commit_factory_data()
-    _register_media_buy(ctx, mb_id, mb)
 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with an active package "{pkg_id}"'))
@@ -874,41 +918,48 @@ def given_principal_owns_single_mb(ctx: dict, principal_id: str, mb_id: str) -> 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}"'))
 def given_principal_owns_mb_simple(ctx: dict, principal_id: str, mb_id: str) -> None:
     """Create a media buy (simple, no date attributes)."""
-    _register_principal(ctx, principal_id)
+    _seed_simple_media_buy(ctx, principal_id, mb_id)
+
+
+# RETIRED with T-UC-019-partition-status-invalid: the "no start_time and no
+# start_date" / "no end_time and no end_date" given steps seeded a schema-impossible
+# null-date buy (MediaBuy dates are NOT NULL). See the feature file for the spec
+# rationale. Their helper _create_media_buy_with_null_dates and the paired
+# then_status_handles_missing_date are removed with them.
+
+
+def _seed_account_for_principal(ctx: dict, *, sandbox: bool) -> None:
+    """Seed a real Account (sandbox or production) reachable by the scenario principal.
+
+    get_media_buys carries no account parameter on the request (production
+    rejects account filtering with ACCOUNT_FILTER_NOT_SUPPORTED and instructs
+    "the seller infers the account from the auth token"), so "the request
+    targets a <kind> account" means: the account the identity resolves to has
+    that sandbox flag. Seeding the Account + AgentAccountAccess rows makes the
+    premise real at the data layer — a future sandbox short-circuit keyed off
+    the principal's account (BR-RULE-209) is then actually exercised, instead
+    of the Given being an inert ctx flag (6szx graduation inspection).
+    """
+    from tests.factories.account import AccountFactory, AgentAccountAccessFactory
+
     env = ctx["env"]
-    real_id = _generate_unique_id(mb_id)
-    mb = MediaBuyFactory(
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        media_buy_id=real_id,
-        status="active",
-    )
+    account = AccountFactory(tenant=ctx["tenant"], sandbox=sandbox)
+    AgentAccountAccessFactory(tenant=ctx["tenant"], principal=ctx["principal"], account=account)
     env._commit_factory_data()
-    _register_media_buy(ctx, mb_id, mb)
-
-
-@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with no start_time and no start_date'))
-def given_principal_owns_mb_no_start(ctx: dict, principal_id: str, mb_id: str) -> None:
-    """Create media buy with no start_time and no start_date."""
-    _create_media_buy_with_null_dates(ctx, principal_id, mb_id, null_start=True, null_end=False)
-
-
-@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with no end_time and no end_date'))
-def given_principal_owns_mb_no_end(ctx: dict, principal_id: str, mb_id: str) -> None:
-    """Create media buy with no end_time and no end_date."""
-    _create_media_buy_with_null_dates(ctx, principal_id, mb_id, null_start=False, null_end=True)
+    ctx["sandbox"] = sandbox
+    ctx["account"] = account
 
 
 @given(parsers.parse("the request targets a sandbox account"))
 def given_sandbox_account(ctx: dict) -> None:
-    """Mark request as targeting a sandbox account."""
-    ctx["sandbox"] = True
+    """Seed a sandbox account for the principal (the token infers the account)."""
+    _seed_account_for_principal(ctx, sandbox=True)
 
 
 @given(parsers.parse("the request targets a production account"))
 def given_production_account(ctx: dict) -> None:
-    """Mark request as targeting a production (non-sandbox) account."""
-    ctx["sandbox"] = False
+    """Seed a production (non-sandbox) account for the principal."""
+    _seed_account_for_principal(ctx, sandbox=False)
 
 
 @given("an authenticated identity with no principal_id")
@@ -1112,11 +1163,6 @@ def when_query_mcp_no_filters(ctx: dict) -> None:
         ctx["error"] = exc
 
 
-@when(parsers.parse("the Buyer Agent sends a get_media_buys request with buyer_refs {refs}"))
-def when_query_by_refs(ctx: dict, refs: str) -> None:
-    pass  # buyer_ref removed in adcp 3.12
-
-
 @when("the Buyer Agent sends a get_media_buys request with include_snapshot true")
 def when_query_with_snapshot(ctx: dict) -> None:
     """Send get_media_buys with include_snapshot=True."""
@@ -1127,10 +1173,26 @@ def when_query_with_snapshot(ctx: dict) -> None:
 @when("the Buyer Agent sends a get_media_buys request")
 @when("the Buyer Agent sends a get_media_buys request with no include_snapshot param")
 @when("the Buyer Agent sends a get_media_buys request with no status_filter")
+@when("the Buyer Agent sends a get_media_buys request with no status_filter and no media_buy_ids")
 @when(parsers.parse('"{principal_id}" sends a get_media_buys request'))
 def when_query_no_filters(ctx: dict, principal_id: str | None = None) -> None:
     """Send get_media_buys with default parameters (no extra kwargs)."""
     _dispatch_query(ctx)
+
+
+@when(
+    parsers.re(
+        r"the Buyer Agent sends a get_media_buys request with no status_filter and media_buy_ids (?P<ids>\[.+\])"
+    )
+)
+def when_query_no_filter_with_ids(ctx: dict, ids: str) -> None:
+    """No status_filter but explicit media_buy_ids — the by-ID path returns every
+    matching buy regardless of status (status filter is skipped for explicit IDs).
+    """
+    import json
+
+    real_ids = _resolve_media_buy_ids(ctx, json.loads(ids))
+    _dispatch_query(ctx, media_buy_ids=real_ids)
 
 
 @when("the Buyer Agent sends a get_media_buys request without authentication")
@@ -1181,20 +1243,17 @@ def when_query_empty_status_filter(ctx: dict) -> None:
     _dispatch_query(ctx, status_filter=[])
 
 
-@when("the Buyer Agent sends a get_media_buys request with all six status values in status_filter")
+@when("the Buyer Agent sends a get_media_buys request with all seven v3.1 status values in status_filter")
 def when_query_all_statuses(ctx: dict) -> None:
-    """Send get_media_buys with all six status enum values."""
-    _dispatch_query(
-        ctx,
-        status_filter=[
-            "pending_start",
-            "active",
-            "completed",
-            "paused",
-            "canceled",
-            "rejected",
-        ],
-    )
+    """Send get_media_buys with all seven v3.1 MediaBuyStatus enum values.
+
+    Derived from the pinned SDK MediaBuyStatus enum (the enums/media-buy-status.json
+    vocabulary) rather than a hand-listed literal, so the "seven" tracks the spec
+    automatically and doesn't duplicate the status list held elsewhere.
+    """
+    from adcp.types import MediaBuyStatus
+
+    _dispatch_query(ctx, status_filter=[s.value for s in MediaBuyStatus])
 
 
 @when(parsers.parse("the Buyer Agent sends a get_media_buys request with invalid parameter types"))
@@ -1370,27 +1429,18 @@ def then_creative_approval_state(ctx: dict) -> None:
     )
 
 
-@then("each media buy should include buyer_ref and buyer_campaign_ref for correlation")
-def then_buyer_refs_for_correlation(ctx: dict) -> None:
+@then("each media buy should include buyer_campaign_ref for correlation")
+def then_buyer_campaign_ref_for_correlation(ctx: dict) -> None:
     """Assert buyer_campaign_ref on each response media buy matches the seeded value.
 
-    buyer_ref was removed in adcp 3.12; buyer_campaign_ref is the surviving
-    correlation identifier.  The step text still mentions buyer_ref because the
-    feature file is auto-generated from the spec.  We explicitly assert buyer_ref
-    is absent to document the removal.
+    buyer_campaign_ref is the surviving correlation identifier (top-level buyer_ref
+    was removed from the schema in adcp 3.12).
     """
     buys = _get_media_buys(ctx)
     seeded = ctx.get("seeded_media_buys", {})
     checked = 0
     for buy in buys:
         buy_id = buy.media_buy_id
-
-        # buyer_ref was removed in adcp 3.12 — assert it is absent on the
-        # response schema to document the removal.
-        assert not hasattr(buy, "buyer_ref") or getattr(buy, "buyer_ref", None) is None, (
-            f"Media buy '{buy_id}' unexpectedly has buyer_ref="
-            f"{getattr(buy, 'buyer_ref', None)!r}; buyer_ref was removed in adcp 3.12"
-        )
 
         # buyer_campaign_ref is the surviving correlation identifier.
         # Match it against the value seeded via factory raw_request.
@@ -1500,7 +1550,26 @@ def then_no_error_in_response(ctx: dict) -> None:
 
 @then(parsers.parse('the operation should fail with error code "{code}"'))
 def then_fail_with_code(ctx: dict, code: str) -> None:
-    """Assert operation failed with specific error code."""
+    """Assert operation failed with specific error code — wire-first, typed fallback.
+
+    On a wire transport (A2A here; MCP wire capture is pending the
+    _run_mcp_client upgrade of MediaBuyListEnv) the code is read from the real
+    two-layer envelope, and BOTH layers must agree (envelope-level
+    ``adcp_error.code`` and payload-level ``errors[0].code``). No-wire runs
+    fall back to the typed production exception. Cannot use
+    ``result.assert_wire_error`` unconditionally: this step also grades
+    locally-tracked non-canonical codes (e.g. ACCOUNT_FILTER_NOT_SUPPORTED)
+    absent from the pinned error-code enum.
+    """
+    wire_code = _wire_code(ctx)
+    if wire_code is not None:
+        assert wire_code == code, f"Expected wire adcp_error.code '{code}', got '{wire_code}'"
+        payload_error = _wire_error_object(ctx) or {}
+        assert payload_error.get("code") == code, (
+            f"Two-layer envelope disagreement: adcp_error.code={code!r} but "
+            f"errors[0].code={payload_error.get('code')!r}"
+        )
+        return
     error = ctx.get("error")
     assert error is not None, "Expected an error but none found"
     from src.core.exceptions import AdCPError
@@ -1522,45 +1591,76 @@ def then_error_identity_required(ctx: dict) -> None:
     )
 
 
-@then(parsers.parse('the error should include a "recovery" field indicating terminal failure'))
-def then_error_recovery_terminal(ctx: dict) -> None:
-    """Assert error has terminal recovery classification."""
+def _assert_error_recovery(ctx: dict, expected: str) -> None:
+    """Assert the error's recovery classification — wire-first, typed fallback.
+
+    On a wire transport the ``recovery`` field is read from the real envelope's
+    error object (the buyer-facing retry semantics per error.json); no-wire
+    runs fall back to the typed production exception.
+    """
+    wire = _wire_error_object(ctx)
+    if wire is not None:
+        assert wire.get("recovery") == expected, (
+            f"Expected wire recovery='{expected}', got {wire.get('recovery')!r} on wire code {wire.get('code')!r}"
+        )
+        return
     error = ctx.get("error")
     assert error is not None, "Expected an error"
     from src.core.exceptions import AdCPError
 
     assert isinstance(error, AdCPError), f"Expected AdCPError with recovery field, got {type(error).__name__}: {error}"
-    assert error.recovery == "terminal", f"Expected terminal recovery, got '{error.recovery}'"
+    assert error.recovery == expected, f"Expected {expected} recovery, got '{error.recovery}'"
+
+
+@then(parsers.parse('the error should include a "recovery" field indicating terminal failure'))
+def then_error_recovery_terminal(ctx: dict) -> None:
+    """Assert error has terminal recovery classification."""
+    _assert_error_recovery(ctx, "terminal")
+
+
+def _current_suggestion(ctx: dict) -> str:
+    """Resolve the buyer-facing error suggestion — wire-first, typed fallback.
+
+    On a wire transport the suggestion is read from the real envelope at the
+    protocol top level (STRICT error.json conformance — a suggestion buried in
+    ``details`` does not count, #1417); no-wire runs fall back to the typed
+    production exception's top-level attribute. Fails when the suggestion is
+    missing or empty — never a silent escape.
+    """
+    suggestion = _wire_suggestion(ctx)
+    if suggestion is None:
+        error = ctx.get("error")
+        assert error is not None, "Expected an error"
+        from src.core.exceptions import AdCPError
+
+        assert isinstance(error, AdCPError), (
+            f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
+        )
+        # STRICT error.json conformance: top-level attribute only (#1417).
+        suggestion = error.suggestion
+    assert isinstance(suggestion, str) and suggestion.strip(), (
+        f"Expected non-empty top-level suggestion string, got {suggestion!r}"
+    )
+    return suggestion
+
+
+def _assert_suggestion_contains_any(ctx: dict, options: list[str]) -> None:
+    """Assert the buyer-facing suggestion contains at least one of the options."""
+    suggestion = _current_suggestion(ctx)
+    lowered = suggestion.lower()
+    assert any(t.lower() in lowered for t in options), f"Expected one of {options!r} in suggestion: {suggestion}"
 
 
 @then(parsers.parse('the suggestion should contain "{text1}" or "{text2}"'))
 def then_suggestion_contains_either(ctx: dict, text1: str, text2: str) -> None:
     """Assert suggestion contains one of the specified texts."""
-    error = ctx.get("error")
-    assert error is not None, "Expected an error"
-    from src.core.exceptions import AdCPError
-
-    assert isinstance(error, AdCPError), f"Expected AdCPError with details, got {type(error).__name__}: {error}"
-    assert error.details is not None, "Expected error.details to contain a suggestion, got None"
-    suggestion = str(error.details.get("suggestion", "")).lower()
-    assert text1.lower() in suggestion or text2.lower() in suggestion, (
-        f"Expected '{text1}' or '{text2}' in suggestion: {error.details.get('suggestion')}"
-    )
+    _assert_suggestion_contains_any(ctx, [text1, text2])
 
 
 @then(parsers.parse('the suggestion should contain "{text1}" or "{text2}" or "{text3}"'))
 def then_suggestion_contains_any_of_three(ctx: dict, text1: str, text2: str, text3: str) -> None:
     """Assert suggestion contains one of three specified texts."""
-    error = ctx.get("error")
-    assert error is not None, "Expected an error"
-    from src.core.exceptions import AdCPError
-
-    assert isinstance(error, AdCPError), f"Expected AdCPError, got {type(error).__name__}: {error}"
-    assert error.details is not None, "Expected error.details with suggestion"
-    suggestion = str(error.details.get("suggestion", "")).lower()
-    assert any(t.lower() in suggestion for t in [text1, text2, text3]), (
-        f"Expected one of '{text1}', '{text2}', '{text3}' in suggestion: {error.details.get('suggestion')}"
-    )
+    _assert_suggestion_contains_any(ctx, [text1, text2, text3])
 
 
 @then(parsers.parse('the media buy "{mb_id}" should have status "{expected_status}"'))
@@ -1578,29 +1678,6 @@ def then_media_buy_has_status(ctx: dict, mb_id: str, expected_status: str) -> No
     assert actual_str == expected_status, f"Expected status '{expected_status}' for '{mb_id}', got '{actual_str}'"
 
 
-@then(parsers.parse('the media buy "{mb_id}" status computation should handle the missing date gracefully'))
-def then_status_handles_missing_date(ctx: dict, mb_id: str) -> None:
-    """Assert that a media buy with missing dates raises a structured error.
-
-    This step is used in @error-tagged scenarios where missing dates should
-    cause a graceful failure (structured AdCPError), not a silent success.
-    The scenario's follow-up steps check for suggestion fields, confirming
-    an error is the expected outcome.
-    """
-    from src.core.exceptions import AdCPError
-
-    error = ctx.get("error")
-    assert error is not None, (
-        f"Expected a structured error for media buy '{mb_id}' with missing dates, "
-        f"but no error was raised — production returned a response instead. "
-        f"Missing dates should cause a validation/computation error, not succeed silently."
-    )
-    assert isinstance(error, (AdCPError, ValueError, TypeError)), (
-        f"Expected graceful error handling (AdCPError/ValueError/TypeError) "
-        f"for missing date, got unhandled {type(error).__name__}: {error}"
-    )
-
-
 @then(parsers.parse("the error message should include field-level validation details"))
 def then_error_field_validation(ctx: dict) -> None:
     """Assert error includes field-level validation details with actual field names.
@@ -1609,14 +1686,21 @@ def then_error_field_validation(ctx: dict) -> None:
     specific field names or paths (media_buy_ids, status_filter, buyer_refs, etc.),
     not just generic words like "type" or "expected" that appear in any error.
     """
-    error = ctx.get("error")
-    assert error is not None, "Expected a validation error"
-    msg = str(error)
-    # Require actual field names from GetMediaBuysRequest schema
+    # Require actual field names from GetMediaBuysRequest schema.
     field_names = ("media_buy_ids", "status_filter", "buyer_refs", "account_id")
-    assert any(field_name in msg.lower() for field_name in field_names), (
-        f"Expected field-level validation details (containing actual field names like "
-        f"{field_names}) in error message, got: {msg}"
+    wire = _wire_error_object(ctx)
+    if wire is not None:
+        # Wire-first: the buyer-facing message and the structured ``field``
+        # selector must reference an actual request schema field.
+        text = f"{wire.get('message', '')} {wire.get('field', '')}".lower()
+        source = f"wire error object {wire!r}"
+    else:
+        error = ctx.get("error")
+        assert error is not None, "Expected a validation error"
+        text = str(error).lower()
+        source = f"error message {error}"
+    assert any(field_name in text for field_name in field_names), (
+        f"Expected field-level validation details (containing actual field names like {field_names}) in {source}"
     )
 
 
@@ -1627,41 +1711,17 @@ def then_error_recovery_correctable(ctx: dict) -> None:
     The step text explicitly says "correctable failure" — the recovery field
     must be exactly "correctable" (not "retryable" or other values).
     """
-    error = ctx.get("error")
-    assert error is not None, "Expected an error but got none"
-    from src.core.exceptions import AdCPError
-
-    assert isinstance(error, AdCPError), f"Expected AdCPError with recovery field, got {type(error).__name__}: {error}"
-    assert error.recovery == "correctable", (
-        f"Expected recovery='correctable' (step says 'correctable failure'), "
-        f"got recovery='{error.recovery!r}' on error code '{error.error_code}'"
-    )
+    _assert_error_recovery(ctx, "correctable")
 
 
 @then(parsers.parse('the error should include a "suggestion" field'))
 def then_error_has_suggestion(ctx: dict) -> None:
-    """Assert error includes a suggestion field with actionable content.
+    """Assert error includes a non-empty suggestion — wire-first, typed fallback.
 
     Step text: 'the error should include a "suggestion" field'.
-    The error must be an AdCPError with a details dict containing a non-empty
-    suggestion string. No xfail escape — if production omits the suggestion,
-    the test must fail.
+    No xfail escape — if production omits the suggestion, the test must fail.
     """
-    error = ctx.get("error")
-    assert error is not None, "Expected an error"
-    from src.core.exceptions import AdCPError
-
-    assert isinstance(error, AdCPError), (
-        f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
-    )
-    assert error.details is not None, (
-        f"AdCPError(error_code={error.error_code!r}) has no details dict — cannot contain 'suggestion' field"
-    )
-    assert "suggestion" in error.details, f"Expected 'suggestion' in error details: {error.details}"
-    suggestion = error.details["suggestion"]
-    assert isinstance(suggestion, str) and suggestion.strip(), (
-        f"Expected non-empty suggestion string, got {suggestion!r}"
-    )
+    _current_suggestion(ctx)
 
 
 @then(parsers.parse('the error message should contain "{fragment}"'))
@@ -2095,12 +2155,17 @@ def then_no_sandbox_field(ctx: dict) -> None:
 
 @then("the response should indicate a validation error")
 def then_validation_error(ctx: dict) -> None:
-    """Assert response indicates a validation error.
+    """Assert response indicates a validation error — wire-first.
 
-    Step text says 'indicate a validation error' — must verify either:
-    1. An exception was raised with validation-related keywords, OR
-    2. Response.errors contains validation-related content.
+    On a wire transport the buyer-facing code must be exactly VALIDATION_ERROR
+    (the pinned error-code enum's canonical request-validation code). No-wire
+    fallback: either a raised exception with validation-related keywords, or
+    response.errors containing validation-related content.
     """
+    wire_code = _wire_code(ctx)
+    if wire_code is not None:
+        assert wire_code == "VALIDATION_ERROR", f"Expected wire code VALIDATION_ERROR, got {wire_code!r}"
+        return
 
     error = ctx.get("error")
     if error:
@@ -2128,7 +2193,18 @@ def then_validation_error(ctx: dict) -> None:
 
 @then("the error should be a real validation error, not simulated")
 def then_real_validation_error(ctx: dict) -> None:
-    """Assert error is a real validation error (not simulated sandbox response)."""
+    """Assert error is a real validation error (not simulated sandbox response).
+
+    Wire-first: a "real" validation error is an actual wire REJECTION — a
+    two-layer error envelope carrying VALIDATION_ERROR with correctable
+    recovery (BR-RULE-209 INV-7: sandbox inputs are validated like production;
+    a simulated sandbox response would come back as a success payload instead).
+    No-wire fallback: the typed production exception.
+    """
+    result = ctx.get("result")
+    if result is not None and result.wire_error_envelope is not None:
+        result.assert_wire_error("VALIDATION_ERROR")
+        return
 
     error = ctx.get("error")
     assert error is not None, "Expected a real validation error but no error was raised"
@@ -2146,30 +2222,27 @@ def then_error_suggestion_for_fix(ctx: dict) -> None:
 
     Step text: 'suggestion for how to fix the issue' — the suggestion must be
     a non-empty string with enough content to be actionable (at least 5 chars).
-    No xfail escape — if production omits suggestions, the test must fail.
+    Wire-first, typed fallback (see _current_suggestion). No xfail escape —
+    if production omits suggestions, the test must fail.
     """
-    error = ctx.get("error")
-    assert error is not None, "Expected an error to check suggestion on"
-    from src.core.exceptions import AdCPError
-
-    assert isinstance(error, AdCPError), (
-        f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
-    )
-    assert error.details is not None, (
-        f"AdCPError(error_code={error.error_code!r}) has no details dict — cannot contain suggestion"
-    )
-    suggestion = error.details.get("suggestion")
-    assert isinstance(suggestion, str) and len(suggestion.strip()) >= 5, (
-        f"Expected actionable suggestion string (>= 5 chars) in error details, "
-        f"got {suggestion!r}. Step claims 'how to fix the issue' — suggestion "
-        f"must contain meaningful guidance."
+    suggestion = _current_suggestion(ctx)
+    assert len(suggestion.strip()) >= 5, (
+        f"Expected actionable suggestion string (>= 5 chars), got {suggestion!r}. "
+        f"Step claims 'how to fix the issue' — suggestion must contain meaningful guidance."
     )
 
 
 @then(parsers.parse('only media buys with status "{status}" are returned'))
 def then_only_status(ctx: dict, status: str) -> None:
-    """Assert only media buys with specified status are in response."""
+    """Assert only media buys with the specified status are in the response.
+
+    Non-empty guard (mirrors the uc004 sibling and this module's other status
+    Thens): a filter that regresses to ``[]`` must NOT false-green here — the
+    single_status / null_default rows route through this step and each seeds a
+    matching buy, so an empty result is a real failure, not a vacuous pass.
+    """
     buys = _get_media_buys(ctx)
+    assert buys, f"Filter '{status}' returned no media buys — expected at least the seeded matching buy."
     for buy in buys:
         actual = getattr(buy, "status", None)
         actual_str = actual.value if hasattr(actual, "value") else str(actual)
@@ -2186,6 +2259,23 @@ def then_either_status_returned(ctx: dict) -> None:
     assert len(statuses) >= 2, (
         f"Step claims 'either status are returned' but only found status(es): {statuses}. "
         f"Expected at least 2 different statuses."
+    )
+
+
+@then("every matching buy returned regardless of status")
+def then_every_matching_buy_regardless_of_status(ctx: dict) -> None:
+    """By-ID query skips the status filter: all requested buys come back even
+    though they hold different lifecycle statuses.
+
+    Non-vacuous: requires the requested buys to be present AND to span more than
+    one status (else 'regardless of status' isn't actually exercised).
+    """
+    buys = _get_media_buys(ctx)
+    assert buys, "Expected media buys returned for an explicit-IDs query"
+    statuses = {b.status.value if hasattr(b.status, "value") else str(b.status) for b in buys}
+    assert len(statuses) >= 2, (
+        f"Step claims buys are returned 'regardless of status' but the result holds a "
+        f"single status {statuses}; the by-ID skip-filter behavior isn't exercised."
     )
 
 
@@ -2253,12 +2343,11 @@ def then_error_code_with_suggestion(ctx: dict, code: str) -> None:
 
     assert isinstance(error, AdCPError), f"Expected AdCPError with code '{code}', got {type(error).__name__}: {error}"
     assert error.error_code == code, f"Expected error code '{code}', got '{error.error_code}'"
-    # Step text promises "with suggestion" — details dict must exist and contain it
-    assert error.details is not None, f"AdCPError(error_code={code!r}) has no details dict — cannot contain suggestion"
-    assert "suggestion" in error.details, f"Expected 'suggestion' in error details for '{code}', got: {error.details}"
-    suggestion = error.details["suggestion"]
+    # STRICT error.json conformance: suggestion is a top-level error attribute,
+    # never read from the free-form details dict (#1417).
+    suggestion = error.suggestion
     assert isinstance(suggestion, str) and suggestion.strip(), (
-        f"Expected non-empty suggestion string for error code '{code}', got {suggestion!r}"
+        f"Expected non-empty top-level suggestion string for error code '{code}', got {suggestion!r}"
     )
 
 

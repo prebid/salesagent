@@ -100,7 +100,6 @@ pkg = create_test_package_request()
 # Custom package request
 pkg = create_test_package_request(
     product_id="prod_video",
-    buyer_ref="buyer_pkg_001",
     budget=5000.0,
     pricing_option_id="premium_cpm",
     creative_ids=["creative_1", "creative_2"],
@@ -109,9 +108,7 @@ pkg = create_test_package_request(
 
 # Use in CreateMediaBuyRequest
 from src.core.schemas import CreateMediaBuyRequest
-request = CreateMediaBuyRequest(
-    buyer_ref="test_buy",
-    brand_manifest={"name": "Test Brand"},
+request = CreateMediaBuyRequest(    brand_manifest={"name": "Test Brand"},
     packages=[pkg],
     start_time="asap",
     end_time="2025-12-31T23:59:59Z",
@@ -300,9 +297,7 @@ brand = create_test_brand_manifest(
 )
 
 # Use in media buy requests
-request = CreateMediaBuyRequest(
-    buyer_ref="test_buy",
-    brand_manifest=brand,
+request = CreateMediaBuyRequest(    brand_manifest=brand,
     packages=[...],
 )
 ```
@@ -345,17 +340,14 @@ from tests.helpers.adcp_factories import (
 from src.core.schemas import CreateMediaBuyRequest
 
 request = CreateMediaBuyRequest(
-    buyer_ref="multi_package_buy",
     brand_manifest=create_test_brand_manifest(name="Nike"),
     packages=[
         create_test_package_request(
             product_id="display_news",
-            buyer_ref="pkg_1",
             budget=10000.0,
         ),
         create_test_package_request(
             product_id="video_sports",
-            buyer_ref="pkg_2",
             budget=15000.0,
         ),
     ],

@@ -40,6 +40,23 @@ class FormatInfo(TypedDict):
     parameters: FormatParameters | None
 
 
+def _optional_format_parameters(
+    *,
+    width: Any = None,
+    height: Any = None,
+    duration_ms: Any = None,
+) -> FormatParameters | None:
+    """Build FormatParameters from optional width/height/duration_ms (omit if all absent)."""
+    params: FormatParameters = {}
+    if width is not None:
+        params["width"] = int(width)
+    if height is not None:
+        params["height"] = int(height)
+    if duration_ms is not None:
+        params["duration_ms"] = float(duration_ms)
+    return params or None
+
+
 def _extract_format_info(format_value: Any) -> FormatInfo:
     """Extract complete format information from format_id field (AdCP 2.5).
 
@@ -67,32 +84,20 @@ def _extract_format_info(format_value: Any) -> FormatInfo:
             raise ValueError(f"format_id must have both 'agent_url' and 'id' fields. Got: {format_value}")
         agent_url = str(agent_url_val)
         format_id = format_id_val
-
-        # Extract optional parameters
-        params: FormatParameters = {}
-        if format_value.get("width") is not None:
-            params["width"] = int(format_value["width"])
-        if format_value.get("height") is not None:
-            params["height"] = int(format_value["height"])
-        if format_value.get("duration_ms") is not None:
-            params["duration_ms"] = float(format_value["duration_ms"])
-        if params:
-            parameters = params
+        parameters = _optional_format_parameters(
+            width=format_value.get("width"),
+            height=format_value.get("height"),
+            duration_ms=format_value.get("duration_ms"),
+        )
 
     elif isinstance(format_value, LibraryFormatId):
         agent_url = str(format_value.agent_url)
         format_id = format_value.id
-
-        # Extract optional parameters from object
-        params = {}
-        if format_value.width is not None:
-            params["width"] = int(format_value.width)
-        if format_value.height is not None:
-            params["height"] = int(format_value.height)
-        if format_value.duration_ms is not None:
-            params["duration_ms"] = float(format_value.duration_ms)
-        if params:
-            parameters = params
+        parameters = _optional_format_parameters(
+            width=format_value.width,
+            height=format_value.height,
+            duration_ms=format_value.duration_ms,
+        )
 
     elif isinstance(format_value, str):
         raise ValueError(
@@ -538,7 +543,7 @@ def process_and_upload_package_creatives(
     import logging
 
     # Lazy import to avoid circular dependency
-    from src.core.exceptions import AdCPAdapterError, AdCPError
+    from src.core.exceptions import AdCPAdapterError, AdCPCreativeRejectedError, AdCPError
     from src.core.tools.creatives import _sync_creatives_impl
 
     logger = logging.getLogger(__name__)
@@ -567,8 +572,32 @@ def process_and_upload_package_creatives(
                 identity=context,  # ResolvedIdentity for principal_id extraction
             )
 
-            # Extract creative IDs from response
-            uploaded_ids = [result.creative_id for result in sync_response.creatives if result.creative_id]
+            # A failed sync result means the creative was REJECTED (e.g. missing
+            # required URL / dimensions in strict validation). Surface it instead
+            # of silently merging the failed id and letting the downstream
+            # "Creative IDs not found" check mask the real reason ('No Quiet
+            # Failures'). The per-creative error message names the offending
+            # field (e.g. the missing URL) so the buyer can remediate (POST-F3).
+            failed_results = [r for r in sync_response.creatives if r.action == "failed"]
+            if failed_results:
+                detail_msgs = [f"{r.creative_id}: {err.message}" for r in failed_results for err in (r.errors or [])]
+                error_msg = "Creative validation failed:\n" + "\n".join(f"  • {m}" for m in detail_msgs)
+                logger.error(error_msg)
+                raise AdCPCreativeRejectedError(
+                    error_msg,
+                    suggestion=(
+                        "Fix the rejected creative(s) so each reference format has the required "
+                        "content URL and dimensions, then re-submit the create_media_buy request."
+                    ),
+                    details={"creative_errors": detail_msgs},
+                )
+
+            # Extract creative IDs from successfully synced creatives only.
+            uploaded_ids = [
+                result.creative_id
+                for result in sync_response.creatives
+                if result.creative_id and result.action != "failed"
+            ]
 
             logger.info(
                 f"Synced {len(uploaded_ids)} creatives to database for package "

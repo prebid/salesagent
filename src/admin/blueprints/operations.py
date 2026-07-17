@@ -2,22 +2,31 @@
 
 import asyncio
 import logging
+from typing import Any
 
-from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
+from adcp import Error, create_a2a_webhook_payload, create_mcp_webhook_payload
+from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 
 # FIXME(#1388): Package has a local subclass; import from src.core.schemas (Pattern #7/#4).
-from adcp.types import CreateMediaBuySuccessResponse, Package
-from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
+from adcp.types import Package
 from flask import Blueprint, request
 from sqlalchemy import select
 
-from src.admin.utils import require_auth, require_tenant_access
+from src.admin.utils import echo_context, require_auth, require_tenant_access
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.exceptions import AdCPMediaBuyRejectedError
+from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
+
+
+def _as_request_dict(value: dict[str, Any] | str | None) -> dict[str, Any]:
+    """Narrow JSONType (dict|str|None) to a dict for .get() / echo_context."""
+    return value if isinstance(value, dict) else {}
+
 
 # Create blueprint
 operations_bp = Blueprint("operations", __name__)
@@ -287,6 +296,22 @@ def media_buy_detail(tenant_id, media_buy_id):
         return "Error loading media buy", 500
 
 
+def _media_buy_webhook_metadata(step_data: dict, tenant_id: str, media_buy_id: str, media_buy_data: dict) -> dict:
+    """App-specific metadata for a media-buy approval/rejection webhook.
+
+    The protocol webhook service reads task_type/tenant_id/principal_id/
+    media_buy_id from this dict for delivery logging and the audit trail
+    (protocol_webhook_service.py) — populate all four. Shared by the approve
+    and reject branches (PR #1567 round-2 cleanup).
+    """
+    return {
+        "task_type": step_data["tool_name"],
+        "tenant_id": tenant_id,
+        "principal_id": media_buy_data["principal_id"],
+        "media_buy_id": media_buy_id,
+    }
+
+
 @operations_bp.route("/media-buy/<media_buy_id>/approve", methods=["POST"])
 @require_tenant_access()
 def approve_media_buy(tenant_id, media_buy_id, **kwargs):
@@ -323,12 +348,14 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 flash("No pending approval found for this media buy", "warning")
                 return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
-            # Extract step data to dict to avoid detached instance errors after commit/nested sessions
+            # Extract step data to dict to avoid detached instance errors after commit/nested sessions.
+            # JSONType columns are typed as dict|str|None; narrow before echo_context / .get().
+            request_data = _as_request_dict(step.request_data)
             step_data = {
                 "step_id": step.step_id,
                 "context_id": step.context_id,
                 "tool_name": step.tool_name,
-                "request_data": step.request_data or {},
+                "request_data": request_data,
             }
 
             # Get user info for audit
@@ -344,7 +371,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
             media_buy_data = None
             if media_buy:
                 # Get push_notification_config from workflow step request_data (same pattern as sync_creatives)
-                push_config = step.request_data.get("push_notification_config") or {} if step.request_data else {}
+                push_config = request_data.get("push_notification_config") or {}
                 media_buy_data = {
                     "principal_id": media_buy.principal_id,
                     "push_notification_url": push_config.get("url"),
@@ -470,16 +497,20 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         approve_repo = MediaBuyRepository(db_session, tenant_id)
                         all_packages = approve_repo.get_packages(media_buy_id)
 
-                        create_media_buy_approved_result = CreateMediaBuySuccessResponse(
+                        # Echo the buyer's request context (shared helper, also used by
+                        # the creative approval webhook in blueprints/creatives.py).
+                        approve_context = echo_context(request_data)
+
+                        # The buy IS committed at this point, so a confirmed Success
+                        # (status/confirmed_at/revision from the subclass defaults) is
+                        # semantically correct here — route through the sync_success()
+                        # factory like every sibling construction site (PR #1567 round-2 cleanup).
+                        create_media_buy_approved_result = CreateMediaBuySuccess.sync_success(
                             media_buy_id=media_buy_id,
                             packages=[Package(package_id=x.package_id) for x in all_packages],
-                            context={},  # TODO: @yusuf - please fix this, like we've fixed in the creative approval
+                            context=approve_context,
                         )
-                        metadata = {
-                            "task_type": step_data["tool_name"],
-                            # TODO: @yusuf - check if we were passing principal_id and tenant to this previously
-                            # TODO: @yusuf - check if we want to make metadata typed
-                        }
+                        metadata = _media_buy_webhook_metadata(step_data, tenant_id, media_buy_id, media_buy_data)
 
                         # Determine protocol type from workflow step request_data
                         protocol = step_data["request_data"].get(
@@ -541,7 +572,6 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
 
                 if media_buy and media_buy.status == "pending_approval":
                     media_buy.status = "rejected"
-                    attributes.flag_modified(media_buy, "status")
 
                 db_session.commit()
 
@@ -561,19 +591,21 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     webhook_config = db_session.scalars(stmt_webhook).first()
 
                 if webhook_config and media_buy_data:
-                    reject_repo = MediaBuyRepository(db_session, tenant_id)
-                    all_packages = reject_repo.get_packages(media_buy_id)
-
-                    create_media_buy_rejected_result = CreateMediaBuySuccessResponse(
-                        media_buy_id=media_buy_id,
-                        packages=[Package(package_id=x.package_id) for x in all_packages],
-                        context={},  # TODO: @yusuf - please fix this, like we've fixed in the creative approval
+                    # A rejection is NOT a completed media buy. adcp 6.6 defaults
+                    # CreateMediaBuySuccess.status="completed"/confirmed_at, so embedding a
+                    # Success here would assert the buy COMPLETED inside a status="rejected"
+                    # webhook. Spec 3.1.1 create-media-buy-response.json models a non-success
+                    # outcome as the CreateMediaBuyError variant — embed that with the reason.
+                    #
+                    # Route the code through the typed AdCPError cascade so the buyer sees
+                    # the same WIRE code the tool path emits for this event
+                    # (MEDIA_BUY_REJECTED is internal-only; wire_error_code translates it
+                    # to POLICY_VIOLATION — never hand-pick codes here; PR #1567 round-2 item 1).
+                    rejection = AdCPMediaBuyRejectedError(f"Rejected: {reason or 'No reason provided'}")
+                    create_media_buy_rejected_result = CreateMediaBuyError(
+                        errors=[Error(code=rejection.wire_error_code, message=rejection.message)]
                     )
-                    metadata = {
-                        "task_type": step_data["tool_name"],
-                        # TODO: @yusuf - check if we were passing principal_id and tenant to this previously
-                        # TODO: @yusuf - check if we want to make metadata typed
-                    }
+                    metadata = _media_buy_webhook_metadata(step_data, tenant_id, media_buy_id, media_buy_data)
 
                     # Determine protocol type from workflow step request_data
                     protocol = step_data["request_data"].get(

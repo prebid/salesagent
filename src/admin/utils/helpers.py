@@ -8,6 +8,7 @@ import os
 from functools import wraps
 from typing import NamedTuple, TypeVar
 
+from adcp.types import ContextObject
 from flask import abort, g, jsonify, redirect, session, url_for
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -568,3 +569,25 @@ def execute_limited(db_session: Session, stmt: Select, limit: int) -> LimitedRes
     """
     rows = list(db_session.scalars(stmt.limit(limit)).all())
     return LimitedResult(rows=rows, truncated=len(rows) >= limit)
+
+
+# ---------------------------------------------------------------------------
+# Webhook context echo
+# ---------------------------------------------------------------------------
+
+
+def echo_context(request_data: dict) -> ContextObject | None:
+    """Reconstruct the buyer's request context for echoing on an outbound webhook.
+
+    The original tool request is stored on the workflow step's ``request_data``;
+    per spec the webhook's embedded result echoes the buyer's ``context`` back
+    verbatim. ``model_construct`` (not ``model_validate``): ContextObject is an
+    extra=allow passthrough and the dict was already validated at request time.
+    Returns ``None`` when no context was stored (absent/None/non-dict), so
+    ``exclude_none`` keeps the field off the wire. Shared by the media-buy
+    approve and creative approval webhook paths (PR #1567 round-3 DRY).
+    """
+    context_data = request_data.get("context")
+    if context_data and isinstance(context_data, dict):
+        return ContextObject.model_construct(**context_data)
+    return None

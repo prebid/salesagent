@@ -1,11 +1,15 @@
-"""MediaBuyDualEnv — composite environment for UC-026 BDD scenarios.
+"""MediaBuyDualEnv — composite environment for UC-026 and UC-003 BDD scenarios.
 
 UC-026 scenarios use both create and update flows within the same test:
 Given steps create a media buy (create path), then When steps update it
-(update path). This env extends MediaBuyCreateEnv with update-module
-patches and delegates update requests to the appropriate production code.
+(update path). UC-003 (salesagent-8hu9) drives the update path directly against
+a pre-seeded media buy to grade the manual-approval UpdateMediaBuySubmitted
+envelope cross-transport. This env extends MediaBuyCreateEnv with update-module
+patches and delegates update requests to the appropriate production code —
+A2A/MCP go through the real on_message_send / FastMCP Client pipelines so the
+serialized wire (and the A2A submitted reconstruction) are genuinely exercised.
 
-beads: salesagent-a3xo
+beads: salesagent-a3xo, salesagent-8hu9
 """
 
 from __future__ import annotations
@@ -97,25 +101,56 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         return super().call_mcp(**kwargs)
 
     def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
-        if _is_update_request(kwargs):
-            self._active_update = True
-            try:
-                return self._run_update_rest_request(**kwargs)
-            finally:
-                self._active_update = False
+        # Set the update-vs-create routing flag and leave it set THROUGH the base
+        # dispatch's subsequent parse_rest_response call: the base dispatch runs
+        # _run_rest_request then parse_rest_response sequentially, so a finally-reset
+        # here would flip the flag back before the parse and misroute the update
+        # response to the create parser (yielding None). parse_rest_response resets
+        # it after routing, and each request re-sets it (False on create requests).
+        self._active_update = _is_update_request(kwargs)
+        if self._active_update:
+            return self._run_update_rest_request(**kwargs)
         return super()._run_rest_request(endpoint, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        # The E2E dispatcher (RestE2EDispatcher) reads REST_ENDPOINT/REST_METHOD as
+        # plain attrs and never calls _run_rest_request, so set the mode flag + target
+        # id HERE (deterministically per request, not via parse_rest_response's reset —
+        # the E2E error path calls parse_rest_error, which would leave a stale flag).
         if _is_update_request(kwargs):
+            self._active_update = True
+            req = kwargs.get("req")
+            target = self._seeded_media_buy_id
+            if req is not None and getattr(req, "media_buy_id", None):
+                target = req.media_buy_id
+            self._update_target_id = target
             return self._build_update_rest_body(**kwargs)
+        self._active_update = False
         return super().build_rest_body(**kwargs)
+
+    @property
+    def REST_ENDPOINT(self) -> str:  # noqa: N802 — matches the inherited class-attr name
+        """Update scenarios PUT a per-id endpoint; create scenarios POST the collection.
+
+        A @property (not a static attr) because the E2E dispatcher reads it directly and
+        the update path needs the seeded media_buy_id in the URL. The in-process path
+        ignores this value (it builds its own PUT URL in _run_update_rest_request)."""
+        if self._active_update:
+            return f"/api/v1/media-buys/{self._update_target_id}"
+        return "/api/v1/media-buys"
+
+    @property
+    def REST_METHOD(self) -> str:  # noqa: N802 — dispatcher reads getattr(env, "REST_METHOD", "post")
+        return "put" if self._active_update else "post"
 
     def parse_rest_response(self, data: dict[str, Any]) -> Any:
         if self._active_update:
+            self._active_update = False
             return self._parse_update_rest_response(data)
         return super().parse_rest_response(data)
 
     _active_update: bool = False
+    _update_target_id: str = "NOT_SEEDED"
 
     # -- Concrete update transport implementations -----------------------------
 
@@ -131,47 +166,54 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
             req = UMR(**kwargs)
         return _update_media_buy_impl(req=req, identity=identity)
 
-    def _call_update_a2a(self, **kwargs: Any) -> Any:
-        from src.core.tools.media_buy_update import update_media_buy_raw
+    def _flatten_update_request(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Flatten an ``UpdateMediaBuyRequest`` into flat A2A/MCP skill parameters.
 
-        self._commit_factory_data()
-        kwargs.setdefault("identity", self.identity)
+        The A2A skill and MCP tool accept a flat param dict, not a request model,
+        and reject the wrapper-unsupported fields — so pop ``req``, expand it
+        (dropping those fields), then overlay any explicit kwargs. ``identity``
+        (if present) is passed through; the real handlers pop and apply it.
+        Shared by the A2A and MCP update paths (DRY).
+        """
         req = kwargs.pop("req", None)
-        if req is not None:
-            flat = req.model_dump(mode="json", exclude_none=True)
-            for key in _WRAPPER_UNSUPPORTED_FIELDS:
-                flat.pop(key, None)
-            flat.update(kwargs)
-            kwargs = flat
-        return update_media_buy_raw(**kwargs)
+        if req is None:
+            return dict(kwargs)
+        flat = req.model_dump(mode="json", exclude_none=True)
+        for key in _WRAPPER_UNSUPPORTED_FIELDS:
+            flat.pop(key, None)
+        flat.update(kwargs)
+        return flat
+
+    def _call_update_a2a(self, **kwargs: Any) -> Any:
+        # Drive the REAL on_message_send → _serialize_for_a2a → Task/Artifact
+        # pipeline (mirrors MediaBuyCreateEnv.call_a2a), so _run_a2a_handler stashes
+        # the true artifact DataPart as the wire_response and the submitted
+        # reconstruction in adcp_a2a_server (union discrimination) runs. A prior
+        # version synthesized the wire via update_media_buy_raw(...).model_dump(),
+        # which tracked the return model rather than the assembled envelope — an
+        # update-envelope regression would not be caught. The union
+        # (submitted|success|error) needs status/media_buy_id discrimination, so
+        # reconstruct via _parse_update_rest_response.
+        return self._run_a2a_handler(
+            "update_media_buy",
+            lambda **data: self._parse_update_rest_response(data),
+            **self._flatten_update_request(kwargs),
+        )
 
     def _call_update_mcp(self, **kwargs: Any) -> Any:
-        import asyncio
-        from unittest.mock import AsyncMock
-        from unittest.mock import MagicMock as MM
-
-        from fastmcp.server.context import Context
-
-        from src.core.tools.media_buy_update import update_media_buy
-        from tests.harness.transport import Transport
-
-        self._commit_factory_data()
-
-        req = kwargs.pop("req", None)
-        if req is not None:
-            flat = req.model_dump(mode="json", exclude_none=True)
-            for key in _WRAPPER_UNSUPPORTED_FIELDS:
-                flat.pop(key, None)
-            flat.update(kwargs)
-            kwargs = flat
-
-        identity = kwargs.pop("identity", self.identity_for(Transport.MCP))
-        mock_ctx = MM(spec=Context)
-        mock_ctx.get_state = AsyncMock(return_value=identity)
-
-        tool_result = asyncio.run(update_media_buy(ctx=mock_ctx, **kwargs))
-        data = dict(tool_result.structured_content)
-        return self._parse_update_rest_response(data)
+        # Drive the REAL FastMCP Client pipeline (mirrors MediaBuyCreateEnv.call_mcp) so the
+        # structured_content — the real MCP wire body — is stashed as wire_response and the
+        # full middleware/auth chain runs, including the production with_error_logging
+        # boundary decorator (src/core/main.py: mcp.tool()(with_error_logging(fn))): on
+        # error it translates the raised AdCPError into an AdCPToolError carrying the
+        # two-layer wire envelope, which the dispatcher captures as wire_error_envelope
+        # (#1417). A prior version hand-built a mocked Context and invoked the wrapper
+        # directly, which bypassed the client/middleware chain.
+        return self._run_mcp_client(
+            "update_media_buy",
+            lambda **data: self._parse_update_rest_response(data),
+            **self._flatten_update_request(kwargs),
+        )
 
     def _build_update_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         kwargs.pop("identity", None)
@@ -184,15 +226,10 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         return kwargs
 
     def _run_update_rest_request(self, **kwargs: Any) -> Any:
-        from tests.harness.transport import Transport
-
-        _NO_OVERRIDE = object()
-        identity = kwargs.pop("identity", _NO_OVERRIDE)
-        if identity is _NO_OVERRIDE:
-            identity = self.identity_for(Transport.REST)
-
-        self._commit_factory_data()
-        client = self.get_rest_client()
+        # Shared preamble (identity resolution + commit + client + auth-dep
+        # override): with no identity the REST auth dep rejects, so the no-auth
+        # update scenario fires instead of test-mode auth letting it through.
+        client, identity = self._prepare_rest_request(kwargs)
 
         headers: dict[str, str] = {}
         if identity is not None:
@@ -211,8 +248,18 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         return client.put(endpoint, json=body, headers=headers)
 
     def _parse_update_rest_response(self, data: dict[str, Any]) -> Any:
-        from src.core.schemas._base import UpdateMediaBuyError, UpdateMediaBuySuccess
+        from src.core.schemas._base import (
+            UpdateMediaBuyError,
+            UpdateMediaBuySubmitted,
+            UpdateMediaBuySuccess,
+        )
 
-        if "errors" in data and data["errors"]:
-            return UpdateMediaBuyError(**data)
-        return UpdateMediaBuySuccess(**data)
+        # Mirror the production A2A union discrimination (adcp_a2a_server.py:484-489):
+        # submitted first (status="submitted"+task_id, no applied media_buy_id — a submitted
+        # envelope must not be mis-reconstructed as Success, whose status is Literal completed),
+        # then success (has media_buy_id), else error.
+        if data.get("status") == "submitted":
+            return UpdateMediaBuySubmitted(**data)
+        if "media_buy_id" in data:
+            return UpdateMediaBuySuccess(**data)
+        return UpdateMediaBuyError(**data)

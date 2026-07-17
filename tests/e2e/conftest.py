@@ -243,6 +243,22 @@ def docker_services_e2e(request):
         # branch runs pytest ON THE HOST and reaches the stack over localhost, so
         # it overlays the ports file (the base compose publishes NO host ports —
         # that is reserved for the in-network runner). Same files for build + up.
+        #
+        # The compose stack now ALWAYS includes the pinned creative-agent (the
+        # server resolves format specs against it and the live public host is
+        # blackholed — salesagent-9qe2), and its image is built by the
+        # single-source pin script, not by compose. Build it first so `up`
+        # doesn't fail on a missing `adcp-creative-agent` image.
+        print("Step 0/2: Building pinned creative-agent image (single-sourced)...")
+        agent_build = subprocess.run(
+            ["scripts/creative-agent-stack.sh", "build"],
+            env=env,
+            capture_output=False,
+        )
+        if agent_build.returncode != 0:
+            print(f"❌ creative-agent image build failed with exit code {agent_build.returncode}")
+            raise subprocess.CalledProcessError(agent_build.returncode, "creative-agent-stack.sh build")
+
         print("Step 1/2: Building Docker images...")
         compose_files = ["-f", "docker-compose.e2e.yml", "-f", "docker-compose.e2e.ports.yml"]
         build_result = subprocess.run(
@@ -537,25 +553,38 @@ def test_auth_token(live_server):
 
 
 @pytest.fixture
+def auto_approval_adapter(live_server):
+    """Pin the ci-test mock adapter to auto-approval before the test runs.
+
+    The e2e suite shares ONE live database and pytest-randomly reorders tests
+    per run, so a prior test that enables manual approval (the a2a submitted-
+    webhook tests) leaks that state into any later test asserting the
+    synchronous success shape — create/update then returns Submitted with no
+    media_buy_id, flakily (salesagent-d1n0). Every test that requires the mock
+    adapter's auto-approval path must request this fixture instead of trusting
+    whatever state the previous test left behind.
+    """
+    from tests.e2e.utils import set_live_adapter_behavior
+
+    set_live_adapter_behavior(live_server, manual_approval_required=False)
+
+
+@pytest.fixture
 async def e2e_client(live_server, test_auth_token):
-    """Provide async client for E2E testing with testing hooks."""
-    from fastmcp.client import Client
-    from fastmcp.client.transports import StreamableHttpTransport
+    """Provide async client for E2E testing with testing hooks.
 
-    # Create MCP client with test session ID
-    # Note: Host header is automatically set by HTTP client based on URL,
-    # so we use x-adcp-tenant header for explicit tenant selection in E2E tests
-    test_session_id = str(uuid.uuid4())
-    headers = {
-        "x-adcp-auth": test_auth_token,
-        "x-adcp-tenant": "ci-test",  # Explicit tenant selection for E2E tests
-        "X-Test-Session-ID": test_session_id,
-        "X-Dry-Run": "true",  # Always use dry-run for tests
-    }
+    Dry-run + per-test session id; tenant selected via x-adcp-tenant (the Host
+    header is set by the HTTP client from the URL). Tests needing other header
+    shapes call tests.e2e.utils.make_mcp_client directly (GH #1423).
+    """
+    from tests.e2e.utils import make_mcp_client
 
-    transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
-    client = Client(transport=transport)
-
+    client = make_mcp_client(
+        live_server,
+        token=test_auth_token,
+        dry_run=True,
+        session_id=str(uuid.uuid4()),
+    )
     async with client:
         yield client
 

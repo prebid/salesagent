@@ -4,8 +4,14 @@ import logging
 from typing import Any
 
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.exceptions import AdCPPackageNotFoundError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPCreativeNotFoundError,
+    AdCPCreativeRejectedError,
+    AdCPPackageNotFoundError,
+)
+from src.core.logging_config import log_safe
 from src.core.schemas import SyncCreativeResult
+from src.core.tools.creatives._processing import _failed_sync_result
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +21,7 @@ def _process_assignments(
     results: list[SyncCreativeResult],
     tenant: dict[str, Any],
     validation_mode: str,
-    principal_id: str | None = None,
+    principal_id: str,
 ) -> list:
     """Process creative-to-package assignments and update results in-place.
 
@@ -33,6 +39,7 @@ def _process_assignments(
     # Track assignments per creative for response population
     assignments_by_creative: dict[str, list[str]] = {}  # creative_id -> [package_ids]
     assignment_errors_by_creative: dict[str, dict[str, str]] = {}  # creative_id -> {package_id: error}
+    not_found_creative_ids: set[str] = set()  # creative_ids whose library lookup returned None
     media_buys_with_new_assignments: dict[str, Any] = {}  # media_buy_id -> MediaBuy object
 
     # AdCP v3 spec defines assignments as list[{creative_id, package_id, ...}];
@@ -43,6 +50,12 @@ def _process_assignments(
             if isinstance(entry, dict) and "creative_id" in entry and "package_id" in entry:
                 coerced.setdefault(entry["creative_id"], []).append(entry["package_id"])
         assignments = coerced if coerced else None
+
+    # Creatives whose sync failed were never persisted; we must not attempt to
+    # assign them (the creative_assignments FK would crash the request). Their
+    # failure is already recorded in ``results`` (action="failed"); the caller
+    # surfaces it. Collect those ids so the assignment loop skips them quietly.
+    failed_creative_ids = {r.creative_id for r in results if getattr(r, "action", None) == "failed"}
 
     if assignments and isinstance(assignments, dict):
         with CreativeUoW(tenant["tenant_id"]) as uow:
@@ -55,6 +68,52 @@ def _process_assignments(
                     assignments_by_creative[creative_id] = []
                 if creative_id not in assignment_errors_by_creative:
                     assignment_errors_by_creative[creative_id] = {}
+
+                # A creative whose sync failed THIS request must not be assigned: if it
+                # was never persisted the creative_assignments FK would crash the whole
+                # request with a raw IntegrityError (#1418), and even a previously
+                # persisted (stale) version must not be silently assigned when the
+                # requested sync failed. The failure is already recorded on the
+                # per-creative result (action="failed") and the caller (e.g.
+                # update_media_buy) raises the buyer-facing, retryable AdCPAdapterError
+                # for it — skip quietly in every validation mode instead of masking it
+                # with a validation error (#1417).
+                if creative_id in failed_creative_ids:
+                    for package_id in package_ids:
+                        error_msg = (
+                            f"Creative {creative_id} was not synced; skipping assignment to package {package_id}"
+                        )
+                        assignment_errors_by_creative[creative_id][package_id] = error_msg
+                        logger.warning(log_safe(error_msg))
+                    continue
+
+                # A creative_id absent from the creative library never existed —
+                # inserting its assignment would also violate the creatives FK (#1418).
+                # Principal-scoped: the composite PK is (creative_id, tenant_id,
+                # principal_id), so another principal's creative must resolve to
+                # "not found" here — never pass the gate on their row (which the
+                # FK insert below would then violate) or read their fields.
+                # Resolve the creative once up front and report the skipped packages
+                # via assignment_errors (same convention as package-not-found below).
+                creative_row = assignment_repo.get_creative_by_id(creative_id, principal_id)
+                if creative_row is None:
+                    error_msg = f"Creative not found: {creative_id}"
+                    not_found_creative_ids.add(creative_id)
+                    for package_id in package_ids:
+                        assignment_errors_by_creative[creative_id][package_id] = error_msg
+                    if validation_mode == "strict":
+                        # Entity-specific spec code (pinned enum: CREATIVE_NOT_FOUND,
+                        # correctable, MANDATED uniformly for unowned creative_ids) —
+                        # parity with the PACKAGE_NOT_FOUND branch below (#1430 review).
+                        raise AdCPCreativeNotFoundError(
+                            error_msg,
+                            suggestion=(
+                                "Sync the creative via sync_creatives (or include it in this "
+                                "request's creatives array) before assigning it to a package."
+                            ),
+                        )
+                    logger.warning(log_safe(f"Skipping assignments for unknown creative {creative_id}: {error_msg}"))
+                    continue
 
                 for package_id in package_ids:
                     # Find which media buy this package belongs to
@@ -79,11 +138,12 @@ def _process_assignments(
                             # via the wire-safe translation and lose buyer-facing specificity.
                             raise AdCPPackageNotFoundError(error_msg)
                         else:
-                            logger.warning(f"Package not found during assignment: {package_id}, skipping")
+                            logger.warning(log_safe(f"Package not found during assignment: {package_id}, skipping"))
                             continue
 
-                    # Validate creative format against package product formats
-                    db_creative_result = assignment_repo.get_creative_by_id(creative_id)
+                    # Validate creative format against package product formats.
+                    # creative_row was fetched once above (guaranteed non-None here).
+                    db_creative_result = creative_row
 
                     # Get product_id from package_config
                     product_id = db_package.package_config.get("product_id") if db_package.package_config else None
@@ -146,9 +206,22 @@ def _process_assignments(
                                 assignment_errors_by_creative[creative_id][package_id] = error_msg
 
                                 if validation_mode == "strict":
-                                    raise AdCPValidationError(error_msg)
+                                    # Converge with the update path (media_buy_update.py:233):
+                                    # creative-format-incompatible-with-product is CREATIVE_REJECTED,
+                                    # the canonical code for a rejected creative (#1417).
+                                    raise AdCPCreativeRejectedError(
+                                        error_msg,
+                                        suggestion=(
+                                            "Assign a creative whose format matches one of the product's "
+                                            f"supported formats ({supported_formats_display}), or call "
+                                            "list_creative_formats to discover supported formats."
+                                        ),
+                                        details={"supported_formats": supported_formats_display},
+                                    )
                                 else:
-                                    logger.warning(f"Creative format mismatch during assignment, skipping: {error_msg}")
+                                    logger.warning(
+                                        log_safe(f"Creative format mismatch during assignment, skipping: {error_msg}")
+                                    )
                                     continue
 
                     # Check if assignment already exists (idempotent operation)
@@ -158,6 +231,7 @@ def _process_assignments(
                         media_buy_id=media_buy_id,
                         package_id=actual_package_id,
                         creative_id=creative_id,
+                        principal_id=principal_id,
                     )
 
                     if existing_assignment:
@@ -165,8 +239,10 @@ def _process_assignments(
                         if existing_assignment.weight != 100:
                             existing_assignment.weight = 100
                             logger.info(
-                                f"Updated existing assignment: creative={creative_id}, "
-                                f"package={actual_package_id}, media_buy={media_buy_id}"
+                                log_safe(
+                                    f"Updated existing assignment: creative={creative_id}, "
+                                    f"package={actual_package_id}, media_buy={media_buy_id}"
+                                )
                             )
                         assignment = existing_assignment
                     else:
@@ -178,8 +254,10 @@ def _process_assignments(
                             principal_id=principal_id,
                         )
                         logger.info(
-                            f"Created new assignment: creative={creative_id}, "
-                            f"package={actual_package_id}, media_buy={media_buy_id}"
+                            log_safe(
+                                f"Created new assignment: creative={creative_id}, "
+                                f"package={actual_package_id}, media_buy={media_buy_id}"
+                            )
                         )
 
                     # Track media buy for potential status update (for any assignment, new or existing)
@@ -219,5 +297,49 @@ def _process_assignments(
             errors = assignment_errors_by_creative[sync_result.creative_id]
             if errors:
                 sync_result.assignment_errors = errors
+
+    # Referenced-but-unsynced creatives (assignment-only references to existing
+    # library creatives, or ids that don't exist at all) have NO entry in
+    # `results` — synthesize one so their recorded outcome reaches the buyer.
+    # The spec's success branch FORBIDS a response-level errors array; per-item
+    # failures ride creatives[] with action='failed' (errors[] required, status
+    # omitted), and BR-RULE-033 INV-4 pins that assignment errors are always
+    # recorded in the response. Without this, creatives=[] + assignments
+    # returned bare success and the buyer never learned the assignment was
+    # skipped (#1430: orphan-assignment visibility fix).
+    present_ids = {r.creative_id for r in results}
+    for creative_id in sorted(assignments_by_creative.keys() | assignment_errors_by_creative.keys()):
+        if creative_id in present_ids:
+            continue
+        assigned = assignments_by_creative.get(creative_id) or []
+        errors = assignment_errors_by_creative.get(creative_id) or {}
+        if not assigned and not errors:
+            continue
+        if assigned:
+            # Existing library creative referenced only via assignments: the
+            # sync didn't modify it — 'unchanged', with its assignment outcome
+            # (and any partial failures) attached.
+            entry = SyncCreativeResult(
+                creative_id=creative_id,
+                action="unchanged",
+                status=None,
+                platform_id=None,
+                review_feedback=None,
+                assigned_to=assigned,
+                assignment_errors=errors or None,
+            )
+        else:
+            # Nothing assigned: every referenced package failed. Buyer-correctable.
+            # Creative-not-found entries carry CREATIVE_NOT_FOUND — the same code
+            # the strict-mode AdCPCreativeNotFoundError raise emits (287c93099);
+            # the continue in the not-found branch means such an entry can never
+            # also carry package causes. Other synthesized causes still ride
+            # VALIDATION_ERROR — a known residual (strict package-not-found emits
+            # PACKAGE_NOT_FOUND; per-condition parity is tracked in GH #1598).
+            message = "; ".join(sorted(set(errors.values())))
+            code = "CREATIVE_NOT_FOUND" if creative_id in not_found_creative_ids else "VALIDATION_ERROR"
+            entry = _failed_sync_result(creative_id, message, recovery="correctable", code=code)
+            entry.assignment_errors = errors
+        results.append(entry)
 
     return assignment_list

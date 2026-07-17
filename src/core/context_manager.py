@@ -251,7 +251,7 @@ class ContextManager(DatabaseManager):
         self,
         step_id: str,
         status: str | None = None,
-        response_data: dict[str, Any] | None = None,
+        response_data: dict[str, Any] | Any | None = None,
         error_message: str | None = None,
         transaction_details: dict[str, Any] | None = None,
         add_comment: dict[str, str] | None = None,
@@ -262,13 +262,24 @@ class ContextManager(DatabaseManager):
         Args:
             step_id: The step ID
             status: New status
-            response_data: Response/result data
+            response_data: Response/result data. Accepts Pydantic models (serialized
+                automatically) or plain dicts. Callers should NOT call .model_dump()
+                — pass the model directly.
             error_message: Error message if failed
             transaction_details: Actual API calls made
             add_comment: Optional comment to add {user, comment}
             tenant_id: Tenant scope — joins through Context for isolation.
                 If provided, the step must belong to this tenant or no update occurs.
         """
+        # Infrastructure-boundary serialization: _impl functions pass Pydantic
+        # models, this method serializes to dict for DB storage.
+        # MIGRATION IN PROGRESS: pre-refactor callers still pass pre-serialized
+        # dicts. As _impl callers migrate (tracked by the shrinking allowlist in
+        # test_architecture_no_model_dump_in_impl), the dict branch becomes dead.
+        # When allowlist hits zero, tighten the type to BaseModel-only and remove
+        # the isinstance branch.
+        if response_data is not None and hasattr(response_data, "model_dump"):
+            response_data = response_data.model_dump(mode="json")
         session = self.session
         try:
             stmt = select(WorkflowStep).filter_by(step_id=step_id)
@@ -350,26 +361,26 @@ class ContextManager(DatabaseManager):
 
         Untyped exceptions are normalized to ``AdCPError`` via
         ``normalize_to_adcp_error``. Wire-code enforcement ensures webhook
-        subscribers only see codes in ``STANDARD_ERROR_CODES``.
+        subscribers only see codes in ``WIRE_STANDARD_CODES``.
 
         Wraps the ``update_workflow_step`` call in ``try/except`` so a DB
         hiccup during audit doesn't replace the original exception that the
         caller is about to re-raise.
         """
-        from adcp.server.helpers import STANDARD_ERROR_CODES
+        from src.core.exceptions import WIRE_STANDARD_CODES
 
         try:
             source = normalize_to_adcp_error(exc)
 
             # Defensive wire-code enforcement: webhook subscribers must only
-            # see codes in ``STANDARD_ERROR_CODES``. If the wire code falls
+            # see codes in ``WIRE_STANDARD_CODES``. If the wire code falls
             # outside the standard set, override with SERVICE_UNAVAILABLE
             # so async subscribers never receive an internal-only code.
             # Structured fields (details/field/suggestion/context) carry
             # forward so buyer agents and webhook subscribers retain
             # machine-actionable correction context across the rewrite.
             wire_code = source.wire_error_code
-            if wire_code not in STANDARD_ERROR_CODES:
+            if wire_code not in WIRE_STANDARD_CODES:
                 source = AdCPError.synthesize(
                     source.message or str(source),
                     error_code="SERVICE_UNAVAILABLE",

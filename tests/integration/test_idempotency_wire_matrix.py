@@ -244,8 +244,9 @@ class TestMissingKeyWireMatrix:
             envelope,
             "VALIDATION_ERROR",
             recovery="correctable",
-            message_substr="idempotency_key",
+            message_substr="Required field is missing",
         )
+        assert envelope["errors"][0].get("field") == "idempotency_key"
 
 
 class TestWireLevelHashInput:

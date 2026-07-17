@@ -147,9 +147,9 @@ class TestResponseStrMethods:
 
         resp = SyncCreativesResponse(
             creatives=[
-                SyncCreativeResult(creative_id="cr-001", status="approved", action="created"),
-                SyncCreativeResult(creative_id="cr-002", status="approved", action="created"),
-                SyncCreativeResult(creative_id="cr-003", status="approved", action="updated"),
+                SyncCreativeResult(creative_id="cr-001", internal_status="approved", action="created"),
+                SyncCreativeResult(creative_id="cr-002", internal_status="approved", action="created"),
+                SyncCreativeResult(creative_id="cr-003", internal_status="approved", action="updated"),
             ],
             dry_run=False,
         )
@@ -210,18 +210,18 @@ class TestResponseStrMethods:
 
     def test_create_media_buy_response_with_id(self):
         """CreateMediaBuySuccess shows created media buy ID."""
-        resp = CreateMediaBuySuccess(buyer_ref="ref_123", media_buy_id="mb_456", packages=[])
+        resp = CreateMediaBuySuccess(media_buy_id="mb_456", packages=[])
         assert str(resp) == "Media buy mb_456 created successfully."
 
     def test_create_media_buy_response_without_id(self):
         """CreateMediaBuySuccess shows buyer ref (manual approval case)."""
         # Note: In success branch, media_buy_id is always required
-        resp = CreateMediaBuySuccess(buyer_ref="ref_123", media_buy_id="pending", packages=[])
+        resp = CreateMediaBuySuccess(media_buy_id="pending", packages=[])
         assert str(resp) == "Media buy pending created successfully."
 
     def test_update_media_buy_response(self):
         """UpdateMediaBuySuccess shows updated media buy ID."""
-        resp = UpdateMediaBuySuccess(media_buy_id="mb_123", buyer_ref="ref_456", affected_packages=[])
+        resp = UpdateMediaBuySuccess(media_buy_id="mb_123", affected_packages=[])
         assert str(resp) == "Media buy mb_123 updated successfully."
 
     # Note: GetMediaBuyDeliveryResponse, CreateCreativeResponse, GetSignalsResponse
@@ -248,7 +248,7 @@ class TestResponseStrMethods:
                 creatives=[],
                 dry_run=False,
             ),
-            CreateMediaBuySuccess(buyer_ref="ref", media_buy_id="mb_123", packages=[]),
+            CreateMediaBuySuccess(media_buy_id="mb_123", packages=[]),
         ]
 
         for resp in responses:

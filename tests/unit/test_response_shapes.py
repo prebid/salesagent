@@ -283,7 +283,7 @@ class TestSyncCreativesResponseShape:
         result = SyncCreativeResult(
             creative_id="creative_002",
             action=CreativeAction.updated,
-            status="approved",
+            internal_status="approved",
             review_feedback="Looks good",
         )
         resp = SyncCreativesResponse(creatives=[result], dry_run=False)  # type: ignore[call-arg]
@@ -291,6 +291,7 @@ class TestSyncCreativesResponseShape:
 
         c = data["creatives"][0]
         assert "status" not in c, "Internal 'status' field should be excluded"
+        assert "internal_status" not in c, "Internal 'internal_status' field should be excluded"
         assert "review_feedback" not in c, "Internal 'review_feedback' field should be excluded"
 
     def test_sync_response_failed_creative_has_errors(self):
@@ -349,7 +350,7 @@ class TestGetMediaBuyDeliveryResponseShape:
                 impressions=50000.0,
                 spend=500.0,
                 clicks=250.0,
-                video_completions=None,
+                completed_views=None,
                 media_buy_count=1,
             ),
             media_buy_deliveries=[
