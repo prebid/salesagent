@@ -227,7 +227,10 @@ async def _call_webhook_for_creative_status(
             logger.info("status: completed")
             logger.info(f"result: {complete_result}")
             logger.info("error: None")
-            logger.info(f"push_notification_config: {push_notification_config}")
+            from src.core.log_safety import redact_push_notification_config
+
+            # Redacted: never log the stored config's authentication_token (#1617).
+            logger.info("push_notification_config: %s", redact_push_notification_config(push_notification_config))
 
             # Determine protocol type from workflow step request_data
             protocol = step_request_data.get("protocol", "mcp")  # Default to MCP for backward compatibility

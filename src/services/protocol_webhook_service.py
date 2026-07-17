@@ -165,17 +165,13 @@ class ProtocolWebhookService:
         # Prepare headers
         headers = {"Content-Type": "application/json", "User-Agent": "AdCP-Sales-Agent/1.0"}
 
-        # Log sanitized config (exclude sensitive authentication_token)
-        safe_config = {
-            "url": push_notification_config.url if hasattr(push_notification_config, "url") else None,
-            "authentication_type": (
-                push_notification_config.authentication_type
-                if hasattr(push_notification_config, "authentication_type")
-                else None
-            ),
-            # DO NOT log authentication_token - security risk
-        }
-        logger.info(f"push_notification_config (sanitized): {safe_config}")
+        # Single redaction path (#1617) — the authentication credential is never logged.
+        from src.core.log_safety import redact_push_notification_config
+
+        logger.info(
+            "push_notification_config (sanitized): %s",
+            redact_push_notification_config(push_notification_config),
+        )
 
         # Serialize payload to dict at the delivery boundary (for HMAC signing
         # and JSON send). Single seam: a2a protobuf -> camelCase + A2A 0.3

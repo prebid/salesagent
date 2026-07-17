@@ -2133,8 +2133,14 @@ async def _create_media_buy_impl(
         if push_notification_config:
             # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object (hoisting would bind the unpatched one at module load).
             from src.core.database.repositories import MediaBuyUoW
+            from src.core.log_safety import redact_push_notification_config
 
-            logger.info(f"[MCP/A2A] Registering push notification config from request: {push_notification_config}")
+            # Redacted: the config's authentication block carries the buyer's webhook
+            # credential — logging it raw leaks a replayable secret (#1617).
+            logger.info(
+                "[MCP/A2A] Registering push notification config from request: %s",
+                redact_push_notification_config(push_notification_config),
+            )
 
             # Extract config details
             url = push_notification_config.get("url")
