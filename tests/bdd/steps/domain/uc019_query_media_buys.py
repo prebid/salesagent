@@ -2577,30 +2577,26 @@ def then_response_schema_valid_get_media_buys(ctx: dict) -> None:
     """Validate the WIRE payload against the pinned GetMediaBuysResponse model.
 
     The repo ships no standalone JSON schema; the pinned Pydantic model is the
-    schema for AdCP 3.1.0-beta.3 (docs/adcp-spec-version.md). On the wire
-    transports this validates ``ctx["wire_response"]`` — the payload the buyer
-    actually received — mirroring uc005_format_id_roundtrip. When no wire
-    payload exists the check degrades to model self-consistency
-    (``model_dump`` → ``model_validate``), which proves the typed model
-    round-trips but cannot observe a wire serialization regression.
+    schema for AdCP 3.1.0-beta.3 (docs/adcp-spec-version.md). Reads the payload
+    through the shared ``wire_dict`` helper: the real ``ctx["wire_response"]`` the
+    buyer received on REST/A2A/MCP (its guard raises if a real-wire transport
+    failed to stash it, rather than silently degrading), or the production
+    serialization of the typed response on IMPL (which round-trips the model but
+    cannot observe a wire serialization regression).
     """
     from src.core.schemas import GetMediaBuysResponse
+    from tests.bdd.steps._outcome_helpers import wire_dict
 
-    wire = ctx.get("wire_response")
-    if isinstance(wire, dict):
-        # Transport framing adds envelope keys around the response object
-        # (the A2A skill result carries success/message alongside the
-        # response fields). The schema governs the RESPONSE, so validate the
-        # model's own fields as they appear on the wire — this still catches
-        # serialization regressions in every response field while tolerating
-        # the envelope.
-        payload = {k: v for k, v in wire.items() if k in GetMediaBuysResponse.model_fields}
-        assert "media_buys" in payload, f"wire payload carries no media_buys — keys: {sorted(wire)}"
-        GetMediaBuysResponse.model_validate(payload)
-        return
-    response = ctx.get("response")
-    assert response is not None, f"No response captured — ctx error: {ctx.get('error')!r}"
-    GetMediaBuysResponse.model_validate(response.model_dump(mode="json"))
+    # wire_dict returns the real wire body on REST/A2A/MCP (its guard raises if a
+    # real-wire transport failed to stash it, rather than silently degrading), and
+    # the production serialization of the typed response on IMPL. Transport framing
+    # adds envelope keys around the response object, so validate the model's own
+    # fields as they appear on the wire — this still catches a serialization
+    # regression in every response field while tolerating the envelope.
+    wire = wire_dict(ctx)
+    payload = {k: v for k, v in wire.items() if k in GetMediaBuysResponse.model_fields}
+    assert "media_buys" in payload, f"wire payload carries no media_buys — keys: {sorted(wire)}"
+    GetMediaBuysResponse.model_validate(payload)
 
 
 @then("the media_buys array should include the freshly-created buy")
