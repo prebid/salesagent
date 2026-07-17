@@ -184,6 +184,48 @@ class DeliveryWebhookScheduler:
             logger.error(f"Error manually triggering report for {media_buy_id}: {e}", exc_info=True)
             return False
 
+    def _dedup_skips_send(self, delivery_repo: DeliveryRepository, media_buy: Any, *, force: bool) -> bool:
+        """BEST-EFFORT de-dup decision — True if this delivery webhook should be skipped.
+
+        NOT a hard exactly-once guarantee.
+          - final: skip if a SUCCESSFUL "final" was already logged for this buy.
+            This applies EVEN under ``force`` — a manual re-trigger must never put
+            a DUPLICATE final (with a fresh sequence) on the wire. It keys on a
+            *successful* final, so a retry after a FAILED final still goes through,
+            and it fires regardless of the 24h window (so the status scheduler
+            flipping the buy to persisted "completed" ~60s after flight end, before
+            this hourly batch, can't leave the spec-required final unsent).
+          - scheduled: 24h rolling dedup, bypassed by ``force`` so an operator can
+            re-send a fresh periodic report on demand.
+
+        This is a READ-then-send check with no atomic reservation, so it does NOT
+        guarantee exactly-once: two concurrent workers can both observe "no final"
+        and both send, and a crash (or swallowed log-write) between a successful
+        POST and the log write leaves no record so a later batch re-sends. A durable
+        exactly-once final (atomic reserve + sequence allocation, e.g. an outbox) is
+        tracked in #1606; until then this is explicitly best-effort.
+        """
+        is_final = resolve_canonical_status(media_buy, datetime.now(UTC).date()) == CANONICAL_COMPLETED
+        if is_final:
+            if delivery_repo.has_successful_final(media_buy.media_buy_id, task_type="media_buy_delivery"):
+                logger.info("Final delivery webhook already sent for media buy %s – skipping", media_buy.media_buy_id)
+                return True
+            return False
+        if force:
+            return False
+        one_day_ago = datetime.now(UTC) - timedelta(hours=24)
+        existing_log = delivery_repo.get_recent_successful_log(
+            media_buy.media_buy_id, task_type="media_buy_delivery", since=one_day_ago
+        )
+        if existing_log:
+            logger.info(
+                "Skipping daily delivery webhook for media buy %s – already sent (log id %s)",
+                media_buy.media_buy_id,
+                existing_log.id,
+            )
+            return True
+        return False
+
     async def _send_report_for_media_buy(
         self, media_buy: Any, reporting_webhook: dict, session: Any, force: bool = False
     ) -> bool:
@@ -223,51 +265,10 @@ class DeliveryWebhookScheduler:
             start_date_obj = datetime.now(UTC).date() - timedelta(days=1)
             end_date_obj = datetime.now(UTC)
 
-            # Whether THIS send is the buy's "final" notification — the buy has
-            # ended (resolves to canonical "completed"). The batch and the impl
-            # both resolve against today, so this agrees with the
-            # notification_type the impl-derived response will carry below.
-            is_final = resolve_canonical_status(media_buy, datetime.now(UTC).date()) == CANONICAL_COMPLETED
-
-            # BEST-EFFORT de-duplication — NOT a hard exactly-once guarantee.
-            #   - final: skip if a SUCCESSFUL "final" was already logged for this
-            #     buy. This gate applies EVEN under ``force`` — a manual re-trigger
-            #     must never put a DUPLICATE final (with a fresh sequence) on the
-            #     wire. It keys on a *successful* final, so a retry after a FAILED
-            #     final still goes through. It also fires regardless of the 24h
-            #     window, so the status scheduler flipping the buy to persisted
-            #     "completed" (~60s after flight end, before this hourly batch)
-            #     can't leave the spec-required final unsent.
-            #   - scheduled: 24h rolling dedup, bypassed by ``force`` so an operator
-            #     can re-send a fresh periodic report on demand.
-            #
-            # This is a READ-then-send check with no atomic reservation, so it does
-            # NOT guarantee exactly-once: two concurrent workers can both observe
-            # "no final" and both send, and a crash (or swallowed log-write) between
-            # a successful POST and the log write leaves no record so a later batch
-            # re-sends. A durable exactly-once final (atomic reserve + sequence
-            # allocation, e.g. an outbox / unique constraint) is tracked in #1606;
-            # until then this is explicitly best-effort.
-            if is_final:
-                if delivery_repo.has_successful_final(media_buy.media_buy_id, task_type="media_buy_delivery"):
-                    logger.info(
-                        "Final delivery webhook already sent for media buy %s – skipping",
-                        media_buy.media_buy_id,
-                    )
-                    return False
-            elif not force:
-                one_day_ago = datetime.now(UTC) - timedelta(hours=24)
-                existing_log = delivery_repo.get_recent_successful_log(
-                    media_buy.media_buy_id, task_type="media_buy_delivery", since=one_day_ago
-                )
-                if existing_log:
-                    logger.info(
-                        "Skipping daily delivery webhook for media buy %s and date %s – already sent (log id %s)",
-                        media_buy.media_buy_id,
-                        end_date_obj,
-                        existing_log.id,
-                    )
-                    return False
+            # Best-effort de-duplication (final-ever gate + 24h scheduled dedup).
+            # See _dedup_skips_send — this is a read-check, NOT exactly-once (#1606).
+            if self._dedup_skips_send(delivery_repo, media_buy, force=force):
+                return False
 
             # Fetch delivery metrics
             # Create a ResolvedIdentity for the delivery call
