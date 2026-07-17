@@ -4,6 +4,9 @@ Tests the is_responsive, name_search, asset_types, and dimension filters
 that were added to match the AdCP spec.
 """
 
+import pytest
+from pydantic import ValidationError
+
 from src.core.schemas import FormatId, ListCreativeFormatsRequest
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -116,34 +119,31 @@ class TestListCreativeFormatsNewFilters:
         assert req.name_search == "banner"
 
 
-class TestDisclosureFilterUniqueItemsDedup:
-    """Duplicate disclosure_positions / disclosure_persistence are silently deduped.
+class TestDisclosureFilterUniqueItemsValidation:
+    """Restore the authoritative schema's ``uniqueItems: true`` contract."""
 
-    The authoritative AdCP 3.1.1 list-creative-formats-request schema marks both
-    fields with ``uniqueItems: true``, but datamodel-code-generator drops that
-    constraint in the pinned ``adcp==6.6.0`` models. Our request boundary restores
-    it with an order-preserving silent dedup, mirroring the SDK team's fix for
-    adcontextprotocol/adcp-client-python#971 (real codegen bug; non-breaking dedup).
-    """
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("disclosure_positions", ["footer", "prominent", "footer"]),
+            ("disclosure_persistence", ["continuous", "continuous", "initial"]),
+        ],
+    )
+    def test_duplicate_disclosure_filters_are_rejected(self, field, value):
+        with pytest.raises(ValidationError, match=f"{field} must not contain duplicate values"):
+            ListCreativeFormatsRequest(**{field: value})
 
-    def test_duplicate_disclosure_positions_are_deduped_order_preserving(self):
-        req = ListCreativeFormatsRequest(disclosure_positions=["footer", "prominent", "footer", "prominent"])
-        assert req.disclosure_positions is not None
-        assert [p.value for p in req.disclosure_positions] == ["footer", "prominent"]
+    def test_multiple_duplicate_disclosure_filters_are_all_rejected(self):
+        with pytest.raises(ValidationError) as exc_info:
+            ListCreativeFormatsRequest(
+                disclosure_positions=["prominent", "prominent"],
+                disclosure_persistence=["initial", "initial"],
+            )
 
-    def test_duplicate_disclosure_persistence_are_deduped_order_preserving(self):
-        req = ListCreativeFormatsRequest(disclosure_persistence=["continuous", "continuous", "initial"])
-        assert req.disclosure_persistence is not None
-        assert [p.value for p in req.disclosure_persistence] == ["continuous", "initial"]
-
-    def test_dedup_is_silent_and_non_breaking(self):
-        """Duplicates never raise — dedup succeeds and the request is usable."""
-        req = ListCreativeFormatsRequest(
-            disclosure_positions=["prominent", "prominent"],
-            disclosure_persistence=["initial", "initial"],
-        )
-        assert [p.value for p in req.disclosure_positions] == ["prominent"]
-        assert [p.value for p in req.disclosure_persistence] == ["initial"]
+        assert {error["loc"][0] for error in exc_info.value.errors()} == {
+            "disclosure_positions",
+            "disclosure_persistence",
+        }
 
     def test_unique_disclosure_filters_are_preserved_unchanged(self):
         req = ListCreativeFormatsRequest(

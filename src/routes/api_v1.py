@@ -136,7 +136,10 @@ class GetMediaBuyDeliveryBody(SalesAgentBaseModel):
 class GetMediaBuysBody(SalesAgentBaseModel):
     """POST /media-buys/query body — mirrors get_media_buys_raw's parameters."""
 
-    media_buy_ids: list[str] | None = None
+    # Preserve the raw wire value until the shared GetMediaBuysRequest validation
+    # boundary. Typing this as list[str] here makes FastAPI reject wrong types before
+    # that boundary, producing INVALID_REQUEST while MCP/A2A produce VALIDATION_ERROR.
+    media_buy_ids: Any = None
     status_filter: Any = None
     include_snapshot: bool = False
     account: dict[str, Any] | None = None  # AccountReference; coerced downstream

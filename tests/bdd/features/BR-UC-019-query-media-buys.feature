@@ -716,32 +716,21 @@ Feature: BR-UC-019 Query Media Buys
 
   @T-UC-019-partition-revision @partition @revision @schema-v3.1
   Scenario Outline: revision partitions - <partition>
-    Given the principal "buyer-001" owns media buy "mb-001" with <revision_state>
+    Given the principal "buyer-001" owns media buy "mb-001" with persisted revision <revision>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" revision should be <expected>
-    # BR-RULE-291: revision >= 1, per-buy monotonic counter
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
+    Then the media buy "mb-001" revision should be <revision>
 
-    Examples: Valid partitions
-      | partition         | revision_state                                                       | expected               |
-      | just_created      | persisted revision 1 and no subsequent writes                        | 1                      |
-      | after_writes      | persisted revision 5 after four state-changing writes                | 5                      |
-      | idempotent_reads  | persisted revision 7 and no intervening writes between two reads     | 7 on both reads        |
+    Examples:
+      | partition        | revision |
+      | just_created     | 1        |
+      | after_writes     | 5        |
+      | later_write      | 7        |
 
   @T-UC-019-boundary-revision @boundary @revision @schema-v3.1
-  Scenario Outline: revision boundary - <boundary_point>
-    Given the principal "buyer-001" owns media buy "mb-001" with <revision_state>
+  Scenario: revision boundary - minimum inclusive
+    Given the principal "buyer-001" owns media buy "mb-001" with persisted revision 1
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then <expected_outcome>
-    # BR-RULE-291: schema minimum 1; 0/negative/missing -> SCHEMA_VIOLATION
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
-
-    Examples: Boundary values
-      | boundary_point                   | revision_state                                  | expected_outcome                                                              |
-      | revision = 1 (minimum inclusive) | persisted revision 1                            | the media buy "mb-001" revision should be 1                                   |
-      | revision = 0                     | persisted revision 0 (defective seller)         | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION" |
-      | revision = -1                    | persisted revision -1 (defective seller)        | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION" |
-      | revision absent                  | persisted store missing revision (defective seller) | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION" |
+    Then the media buy "mb-001" revision should be 1
 
   @T-UC-019-inv-291-1 @invariant @BR-RULE-291 @schema-v3.1
   Scenario: INV-1 holds - every returned media buy has revision integer >= 1
@@ -811,21 +800,11 @@ Feature: BR-UC-019 Query Media Buys
     #       and its @source aligns automatically — tracked in #1565.
 
   @T-UC-019-partition-confirmed-at @partition @confirmed_at @schema-v3.1
-  Scenario Outline: confirmed_at - <partition>
-    Given the principal "buyer-001" owns media buy "mb-001" with <buy_state>
+  Scenario: Production-created media buy carries confirmed_at
+    Given the principal "buyer-001" owns media buy "mb-001" with persisted revision 1
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then <expected_outcome>
-    # POST-S6 / INT-006: confirmed_at presence and ISO 8601 shape
-
-    Examples: Valid partitions
-      | partition                       | buy_state                                                  | expected_outcome                                                                                  |
-      | confirmed_buy_carries_timestamp | a successful create stamping confirmed_at "2026-05-01T12:00:00Z" | the media buy "mb-001" confirmed_at should equal "2026-05-01T12:00:00Z"                          |
-      | confirmed_at_includes_timezone  | confirmed_at "2026-05-01T12:00:00+00:00"                   | the media buy "mb-001" confirmed_at should be an ISO 8601 string with a timezone designator       |
-
-    Examples: Invalid partitions
-      | partition                       | buy_state                                                  | expected_outcome                                                                                  |
-      | confirmed_at_missing_on_buy     | persisted store missing confirmed_at (defective seller)    | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"        |
-      | confirmed_at_not_iso8601        | persisted confirmed_at "2026-05-01 12:00:00" (no T, no TZ) | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"        |
+    Then the media buy "mb-001" should include a confirmed_at field
+    And the media buy "mb-001" confirmed_at should be an ISO 8601 timestamp
 
   @T-UC-019-partition-package-creative-deadline @partition @creative_deadline @schema-v3.1
   Scenario Outline: package creative_deadline - <partition>

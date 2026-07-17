@@ -377,6 +377,9 @@ class TestApprovalCrashRecovery:
         buy = _buy_snapshot(tenant_id, "mb_manual")
         assert buy.status == "finalizing"
         assert buy.finalize_recovery_mode == MEDIA_BUY_RECOVERY_MANUAL
+        assert buy.finalize_reconcile_incident_at is not None
+        assert "crash after adapter invocation" in (buy.finalize_reconcile_incident_reason or "")
+        assert _finalize_incident_audit_count(tenant_id, "mb_manual") == 1
         # The scan the scheduler uses excludes flagged buys — no hot loop.
         assert "mb_manual" not in _recoverable_ids(tenant_id)
 
@@ -695,6 +698,13 @@ class TestApprovalCrashRecovery:
         buy = _buy_snapshot(tenant_id, "mb_lost")
         assert buy.status == "finalizing"  # did NOT publish the serving status
         assert buy.finalize_recovery_mode == MEDIA_BUY_RECOVERY_MANUAL  # manual flag set, not cleared
+        # This is the ownership_lost/CAS-win race: no competing worker took the row,
+        # so the conservative owner-CAS must retain the lease and its cooldown. If
+        # the cooldown argument is removed from that exact branch, reapproval becomes
+        # immediately claimable here despite an adapter call that may have created a
+        # remote graph.
+        assert buy.finalize_lease_id is not None
+        assert not _reapproval_would_claim(tenant_id, "mb_lost", clock.now)
         assert _step_snapshot(tenant_id, step_id).status != "completed"  # no success artifact emitted
 
     # ── Round N+6/N+7 pins: shortcut removal / remediation / probe / fencing ──

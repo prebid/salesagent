@@ -356,12 +356,13 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
     def sync_success(cls, **kwargs: Any) -> "CreateMediaBuySuccess":
         """Construct a create_media_buy success without tripping mypy's pydantic plugin.
 
-        adcp 6.6 types confirmed_at/revision as required on the parent; even though this
-        subclass overrides them to nullable-with-default, mypy's pydantic plugin still emits
-        a spurious ``call-arg`` at direct construction sites. Callers route the untyped
-        ``**kwargs`` through here to dodge that. Committed-success callers pass confirmed_at
-        and revision explicitly (from the persisted MediaBuy); the provisional arm omits them
-        and they default to None. Do NOT re-default the fields here.
+        adcp 6.6 types confirmed_at/revision as required on the parent. This subclass makes
+        confirmed_at nullable with a None default and keeps revision non-null with the
+        spec-minimum default 1, but mypy's pydantic plugin still emits a spurious ``call-arg``
+        at direct construction sites. Callers route the untyped ``**kwargs`` through here to
+        dodge that. Committed-success callers pass both fields explicitly from the persisted
+        MediaBuy; a provisional caller may omit them and receives confirmed_at=None and
+        revision=1. Do NOT re-default the fields here.
         """
         return cls(**kwargs)
 

@@ -189,35 +189,6 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-002-inv-087-5": "duplicate optimization_goals priority: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
     "T-UC-002-inv-087-6": "empty optimization_goals array: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
     "T-UC-002-inv-087-7": "per_ad_spend without value_field: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
-    # FIXME(beads-dul): disclosure_positions filter not implemented in production
-    # Note: violated/nofield pass vacuously (field rejected at schema level)
-    "T-UC-005-inv-049-8-holds": "disclosure_positions filter not implemented",
-    # ── UC-005 `type` scenarios: creative-agent ROLE BOUNDARY (not an SDK omission) ──
-    # Per the SDK team's official triage of adcontextprotocol/adcp-client-python#971, the
-    # `type` filter (audio/video/display/dooh) is INTENTIONALLY absent from the media-buy
-    # ListCreativeFormatsRequest — it lives on the creative-agent-role request
-    # ListCreativeFormatsRequestCreativeAgent. That is a role boundary BY DESIGN, NOT a
-    # codegen bug and NOT a removed spec feature. Our list_creative_formats tool uses the
-    # media-buy request (verified: `type` not in ListCreativeFormatsRequest.model_fields),
-    # so these scenarios exercise a filter that is not part of our contract by design.
-    #
-    # Correct disposition (per #971 triage) is to RETIRE/REFRAME these as a role-boundary
-    # negative assertion. That retirement is NOT applied here because these three scenarios
-    # are coupled to graded obligation contracts (UC-005-MAIN-MCP-05 filter-by-type,
-    # UC-005-MAIN-MCP-16 combined-with-type, UC-005-MAIN-MCP-04 sort-by-type) that still
-    # encode the pre-removal type behavior; reconciling those obligation contracts (and
-    # regenerating the compiled feature via scripts/compile_bdd.py) is a maintainer-level
-    # change beyond the #971 filter authority. They are kept as honest, NON-owner-approved
-    # xfails until that obligation reconciliation lands. (The two DEDICATED type-filter
-    # scenario outlines with no obligation coupling — partition/boundary-type-filter — are
-    # addressed in the selective-xfail section below.)
-    "T-UC-005-main-filtered": "media-buy list_creative_formats has no `type` filter (creative-agent role boundary, SDK #971 triage); scenario tests a filter absent from our contract by design",
-    "T-UC-005-inv-031-1-holds": "media-buy request has no `type` filter (creative-agent role boundary, SDK #971); type+asset_types AND combination not expressible on our contract",
-    "T-UC-005-inv-031-1-violated": "media-buy request has no `type` filter (creative-agent role boundary, SDK #971); type+asset_types AND combination not expressible on our contract",
-    # inv-031-2 is a SORT scenario, a DIFFERENT truth: the Format MODEL `type`/FormatCategory
-    # field was genuinely removed from the AdCP spec in the adcp 3.10->3.12 migration, so
-    # sort-by-type is no longer applicable (production sorts by name). Not a role boundary.
-    "T-UC-005-inv-031-2-holds": "Format model `type`/FormatCategory field removed from AdCP spec (adcp 3.10->3.12 migration); sort-by-type no longer applicable (production sorts by name)",
     # Un-graduated: T-UC-005-sandbox-happy — sandbox=True not set on response (all transports)
     "T-UC-005-sandbox-happy": "sandbox mode not implemented in list_creative_formats response — spec-production gap",
     # Un-graduated: T-UC-005-sandbox-validation — sandbox validation not triggered (all transports)
@@ -243,16 +214,15 @@ _XFAIL_TAGS: dict[str, str] = {
     # tests/integration/test_request_validation_suggestion_parity.py.
     "T-UC-005-ext-b": "suggestion field not implemented in error responses",
     # FIXME(beads-dul): disclosure validation errors not implemented
-    # NOTE: -dupes GRADUATED — duplicate disclosure_positions/persistence are now silently
-    # deduped order-preserving at the request boundary (AdCP 3.1.1 uniqueItems restored,
-    # mirroring the SDK adcp-client-python#971 dedup fix), so those scenarios PASS.
+    # NOTE: duplicate disclosure_positions/persistence have dedicated, wire-asserted
+    # rejection scenarios. The remaining entries cover invalid enum and empty-array
+    # errors whose specific code/suggestion contract is not yet implemented.
     "T-UC-005-ext-b-disclosure-invalid": "disclosure_positions validation not implemented",
     "T-UC-005-ext-b-disclosure-empty": "disclosure_positions validation not implemented",
     # Persistence variants share the same pre-existing gap as the positions variants above:
     # production raises a generic VALIDATION_ERROR (Pydantic enum/minItems) without the
-    # spec-specific error code or a buyer-facing `suggestion` field. NOT dedup-related
-    # (dedup graduated); these are the specific-error-code/suggestion gap. They became
-    # runnable once the disclosure_persistence filter When step landed for the dedup work.
+    # spec-specific error code or a buyer-facing `suggestion` field. These are the
+    # specific-error-code/suggestion gap; duplicate values are rejected separately.
     "T-UC-005-ext-b-persistence-invalid": "disclosure_persistence specific error code/suggestion not implemented",
     "T-UC-005-ext-b-persistence-empty": "disclosure_persistence specific error code/suggestion not implemented",
     # FIXME(beads-dul): specific error codes (OUTPUT_FORMAT_IDS_EMPTY etc.)
@@ -433,29 +403,8 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         "Pre-existing UC-003 targeting-overlay validation gaps (not da07): pydantic "
         "extra='forbid' / GeoProximity coordinate modes / frequency_cap / keyword-dup / device_type overlap",
     ),
-    # Graduated: the duplicate_positions partition/boundary examples now PASS — duplicate
-    # disclosure_positions are silently deduped order-preserving at the request boundary
-    # (AdCP 3.1.1 uniqueItems restored, mirroring the SDK adcp-client-python#971 fix), so a
-    # duplicate array is a VALID request. The remaining invalid examples (unknown_position,
-    # empty_array) are rejected at the enum/minItems schema level and pass genuinely.
-    # UC-005 `type`-filter dedicated outlines: the media-buy ListCreativeFormatsRequest has
-    # NO `type` filter — it is a creative-agent-role field by design (SDK adcp-client-python#971
-    # triage), NOT an SDK omission of a media-buy feature. Only the "invalid" example rows fail:
-    # they expect production to REJECT an invalid type value, but with no type field to validate,
-    # the request dispatches unfiltered and succeeds. The "valid" rows dispatch unfiltered and
-    # pass. These two outlines carry no obligation coupling (obligation_id: null), so the correct
-    # disposition is a role-boundary reframe/retire; that is surfaced for maintainer sign-off
-    # (it requires regenerating the compiled feature via scripts/compile_bdd.py).
-    (
-        "T-UC-005-partition-type-filter",
-        {"invalid_type"},
-        "media-buy list_creative_formats has no `type` filter (creative-agent role boundary, SDK #971); an invalid type value cannot be rejected because the field does not exist on our contract",
-    ),
-    (
-        "T-UC-005-boundary-type-filter",
-        {"invalid type (rejected)"},
-        "media-buy list_creative_formats has no `type` filter (creative-agent role boundary, SDK #971); an invalid type value cannot be rejected because the field does not exist on our contract",
-    ),
+    # Duplicate disclosure filter values are rejected by the local AdCP 3.1.1
+    # uniqueItems override; invalid examples must not be selectively suppressed.
     # Graduated: T-UC-005-boundary-asset-types (all 4 transports pass — brief/catalog now in enum)
     # Graduated: T-UC-005-partition-agent-type, T-UC-005-boundary-agent-type,
     # T-UC-005-boundary-agent-asset — all pass now that When steps dispatch through harness.
@@ -500,31 +449,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         is_rest = "[rest]" in nodeid or "[rest-" in nodeid
         is_impl = "[impl]" in nodeid or "[impl-" in nodeid
         is_e2e_rest = "[e2e_rest]" in nodeid or "[e2e_rest-" in nodeid
-
-        # UC-005 `type`-filter scenarios over e2e_rest: the media-buy
-        # ListCreativeFormatsRequest has no `type` filter — it is a creative-agent-role
-        # field by design (SDK adcp-client-python#971 triage), NOT an SDK omission and NOT
-        # a removed spec feature. In-process transports xfail these strict=True (the field
-        # is absent on our contract for ALL transports); against the live Docker server the
-        # request dispatches unfiltered and the scenario passes vacuously (valid rows), so a
-        # strict xfail would XPASS there — weaken to strict=False to tolerate either outcome.
-        # (Disclosure dedup GRADUATED — those scenarios now pass on every transport, including
-        # e2e_rest where the server re-parses with the same dedup boundary — so they are no
-        # longer listed here.)
-        uc005_filter_e2e_untestable = {
-            # `type` filter — creative-agent-role field, absent from our media-buy contract
-            # by design (SDK #971 role boundary)
-            "T-UC-005-inv-031-1-violated",
-            "T-UC-005-partition-type-filter",
-            "T-UC-005-boundary-type-filter",
-        }
-        uc005_filter_e2e_reason = (
-            "e2e_rest: the `type` filter (audio/video/display/dooh) is a creative-agent-role "
-            "field absent from the media-buy ListCreativeFormatsRequest by design (SDK "
-            "adcp-client-python#971 role boundary), NOT an SDK omission or removed spec "
-            "feature. It dispatches unfiltered and passes vacuously over the live server, so "
-            "the strict in-process xfail cannot hold here"
-        )
 
         # Graduated: UC-005 creative agent type/asset_type filter tests now pass —
         # When steps dispatch through harness (blanket xfail removed).
@@ -789,43 +713,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # workflow_step_id) and passes on all 4 transports — a strict xfail here
         # would XPASS-fail.
 
-        # --- UC-005: disclosure/asset scenarios with partial impl ---
-        # FIXME(beads-dul): disclosure_positions and brief/catalog asset types
-        # partially implemented — some transport variants pass, others fail.
-        # Must run BEFORE selective xfails (which use strict=True) to avoid
-        # XPASS failures on transport variants that now pass.
-        _UC005_PARTIAL_TAGS = {
-            # disclosure_positions filter is not implemented in _impl (all transports).
-            # #1417 added the param to the MCP wrapper, so MCP now sends it
-            # and fails the exclusion assertion exactly like impl/a2a/rest — hence the
-            # former `not is_mcp` exclusion is removed (MCP no longer passes vacuously).
-            "T-UC-005-inv-049-8-violated",
-            "T-UC-005-inv-049-8-nofield",
-        }
-        if marker_names & _UC005_PARTIAL_TAGS and not is_e2e_rest:
-            item.add_marker(pytest.mark.xfail(reason="disclosure/asset partial impl", strict=False))
-            # Skip selective xfails for these — the strict=False above covers them
-        else:
-            # Graduated (#1417): the partition/boundary-disclosure "valid"
-            # examples (all_positions / no_matching_formats / all 8 positions /
-            # "format has no") return unfiltered results that satisfy the assertion,
-            # so they now PASS on every wire transport (a2a/mcp/rest) — no marker.
-            # NOTE: main's MCP-specific strict xfails ("MCP wrapper does not accept
-            # the disclosure_positions keyword") are intentionally dropped here —
-            # #1417 added disclosure_positions to the MCP list_creative_formats
-            # wrapper (src/core/tools/creative_formats.py:519), so MCP now accepts the
-            # keyword exactly like a2a/rest and the valid examples pass on MCP too.
-
-            # Selective xfail for parametrized scenarios
-            for tag, substrings, reason in _SELECTIVE_XFAIL:
-                if tag in marker_names:
-                    if is_e2e_rest and tag in uc005_filter_e2e_untestable:
-                        # tolerate either outcome — see uc005_filter_e2e_reason (salesagent-7fye)
-                        item.add_marker(pytest.mark.xfail(reason=uc005_filter_e2e_reason, strict=False))
-                        break
-                    if any(s in item.nodeid for s in substrings):
-                        item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
-                    break  # tag matched — skip remaining selective entries
+        # Disclosure filtering is fully implemented in the shared production impl. Its
+        # UC-005 scenarios must execute like every other filter scenario; no partial-xfail
+        # escape hatch is permitted here.
+        for tag, substrings, reason in _SELECTIVE_XFAIL:
+            if tag in marker_names:
+                if any(s in item.nodeid for s in substrings):
+                    item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+                break  # tag matched — skip remaining selective entries
 
         # Original rejection scenario missing webhook Given step.
         # Replaced by BR-UC-002-manual-overrides.feature with webhook config.
@@ -866,10 +761,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # live server populates creative_agents (>=DEFAULT_AGENT), so referrals
                     # are present on the wire and the (wire-asserting) Then passes. The marker
                     # stays strict for in-process transports where the registry mock is empty.
-                    break
-                if is_e2e_rest and tag in uc005_filter_e2e_untestable:
-                    # tolerate either outcome — see uc005_filter_e2e_reason (salesagent-7fye)
-                    item.add_marker(pytest.mark.xfail(reason=uc005_filter_e2e_reason, strict=False))
                     break
                 item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
                 break
@@ -2149,20 +2040,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-019-main-snapshot",
             # Transport-agnostic main scenario
             "T-UC-019-main",
-            # #1544 revision/confirmed_at grading that outruns production. These
-            # three were previously in _UC019_WIRED but their Then steps have no
-            # handler, so they graded nothing while appearing wired. The gap:
-            # partition-revision needs Given plumbing to seed an exact persisted
-            # revision (e.g. 5 after four writes) plus a `revision should be <n>`
-            # step; boundary-revision and the invalid partition-confirmed-at rows
-            # grade a SCHEMA_VIOLATION on defective persisted seller data
-            # (revision 0/-1/absent, non-ISO confirmed_at) that get_media_buys
-            # does not emit — it reads persisted rows without re-validating them.
-            # The scalar revision/confirmed_at invariants ARE graded, by
-            # T-UC-019-inv-291-* and T-UC-019-inv-confirmed-at-*.
-            "T-UC-019-partition-revision",
-            "T-UC-019-boundary-revision",
-            "T-UC-019-partition-confirmed-at",
         }
         if marker_names & _UC019_XFAIL_TAGS:
             item.add_marker(
@@ -2239,27 +2116,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         strict=False,
                     )
                 )
-
-        # --- UC-019: HTTP transport xfail for ext-d structural-vs-value gap ---
-        # ext-d (invalid parameter types) is graduated on impl/a2a/mcp (6szx): those
-        # build the request inside the shared adcp_validation_boundary, so a mistyped
-        # media_buy_ids (list expected, string given) surfaces as VALIDATION_ERROR.
-        # The REST route (#1544, absent upstream when ext-d was graduated) binds the
-        # body to GetMediaBuysBody, so FastAPI's RequestValidationError fires at
-        # body-parse time and the app-level handler classifies a wrong-type field as
-        # STRUCTURAL -> INVALID_REQUEST (the documented salesagent-meho value-vs-
-        # structural split; full per-field reclassification is a deferred repo-wide
-        # follow-up). Until that lands, REST/e2e_rest emit INVALID_REQUEST where the
-        # scenario pins VALIDATION_ERROR.
-        if (is_rest or is_e2e_rest) and "T-UC-019-ext-d" in marker_names:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="HTTP transport: mistyped field rejected at FastAPI body-parse as "
-                    "INVALID_REQUEST (structural), not the VALIDATION_ERROR impl/a2a/mcp emit via "
-                    "adcp_validation_boundary — deferred value-vs-structural reclassification (salesagent-meho)",
-                    strict=False,
-                )
-            )
 
         # --- UC-019: parametrization-specific xfails for partially-passing scenarios ---
         # These scenario outlines have some parametrizations that pass (graduated)
@@ -2890,10 +2746,11 @@ _UC019_WIRED: set[str] = {
     "T-UC-019-inv-confirmed-at-present",
     "T-UC-019-inv-confirmed-at-stable",
     "T-UC-019-lifecycle-approval",
-    # NOTE: partition-revision / boundary-revision / partition-confirmed-at are
-    # deliberately NOT wired here — they grade behavior production doesn't yet
-    # implement (see _UC019_XFAIL_TAGS). Wiring them would present them as graded
-    # when their steps don't exist.
+    # Sales Agent-owned overrides replace unreachable corrupted-row examples with
+    # real lifecycle/readback contracts. These require MediaBuyLifecycleEnv.
+    "T-UC-019-partition-revision",
+    "T-UC-019-boundary-revision",
+    "T-UC-019-partition-confirmed-at",
 }
 
 # UC-002 manual-approval scenario wired to MediaBuyCreateEnv (PR #1567 round-2 item 2):

@@ -2812,6 +2812,18 @@ def then_every_revision_at_least_1(ctx: dict) -> None:
     assert not below_minimum, f"media buys with revision below the schema minimum 1: {below_minimum}"
 
 
+@then(parsers.parse('the media buy "{label}" revision should be {revision:d}'))
+def then_media_buy_revision_equals(ctx: dict, label: str, revision: int) -> None:
+    """Assert the real query returns the revision produced by repository mutations."""
+    from tests.bdd.steps._outcome_helpers import require_success_response
+
+    response = require_success_response(ctx, "query")
+    expected_id = resolve_media_buy_id(ctx, label)
+    media_buy = next((buy for buy in response.media_buys if buy.media_buy_id == expected_id), None)
+    assert media_buy is not None, f"media buy {label!r} missing from query response"
+    assert media_buy.revision == revision, f"expected revision {revision}, got {media_buy.revision}"
+
+
 @then("the revision at t1 should equal the revision at t2")
 def then_revision_stable_across_reads(ctx: dict) -> None:
     r1 = _labeled_buy_from_response(ctx, ctx.get("read_t1"), "mb-001").revision
@@ -2830,6 +2842,27 @@ def then_revision_increased_across_reads(ctx: dict) -> None:
 def then_buy_includes_confirmed_at(ctx: dict, label: str) -> None:
     buy = _labeled_buy_from_response(ctx, ctx.get("response"), label)
     assert buy.confirmed_at is not None, f"media buy {label!r} is missing confirmed_at"
+
+
+@then(parsers.parse('the media buy "{label}" confirmed_at should be an ISO 8601 timestamp'))
+def then_buy_confirmed_at_is_iso_timestamp(ctx: dict, label: str) -> None:
+    """Validate the production-created timestamp on the serialized response wire."""
+    from tests.bdd.steps._outcome_helpers import parse_iso_8601, wire_dict
+
+    wire = wire_dict(ctx)
+    media_buys = wire.get("media_buys")
+    assert isinstance(media_buys, list), f"serialized query response missing media_buys: {wire!r}"
+    expected_id = resolve_media_buy_id(ctx, label)
+    buy = next((item for item in media_buys if item.get("media_buy_id") == expected_id), None)
+    assert isinstance(buy, dict), f"media buy {label!r} missing from serialized response: {wire!r}"
+    confirmed_at = buy.get("confirmed_at")
+    assert isinstance(confirmed_at, str), (
+        f"confirmed_at must be an ISO 8601 string on the wire, got {type(confirmed_at).__name__}: {confirmed_at!r}"
+    )
+    parsed = parse_iso_8601(confirmed_at)
+    assert parsed.tzinfo is not None and parsed.utcoffset() is not None, (
+        f"confirmed_at must include a timezone designator, got {confirmed_at!r}"
+    )
 
 
 @then(parsers.parse('the confirmed_at value should be the ISO 8601 timestamp "{timestamp}"'))

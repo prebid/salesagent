@@ -76,7 +76,19 @@ class FinalizeOutcome(StrEnum):
 # ALIVE worker (whose heartbeat renews every ~TTL/3) is never mistaken for abandoned: its
 # lease only ages out after the heartbeat STOPS, and takeover then waits a further full
 # grace. Keep grace ≥ the worst-case runtime if either bound is re-tuned.
-FINALIZE_LEASE_TTL_SECONDS = int(os.getenv("MEDIA_BUY_FINALIZE_LEASE_TTL") or "3600")
+def _positive_duration_from_env(name: str, default: int) -> int:
+    """Read a safety-critical duration and reject values that disable its fence."""
+    raw = os.getenv(name)
+    try:
+        value = default if raw is None else int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer number of seconds") from exc
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer number of seconds")
+    return value
+
+
+FINALIZE_LEASE_TTL_SECONDS = _positive_duration_from_env("MEDIA_BUY_FINALIZE_LEASE_TTL", 3600)
 
 # Cool-down applied to the AMBIGUOUS post-mutation manual transition (#1637 Hole B).
 # ``AdapterPostMutationIncomplete`` means a remote (GAM) order MAY have been created but is
@@ -89,8 +101,9 @@ FINALIZE_LEASE_TTL_SECONDS = int(os.getenv("MEDIA_BUY_FINALIZE_LEASE_TTL") or "3
 # re-approval until the first order is reliably visible. The EFFECTIVE re-approval delay is
 # this cool-down PLUS that abandoned-owner grace. Default 300s comfortably exceeds GAM's
 # read-after-write propagation; override via MEDIA_BUY_FINALIZE_AMBIGUOUS_COOLDOWN. The
-# OWNERSHIP-LOSS path does NOT apply a cool-down: that worker owns no lease to retain.
-FINALIZE_AMBIGUOUS_COOLDOWN_SECONDS = int(os.getenv("MEDIA_BUY_FINALIZE_AMBIGUOUS_COOLDOWN") or "300")
+# The ownership-loss path requests the same cool-down. It normally loses the owner-CAS,
+# but retaining the lease if it wins the heartbeat/publish race fences re-approval too.
+FINALIZE_AMBIGUOUS_COOLDOWN_SECONDS = _positive_duration_from_env("MEDIA_BUY_FINALIZE_AMBIGUOUS_COOLDOWN", 300)
 
 # Named registry of in-flight phase-2 heartbeat threads (#1637). Dead-thread reaping is
 # built in; used only so the renewers are discoverable/joinable, never for correctness.
@@ -488,7 +501,8 @@ def _flag_manual_reconciliation(
     - PROVABLE ownership loss during the adapter run — the phase-2 heartbeat lost the lease
       (a newer owner took over) or the lease provably expired because renewals kept failing,
       so this worker can no longer assert it owns the finalization even though its adapter
-      call ran. No cool-down: the worker owns no lease to retain.
+      call ran. Request the same cool-down: normally the owner-CAS loses, but if it wins
+      the heartbeat/publish race, retaining the lease fences re-approval during reconciliation.
 
     In BOTH cases this worker's adapter RAN, so a duplicate/partial remote graph may exist —
     a durable, OWNERSHIP-INDEPENDENT reconcile incident is recorded either way (#1637 Hole A),
@@ -510,9 +524,22 @@ def _flag_manual_reconciliation(
             session, repo, tenant_id=tenant_id, media_buy_id=media_buy_id, step_id=step_id, reason=reason
         )
         return FinalizeOutcome.NOT_CLAIMED, reason
-    # CAS won. Also record the incident: this worker's adapter ran and could not complete
-    # cleanly, so a partial/duplicate remote graph may exist even though this worker owns the
-    # manual flag. The marker survives a later winner's clean publish.
+    _record_manual_reconciliation(
+        session, repo, tenant_id=tenant_id, media_buy_id=media_buy_id, step_id=step_id, reason=reason
+    )
+    return FinalizeOutcome.RETRYING, f"manual reconciliation required: {reason}"
+
+
+def _record_manual_reconciliation(
+    session: Session,
+    repo: MediaBuyRepository,
+    *,
+    tenant_id: str,
+    media_buy_id: str,
+    step_id: str | None,
+    reason: str,
+) -> None:
+    """Durably expose a manual-reconciliation incident in the current transaction."""
     repo.record_finalize_reconcile_incident(media_buy_id, reason)
     session.commit()
     logger.error(
@@ -522,7 +549,6 @@ def _flag_manual_reconciliation(
         f"(preferred) or clear BOTH flags to let the reconciler retry: UPDATE media_buys SET "
         f"finalize_recovery_mode = NULL, finalize_adapter_invoked_at = NULL WHERE media_buy_id = '{media_buy_id}'."
     )
-    return FinalizeOutcome.RETRYING, f"manual reconciliation required: {reason}"
 
 
 def _run_adapter_and_finalize(
@@ -653,9 +679,9 @@ def _run_adapter_and_finalize(
     # a duplicate/partial remote graph may exist while another owner runs concurrently. Fail
     # SAFE to manual reconciliation, exactly like AdapterPostMutationIncomplete.
     if ownership_lost.is_set():
-        # No cool-down here: this worker no longer owns the lease (a newer owner took over, or
-        # the lease provably expired), so there is nothing to retain — the owner-CAS below will
-        # fail and the incident is recorded ownership-independently (#1637 Hole A).
+        # Retain the same cool-down as the other ambiguous post-mutation outcome. Normally the
+        # owner CAS below loses, but if it wins in the heartbeat/publish race the lease must stay
+        # fenced while a possibly duplicated remote graph is reconciled.
         return _flag_manual_reconciliation(
             session,
             repo,
@@ -664,6 +690,7 @@ def _run_adapter_and_finalize(
             step_id=step_id,
             lease_id=lease_id,
             reason="finalization lease ownership was lost while the adapter was running",
+            cooldown_seconds=FINALIZE_AMBIGUOUS_COOLDOWN_SECONDS,
         )
     if not success:
         failed = repo.update_status_computed(
@@ -797,16 +824,16 @@ def resume_finalizing_media_buy(
             replayable = False
         if not replayable:
             if repo.set_finalize_recovery_manual(media_buy_id):
-                session.commit()
-                logger.error(
-                    f"Media buy {media_buy_id} (tenant {tenant_id}, step {step_id}) crashed mid-finalization "
-                    f"AFTER its adapter was invoked; the adapter does not support full create replay, so the "
-                    f"remote state may be partial. Marked finalize_recovery_mode=manual_required — the "
-                    f"preferred remediation is to reconcile the remote state (remove/archive the partial "
-                    f"order so a fresh create is clean, or complete it and cancel the buy) and then "
-                    f"RE-APPROVE the buy; alternatively clear BOTH flags to let the reconciler retry: "
-                    f"UPDATE media_buys SET finalize_recovery_mode = NULL, finalize_adapter_invoked_at = NULL "
-                    f"WHERE media_buy_id = '{media_buy_id}'."
+                _record_manual_reconciliation(
+                    session,
+                    repo,
+                    tenant_id=tenant_id,
+                    media_buy_id=media_buy_id,
+                    step_id=step_id,
+                    reason=(
+                        "crash after adapter invocation on a non-replayable adapter; "
+                        "the remote finalization graph may be partial"
+                    ),
                 )
             else:
                 session.rollback()

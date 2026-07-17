@@ -66,8 +66,11 @@ def _call_via(
 
     try:
         result = env.call_via(t, **kwargs)
+        ctx["result"] = result
         if result.is_error:
             ctx["error"] = result.error
+            ctx["wire_error_envelope"] = result.wire_error_envelope
+            ctx["synthesized_error_envelope"] = result.synthesized_error_envelope
         else:
             ctx["response"] = result.payload
             # Real serialized wire (REST/A2A/MCP); None on IMPL — surfaced for
@@ -203,6 +206,12 @@ def when_request_type_filter(ctx: dict, fmt_type: str) -> None:
     _call(ctx)
 
 
+@when(parsers.parse('the Buyer Agent submits unsupported media-buy type field "{fmt_type}"'))
+def when_submit_unsupported_media_buy_type_field(ctx: dict, fmt_type: str) -> None:
+    """Exercise the real boundary: type is not a media-buy request field."""
+    _call_via(ctx, ctx["transport"], raw_params={"type": fmt_type})
+
+
 # ── Filter: format_ids ───────────────────────────────────────────────
 
 
@@ -265,25 +274,13 @@ def when_request_name_search(ctx: dict, search: str) -> None:
 @when(parsers.parse("the Buyer Agent requests formats with disclosure_positions filter {filter_value}"))
 def when_request_disclosure_positions(ctx: dict, filter_value: str) -> None:
     parsed = json.loads(filter_value)
-    try:
-        req = ListCreativeFormatsRequest(disclosure_positions=parsed)
-        # Stash the constructed request so dedup (uniqueItems restoration, SDK #971)
-        # can be asserted at the boundary independent of the wire response.
-        ctx["dispatched_request"] = req
-        _call(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    _call_via(ctx, ctx["transport"], raw_params={"disclosure_positions": parsed})
 
 
 @when(parsers.parse("the Buyer Agent requests formats with disclosure_persistence filter {filter_value}"))
 def when_request_disclosure_persistence(ctx: dict, filter_value: str) -> None:
     parsed = json.loads(filter_value)
-    try:
-        req = ListCreativeFormatsRequest(disclosure_persistence=parsed)
-        ctx["dispatched_request"] = req
-        _call(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    _call_via(ctx, ctx["transport"], raw_params={"disclosure_persistence": parsed})
 
 
 # ── Filter: output_format_ids ────────────────────────────────────────

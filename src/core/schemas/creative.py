@@ -45,6 +45,7 @@ from adcp.types.generated_poc.creative.sync_creatives_response import (
 from pydantic import (
     ConfigDict,
     Field,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -516,24 +517,16 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
         return msg
 
 
-def _coerce_to_unique_enum_list(value: list[Any] | None) -> list[Any] | None:
-    """Order-preserving silent dedup mirroring the SDK's ``coerce_to_unique_enum_list``.
+def _validate_unique_enum_list(value: list[Any] | None, field_name: str) -> list[Any] | None:
+    """Enforce the authoritative schema's ``uniqueItems: true`` constraint.
 
-    The authoritative AdCP 3.1.1 list-creative-formats-request schema marks both
-    ``disclosure_positions`` and ``disclosure_persistence`` with ``uniqueItems: true``,
-    but datamodel-code-generator drops that constraint when generating the pinned
-    ``adcp==6.6.0`` models (verified: duplicate enum values are accepted un-deduped).
-    The SDK team's official triage of adcontextprotocol/adcp-client-python#971 confirms
-    this is a real codegen bug (not a spec change) and fixes it upstream with an
-    order-preserving silent dedup (``dict.fromkeys``), which is non-breaking.
-
-    This mirrors that upstream fix at our request boundary pending the SDK release:
-    duplicates are silently removed, first-seen order preserved, and the request
-    still succeeds. ``dict.fromkeys`` is order-preserving on Python 3.7+.
+    ``adcp==6.6.0`` omits this JSON-Schema constraint during code generation, but
+    the pinned AdCP 3.1.1 request schema remains authoritative: duplicate values
+    are invalid input, not a request the seller may silently rewrite.
     """
-    if value is None:
-        return value
-    return list(dict.fromkeys(value))
+    if value is not None and len(set(value)) != len(value):
+        raise ValueError(f"{field_name} must not contain duplicate values")
+    return value
 
 
 class ListCreativeFormatsRequest(LibraryListCreativeFormatsRequest):
@@ -558,13 +551,9 @@ class ListCreativeFormatsRequest(LibraryListCreativeFormatsRequest):
 
     @field_validator("disclosure_positions", "disclosure_persistence")
     @classmethod
-    def _dedup_unique_disclosure_filters(cls, value: list[Any] | None) -> list[Any] | None:
-        """Restore the AdCP 3.1.1 ``uniqueItems: true`` intent dropped by SDK codegen.
-
-        Mirrors the SDK's order-preserving silent dedup fix for
-        adcontextprotocol/adcp-client-python#971 on both disclosure filter fields.
-        """
-        return _coerce_to_unique_enum_list(value)
+    def _validate_unique_disclosure_filters(cls, value: list[Any] | None, info: ValidationInfo) -> list[Any] | None:
+        """Restore the AdCP 3.1.1 ``uniqueItems: true`` validation SDK codegen dropped."""
+        return _validate_unique_enum_list(value, info.field_name or "disclosure filter")
 
 
 class ListCreativeFormatsResponse(NestedModelSerializerMixin, LibraryListCreativeFormatsResponse):

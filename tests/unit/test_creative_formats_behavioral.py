@@ -185,6 +185,48 @@ class TestTypeFilterIsCreativeAgentRoleBoundary:
         assert result == []
 
 
+class TestDisclosureFilters:
+    """UC-005 disclosure filters use the authoritative AND-match semantics."""
+
+    def test_positions_match_structured_or_legacy_capabilities(self):
+        from adcp.types.generated_poc.core.format import DisclosureCapability
+
+        structured = _make_format("structured", "Structured")
+        structured.disclosure_capabilities = [
+            DisclosureCapability(position="prominent", persistence=["continuous"]),
+            DisclosureCapability(position="footer", persistence=["initial"]),
+        ]
+        legacy = _make_format("legacy", "Legacy")
+        legacy.supported_disclosure_positions = ["prominent", "footer"]
+        partial = _make_format("partial", "Partial")
+        partial.supported_disclosure_positions = ["prominent"]
+
+        result = _call_impl(
+            [structured, legacy, partial],
+            ListCreativeFormatsRequest(disclosure_positions=["prominent", "footer"]),
+        )
+
+        assert [format_.format_id.id for format_ in result] == ["legacy", "structured"]
+
+    def test_persistence_modes_may_be_satisfied_by_different_positions(self):
+        from adcp.types.generated_poc.core.format import DisclosureCapability
+
+        combined = _make_format("combined", "Combined")
+        combined.disclosure_capabilities = [
+            DisclosureCapability(position="prominent", persistence=["continuous"]),
+            DisclosureCapability(position="footer", persistence=["initial"]),
+        ]
+        partial = _make_format("partial", "Partial")
+        partial.disclosure_capabilities = [DisclosureCapability(position="prominent", persistence=["continuous"])]
+
+        result = _call_impl(
+            [combined, partial],
+            ListCreativeFormatsRequest(disclosure_persistence=["continuous", "initial"]),
+        )
+
+        assert [format_.format_id.id for format_ in result] == ["combined"]
+
+
 # ---------------------------------------------------------------------------
 # MEDIUM_RISK: Group asset filtering — T-UC-005-inv4-group
 # ---------------------------------------------------------------------------

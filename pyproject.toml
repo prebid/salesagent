@@ -9,6 +9,7 @@ dependencies = [
     "a2wsgi>=1.10.0",
     "adcp==6.6.0",  # exact pin — 6.6.0 (latest stable); bump WIP, see docs/adcp-spec-version.md
     "fastmcp>=3.2.0,<3.3.0", # 3.3.0 split fastmcp-slim[server] from the monolith (breaking Context/Middleware imports); stay on 3.2.x
+    "mcp>=1.28.1",  # CVE-2026-59950; transitive via fastmcp
     "google-cloud-iam>=2.19.1",
     "rich>=13.7.1",
     "google-ads>=24.1.0",

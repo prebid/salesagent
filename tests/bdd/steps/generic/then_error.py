@@ -73,6 +73,15 @@ def _wire_error_object(ctx: dict) -> dict | None:
     return envelope.get("adcp_error") or {}
 
 
+def _wire_message(ctx: dict) -> str | None:
+    """Return the buyer-facing error message when a wire envelope exists."""
+    error = _wire_error_object(ctx)
+    if error is None:
+        return None
+    message = error.get("message")
+    return str(message) if message is not None else None
+
+
 def _get_error_code(error: object) -> str:
     """Extract error code from an exception or Error model.
 
@@ -288,11 +297,14 @@ def then_error_code(ctx: dict, code: str) -> None:
 
 @then(parsers.parse('the error message should contain "{text}"'))
 def then_error_message_contains(ctx: dict, text: str) -> None:
-    """Assert error message contains the given text (case-insensitive)."""
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    msg = _get_error_message(error).lower()
-    assert text.lower() in msg, f"Expected '{text}' in error message: {_get_error_message(error)}"
+    """Assert buyer-facing error message contains text, wire-first."""
+    message = _wire_message(ctx)
+    if message is None:
+        error = ctx.get("error")
+        assert error is not None, "No error recorded in ctx"
+        message = _get_error_message(error)
+    msg = message.lower()
+    assert text.lower() in msg, f"Expected '{text}' in error message: {message}"
 
 
 @then(parsers.parse('the suggestion should contain "{text}"'))
@@ -383,11 +395,46 @@ def then_error_min_items(ctx: dict) -> None:
 
 @then("the error message should indicate duplicate values are not allowed")
 def then_error_duplicates(ctx: dict) -> None:
-    """Assert error message mentions duplicate values."""
+    """Assert duplicate rejection on the buyer-facing wire envelope when present."""
+    message = _wire_message(ctx)
+    if message is None:
+        from tests.harness.transport import Transport
+
+        transport = ctx.get("transport")
+        if transport not in (None, Transport.IMPL):
+            raise AssertionError(f"{transport}: wire error envelope missing — cannot grade duplicate rejection")
+        error = ctx.get("error")
+        assert error is not None, "No wire envelope or reconstructed error recorded in ctx"
+        message = _get_error_message(error)
+    assert "duplicate" in message.lower(), f"Expected 'duplicate' in error message: {message}"
+
+
+def _assert_validation_wire_error(ctx: dict, *, message_substr: str, label: str) -> None:
+    """Assert a validation failure through the canonical wire oracle or IMPL seam."""
+    from tests.harness.transport import Transport
+
+    result = ctx.get("result")
+    transport = ctx.get("transport")
+    if transport not in (None, Transport.IMPL):
+        assert result is not None, f"{transport}: transport result missing"
+        result.assert_wire_error("VALIDATION_ERROR", message_substr=message_substr)
+        return
     error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    msg = _get_error_message(error).lower()
-    assert "duplicate" in msg, f"Expected 'duplicate' in error message: {_get_error_message(error)}"
+    assert error is not None, f"IMPL {label} request did not fail"
+    assert _get_error_code(error) == "VALIDATION_ERROR"
+    assert message_substr in _get_error_message(error).lower()
+
+
+@then("the duplicate request should fail with a VALIDATION_ERROR wire envelope")
+def then_duplicate_request_wire_error(ctx: dict) -> None:
+    """Assert duplicate validation through the canonical transport error oracle."""
+    _assert_validation_wire_error(ctx, message_substr="duplicate", label="duplicate")
+
+
+@then("the unsupported type request should fail with a VALIDATION_ERROR wire envelope")
+def then_unsupported_type_request_wire_error(ctx: dict) -> None:
+    """Assert an unsupported raw field through the canonical transport error oracle."""
+    _assert_validation_wire_error(ctx, message_substr="type", label="unsupported type")
 
 
 @then("the error message should indicate FormatId must include agent_url and id")
