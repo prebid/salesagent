@@ -304,6 +304,25 @@ class TestMCPBoundaryAdCPErrorTranslation:
         )
 
 
+def _uncovered_correctable_targets(registry, sanitized_by_code, internal_codes, standard_codes):
+    """Registry entries whose CLIENT-CORRECTABLE target code has no ``sanitized_by_code`` entry.
+
+    Pure over its inputs (not the module globals) so the same logic grades both the real
+    ``_BUILTIN_NORMALIZATION`` (must be empty) and a known-bad synthetic registry (must be
+    non-empty). Reads each entry's ``target_class`` — the 2nd tuple element — so it covers EVERY
+    normalizer, including a SPECIAL one with a custom structured factory, not only the plain
+    ``target_class(str(exc))`` entries. Internal-bucket / non-standard targets are exempt.
+    """
+    uncovered = []
+    for _exc_type, target_class, _factory in registry:
+        wire_code = target_class("x").wire_error_code
+        if wire_code in internal_codes or wire_code not in standard_codes:
+            continue
+        if wire_code not in sanitized_by_code:
+            uncovered.append((target_class.__name__, wire_code))
+    return uncovered
+
+
 class TestSafeAdcpErrorSuggestionMatchesRecovery:
     """``safe_adcp_error``'s sanitized suggestion must not contradict the preserved recovery.
 
@@ -436,11 +455,12 @@ class TestSafeAdcpErrorSuggestionMatchesRecovery:
     def test_sanitized_category_registry_covers_all_correctable_builtin_targets(self):
         """Completeness guard reconciling ``_BUILTIN_NORMALIZATION`` with ``_SANITIZED_BY_WIRE_CODE``.
 
-        Every raw built-in that normalizes to a CLIENT-CORRECTABLE standard wire code MUST have a
-        category ``(message, suggestion)`` entry — otherwise a future mapping (e.g.
-        ``KeyError → AdCPNotFoundError``) would silently fall back to the misleading generic
-        'internal error occurred' message when scrubbed. Internal-bucket / non-standard targets are
-        exempt (the generic message is correct there). This is the enforcement the registry lacked.
+        EVERY raw-exception normalizer — including the SPECIAL Pydantic ``ValidationError`` entry
+        with its structured factory — is in the one registry, and each one whose target is a
+        client-correctable standard code must have a category ``(message, suggestion)`` entry.
+        Otherwise a future mapping (e.g. ``KeyError → AdCPNotFoundError``, or another special
+        normalizer) would silently fall back to the misleading generic 'internal error occurred'
+        message when scrubbed. Internal-bucket / non-standard targets are exempt.
         """
         from src.core.exceptions import (
             _BUILTIN_NORMALIZATION,
@@ -449,15 +469,51 @@ class TestSafeAdcpErrorSuggestionMatchesRecovery:
             WIRE_STANDARD_CODES,
         )
 
-        for _exc_type, adcp_class in _BUILTIN_NORMALIZATION:
-            wire_code = adcp_class("x").wire_error_code
-            if wire_code in INTERNAL_WIRE_CODES or wire_code not in WIRE_STANDARD_CODES:
-                continue  # internal/non-standard → generic internal message is correct
-            assert wire_code in _SANITIZED_BY_WIRE_CODE, (
-                f"{adcp_class.__name__} normalizes to client-correctable {wire_code!r}, but "
-                f"_SANITIZED_BY_WIRE_CODE has no entry — a scrubbed built-in would read "
-                f"'An internal error occurred'. Add a category (message, suggestion) for {wire_code!r}."
-            )
+        uncovered = _uncovered_correctable_targets(
+            _BUILTIN_NORMALIZATION, _SANITIZED_BY_WIRE_CODE, INTERNAL_WIRE_CODES, WIRE_STANDARD_CODES
+        )
+        assert uncovered == [], (
+            f"raw-exception normalizers whose client-correctable target lacks a "
+            f"_SANITIZED_BY_WIRE_CODE entry (a scrubbed built-in would read 'An internal error "
+            f"occurred'): {uncovered}. Add a category (message, suggestion) for each code."
+        )
+
+    def test_uncovered_detector_flags_a_special_normalizer(self):
+        """Known-bad self-test: the detector must catch a SPECIAL normalizer (custom structured
+        factory, like the Pydantic branch) whose target code lacks a category entry — not only a
+        plain tuple entry. This is what makes the completeness guard above non-vacuous: without it,
+        a degraded detector that silently skipped custom-factory entries would pass green while a
+        special normalizer restored the misleading internal-error fallback.
+        """
+        from src.core.exceptions import (
+            _SANITIZED_BY_WIRE_CODE,
+            INTERNAL_WIRE_CODES,
+            WIRE_STANDARD_CODES,
+            AdCPNotFoundError,
+            AdCPValidationError,
+        )
+
+        def _special_factory(exc):
+            # Mirrors the Pydantic branch's shape: a custom structured constructor, NOT
+            # ``target_class(str(exc))``.
+            return AdCPNotFoundError("resource missing", field="id", details={"probe": str(exc)})
+
+        # AdCPNotFoundError → wire INVALID_REQUEST: client-correctable, standard, and (correctly)
+        # ABSENT from _SANITIZED_BY_WIRE_CODE today — so a normalizer targeting it must be flagged.
+        assert "INVALID_REQUEST" not in _SANITIZED_BY_WIRE_CODE, "test premise: INVALID_REQUEST is uncovered"
+        known_bad_registry = (
+            (KeyError, AdCPNotFoundError, _special_factory),
+            (ValueError, AdCPValidationError, lambda exc: AdCPValidationError(str(exc))),  # covered control
+        )
+
+        uncovered = _uncovered_correctable_targets(
+            known_bad_registry, _SANITIZED_BY_WIRE_CODE, INTERNAL_WIRE_CODES, WIRE_STANDARD_CODES
+        )
+        assert ("AdCPNotFoundError", "INVALID_REQUEST") in uncovered, (
+            "detector must flag a special-factory normalizer whose correctable target is uncovered"
+        )
+        # The covered control (VALIDATION_ERROR) must NOT be flagged.
+        assert all(code != "VALIDATION_ERROR" for _name, code in uncovered)
 
 
 # ---------------------------------------------------------------------------

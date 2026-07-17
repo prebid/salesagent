@@ -17,7 +17,7 @@ from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
 from pydantic import BaseModel, ValidationError
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping, Sequence
+    from collections.abc import Callable, Iterator, Mapping, Sequence
 
     from adcp.types import ContextObject
 
@@ -1070,17 +1070,33 @@ def build_validation_error_details(errors: Sequence[Mapping[str, Any]]) -> dict[
     }
 
 
-# Ordered registry mapping a raw built-in exception type → the typed AdCPError it normalizes to.
-# The SINGLE SOURCE OF TRUTH for ``normalize_to_adcp_error`` AND the completeness guard
-# (``test_error_boundary_translation`` / ``test_sanitized_category_registry_covers_...``) that pins
-# every CLIENT-CORRECTABLE target code into ``_SANITIZED_BY_WIRE_CODE`` — so a future mapping (e.g.
-# ``KeyError → AdCPNotFoundError``) can't silently fall through to the misleading generic internal
-# message when scrubbed. The Pydantic ``ValidationError`` branch (structured field/details) is
-# handled explicitly BEFORE this loop — it IS-A ``ValueError`` but needs richer construction than
-# the plain ``adcp_class(str(exc))`` form. Order matters: first isinstance match wins.
-_BUILTIN_NORMALIZATION: tuple[tuple[type[Exception], type[AdCPError]], ...] = (
-    (ValueError, AdCPValidationError),
-    (PermissionError, AdCPAuthorizationError),
+def _normalize_pydantic_validation_error(exc: ValidationError) -> AdCPError:
+    """Structured, sanitized ``AdCPValidationError`` from a Pydantic ``ValidationError`` — carries
+    the offending ``field`` path + per-error ``details`` instead of only the rendered message."""
+    errors = exc.errors()
+    return AdCPValidationError(
+        errors[0].get("msg") if errors else "Request failed schema validation",
+        field=first_validation_error_field(exc),
+        suggestion=VALIDATION_ERROR_SUGGESTION,
+        details=build_validation_error_details(errors),
+    )
+
+
+# Ordered registry of EVERY raw-exception → typed-AdCPError normalizer. The SINGLE SOURCE OF TRUTH
+# for ``normalize_to_adcp_error`` AND the completeness guard
+# (``test_sanitized_category_registry_covers_all_correctable_builtin_targets``), which pins every
+# CLIENT-CORRECTABLE target code into ``_SANITIZED_BY_WIRE_CODE`` — so a future mapping (e.g.
+# ``KeyError → AdCPNotFoundError``, or another SPECIAL normalizer) can't silently fall through to
+# the misleading generic internal message when scrubbed. Each entry is
+# ``(builtin_type, target_class, factory)``: ``target_class`` exposes the wire code to the guard,
+# and ``factory`` builds the instance (a plain ``target_class(str(exc))`` OR a custom structured
+# constructor). The Pydantic ``ValidationError`` entry is listed FIRST because it IS-A ``ValueError``
+# and needs the structured factory; first ``isinstance`` match wins.
+_BuiltinNormalizer = tuple[type[Exception], type["AdCPError"], "Callable[[Any], AdCPError]"]
+_BUILTIN_NORMALIZATION: tuple[_BuiltinNormalizer, ...] = (
+    (ValidationError, AdCPValidationError, _normalize_pydantic_validation_error),
+    (ValueError, AdCPValidationError, lambda exc: AdCPValidationError(str(exc))),
+    (PermissionError, AdCPAuthorizationError, lambda exc: AdCPAuthorizationError(str(exc))),
 )
 
 
@@ -1089,27 +1105,16 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
 
     Single source of truth for the wrapping applied at all three transport
     boundaries (MCP, A2A, REST). Already-typed ``AdCPError`` passes through
-    unchanged. Pydantic ``ValidationError`` maps to a structured, sanitized
-    ``AdCPValidationError`` (field + details); other ``ValueError`` instances map to the plain
-    validation error and ``PermissionError`` to ``AdCPAuthorizationError`` (both via
-    ``_BUILTIN_NORMALIZATION``), and anything else wraps in base ``AdCPError`` (INTERNAL_ERROR).
+    unchanged. Every raw-exception normalizer lives in ``_BUILTIN_NORMALIZATION``:
+    Pydantic ``ValidationError`` → a structured, sanitized ``AdCPValidationError`` (field +
+    details); other ``ValueError`` → the plain validation error; ``PermissionError`` →
+    ``AdCPAuthorizationError``. Anything else wraps in base ``AdCPError`` (INTERNAL_ERROR).
     """
     if isinstance(exc, AdCPError):
         return exc
-    if isinstance(exc, ValidationError):
-        # Pydantic schema failure → structured, sanitized validation error. Checked BEFORE the
-        # registry because ``ValidationError`` IS-A ``ValueError``; the plain ``str(exc)`` form
-        # would drop the field/details.
-        errors = exc.errors()
-        return AdCPValidationError(
-            errors[0].get("msg") if errors else "Request failed schema validation",
-            field=first_validation_error_field(exc),
-            suggestion=VALIDATION_ERROR_SUGGESTION,
-            details=build_validation_error_details(errors),
-        )
-    for exc_type, adcp_class in _BUILTIN_NORMALIZATION:
+    for exc_type, _target_class, factory in _BUILTIN_NORMALIZATION:
         if isinstance(exc, exc_type):
-            return adcp_class(str(exc))
+            return factory(exc)
     return AdCPError(str(exc) or type(exc).__name__)
 
 
