@@ -316,24 +316,23 @@ Two separate analyzers can comment on Python PRs:
 | Analyzer | Configured by | Alembic exclusions |
 |----------|---------------|-------------------|
 | **CodeQL** (security workflow) | In-repo [`.github/codeql/codeql-config.yml`](../../.github/codeql/codeql-config.yml) | `paths-ignore: alembic/versions/` — honored |
-| **Code Quality** (`github-code-quality[bot]`) | GitHub org/repo **Advanced Security → Code Quality** settings | **Not** driven by `codeql-config.yml` |
+| **Code Quality** (`github-code-quality[bot]`) | GitHub org/repo **Advanced Security → Code Quality** settings | **Not** driven by `codeql-config.yml`; **path exclusions not available yet** (public preview) |
 
 ### Problem
 
 Code Quality flags alembic module globals (`revision`, `down_revision`, `branch_labels`, `depends_on`) as "Unused global variable". Those globals are Alembic's public migration API — false positives on every migration touch.
 
-### Maintainer action (org/repo settings)
+### Current disposition (2026-07)
 
-Keep Code Quality **enabled** (it catches real issues outside excluded paths) but scope it to mirror CodeQL:
+GitHub Code Quality **does not support path/directory exclusions** today. Org admins cannot mirror `.github/codeql/codeql-config.yml` `paths-ignore` in Code Quality settings — only language selection and runner choice are exposed. GitHub staff have path customization on the roadmap ([community discussion #186446](https://github.com/orgs/community/discussions/186446)).
 
-1. GitHub → **Settings** → **Code security and analysis** → **Code Quality** (org admins: org-level defaults).
-2. Add path exclusions matching `.github/codeql/codeql-config.yml` `paths-ignore`, at minimum:
-   - `alembic/versions/`
-3. After updating scope, dismiss/resolving stale bot comments on open migration PRs.
+**Impact:** bot comments are non-gating (COMMENTED, never a failing check) — comment noise only.
 
-### Verification
+**Options until path exclusion ships:**
 
-- Push touching `alembic/versions/` → zero unused-global comments from `github-code-quality[bot]`.
-- Deliberate quality issue in `src/` → still flagged.
+1. **Wait** (default) — apply `alembic/versions/` exclusion the moment GitHub ships directory customization. Intended scope is already documented here and cross-linked from [`.github/codeql/codeql-config.yml`](../../.github/codeql/codeql-config.yml) via #1491.
+2. **Disable Code Quality for Python** — removes alembic false positives but also drops genuine `src/` findings. All-or-nothing; use only if noise becomes intolerable.
+
+Do **not** hunt org settings for a path-exclusion checkbox that does not exist yet.
 
 Track: [#1422](https://github.com/prebid/salesagent/issues/1422).

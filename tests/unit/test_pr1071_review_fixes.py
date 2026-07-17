@@ -48,14 +48,16 @@ class TestDeliveryLoopErrorHandling:
 
         # Create two mock media buys: one good, one that will error
         good_buy = MagicMock()
+        good_buy.status = "active"
+        good_buy.is_paused = False
+        good_buy.start_time = None
+        good_buy.end_time = None
         good_buy.start_date = date.today() - timedelta(days=5)
         good_buy.end_date = date.today() + timedelta(days=5)
         good_buy.budget = "1000.00"
         good_buy.raw_request = {
-            "buyer_ref": "buyer1",
             "packages": [{"package_id": "pkg1", "product_id": "prod1"}],
         }
-        good_buy.buyer_ref = "buyer1"
 
         bad_buy = MagicMock()
         # This will raise when accessed in the loop (e.g., start_date raises)

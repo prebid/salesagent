@@ -81,7 +81,6 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
     def add_buy(
         self,
         media_buy_id: str = "mb_001",
-        buyer_ref: str | None = "ref_001",
         start_date: date = date(2025, 1, 1),
         end_date: date = date(2027, 12, 31),
         budget: float = 10000.0,
@@ -101,7 +100,6 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
         """
         buy = MagicMock()
         buy.media_buy_id = media_buy_id
-        buy.buyer_ref = buyer_ref
         buy.start_date = start_date
         buy.end_date = end_date
         buy.start_time = None
@@ -111,7 +109,6 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
         buy.is_paused = is_paused
         buy.status = status
         buy.raw_request = raw_request or {
-            "buyer_ref": buyer_ref,
             "packages": [{"package_id": "pkg_001", "product_id": "prod_001"}],
         }
         self._buys.append(buy)

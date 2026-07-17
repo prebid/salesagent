@@ -23,19 +23,15 @@ AdCPValidationError raised directly.
 
 from __future__ import annotations
 
-import asyncio
-import json
 import uuid
 from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
 
 import pytest
-from fastmcp import Client
 
-from src.core.main import mcp
 from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape
 from tests.helpers.adcp_factories import create_test_package_request_dict
+from tests.helpers.mcp_envelope_capture import call_mcp_tool_capturing_envelope
 from tests.integration.conftest import seed_error_test_tenant
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -93,7 +89,7 @@ class TestMcpWireErrorEnvelope:
         """
         identity = PrincipalFactory.make_identity(protocol="mcp")
 
-        is_error, envelope = self._call_mcp_tool_capturing_envelope(
+        is_error, envelope = call_mcp_tool_capturing_envelope(
             "update_media_buy",
             {
                 "media_buy_id": "mb_does_not_exist_mcp_wire",
@@ -118,36 +114,6 @@ class TestMcpWireErrorEnvelope:
         single_error_msg = "errors[0].message must be byte-identical to adcp_error.message in single-error case"
         assert envelope["errors"][0]["message"] == envelope["adcp_error"]["message"], single_error_msg
 
-    def _call_mcp_tool_capturing_envelope(self, tool_name: str, params: dict, identity) -> tuple[bool, dict | None]:
-        """Shared helper: invoke an MCP tool and return (is_error, parsed_envelope).
-
-        Single source of truth for the "Client(mcp) → patch identity → call_tool →
-        parse content[0].text as JSON envelope" pattern used by every wire test.
-        Returns ``None`` envelope when the result lacks content (caller asserts
-        that's not the case).
-        """
-
-        async def _call() -> tuple[bool, str | None]:
-            with patch(
-                "src.core.mcp_auth_middleware.resolve_identity_from_context",
-                return_value=identity,
-            ):
-                async with Client(mcp) as client:
-                    result = await client.call_tool(tool_name, params, raise_on_error=False)
-                    if not result.content:
-                        return result.is_error, None
-                    text = None
-                    for c in result.content:
-                        if hasattr(c, "text"):
-                            text = c.text
-                            break
-                    return result.is_error, text
-
-        is_error, envelope_text = asyncio.run(_call())
-        if envelope_text is None:
-            return is_error, None
-        return is_error, json.loads(envelope_text)
-
     def test_create_media_buy_budget_too_low_emits_envelope_on_wire(self, mcp_real_tenant_setup):
         """Production BUDGET_TOO_LOW validator surfaces as a spec two-layer envelope on the wire.
 
@@ -169,7 +135,7 @@ class TestMcpWireErrorEnvelope:
         start_time = (datetime.now(UTC) + timedelta(days=1)).isoformat()
         end_time = (datetime.now(UTC) + timedelta(days=31)).isoformat()
 
-        is_error, envelope = self._call_mcp_tool_capturing_envelope(
+        is_error, envelope = call_mcp_tool_capturing_envelope(
             "create_media_buy",
             {
                 "brand": {"domain": "wiretest.example"},
@@ -206,7 +172,7 @@ class TestMcpWireErrorEnvelope:
         """
         identity = mcp_real_tenant_setup
 
-        is_error, envelope = self._call_mcp_tool_capturing_envelope(
+        is_error, envelope = call_mcp_tool_capturing_envelope(
             "create_media_buy",
             {
                 "brand": {"domain": "wiretest.example"},
@@ -232,18 +198,18 @@ class TestMcpWireErrorEnvelope:
         assert "past" in msg_lower or "start" in msg_lower, past_or_start_msg
 
     def test_get_media_buy_delivery_missing_identity_emits_auth_envelope_on_wire(self, integration_db):
-        """Missing identity in get_media_buy_delivery surfaces AUTH_TOKEN_INVALID on the MCP wire.
+        """Missing identity in get_media_buy_delivery surfaces AUTH_REQUIRED on the MCP wire.
 
         Flow:
             Client(mcp).call_tool("get_media_buy_delivery", {...}) with identity=None
               → MCP wrapper resolve_identity returns None
-              → _get_media_buy_delivery_impl raises AdCPAuthRequiredError("Identity is required")
-              → AdCPAuthRequiredError carries error_code="AUTH_TOKEN_INVALID" (passthrough STANDARD code)
+              → _get_media_buy_delivery_impl raises AdCPAuthRequiredError("Authentication required...")
+              → AdCPAuthRequiredError carries error_code="AUTH_REQUIRED" (passthrough STANDARD code)
               → with_error_logging → _translate_to_tool_error → wire envelope
 
-        AUTH_TOKEN_INVALID is a STANDARD spec code — passes through unchanged.
+        AUTH_REQUIRED is a STANDARD spec code — passes through unchanged.
         """
-        is_error, envelope = self._call_mcp_tool_capturing_envelope(
+        is_error, envelope = call_mcp_tool_capturing_envelope(
             "get_media_buy_delivery",
             {"media_buy_ids": ["any_id"]},
             identity=None,
@@ -252,10 +218,9 @@ class TestMcpWireErrorEnvelope:
         assert is_error, "Missing identity must produce a tool error"
         assert envelope is not None, "Error must include content text carrying the envelope"
 
-        # AdCPAuthRequiredError -> AUTH_TOKEN_INVALID (AdCP 3.1 spec code, passed through unchanged).
-        # Recovery is terminal for AdCPAuthenticationError: a hardcoded class default,
-        # intentionally set because the 3.1 storyboards grade the error code, not the recovery class.
-        assert_envelope_shape(envelope, "AUTH_TOKEN_INVALID", recovery="terminal")
+        # AdCPAuthRequiredError -> AUTH_REQUIRED (AdCP 3.1 spec code, passed through unchanged).
+        # Recovery is correctable per the pinned error-code enum (#1417).
+        assert_envelope_shape(envelope, "AUTH_REQUIRED", recovery="correctable")
         assert "identity" in envelope["adcp_error"]["message"].lower() or (
             "auth" in envelope["adcp_error"]["message"].lower()
         ), f"Envelope message must mention identity/auth, got: {envelope['adcp_error']['message']}"
@@ -283,7 +248,7 @@ class TestMcpWireErrorEnvelope:
             protocol="mcp",
         )
 
-        is_error, envelope = self._call_mcp_tool_capturing_envelope(
+        is_error, envelope = call_mcp_tool_capturing_envelope(
             "get_media_buys",
             {"account_id": "acc_unsupported_wire_test"},
             identity,

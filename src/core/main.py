@@ -77,31 +77,65 @@ except (RuntimeError, Exception) as e:
 from contextlib import asynccontextmanager
 
 
+def _background_schedulers_enabled() -> bool:
+    """Whether to start the background schedulers on app startup.
+
+    ``ADCP_RUN_BACKGROUND_SCHEDULERS`` is a **test-only** knob that defaults to
+    ENABLED (schedulers run in production unless the value is exactly ``"false"``,
+    read at runtime). The test harness sets it to ``false`` because the schedulers
+    run a batch immediately on startup, on the *real* wall clock, and mutate
+    media-buy status rows — which silently rewrites the rows a test just seeded
+    (e.g. promoting a seeded ``pending_start`` buy to ``active`` before the
+    assertion runs). It is NOT an operator control: disabling it in production
+    stops automatic pending->active->completed status transitions and delivery
+    webhooks, so an accidental disable is logged at WARNING (below) to make it
+    visible in production logs.
+    """
+    import os
+
+    return os.getenv("ADCP_RUN_BACKGROUND_SCHEDULERS", "true").lower() != "false"
+
+
 # Lifespan context manager for FastMCP startup/shutdown
 @asynccontextmanager
 async def lifespan_context(app):
     """Handle application startup and shutdown."""
-    # Startup: Initialize delivery webhook scheduler
-    from src.services.delivery_webhook_scheduler import start_delivery_webhook_scheduler
+    schedulers_enabled = _background_schedulers_enabled()
+    if not schedulers_enabled:
+        # WARNING, not INFO: this is a test-only knob (see
+        # _background_schedulers_enabled). If it is ever set in production the
+        # status/webhook schedulers do not run — surface that loudly.
+        logger.warning(
+            "Background schedulers DISABLED via ADCP_RUN_BACKGROUND_SCHEDULERS=false — "
+            "media-buy status transitions and delivery webhooks will NOT run. "
+            "This is a test-only knob; unset it in production."
+        )
 
-    logger.info("Starting delivery webhook scheduler...")
-    try:
-        await start_delivery_webhook_scheduler()
-        logger.info("✅ Delivery webhook scheduler started")
-    except Exception as e:
-        logger.error(f"Failed to start delivery webhook scheduler: {e}", exc_info=True)
+    if schedulers_enabled:
+        # Startup: Initialize delivery webhook scheduler
+        from src.services.delivery_webhook_scheduler import start_delivery_webhook_scheduler
 
-    # Startup: Initialize media buy status scheduler
-    from src.services.media_buy_status_scheduler import start_media_buy_status_scheduler
+        logger.info("Starting delivery webhook scheduler...")
+        try:
+            await start_delivery_webhook_scheduler()
+            logger.info("✅ Delivery webhook scheduler started")
+        except Exception as e:
+            logger.error(f"Failed to start delivery webhook scheduler: {e}", exc_info=True)
 
-    logger.info("Starting media buy status scheduler...")
-    try:
-        await start_media_buy_status_scheduler()
-        logger.info("✅ Media buy status scheduler started")
-    except Exception as e:
-        logger.error(f"Failed to start media buy status scheduler: {e}", exc_info=True)
+        # Startup: Initialize media buy status scheduler
+        from src.services.media_buy_status_scheduler import start_media_buy_status_scheduler
+
+        logger.info("Starting media buy status scheduler...")
+        try:
+            await start_media_buy_status_scheduler()
+            logger.info("✅ Media buy status scheduler started")
+        except Exception as e:
+            logger.error(f"Failed to start media buy status scheduler: {e}", exc_info=True)
 
     yield
+
+    if not schedulers_enabled:
+        return
 
     # Shutdown: Stop media buy status scheduler
     from src.services.media_buy_status_scheduler import stop_media_buy_status_scheduler

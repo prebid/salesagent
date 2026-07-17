@@ -182,3 +182,19 @@ def assert_assets(stored_assets: Mapping, *specs: AssetSpec) -> None:
     """Assert every spec is present in ``stored_assets`` with its declared fields preserved."""
     for spec in specs:
         spec.assert_in(stored_assets)
+
+
+def make_test_banner_creative(**overrides: object) -> CreativeAsset:
+    """Minimal valid banner CreativeAsset (``c_test_1`` / ``display_300x250``) for sync tests.
+
+    Canonical replacement for per-module ``_make_creative_asset`` helpers —
+    see #1430 DRY extraction.
+    """
+    defaults: dict = {
+        "creative_id": "c_test_1",
+        "name": "Test Banner",
+        "format_id": FormatId(agent_url=AGENT_URL, id="display_300x250"),
+        "assets": build_assets(image_spec("banner")),
+    }
+    defaults.update(overrides)
+    return make_creative_asset_minimal(**defaults)

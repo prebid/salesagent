@@ -183,14 +183,14 @@ High impact. The `get-adcp-capabilities-response.json` schema is central to the 
 **And** warnings are logged server-side only
 **Priority:** P1
 
-### Extension C: AUTH_TOKEN_INVALID
+### Extension C: AUTH_REQUIRED
 
 #### Scenario: A2A path -- invalid token provided causes error
 **Obligation ID** UC-010-EXT-C-01
 **Layer** behavioral
 **Given** a Bearer token that is expired/malformed in an A2A request
 **When** the buyer sends `get_adcp_capabilities` via A2A
-**Then** a ServerError with AUTH_TOKEN_INVALID is raised
+**Then** a ServerError with AUTH_REQUIRED is raised
 **And** no capabilities are returned
 **Priority:** P1
 

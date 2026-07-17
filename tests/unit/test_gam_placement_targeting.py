@@ -181,6 +181,12 @@ class TestPlacementIdsValidation:
             mock_package.package_config = {"product_id": "prod_1"}
             mock_uow.media_buys.get_package.return_value = mock_package
 
+            # Creative validation: c1 exists, approved, no format restriction so
+            # the placement check is the one that rejects.
+            mock_creative = MagicMock(creative_id="c1", status="approved", agent_url=None, format="display_300x250")
+            mock_uow.creatives.get_by_ids.return_value = [mock_creative]
+            mock_uow.products.get_by_id.return_value = MagicMock(format_ids=[])
+
             # 3. product lookup via session (not in repo)
             mock_product = MagicMock()
             mock_product.placements = [
@@ -287,6 +293,13 @@ class TestPlacementIdsValidation:
             mock_package = MagicMock()
             mock_package.package_config = {"product_id": "prod_no_placements"}
             mock_uow.media_buys.get_package_or_raise.return_value = mock_package
+            mock_uow.media_buys.get_package.return_value = mock_package
+
+            # Creative validation: c1 exists, approved, no format restriction so
+            # the placement-support check is the one that rejects.
+            mock_creative = MagicMock(creative_id="c1", status="approved", agent_url=None, format="display_300x250")
+            mock_uow.creatives.get_by_ids.return_value = [mock_creative]
+            mock_uow.products.get_by_id.return_value = MagicMock(format_ids=[])
 
             # Mock product with NO placements (empty list) via session
             mock_product = MagicMock()

@@ -8,9 +8,7 @@ Updated for adcp 3.12:
 - brand_manifest replaced by brand (BrandReference with domain field)
 - GetSignalsRequest uses flat countries/destinations fields (DeliverTo removed)
 - ActivateSignalRequest.destinations is required (uses Destination type)
-- buyer_ref removed from CreateMediaBuyRequest and UpdateMediaBuyRequest
-- UpdateMediaBuyRequest.media_buy_id is now required (oneOf validator removed)
-- buyer_refs removed from GetMediaBuyDeliveryRequest
+- UpdateMediaBuyRequest.media_buy_id is now required
 """
 
 import uuid

@@ -32,6 +32,30 @@ from src.services.webhook_delivery_service import (
     CircuitBreaker,
     WebhookDeliveryService,
 )
+from tests.harness._realize import e2e_unsupported, realize_e2e
+
+
+def _persist_simulation_config(env: Any, resp: AdapterGetMediaBuyDeliveryResponse) -> Any:
+    """E2E realization of a delivery-poll adapter response (#1418).
+
+    Persists the same ``AdapterGetMediaBuyDeliveryResponse`` the in-process
+    branch would inject on the MagicMock as a ``DeliverySimulationConfig`` row in
+    the live server's DB, where the server's Mock adapter reads it. Uses the
+    env's server-bound session (rebound to the server engine in e2e mode) via
+    the tenant-scoped repository, then commits so the HTTP request sees it.
+
+    The repository ``upsert`` writes only the simulation-config row (never a
+    tenant row), so the seeded tenant from the discovery-path / Given step is
+    left intact.
+    """
+    from src.core.database.repositories.delivery_simulation import (
+        DeliverySimulationConfigRepository,
+    )
+
+    repo = DeliverySimulationConfigRepository(env._session, env._tenant_id)
+    row = repo.upsert(resp.media_buy_id, resp.model_dump(mode="json"))
+    env._commit_factory_data()
+    return row
 
 
 def make_adapter_update_side_effect() -> Any:
@@ -87,21 +111,22 @@ class DeliveryPollMixin:
             )
         return self._make_default_adapter_response()
 
-    def set_adapter_response(
-        self,
-        media_buy_id: str = "mb_001",
-        impressions: int = 5000,
-        spend: float = 250.0,
-        package_id: str = "pkg_001",
-        clicks: int | None = None,
-        packages: list[dict[str, Any]] | None = None,
-    ) -> None:
-        """Configure adapter to return specific delivery data for a media buy.
+    @staticmethod
+    def _build_adapter_delivery(
+        media_buy_id: str,
+        impressions: int,
+        spend: float,
+        package_id: str,
+        clicks: int | None,
+        packages: list[dict[str, Any]] | None,
+        conversions: float | None = None,
+        conversion_value: float | None = None,
+    ) -> AdapterGetMediaBuyDeliveryResponse:
+        """Normalize set_adapter_response params into the delivery intent.
 
-        For single-package responses, use the scalar parameters (backward compatible).
-        For multi-package responses, pass ``packages`` — a list of dicts with
-        ``package_id``, ``impressions``, and ``spend`` keys. Totals are auto-computed
-        as the sum of per-package values.
+        Shared by both transports: the in-process branch injects this object on
+        the MagicMock; the e2e branch persists its wire dump. Single source of
+        the packages-list-vs-scalars + totals-auto-sum logic.
         """
         if packages is not None:
             by_package = [
@@ -130,8 +155,12 @@ class DeliveryPollMixin:
 
         if clicks is not None:
             totals.clicks = float(clicks)
+        if conversions is not None:
+            totals.conversions = float(conversions)
+        if conversion_value is not None:
+            totals.conversion_value = float(conversion_value)
 
-        self._adapter_responses[media_buy_id] = AdapterGetMediaBuyDeliveryResponse(
+        return AdapterGetMediaBuyDeliveryResponse(
             media_buy_id=media_buy_id,
             reporting_period=ReportingPeriod(
                 start=datetime(2025, 1, 1, tzinfo=UTC),
@@ -142,6 +171,43 @@ class DeliveryPollMixin:
             currency="USD",
         )
 
+    def set_adapter_response(
+        self,
+        media_buy_id: str = "mb_001",
+        impressions: int = 5000,
+        spend: float = 250.0,
+        package_id: str = "pkg_001",
+        clicks: int | None = None,
+        packages: list[dict[str, Any]] | None = None,
+        conversions: float | None = None,
+        conversion_value: float | None = None,
+    ) -> None:
+        """Configure adapter to return specific delivery data for a media buy.
+
+        For single-package responses, use the scalar parameters (backward compatible).
+        For multi-package responses, pass ``packages`` — a list of dicts with
+        ``package_id``, ``impressions``, and ``spend`` keys. Totals are auto-computed
+        as the sum of per-package values. ``conversions`` / ``conversion_value``
+        are totals-level (spec-optional metrics; omitted when None).
+
+        In-process: injects the response on the adapter MagicMock. E2E: persists
+        a ``DeliverySimulationConfig`` row the live server's Mock adapter reads.
+        """
+        resp = self._build_adapter_delivery(
+            media_buy_id, impressions, spend, package_id, clicks, packages, conversions, conversion_value
+        )
+        self._realize_adapter_response(resp)
+
+    @realize_e2e(_persist_simulation_config)
+    def _realize_adapter_response(self, resp: AdapterGetMediaBuyDeliveryResponse) -> None:
+        """In-process realization: register the response on the adapter mock."""
+        self._adapter_responses[resp.media_buy_id] = resp
+
+    @realize_e2e(
+        e2e_unsupported(
+            "adapter fault-injection has no server surface; needs an ADCP_TESTING fault-injection control (#1418)"
+        )
+    )
     def set_adapter_error(self, exception: Exception) -> None:
         """Make the adapter raise the given exception on get_media_buy_delivery."""
         self.mock["adapter"].return_value.get_media_buy_delivery.side_effect = exception  # type: ignore[attr-defined]
@@ -163,9 +229,6 @@ class DeliveryPollMixin:
         _no_identity = object()
         raw_identity = extra.pop("identity", _no_identity)
         identity = self.identity if raw_identity is _no_identity else raw_identity  # type: ignore[attr-defined]
-
-        # buyer_refs removed from GetMediaBuyDeliveryRequest in adcp 3.12
-        extra.pop("buyer_refs", None)
 
         kwargs: dict[str, Any] = {}
         if media_buy_ids is not None:

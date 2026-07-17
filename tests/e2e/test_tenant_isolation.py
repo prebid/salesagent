@@ -23,12 +23,11 @@ explicitly if the call returns data instead of being rejected.
 """
 
 import pytest
-from fastmcp.client import Client
-from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ClientError, FastMCPError, ToolError
 from mcp.shared.exceptions import McpError
 
 from tests.e2e.adcp_request_builder import parse_tool_result
+from tests.e2e.utils import make_mcp_client
 
 # Canonical product-id sets, kept in sync with scripts/setup/init_database_ci.py.
 # ci-test products are defined in init_database_ci.py `products_data` (~line 306).
@@ -74,16 +73,7 @@ class TestMultiTenantIsolation:
 
         Exercises: x-adcp-tenant header -> tenant resolution -> get_products -> tenant-scoped query.
         """
-        headers = {
-            "x-adcp-auth": "ci-test-token",
-            "x-adcp-tenant": "ci-test",
-        }
-        transport = StreamableHttpTransport(
-            url=f"{live_server['mcp']}/mcp/",
-            headers=headers,
-        )
-
-        async with Client(transport=transport) as client:
+        async with make_mcp_client(live_server, token="ci-test-token", tenant="ci-test") as client:
             result = await client.call_tool(
                 "get_products",
                 {"brief": "all products", "context": {"e2e": "tenant_isolation"}},
@@ -113,16 +103,7 @@ class TestMultiTenantIsolation:
 
         Exercises: x-adcp-tenant header -> tenant resolution -> get_products -> tenant-scoped query.
         """
-        headers = {
-            "x-adcp-auth": "iso-test-token",
-            "x-adcp-tenant": "iso-test",
-        }
-        transport = StreamableHttpTransport(
-            url=f"{live_server['mcp']}/mcp/",
-            headers=headers,
-        )
-
-        async with Client(transport=transport) as client:
+        async with make_mcp_client(live_server, token="iso-test-token", tenant="iso-test") as client:
             result = await client.call_tool(
                 "get_products",
                 {"brief": "all products", "context": {"e2e": "tenant_isolation"}},
@@ -160,19 +141,13 @@ class TestMultiTenantIsolation:
         Exercises: x-adcp-tenant header -> tenant resolution -> token validation
         -> cross-tenant rejection.
         """
-        headers = {
-            "x-adcp-auth": "ci-test-token",  # Token belongs to ci-test
-            "x-adcp-tenant": "iso-test",  # But targeting iso-test tenant
-        }
-        transport = StreamableHttpTransport(
-            url=f"{live_server['mcp']}/mcp/",
-            headers=headers,
-        )
+        # Token belongs to ci-test, but the request targets the iso-test tenant.
+        client_cm = make_mcp_client(live_server, token="ci-test-token", tenant="iso-test")
 
         raised: Exception | None = None
         data = None
         try:
-            async with Client(transport=transport) as client:
+            async with client_cm as client:
                 result = await client.call_tool(
                     "get_products",
                     {"brief": "should fail", "context": {"e2e": "cross_tenant"}},

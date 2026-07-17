@@ -15,23 +15,18 @@ Usage:
     pytest tests/e2e/test_adcp_schema_compliance.py --server-url=https://example.com
 """
 
-import json
 from pathlib import Path
-from typing import Any
 
 import pytest
 
+from ._compliance_report import ComplianceReportBase
 from .adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
 
 
-class AdCPComplianceReport:
+class AdCPComplianceReport(ComplianceReportBase):
     """Collects and reports on AdCP protocol compliance."""
 
-    def __init__(self):
-        self.results: list[dict[str, Any]] = []
-        self.passed = 0
-        self.failed = 0
-        self.warnings = 0
+    title = "AdCP SCHEMA COMPLIANCE SUMMARY"
 
     def add_result(self, operation: str, result_type: str, status: str, details: str = ""):
         """Add a compliance test result."""
@@ -51,16 +46,7 @@ class AdCPComplianceReport:
         elif status == "warning":
             self.warnings += 1
 
-    def print_summary(self):
-        """Print a summary of compliance results."""
-        print("\n" + "=" * 60)
-        print("AdCP SCHEMA COMPLIANCE SUMMARY")
-        print("=" * 60)
-        print(f"✓ Passed: {self.passed}")
-        print(f"⚠ Warnings: {self.warnings}")
-        print(f"✗ Failed: {self.failed}")
-        print(f"Total Tests: {len(self.results)}")
-
+    def _print_details(self):
         if self.failed > 0:
             print("\nFAILED TESTS:")
             for result in self.results:
@@ -72,21 +58,6 @@ class AdCPComplianceReport:
             for result in self.results:
                 if result["status"] == "warning":
                     print(f"  ⚠ {result['operation']} ({result['type']}): {result['details']}")
-
-    def save_report(self, filepath: Path):
-        """Save compliance report to JSON file."""
-        report_data = {
-            "summary": {
-                "passed": self.passed,
-                "failed": self.failed,
-                "warnings": self.warnings,
-                "total": len(self.results),
-            },
-            "results": self.results,
-        }
-
-        with open(filepath, "w") as f:
-            json.dump(report_data, f, indent=2)
 
 
 @pytest.fixture

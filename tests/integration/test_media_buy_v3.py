@@ -23,13 +23,22 @@ from sqlalchemy import func, select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, WorkflowStep
 from src.core.database.models import MediaPackage as DBMediaPackage
-from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAuthenticationError,
+    AdCPAuthorizationError,
+    AdCPCapabilityNotSupportedError,
+    AdCPValidationError,
+)
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     UpdateMediaBuyRequest,
 )
 from src.core.testing_hooks import AdCPTestContext
-from tests.integration.media_buy_helpers import _get_tenant_dict, _make_create_request
+from tests.integration.media_buy_helpers import (
+    _get_tenant_dict,
+    _make_create_request,
+    resolve_media_buy_id_from_task,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -221,11 +230,13 @@ class TestCreateMediaBuyCurrencyValidation:
             ],
         )
 
-        with pytest.raises(AdCPValidationError) as excinfo:
+        # Currency support is a seller capability, not a malformed request:
+        # unsupported currency -> UNSUPPORTED_FEATURE (#1417).
+        with pytest.raises(AdCPCapabilityNotSupportedError) as excinfo:
             await _create_media_buy_impl(req=req, identity=identity)
 
         exc = excinfo.value
-        assert exc.error_code == "VALIDATION_ERROR"
+        assert exc.error_code == "UNSUPPORTED_FEATURE"
         msg = exc.message.lower()
         assert "currency" in msg or "eur" in msg
 
@@ -299,8 +310,12 @@ class TestCreateMediaBuyManualApproval:
         result = await _create_media_buy_impl(req=req, identity=identity)
         assert result.status == "submitted"
 
+        # Spec 3.1.1: the submitted response carries task_id (the workflow step id),
+        # not media_buy_id — resolve the persisted buy via the workflow mapping,
+        # exactly as the approval flow does (PR #1567 round-2 item 2).
+        media_buy_id = resolve_media_buy_id_from_task(result.response.task_id)
         with get_db_session() as session:
-            mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == result.response.media_buy_id)).first()
+            mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id)).first()
             assert mb is not None, "Media buy record should exist in DB"
             assert mb.raw_request is not None, "raw_request should be stored"
 
@@ -335,7 +350,9 @@ class TestCreateMediaBuyManualApproval:
         result = await _create_media_buy_impl(req=req, identity=identity)
         assert result.status == "submitted"
 
-        media_buy_id = result.response.media_buy_id
+        # Resolve the buy from the buyer-visible task_id via the workflow
+        # mapping — the submitted response has no media_buy_id (spec 3.1.1).
+        media_buy_id = resolve_media_buy_id_from_task(result.response.task_id)
 
         success, error = execute_approved_media_buy(
             media_buy_id=media_buy_id,
@@ -486,14 +503,19 @@ class TestUpdateMediaBuyCreativeAssignments:
         )
         update_result = _update_media_buy_impl(req=update_req, identity=mb_identity)
 
-        assert not hasattr(update_result, "errors") or not update_result.errors
+        assert not update_result.response.errors
 
     @pytest.mark.asyncio
-    async def test_invalid_placement_ids_rejected(self, mb_tenant, mb_principal, mb_products, mb_identity):
+    async def test_invalid_placement_ids_rejected(
+        self, mb_tenant, mb_principal, mb_products, mb_identity, mb_creatives
+    ):
         """UC-003-CA02: placement_ids not in product rejected.
 
         Covers: UC-003-ALT-UPDATE-CREATIVE-ASSIGNMENTS-03
         Integration equivalent of unit xfail test_invalid_placement_ids_rejected.
+
+        Uses an existing creative (``c1``) so creative validation passes and the
+        placement check is the one that rejects the request.
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -512,7 +534,7 @@ class TestUpdateMediaBuyCreativeAssignments:
                     "package_id": package_id,
                     "creative_assignments": [
                         {
-                            "creative_id": "c_placement_test",
+                            "creative_id": "c1",
                             "placement_ids": ["nonexistent_placement_123"],
                         }
                     ],
@@ -910,6 +932,18 @@ class TestUpdateMediaBuyAdapterError:
         assert result.status == "completed"
         media_buy_id = result.response.media_buy_id
 
+        # Move the buy to 'active' so 'pause' passes the state-machine gate and
+        # actually reaches the adapter — a pending_creatives buy (no creatives)
+        # rejects 'pause' with AdCPGoneError BEFORE any adapter call, so the
+        # network-failure path would never be exercised (#1417).
+        from src.core.database.repositories.uow import MediaBuyUoW
+
+        with MediaBuyUoW(mb_tenant["tenant_id"]) as uow:
+            buy = uow.media_buys.get_by_id(media_buy_id)
+            assert buy is not None
+            buy.status = "active"
+            # MediaBuyUoW auto-commits on clean exit
+
         # Mock adapter to simulate network failure
         with patch("src.core.tools.media_buy_update.get_adapter") as mock_get_adapter:
             mock_adapter = MagicMock()
@@ -922,15 +956,13 @@ class TestUpdateMediaBuyAdapterError:
                 media_buy_id=media_buy_id,
                 paused=True,
             )
-            # _update_media_buy_impl propagates adapter exceptions as-is or returns error
-            # depending on the code path. Test that it either raises or returns error.
-            try:
-                update_result = _update_media_buy_impl(req=update_req, identity=mb_identity)
-                # If it returns, should be an error response
-                assert hasattr(update_result, "errors") and update_result.errors
-            except (ConnectionError, Exception):
-                # Adapter error propagated -- acceptable behavior
-                pass
+            # The pause path calls adapter.update_media_buy() with no local try/except
+            # and _update_media_buy_impl has no outer handler, so the adapter's
+            # ConnectionError propagates to the caller. Assert that deterministically
+            # OUTSIDE any catch-all (#1417: the prior try/except swallowed
+            # both the propagated error and the unreachable assert, making this vacuous).
+            with pytest.raises(ConnectionError, match="Simulated network failure"):
+                _update_media_buy_impl(req=update_req, identity=mb_identity)
 
 
 class TestDeliveryIdentityValidation:
@@ -948,3 +980,90 @@ class TestDeliveryIdentityValidation:
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_nonexistent"])
         with pytest.raises(AdCPAuthenticationError):
             _get_media_buy_delivery_impl(req, identity=None)
+
+
+class TestUpdateMediaBuyMissingPackageId:
+    """UC-003 ext-h: a package update entry lacking package_id (and buyer_ref) is rejected."""
+
+    def test_package_update_without_identifier_is_rejected(self):
+        """UC-003-H01: a package update with no package_id raises INVALID_REQUEST.
+
+        Covers: UC-003-EXT-H-01
+        The request-shape validator (_validate_package_update_shape) enforces
+        PRE-BIZ7 (package XOR identification): a package entry must carry a
+        package_id (or buyer_ref). Missing both raises AdCPInvalidRequestError
+        (wire INVALID_REQUEST). Live wire coverage: BDD @T-UC-003-ext-h.
+        """
+        from src.core.exceptions import AdCPInvalidRequestError
+        from src.core.schemas import UpdateMediaBuyRequest
+
+        with pytest.raises(AdCPInvalidRequestError, match="package_id is required"):
+            UpdateMediaBuyRequest(media_buy_id="mb_x", packages=[{"budget": 5000.0}])
+
+    def test_package_update_with_buyer_ref_but_no_package_id_is_rejected(self):
+        """UC-003-H02: a package update identified by buyer_ref (not package_id) is
+        STILL rejected — buyer_ref is not accepted as a package identifier (gap G38).
+
+        Covers: UC-003-EXT-H-02
+        Distinct input from H-01 (which supplies NEITHER identifier): here buyer_ref
+        IS present but package_id is absent. _validate_package_update_shape checks only
+        ``package_id`` and never resolves the package by buyer_ref, so it raises
+        AdCPInvalidRequestError (wire INVALID_REQUEST). This documents the known gap
+        G38 (docs/test-obligations/UC-003-update-media-buy.md): the update path does
+        not support buyer_ref-based package identification.
+        """
+        from src.core.exceptions import AdCPInvalidRequestError
+        from src.core.schemas import UpdateMediaBuyRequest
+
+        with pytest.raises(AdCPInvalidRequestError, match="package_id is required"):
+            UpdateMediaBuyRequest(media_buy_id="mb_x", packages=[{"buyer_ref": "pkg_ref_1", "budget": 5000.0}])
+
+
+class TestGetMediaBuysStatusIsDateRefined:
+    """get_media_buys date-refines the generic serving state against the flight window (AdCP 3.1 GA).
+
+    Core invariant (GA protocol lifecycle, docs/media-buy/media-buys/lifecycle.mdx):
+    the serving-state transitions are flight-date-driven — `pending_start` before the
+    flight starts, `active` within the window, `completed` after it ends. A past-end
+    'active'-persisted buy reports 'completed' at read time; only terminal/explicit
+    states (paused/rejected/canceled) are returned verbatim. Shared with
+    get_media_buy_delivery via resolve_canonical_status (#1545 supersedes the earlier
+    #1417 persisted-authoritative read; the GA state machine defines active->completed
+    at flight end). This is the SAME answer the update response now gives (both
+    delegate to _compute_status), so the read and write paths agree.
+    """
+
+    def test_past_end_active_buy_reports_completed(self, integration_db):
+        from datetime import date
+
+        from src.core.schemas import GetMediaBuysRequest
+        from src.core.tools.media_buy_list import _get_media_buys_impl
+        from tests.factories import MediaBuyFactory
+        from tests.harness.media_buy_dual import MediaBuyDualEnv
+
+        # MediaBuyDualEnv binds the ORM factory session and provides real ORM
+        # tenant/principal so the seeded buy is owned by the calling identity.
+        with MediaBuyDualEnv() as env:
+            tenant, principal, _product, _ = env.setup_media_buy_data()
+            # Persisted 'active', flight ended years ago (scheduler has not yet run).
+            buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                status="active",
+                start_date=date(2020, 1, 1),
+                end_date=date(2020, 12, 31),
+            )
+            env._commit_factory_data()
+
+            get_req = GetMediaBuysRequest(
+                media_buy_ids=[buy.media_buy_id],
+                status_filter=[MediaBuyStatus.active, MediaBuyStatus.completed],
+            )
+            response = _get_media_buys_impl(get_req, identity=env.identity)
+
+        assert len(response.media_buys) == 1, f"Expected the buy; errors: {response.errors}"
+        assert response.media_buys[0].status == MediaBuyStatus.completed, (
+            "past-end 'active'-persisted buy must date-refine to 'completed' per the GA state "
+            "machine (active->completed at flight end) via the shared resolver, agreeing with "
+            "delivery and the update path, NOT report persisted 'active'"
+        )

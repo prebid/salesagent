@@ -2,7 +2,7 @@
 
 These tests verify the AdCP 2.5 creative management changes:
 1. sync_creatives with creative_ids filter (scoped sync)
-2. list_creatives with media_buy_ids/buyer_refs (plural filters)
+2. list_creatives with media_buy_ids (plural filters)
 3. update_media_buy with package-level creatives (inline upload)
 4. update_media_buy with creative_assignments (weight updates)
 """
@@ -117,7 +117,7 @@ class TestSyncCreativesCreativeIdsFilter:
 
 
 class TestListCreativesPluralFilters:
-    """Test list_creatives media_buy_ids/buyer_refs (AdCP 2.5)."""
+    """Test list_creatives media_buy_ids (AdCP 2.5)."""
 
     def test_creative_filters_accepts_plural_media_buy_ids(self):
         """Test CreativeFilters accepts plural media_buy_ids parameter."""
@@ -135,29 +135,6 @@ class TestListCreativesPluralFilters:
         assert request.filters is not None
         assert hasattr(request.filters, "media_buy_ids")
         assert request.filters.media_buy_ids == ["mb_1", "mb_2", "mb_3"]
-
-    def test_creative_filters_buyer_refs_removed(self):
-        """buyer_refs removed from CreativeFilters in adcp 3.12."""
-        from adcp.types import CreativeFilters as LibraryCreativeFilters
-
-        # buyer_refs is no longer a field on CreativeFilters
-        assert "buyer_refs" not in LibraryCreativeFilters.model_fields
-
-    def test_creative_filters_accepts_both_media_buy_ids_and_buyer_refs(self):
-        """Test CreativeFilters accepts both filter types together."""
-        from adcp.types import CreativeFilters as LibraryCreativeFilters
-
-        from src.core.schemas import ListCreativesRequest
-
-        filters = LibraryCreativeFilters(
-            media_buy_ids=["mb_1", "mb_2"],
-            buyer_refs=["ref_1", "ref_2"],
-        )
-        request = ListCreativesRequest(filters=filters)
-
-        assert request.filters is not None
-        assert request.filters.media_buy_ids == ["mb_1", "mb_2"]
-        assert request.filters.buyer_refs == ["ref_1", "ref_2"]
 
 
 class TestUpdateMediaBuyInlineCreatives:
@@ -293,7 +270,6 @@ class TestAdCP25SchemaCompliance:
 
         # Should have plural fields
         assert "media_buy_ids" in fields, "CreativeFilters should have media_buy_ids (plural)"
-        # buyer_refs removed from CreativeFilters in adcp 3.12
 
 
 # ============================================================================

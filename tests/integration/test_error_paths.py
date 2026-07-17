@@ -287,7 +287,8 @@ class TestRecoveryFieldInErrorResponses:
         cases = [
             (AdCPValidationError("bad"), "correctable"),
             (AdCPRateLimitError("slow"), "transient"),
-            (AdCPBudgetExhaustedError("broke"), "correctable"),
+            # BUDGET_EXHAUSTED recovery is terminal per the pinned enum (#1417).
+            (AdCPBudgetExhaustedError("broke"), "terminal"),
         ]
 
         for exc, expected_recovery in cases:

@@ -89,6 +89,8 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
         ``INTERNAL_CODES``; the helper's defensive wire-code enforcement
         falls back to ``SERVICE_UNAVAILABLE`` so async subscribers only see
         codes from ``STANDARD_ERROR_CODES`` even when the source was untyped.
+        Recovery is transient — the pinned enumMetadata classification of the
+        SERVICE_UNAVAILABLE wire code (salesagent-nr2q).
         """
         cm, mock_update = _new_ctx_manager_with_mocked_update()
 
@@ -98,7 +100,7 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
             "step_abc",
             status="failed",
             error_message="kaboom",
-            response_data=_expected_response_data("SERVICE_UNAVAILABLE", "kaboom", recovery="terminal"),
+            response_data=_expected_response_data("SERVICE_UNAVAILABLE", "kaboom", recovery="transient"),
         )
 
     def test_empty_exception_message_falls_back_to_type_name(self):
@@ -112,7 +114,7 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
             "step_abc",
             status="failed",
             error_message="RuntimeError",
-            response_data=_expected_response_data("SERVICE_UNAVAILABLE", "RuntimeError", recovery="terminal"),
+            response_data=_expected_response_data("SERVICE_UNAVAILABLE", "RuntimeError", recovery="transient"),
         )
 
 

@@ -20,8 +20,8 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps._outcome_helpers import is_e2e
+from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal, seed_account_with_access
 from tests.bdd.steps.generic._dispatch import dispatch_request
-from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 from tests.factories.creative_asset import (
     assert_assets,
     build_assets,
@@ -183,14 +183,9 @@ def _setup_account_by_id(account_id: str, tenant: object, principal: object) -> 
         # Account exists but the test principal has no access — triggers AUTHORIZATION_ERROR
         domain = account_id.replace("_", "-") + ".com"
         other_principal = PrincipalFactory(tenant=tenant)
-        account = AccountFactory(
-            tenant=tenant,
-            account_id=account_id,
-            status="active",
-            brand={"domain": domain},
-            operator=domain,
+        seed_account_with_access(
+            tenant, other_principal, account_id=account_id, status="active", brand_domain=domain, operator=domain
         )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
         return
 
     if status is None:
@@ -200,14 +195,9 @@ def _setup_account_by_id(account_id: str, tenant: object, principal: object) -> 
     # BrandReference domain must match ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]...)$
     # Replace underscores with hyphens for valid domains
     domain = account_id.replace("_", "-") + ".com"
-    account = AccountFactory(
-        tenant=tenant,
-        account_id=account_id,
-        status=status,
-        brand={"domain": domain},
-        operator=domain,
+    seed_account_with_access(
+        tenant, principal, account_id=account_id, status=status, brand_domain=domain, operator=domain
     )
-    AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
 
 
 def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: object, principal: object) -> None:
@@ -216,13 +206,16 @@ def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: obje
     access_denied_domains = {"other-agent.com"}
 
     if brand_domain == "multi.com":
-        # Ambiguous: create 3 accounts with same natural key
+        # Ambiguous: create 3 accounts with same natural key, all accessible to the
+        # requesting agent so ambiguity is genuine FOR THIS AGENT — natural-key
+        # resolution is access-scoped (#1417).
         for i in range(3):
-            AccountFactory(
-                tenant=tenant,
+            seed_account_with_access(
+                tenant,
+                principal,
                 account_id=f"acc-multi-{i}",
                 status="active",
-                brand={"domain": brand_domain},
+                brand_domain=brand_domain,
                 operator=operator,
             )
     elif brand_domain in ("unknown.com",):
@@ -231,24 +224,24 @@ def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: obje
     elif brand_domain in access_denied_domains:
         # Account exists but the test principal has no access — triggers AUTHORIZATION_ERROR
         other_principal = PrincipalFactory(tenant=tenant)
-        account = AccountFactory(
-            tenant=tenant,
+        seed_account_with_access(
+            tenant,
+            other_principal,
             account_id=f"acc-{brand_domain.replace('.', '-')}",
             status="active",
-            brand={"domain": brand_domain},
+            brand_domain=brand_domain,
             operator=operator,
         )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
     else:
         # Single match — create one active account
-        account = AccountFactory(
-            tenant=tenant,
+        seed_account_with_access(
+            tenant,
+            principal,
             account_id=f"acc-{brand_domain.replace('.', '-')}",
             status="active",
-            brand={"domain": brand_domain},
+            brand_domain=brand_domain,
             operator=operator,
         )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -292,8 +285,6 @@ def when_sync_creative(ctx: dict) -> None:
 
 def _ensure_tenant_principal(ctx: dict, env: object) -> None:
     """Create tenant + principal if not already created by a Given step."""
-    from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
-
     ensure_tenant_principal(ctx, env)
 
 
@@ -427,22 +418,16 @@ def then_proceed_with_resolved_account(ctx: dict) -> None:
 def _extract_error_code_and_suggestion(error: object) -> tuple[str | None, str | None]:
     """Return (error_code, suggestion) for either AdCPError or adcp.types.Error.
 
-    - AdCPError: error_code attribute; suggestion lives in details['suggestion'].
-    - adcp.types.Error: code attribute; suggestion is a top-level field.
+    STRICT error.json conformance: ``suggestion`` is a top-level attribute on
+    both shapes — a copy buried in the free-form ``details`` dict is a
+    conformance bug and deliberately does not count (#1417).
     """
     from src.core.exceptions import AdCPError
 
     if isinstance(error, AdCPError):
-        code = error.error_code
-        suggestion = (error.details or {}).get("suggestion") if error.details else None
-        return code, suggestion
+        return error.error_code, error.suggestion
     code = getattr(error, "error_code", None) or getattr(error, "code", None)
-    suggestion = getattr(error, "suggestion", None)
-    if suggestion is None:
-        details = getattr(error, "details", None)
-        if isinstance(details, dict):
-            suggestion = details.get("suggestion")
-    return code, suggestion
+    return code, getattr(error, "suggestion", None)
 
 
 @then(parsers.parse("the error should be {error_code} with suggestion"))
@@ -458,13 +443,18 @@ def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
         "ASSIGNMENT_PACKAGE_ID_REQUIRED",
         "ASSIGNMENT_WEIGHT_BELOW_MINIMUM",
         "ASSIGNMENT_WEIGHT_ABOVE_MAXIMUM",
+        # Idempotency-key length codes — merged from the shadowed duplicate step
+        # def this literal used to have (#1417): production does not
+        # validate idempotency_key length yet.
+        "IDEMPOTENCY_KEY_TOO_SHORT",
+        "IDEMPOTENCY_KEY_TOO_LONG",
     }
 
     error = ctx.get("error")
     if error is None and error_code in _SPEC_PRODUCTION_GAP_CODES:
         pytest.xfail(
-            f"SPEC-PRODUCTION GAP: production does not raise {error_code} for empty/malformed "
-            "assignment entries — spec defines these codes but production silently accepts them"
+            f"SPEC-PRODUCTION GAP: production does not raise {error_code} — "
+            "spec defines this code but production silently accepts the input"
         )
     assert error is not None, f"Expected error {error_code} but none was recorded"
 
@@ -1889,21 +1879,15 @@ def given_buyer_empty_principal_id_in_auth(ctx: dict) -> None:
     """Buyer presents an identity whose principal_id is the empty string.
 
     Sets up the same state as 'the request has an empty principal_id'.
-    Production raises AUTH_TOKEN_INVALID; spec demands AUTH_REQUIRED.
-    The downstream generic Then step ``the error code should be "AUTH_REQUIRED"``
-    performs strict comparison that cannot accommodate this gap without
-    conftest-level xfail for tag T-UC-006-ext-a-empty.
+    Production emits the standard AUTH_REQUIRED for the missing-auth path,
+    matching the spec; the downstream generic Then step
+    ``the error code should be "AUTH_REQUIRED"`` asserts it.
     """
     env = ctx["env"]
     ctx["has_auth"] = False
     ctx["identity"] = PrincipalFactory.make_identity(
         principal_id="",
         tenant_id=env._tenant_id,
-    )
-    pytest.xfail(
-        "SPEC-PRODUCTION GAP: production raises AUTH_TOKEN_INVALID, spec requires AUTH_REQUIRED. "
-        "Generic Then step 'the error code should be \"AUTH_REQUIRED\"' does strict comparison. "
-        "Needs conftest xfail for T-UC-006-ext-a-empty (same gap as T-UC-006-ext-a-rest/mcp)."
     )
 
 
@@ -1934,18 +1918,12 @@ def given_principal_no_associated_tenant(ctx: dict) -> None:
 def _assert_auth_rejection(ctx: dict, expected_code: str) -> None:
     """Assert the sync was rejected with the spec-named auth error code.
 
-    Production raises AdCPAuthenticationError.error_code='AUTH_TOKEN_INVALID'
-    while the spec uses 'AUTH_REQUIRED'. When they differ, xfail with the
-    spec-production gap reason rather than weakening the assertion.
+    Production emits the standard AUTH_REQUIRED for authentication failures,
+    matching the spec.
     """
     error = ctx.get("error")
     assert error is not None, f"Expected {expected_code} error but got response: {ctx.get('response')}"
     actual_code, _ = _extract_error_code_and_suggestion(error)
-    if actual_code != expected_code:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: spec requires error_code '{expected_code}' but production "
-            f"raises '{actual_code}' (AdCPAuthenticationError.error_code='AUTH_TOKEN_INVALID')"
-        )
     assert actual_code == expected_code, (
         f"Expected error code '{expected_code}', got '{actual_code}' ({type(error).__name__}: {error})"
     )
@@ -2139,8 +2117,11 @@ def _promote_creative_errors_to_ctx(ctx: dict, errs: list) -> None:
             self.error_code = code
             self.code = code
             self.message = message
+            # STRICT error.json conformance: suggestion is top-level ONLY —
+            # synthesizing a details copy would feed the exact non-conformant
+            # position the harness must reject (#1417).
             self.suggestion = suggestion
-            self.details = {"suggestion": suggestion} if suggestion else {}
+            self.details: dict = {}
 
         def __str__(self) -> str:
             return self.message
@@ -2689,7 +2670,7 @@ def then_creative_has_approval_workflow_status(ctx: dict) -> None:
     """Assert the creative's status is one of the approval-workflow statuses."""
     _APPROVAL_STATUSES = {"pending_review", "approved", "rejected", "processing", "adaptation_required"}
     result = _get_sync_creative_result(ctx)
-    status = getattr(result, "status", None)
+    status = getattr(result, "internal_status", None)
     if status is None:
         _xfail_if_e2e(ctx)
         creative = _get_creative_from_db(ctx)
@@ -3934,31 +3915,35 @@ def then_workflow_step_created_with_type(ctx: dict, step_type: str) -> None:
 
 @given(parsers.parse('a creative "{creative_id}" exists for principal "{principal_id}" in the tenant'))
 def given_creative_exists_for_principal(ctx: dict, creative_id: str, principal_id: str) -> None:
-    """Pre-seed a creative in the DB keyed by (tenant_id, principal_id, creative_id)."""
-    from sqlalchemy import select
+    """Pre-seed a creative in the DB keyed by (tenant_id, principal_id, creative_id).
 
+    Seeds tenant/principal idempotently: the auth Given only mutates the env
+    identity (no DB writes — the assumption that it seeds rows was never true;
+    surfaced when the dormant BR-RULE-034 scenarios were wired). The named
+    principal may differ from the authenticated one (INV-2 seeds the OTHER
+    principal's creative), so it gets its own get-or-create row.
+    """
     from src.core.database.models import Principal, Tenant
-    from tests.factories import CreativeFactory
+    from tests.factories import CreativeFactory, PrincipalFactory, TenantFactory
+    from tests.factories.core import get_or_create
 
     env = ctx["env"]
-    # The auth step (given_buyer_authenticated_as) already created tenant/principal
-    # via env.identity → _ensure_default_data_for_auth(). Retrieve them from DB
-    # rather than calling _ensure_tenant_principal which would try to create duplicates.
-    if "tenant" not in ctx:
-        with db_session(ctx) as session:
-            tenant = session.scalars(select(Tenant).filter_by(tenant_id=env._tenant_id)).first()
-            assert tenant is not None, f"Tenant {env._tenant_id!r} not found — auth step should have created it"
-            principal = session.scalars(
-                select(Principal).filter_by(principal_id=principal_id, tenant_id=env._tenant_id)
-            ).first()
-            assert principal is not None, f"Principal {principal_id!r} not found — auth step should have created it"
-            ctx["tenant"] = tenant
-            ctx["principal"] = principal
-    tenant = ctx["tenant"]
-    principal = ctx["principal"]
-    assert principal.principal_id == principal_id, (
-        f"Authenticated principal '{principal.principal_id}' != scenario principal '{principal_id}'"
+    tenant = ctx.get("tenant")
+    if tenant is None:
+        tenant = get_or_create(
+            env,
+            Tenant,
+            {"tenant_id": env._tenant_id},
+            lambda: TenantFactory(tenant_id=env._tenant_id),
+        )
+        ctx["tenant"] = tenant
+    principal = get_or_create(
+        env,
+        Principal,
+        {"principal_id": principal_id, "tenant_id": tenant.tenant_id},
+        lambda: PrincipalFactory(tenant=tenant, principal_id=principal_id),
     )
+    ctx.setdefault("principal", principal)
     creative = CreativeFactory(
         tenant=tenant,
         principal=principal,
@@ -4483,35 +4468,6 @@ def then_request_proceed_normally(ctx: dict) -> None:
     assert has_products or has_creatives, (
         f"Expected a successful response with products or creatives, got {type(resp).__name__}"
     )
-
-
-@then(parsers.parse("the error should be {error_code} with suggestion"))
-def then_idempotency_error_with_suggestion(ctx: dict, error_code: str) -> None:
-    """Assert idempotency_key validation error with the specified code and a suggestion.
-
-    Delegates to the existing then_error_code_with_suggestion for known codes.
-    For idempotency-specific codes (not yet in production), uses SPEC-PRODUCTION GAP.
-    """
-    _IDEMPOTENCY_CODES = {
-        "IDEMPOTENCY_KEY_TOO_SHORT",
-        "IDEMPOTENCY_KEY_TOO_LONG",
-    }
-    if error_code in _IDEMPOTENCY_CODES:
-        error = ctx.get("error")
-        if error is None:
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: production does not validate idempotency_key length. "
-                f"Spec requires {error_code} but no error was raised."
-            )
-        actual_code, suggestion = _extract_error_code_and_suggestion(error)
-        if actual_code != error_code:
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: expected {error_code}, got '{actual_code}'. "
-                f"Production may not enforce idempotency_key length constraints."
-            )
-        assert suggestion, f"Expected suggestion on {error_code}, got {suggestion!r}"
-    else:
-        then_error_code_with_suggestion(ctx, error_code)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -5569,48 +5525,15 @@ def then_response_includes_assignment_errors(ctx: dict) -> None:
 
 @given(parsers.parse('a creative "{creative_id}" exists for principal "{principal_id}" in the same tenant'))
 def given_creative_exists_for_principal_same_tenant(ctx: dict, creative_id: str, principal_id: str) -> None:
-    """Pre-seed a creative for a different principal in the same tenant.
+    """Pre-seed a creative for a (possibly different) principal in the same tenant.
 
     Used by cross-principal isolation tests (BR-RULE-034 INV-2): the creative
     belongs to principal_id (e.g. "buyer-A"), but the authenticated principal
     (e.g. "buyer-B") is different — sync should create a new creative.
+    Delegates to the "in the tenant" Given (same semantics; the named principal
+    gets its own get-or-create row, never overwriting ctx["principal"]).
     """
-    from sqlalchemy import select
-
-    from src.core.database.models import Tenant
-    from tests.factories import CreativeFactory, PrincipalFactory
-
-    env = ctx["env"]
-    # Retrieve tenant from DB (created by auth step)
-    if "tenant" not in ctx:
-        with db_session(ctx) as session:
-            tenant = session.scalars(select(Tenant).filter_by(tenant_id=env._tenant_id)).first()
-            assert tenant is not None, f"Tenant {env._tenant_id!r} not found"
-            ctx["tenant"] = tenant
-    tenant = ctx["tenant"]
-
-    # Create or retrieve the other principal in the same tenant
-    with db_session(ctx) as session:
-        from src.core.database.models import Principal
-
-        other_principal = session.scalars(
-            select(Principal).filter_by(principal_id=principal_id, tenant_id=tenant.tenant_id)
-        ).first()
-    if other_principal is None:
-        other_principal = PrincipalFactory(tenant=tenant, principal_id=principal_id)
-        env._commit_factory_data()
-
-    creative = CreativeFactory(
-        tenant=tenant,
-        principal=other_principal,
-        creative_id=creative_id,
-        name=f"Pre-existing creative {creative_id}",
-        agent_url=env.DEFAULT_AGENT_URL,
-        format="display_300x250",
-    )
-    env._commit_factory_data()
-    ctx["pre_existing_creative_id"] = creative_id
-    ctx["pre_existing_creative"] = creative
+    given_creative_exists_for_principal(ctx, creative_id, principal_id)
     ctx["pre_existing_principal_id"] = principal_id
 
 
@@ -5662,6 +5585,21 @@ def when_sync_creative_as_principal(ctx: dict, creative_id: str, principal_id: s
     """
     env = ctx["env"]
     _ensure_tenant_principal(ctx, env)
+    # The auth Given only mutates the env identity; the AUTHENTICATED principal
+    # (e.g. buyer-B) still needs a DB row — the pre-existing creative's Given
+    # seeded only the OTHER principal. Without it the new creative's insert
+    # violates the principals FK and the sync reports action='failed'.
+    from src.core.database.models import Principal
+    from tests.factories import PrincipalFactory
+    from tests.factories.core import get_or_create
+
+    tenant = ctx["tenant"]
+    get_or_create(
+        env,
+        Principal,
+        {"principal_id": principal_id, "tenant_id": tenant.tenant_id},
+        lambda: PrincipalFactory(tenant=tenant, principal_id=principal_id),
+    )
     creative_payload = {
         "creative_id": creative_id,
         "name": f"Synced creative {creative_id}",
@@ -5670,6 +5608,71 @@ def when_sync_creative_as_principal(ctx: dict, creative_id: str, principal_id: s
     }
     ctx.setdefault("creatives", []).append(creative_payload)
     dispatch_request(ctx, creatives=ctx["creatives"])
+
+
+@when('the Buyer Agent syncs an assignment of creative "creative-xp" to a package owned by the authenticated principal')
+def when_sync_cross_principal_assignment(ctx: dict) -> None:
+    """Dispatch sync_creatives with ONLY an assignment referencing another
+    principal's creative (no creatives array) — the cross-principal FK-500
+    surface (local feature; upstream storyboard gap, PR #1430 review).
+    """
+    from src.core.database.models import Principal
+    from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory
+    from tests.factories.core import get_or_create
+
+    env = ctx["env"]
+    tenant = ctx["tenant"]
+    authenticated = get_or_create(
+        env,
+        Principal,
+        {"principal_id": env._principal_id, "tenant_id": tenant.tenant_id},
+        lambda: PrincipalFactory(tenant=tenant, principal_id=env._principal_id),
+    )
+    media_buy = MediaBuyFactory(tenant=tenant, principal=authenticated)
+    pkg = MediaPackageFactory(media_buy=media_buy)
+    env._commit_factory_data()
+    ctx["xp_package_id"] = pkg.package_id
+    dispatch_request(ctx, creatives=[], assignments={"creative-xp": [pkg.package_id]}, validation_mode="lenient")
+
+
+@then("the sync operation should not fail")
+def then_sync_did_not_fail(ctx: dict) -> None:
+    """The cross-principal reference must be skipped — never a raw FK 500 —
+    and the skip must be VISIBLE: a synthesized per-item action='failed'
+    result naming the package in assignment_errors (salesagent-9qpj;
+    the spec's success branch forbids response-level errors, so the outcome
+    rides creatives[]). A bare no-error check survives deletion of the
+    error recording — this assertion does not.
+    """
+    error = ctx.get("error")
+    assert error is None, f"sync_creatives failed on a cross-principal assignment reference: {error!r}"
+    response = ctx.get("response")
+    assert response is not None, "Expected a sync_creatives response"
+    entries = {r.creative_id: r for r in (getattr(response, "creatives", None) or [])}
+    entry = entries.get("creative-xp")
+    assert entry is not None, (
+        f"Skipped cross-principal assignment must surface as a per-item result entry, got creatives={sorted(entries)}"
+    )
+    assert entry.action == "failed", f"Expected action='failed' for the skipped reference, got {entry.action!r}"
+    pkg_id = ctx["xp_package_id"]
+    assert (entry.assignment_errors or {}).get(pkg_id), (
+        f"assignment_errors must name the skipped package {pkg_id}: {entry.assignment_errors!r}"
+    )
+
+
+@then('no assignment should exist for creative "creative-xp" in the tenant')
+def then_no_assignment_for_xp_creative(ctx: dict) -> None:
+    """DB read-back: the cross-principal reference must not create a row."""
+    from sqlalchemy import select
+
+    from src.core.database.models import CreativeAssignment as DBAssignment
+
+    tenant = ctx["tenant"]
+    with db_session(ctx) as session:
+        rows = session.scalars(
+            select(DBAssignment).filter_by(tenant_id=tenant.tenant_id, creative_id="creative-xp")
+        ).all()
+    assert len(rows) == 0, f"Cross-principal assignment reference created {len(rows)} row(s) — must be 0"
 
 
 @then(parsers.parse('a new creative should be created for principal "{principal_id}"'))

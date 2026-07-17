@@ -16,10 +16,9 @@ import os
 
 import pytest
 import requests
-from fastmcp.client import Client
-from fastmcp.client.transports import StreamableHttpTransport
 
 from tests.e2e.conftest import e2e_host
+from tests.e2e.utils import make_mcp_client
 
 
 class TestLandingPages:
@@ -193,12 +192,10 @@ class TestAuthOptionalEndpoints:
     @pytest.mark.integration
     async def test_list_creative_formats_without_auth(self, live_server):
         """list_creative_formats should be reachable without authentication via domain routing."""
-        transport = StreamableHttpTransport(
-            url=f"{live_server['mcp']}/mcp/",
-            headers={"Host": "test-custom-domain.example.com"},
-        )
+        # Unauthenticated: tenant resolved via Host header only (no x-adcp-tenant).
+        mcp_client = make_mcp_client(live_server, tenant=None, host="test-custom-domain.example.com")
         try:
-            async with Client(transport=transport) as client:
+            async with mcp_client as client:
                 result = await client.call_tool("list_creative_formats", {})
                 # Success or tool-level error are both acceptable
                 assert result is not None
@@ -210,11 +207,7 @@ class TestAuthOptionalEndpoints:
     @pytest.mark.integration
     async def test_list_creative_formats_with_auth(self, live_server, test_auth_token):
         """list_creative_formats should work with authentication."""
-        transport = StreamableHttpTransport(
-            url=f"{live_server['mcp']}/mcp/",
-            headers={"x-adcp-auth": test_auth_token, "x-adcp-tenant": "ci-test"},
-        )
-        async with Client(transport=transport) as client:
+        async with make_mcp_client(live_server, token=test_auth_token) as client:
             result = await client.call_tool("list_creative_formats", {})
             assert result is not None, "list_creative_formats should return a result"
 
@@ -222,12 +215,10 @@ class TestAuthOptionalEndpoints:
     @pytest.mark.integration
     async def test_list_authorized_properties_without_auth(self, live_server):
         """list_authorized_properties should be reachable without authentication via domain routing."""
-        transport = StreamableHttpTransport(
-            url=f"{live_server['mcp']}/mcp/",
-            headers={"Host": "test-custom-domain.example.com"},
-        )
+        # Unauthenticated: tenant resolved via Host header only (no x-adcp-tenant).
+        mcp_client = make_mcp_client(live_server, tenant=None, host="test-custom-domain.example.com")
         try:
-            async with Client(transport=transport) as client:
+            async with mcp_client as client:
                 result = await client.call_tool("list_authorized_properties", {})
                 assert result is not None
         except Exception:
@@ -237,11 +228,7 @@ class TestAuthOptionalEndpoints:
     @pytest.mark.integration
     async def test_list_authorized_properties_with_auth(self, live_server, test_auth_token):
         """list_authorized_properties should work with authentication."""
-        transport = StreamableHttpTransport(
-            url=f"{live_server['mcp']}/mcp/",
-            headers={"x-adcp-auth": test_auth_token, "x-adcp-tenant": "ci-test"},
-        )
-        async with Client(transport=transport) as client:
+        async with make_mcp_client(live_server, token=test_auth_token) as client:
             result = await client.call_tool("list_authorized_properties", {})
             assert result is not None, "list_authorized_properties should return a result"
 
@@ -249,12 +236,10 @@ class TestAuthOptionalEndpoints:
     @pytest.mark.integration
     async def test_get_products_without_auth_public_policy(self, live_server):
         """get_products should be reachable without authentication (public policy tenants)."""
-        transport = StreamableHttpTransport(
-            url=f"{live_server['mcp']}/mcp/",
-            headers={"Host": "test-custom-domain.example.com"},
-        )
+        # Unauthenticated: tenant resolved via Host header only (no x-adcp-tenant).
+        mcp_client = make_mcp_client(live_server, tenant=None, host="test-custom-domain.example.com")
         try:
-            async with Client(transport=transport) as client:
+            async with mcp_client as client:
                 result = await client.call_tool("get_products", {"brief": "test campaign"})
                 assert result is not None
         except Exception:
@@ -264,11 +249,7 @@ class TestAuthOptionalEndpoints:
     @pytest.mark.integration
     async def test_get_products_with_auth(self, live_server, test_auth_token):
         """get_products should work with authentication regardless of policy."""
-        transport = StreamableHttpTransport(
-            url=f"{live_server['mcp']}/mcp/",
-            headers={"x-adcp-auth": test_auth_token, "x-adcp-tenant": "ci-test"},
-        )
-        async with Client(transport=transport) as client:
+        async with make_mcp_client(live_server, token=test_auth_token) as client:
             result = await client.call_tool("get_products", {"brief": "test campaign"})
             assert result is not None, "get_products should return a result"
 
@@ -276,12 +257,10 @@ class TestAuthOptionalEndpoints:
     @pytest.mark.integration
     async def test_get_products_filters_pricing_for_anonymous(self, live_server):
         """get_products should hide pricing information for anonymous users."""
-        transport = StreamableHttpTransport(
-            url=f"{live_server['mcp']}/mcp/",
-            headers={"Host": "test-custom-domain.example.com"},
-        )
+        # Unauthenticated: tenant resolved via Host header only (no x-adcp-tenant).
+        mcp_client = make_mcp_client(live_server, tenant=None, host="test-custom-domain.example.com")
         try:
-            async with Client(transport=transport) as client:
+            async with mcp_client as client:
                 result = await client.call_tool("get_products", {"brief": "test campaign"})
                 # If tool succeeds, verify pricing is filtered for anonymous
                 if result:

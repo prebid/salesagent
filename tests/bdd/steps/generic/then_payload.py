@@ -15,6 +15,8 @@ from typing import Any
 
 from pytest_bdd import parsers, then
 
+from tests.bdd.steps._outcome_helpers import wire_field
+
 # -- Helpers -------------------------------------------------------------------
 
 
@@ -99,23 +101,37 @@ def then_no_video(ctx: dict) -> None:
     )
 
 
+def _referral_url(ref: Any) -> str | None:
+    """Extract agent_url from a wire referral dict (model_dump shape)."""
+    return ref.get("agent_url") if isinstance(ref, dict) else getattr(ref, "agent_url", None)
+
+
+def _referral_capabilities(ref: Any) -> Any:
+    """Extract capabilities from a wire referral dict (model_dump shape)."""
+    return ref.get("capabilities") if isinstance(ref, dict) else getattr(ref, "capabilities", None)
+
+
 @then("the response should include creative_agents referrals")
 def then_has_referrals(ctx: dict) -> None:
-    """Assert response contains creative_agents matching the Given agents."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
-    referrals = resp.creative_agents
-    assert referrals is not None, "Expected creative_agents field in response, got None"
-    assert referrals, "Expected creative agent referrals in response but got empty list"
+    """Assert the wire response contains creative_agents matching the Given agents.
+
+    Reads ``creative_agents`` from the serialized wire (REST/A2A/MCP/e2e_rest) via
+    the shared :func:`wire_field` reader; IMPL falls through to the production
+    serializer inside the helper. The previous body read the lossy reconstructed
+    ``ctx['response'].creative_agents`` payload — this asserts the buyer-facing wire.
+    """
+    referrals = wire_field(ctx, "creative_agents")
+    assert referrals is not None, "Expected creative_agents field on the wire, got None"
+    assert referrals, "Expected creative agent referrals on the wire but got empty list"
 
     actual_urls = set()
     for ref in referrals:
-        url_value = ref.agent_url
+        url_value = _referral_url(ref)
         assert url_value, f"Referral missing agent_url: {ref}"
         url_str = str(url_value)
         assert url_str.startswith("http"), f"agent_url should be http/https URL, got: {url_str!r}"
         actual_urls.add(url_str)
-        assert ref.capabilities is not None, f"Referral missing capabilities: {ref}"
+        assert _referral_capabilities(ref) is not None, f"Referral missing capabilities: {ref}"
 
     given_agents = ctx.get("creative_agent_referrals", [])
     if given_agents and not _is_e2e(ctx):
@@ -129,10 +145,13 @@ def then_has_referrals(ctx: dict) -> None:
 
 @then("each referral should include the agent URL and supported capabilities")
 def then_referral_fields(ctx: dict) -> None:
-    """Assert each referral has a well-formed agent_url AND non-empty capabilities."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
-    referrals = resp.creative_agents
+    """Assert each wire referral has a well-formed agent_url AND non-empty capabilities.
+
+    Reads referrals from the serialized wire via the shared :func:`wire_field`
+    reader (IMPL falls through to the production serializer) instead of the lossy
+    reconstructed ``ctx['response']`` payload.
+    """
+    referrals = wire_field(ctx, "creative_agents")
     assert referrals, "No referrals to verify -- expected at least one creative agent"
     # Capabilities are commitments (AdCP design principle): referrals must
     # advertise exactly the backed set — extras are unbacked commitments,
@@ -143,11 +162,11 @@ def then_referral_fields(ctx: dict) -> None:
 
     known_capabilities = {c.value for c in ADVERTISED_CREATIVE_AGENT_CAPABILITIES}
     for ref in referrals:
-        url_value = ref.agent_url
+        url_value = _referral_url(ref)
         assert url_value, f"Missing agent_url in referral: {ref}"
         url_str = str(url_value)
         assert url_str.startswith("http"), f"agent_url should be a URL (http/https), got: {url_str!r}"
-        caps = ref.capabilities
+        caps = _referral_capabilities(ref)
         assert caps is not None, f"Missing capabilities in referral: {ref}"
         assert isinstance(caps, (list, tuple)), f"capabilities should be a list, got: {type(caps).__name__}"
         assert caps, "capabilities should be non-empty, got empty list"

@@ -212,6 +212,19 @@ def _get_media_buy_state(live_server: dict[str, str], media_buy_id: str) -> dict
     }
 
 
+@pytest.fixture
+def restore_auto_approval(live_server):
+    """Guarantee the shared ci-test tenant returns to auto-approval after the test.
+
+    _create_pending_media_buy flips mock_manual_approval_required on the shared
+    tenant's AdapterConfig row; without this restore, every later create on the
+    stack routes to the manual-approval SUBMITTED envelope (the leak class fixed
+    for tests/e2e in this same change set).
+    """
+    yield
+    _set_mock_manual_approval(live_server, False)
+
+
 def _create_pending_media_buy(live_server: dict[str, str], auth_token: str) -> str:
     _set_mock_manual_approval(live_server, True)
     product = _discover_reference_product(live_server, auth_token)
@@ -359,7 +372,7 @@ def test_create_principal_browser_flow(docker_services_e2e, live_server):
     assert len(record[2]) > 0, "Principal access token should be generated"
 
 
-def test_workflow_approval_browser_flow(docker_services_e2e, live_server, test_auth_token):
+def test_workflow_approval_browser_flow(docker_services_e2e, live_server, test_auth_token, restore_auto_approval):
     """Approve a pending media buy in the browser and verify the workflow outcome."""
     media_buy_id = _create_pending_media_buy(live_server, test_auth_token)
 
@@ -376,7 +389,7 @@ def test_workflow_approval_browser_flow(docker_services_e2e, live_server, test_a
     assert state["media_buy_status"] != "pending_approval"
 
 
-def test_workflow_rejection_browser_flow(docker_services_e2e, live_server, test_auth_token):
+def test_workflow_rejection_browser_flow(docker_services_e2e, live_server, test_auth_token, restore_auto_approval):
     """Reject a pending media buy in the browser and verify the terminal state."""
     media_buy_id = _create_pending_media_buy(live_server, test_auth_token)
     rejection_reason = "Rejected by browser UI E2E"

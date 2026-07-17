@@ -50,7 +50,8 @@ from src.core.exceptions import (
     AdCPAdapterError,
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
-    AdCPCreativeNotFoundError,
+    AdCPCapabilityNotSupportedError,
+    AdCPCreativeRejectedError,
     AdCPFormatNotFoundError,
     AdCPNotFoundError,
     AdCPProductNotFoundError,
@@ -61,6 +62,7 @@ from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
+    CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
     PricingOption,
 )
@@ -71,8 +73,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 # A subdomain free of underscores is required: Product.publisher_properties derives
 # publisher_domain from the tenant subdomain (f"{subdomain}.example.com") and the
-# AdCP domain pattern rejects underscores. TenantFactory builds the subdomain as
-# f"pub-{tenant_id}", so the tenant_id must not contain underscores either.
+# AdCP domain pattern rejects underscores. TenantFactory derives the subdomain via
+# tenant_subdomain() (pub-<tenant_id> with underscores normalized to hyphens); a
+# hyphen-free tenant_id keeps the rest of the derived name predictable here.
 _TENANT_ID = "behavioraltenant"
 _PRINCIPAL_ID = "behavioralprincipal"
 
@@ -329,11 +332,14 @@ class TestCreativeMissingUrl:
             # URL extraction returns None (missing)
             mock_extract.return_value = (None, None, None)
 
-            with pytest.raises(AdCPValidationError) as exc_info:
-                _validate_creatives_before_adapter_call([mock_package], "test_tenant", session=session)
+            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+                _validate_creatives_before_adapter_call(
+                    [mock_package], "test_tenant", "test_principal", session=session
+                )
 
             assert "creative_errors" in exc_info.value.details
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            assert exc_info.value.suggestion
 
     def test_creative_missing_dimensions_raises_invalid_creatives(self):
         """When creative has URL but missing dimensions, raise INVALID_CREATIVES.
@@ -365,11 +371,14 @@ class TestCreativeMissingUrl:
             # Has URL but no dimensions
             mock_extract.return_value = ("https://example.com/ad.jpg", None, None)
 
-            with pytest.raises(AdCPValidationError) as exc_info:
-                _validate_creatives_before_adapter_call([mock_package], "test_tenant", session=session)
+            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+                _validate_creatives_before_adapter_call(
+                    [mock_package], "test_tenant", "test_principal", session=session
+                )
 
             assert "creative_errors" in exc_info.value.details
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            assert exc_info.value.suggestion
 
 
 class TestCreativeUploadFailure:
@@ -537,8 +546,10 @@ class TestMultipleInvalidCreativesAccumulated:
             # All creatives missing URL and dimensions
             mock_extract.return_value = (None, None, None)
 
-            with pytest.raises(AdCPValidationError) as exc_info:
-                _validate_creatives_before_adapter_call([mock_package], "test_tenant", session=session)
+            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+                _validate_creatives_before_adapter_call(
+                    [mock_package], "test_tenant", "test_principal", session=session
+                )
 
             error_message = str(exc_info.value)
             assert "creative_errors" in exc_info.value.details
@@ -546,7 +557,8 @@ class TestMultipleInvalidCreativesAccumulated:
             assert "creative_1" in error_message
             assert "creative_2" in error_message
             assert "creative_3" in error_message
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            assert exc_info.value.suggestion
 
 
 class TestPricingOptionXOR:
@@ -641,12 +653,13 @@ class TestCreativeIdsNotFound:
                 data={"url": "https://example.com/ad.jpg", "width": 300, "height": 250},
             )
 
-            with pytest.raises(AdCPCreativeNotFoundError) as exc_info:
+            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
                 env.call_impl(req=req)
 
             assert "creative_missing_1" in str(exc_info.value)
             assert "creative_missing_2" in str(exc_info.value)
-            assert exc_info.value.error_code == "CREATIVE_NOT_FOUND"
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            assert exc_info.value.suggestion
 
     def test_set_difference_logic_detects_missing_creative_ids(self):
         """The set-difference logic (requested - found) correctly identifies missing IDs.
@@ -666,13 +679,13 @@ class TestCreativeIdsNotFound:
 
         assert missing_ids == {"creative_missing_1", "creative_missing_2"}
 
-        # Verify the AdCPNotFoundError would be raised with the correct error code
+        # Verify the rejection would be raised with the correct error code
         if missing_ids:
             error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
-            with pytest.raises(AdCPCreativeNotFoundError) as exc_info:
-                raise AdCPCreativeNotFoundError(error_msg)
+            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+                raise AdCPCreativeRejectedError(error_msg)
 
-            assert exc_info.value.error_code == "CREATIVE_NOT_FOUND"
+            assert exc_info.value.error_code == "CREATIVE_REJECTED"
             assert "creative_missing_1" in str(exc_info.value)
             assert "creative_missing_2" in str(exc_info.value)
 
@@ -694,6 +707,104 @@ class TestCreativeIdsNotFound:
 # ===========================================================================
 # OBLIGATION COVERAGE Tests
 # ===========================================================================
+
+
+class TestManualApprovalPathCreativeValidation:
+    """The pending-approval path must validate creative refs like the auto path.
+
+    The graded ext-o/ext-p storyboard steps (BR-UC-002 :426-452) assert
+    CREATIVE_REJECTED regardless of tenant approval mode, and POST-F1/POST-F2
+    forbid a pending SUCCESS that silently dropped creative assignments.
+
+    Covers: UC-002-EXT-O-01
+    """
+
+    def test_manual_path_rejects_missing_creative_ids(self, integration_db):
+        """PR #1430 review: missing creative_ids on the manual-approval path fail
+        CREATIVE_REJECTED on the wire — not a pending SUCCESS that skips them.
+        """
+        from tests.factories import CreativeFactory
+        from tests.harness.transport import Transport
+        from tests.helpers import assert_envelope_shape
+
+        req = _make_request(
+            packages=[
+                {
+                    "product_id": "prod_1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "creative_ids": ["creative_exists", "creative_missing_1"],
+                }
+            ]
+        )
+
+        with _env(human_review_required=True) as env:
+            tenant, principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            _require_manual_approval(env)
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="creative_exists",
+                format="display_300x250",
+                agent_url="https://creative.adcontextprotocol.org",
+                data={"url": "https://example.com/ad.jpg", "width": 300, "height": 250},
+            )
+
+            result = env.call_via(Transport.REST, req=req)
+
+            assert result.is_error, (
+                f"Manual-approval path accepted missing creative_ids (pending success): {result.payload}"
+            )
+            assert_envelope_shape(
+                result.wire_error_envelope,
+                "CREATIVE_REJECTED",
+                recovery="correctable",
+                message_substr="creative_missing_1",
+            )
+
+    def test_manual_path_format_mismatch_emits_creative_rejected(self, integration_db):
+        """PR #1430 review: creative-vs-product format mismatch must emit
+        CREATIVE_REJECTED on the manual-approval path — the same wire code the
+        auto path emits for the same buyer input — not VALIDATION_ERROR.
+        """
+        from tests.factories import CreativeFactory
+        from tests.harness.transport import Transport
+        from tests.helpers import assert_envelope_shape
+
+        req = _make_request(
+            packages=[
+                {
+                    "product_id": "prod_1",
+                    "budget": 5000.0,
+                    "pricing_option_id": "cpm_usd_fixed",
+                    "creative_ids": ["cr-fmt-mismatch"],
+                }
+            ]
+        )
+
+        with _env(human_review_required=True) as env:
+            tenant, principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            _require_manual_approval(env)
+            # Product accepts display_300x250; this creative carries video_640x480.
+            CreativeFactory(
+                tenant=tenant,
+                principal=principal,
+                creative_id="cr-fmt-mismatch",
+                format="video_640x480",
+                agent_url="https://creative.adcontextprotocol.org",
+                data={"url": "https://example.com/ad.mp4", "width": 640, "height": 480},
+            )
+
+            result = env.call_via(Transport.REST, req=req)
+
+            assert result.is_error, f"Manual-approval path accepted a format-mismatched creative: {result.payload}"
+            assert_envelope_shape(
+                result.wire_error_envelope,
+                "CREATIVE_REJECTED",
+                recovery="correctable",
+            )
 
 
 class TestMainFlowObligations:
@@ -783,7 +894,7 @@ class TestMainFlowObligations:
         with pytest.raises(AdCPAuthenticationError, match="Principal ID not found") as exc_info:
             await _create_media_buy_impl(req=req, identity=identity)
 
-        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
 
     @pytest.mark.asyncio
     async def test_tenant_setup_validation(self):
@@ -967,10 +1078,10 @@ class TestPreconditionObligations:
         req = _make_request()
 
         # None identity -> should raise
-        with pytest.raises(AdCPAuthenticationError, match="Identity is required") as exc_info:
+        with pytest.raises(AdCPAuthenticationError, match="Authentication required") as exc_info:
             await _create_media_buy_impl(req=req, identity=None)
 
-        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
 
 
 class TestAsapStartTimingObligations:
@@ -1036,7 +1147,9 @@ class TestManualApprovalObligations:
             _require_manual_approval(env)
             result = env.call_impl(req=req)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
+        # Spec 3.1.1: pending approval is the Submitted task envelope, not a
+        # confirmed Success (PR #1567 round-2 item 2).
+        assert isinstance(result.response, CreateMediaBuySubmitted)
         assert result.status == "submitted"  # Not "completed"
 
     def test_adapter_requires_review_enters_manual_path(self, integration_db):
@@ -1055,7 +1168,7 @@ class TestManualApprovalObligations:
             mock_adapter.manual_approval_operations = ["create_media_buy"]
             result = env.call_impl(req=req)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert isinstance(result.response, CreateMediaBuySubmitted)
         assert result.status == "submitted"
 
     def test_seller_notification_sent_on_manual_approval(self, integration_db):
@@ -1097,8 +1210,10 @@ class TestManualApprovalObligations:
             result = env.call_impl(req=req)
 
         assert result.status == "submitted"
-        assert isinstance(result.response, CreateMediaBuySuccess)
-        assert result.response.workflow_step_id is not None
+        # Spec 3.1.1 CreateMediaBuySubmitted: task_id is the required handle the
+        # buyer polls; workflow_step_id/media_buy_id are not on this envelope.
+        assert isinstance(result.response, CreateMediaBuySubmitted)
+        assert result.response.task_id
 
     def test_no_adapter_execution_before_approval(self, integration_db):
         """Adapter is NOT called when manual approval is required.
@@ -1133,17 +1248,18 @@ class TestManualApprovalObligations:
             _require_manual_approval(env)
             result = env.call_impl(req=req)
 
-        # Pending approval means it's ready for accept/reject
+        # Pending approval means it's ready for accept/reject; the buyer holds
+        # the task_id the reject flow resolves (spec 3.1.1 Submitted envelope).
         assert result.status == "submitted"
-        assert result.response.workflow_step_id is not None
+        assert result.response.task_id
 
     def test_buyer_can_poll_approval_progress(self, integration_db):
-        """Response includes workflow_step_id for polling.
+        """Response includes task_id for polling.
 
         Covers: UC-002-ALT-MANUAL-APPROVAL-REQUIRED-10
 
-        Note: Polling is via tasks/get with the workflow_step_id.
-        This test verifies the step_id is included in the response.
+        Note: Polling is via tasks/get with the task_id (spec 3.1.1
+        CreateMediaBuySubmitted.required; PR #1567 round-2 item 2).
         """
         req = _make_request()
 
@@ -1153,8 +1269,8 @@ class TestManualApprovalObligations:
             _require_manual_approval(env)
             result = env.call_impl(req=req)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
-        assert result.response.workflow_step_id is not None
+        assert isinstance(result.response, CreateMediaBuySubmitted)
+        assert result.response.task_id
 
 
 class TestInlineCreativeObligations:
@@ -1369,10 +1485,18 @@ class TestCrossCuttingObligations:
             _require_manual_approval(env)
             result = env.call_impl(req=req)
 
-            # Manual path: adapter was NOT called, but records were persisted
+            # Manual path: adapter was NOT called, but records were persisted.
+            # The submitted response carries no media_buy_id (spec 3.1.1) — the
+            # persisted row is the evidence, keyed by the workflow mapping.
             assert result.status == "submitted"
             env.mock["adapter"].return_value.create_media_buy.assert_not_called()
-            assert result.response.media_buy_id is not None
+            ctx_mgr_mock = env.mock["context_mgr"].return_value
+            link_call = ctx_mgr_mock.link_workflow_to_object.call_args
+            assert link_call is not None, "manual path must link the persisted media buy to the workflow step"
+            from src.core.database.models import MediaBuy as DBMediaBuy
+
+            persisted = env.get_one(DBMediaBuy, media_buy_id=link_call.kwargs["object_id"])
+            assert persisted is not None, "media buy row must be persisted before approval"
 
     def test_manual_approval_calls_link_workflow_to_object(self, integration_db):
         """Manual-approval path calls link_workflow_to_object to create the ObjectWorkflowMapping row.
@@ -1391,14 +1515,22 @@ class TestCrossCuttingObligations:
             _require_manual_approval(env)
             result = env.call_impl(req=req)
 
-            assert result.response.media_buy_id is not None
+            # Submitted response carries no media_buy_id (spec 3.1.1); the
+            # mapping's object_id must reference the PERSISTED media buy row.
+            assert result.status == "submitted"
             ctx_mgr_mock = env.mock["context_mgr"].return_value
             ctx_mgr_mock.link_workflow_to_object.assert_called_once_with(
                 step_id=ANY,
                 object_type="media_buy",
-                object_id=result.response.media_buy_id,
+                object_id=ANY,
                 action="create",
                 tenant_id=ANY,
+            )
+            from src.core.database.models import MediaBuy as DBMediaBuy
+
+            object_id = ctx_mgr_mock.link_workflow_to_object.call_args.kwargs["object_id"]
+            assert env.get_one(DBMediaBuy, media_buy_id=object_id) is not None, (
+                "ObjectWorkflowMapping.object_id must reference the persisted media buy"
             )
 
     @pytest.mark.asyncio
@@ -1447,11 +1579,13 @@ class TestExtensionObligations:
                 gam_network_currency="USD",
                 gam_secondary_currencies=None,
             )
-            with pytest.raises(AdCPValidationError) as excinfo:
+            # Currency unsupported by the GAM network is a seller-capability gap:
+            # UNSUPPORTED_FEATURE, not VALIDATION_ERROR (#1417).
+            with pytest.raises(AdCPCapabilityNotSupportedError) as excinfo:
                 env.call_impl(req=req)
 
         exc = excinfo.value
-        assert exc.error_code == "VALIDATION_ERROR"
+        assert exc.error_code == "UNSUPPORTED_FEATURE"
         error_msg = exc.message.lower()
         assert "not supported" in error_msg
         assert "gam" in error_msg
@@ -1559,10 +1693,10 @@ class TestExtensionObligations:
         req = _make_request()
 
         # None identity -> requires authentication
-        with pytest.raises(AdCPAuthenticationError, match="Identity is required") as exc_info:
+        with pytest.raises(AdCPAuthenticationError, match="Authentication required") as exc_info:
             await _create_media_buy_impl(req=req, identity=None)
 
-        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
 
         # Identity with no principal_id -> requires authentication
 
@@ -1576,7 +1710,7 @@ class TestExtensionObligations:
         with pytest.raises(AdCPAuthenticationError, match="Principal ID not found") as exc_info:
             await _create_media_buy_impl(req=req, identity=identity_no_principal)
 
-        assert exc_info.value.error_code == "AUTH_TOKEN_INVALID"
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
 
     def test_no_database_record_on_adapter_failure(self, integration_db):
         """When adapter fails, no database records are created.
@@ -1720,9 +1854,10 @@ class TestExtensionObligations:
         Covers: UC-002-EXT-O-01
         """
         # This is covered by TestCreativeIdsNotFound above.
-        # Verify the error code pattern.
-        error = AdCPCreativeNotFoundError("Creative IDs not found: creative_missing")
-        assert error.error_code == "CREATIVE_NOT_FOUND"
+        # Verify the error code pattern: the create path now emits CREATIVE_REJECTED
+        # for missing creative_ids (unified with the update path).
+        error = AdCPCreativeRejectedError("Creative IDs not found: creative_missing")
+        assert error.error_code == "CREATIVE_REJECTED"
 
     def test_creative_upload_failed_error_code(self):
         """Creative upload failures raise AdCPAdapterError (wire code SERVICE_UNAVAILABLE).

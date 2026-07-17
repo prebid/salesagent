@@ -32,11 +32,11 @@ Feature: BR-UC-019 Query Media Buys
     Then the response should include media buy "mb-001" with status "active"
     And each media buy should include package-level details with budget, bid_price, product_id, flight dates, and paused state
     And each package should include creative approval state when creatives are assigned
-    And each media buy should include buyer_ref and buyer_campaign_ref for correlation
+    And each media buy should include buyer_campaign_ref for correlation
     # POST-S1: Status computed from flight dates
     # POST-S2: Package-level details present
     # POST-S3: Creative approval state present
-    # POST-S6: Buyer refs present for correlation
+    # POST-S6: buyer_campaign_ref present for correlation
 
   @T-UC-019-main-filter-ids @main-flow @filtering
   Scenario: Query media buys by specific media_buy_ids
@@ -145,19 +145,18 @@ Feature: BR-UC-019 Query Media Buys
       | active_refined_completed  | 2026-04-01 | 2026-03-01 | 2026-03-31 | completed       |
       | single_day_flight         | 2026-03-15 | 2026-03-15 | 2026-03-15 | active          |
 
-  @T-UC-019-partition-status-invalid @partition @status @error
-  Scenario Outline: Status computation with missing dates - <partition>
-    Given the principal "buyer-001" owns media buy "mb-001" with <date_condition>
-    When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" status computation should handle the missing date gracefully
-    And the error should include a "suggestion" field
-    And the suggestion should contain "start_date" or "end_date" or "flight dates"
-    # BR-RULE-150: Missing dates prevent status computation
-
-    Examples: Invalid partitions
-      | partition          | date_condition                          |
-      | missing_start_date | no start_time and no start_date         |
-      | missing_end_date   | no end_time and no end_date             |
+  # RETIRED (T-UC-019-partition-status-invalid): "Status computation with missing dates".
+  # Verified against AdCP 3.1 GA (spec pin v3.1-04f59d2d5): the core media-buy object
+  # (dist/schemas/2.5.0/core/media-buy.json) has NO date fields — flight dates are
+  # per-package — and `status` is REQUIRED, always emitted from the persisted status
+  # column (never computed FROM dates; dates only REFINE a serving window). A media
+  # buy with "missing dates" is therefore not a spec-level state. It is also
+  # schema-impossible: MediaBuy.start_date/end_date are NOT NULL, so a dateless buy
+  # cannot be persisted and get_media_buys can never receive one. This partition was a
+  # phantom (its error was synthesized test-side; production was never invoked), so it
+  # is retired rather than wired. The latent crash it implied (date compare vs a NULL
+  # edge) is fixed defensively in resolve_canonical_status (returns the persisted
+  # status, no TypeError). Reconcile upstream in adcp-req so --merge does not re-add it.
 
   @T-UC-019-boundary-status @boundary @status
   Scenario Outline: Status computation boundary - <boundary_point>
@@ -196,6 +195,10 @@ Feature: BR-UC-019 Query Media Buys
   @T-UC-019-partition-status-filter @partition @status_filter
   Scenario Outline: Default status filter behavior - <partition>
     Given the principal "buyer-001" owns media buys in various statuses
+    # Pin the clock: the "various statuses" seed builds each buy's flight window
+    # around this date, so the query MUST evaluate status against it too (else all
+    # windows are in the past under the real clock and every buy reads completed).
+    And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with <filter_config>
     Then <expected_behavior>
     # BR-RULE-151: Status filter defaults and validation
@@ -224,6 +227,9 @@ Feature: BR-UC-019 Query Media Buys
   @T-UC-019-boundary-status-filter @boundary @status_filter
   Scenario Outline: Status filter boundary - <boundary_point>
     Given the principal "buyer-001" owns media buys in various statuses
+    # Pin the clock so the seed's flight windows and the query's status
+    # computation agree (see the partition scenario above).
+    And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with <filter_config>
     Then <expected_behavior>
     # BR-RULE-151: Boundary test for status filter
@@ -231,7 +237,7 @@ Feature: BR-UC-019 Query Media Buys
     Examples: Boundary values
       | boundary_point                              | filter_config                                          | expected_behavior                                               |
       | status_filter omitted, media_buy_ids omitted| no status_filter                                       | only media buys with status "active" are returned               |
-      | status_filter omitted, media_buy_ids non-empty | no status_filter and media_buy_ids ["mb-1","mb-2"]   | every matching buy returned regardless of status                |
+      | status_filter omitted, media_buy_ids non-empty | no status_filter and media_buy_ids ["mb-active","mb-completed"]   | every matching buy returned regardless of status                |
       | single valid enum value                     | status_filter "active"                                 | only media buys with status "active" are returned               |
       | array with one valid value                  | status_filter ["completed"]                            | only media buys with status "completed" are returned            |
       | array with all seven enum values            | all seven v3.1 status values in status_filter          | media buys in any status are returned                           |
@@ -379,12 +385,14 @@ Feature: BR-UC-019 Query Media Buys
     # BR-RULE-154 INV-5: Results filtered to principal only
 
   @T-UC-019-inv-150-1 @invariant @BR-RULE-150
-  Scenario: INV-1 holds - pre-flight media buy has pending_activation status
+  Scenario: INV-1 holds - pre-flight media buy has pending_start status
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-04-01" and end_date "2026-04-30"
     And today is "2026-03-15"
-    When the Buyer Agent sends a get_media_buys request with status_filter "pending_activation"
-    Then the response should include media buy "mb-001" with status "pending_activation"
-    # BR-RULE-150 INV-1: today < start_date yields pending_activation
+    When the Buyer Agent sends a get_media_buys request with status_filter "pending_start"
+    Then the response should include media buy "mb-001" with status "pending_start"
+    # BR-RULE-150 INV-1: today < start_date yields pending_start.
+    # CORRECTED to AdCP 3.1 enums/media-buy-status.json @ v3.1-04f59d2d5: pre-flight is pending_start
+    # ("ready to serve, waiting for its flight date"); "pending_activation" is not a 3.1 wire value.
 
   @T-UC-019-inv-150-2 @invariant @BR-RULE-150
   Scenario: INV-2 holds - in-flight media buy has active status
@@ -405,6 +413,10 @@ Feature: BR-UC-019 Query Media Buys
   @T-UC-019-inv-151-1 @invariant @BR-RULE-151
   Scenario: INV-1 holds - default filter returns only active media buys
     Given the principal "buyer-001" owns active media buy "mb-001" and completed media buy "mb-002"
+    # Pin the clock: the seed builds mb-001/mb-002 flight windows around this same
+    # "today" (mock_today), so the query MUST evaluate status against it too, else
+    # mb-001's window is in the past under the real clock and it reads as completed.
+    And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with no status_filter
     Then the response should include media buy "mb-001"
     And the response should not include media buy "mb-002"
@@ -501,18 +513,22 @@ Feature: BR-UC-019 Query Media Buys
       | canceled  | canceled  |
 
   @T-UC-019-inv-150-8 @invariant @BR-RULE-150 @schema-v3.1
-  Scenario Outline: INV-8 holds - pre-serving persisted states collapse to pending_start
+  Scenario Outline: INV-8 holds - pre-serving persisted states map to their pending status
     Given the principal "buyer-001" owns media buy "mb-001" with persisted status "<persisted>"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" should have status "pending_start"
-    # BR-RULE-150 INV-8: draft/pending/pending_approval -> pending_start; no flight refinement
+    Then the media buy "mb-001" should have status "<expected>"
+    # BR-RULE-150 INV-8: pre-serving persisted states map to their pending status; no flight refinement.
+    # CORRECTED to AdCP 3.1 enums/media-buy-status.json @ v3.1-04f59d2d5: a draft buy has no creatives
+    # assigned, so it is pending_creatives ("approved but has no creatives"), NOT pending_start
+    # ("ready to serve, waiting for its flight date"). pending / pending_approval are pre-serving
+    # ready states -> pending_start.
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
 
     Examples:
-      | persisted        |
-      | draft            |
-      | pending          |
-      | pending_approval |
+      | persisted        | expected          |
+      | draft            | pending_creatives |
+      | pending          | pending_start     |
+      | pending_approval | pending_start     |
 
   @T-UC-019-inv-150-9 @invariant @BR-RULE-150 @schema-v3.1
   Scenario: INV-9 holds - persisted failed maps to rejected
@@ -537,7 +553,10 @@ Feature: BR-UC-019 Query Media Buys
 
   @T-UC-019-inv-150-11 @invariant @BR-RULE-150 @schema-v3.1
   Scenario: INV-11 holds - unknown persisted status defaults to active then flight-refines
-    Given the principal "buyer-001" owns media buy "mb-001" with persisted status "some_unmapped_internal_state" and is_paused false
+    # Unmapped status must fit the status column (varchar(20)); the exact
+    # string is irrelevant — any value absent from PERSISTED_STATUS_TO_CANONICAL
+    # exercises the defensive default-to-active path.
+    Given the principal "buyer-001" owns media buy "mb-001" with persisted status "unmapped_state" and is_paused false
     And media buy "mb-001" has start_date "2026-03-01" and end_date "2026-03-31"
     And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
@@ -927,15 +946,15 @@ Feature: BR-UC-019 Query Media Buys
       | no_targeting_persisted               | no targeting_overlay and no legacy targeting          | the package "pkg-001" targeting_overlay should be null and no error should appear in response.errors[] for "pkg-001"                                            |
       | targeting_rehydrates_cleanly         | targeting_overlay {geo:['US']}                        | the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]                                                                            |
       | legacy_targeting_key                 | no targeting_overlay but legacy targeting {geo:['US']} | the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]                                                                            |
-      | rehydration_typeerror_partial_success | targeting_overlay set to the string 'not a dict'      | the package "pkg-001" targeting_overlay should be null and response.errors[] should include an INTERNAL_ERROR entry with message starting "TARGETING_REHYDRATION_FAILED:" |
+      | rehydration_typeerror_partial_success | targeting_overlay set to the string 'not a dict'      | the package "pkg-001" targeting_overlay should be null and response.errors[] should include a SERVICE_UNAVAILABLE entry with message starting "TARGETING_REHYDRATION_FAILED:" |
 
   @T-UC-019-inv-294-3 @invariant @BR-RULE-294 @error @schema-v3.1
-  Scenario: INV-3 holds - TypeError during Targeting instantiation yields non-fatal INTERNAL_ERROR + null overlay
+  Scenario: INV-3 holds - TypeError during Targeting instantiation yields non-fatal SERVICE_UNAVAILABLE + null overlay
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And package "pkg-001" persisted targeting_overlay is a string (will raise TypeError on Targeting(**str))
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then a warning should be logged with media_buy_id "mb-001" and package_id "pkg-001"
-    And response.errors[] should include an entry with code "INTERNAL_ERROR"
+    And response.errors[] should include an entry with code "SERVICE_UNAVAILABLE"
     And that errors[] entry message should start with "TARGETING_REHYDRATION_FAILED:"
     And that errors[] entry field selector should be "media_buys[].packages[pkg-001].targeting_overlay"
     And the package "pkg-001" targeting_overlay should be null
@@ -1197,10 +1216,10 @@ Feature: BR-UC-019 Query Media Buys
       | targeting_overlay key absent, targeting key absent                             | no targeting_overlay and no legacy targeting                  | the package "pkg-001" targeting_overlay should be null and no error should appear in response.errors[] for "pkg-001"                                                                                                                    |
       | targeting_overlay key present and parseable                                    | targeting_overlay {geo:['US']}                                | the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]                                                                                                                                                    |
       | targeting_overlay key absent, targeting key present                            | no targeting_overlay but legacy targeting {geo:['US']}        | the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]                                                                                                                                                    |
-      | targeting_overlay is a string (TypeError on Targeting(**str))                  | targeting_overlay set to the string 'not a dict'              | the package "pkg-001" targeting_overlay should be null and response.errors[] should include an INTERNAL_ERROR entry with message starting "TARGETING_REHYDRATION_FAILED:" and a "suggestion" field referencing "package_config"          |
-      | targeting_overlay is a list (TypeError on Targeting(**list))                   | targeting_overlay set to the list ['not','a','dict']          | the package "pkg-001" targeting_overlay should be null and response.errors[] should include an INTERNAL_ERROR entry with message starting "TARGETING_REHYDRATION_FAILED:" and a "suggestion" field referencing "package_config"          |
-      | two packages in same buy both raise TypeError                                  | two packages "pkg-001" and "pkg-002" both with corrupted targeting_overlay strings | both packages' targeting_overlay should be null and response.errors[] should include two INTERNAL_ERROR entries (one per package) each with a "suggestion" field referencing "package_config"                              |
-      | one of N buys has one bad package                                              | one of two buys "mb-001"/"mb-002" has package "pkg-001" with corrupted targeting_overlay and the other buy is clean | the corrupted package's targeting_overlay should be null, sibling buys should render normally, and response.errors[] should include exactly one INTERNAL_ERROR entry with a "suggestion" field referencing "package_config"             |
+      | targeting_overlay is a string (TypeError on Targeting(**str))                  | targeting_overlay set to the string 'not a dict'              | the package "pkg-001" targeting_overlay should be null and response.errors[] should include a SERVICE_UNAVAILABLE entry with message starting "TARGETING_REHYDRATION_FAILED:" and a "suggestion" field referencing "package_config"          |
+      | targeting_overlay is a list (TypeError on Targeting(**list))                   | targeting_overlay set to the list ['not','a','dict']          | the package "pkg-001" targeting_overlay should be null and response.errors[] should include a SERVICE_UNAVAILABLE entry with message starting "TARGETING_REHYDRATION_FAILED:" and a "suggestion" field referencing "package_config"          |
+      | two packages in same buy both raise TypeError                                  | two packages "pkg-001" and "pkg-002" both with corrupted targeting_overlay strings | both packages' targeting_overlay should be null and response.errors[] should include two SERVICE_UNAVAILABLE entries (one per package) each with a "suggestion" field referencing "package_config"                              |
+      | one of N buys has one bad package                                              | one of two buys "mb-001"/"mb-002" has package "pkg-001" with corrupted targeting_overlay and the other buy is clean | the corrupted package's targeting_overlay should be null, sibling buys should render normally, and response.errors[] should include exactly one SERVICE_UNAVAILABLE entry with a "suggestion" field referencing "package_config"             |
 
   @T-UC-019-storyboard-post-create-status-poll @storyboard-v3.1 @v3-1 @post-create-poll
   Scenario: get_media_buys called immediately after create_media_buy resolves the freshly-created buy by media_buy_id

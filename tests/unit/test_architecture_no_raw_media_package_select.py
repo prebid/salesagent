@@ -9,12 +9,11 @@ Integration tests are excluded — they need direct DB access for assertions.
 beads: salesagent-rva2 (structural guard — no raw MediaPackage select)
 """
 
-import ast
 from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, find_raw_select_violations
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -41,45 +40,13 @@ def _find_raw_media_package_selects() -> list[tuple[str, str, int]]:
     Returns list of (file_path, function_name, line_number).
     Skips the repository module itself and non-production code.
     """
-    violations = []
-    src_dir = ROOT / "src"
-
-    for py_file in src_dir.rglob("*.py"):
-        rel_path = str(py_file.relative_to(ROOT))
-
-        # Skip the repository itself — it's allowed to use raw selects
-        if rel_path == REPOSITORY_FILE:
-            continue
-
-        try:
-            tree = ast.parse(py_file.read_text())
-        except SyntaxError:
-            continue
-
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-
-            for child in iter_call_expressions(node):
-                func = child.func
-                if not (isinstance(func, ast.Name) and func.id == "select"):
-                    continue
-
-                if not child.args:
-                    continue
-
-                model_arg = child.args[0]
-                model_name = None
-                if isinstance(model_arg, ast.Name):
-                    model_name = model_arg.id
-                elif isinstance(model_arg, ast.Attribute):
-                    model_name = model_arg.attr
-
-                if model_name in MEDIA_PACKAGE_MODELS:
-                    violations.append((rel_path, node.name, child.lineno))
-                    break  # One violation per function is enough
-
-    return violations
+    return [
+        (rel_path, func_name, lineno)
+        for rel_path, func_name, _model, lineno in find_raw_select_violations(
+            skip=lambda rel_path: rel_path == REPOSITORY_FILE,
+            model_names=MEDIA_PACKAGE_MODELS,
+        )
+    ]
 
 
 class TestNoRawMediaPackageSelect:

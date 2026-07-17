@@ -15,12 +15,13 @@ from typing import Annotated, Any, cast
 
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import Field, RootModel, ValidationError
+from pydantic import Field, RootModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
+from src.core.tools._media_buy_status import PERSISTED_STATUS_TO_CANONICAL, resolve_canonical_status
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +60,9 @@ from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import ContextObject, MediaBuyStatus
 
 from src.core.auth import get_principal_object, require_identity, require_tenant
-from src.core.database.models import Creative, CreativeAssignment, MediaBuy
+from src.core.database.models import CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
+from src.core.database.repositories.creative import CreativeRepository
 from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
     AdCPValidationError,
@@ -78,7 +80,7 @@ from src.core.schemas import (
     SnapshotUnavailableReason,
     Targeting,
 )
-from src.core.validation_helpers import format_validation_error
+from src.core.validation_helpers import adcp_validation_boundary
 
 
 def _get_media_buys_impl(
@@ -145,7 +147,9 @@ def _get_media_buys_impl(
         all_media_buy_ids = [buy.media_buy_id for buy in target_media_buys]
         # FIXME(salesagent-9f2): _fetch_creative_approvals should use a repository method
         assert uow.session is not None
-        creative_approvals_by_package = _fetch_creative_approvals(all_media_buy_ids, tenant_id, uow.session)
+        creative_approvals_by_package = _fetch_creative_approvals(
+            all_media_buy_ids, tenant_id, principal_id, uow.session
+        )
 
         # Resolve package configs for all media buys in one batch query
         packages_by_media_buy = _fetch_packages(all_media_buy_ids, uow)
@@ -291,6 +295,28 @@ def _get_media_buys_impl(
     )
 
 
+def _build_get_media_buys_request(
+    media_buy_ids: list[str] | None,
+    status_filter: MediaBuyStatus | list[MediaBuyStatus] | None,
+    account: LibraryAccountReference | None,
+    context: ContextObject | None,
+) -> GetMediaBuysRequest:
+    """Build a GetMediaBuysRequest from individual wire params.
+
+    Shared by the MCP wrapper and the A2A/REST raw wrapper so request
+    construction runs inside the ONE validation boundary — previously the raw
+    wrapper built the request unprotected and REST leaked a raw pydantic
+    ``ValidationError`` with no top-level suggestion (#1417).
+    """
+    with adcp_validation_boundary(context="get_media_buys request"):
+        return GetMediaBuysRequest(
+            media_buy_ids=media_buy_ids,
+            status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
+            account=account,
+            context=cast(ContextObject | None, context),
+        )
+
+
 async def get_media_buys(
     media_buy_ids: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
@@ -316,22 +342,11 @@ async def get_media_buys(
     Returns:
         ToolResult with GetMediaBuysResponse data
     """
-    try:
-        req = GetMediaBuysRequest(
-            media_buy_ids=media_buy_ids,
-            status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
-            account=account,
-            context=cast(ContextObject | None, context),
-        )
-        # Read identity pre-resolved by MCPAuthMiddleware
-        identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
-        response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
-        return ToolResult(content=str(response), structured_content=response)
-    except ValidationError as e:
-        # Raise AdCPValidationError so the MCP boundary translator runs the
-        # envelope builder; the prior ToolError raise bypassed it and produced
-        # a tuple-stringified wire response with no adcp_error/errors layers.
-        raise AdCPValidationError(format_validation_error(e, context="get_media_buys request")) from e
+    req = _build_get_media_buys_request(media_buy_ids, status_filter, account, context)
+    # Read identity pre-resolved by MCPAuthMiddleware
+    identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
+    response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
+    return ToolResult(content=str(response), structured_content=response)
 
 
 def get_media_buys_raw(
@@ -362,12 +377,7 @@ def get_media_buys_raw(
 
         identity = resolve_identity_from_context(ctx, require_valid_token=True, protocol="a2a")
 
-    req = GetMediaBuysRequest(
-        media_buy_ids=media_buy_ids,
-        status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
-        account=account,
-        context=cast(ContextObject | None, context),
-    )
+    req = _build_get_media_buys_request(media_buy_ids, status_filter, account, context)
     return _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
 
 
@@ -428,76 +438,94 @@ def _resolve_status_filter(
         # Default: active only
         return {MediaBuyStatus.active}
 
+    # Normalize every element to a MediaBuyStatus enum. On the wire the filter
+    # arrives as bare strings (GetMediaBuysRequest.status_filter is not coerced
+    # to the enum), while _compute_status returns MediaBuyStatus members — so a
+    # raw ``set(status_filter)`` of strings never matches the enum membership
+    # test at the call site, silently dropping every buy. ``MediaBuyStatus(x)``
+    # is idempotent for enum members and coerces valid strings.
     if isinstance(status_filter, RootModel):
-        return set(status_filter.root)
+        raw = status_filter.root
+    elif isinstance(status_filter, list):
+        raw = status_filter
+    else:
+        raw = [status_filter]
 
-    if isinstance(status_filter, list):
-        return set(status_filter)
+    try:
+        return {MediaBuyStatus(s) for s in raw}
+    except ValueError as e:
+        # An unknown status string is a bad request, not a server fault — surface
+        # a clean VALIDATION_ERROR instead of letting the ValueError escape as a
+        # 500. (A dedicated STATUS_FILTER_INVALID_VALUE code is a separate,
+        # unimplemented gap; see the xfailed boundary-status-filter rows.)
+        raise AdCPValidationError(
+            f"Invalid status_filter value: {e}",
+            field="status_filter",
+            suggestion="status_filter values must be valid media-buy statuses",
+        ) from e
 
-    return {status_filter}
 
-
-# Persisted MediaBuy.status (written by media_buy_create.py and lifecycle
-# transitions) maps onto the AdCP MediaBuyStatus wire vocabulary below.
-# This mirrors media_buy_delivery._PERSISTED_STATUS_TO_INTERNAL (the
-# salesagent-18h.1 fix) but targets the AdCP enum used by list_media_buys
-# instead of the internal delivery filter vocabulary — the two output
-# vocabularies are genuinely different (AdCP has no "failed"/"ready"/"draft"),
-# so per the CLAUDE.md DRY guidance ("not about collapsing two genuinely
-# different operations") the mapping is mirrored, not shared.
-#
-# The persisted status is authoritative: terminal/explicit states
-# (paused, completed, rejected, canceled) are lifecycle decisions that
-# cannot be re-derived from flight dates. "failed" has no AdCP equivalent
-# and is reported as the closest terminal state, "rejected". Pre-serving
-# states (draft/pending/pending_approval) map to "pending_start"
-# (consistent with media_buy_create._compute_initial_media_buy_status).
-# Generic serving states (active/approved) are date-refined below.
+# Persisted MediaBuy.status -> AdCP MediaBuyStatus wire enum, DERIVED from the
+# authoritative ``PERSISTED_STATUS_TO_CANONICAL`` (#1417 round-8 review nit: the
+# former hand-written literal drifted from the canonical map on ``draft``/
+# ``scheduled`` and omitted ``ready``/``pending_activation`` entirely). This is
+# the LIFECYCLE-surface projection consumed by the #1417 dual-emit of
+# ``media_buy_status`` on the update responses, used only by
+# ``normalize_persisted_media_buy_status`` on the no-DB-row fallback path — a
+# pure column coercion with NO flight-window refinement. Two sanctioned
+# adaptations of the canonical values (pinned row-by-row by
+# ``tests/unit/test_media_buy_status_consistency.py``):
+#   - "failed" -> "rejected": the lifecycle enum has no ``failed``; the same
+#     collapse ``_compute_status`` applies below.
+#   - "ready"/"scheduled" -> "pending_start": canonically the date-gated generic
+#     serving state, but this path has no DB row (hence no dates) to refine
+#     against, so pre-flight is the truthful unrefined reading.
+_UNREFINED_PRE_FLIGHT_OVERRIDES = {"ready": "pending_start", "scheduled": "pending_start"}
 _PERSISTED_STATUS_TO_ADCP: dict[str, MediaBuyStatus] = {
-    "active": MediaBuyStatus.active,
-    "approved": MediaBuyStatus.active,
-    "paused": MediaBuyStatus.paused,
-    "completed": MediaBuyStatus.completed,
-    "rejected": MediaBuyStatus.rejected,
-    "canceled": MediaBuyStatus.canceled,
-    "failed": MediaBuyStatus.rejected,
-    "draft": MediaBuyStatus.pending_start,
-    "pending": MediaBuyStatus.pending_start,
-    "pending_approval": MediaBuyStatus.pending_start,
-    "pending_creatives": MediaBuyStatus.pending_creatives,
-    "pending_start": MediaBuyStatus.pending_start,
+    persisted: MediaBuyStatus(
+        "rejected" if canonical == "failed" else _UNREFINED_PRE_FLIGHT_OVERRIDES.get(persisted, canonical)
+    )
+    for persisted, canonical in PERSISTED_STATUS_TO_CANONICAL.items()
 }
 
 
-def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatus:
-    """Resolve a media buy's AdCP status from its persisted status column.
+def normalize_persisted_media_buy_status(status: str | None) -> MediaBuyStatus | None:
+    """Map a persisted ``MediaBuy.status`` string to its AdCP ``MediaBuyStatus``.
 
-    The persisted ``MediaBuy.status`` is the source of truth. Only when the
-    buy is in a generic serving state ("active"/"approved") do we refine
-    against the flight window — a serving buy whose flight has not started
-    yet is "pending_start", one past its end date is "completed", and one
-    flagged ``is_paused`` is "paused". Terminal/explicit lifecycle states
-    (paused, completed, rejected, canceled) come straight from the column
-    and cannot be re-derived from flight dates (salesagent-36d).
+    DB-status → AdCP-status coercion via ``_PERSISTED_STATUS_TO_ADCP`` (derived
+    from ``PERSISTED_STATUS_TO_CANONICAL`` — the single authoritative
+    persisted-status map — with the two sanctioned adaptations documented above),
+    so the create/update dual-emit of ``media_buy_status`` cannot inject a non-enum DB
+    value (e.g. legacy ``pending_approval``) into the typed response field (#1417). This is a
+    pure column coercion with NO flight-window refinement — the update-response status pair
+    reflects the persisted lifecycle decision, not a date-derived state. Returns ``None`` for
+    an empty/unknown status so callers omit the field rather than emit a non-spec value.
     """
-    persisted = (buy.status or "").lower()
-    mapped = _PERSISTED_STATUS_TO_ADCP.get(persisted, MediaBuyStatus.active)
+    if not status:
+        return None
+    return _PERSISTED_STATUS_TO_ADCP.get(status.lower())
 
-    if mapped != MediaBuyStatus.active:
-        return mapped
 
-    # Generic serving state — refine against the flight window.
-    if getattr(buy, "is_paused", False):
-        return MediaBuyStatus.paused
+def _compute_status(buy: MediaBuy | _MediaBuyData, today: date) -> MediaBuyStatus:
+    """Resolve a media buy's AdCP status for the get_media_buys read path.
 
-    start = buy.start_time.date() if buy.start_time else cast(date, buy.start_date)
-    end = buy.end_time.date() if buy.end_time else cast(date, buy.end_date)
+    Delegates the persisted-status map + flight-window refinement to the shared
+    ``resolve_canonical_status`` (the single source of truth also used by
+    get_media_buy_delivery, so both required tools describe the same buy with
+    the same status — pinned by test_media_buy_status_consistency). The only
+    adaptation to the lifecycle surface: the canonical vocabulary's delivery-only
+    "failed" has no AdCP lifecycle equivalent, so it collapses to the closest
+    terminal state, "rejected" (enums/media-buy-status.json).
 
-    if today < start:
-        return MediaBuyStatus.pending_start
-    if today > end:
-        return MediaBuyStatus.completed
-    return MediaBuyStatus.active
+    Note: the update-response dual-emit takes a DIFFERENT path —
+    ``normalize_persisted_media_buy_status`` above — which is a pure column
+    coercion with no date refinement, so the two surfaces read the same column
+    but only the read path refines against the flight window (#1417 / #1545).
+    """
+    canonical = resolve_canonical_status(buy, today)
+    if canonical == "failed":
+        return MediaBuyStatus.rejected
+    return MediaBuyStatus(canonical)
 
 
 def _fetch_packages(media_buy_ids: list[str], uow: MediaBuyUoW) -> dict[str, list[_PackageData]]:
@@ -526,6 +554,7 @@ def _fetch_packages(media_buy_ids: list[str], uow: MediaBuyUoW) -> dict[str, lis
 def _fetch_creative_approvals(
     media_buy_ids: list[str],
     tenant_id: str,
+    principal_id: str,
     session: Session,
 ) -> dict[tuple[str, str], list[CreativeApproval]]:
     """Fetch creative approvals for all packages, grouped by (media_buy_id, package_id)."""
@@ -542,13 +571,14 @@ def _fetch_creative_approvals(
     if not assignments:
         return {}
 
-    # Fetch all referenced creatives in one query (scoped to tenant)
+    # Fetch all referenced creatives in one principal-scoped query. The map is
+    # keyed by bare creative_id, but the creatives PK is composite (creative_id,
+    # tenant_id, principal_id) — a tenant-only load could resolve a colliding id
+    # to ANOTHER principal's row and show their approval status to this buyer.
     creative_ids = [a.creative_id for a in assignments]
-    creative_stmt = select(Creative).where(
-        Creative.tenant_id == tenant_id,
-        Creative.creative_id.in_(creative_ids),
-    )
-    creatives = {c.creative_id: c for c in session.scalars(creative_stmt).all()}
+    creatives = {
+        c.creative_id: c for c in CreativeRepository(session, tenant_id).get_by_ids(creative_ids, principal_id)
+    }
 
     # Build approval objects grouped by (media_buy_id, package_id)
     result: dict[tuple[str, str], list[CreativeApproval]] = {}

@@ -113,10 +113,28 @@ class TestTimestamptzMigration:
         """Downgrade should revert TIMESTAMPTZ columns back to TIMESTAMP."""
         engine, db_url = migration_db
 
-        # The database is already at MIGRATION_REV from the previous test.
-        # Verify it's TIMESTAMPTZ first.
+        # Self-contained setup (#1572 fallout): migration_db is module-scoped, but
+        # under xdist the two tests of this class can land on DIFFERENT workers,
+        # each with its own migration_db — a fresh worker's DB has no schema at all
+        # (the old "already at MIGRATION_REV from the previous test" assumption read
+        # back column type None). Detect that and replay the upgrade test's setup
+        # (PRE_MIGRATION_REV -> seed naive row -> MIGRATION_REV) instead of assuming
+        # its state. The integration tox env additionally runs xdist with
+        # --dist loadfile so this whole file normally stays on one worker, but the
+        # test stays self-contained rather than depending on scheduling.
         col_type = _get_column_type(engine, "tenants", "created_at")
+        if col_type is None:
+            run_alembic_upgrade(db_url, PRE_MIGRATION_REV)
+            _insert_test_tenant(engine, datetime(2025, 6, 15, 12, 30, 0))
+            run_alembic_upgrade(db_url, MIGRATION_REV)
+            col_type = _get_column_type(engine, "tenants", "created_at")
         assert col_type == "timestamp with time zone", f"Expected TIMESTAMPTZ before downgrade, got: {col_type}"
+
+        # Seed the survival-check row if the sibling test didn't (fresh worker).
+        with engine.connect() as conn:
+            existing = conn.execute(text("SELECT 1 FROM tenants WHERE tenant_id = 'test_tz_tenant'")).fetchone()
+        if existing is None:
+            _insert_test_tenant(engine, datetime(2025, 6, 15, 12, 30, 0))
 
         # Step 1: Downgrade
         run_alembic_downgrade(db_url, PRE_MIGRATION_REV)

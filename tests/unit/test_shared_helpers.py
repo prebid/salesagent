@@ -259,20 +259,16 @@ class TestBuildAgentConfig:
 
 def _make_media_package(
     package_id: str = "pkg-1",
-    buyer_ref: str | None = "buyer-ref-1",
 ) -> MagicMock:
     """Create a minimal MediaPackage-like object for testing response builders."""
     pkg = MagicMock()
     pkg.package_id = package_id
-    pkg.buyer_ref = buyer_ref
     return pkg
 
 
-def _make_create_request(buyer_ref: str | None = "order-ref-1") -> MagicMock:
+def _make_create_request() -> MagicMock:
     """Create a minimal CreateMediaBuyRequest-like object."""
-    req = MagicMock()
-    req.buyer_ref = buyer_ref
-    return req
+    return MagicMock()
 
 
 def _make_adapter_instance() -> Any:
@@ -327,14 +323,6 @@ class TestBuildPackageResponses:
         result = adapter._build_package_responses(packages, paused=True)
 
         assert result[0].paused is True
-
-    def test_none_buyer_ref_package_still_valid(self):
-        """Package without buyer_ref is still valid (buyer_ref removed in adcp 3.12)."""
-        adapter = _make_adapter_instance()
-        packages = [_make_media_package(buyer_ref=None)]
-        result = adapter._build_package_responses(packages)
-
-        assert result[0].package_id == "pkg-1"
 
     def test_empty_packages_list(self):
         """Empty packages list produces empty result."""
@@ -421,12 +409,14 @@ class TestBuildCreateSuccess:
         assert len(result.packages) == 1
         assert result.packages[0].package_id == "custom-p1"
 
-    def test_buyer_ref_no_longer_on_success_response(self):
-        """buyer_ref should not be set on CreateMediaBuySuccess response.
+    def test_buyer_ref_not_serialized_on_success_response(self):
+        """buyer_ref must never reach the wire on CreateMediaBuySuccess.
 
-        Note: SDK 5.7 codegen incorrectly declares buyer_ref on the response
-        schema (it belongs on the request, not the response per AdCP 3.1).
-        We verify our code doesn't populate it, even though the SDK accepts it.
+        adcp 6.6 (spec 3.1.1) removed buyer_ref from the create-media-buy response type —
+        it belongs on the request, not the response. The adcp 6.6 parent therefore no
+        longer declares it, so it is not a field on CreateMediaBuySuccess at all and can
+        never be serialized. (The obsolete SDK-5.7 exclude=True redeclaration that used to
+        neutralize a wrongly-inherited parent field is gone with the 6.6 bump.)
         """
         adapter = _make_adapter_instance()
         result = adapter._build_create_success(
@@ -435,8 +425,11 @@ class TestBuildCreateSuccess:
             packages=[_make_media_package()],
         )
 
-        # Our code should not set buyer_ref on the response
-        assert result.buyer_ref is None
+        # The obligation is on the wire: buyer_ref never serializes. Under adcp 6.6 that
+        # holds because it is not a field on the response type at all.
+        assert "buyer_ref" not in type(result).model_fields
+        assert "buyer_ref" not in result.model_dump()
+        assert "buyer_ref" not in result.model_dump_json()
 
     def test_result_is_create_media_buy_success_type(self):
         """Return type is CreateMediaBuySuccess."""

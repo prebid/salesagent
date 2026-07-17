@@ -13,77 +13,49 @@ will pass once the queries are fixed.
 import ast
 from pathlib import Path
 
+from tests.unit._architecture_helpers import extract_select_calls
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def _extract_select_calls_in_function(file_path: str, func_name: str) -> list[dict]:
-    """Extract select() call info from a function using AST.
+    """Extract Creative-related select() call info from a function using AST.
 
     Returns list of dicts with:
     - model: the model name being selected (e.g., "Creative", "CreativeModel")
     - has_tenant_filter: whether .filter/.where includes tenant_id
     - lineno: line number of the select() call
     """
+    return extract_select_calls(
+        ROOT / file_path,
+        func_name,
+        model_predicate=lambda name: "creative" in name.lower(),
+    )
+
+
+def _function_calls_repo_get_by_ids(file_path: str, func_name: str) -> bool:
+    """True if *func_name* calls CreativeRepository(...).get_by_ids(...).
+
+    The repository pins tenant_id in its constructor and requires
+    principal_id, so routing through it IS the tenant-isolation fix —
+    stronger than an inline select with a hand-written tenant filter.
+    """
     source_path = ROOT / file_path
     tree = ast.parse(source_path.read_text())
-    results = []
 
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name != func_name:
             continue
-        if node.name != func_name:
-            continue
-
-        # Walk the function body for select() calls
-        source_text = source_path.read_text()
         for child in ast.walk(node):
             if not isinstance(child, ast.Call):
                 continue
-
-            # Find select(Model) calls
             func = child.func
-            if not (isinstance(func, ast.Name) and func.id == "select"):
+            if not (isinstance(func, ast.Attribute) and func.attr == "get_by_ids"):
                 continue
-            if not child.args:
-                continue
-
-            # Get the model name
-            model_arg = child.args[0]
-            model_name = None
-            if isinstance(model_arg, ast.Name):
-                model_name = model_arg.id
-            elif isinstance(model_arg, ast.Attribute):
-                model_name = model_arg.attr
-
-            if not model_name:
-                continue
-
-            # Check if this is a Creative/CreativeReview/CreativeModel query
-            if "Creative" not in model_name and "creative" not in model_name.lower():
-                continue
-
-            # Now walk UP the chain from this select() to find the full
-            # statement including .filter()/.where()/.filter_by() calls.
-            # We scan the function source lines around the select() call
-            # for tenant_id references.
-            select_line = child.lineno
-
-            # Get surrounding lines (the full statement can span multiple lines)
-            lines = source_text.splitlines()
-            # Look at lines from select() to the next statement (up to 10 lines)
-            stmt_text = "\n".join(lines[select_line - 1 : select_line + 10])
-
-            has_tenant_filter = "tenant_id" in stmt_text
-
-            results.append(
-                {
-                    "model": model_name,
-                    "has_tenant_filter": has_tenant_filter,
-                    "lineno": select_line,
-                }
-            )
-
-    return results
+            base = func.value
+            if isinstance(base, ast.Call) and isinstance(base.func, ast.Name) and base.func.id == "CreativeRepository":
+                return True
+    return False
 
 
 class TestCreativeQueryTenantIsolation:
@@ -95,11 +67,13 @@ class TestCreativeQueryTenantIsolation:
     """
 
     def test_fetch_creative_approvals_scopes_by_tenant(self):
-        """_fetch_creative_approvals must filter Creative by tenant_id.
+        """_fetch_creative_approvals must load Creative via CreativeRepository.
 
-        The function already has tenant_id as a parameter and uses it on
-        CreativeAssignment queries, but the Creative query at line 414
-        only filters by creative_id.
+        Originally this pinned an inline tenant-filtered select(). The lookup
+        now routes through CreativeRepository.get_by_ids (tenant_id pinned in
+        the constructor, principal_id required) — the centralized form of the
+        same isolation fix (salesagent-s9eg, DRY'd in salesagent-ol24). An
+        inline select(Creative) reappearing here is a regression.
         """
         selects = _extract_select_calls_in_function(
             "src/core/tools/media_buy_list.py",
@@ -107,20 +81,23 @@ class TestCreativeQueryTenantIsolation:
         )
 
         creative_selects = [s for s in selects if s["model"] in ("Creative", "CreativeModel")]
-        assert creative_selects, "Expected at least one Creative select() call"
-
-        for s in creative_selects:
-            assert s["has_tenant_filter"], (
-                f"Creative query at media_buy_list.py:{s['lineno']} is missing tenant_id filter. "
-                f"This is a cross-tenant data leak (salesagent-s9eg)."
-            )
+        assert not creative_selects, (
+            f"Inline Creative select() at media_buy_list.py:"
+            f"{[s['lineno'] for s in creative_selects]} — Creative loads must go "
+            f"through CreativeRepository.get_by_ids (salesagent-s9eg/salesagent-ol24)."
+        )
+        assert _function_calls_repo_get_by_ids("src/core/tools/media_buy_list.py", "_fetch_creative_approvals"), (
+            "_fetch_creative_approvals must load creatives via CreativeRepository(...).get_by_ids()."
+        )
 
     def test_execute_approved_creative_lookup_scopes_by_tenant(self):
-        """execute_approved_media_buy must filter Creative by tenant_id.
+        """execute_approved_media_buy must load Creative via CreativeRepository.
 
-        The function opens its own session and queries CreativeModel by
-        creative_id alone at line 783. The tenant dict is available
-        as tenant_dict["tenant_id"].
+        Originally this pinned an inline tenant-filtered select(). The lookup
+        now routes through CreativeRepository.get_by_ids (tenant_id pinned in
+        the constructor, principal_id required) — the centralized form of the
+        same isolation fix (salesagent-s9eg, DRY'd in salesagent-ol24). An
+        inline select(Creative) reappearing here is a regression.
         """
         selects = _extract_select_calls_in_function(
             "src/core/tools/media_buy_create.py",
@@ -128,13 +105,14 @@ class TestCreativeQueryTenantIsolation:
         )
 
         creative_selects = [s for s in selects if s["model"] in ("Creative", "CreativeModel")]
-        assert creative_selects, "Expected at least one Creative select() call"
-
-        for s in creative_selects:
-            assert s["has_tenant_filter"], (
-                f"Creative query at media_buy_create.py:{s['lineno']} is missing tenant_id filter. "
-                f"This is a cross-tenant data leak (salesagent-s9eg)."
-            )
+        assert not creative_selects, (
+            f"Inline Creative select() at media_buy_create.py:"
+            f"{[s['lineno'] for s in creative_selects]} — Creative loads must go "
+            f"through CreativeRepository.get_by_ids (salesagent-s9eg/salesagent-ol24)."
+        )
+        assert _function_calls_repo_get_by_ids("src/core/tools/media_buy_create.py", "execute_approved_media_buy"), (
+            "execute_approved_media_buy must load creatives via CreativeRepository(...).get_by_ids()."
+        )
 
     def test_get_creative_with_latest_review_scopes_by_tenant(self):
         """get_creative_with_latest_review must accept and filter by tenant_id.

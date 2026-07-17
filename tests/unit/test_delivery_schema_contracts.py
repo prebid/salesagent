@@ -71,9 +71,13 @@ class TestDeliveryTotalsFields:
         "spend",
         "clicks",
         "ctr",
-        "video_completions",
+        "completed_views",
         "completion_rate",
         "conversions",
+        # conversion_value: spec core/delivery-metrics.json declares it per buy;
+        # feeds the aggregated_totals.roas quotient defined by
+        # media-buy/get-media-buy-delivery-response.json (pin 04f59d2d5).
+        "conversion_value",
         "viewability",
     }
 
@@ -100,7 +104,7 @@ class TestPackageDeliveryFields:
         "impressions",
         "spend",
         "clicks",
-        "video_completions",
+        "completed_views",
         "pacing_index",
         "pricing_model",
         "rate",

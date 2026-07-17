@@ -106,11 +106,39 @@ def _sync_adapter_approval_to_db(ctx: dict, *, manual_approval_required: bool) -
     set_adapter_test_behavior(env, tenant.tenant_id, manual_approval_required=manual_approval_required)
 
 
+def _seed_auto_approval(ctx: dict, *, sync_adapter: bool = True) -> None:
+    """Force the auto-approval create path for the scenario's tenant.
+
+    Sets human_review_required=False on the ORM row, the identity cache, and
+    the env tenant overrides. With ``sync_adapter`` also mirrors
+    manual_approval_required=False into the adapter DB config so live-server
+    (e2e) transports take the same auto path as in-process: the in-process
+    harness zeroes manual_approval_operations, but the live tenant defaults to
+    human_review_required=True and the real adapter requires approval for
+    create_media_buy, which would divert e2e onto the PENDING-approval path
+    with different validation semantics (PR #1430 item 3).
+
+    No-op when the scenario has no tenant yet.
+    """
+    tenant = ctx.get("tenant")
+    if tenant is None:
+        return
+    env = ctx["env"]
+    tenant.human_review_required = False
+    env._commit_factory_data()
+    # Also update identity's tenant dict (pre-built, not re-read from DB)
+    env._identity_cache.clear()
+    env._tenant_overrides["human_review_required"] = False
+    if sync_adapter:
+        _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
+
+
 def _sync_adapter_error_to_db(
     ctx: dict,
     *,
     fail_on_create: bool = False,
     fail_on_update: bool = False,
+    fail_on_upload: bool = False,
     error_message: str | None = None,
     error_details: dict | None = None,
     recovery: str | None = None,
@@ -125,6 +153,7 @@ def _sync_adapter_error_to_db(
     kwargs: dict = {
         "fail_on_create": fail_on_create,
         "fail_on_update": fail_on_update,
+        "fail_on_upload": fail_on_upload,
         "error_message": error_message,
     }
     if error_details is not None:
@@ -139,25 +168,41 @@ def _sync_adapter_error_to_db(
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given("the tenant is configured for auto-approval")
+def _configure_adapter_manual_approval(env: Any, *, required: bool) -> None:
+    """Set manual-approval config on EVERY adapter mock the env exposes.
+
+    MediaBuyCreateEnv patches the create-module adapter as ``env.mock['adapter']``;
+    MediaBuyDualEnv additionally patches the update-module adapter as
+    ``env.mock['update_adapter']``. The production create/update manual-approval
+    gate reads ``manual_approval_required`` + ``'<op>' in manual_approval_operations``
+    from its OWN module's adapter, so both must be configured (guarded on presence).
+    """
+    operations = {"create_media_buy", "update_media_buy"} if required else []
+    for name in ("adapter", "update_adapter"):
+        if name not in env.mock:
+            continue
+        adapter_mock = env.mock[name].return_value
+        adapter_mock.manual_approval_required = required
+        adapter_mock.manual_approval_operations = operations
+
+
 @given("tenant human_review_required is false")
 def given_tenant_auto_approval(ctx: dict) -> None:
-    """Configure tenant for auto-approval (human_review_required=False)."""
-    tenant = ctx.get("tenant")
-    assert tenant is not None, (
+    """Configure tenant for auto-approval (human_review_required=False).
+
+    The "the tenant is configured for auto-approval" alias is owned by
+    uc002_create_media_buy (canonical) to avoid a cross-module shadow now that
+    this module is registered; UC-003 scenarios reach this via the
+    "human_review_required is false" alias.
+    """
+    assert ctx.get("tenant") is not None, (
         "No tenant in ctx — step claims 'tenant is configured for auto-approval' but no tenant exists to configure"
     )
-    tenant.human_review_required = False
-    env = ctx["env"]
-    env._commit_factory_data()
-    # Also update identity's tenant dict (pre-built, not re-read from DB)
-    env._identity_cache.clear()
-    env._tenant_overrides["human_review_required"] = False
-    # Also write to DB so Docker-hosted adapter reads the correct config
-    _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
+    _seed_auto_approval(ctx)
 
 
 @given("the tenant is configured for manual approval")
+@given("the tenant requires manual approval")
 @given(parsers.parse('the tenant has "human_review_required" set to true'))
 @given("tenant human_review_required is true")
 @given("approval path is manual")
@@ -173,12 +218,10 @@ def given_tenant_manual_approval(ctx: dict) -> None:
     env._identity_cache.clear()
     env._tenant_overrides["human_review_required"] = True
     # Production code checks: manual_approval_required AND
-    # "create_media_buy" in adapter.manual_approval_operations.
-    # The mock adapter defaults to manual_approval_operations=[],
-    # so we must also configure the adapter mock for manual approval.
-    adapter_mock = env.mock["adapter"].return_value
-    adapter_mock.manual_approval_required = True
-    adapter_mock.manual_approval_operations = {"create_media_buy", "update_media_buy"}
+    # "<op>" in adapter.manual_approval_operations. The mock adapter defaults to
+    # manual_approval_operations=[], so configure every adapter mock (create +
+    # update) for manual approval — the update submitted path reads update_adapter.
+    _configure_adapter_manual_approval(env, required=True)
     # Also write to DB so Docker-hosted adapter reads the correct config
     _sync_adapter_approval_to_db(ctx, manual_approval_required=True)
 
@@ -191,9 +234,7 @@ def given_adapter_no_manual_approval(ctx: dict) -> None:
     to be clear in the scenario.
     """
     env = ctx["env"]
-    adapter_mock = env.mock["adapter"].return_value
-    adapter_mock.manual_approval_required = False
-    adapter_mock.manual_approval_operations = []
+    _configure_adapter_manual_approval(env, required=False)
     # Also write to DB so Docker-hosted adapter reads the correct config
     _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
 
@@ -206,9 +247,7 @@ def given_adapter_manual_approval(ctx: dict) -> None:
     manual_approval_operations — both are needed for the approval gate.
     """
     env = ctx["env"]
-    adapter_mock = env.mock["adapter"].return_value
-    adapter_mock.manual_approval_required = True
-    adapter_mock.manual_approval_operations = {"create_media_buy", "update_media_buy"}
+    _configure_adapter_manual_approval(env, required=True)
     # Also write to DB so Docker-hosted adapter reads the correct config
     _sync_adapter_approval_to_db(ctx, manual_approval_required=True)
 
@@ -312,9 +351,11 @@ def given_persistence_timing_boundary(ctx: dict, config: str) -> None:
     _configure_persistence_timing(ctx, approval, adapter_result)
 
 
-@given(parsers.parse("the tenant has max_daily_package_spend configured at {amount:d}"))
-def given_tenant_max_daily_spend(ctx: dict, amount: int) -> None:
-    """Configure tenant max daily package spend on the CurrencyLimit (USD)."""
+def _set_max_daily_package_spend(ctx: dict, amount: int) -> None:
+    """Configure tenant max daily package spend on the CurrencyLimit (USD).
+
+    Shared helper for both the parameterized and bare 'configured' steps.
+    """
     from decimal import Decimal
 
     from sqlalchemy import select
@@ -331,6 +372,22 @@ def given_tenant_max_daily_spend(ctx: dict, amount: int) -> None:
         assert cl is not None, f"No CurrencyLimit(USD) for tenant {tenant.tenant_id}"
         cl.max_daily_package_spend = Decimal(str(amount))
         session.commit()
+
+
+@given(parsers.parse("the tenant has max_daily_package_spend configured at {amount:d}"))
+def given_tenant_max_daily_spend(ctx: dict, amount: int) -> None:
+    """Configure tenant max daily package spend on the CurrencyLimit (USD)."""
+    _set_max_daily_package_spend(ctx, amount)
+
+
+@given("the tenant has max_daily_package_spend configured")
+def given_tenant_max_daily_spend_default(ctx: dict) -> None:
+    """Configure tenant max daily package spend with a default value (1000 USD).
+
+    Used by legacy-mode scenarios where the exact cap amount is not specified
+    in the Gherkin step text -- the scenario only asserts that a cap EXISTS.
+    """
+    _set_max_daily_package_spend(ctx, 1000)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -416,6 +473,7 @@ def given_request_with_total_budget(ctx: dict, amount: int) -> None:
 
 
 @given(parsers.parse("a create_media_buy request with total_budget of {amount:d}"))
+@given(parsers.parse("a create_media_buy request with total_budget {amount:d}"))
 def given_request_with_total_budget_of(ctx: dict, amount: int) -> None:
     """Set up request with a specific total_budget amount (may be invalid, e.g. 0).
 
@@ -439,6 +497,31 @@ def given_request_with_total_budget_of(ctx: dict, amount: int) -> None:
     assert actual_total == float(amount), (
         f"Step claims 'total_budget of {amount}' but total of all package budgets "
         f"is {actual_total} — setup did not establish the claimed total"
+    )
+
+
+@given(parsers.parse("the product minimum spend is {amount:d} {currency}"))
+def given_product_minimum_spend(ctx: dict, amount: int, currency: str) -> None:
+    """Configure the product's minimum spend threshold.
+
+    Sets the tenant's CurrencyLimit.min_package_budget so the product
+    enforces a minimum spend. Also stores the expected values in ctx for
+    downstream Then-step assertions on error details.
+
+    SPEC-PRODUCTION GAP: Production validates min_package_budget per
+    CurrencyLimit, not per product. This step uses CurrencyLimit as the
+    mechanism. When per-product minimums are implemented, update this step.
+
+    FIXME(salesagent-9vgz.1): Per-product minimum spend not yet implemented.
+    """
+    import pytest
+
+    ctx["expected_min_budget"] = amount
+    ctx["expected_min_budget_currency"] = currency
+    pytest.xfail(
+        f"SPEC-PRODUCTION GAP: Per-product minimum spend ({amount} {currency}) "
+        "not yet implemented. Production uses CurrencyLimit.min_package_budget "
+        "for all products in a tenant. FIXME(salesagent-9vgz.1)"
     )
 
 
@@ -646,8 +729,12 @@ def given_end_before_start(ctx: dict) -> None:
     kwargs["end_time"] = _future(1).isoformat()
 
 
-@given(parsers.parse("the start_time is {value}"))
-@given(parsers.parse("start_time is {value}"))
+# Single-token value only (\S+). A bare ``{value}`` parse would greedily swallow
+# spaced phrasings like ``start_time is "..." (in the past)`` and shadow the
+# specific step ``given_past_start_time`` (pytest-bdd resolves multiple matches
+# last-registered-wins). parsers.re uses fullmatch, so \S+ refuses any value
+# containing whitespace, letting the specific spaced-phrase step win.
+@given(parsers.re(r"(?:the )?start_time is (?P<value>\S+)"))
 def given_start_time_value(ctx: dict, value: str) -> None:
     """Set or remove start_time on the request (unquoted table value).
 
@@ -664,8 +751,10 @@ def given_start_time_value(ctx: dict, value: str) -> None:
         kwargs["start_time"] = value
 
 
-@given(parsers.parse("the end_time is {value}"))
-@given(parsers.parse("end_time is {value}"))
+# Single-token value only (\S+); see given_start_time_value. Refusing whitespace
+# lets the specific step ``given_end_before_start`` ("end_time is before start_time")
+# win instead of this generic capturing "before start_time" as a literal value.
+@given(parsers.re(r"(?:the )?end_time is (?P<value>\S+)"))
 def given_end_time_value(ctx: dict, value: str) -> None:
     """Set or remove end_time on the request (unquoted table value).
 
@@ -1920,11 +2009,15 @@ def _add_creative_ids_to_package(ctx: dict, creative_ids: list[str]) -> None:
     pkg["creative_ids"] = existing
 
 
-def _create_approved_creative(ctx: dict, creative_id: str, fmt: str = "display_300x250") -> Any:
+def _create_approved_creative(
+    ctx: dict, creative_id: str, fmt: str = "display_300x250", asset_key: str = "primary"
+) -> Any:
     """Create an approved Creative in the DB and return it.
 
     Uses CreativeFactory with the tenant/principal from harness context.
-    Asset key uses "primary" to match the harness format spec's asset_id.
+    The default asset key "primary" matches the harness format spec's
+    asset_id; scenarios seeding a real reference-catalog format pass the
+    format's actual asset_id (e.g. "banner_image" for display_300x250_image).
     """
     from tests.factories.creative import CreativeFactory
 
@@ -1935,7 +2028,7 @@ def _create_approved_creative(ctx: dict, creative_id: str, fmt: str = "display_3
         principal=ctx["principal"],
         format=fmt,
         approved=True,
-        data={"assets": {"primary": {"url": "https://example.com/banner.png", "width": 300, "height": 250}}},
+        data={"assets": {asset_key: {"url": "https://example.com/banner.png", "width": 300, "height": 250}}},
     )
     env._commit_factory_data()
     return creative
@@ -2099,6 +2192,172 @@ def given_creative_boundary(ctx: dict, config: str) -> None:
 
     else:
         raise ValueError(f"Unknown creative asset boundary config: {config}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# UC-002 ext-o/ext-p/ext-g/ext-q — single creative error scenarios
+# ═══════════════════════════════════════════════════════════════════════
+# These wire the four named creative-error scenarios so they dispatch a real
+# create_media_buy on the wire and assert the canonical creative error code:
+#   ext-o: creative_id referenced but absent from the library  → CREATIVE_REJECTED
+#   ext-p: creative format not in product's accepted formats    → CREATIVE_REJECTED
+#   ext-g: inline creative missing its required content URL      → message contains "URL"
+#   ext-q: ad server rejects the creative upload                 → SERVICE_UNAVAILABLE
+# They reuse the creative-seeding helpers above; each step text is defined once.
+
+
+@given(parsers.parse('But a package creative_assignment references creative_id "{creative_id}"'))
+@given(parsers.parse('a package creative_assignment references creative_id "{creative_id}"'))
+def given_package_references_missing_creative(ctx: dict, creative_id: str) -> None:
+    """ext-o: reference a creative_id with no matching library row.
+
+    No Creative is seeded for ``creative_id``, so the create path's
+    "Creative IDs not found" check (media_buy_create.py) raises
+    AdCPCreativeRejectedError → CREATIVE_REJECTED on the wire, with the missing
+    id and a sync_creatives suggestion.
+
+    Auto-approval is seeded because the CREATIVE_REJECTED raise lives on the
+    auto path; the live-server default (human_review_required=True) would take
+    the PENDING path, which silently skips missing creatives.
+    """
+    _add_creative_ids_to_package(ctx, [creative_id])
+    _seed_auto_approval(ctx)
+
+
+@given("But a creative's format_id does not match any of the product's supported format_ids")
+@given("a creative's format_id does not match any of the product's supported format_ids")
+def given_creative_format_mismatch(ctx: dict) -> None:
+    """ext-p: seed an approved creative whose format is absent from the product.
+
+    The default product accepts ``display_300x250``; this creative carries
+    ``video_640x480``. The pre-adapter creative validation in the create path
+    rejects the format mismatch with CREATIVE_REJECTED on the wire.
+
+    Auto-approval is seeded because the CREATIVE_REJECTED raise lives on the
+    auto path; the live-server default (human_review_required=True) would take
+    the PENDING path, which emits VALIDATION_ERROR for the same condition.
+    """
+    creative = _create_approved_creative(ctx, "cr-fmt-mismatch", fmt="video_640x480")
+    _add_creative_ids_to_package(ctx, [creative.creative_id])
+    _seed_auto_approval(ctx)
+
+
+@given("a valid create_media_buy request with inline creatives")
+def given_request_with_inline_creatives(ctx: dict) -> None:
+    """ext-g/base: attach one valid inline creative to the request's package."""
+    _ensure_request_defaults(ctx)
+    _add_inline_creatives(ctx, count=1)
+
+
+@given("But a creative is missing the required URL in assets")
+@given("a creative is missing the required URL in assets")
+def given_inline_creative_missing_url(ctx: dict) -> None:
+    """ext-g: strip the content URL from the inline creative's primary asset.
+
+    Production's reference-creative validation requires a content URL; without
+    it the create path rejects the creative and the wire error message names the
+    missing URL.
+    """
+    kwargs = _ensure_request_defaults(ctx)
+    pkg = kwargs["packages"][0]
+    creatives = pkg.get("creatives")
+    assert creatives, "No inline creatives on package — wire the inline-creatives Given first"
+    for creative in creatives:
+        primary = creative.get("assets", {}).get("primary")
+        assert primary is not None, "Inline creative has no primary asset to clear the URL on"
+        # Empty (not absent) URL keeps the asset structurally valid so it syncs to
+        # the library, then production's reference-creative URL validation rejects
+        # it with a message naming the missing URL (ext-g intent).
+        primary["url"] = ""
+
+
+@given("And the creative format is not generative")
+@given("the creative format is not generative")
+def given_creative_format_not_generative(ctx: dict) -> None:
+    """ext-g: assert the inline creative uses a non-generative reference format.
+
+    Generative formats (those with output_format_ids) skip URL validation, so
+    the missing-URL rejection only fires for reference formats. The default
+    inline creative uses ``display_300x250`` (a reference format with no
+    output_format_ids), satisfying this precondition.
+    """
+    kwargs = ctx.get("request_kwargs", {})
+    for pkg in kwargs.get("packages", []):
+        for creative in pkg.get("creatives") or []:
+            fmt = creative.get("format_id", {})
+            fmt_id = fmt.get("id") if isinstance(fmt, dict) else fmt
+            assert fmt_id == "display_300x250", (
+                f"Inline creative format '{fmt_id}' is not the expected non-generative reference format"
+            )
+
+
+@given("Given a valid create_media_buy request with inline creatives that passes all validation")
+@given("a valid create_media_buy request with inline creatives that passes all validation")
+def given_request_inline_creatives_valid(ctx: dict) -> None:
+    """ext-q: attach a valid, approved creative whose format/URL pass all validation.
+
+    The creative is well-formed and approved (status='approved', no
+    platform_creative_id) so the synchronous create path reaches the ad-server
+    upload (adapter.add_creative_assets). Pending-review creatives are held back
+    from upload during create, so an *approved* creative is required to exercise
+    the upload path the scenario tests. The only failure injected (by the sibling
+    'ad server rejects the creative upload' step) is the adapter upload itself.
+    Tenant is set to auto-approval so the synchronous upload runs and the adapter
+    rejection surfaces on the create wire.
+    """
+    _ensure_request_defaults(ctx)
+    # A REAL reference-catalog format (not the synthetic display_300x250):
+    # the live server resolves formats from the 54-format fixture under
+    # ADCP_TESTING, so a synthetic id dies CREATIVE_REJECTED before the upload
+    # this scenario tests. display_300x250_image's asset_id is banner_image.
+    creative = _create_approved_creative(ctx, "cr-upload-ok", fmt="display_300x250_image", asset_key="banner_image")
+    _add_creative_ids_to_package(ctx, [creative.creative_id])
+    # The default product only accepts display_300x250 — add the real format so
+    # the creative-vs-product compat check passes on the server DB too.
+    product = ctx.get("default_product")
+    if product is not None:
+        env = ctx["env"]
+        product.format_ids = [
+            *(product.format_ids or []),
+            {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
+        ]
+        env._commit_factory_data()
+    _seed_auto_approval(ctx)
+
+
+@given("But the ad server rejects the creative upload")
+@given("the ad server rejects the creative upload")
+def given_ad_server_rejects_creative_upload(ctx: dict) -> None:
+    """ext-q: make the adapter raise on the creative-upload call.
+
+    Configures ``add_creative_assets`` to raise so the create path's
+    synchronous upload surfaces the adapter failure as SERVICE_UNAVAILABLE
+    on the wire (instead of swallowing it — 'No Quiet Failures').
+    """
+    from src.core.exceptions import AdCPAdapterError
+
+    message = "Ad server rejected the creative upload"
+    suggestion = "Retry the upload or verify the creative meets the ad server's requirements"
+    recovery = "transient"
+
+    env = ctx["env"]
+    mock_adapter = env.mock["adapter"].return_value
+    # Model a CONFORMANT adapter error: the buyer suggestion rides the first-class
+    # suggestion= param so the envelope builder lifts it to the top-level error.json
+    # position. Burying it in details={"suggestion": ...} yields a non-conformant wire
+    # error (empty top-level suggestion). The e2e sibling below keeps error_details;
+    # mock_ad_server pops it back to first-class.
+    mock_adapter.add_creative_assets.side_effect = AdCPAdapterError(message, recovery=recovery, suggestion=suggestion)
+    # E2E path: write the failure to the adapter test-behavior config so the
+    # Docker-hosted adapter raises the same error on creative upload
+    # (MockAdServer.add_creative_assets reads the fail_on_upload flag).
+    _sync_adapter_error_to_db(
+        ctx,
+        fail_on_upload=True,
+        error_message=message,
+        error_details={"suggestion": suggestion},
+        recovery=recovery,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2494,6 +2753,22 @@ def given_request_with_proposal_and_budget(ctx: dict, amount: int) -> None:
     kwargs["total_budget"] = {"amount": float(amount), "currency": "USD"}
 
 
+@given("a valid create_media_buy request in proposal mode with a proposal_id and total_budget")
+def given_request_proposal_mode(ctx: dict) -> None:
+    """Set up a proposal-mode request with proposal_id and total_budget.
+
+    In proposal mode the buyer supplies a proposal_id and total_budget but
+    does NOT supply a manual packages array -- the seller derives packages
+    from the proposal's product allocations.
+    """
+    kwargs = _ensure_request_defaults(ctx)
+    kwargs["proposal_id"] = f"prop-{uuid.uuid4().hex[:8]}"
+    kwargs["total_budget"] = {"amount": 5000.0, "currency": "USD"}
+    # Remove the packages array to signal proposal mode (seller derives packages)
+    kwargs.pop("packages", None)
+    ctx["proposal_mode"] = True
+
+
 @given(parsers.parse('proposal "{proposal_id}" does not exist or has expired'))
 @given(parsers.parse('But proposal "{proposal_id}" does not exist or has expired'))
 def given_proposal_not_exists(ctx: dict, proposal_id: str) -> None:
@@ -2547,11 +2822,9 @@ def given_proposal_budget_guidance_min(ctx: dict, amount: int) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given("the ad server adapter is available")
-def given_adapter_available(ctx: dict) -> None:
-    """Ensure the mock adapter is configured for success (default state)."""
-    # MediaBuyCreateEnv._configure_mocks() already sets up happy-path adapter
-    ctx.setdefault("adapter_available", True)
+# "the ad server adapter is available" is owned by uc002_create_media_buy
+# (canonical) — removed here to avoid a cross-module shadow now that this module
+# is registered. No UC-003 scenario uses that text.
 
 
 @given("the ad server adapter returns an error")
@@ -2582,12 +2855,7 @@ def given_adapter_error(ctx: dict) -> None:
         recovery="retryable",
     )
     # Ensure tenant is auto-approval so production code doesn't short-circuit
-    tenant = ctx.get("tenant")
-    if tenant is not None:
-        tenant.human_review_required = False
-        env._commit_factory_data()
-        env._identity_cache.clear()
-        env._tenant_overrides["human_review_required"] = False
+    _seed_auto_approval(ctx, sync_adapter=False)
     # Strip creative_ids so E2E doesn't fail on creative format validation
     # (the Docker creative agent doesn't know test formats like display_300x250).
     # This scenario tests adapter failure, not creative assignment.
@@ -2621,6 +2889,37 @@ def given_adapter_success(ctx: dict) -> None:
 def given_bare_create_request(ctx: dict) -> None:
     """Set up a bare create_media_buy request with valid defaults."""
     _ensure_request_defaults(ctx)
+
+
+@given("the request uses legacy mode with no per-package budgets")
+def given_legacy_mode_no_packages(ctx: dict) -> None:
+    """Convert request to legacy mode: total_budget only, no packages array.
+
+    In legacy mode (v3.1 BR-RULE-012 INV-5), the buyer sends a total_budget
+    without per-package budget breakdowns. The daily cap is validated against
+    the total budget treated as a single daily figure.
+    """
+    kwargs = _ensure_request_defaults(ctx)
+    # Capture the total from existing packages before removing them
+    total = sum(pkg.get("budget", 0) for pkg in kwargs.get("packages", []))
+    if total <= 0:
+        total = 5000.0
+    kwargs["total_budget"] = {"amount": total, "currency": "USD"}
+    # Remove the packages array to signal legacy mode
+    kwargs.pop("packages", None)
+    ctx["legacy_mode"] = True
+
+
+@given("the request supplies no buyer packages array")
+def given_no_packages_array(ctx: dict) -> None:
+    """Remove the packages array from the request.
+
+    In proposal mode, the buyer does not supply a manual packages array --
+    the seller derives packages from the proposal's product allocations.
+    The product-uniqueness check (BR-RULE-010) has no applicable buyer input.
+    """
+    kwargs = _ensure_request_defaults(ctx)
+    kwargs.pop("packages", None)
 
 
 @given(parsers.parse("a valid create_media_buy request that passes all validation"))

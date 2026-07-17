@@ -52,6 +52,11 @@ class TenantConfigRepository:
         return sorted([p.publisher_domain for p in partners])
 
     def get_adapter_config(self) -> AdapterConfig | None:
-        """Get the adapter configuration for the tenant, or None if not configured."""
-        stmt = select(AdapterConfig).filter_by(tenant_id=self._tenant_id)
-        return self._session.scalars(stmt).first()
+        """Get the adapter configuration for the tenant, or None if not configured.
+
+        Delegates to AdapterConfigRepository — the canonical AdapterConfig
+        lookup (same absence-is-normal semantics as ``find_by_tenant``).
+        """
+        from src.core.database.repositories.adapter_config import AdapterConfigRepository
+
+        return AdapterConfigRepository(self._session, self._tenant_id).find_by_tenant()

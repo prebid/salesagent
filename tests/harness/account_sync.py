@@ -68,45 +68,73 @@ class AccountSyncEnv(IntegrationEnv):
         mock_logger = MagicMock()
         self.mock["audit_logger"].return_value = mock_logger
 
+    def setup_default_data(self) -> tuple[Any, Any]:
+        """Create tenant + principal, then fold constructor billing config into the DB.
+
+        Constructor-passed ``supported_billing`` / ``account_approval_mode`` only
+        seed in-memory tenant overrides; over the real MCP/A2A/e2e auth chain the
+        live server reads tenant config from its own DB. Once the tenant row
+        exists, write those values through the same setters so the DB and the
+        in-memory identity agree.
+        """
+        tenant, principal = super().setup_default_data()
+        if self._supported_billing is not None:
+            self.set_billing_policy(self._supported_billing)
+        if self._account_approval_mode is not None:
+            self.set_approval_mode(self._account_approval_mode)
+        return tenant, principal
+
+    def _require_tenant_row(self, setter_name: str) -> Any:
+        """Return the env's Tenant row, raising if it does not exist yet.
+
+        No-Quiet-Failures: writing tenant config to a missing row silently drops
+        it, and over e2e the live server then never sees the policy. Direct the
+        step to create the tenant first instead of skipping the write.
+        """
+        from src.core.database.models import Tenant
+
+        tenant = self._session.get(Tenant, self._tenant_id) if self._session else None
+        if tenant is None:
+            raise RuntimeError(
+                f"{setter_name}() requires the tenant row '{self._tenant_id}' to exist. "
+                "Call env.setup_default_data() (or create the tenant via a Given step) "
+                "before configuring billing policy / approval mode."
+            )
+        return tenant
+
     def set_billing_policy(self, supported: list[str]) -> None:
         """Configure which billing models this seller accepts (BR-RULE-059).
 
         Updates both the in-memory tenant overrides (for mock identity path)
-        and the DB tenant record (for real MCP/A2A auth chain).
+        and the DB tenant record (for real MCP/A2A/e2e auth chain).
         """
         self._supported_billing = supported
         self._tenant_overrides["supported_billing"] = supported
         self._identity_cache.clear()
 
         if self._session:
-            from src.core.database.models import Tenant
-
-            tenant = self._session.get(Tenant, self._tenant_id)
-            if tenant:
-                tenant.supported_billing = supported
-                self._session.commit()
+            tenant = self._require_tenant_row("set_billing_policy")
+            tenant.supported_billing = supported
+            self._session.commit()
 
     def set_approval_mode(self, mode: str) -> None:
         """Configure account approval mode (BR-RULE-060).
 
         Updates both the in-memory tenant overrides (for mock identity path)
-        and the DB tenant record (for real MCP/A2A auth chain).
+        and the DB tenant record (for real MCP/A2A/e2e auth chain).
         """
         self._account_approval_mode = mode
         self._tenant_overrides["account_approval_mode"] = mode
         self._identity_cache.clear()
 
         if self._session:
-            from src.core.database.models import Tenant
-
-            tenant = self._session.get(Tenant, self._tenant_id)
-            if tenant:
-                # BR-RULE-060: account approval mode is a distinct field from creative
-                # approval_mode (BR-RULE-037). Write to the correct column so the MCP
-                # real-auth chain (which reads DB via config_loader.get_tenant_by_id)
-                # sees the test-configured value.
-                tenant.account_approval_mode = mode
-                self._session.commit()
+            tenant = self._require_tenant_row("set_approval_mode")
+            # BR-RULE-060: account approval mode is a distinct field from creative
+            # approval_mode (BR-RULE-037). Write to the correct column so the MCP
+            # real-auth chain (which reads DB via config_loader.get_tenant_by_id)
+            # sees the test-configured value.
+            tenant.account_approval_mode = mode
+            self._session.commit()
 
     def identity_for(self, transport: Any) -> Any:
         """Build identity with billing policy and approval mode on the tenant dict."""

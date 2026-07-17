@@ -5,7 +5,7 @@ Tests the mock server's response header functionality added to comply with
 the AdCP testing specification.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from src.core.testing_hooks import (
     AdCPTestContext,
@@ -48,7 +48,12 @@ class TestMockServerResponseHeaders:
         assert next_event == CampaignEvent.CAMPAIGN_75_PERCENT
 
     def test_next_event_time_calculation(self):
-        """Test calculation of next event timing."""
+        """Test calculation of next event timing.
+
+        Inputs are deliberately naive: calculate_next_event_time coerces them
+        to UTC-aware (#1545 K1), so the result must be aware and land at the
+        campaign midpoint expressed in UTC.
+        """
         start_date = datetime(2025, 1, 1)
         end_date = datetime(2025, 1, 31)
         current_time = datetime(2025, 1, 10)
@@ -58,8 +63,11 @@ class TestMockServerResponseHeaders:
             CampaignEvent.CAMPAIGN_MIDPOINT, start_date, end_date, current_time
         )
 
+        # Naive inputs are assumed UTC — the result is always aware.
+        assert midpoint_time.tzinfo is not None
+
         # Midpoint should be around January 16 (middle of campaign)
-        expected_midpoint = start_date + (end_date - start_date) * 0.5
+        expected_midpoint = datetime(2025, 1, 16, tzinfo=UTC)
         assert abs((midpoint_time - expected_midpoint).total_seconds()) < 3600  # Within 1 hour
 
     def test_response_headers_with_campaign_info(self):

@@ -16,7 +16,7 @@ from adcp import Product as LibraryProduct
 from adcp.types import BrandReference, ContextObject, PropertyListReference
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
-from pydantic import Field, ValidationError
+from pydantic import Field
 
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
@@ -39,7 +39,7 @@ from src.core.schemas import (
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
 from src.core.transport_helpers import resolve_identity_from_context
-from src.core.validation_helpers import format_validation_error, safe_parse_json_field
+from src.core.validation_helpers import adcp_validation_boundary, safe_parse_json_field
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
 logger = logging.getLogger(__name__)
@@ -487,7 +487,7 @@ async def _get_products_impl(
             if req.filters.format_ids:
                 # Product.format_ids is list[str] or list[dict] (format IDs)
                 product_format_ids: set[str] = set()
-                for format_id in product.format_ids:
+                for format_id in product.format_ids or []:  # adcp 6.6: Product.format_ids is now Optional (spec 3.1.1)
                     if isinstance(format_id, str):
                         product_format_ids.add(format_id)
                     elif isinstance(format_id, dict):
@@ -518,7 +518,7 @@ async def _get_products_impl(
                 # Check if all formats are IAB standard formats
                 # IAB standard formats typically follow patterns like "display_", "video_", "audio_", "native_"
                 has_only_standard = True
-                for format_id in product.format_ids:
+                for format_id in product.format_ids or []:  # adcp 6.6: Product.format_ids is now Optional (spec 3.1.1)
                     format_id_str: str | None = None
                     if isinstance(format_id, str):
                         format_id_str = format_id
@@ -775,8 +775,13 @@ async def _get_products_impl(
 
 async def get_products(
     brand: Annotated[
-        BrandReference | str | None,
-        Field(description="Brand reference with domain field, or domain string shorthand (e.g. 'acme.com')"),
+        BrandReference | dict[str, Any] | str | None,
+        Field(
+            description=(
+                "Brand reference (object with domain), domain/URL string shorthand "
+                "(e.g. 'acme.com' / 'https://acme.com'), or equivalent dict"
+            )
+        ),
     ] = None,
     brief: Annotated[str, Field(description="Natural language description of campaign goals and requirements")] = "",
     filters: ProductFilters | None = None,
@@ -799,25 +804,22 @@ async def get_products(
     Returns:
         ToolResult with human-readable text and structured data
     """
-    # Coerce string brand shorthand to BrandReference (AdCP v3 allows "acme.com")
-    if isinstance(brand, str):
-        brand = BrandReference(domain=brand)
-
-    # Build request object for shared implementation
+    # create_get_products_request coerces string/dict brand via to_brand_reference
     try:
-        req = create_get_products_request(
-            brief=brief,
-            brand=brand,
-            filters=filters,
-            property_list=property_list,
-            context=context,
-        )
-
-    except ValidationError as e:
-        raise AdCPValidationError(format_validation_error(e, context="get_products request")) from e
+        with adcp_validation_boundary(context="get_products request"):
+            req = create_get_products_request(
+                brief=brief,
+                brand=brand,
+                filters=filters,
+                property_list=property_list,
+                context=context,
+            )
     except ValueError as e:
-        # Convert ValueError from helper to ToolError with clear message
-        raise AdCPValidationError(f"Invalid get_products request: {e}") from e
+        # Helper raises ValueError for semantic (non-Pydantic) input problems.
+        raise AdCPValidationError(
+            f"Invalid get_products request: {e}",
+            suggestion="Correct the get_products request per the AdCP specification and resend.",
+        ) from e
 
     # Read identity pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None

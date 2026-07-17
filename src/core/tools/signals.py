@@ -18,14 +18,12 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.tool_context import ToolContext
+from src.core.validation_helpers import adcp_validation_boundary
 
 logger = logging.getLogger(__name__)
 
 from adcp.types import ContextObject
-from adcp.types.generated_poc.core.signal_id import (
-    SignalId,
-    SignalId5,
-)  # SDK 5.7: SignalId18 → SignalId5 (same fields: agent_url, id, source)
+from adcp.types.generated_poc.core.signal_id import SignalId
 from adcp.types.generated_poc.core.vendor_pricing_option import (
     VendorPricingOption,
 )  # TODO: no stable alias in adcp.types
@@ -33,6 +31,7 @@ from adcp.types.generated_poc.core.vendor_pricing_option import (
 from src.core.auth import get_principal_object, require_identity, require_principal_id, require_tenant
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
+    ActivateSignalRequest,
     ActivateSignalResponse,
     GetSignalsRequest,
     GetSignalsResponse,
@@ -44,8 +43,16 @@ from src.core.transport_helpers import resolve_identity_from_context
 
 
 def _agent_signal_id(segment_id: str) -> SignalId:
-    """Build a SignalId for an agent-native signal."""
-    return SignalId(SignalId5(id=segment_id, source="agent", agent_url="https://salesagent.adcontextprotocol.org"))
+    """Build a SignalId for an agent-native signal.
+
+    SignalId is a RootModel discriminated union on ``source``; validating a dict with
+    ``source="agent"`` selects the agent-URL variant. We deliberately do NOT name that
+    variant (adcp codegen emits an ordinal like ``SignalId54`` that churns on every bump).
+    (``signal-id.json`` is deprecated in spec 3.1.1 in favor of ``SignalRef`` — a follow-up.)
+    """
+    return SignalId.model_validate(
+        {"id": segment_id, "source": "agent", "agent_url": "https://salesagent.adcontextprotocol.org"}
+    )
 
 
 def _cpm_pricing_option(cpm: float, currency: str = "USD") -> list[VendorPricingOption]:
@@ -163,7 +170,7 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
         # Apply filters if provided
         if req.filters:
             # Filter by catalog_types (equivalent to old 'type' field)
-            # catalog_types contains SignalCatalogType enums; compare via .value
+            # catalog_types contains SignalAvailabilityType enums; compare via .value
             if req.filters.catalog_types and signal.signal_type not in [ct.value for ct in req.filters.catalog_types]:
                 continue
 
@@ -175,10 +182,11 @@ async def _get_signals_impl(req: GetSignalsRequest, identity: ResolvedIdentity |
             if req.filters.max_cpm is not None and signal.pricing and signal.pricing.cpm > req.filters.max_cpm:
                 continue
 
-            # Filter by min_coverage_percentage
-            if (
-                req.filters.min_coverage_percentage is not None
-                and signal.coverage_percentage < req.filters.min_coverage_percentage
+            # Filter by min_coverage_percentage. adcp 6.6 made coverage_percentage
+            # Optional; a signal with unknown coverage cannot be shown to meet the
+            # minimum, so exclude it when the filter is set.
+            if req.filters.min_coverage_percentage is not None and (
+                signal.coverage_percentage is None or signal.coverage_percentage < req.filters.min_coverage_percentage
             ):
                 continue
 
@@ -210,26 +218,52 @@ async def get_signals(req: GetSignalsRequest, context: Context | ToolContext | N
     return ToolResult(content=str(response), structured_content=response)
 
 
-async def _activate_signal_impl(
+def _build_activate_signal_request(
     signal_agent_segment_id: str,
-    campaign_id: str = None,
-    media_buy_id: str = None,
-    context: ContextObject | dict | None = None,  # payload-level context
+    campaign_id: str | None = None,
+    media_buy_id: str | None = None,
+    context: ContextObject | dict | None = None,
+) -> ActivateSignalRequest:
+    """Build an ActivateSignalRequest from individual wire params.
+
+    Translates Pydantic ValidationError into AdCPValidationError. Shared by both
+    transport wrappers so construction lives in one place.
+
+    NOTE: The wrapper layer does not yet surface ``destinations`` / ``idempotency_key``
+    (both REQUIRED on the spec request). The current implementation is a mock that
+    consumes only signal_agent_segment_id / campaign_id / media_buy_id / context, so
+    placeholder values satisfy model construction without affecting observable
+    behavior. Wiring real destinations/idempotency_key from the wire is tracked
+    separately (mock-activation gap), not in this boundary-shape refactor.
+    """
+    with adcp_validation_boundary(context="activate_signal request"):
+        return ActivateSignalRequest(
+            signal_agent_segment_id=signal_agent_segment_id,
+            destinations=[{"type": "platform", "platform": "mock"}],
+            idempotency_key=f"activate-{signal_agent_segment_id}".ljust(16, "0")[:255],
+            campaign_id=campaign_id,
+            media_buy_id=media_buy_id,
+            context=context,
+        )
+
+
+async def _activate_signal_impl(
+    req: ActivateSignalRequest,
     identity: ResolvedIdentity | None = None,
 ) -> ActivateSignalResponse:
     """Shared implementation for activate_signal (used by both MCP and A2A).
 
     Args:
-        signal_agent_segment_id: Universal signal identifier to activate
-        campaign_id: Optional campaign ID to activate signal for
-        media_buy_id: Optional media buy ID to activate signal for
-        context: Application level context per adcp spec
+        req: Typed activate-signal request
         identity: Resolved identity from transport boundary
 
     Returns:
         ActivateSignalResponse with activation status
     """
     start_time = time.time()
+
+    signal_agent_segment_id = req.signal_agent_segment_id
+    context = req.context
 
     identity = require_identity(identity, context=context)
     principal_id = require_principal_id(identity, context=context)
@@ -302,7 +336,8 @@ async def activate_signal(
         ToolResult with ActivateSignalResponse data
     """
     identity = resolve_identity_from_context(ctx)
-    response = await _activate_signal_impl(signal_agent_segment_id, campaign_id, media_buy_id, context, identity)
+    req = _build_activate_signal_request(signal_agent_segment_id, campaign_id, media_buy_id, context)
+    response = await _activate_signal_impl(req=req, identity=identity)
     return ToolResult(content=str(response), structured_content=response)
 
 
@@ -353,4 +388,5 @@ async def activate_signal_raw(
     """
     if identity is None:
         identity = resolve_identity_from_context(ctx)
-    return await _activate_signal_impl(signal_agent_segment_id, campaign_id, media_buy_id, context, identity)
+    req = _build_activate_signal_request(signal_agent_segment_id, campaign_id, media_buy_id, context)
+    return await _activate_signal_impl(req=req, identity=identity)

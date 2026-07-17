@@ -604,7 +604,6 @@ class GAMReportingService:
                 "total_spend": 0.0,
                 "average_ctr": 0.0,
                 "average_ecpm": 0.0,
-                "total_video_completions": 0,
                 "unique_advertisers": 0,
                 "unique_orders": 0,
                 "unique_line_items": 0,

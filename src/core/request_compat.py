@@ -10,11 +10,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import urlparse
+
+from src.core.schema_helpers import brand_shorthand_to_domain, is_url_shorthand
 
 logger = logging.getLogger(__name__)
-
-# Fields whose presence signals a v2.5 caller.
 V25_SIGNALS: frozenset[str] = frozenset({"brand_manifest", "promoted_offerings", "campaign_ref"})
 
 # Tools where brand_manifest → brand translation applies.
@@ -33,6 +32,10 @@ class NormalizationResult:
 def _translate_brand_manifest(value: Any) -> dict[str, str] | None:
     """Convert brand_manifest (URL string or {url: str}) to BrandReference {domain}.
 
+    Legacy v2.5 compat: silently strip unparseable values (return None). Explicit
+    ``brand`` on tool boundaries uses ``to_brand_reference`` instead, which raises
+    ``AdCPValidationError(field="brand")`` for the same malformed inputs.
+
     Returns None if the value cannot be parsed into a valid domain.
     """
     if value is None:
@@ -40,21 +43,24 @@ def _translate_brand_manifest(value: Any) -> dict[str, str] | None:
 
     url: str | None = None
     if isinstance(value, str):
+        if not is_url_shorthand(value):
+            return None
         url = value
     elif isinstance(value, dict):
-        url = value.get("url")
-
-    if not url or not isinstance(url, str):
+        raw_url = value.get("url")
+        if not raw_url or not isinstance(raw_url, str):
+            return None
+        if not is_url_shorthand(raw_url):
+            return None
+        url = raw_url
+    else:
         return None
 
-    try:
-        parsed = urlparse(url)
-        hostname = parsed.hostname
-        if hostname:
-            return {"domain": hostname}
-    except Exception:  # noqa: BLE001
-        logger.debug("Could not parse domain from agent_url", exc_info=True)
-    return None
+    domain = brand_shorthand_to_domain(url)
+    if not domain:
+        logger.debug("Could not parse domain from brand_manifest url=%r; stripping field", url)
+        return None
+    return {"domain": domain}
 
 
 def _normalize_packages(packages: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
@@ -116,11 +122,18 @@ def normalize_request_params(
 
     # --- Tool-scoped translations ---
 
-    # campaign_ref → buyer_campaign_ref (create_media_buy only)
+    # campaign_ref → ext.buyer_campaign_ref (create_media_buy only)
+    # AdCP 3.12 removed the top-level buyer_campaign_ref field from
+    # create-media-buy-request; the migration path is the ext extension object.
     if "campaign_ref" in result:
-        if tool_name == "create_media_buy" and "buyer_campaign_ref" not in result:
-            result["buyer_campaign_ref"] = result["campaign_ref"]
-            translations.append("campaign_ref → buyer_campaign_ref")
+        if tool_name == "create_media_buy":
+            ext = result.get("ext")
+            if ext is None:
+                ext = {}
+                result["ext"] = ext
+            if isinstance(ext, dict) and "buyer_campaign_ref" not in ext:
+                ext["buyer_campaign_ref"] = result["campaign_ref"]
+                translations.append("campaign_ref → ext.buyer_campaign_ref")
         del result["campaign_ref"]
 
     # brand_manifest → brand (get_products, create_media_buy only)

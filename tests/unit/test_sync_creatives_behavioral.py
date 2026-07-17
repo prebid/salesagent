@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from src.core.exceptions import AdCPNotFoundError, AdCPValidationError
+from src.core.exceptions import AdCPNotFoundError
 from src.core.schemas import SyncCreativeResult
 from src.core.tools.creatives._assignments import _process_assignments
 from src.core.tools.creatives._workflow import _send_creative_notifications
@@ -93,8 +93,12 @@ class TestMediaBuyStatusTransitions:
         # Mock find_package_with_media_buy to return the package+media_buy pair
         mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
 
-        # Mock get_creative_by_id: return db_creative if provided, else None
-        mock_repo.get_creative_by_id.return_value = db_creative
+        # get_creative_by_id: an explicit creative, or the default truthy MagicMock
+        # (a present creative). A creative must exist in the library for its
+        # assignment to be created — a non-persisted creative is skipped to avoid
+        # an FK violation (#1418).
+        if db_creative is not None:
+            mock_repo.get_creative_by_id.return_value = db_creative
 
         # Mock get_existing: no existing assignment
         mock_repo.get_existing.return_value = None
@@ -119,6 +123,7 @@ class TestMediaBuyStatusTransitions:
                 results=results,
                 tenant=tenant,
                 validation_mode="strict",
+                principal_id="principal_1",
             )
 
     def test_draft_with_approved_at_transitions_to_pending_creatives(self, tenant, _make_db_package):
@@ -188,7 +193,8 @@ class TestMediaBuyStatusTransitions:
 
         mock_uow, mock_repo = _make_creative_uow()
         mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
-        mock_repo.get_creative_by_id.return_value = None
+        # get_creative_by_id defaults to the truthy MagicMock (present creative)
+        # so the assignments are created (#1418).
         mock_repo.get_existing.return_value = None
 
         def _create_assignment(**kwargs):
@@ -210,6 +216,7 @@ class TestMediaBuyStatusTransitions:
                 results=results,
                 tenant=tenant,
                 validation_mode="strict",
+                principal_id="principal_1",
             )
 
         # Status should be pending_creatives (transitioned once, not twice)
@@ -228,7 +235,8 @@ class TestMediaBuyStatusTransitions:
 
         mock_uow, mock_repo = _make_creative_uow()
         mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
-        mock_repo.get_creative_by_id.return_value = None
+        # get_creative_by_id defaults to the truthy MagicMock (present creative)
+        # so the assignments are created (#1418).
         mock_repo.get_existing.return_value = None
 
         def _create_assignment(**kwargs):
@@ -250,6 +258,7 @@ class TestMediaBuyStatusTransitions:
                 results=results,
                 tenant=tenant,
                 validation_mode="strict",
+                principal_id="principal_1",
             )
 
         assert db_media_buy.status == "pending_creatives"
@@ -280,6 +289,7 @@ class TestStrictAssignmentAbort:
                     results=results,
                     tenant=tenant,
                     validation_mode="strict",
+                    principal_id="principal_1",
                 )
 
 
@@ -307,6 +317,7 @@ class TestLenientAssignmentSkip:
                 results=results,
                 tenant=tenant,
                 validation_mode="lenient",
+                principal_id="principal_1",
             )
 
         # No ToolError raised, no assignments created
@@ -351,6 +362,7 @@ class TestLenientAssignmentSkip:
                 results=results,
                 tenant=tenant,
                 validation_mode="lenient",
+                principal_id="principal_1",
             )
 
         assert len(assignment_list) == 0
@@ -374,7 +386,8 @@ class TestLenientAssignmentSkip:
             (db_package_valid, db_media_buy),
             None,
         ]
-        mock_repo.get_creative_by_id.return_value = None
+        # Creative exists (default truthy MagicMock) so the valid assignment can
+        # be created (#1418).
         mock_repo.get_existing.return_value = None
 
         def _create_assignment(**kwargs):
@@ -396,6 +409,7 @@ class TestLenientAssignmentSkip:
                 results=results,
                 tenant=tenant,
                 validation_mode="lenient",
+                principal_id="principal_1",
             )
 
         # Valid assignment created
@@ -442,45 +456,11 @@ class TestStrictModeAdCPErrorPropagation:
                     results=results,
                     tenant=tenant,
                     validation_mode="strict",
+                    principal_id="principal_1",
                 )
 
         # After AdCPError, the post-processing loop never ran,
         # so assignment_errors is NOT populated on the result
-        assert results[0].assignment_errors is None
-
-    def test_strict_mode_format_mismatch_error_not_written_to_result(self, tenant, _make_db_package):
-        """rule-038-inv4: format mismatch AdCPValidationError also prevents result population."""
-        db_package, db_media_buy = _make_db_package(product_id="product_1")
-
-        db_creative = Mock()
-        db_creative.agent_url = "https://agent.example.com"
-        db_creative.format = "video_format"
-
-        mock_product = Mock()
-        mock_product.name = "Display Product"
-        mock_product.format_ids = [
-            {"agent_url": "https://agent.example.com", "id": "display_300x250"},
-        ]
-
-        results = [SyncCreativeResult(creative_id="c1", action="created")]
-
-        mock_uow, mock_repo = _make_creative_uow()
-        mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
-        mock_repo.get_creative_by_id.return_value = db_creative
-        mock_repo.get_product_by_id.return_value = mock_product
-
-        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_uow_cls:
-            mock_uow_cls.return_value.__enter__.return_value = mock_uow
-
-            with pytest.raises(AdCPValidationError, match="is not supported by product"):
-                _process_assignments(
-                    assignments={"c1": ["pkg_1"]},
-                    results=results,
-                    tenant=tenant,
-                    validation_mode="strict",
-                )
-
-        # AdCPError prevented post-processing — assignment_errors not written to result
         assert results[0].assignment_errors is None
 
 
@@ -619,7 +599,7 @@ class TestAssignmentsListFormNormalization:
     def _run_list_assignments(self, assignments, results, tenant, db_package, db_media_buy):
         mock_uow, mock_repo = _make_creative_uow()
         mock_repo.find_package_with_media_buy.return_value = (db_package, db_media_buy)
-        mock_repo.get_creative_by_id.return_value = None
+        # Creative exists (default truthy MagicMock) so its assignment is created (#1418).
         mock_repo.get_existing.return_value = None
 
         def _create_assignment(**kwargs):
@@ -640,6 +620,7 @@ class TestAssignmentsListFormNormalization:
                 results=results,
                 tenant=tenant,
                 validation_mode="strict",
+                principal_id="principal_1",
             )
 
     def test_list_form_creates_assignment(self, tenant, _make_db_package):
@@ -670,7 +651,7 @@ class TestAssignmentsListFormNormalization:
             (db_package1, db_media_buy),
             (db_package2, db_media_buy),
         ]
-        mock_repo.get_creative_by_id.return_value = None
+        # Creative exists (default truthy MagicMock) so both assignments are created (#1418).
         mock_repo.get_existing.return_value = None
 
         call_count = 0
@@ -698,6 +679,7 @@ class TestAssignmentsListFormNormalization:
                 results=results,
                 tenant=tenant,
                 validation_mode="strict",
+                principal_id="principal_1",
             )
 
         assert len(assignment_list) == 2

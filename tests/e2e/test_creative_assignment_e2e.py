@@ -11,16 +11,16 @@ import json
 import uuid
 
 import pytest
-from fastmcp.client import Client
-from fastmcp.client.transports import StreamableHttpTransport
 
 from tests.e2e.adcp_request_builder import (
     build_adcp_media_buy_request,
     build_creative,
+    build_default_campaign_request,
     build_sync_creatives_request,
     get_test_date_range,
     parse_tool_result,
 )
+from tests.e2e.utils import make_mcp_client
 
 
 def discover_pricing_option_id(product: dict) -> str:
@@ -36,12 +36,36 @@ def discover_pricing_option_id(product: dict) -> str:
     return product["pricing_options"][0]["pricing_option_id"]
 
 
+def pick_display_format(formats: list[dict]) -> dict | None:
+    """Pick a deterministic display format for the assignment happy path.
+
+    The captured 54-format catalog includes generative display formats (e.g.
+    display_970x250_generative) that reject a plain image-asset creative. Blindly
+    taking the first "display" format makes this test depend on catalog ordering.
+    Prefer a static image format (id ends in "_image"); fall back to any display
+    format only if none exists. Returns the FULL FormatId dict (with agent_url),
+    which sync_creatives' schema requires, or None if no display format is found.
+    """
+    fallback = None
+    for fmt in formats:
+        fmt_id = fmt.get("format_id")
+        fmt_id_str = fmt_id.get("id", "") if isinstance(fmt_id, dict) else ""
+        lowered = fmt_id_str.lower()
+        if "display" not in lowered:
+            continue
+        if lowered.endswith("_image"):
+            return fmt_id
+        if fallback is None:
+            fallback = fmt_id
+    return fallback
+
+
 class TestCreativeAssignment:
     """E2E tests for creative assignment to media buy packages."""
 
     @pytest.mark.asyncio
     async def test_creative_sync_with_assignment_in_single_call(
-        self, docker_services_e2e, live_server, test_auth_token
+        self, docker_services_e2e, live_server, test_auth_token, auto_approval_adapter
     ):
         """
         Test creative sync with assignment in a single call.
@@ -60,13 +84,7 @@ class TestCreativeAssignment:
         print("=" * 80)
 
         # Setup MCP client
-        headers = {
-            "x-adcp-auth": test_auth_token,
-            "x-adcp-tenant": "ci-test",  # Explicit tenant selection for E2E tests
-        }
-        transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
-
-        async with Client(transport=transport) as client:
+        async with make_mcp_client(live_server, token=test_auth_token) as client:
             # ================================================================
             # PHASE 1: Product Discovery
             # ================================================================
@@ -99,16 +117,8 @@ class TestCreativeAssignment:
             assert "formats" in formats_data, "Response must contain formats"
             print(f"   ✓ Available formats: {len(formats_data['formats'])}")
 
-            # Find a suitable format
-            format_id = None
-            for fmt in formats_data["formats"]:
-                fmt_id = fmt.get("format_id")
-                # format_id is always a FormatId dict per AdCP spec
-                fmt_id_str = fmt_id.get("id", "") if isinstance(fmt_id, dict) else ""
-
-                if "display" in fmt_id_str.lower():
-                    format_id = fmt_id  # Store the FULL FormatId dict (with agent_url)
-                    break
+            # Find a suitable format (prefer static image; see pick_display_format)
+            format_id = pick_display_format(formats_data["formats"])
 
             if not format_id:
                 pytest.skip("Creative agent returned no display formats - service may be unavailable")
@@ -120,15 +130,9 @@ class TestCreativeAssignment:
             # ================================================================
             print("\n🎯 PHASE 2: Create Media Buy with Package")
 
-            start_time, end_time = get_test_date_range(days_from_now=1, duration_days=30)
-
-            media_buy_request = build_adcp_media_buy_request(
-                product_ids=[product_id],
-                total_budget=5000.0,
-                start_time=start_time,
-                end_time=end_time,
-                brand={"domain": "testbrand.com"},
-                pricing_option_id=pricing_option_id,
+            media_buy_request = build_default_campaign_request(
+                product_id,
+                pricing_option_id,
                 targeting_overlay={
                     "geo_countries": ["US"],
                 },
@@ -254,7 +258,9 @@ class TestCreativeAssignment:
             print("=" * 80)
 
     @pytest.mark.asyncio
-    async def test_multiple_creatives_multiple_packages(self, docker_services_e2e, live_server, test_auth_token):
+    async def test_multiple_creatives_multiple_packages(
+        self, docker_services_e2e, live_server, test_auth_token, auto_approval_adapter
+    ):
         """
         Test multiple creatives assigned to multiple packages.
 
@@ -272,13 +278,7 @@ class TestCreativeAssignment:
         print("E2E TEST: Multiple Creatives → Multiple Packages")
         print("=" * 80)
 
-        headers = {
-            "x-adcp-auth": test_auth_token,
-            "x-adcp-tenant": "ci-test",  # Explicit tenant selection for E2E tests
-        }
-        transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
-
-        async with Client(transport=transport) as client:
+        async with make_mcp_client(live_server, token=test_auth_token) as client:
             # ================================================================
             # PHASE 1: Product Discovery
             # ================================================================
@@ -317,18 +317,8 @@ class TestCreativeAssignment:
             formats_result = await client.call_tool("list_creative_formats", {})
             formats_data = parse_tool_result(formats_result)
 
-            format_id = None
-            for fmt in formats_data["formats"]:
-                fmt_id = fmt.get("format_id")
-                # format_id is always a FormatId dict per AdCP spec
-                fmt_id_str = fmt_id.get("id", "") if isinstance(fmt_id, dict) else ""
-
-                if "display" in fmt_id_str.lower():
-                    # Store the FULL FormatId dict — sync_creatives' schema
-                    # requires a FormatReferenceStructuredObject, not a bare
-                    # string (matches test_creative_sync_with_assignment).
-                    format_id = fmt_id
-                    break
+            # Prefer a static image display format (see pick_display_format).
+            format_id = pick_display_format(formats_data["formats"])
 
             if not format_id:
                 pytest.skip("Creative agent returned no display formats - service may be unavailable")

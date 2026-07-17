@@ -77,12 +77,37 @@ if [ "$DELEGATE" = 1 ]; then
     exec "$(dirname "$0")/run_all_tests_host.sh" "$@"
 fi
 
+# Fast bdd path: when per-worker e2e stacks are provisioned (E2E_WORKERS>0), swap
+# the plain serial `bdd` env for the two-pass split — bdd_inprocess (the
+# a2a/mcp/rest bulk, parallelized by BDD_XDIST_N) then bdd_e2e (the e2e_rest
+# transport, fanned across the per-worker servers by BDD_E2E_XDIST_N). Without
+# E2E_WORKERS the plain serial `bdd` runs unchanged, so CI and small runners are
+# unaffected. Phase B below provisions the servers and exports BDD_E2E_XDIST_N.
+if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
+    # Token-exact swap: a plain-substring ${SUITES/bdd/...} would mangle an
+    # explicit bdd_inprocess/bdd_e2e suite argument (bdd_e2e -> bdd_e2e_e2e).
+    SUITES=",$SUITES,"
+    SUITES="${SUITES/,bdd,/,bdd_inprocess,bdd_e2e,}"
+    SUITES="${SUITES#,}"; SUITES="${SUITES%,}"
+    # bdd_inprocess reads BDD_XDIST_N (compose pins it to 0 = serial by default),
+    # so the in-process bulk only parallelizes if we export a worker count here.
+    # Default to `auto` (PYTEST_XDIST_AUTO_NUM_WORKERS) so the swap is actually
+    # fast on its own — without this the ~23m->~3.5m in-process win never lands.
+    export BDD_XDIST_N="${BDD_XDIST_N:-auto}"
+    echo "Fast bdd path: E2E_WORKERS=$E2E_WORKERS BDD_XDIST_N=$BDD_XDIST_N -> suites=$SUITES"
+fi
+
 RESULTS_DIR="test-results/innet_$(date +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
 
 dc() { docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" --profile runner "$@"; }
 
-cleanup() { dc down -v >/dev/null 2>&1 || true; }
+cleanup() {
+    # Per-worker e2e servers are `docker compose run` containers (not `up`), so
+    # `dc down` won't remove them — do it explicitly.
+    docker ps -aq --filter "name=${COMPOSE_PROJECT_NAME}-server-gw" | xargs -r docker rm -f >/dev/null 2>&1 || true
+    dc down -v >/dev/null 2>&1 || true
+}
 trap cleanup EXIT
 
 # The pinned reference creative-agent image (adcp@<pin>) is built once by the
@@ -112,6 +137,48 @@ done
 # The suites use the adcp_test database (matches scripts/test-stack.sh).
 dc exec -T postgres psql -U adcp_user -d postgres -c "CREATE DATABASE adcp_test" >/dev/null 2>&1 || true
 
+# ── Per-worker e2e server stacks (parallel bdd_e2e) ──────────────────────────
+# When E2E_WORKERS=N, provision N isolated (server + DB) stacks so the e2e_rest
+# transport can run in parallel. Each xdist worker gwK targets <project>-server-gwK
+# / adcp_gwK (routed by tests/bdd/conftest.py e2e_stack via E2E_PER_WORKER=1).
+# DBs are cloned from a migrated template (adcp_e2e_template) so per-worker setup
+# is a fast copy, not N migration runs. Off by default (E2E_WORKERS unset).
+E2E_ENV_ARGS=""
+if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
+    N="$E2E_WORKERS"
+    _admin="postgresql://adcp_user:secure_password_change_me@postgres:5432"
+    psql_admin() { dc exec -T postgres psql -U adcp_user -d postgres -c "$1" >/dev/null 2>&1 || true; }
+    echo "Provisioning $N per-worker e2e server stacks..."
+    psql_admin "DROP DATABASE IF EXISTS adcp_e2e_template"
+    psql_admin "CREATE DATABASE adcp_e2e_template"
+    # Fail fast: if the template migration fails, every per-worker DB below would
+    # be cloned from an un-migrated template and the whole e2e_rest pass would
+    # error confusingly. Surface it here instead.
+    if ! dc run --rm --no-deps -e DATABASE_URL="$_admin/adcp_e2e_template?sslmode=disable" \
+            tests python scripts/ops/migrate.py >/dev/null 2>&1; then
+        echo "ERROR: e2e template migration failed — aborting per-worker provisioning" >&2
+        exit 1
+    fi
+    for i in $(seq 0 $((N - 1))); do
+        psql_admin "DROP DATABASE IF EXISTS adcp_gw$i"
+        psql_admin "CREATE DATABASE adcp_gw$i TEMPLATE adcp_e2e_template"
+        dc run -d --no-deps --name "${COMPOSE_PROJECT_NAME}-server-gw$i" \
+            -e DATABASE_URL="$_admin/adcp_gw$i?sslmode=disable" adcp-server >/dev/null
+    done
+    echo "  waiting for $N per-worker servers to become healthy..."
+    for i in $(seq 0 $((N - 1))); do
+        wd=$(( $(date +%s) + 120 )); ok=false
+        while [ "$(date +%s)" -lt "$wd" ]; do
+            docker exec "${COMPOSE_PROJECT_NAME}-server-gw$i" curl -sf http://localhost:8080/health >/dev/null 2>&1 && ok=true && break
+            sleep 2
+        done
+        [ "$ok" = true ] && echo "    server-gw$i ready" || echo "    server-gw$i NOT ready (continuing)"
+    done
+    # COMPOSE_PROJECT_NAME must reach pytest so conftest e2e_stack builds the FULL
+    # server name "<project>-server-gwN" (short "server-gwN" doesn't resolve).
+    E2E_ENV_ARGS="-e E2E_PER_WORKER=1 -e BDD_E2E_XDIST_N=$N -e COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME"
+fi
+
 # Run the suites in-network. DATABASE_URL=postgres:5432 (service name) is baked
 # into the `tests` service environment — no host port, no scan, no race.
 # --use-aliases gives this run container the `tests` network alias so the server
@@ -129,7 +196,7 @@ echo "Running suites in-network (serial): $SUITES"
 # Capture the suite exit code without aborting under `set -e` — reports must
 # still be extracted and the security audit must still run on a suite failure.
 RC=0
-dc run --rm --use-aliases tests tox -e "$SUITES" || RC=$?
+dc run --rm --use-aliases $E2E_ENV_ARGS tests tox -e "$SUITES" || RC=$?
 
 # tox writes per-suite JSON into /app/.tox, which is the `tox_data` NAMED VOLUME
 # (kept off the bind mount so venvs don't live on the slow host tree). The host
@@ -147,12 +214,23 @@ ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports extracted)"
 # host runner runs this too; keep parity so the canonical local gate still scans
 # for known vulnerabilities. Single-sourced in scripts/security-audit.sh (also
 # called by .github/workflows/ci.yml, so CI and local can't drift).
-echo "Running security audit (uv-secure)..."
-if ./scripts/security-audit.sh --no-check-uv-tool 2>/dev/null; then
-    echo "Security audit passed"
-else
-    echo "Security audit FAILED — run: ./scripts/security-audit.sh"
+# RUN_ALL_SKIP_AUDIT=1 skips it: the CI in-network job has no host uvx (it
+# deliberately skips _setup-env) and the dedicated "Security Audit" CI check
+# already owns this scan — a silent command-not-found here must not fail an
+# otherwise-green suite run.
+if [ "${RUN_ALL_SKIP_AUDIT:-0}" = "1" ]; then
+    echo "Security audit skipped (RUN_ALL_SKIP_AUDIT=1 — owned by the dedicated CI check)"
+elif ! command -v uvx >/dev/null 2>&1; then
+    echo "Security audit FAILED — uvx not on PATH (install uv or set RUN_ALL_SKIP_AUDIT=1)"
     [ "$RC" -eq 0 ] && RC=1
+else
+    echo "Running security audit (uv-secure)..."
+    if ./scripts/security-audit.sh --no-check-uv-tool 2>/dev/null; then
+        echo "Security audit passed"
+    else
+        echo "Security audit FAILED — run: ./scripts/security-audit.sh"
+        [ "$RC" -eq 0 ] && RC=1
+    fi
 fi
 
 exit $RC

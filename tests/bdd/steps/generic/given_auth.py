@@ -32,10 +32,19 @@ def given_buyer_has_tenant_context_mcp(ctx: dict) -> None:
 
 
 @given("the Buyer has no authentication credentials")
+@given("the request has no valid authentication")
 def given_buyer_no_auth(ctx: dict) -> None:
-    """Buyer has no authentication credentials at all."""
+    """Buyer has no authentication credentials at all.
+
+    ``identity=None`` plumbs through every dispatcher as a token-less request,
+    so the REAL transport auth gates run (A2A ``on_message_send`` no-token
+    gate, REST ``_require_auth_dep``, MCP boundary) — nothing is simulated
+    (#1417). ``dispatch_identity`` is the key the uc002 full-create
+    dispatch reads to override its default authenticated identity.
+    """
     ctx["has_auth"] = False
     ctx["identity"] = None
+    ctx["dispatch_identity"] = None
 
 
 @given("no hostname-based tenant resolution is possible")
