@@ -86,6 +86,27 @@ def _merge_structured_filters(filters: "CreativeFilters | None", flat_params: di
     return flat_params
 
 
+def _enforce_filter_list_caps(structured_filters: Any) -> None:
+    """Reject any list-valued filter longer than ``_MAX_FILTER_LIST_LEN``.
+
+    Runs on the MERGED filters (the object the query actually runs off) — checking
+    the pre-merge ``filters`` argument alone would let the flat params (tags,
+    media_buy_ids) bypass the cap entirely. Rejects with a clean VALIDATION_ERROR
+    (``correctable``) rather than expanding into a very large SQL IN (...) query;
+    unlike the effective_limit clamp, this REJECTS rather than truncates.
+    """
+    if structured_filters is None:
+        return
+    for field in _CAPPED_FILTER_FIELDS:
+        values = getattr(structured_filters, field, None)
+        if values is not None and len(values) > _MAX_FILTER_LIST_LEN:
+            raise AdCPValidationError(
+                f"The {field} filter has {len(values)} entries; the maximum is {_MAX_FILTER_LIST_LEN}.",
+                field=f"filters.{field}",
+                suggestion=f"Send at most {_MAX_FILTER_LIST_LEN} values in {field}, or narrow the query.",
+            )
+
+
 def _build_list_creatives_request(
     media_buy_id: str | None = None,
     media_buy_ids: list[str] | None = None,
@@ -180,21 +201,9 @@ def _build_list_creatives_request(
     # Build structured objects
     structured_filters = LibraryCreativeFilters(**filters_dict) if filters_dict else None
 
-    # Enforce max filter-list length (defense-in-depth) on the MERGED filters —
-    # the object the query actually runs off. Checking the pre-merge `filters`
-    # argument alone would let the flat params (tags, media_buy_ids) bypass the
-    # cap entirely. Rejects with a clean VALIDATION_ERROR (`correctable`)
-    # instead of expanding into a very large SQL IN (...) query; unlike the
-    # effective_limit clamp above, this REJECTS rather than truncates.
-    if structured_filters is not None:
-        for _field in _CAPPED_FILTER_FIELDS:
-            _values = getattr(structured_filters, _field, None)
-            if _values is not None and len(_values) > _MAX_FILTER_LIST_LEN:
-                raise AdCPValidationError(
-                    f"The {_field} filter has {len(_values)} entries; the maximum is {_MAX_FILTER_LIST_LEN}.",
-                    field=f"filters.{_field}",
-                    suggestion=f"Send at most {_MAX_FILTER_LIST_LEN} values in {_field}, or narrow the query.",
-                )
+    # Defense-in-depth: reject over-long list filters before they expand into a
+    # very large SQL IN (...) query (see _enforce_filter_list_caps).
+    _enforce_filter_list_caps(structured_filters)
 
     # Build pagination
     # 3.6.0: PaginationRequest is cursor-based (max_results, cursor). DB query uses offset/limit internally.
