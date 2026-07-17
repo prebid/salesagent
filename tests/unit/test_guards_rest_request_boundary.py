@@ -34,7 +34,9 @@ on them outside the boundary. Names suffixed ``Response``/``Success``/``Error``
 are excluded — those are response-direction models built from INTERNAL data
 (the deserialization helper), where a ValidationError is a server bug, not
 buyer-correctable input; wrapping them would mislabel INTERNAL failures as
-VALIDATION_ERROR/correctable.
+VALIDATION_ERROR/correctable. ``Submitted`` is in that same set: it is the
+pending-approval variant of the update_media_buy response union, reconstructed
+from an internal result dict alongside ``*Success``/``*Error``.
 """
 
 from __future__ import annotations
@@ -51,7 +53,7 @@ _VALIDATE_METHODS = {"model_validate", "model_validate_json", "parse_obj"}
 # Response-direction suffixes: models built from INTERNAL data at the boundary
 # (deserializing core-tool results), where a ValidationError is a server bug —
 # wrapping would mislabel it as buyer-correctable VALIDATION_ERROR.
-_RESPONSE_SUFFIXES = ("Response", "Success", "Error")
+_RESPONSE_SUFFIXES = ("Response", "Success", "Error", "Submitted")
 
 _WIRE_MODEL_MODULE_PREFIXES = ("adcp", "src.core.schemas")
 
@@ -339,6 +341,13 @@ class TestWireModelImportDerivation:
         # Response/Success/Error models are built from INTERNAL data at the
         # boundary; a ValidationError there is a server bug, not buyer input.
         tree = ast.parse("from src.core.schemas import CreateMediaBuySuccess, CreateMediaBuyError, GetProductsResponse")
+        assert wire_model_imports(tree) == frozenset()
+
+    def test_submitted_variant_excluded(self):
+        # UpdateMediaBuySubmitted is the pending-approval member of the
+        # update_media_buy response union — reconstructed from an internal
+        # result dict in the A2A deserialization helper, same as *Success/*Error.
+        tree = ast.parse("from src.core.schemas import UpdateMediaBuySubmitted")
         assert wire_model_imports(tree) == frozenset()
 
     def test_unrelated_imports_ignored(self):

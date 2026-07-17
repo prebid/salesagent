@@ -298,7 +298,28 @@ class TestUpdateMediaBuyFieldForwarding:
 
         assert func_node is not None, "_build_update_request function not found"
 
-        # Find all request_params["key"] = ... assignments
+        # Find every key the builder puts into `request_params`, in either of two
+        # equally-valid styles: (a) `request_params["key"] = value` assignments, or
+        # (b) a dict-literal's string keys, when that dict is the *source* dict
+        # comprehension/constructor assigned to `request_params` (e.g.
+        # `request_params = {k: v for k, v in {"key": value, ...}.items() if v}`).
+        def _dict_comp_source_keys(value: ast.expr) -> set[str]:
+            """String keys of the dict literal a DictComp iterates via `.items()`."""
+            if (
+                isinstance(value, ast.DictComp)
+                and value.generators
+                and isinstance(value.generators[0].iter, ast.Call)
+                and isinstance(value.generators[0].iter.func, ast.Attribute)
+                and value.generators[0].iter.func.attr == "items"
+                and isinstance(value.generators[0].iter.func.value, ast.Dict)
+            ):
+                return {
+                    key.value
+                    for key in value.generators[0].iter.func.value.keys
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str)
+                }
+            return set()
+
         assigned_keys = set()
         for node in ast.walk(func_node):
             if isinstance(node, ast.Assign):
@@ -311,6 +332,15 @@ class TestUpdateMediaBuyFieldForwarding:
                         and isinstance(target.slice.value, str)
                     ):
                         assigned_keys.add(target.slice.value)
+                    elif isinstance(target, ast.Name) and target.id == "request_params":
+                        assigned_keys |= _dict_comp_source_keys(node.value)
+            elif (
+                isinstance(node, ast.AnnAssign)
+                and isinstance(node.target, ast.Name)
+                and node.target.id == "request_params"
+                and node.value is not None
+            ):
+                assigned_keys |= _dict_comp_source_keys(node.value)
 
         missing = UPDATE_SPEC_FIELDS - assigned_keys
         assert not missing, f"_build_update_request doesn't include AdCP fields in request_params: {sorted(missing)}"

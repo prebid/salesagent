@@ -1029,7 +1029,8 @@ class TestGetMediaBuysStatusIsDateRefined:
     states (paused/rejected/canceled) are returned verbatim. Shared with
     get_media_buy_delivery via resolve_canonical_status (#1545 supersedes the earlier
     #1417 persisted-authoritative read; the GA state machine defines active->completed
-    at flight end).
+    at flight end). This is the SAME answer the update response now gives (both
+    delegate to _compute_status), so the read and write paths agree.
     """
 
     def test_past_end_active_buy_reports_completed(self, integration_db):
@@ -1063,5 +1064,6 @@ class TestGetMediaBuysStatusIsDateRefined:
         assert len(response.media_buys) == 1, f"Expected the buy; errors: {response.errors}"
         assert response.media_buys[0].status == MediaBuyStatus.completed, (
             "past-end 'active'-persisted buy must date-refine to 'completed' per the GA state "
-            "machine (active->completed at flight end), NOT report persisted 'active'"
+            "machine (active->completed at flight end) via the shared resolver, agreeing with "
+            "delivery and the update path, NOT report persisted 'active'"
         )

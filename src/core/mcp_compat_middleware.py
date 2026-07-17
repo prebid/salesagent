@@ -151,7 +151,20 @@ class RequestCompatMiddleware(Middleware):
             )
             context = context.copy(message=new_message)
 
-        # Step 6: Dispatch — with production fallback on TypeAdapter rejection
+        # Step 6: Dispatch — with production fallback on TypeAdapter rejection.
+        # Extracted to keep this method's cyclomatic size bounded (ADR-009 / #1610).
+        return await self._dispatch_with_typeadapter_fallback(context, tool_name, normalized, call_next)
+
+    async def _dispatch_with_typeadapter_fallback(
+        self,
+        context: MiddlewareContext,
+        tool_name: str,
+        normalized: dict,
+        call_next,
+    ) -> ToolResult:
+        """Dispatch to the tool; on a TypeAdapter structural validation failure, retry
+        (production only) after schema-aware deep-strip, then translate the failure to
+        an AdCP validation envelope. Non-TypeAdapter exceptions propagate unchanged."""
         try:
             return await call_next(context)
         except Exception as exc:

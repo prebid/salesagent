@@ -242,7 +242,7 @@ services:
   # Mirror of scripts/creative-agent-stack.sh, but ON the compose network with
   # NO published host port. The host path runs that script standalone (creative-net,
   # :9999); in-network we reuse the SAME pre-built image (`adcp-creative-agent`,
-  # adcp@ca70dd1e2a6c) so CI/host/in-network cannot diverge on the pin. The
+  # adcp@ADCP_PIN from that script) so CI/host/in-network cannot diverge on the pin. The
   # image is built by `scripts/creative-agent-stack.sh build` before `up`
   # (run_all_tests.sh for the in-network path; tests/e2e/conftest.py for the
   # host-side standalone path). NOT profile-gated: the SERVER resolves format
@@ -265,7 +265,11 @@ services:
   creative-agent:
     image: adcp-creative-agent  # built by scripts/creative-agent-stack.sh build
     environment:
-      NODE_ENV: production
+      # NOT production: since adcp v3.1.1 the agent refuses to start with the
+      # DEV_USER_* auth bypass (which the test harness needs) in a
+      # production-shaped env (NODE_ENV=production). Mirrors
+      # scripts/creative-agent-stack.sh cmd_up.
+      NODE_ENV: development
       PORT: "8080"
       DATABASE_URL: postgresql://adcp:localdev@creative-pg:5432/adcp_registry
       RUN_MIGRATIONS: "true"

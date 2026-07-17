@@ -3030,17 +3030,18 @@ class TestUpdateMediaBuyManualApproval:
             result = _update_media_buy_impl(req=req, identity=identity)
 
         # Spec 3.1.1: a pending-approval update is the SUBMITTED variant (status="submitted"
-        # + task_id), not a completed success, carried in the UpdateMediaBuyResult
-        # protocol envelope (#1417). The workflow step is marked requires_approval.
-        assert isinstance(result.response, UpdateMediaBuySubmitted)
+        # + task_id), not a completed success. It carries no affected_packages (the update is
+        # not yet applied). The workflow step is marked requires_approval, and the result
+        # envelope's protocol status mirrors the submitted state.
+        assert isinstance(result, UpdateMediaBuySubmitted)
         assert result.status == "submitted"
-        assert result.response.task_id == "step_1"
+        assert result.task_id == "step_1"
+        # The submitted envelope must not claim any applied change: no affected_packages
+        # (the pre-3.1.1 success shape reported `affected_packages == []` for this case).
+        assert "affected_packages" not in result.model_dump()
         ctx_mgr.audit_workflow_step_result.assert_called_once_with(
             ANY, ANY, status="requires_approval", request_obj=ANY, add_comment=ANY
         )
-        # 6.6 reconciliation of main's "affected_packages empty (not yet applied)" check:
-        # the submitted envelope has no affected_packages field — the update is not applied.
-        assert result.model_dump().get("affected_packages") is None
 
     def test_implementation_date_null_when_pending(self):
         """UC-003-MA02: implementation_date is null until approved.
@@ -3098,10 +3099,9 @@ class TestUpdateMediaBuyManualApproval:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        # Spec 3.1.1: a pending-approval update is the SUBMITTED variant, carried in the
-        # UpdateMediaBuyResult protocol envelope (#1417). implementation_date is not part
-        # of that envelope (the update is not yet applied), so it is absent/None.
-        assert isinstance(result.response, UpdateMediaBuySubmitted)
+        # Spec 3.1.1: a pending-approval update is the SUBMITTED variant. implementation_date
+        # is not part of that envelope (the update is not yet applied), so it is absent/None.
+        assert isinstance(result, UpdateMediaBuySubmitted)
         assert result.status == "submitted"
         dumped = result.model_dump()
         # implementation_date should be None when pending approval

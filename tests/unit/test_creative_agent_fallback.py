@@ -395,13 +395,11 @@ class TestSchemaValidationFailureTriggersFallback:
     fall back to the raw-MCP path (where per-format tolerance applies), not only
     transport-class errors."""
 
-    @pytest.mark.asyncio
-    async def test_schema_mismatch_failed_status_triggers_raw_fallback(self, registry, agent):
-        """SDK returns status='failed' with a schema-validation error → raw-MCP fallback."""
+    async def _assert_routes_to_fallback(self, registry, agent, error_text):
+        """Drive a status='failed' result with the given error and assert the raw-MCP fallback is taken."""
         mock_result = MagicMock()
         mock_result.status = "failed"
-        # The exact wholesale-validation signature observed live (2700 errors).
-        mock_result.error = "Response doesn't match expected schema ListCreativeFormatsResponse"
+        mock_result.error = error_text
         mock_result.message = None
 
         mock_agent_proxy = MagicMock()
@@ -415,3 +413,23 @@ class TestSchemaValidationFailureTriggersFallback:
         ):
             await registry._fetch_formats_from_agent(mock_client, agent)
             mock_fallback.assert_called_once_with(agent)
+
+    @pytest.mark.asyncio
+    async def test_schema_mismatch_failed_status_triggers_raw_fallback(self, registry, agent):
+        """SDK returns status='failed' with a schema-validation error → raw-MCP fallback."""
+        # The exact wholesale-validation signature observed live (2700 errors).
+        await self._assert_routes_to_fallback(
+            registry, agent, "Response doesn't match expected schema ListCreativeFormatsResponse"
+        )
+
+    @pytest.mark.asyncio
+    async def test_sdk66_schema_validation_phrasing_triggers_raw_fallback(self, registry, agent):
+        """adcp 6.6 rephrased wholesale-validation errors to 'Schema validation failed
+        for <tool>: ...' — observed live against the v3.1.1-pinned reference agent,
+        whose catalog carries post-3.1.1 additive asset_types (pixel_tracker).
+        Must route to the raw-MCP fallback (per-format tolerance), not raise."""
+        await self._assert_routes_to_fallback(
+            registry,
+            agent,
+            "Schema validation failed for list_creative_formats: /formats/0/assets/1 oneOf composition failed (+47 more)",
+        )

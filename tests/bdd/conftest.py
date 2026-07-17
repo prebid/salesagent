@@ -622,14 +622,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # UC-003 empty update (#1417/nzjx): production now rejects with
+        # GRADUATED (#1417/nzjx): UC-003 empty update now rejected. Production raises
         # AdCPInvalidRequestError (INVALID_REQUEST + buyer suggestion) per BR-RULE-022
-        # INV-3, but the @T-UC-003-empty-update BDD scenario stays DORMANT — it is
-        # neither ext-* nor targeting-overlay, so the UC-003 harness gate below
-        # ("UC-003 harness not yet wired for non-extension scenarios") xfails it.
-        # The behavior is graded by tests/integration/test_uc003_mcp_update_error_capture.py
-        # (per-transport: INVALID_REQUEST + non-empty top-level suggestion on the wire).
-        # Grounded against AdCP 3.1 GA: update fields are all optional in
+        # INV-3. Grounded against AdCP 3.1 GA: update fields are all optional in
         # update-media-buy-request.json, so an empty update passes schema validation and
         # is a SEMANTIC rejection → INVALID_REQUEST, not the schema-level VALIDATION_ERROR
         # (GA L3 error-handling). The two Scenario-Outline rows that asserted
@@ -1346,14 +1341,34 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # buyer-supplied start_date/end_date in response.reporting_period,
             # so T-UC-004-daterange now genuinely passes (no strict xfail).
             #
-            # date-range partition (salesagent-x18x, #1545): GRADUATED. The Examples
-            # now name the wire code — error "VALIDATION_ERROR" with suggestion — and
-            # production emits exactly that on the a2a wire ("Start date must be before
-            # end date", media_buy_delivery.py:209-218 via AdCPValidationError). Only the
-            # [a2a-…] rows are parametrized for this partition (mcp/rest/impl not
-            # collected), and they pass the named code, so no partition marker remains.
-            # (The boundary counterpart below still masks mcp/rest — those transports
-            # ARE parametrized there and still gap.)
+            # date-range partition (salesagent-x18x, #1545): the a2a rows GRADUATED —
+            # the Examples now name the wire code (error "VALIDATION_ERROR" with
+            # suggestion) and production emits exactly that on the a2a wire ("Start date
+            # must be before end date", media_buy_delivery.py:209-218 via
+            # AdCPValidationError). Under the transport-aware harness (e2e-harness-wiring)
+            # mcp/rest ARE parametrized for this partition and still gap, so they retain a
+            # marker below.
+            # date-range partition/boundary (salesagent-04zf, 18h.10 Phase-2):
+            # when_partition/boundary_date_range now translate the descriptor
+            # into real start_date/end_date (previously the axis name was sent
+            # as a literal request field and rejected by extra=forbid, so the
+            # blanket _UC004_{PARTITION,BOUNDARY}_TAGS strict=False masked a
+            # broken step). With real wiring: the "valid" rows
+            # (start_before_end / dates_omitted) genuinely PASS on all 4
+            # transports (no marker). Only the "invalid" rows genuinely fail —
+            # production does not reject start>=end (same real gap as
+            # T-UC-004-daterange-invalid / -equal). strict=True forces marker
+            # removal the moment start>=end validation lands. See
+            # docs/test-debt-bdd-strict-markers.md item C4.
+            (
+                "T-UC-004-partition-date-range",
+                # a2a rows GRADUATED at the main merge (strict XPASS observed
+                # 2026-07-09): the merged wire path validates start>=end on a2a
+                # (same evidence class as the boundary-date-range rows below).
+                {"mcp-start_after_end", "mcp-start_equals_end", "[rest-start_after_end", "[rest-start_equals_end"},
+                "production does not validate start_date>=end_date (same gap as "
+                "T-UC-004-daterange-invalid/-equal). See docs/test-debt-bdd-strict-markers.md item C4.",
+            ),
             # Transport-scoped: impl genuinely PASSES start>=end on the _impl
             # path now. mcp/rest boundary rows still don't enforce the gap.
             (
@@ -1423,11 +1438,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-account_not_found",
                     "impl-empty_object",
                     # valid rows (explicit_account_id / natural_key) now resolve the
-                    # account on a2a/mcp/rest (seeded, salesagent-jr5b) — removed.
+                    # account on a2a/mcp/rest — the delivery When seeds the named valid
+                    # accounts via _seed_valid_account_if_named / seed_account_with_access
+                    # (salesagent-jr5b, #1545), which is exactly the "seed the account in the
+                    # delivery Given" follow-up the e2e-harness-wiring branch flagged as the
+                    # condition for graduation. That seeding is present in the merged tree,
+                    # so the earlier REVERT no longer applies — the valid rows are removed.
                     # account_not_found now correctly raises ACCOUNT_NOT_FOUND on
-                    # a2a/mcp/rest once resolution runs (seeded siblings exist, the
-                    # unseeded id 404s) — removed. Only invalid_oneOf_both / empty_object
-                    # still raise ValidationError-not-AdCPError on the wire, kept.
+                    # a2a/mcp/rest once resolution runs (seeded siblings exist, the unseeded
+                    # id 404s) — removed. Only invalid_oneOf_both / empty_object still raise
+                    # ValidationError-not-AdCPError on the wire, kept (impl path also fails).
                     "a2a-invalid_oneOf_both",
                     "a2a-empty_object",
                     "mcp-invalid_oneOf_both",
@@ -1445,9 +1465,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {
                     "impl-account_id present + not found",
                     # Valid rows (account exists / single match = "brand + operator
-                    # present", incl. the sandbox:true variant) now resolve on
-                    # a2a/mcp/rest once their accounts are seeded (salesagent-jr5b)
-                    # — removed. a2a invalid rows (both / not found / empty) already
+                    # present", incl. the sandbox:true variant) now resolve on a2a/mcp/rest
+                    # once their accounts are seeded (salesagent-jr5b, present in the merged
+                    # tree) — removed. a2a invalid rows (both / not found / empty) already
                     # raise AdCPError (wire-drop XPASS, #1417) — removed.
                     "mcp-both account_id and brand/operator",
                     # mcp-account_id present + not found genuinely passes
@@ -1513,7 +1533,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # (empirically verified: a2a/mcp/rest all PASS the named code). The earlier
             # INVALID_REQUEST framing (and the "A2A wraps in RuntimeError" note) were both
             # stale — production emits VALIDATION_ERROR here, not INVALID_REQUEST — so no
-            # partition marker remains.
+            # partition marker remains. (e2e-harness-wiring corroborates: strict XPASS
+            # observed on the merged tree 2026-07-09, the merged A2A boundary raises
+            # AdCPError on the empty-array reject — adcp_validation_boundary from the
+            # #1417 embed — matching the boundary-resolution graduation below. Entry removed.)
             # T-UC-004-boundary-resolution: a2a now raises AdCPError on the empty-array
             # reject (wire-drop confirmed XPASS, #1417); the only remaining
             # transport-aware failure (a2a empty array) is handled below — entry removed
@@ -1723,11 +1746,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(
                     pytest.mark.xfail(reason="date_range boundary: validation gaps on some transports", strict=False)
                 )
-            # GRADUATED (#1270): production now validates date range over e2e_rest, so the
-            # invalid cases (equals, after) are rejected — the former strict-xfail tripwire
-            # here XPASSed deterministically (two consecutive in-network runs) and was
-            # removed. The non-strict e2e_rest ledger entries for these 2 nodeids remain as
-            # a graceful guard against e2e environment flakiness.
+            # GRADUATED (#1270): the live server now validates start>=end (the
+            # merged #1417 validation embed), so the invalid cases (equals, after)
+            # are rejected over e2e_rest — the former strict-xfail tripwire here
+            # XPASSed deterministically on in-network CI runs (first fired
+            # 2026-07-09) and was removed. The non-strict e2e_rest ledger entries
+            # for these 2 nodeids remain as a graceful guard against e2e
+            # environment flakiness.
             # GRADUATED (#1417 round-8 follow-up, same tripwire from main's side): the
             # #1417 validation refactor made the live server reject invalid date ranges;
             # the invalid cases (equals, after) pass on e2e_rest and main removed their
@@ -1767,6 +1792,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # never reaches the live server (#1417). Marker kept for e2e_rest until the step-
         # binding bug is fixed.
         _aw_partition_error = "T-UC-004-partition-attribution" in marker_names and 'error "INVALID_REQUEST"' in nodeid
+        # #1545/x18x: the campaign partition row GRADUATED on a2a (the only transport
+        # parametrized for it) — INV-5 fires VALIDATION_ERROR with suggestion — so the
+        # former strict=True _aw_partition_campaign leg is dropped (no _aw_partition_campaign
+        # var remains). Only the error "INVALID_REQUEST" rows still fail on e2e_rest, where
+        # the generic "with {request_params}" step still shadows the specific partition step.
         _partition_window_dropped = _aw_partition_error and is_e2e_rest
         if _partition_window_dropped:
             item.add_marker(
@@ -2063,9 +2093,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-019-inv-153-3",
             "T-UC-019-inv-153-4",
             "T-UC-019-inv-153-5",
-            # Sandbox mode — not implemented
+            # Sandbox mode (response echo) — not implemented
             "T-UC-019-sandbox-happy",
-            "T-UC-019-sandbox-validation",
+            # Graduated (6szx): T-UC-019-sandbox-validation — BR-RULE-209 INV-7:
+            # invalid status_filter on a sandbox account yields a REAL rejection
+            # (_resolve_status_filter → AdCPValidationError → VALIDATION_ERROR wire
+            # envelope). Given now seeds a real sandbox Account + AgentAccountAccess
+            # (was an inert ctx flag); Then steps assert wire-first.
             # Graduated: T-UC-019-partition-principal-invalid identity_missing (impl/a2a/mcp pass)
             # — moved to _UC019_PARAM_XFAIL for selective identity_missing exclusion.
             # Extension errors — error code mismatches / not implemented.
@@ -2075,7 +2109,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-019-ext-a",
             "T-UC-019-ext-b",
             "T-UC-019-ext-c",
-            "T-UC-019-ext-d",
+            # Graduated (6szx): T-UC-019-ext-d — invalid parameter types are rejected
+            # inside the shared adcp_validation_boundary (_build_get_media_buys_request)
+            # with VALIDATION_ERROR, field-level details (field="media_buy_ids"),
+            # recovery=correctable and a top-level suggestion, on the A2A wire and via
+            # the typed exception on the legacy MCP wrapper. Then steps assert wire-first.
             "T-UC-019-ext-e",
             # Main flow snapshots — adapter not wired
             "T-UC-019-main-snapshot",
@@ -2852,15 +2890,17 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 
     # UCs without a REST endpoint (get_media_buys has no REST route) are graded on
     # the A2A + MCP wire transports only — including a REST variant would 404.
-    # This exclusion covers e2e_rest too: it is the SAME REST surface over live
-    # HTTP, so every e2e_rest variant of these UCs 404s against the server
-    # (the whole uc019 red cluster in the first in-network bdd_e2e run).
-    no_rest_route = any(t.startswith(_uc_prefix) for _uc_prefix in _NO_REST_UC_TAG_PREFIXES for t in marker_names)
-    if no_rest_route:
+    # This applies to e2e_rest too: it dispatches real HTTP REST to the live
+    # server, so a tool with no REST route 404s there identically (confirmed by
+    # the first in-network CI run: every UC-019 e2e_rest param died on a live
+    # 404). Skip the e2e append for these UCs instead of parking ~40 ledger
+    # entries for a definitionally-unsupported transport.
+    no_rest_uc = any(t.startswith(_uc_prefix) for _uc_prefix in _NO_REST_UC_TAG_PREFIXES for t in marker_names)
+    if no_rest_uc:
         transports = [Transport.A2A, Transport.MCP]
         ids = ["a2a", "mcp"]
 
-    if os.environ.get("BDD_E2E_ENABLED") == "true" and not no_rest_route:
+    if os.environ.get("BDD_E2E_ENABLED") == "true" and not no_rest_uc:
         transports.append(Transport.E2E_REST)
         ids.append("e2e_rest")
 
@@ -3271,9 +3311,11 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-003-partition-targeting-overlay",
             "T-UC-003-boundary-targeting-overlay",
         }
-        # The 3 manual-approval submitted-envelope scenarios (PR #1567) — see the
-        # BOUNDED branch below.
-        _UC003_WIRED_TAGS = {
+        # The 3 manual-approval submitted-envelope scenarios (PR #1567) are graded
+        # too (they exercise UpdateMediaBuySubmitted cross-transport, adcp 6.6 /
+        # spec 3.1.1). Every other UC-003 scenario stays dormant; graduating the
+        # full UC-003 file is tracked separately. See the BOUNDED branch below.
+        _UC003_MANUAL_APPROVAL = {
             "T-UC-003-alt-manual",
             "T-UC-003-approval-tenant",
             "T-UC-003-approval-adapter",
@@ -3300,7 +3342,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 _setup_existing_media_buy(ctx, env, tenant, principal, product)
                 env._seeded_media_buy_id = ctx["existing_media_buy"].media_buy_id
                 yield
-        elif marker_names & _UC003_WIRED_TAGS:
+        elif marker_names & _UC003_MANUAL_APPROVAL:
             # BOUNDED (PR #1567): the 3 manual-approval submitted-envelope
             # scenarios are graded here (they exercise UpdateMediaBuySubmitted
             # cross-transport). Every other non-extension UC-003 scenario stays

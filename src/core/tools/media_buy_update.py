@@ -12,7 +12,7 @@ import logging
 import os
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from adcp import PushNotificationConfig
 from adcp.server.helpers import MEDIA_BUY_STATE_MACHINE, is_terminal_status, valid_actions_for_status
@@ -21,6 +21,9 @@ from adcp.types import MediaBuyStatus
 from pydantic import Field
 
 from src.core.tools.media_buy_list import _compute_status, normalize_persisted_media_buy_status
+
+if TYPE_CHECKING:
+    from src.core.database.models import MediaBuy
 
 # ---------------------------------------------------------------------------
 # Financial policy constants (F-05)
@@ -344,7 +347,7 @@ def _update_media_buy_impl(
     req: UpdateMediaBuyRequest,
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
-) -> UpdateMediaBuyResult:
+) -> UpdateMediaBuyResult | UpdateMediaBuySubmitted:
     """Shared implementation for update_media_buy (used by both MCP and A2A).
 
     Callers construct the validated UpdateMediaBuyRequest at their boundary
@@ -608,7 +611,10 @@ def _update_media_buy_impl(
                 )
                 session.add(mapping)
 
-                return UpdateMediaBuyResult(response=approval_response, status=AdcpTaskStatus.submitted.value)
+                # UpdateMediaBuySubmitted carries the protocol-envelope
+                # status="submitted" (const) natively — returned unwrapped so every
+                # transport serializes the spec-correct submitted envelope.
+                return approval_response
 
             # Validate currency limits if flight dates or budget changes
             # This prevents workarounds where buyers extend flight to bypass daily max
@@ -1479,30 +1485,26 @@ def _build_update_request(
                 auto_pause_on_budget_exhaustion=None,
             )
 
-    # Build request with only non-None values (strict validation in dev mode)
-    request_params: dict[str, Any] = {}
-    if media_buy_id is not None:
-        request_params["media_buy_id"] = media_buy_id
-    if paused is not None:
-        request_params["paused"] = paused
-    if effective_start is not None:
-        request_params["start_time"] = effective_start
-    if effective_end is not None:
-        request_params["end_time"] = effective_end
-    if budget_obj is not None:
-        request_params["budget"] = budget_obj
-    if packages is not None:
-        request_params["packages"] = packages
-    if push_notification_config is not None:
-        request_params["push_notification_config"] = push_notification_config
-    if context is not None:
-        request_params["context"] = context
-    if reporting_webhook is not None:
-        request_params["reporting_webhook"] = reporting_webhook
-    if ext is not None:
-        request_params["ext"] = ext
-    if idempotency_key is not None:
-        request_params["idempotency_key"] = idempotency_key
+    # Build request with only non-None values (strict validation in dev mode).
+    # Collected via a dict comprehension rather than a branch-per-field so adding a
+    # tolerated field does not grow the function's cyclomatic complexity.
+    request_params: dict[str, Any] = {
+        key: value
+        for key, value in {
+            "media_buy_id": media_buy_id,
+            "paused": paused,
+            "start_time": effective_start,
+            "end_time": effective_end,
+            "budget": budget_obj,
+            "packages": packages,
+            "push_notification_config": push_notification_config,
+            "context": context,
+            "reporting_webhook": reporting_webhook,
+            "ext": ext,
+            "idempotency_key": idempotency_key,
+        }.items()
+        if value is not None
+    }
 
     with adcp_validation_boundary(context="update_media_buy request"):
         req = UpdateMediaBuyRequest(**request_params)
