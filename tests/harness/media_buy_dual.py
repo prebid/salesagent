@@ -2,14 +2,14 @@
 
 UC-026 scenarios use both create and update flows within the same test:
 Given steps create a media buy (create path), then When steps update it
-(update path). UC-003 (PR #1567) drives the update path directly against
+(update path). UC-003 (salesagent-8hu9) drives the update path directly against
 a pre-seeded media buy to grade the manual-approval UpdateMediaBuySubmitted
 envelope cross-transport. This env extends MediaBuyCreateEnv with update-module
 patches and delegates update requests to the appropriate production code —
 A2A/MCP go through the real on_message_send / FastMCP Client pipelines so the
 serialized wire (and the A2A submitted reconstruction) are genuinely exercised.
 
-Introduced by PR #1567.
+beads: salesagent-a3xo, salesagent-8hu9
 """
 
 from __future__ import annotations
@@ -102,12 +102,11 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
 
     def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
         # Set the update-vs-create routing flag and leave it set THROUGH the base
-        # dispatch's subsequent parse_rest_response call: _base.py runs
+        # dispatch's subsequent parse_rest_response call: the base dispatch runs
         # _run_rest_request then parse_rest_response sequentially, so a finally-reset
         # here would flip the flag back before the parse and misroute the update
-        # response to the create parser (yielding None). The flag is reset in
-        # parse_rest_response after routing, and each request re-sets it here
-        # (unconditional assignment, so a create request clears a stale flag).
+        # response to the create parser (yielding None). parse_rest_response resets
+        # it after routing, and each request re-sets it (False on create requests).
         self._active_update = _is_update_request(kwargs)
         if self._active_update:
             return self._run_update_rest_request(**kwargs)
@@ -188,16 +187,13 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
     def _call_update_a2a(self, **kwargs: Any) -> Any:
         # Drive the REAL on_message_send → _serialize_for_a2a → Task/Artifact
         # pipeline (mirrors MediaBuyCreateEnv.call_a2a), so _run_a2a_handler stashes
-        # the true artifact DataPart as the wire_response. A prior version synthesized
-        # the wire via update_media_buy_raw(...).model_dump(), which tracked the return
-        # model rather than the assembled envelope — an update-envelope regression
-        # would not be caught. A SUBMITTED update never carries an artifact body:
-        # on_message_send early-returns a Task (state=SUBMITTED, no artifacts) and the
-        # base handler synthesizes the submitted wire from the Task (tests/harness/
-        # _base.py) — production has no A2A submitted reconstruction (PR #1567 round-2
-        # follow-up). Completed/error results DO carry an artifact, stashed as
-        # wire_response; _parse_update_rest_response recovers the union from the
-        # flattened artifact (needs the top-level status the plain model drops).
+        # the true artifact DataPart as the wire_response and the submitted
+        # reconstruction in adcp_a2a_server (union discrimination) runs. A prior
+        # version synthesized the wire via update_media_buy_raw(...).model_dump(),
+        # which tracked the return model rather than the assembled envelope — an
+        # update-envelope regression would not be caught. The union
+        # (submitted|success|error) needs status/media_buy_id discrimination, so
+        # reconstruct via _parse_update_rest_response.
         return self._run_a2a_handler(
             "update_media_buy",
             lambda **data: self._parse_update_rest_response(data),
@@ -207,11 +203,12 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
     def _call_update_mcp(self, **kwargs: Any) -> Any:
         # Drive the REAL FastMCP Client pipeline (mirrors MediaBuyCreateEnv.call_mcp) so the
         # structured_content — the real MCP wire body — is stashed as wire_response and the
-        # full middleware/auth chain runs. This subsumes the earlier mock-Context invocation
-        # through with_error_logging (#1417): the real pipeline applies the production
-        # boundary decorator via registration (src/core/main.py: mcp.tool()(with_error_logging(fn))),
-        # so a raised AdCPError still surfaces as the two-layer wire envelope captured as
-        # wire_error_envelope.
+        # full middleware/auth chain runs, including the production with_error_logging
+        # boundary decorator (src/core/main.py: mcp.tool()(with_error_logging(fn))): on
+        # error it translates the raised AdCPError into an AdCPToolError carrying the
+        # two-layer wire envelope, which the dispatcher captures as wire_error_envelope
+        # (#1417). A prior version hand-built a mocked Context and invoked the wrapper
+        # directly, which bypassed the client/middleware chain.
         return self._run_mcp_client(
             "update_media_buy",
             lambda **data: self._parse_update_rest_response(data),
@@ -253,25 +250,16 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
     def _parse_update_rest_response(self, data: dict[str, Any]) -> Any:
         from src.core.schemas._base import (
             UpdateMediaBuyError,
-            UpdateMediaBuyResult,
             UpdateMediaBuySubmitted,
             UpdateMediaBuySuccess,
         )
 
-        # Harness-side union discrimination for the REST/synthesized wires: submitted first
-        # (status="submitted"+task_id, no applied media_buy_id — a submitted envelope must
-        # not be mis-reconstructed as Success, whose status is Literal completed), then
-        # error (non-empty errors), else success. The submitted arm serves the REST wire and
-        # the harness-synthesized A2A submitted dict — production A2A has NO submitted
-        # reconstruction (Task early-return; PR #1567 round-2 follow-up). The reconstructed
-        # union member is wrapped in the UpdateMediaBuyResult task envelope carrying the
-        # top-level wire status (#1417).
-        status = data.pop("status", "completed")
-        response: UpdateMediaBuySubmitted | UpdateMediaBuyError | UpdateMediaBuySuccess
-        if status == "submitted":
-            response = UpdateMediaBuySubmitted(status=status, **data)
-        elif "errors" in data and data["errors"]:
-            response = UpdateMediaBuyError(**data)
-        else:
-            response = UpdateMediaBuySuccess(**data)
-        return UpdateMediaBuyResult(response=response, status=status)
+        # Mirror the production A2A union discrimination (adcp_a2a_server.py:484-489):
+        # submitted first (status="submitted"+task_id, no applied media_buy_id — a submitted
+        # envelope must not be mis-reconstructed as Success, whose status is Literal completed),
+        # then success (has media_buy_id), else error.
+        if data.get("status") == "submitted":
+            return UpdateMediaBuySubmitted(**data)
+        if "media_buy_id" in data:
+            return UpdateMediaBuySuccess(**data)
+        return UpdateMediaBuyError(**data)

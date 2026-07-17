@@ -25,6 +25,13 @@
 # now-passing entries, 4 stale (renamed by #1370), and 98 format-injection
 # entries now owned by the env E2EUnsupportedSetup declaration. 47 genuine-gap
 # entries remain, grouped by gap below.
+#
+# FINAL SET AFTER THE main MERGE: 17 entries =
+#   5  uc004 invalid-input rows the live server still accepts (spec-production gap)
+#   2  explicit inline-xfail production gaps (attribution default, push-notification ack)
+#   10 parallel-e2e_rest mock-injection artifacts (E2E_PER_WORKER, owner-approved)
+# The 4 uc004 date-range rows and the 2 uc004 account valid rows GRADUATED at the
+# #1417 merge and must never be re-added.
 
 # --- uc004 invalid-input validation — wire shape — GRADUATED (#1430 jdy1-M1) ---
 # Fixed by mapping FastAPI 422 -> AdCPValidationError in parse_rest_error
@@ -112,3 +119,19 @@ tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status
 # failed with 'asyncio.run() cannot be called from a running event loop').
 # Verified in-network: all 4 transports pass incl. e2e_rest.
 
+# --- parallel e2e_rest mock-injection artifacts (10) ---
+# Added 2026-07-09: surfaced when perf/parallelize-test-suite enabled parallel
+# e2e_rest (E2E_PER_WORKER). Mock-injection-incompatible artifacts, not regressions:
+# UC-004 set_adapter_response (delivery), UC-005 set_registry_formats, UC-018
+# injected cross-principal creatives — none visible to the separate HTTP server.
+# Ledger: salesagent-5p68 / e2e_rest retirement epic salesagent-rlgl.
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_complete_not_truncated__truncation_flag_set_false[e2e_rest]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_truncated_by_limit__truncation_flag_set_true[e2e_rest]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_buyer_requests_supported_dimension__seller_returns_breakdown[e2e_rest]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_multiple_dimensions_requested_simultaneously[e2e_rest]
+tests/bdd/test_uc005_discover_creative_formats.py::test_baseline_list_creative_formats_response_carries_format_id_objects_with_agent_url_and_id[e2e_rest]
+tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_roundtrip__list_creative_formats_returns_the_same_format_object_that_get_products_advertised[e2e_rest]
+tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url_pointing_at_a_thirdparty_creative_agent_is_reported_as_observation_not_failure[e2e_rest]
+tests/bdd/test_uc018_list_creatives.py::test_brrule034_inv1_counter__crossprincipal_creatives_never_visible[e2e_rest]
+tests/bdd/test_uc018_list_creatives.py::test_brrule034_inv1_holds__query_always_scoped_by_principal[e2e_rest]
+tests/bdd/test_uc018_list_creatives.py::test_list_creatives_filtered_by_concept_ids_returns_only_creatives_in_that_concept_carrying_concept_id_and_concept_name[e2e_rest]
