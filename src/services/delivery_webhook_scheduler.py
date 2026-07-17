@@ -192,41 +192,25 @@ class DeliveryWebhookScheduler:
             return False
 
     def _should_skip_send(
-        self, session: Any, delivery_repo: DeliveryRepository, media_buy: Any, *, force: bool
+        self, delivery_repo: DeliveryRepository, media_buy: Any, *, is_final: bool, force: bool
     ) -> bool:
-        """BEST-EFFORT skip decision — True if this delivery webhook should NOT be sent.
+        """BEST-EFFORT read-only de-dup — True if this delivery webhook should NOT be sent.
 
-        NOT a hard exactly-once guarantee.
+        NOT a hard exactly-once guarantee. This is a pure read decision; the atomic
+        concurrency CLAIM is taken later, just before the POST (see _deliver_report),
+        so definitive no-send paths before the POST never hold a claim.
           - final: skip if a SUCCESSFUL "final" was already logged for this buy.
-            This applies EVEN under ``force`` — a manual re-trigger must never put
-            a DUPLICATE final (with a fresh sequence) on the wire. It keys on a
-            *successful* final, so a retry after a FAILED final still goes through,
-            and it fires regardless of the 24h window (so the status scheduler
-            flipping the buy to persisted "completed" ~60s after flight end, before
-            this hourly batch, can't leave the spec-required final unsent). If no
-            successful final exists yet, atomically CLAIM the final (see
-            _claim_final_webhook) so two concurrent workers can't both send it — the
-            loser skips.
+            Applies EVEN under ``force`` — a manual re-trigger must never duplicate a
+            delivered final. Keys on a *successful* final, so a retry after a FAILED
+            final still goes through, and it fires regardless of the 24h window (so
+            the status scheduler flipping the buy to persisted "completed" before this
+            hourly batch can't leave the spec-required final unsent).
           - scheduled: 24h rolling dedup, bypassed by ``force`` so an operator can
             re-send a fresh periodic report on demand.
-
-        The atomic claim closes the CONCURRENCY duplicate. What remains best-effort
-        is the crash window: a crash (or swallowed log-write) between a successful
-        POST and the success-log write leaves no record, so once the claim's lease
-        expires a later batch re-sends. A durable exactly-once final (reserve +
-        sequence allocation before the side effect, e.g. an outbox) is tracked in
-        #1606.
         """
-        is_final = resolve_canonical_status(media_buy, datetime.now(UTC).date()) == CANONICAL_COMPLETED
         if is_final:
             if delivery_repo.has_successful_final(media_buy.media_buy_id, task_type="media_buy_delivery"):
                 logger.info("Final delivery webhook already sent for media buy %s – skipping", media_buy.media_buy_id)
-                return True
-            if not self._claim_final_webhook(session, media_buy):
-                logger.info(
-                    "Final delivery webhook for media buy %s is claimed by another worker – skipping",
-                    media_buy.media_buy_id,
-                )
                 return True
             return False
         if force:
@@ -244,22 +228,45 @@ class DeliveryWebhookScheduler:
             return True
         return False
 
-    def _claim_final_webhook(self, session: Any, media_buy: Any) -> bool:
-        """Atomically claim the buy's ONE final webhook. True if THIS worker won.
+    def _claim_final_webhook(self, session: Any, media_buy: Any) -> datetime | None:
+        """Atomically claim the buy's ONE final webhook. Returns the claim token
+        (the exact ``claimed_at`` written) if THIS worker won, else None.
 
         Best-effort concurrency guard (#1575): a conditional UPDATE that wins only
         when the claim is unset or stale (older than FINAL_WEBHOOK_CLAIM_LEASE, so a
         crashed worker's claim self-heals). Runs on the caller's ``session`` and
         COMMITS it so the claim is immediately visible to a racing worker (whose
-        UPDATE then matches 0 rows and loses). Does NOT close the crash-after-POST
-        window — #1606.
+        UPDATE then matches 0 rows and loses). The returned token is passed to
+        _release_final_claim on a definitive failure/no-send so the claim doesn't
+        block an immediate retry for the whole lease. Does NOT close the
+        crash-after-POST window — #1606.
         """
         now = datetime.now(UTC)
         won = MediaBuyRepository(session, media_buy.tenant_id).try_claim_final_webhook(
             media_buy.media_buy_id, now=now, stale_before=now - FINAL_WEBHOOK_CLAIM_LEASE
         )
         session.commit()
-        return won
+        return now if won else None
+
+    def _release_final_claim(self, session: Any, media_buy: Any, claimed_at: datetime) -> None:
+        """Best-effort release of THIS worker's final claim after a definitive
+        failure/no-send, so an immediate retry isn't blocked for the whole lease.
+
+        Token-guarded by ``claimed_at`` (see release_final_webhook_claim) so it can
+        never clear a newer owner's claim. Swallows its own errors — the lease is the
+        real guarantee, so a failed release just falls back to lease recovery.
+        """
+        try:
+            MediaBuyRepository(session, media_buy.tenant_id).release_final_webhook_claim(
+                media_buy.media_buy_id, claimed_at=claimed_at
+            )
+            session.commit()
+        except Exception:  # noqa: BLE001 - best-effort; lease recovery is the guarantee
+            logger.debug(
+                "Failed to release final claim for media buy %s (lease will recover)",
+                media_buy.media_buy_id,
+                exc_info=True,
+            )
 
     async def _send_report_for_media_buy(
         self, media_buy: Any, reporting_webhook: dict, session: Any, force: bool = False
@@ -296,174 +303,215 @@ class DeliveryWebhookScheduler:
                 )
                 return False
 
-            # Calculate reporting period for daily frequency: yesterday (full day)
-            start_date_obj = datetime.now(UTC).date() - timedelta(days=1)
-            end_date_obj = datetime.now(UTC)
+            is_final = resolve_canonical_status(media_buy, datetime.now(UTC).date()) == CANONICAL_COMPLETED
 
-            # Best-effort de-dup + atomic concurrency claim for the final. See
-            # _should_skip_send — closes the concurrency duplicate; the crash-after-
-            # POST window remains and is tracked in #1606.
-            if self._should_skip_send(session, delivery_repo, media_buy, force=force):
+            # Best-effort read-only de-dup (no claim here — the atomic concurrency
+            # claim is taken inside _deliver_report, just before the POST).
+            if self._should_skip_send(delivery_repo, media_buy, is_final=is_final, force=force):
                 return False
 
-            # Fetch delivery metrics
-            # Create a ResolvedIdentity for the delivery call
-            from src.core.resolved_identity import ResolvedIdentity
+            return await self._deliver_report(session, delivery_repo, media_buy, reporting_webhook, is_final=is_final)
 
-            identity = ResolvedIdentity(
-                principal_id=media_buy.principal_id,
+        except Exception as e:
+            # Re-raise for the caller (batch loop / manual trigger) to own the
+            # single ERROR line. Log at DEBUG here to avoid a duplicate full
+            # traceback on the common send_notification -> False path.
+            logger.debug("Error sending delivery report for media buy %s: %s", media_buy.media_buy_id, e, exc_info=True)
+            raise
+
+    async def _deliver_report(
+        self,
+        session: Any,
+        delivery_repo: DeliveryRepository,
+        media_buy: Any,
+        reporting_webhook: dict,
+        *,
+        is_final: bool,
+    ) -> bool:
+        """Build the delivery report and POST it.
+
+        Returns True when a webhook was delivered, False on a definitive no-send
+        (no delivery data, no URL, or the final claim was lost to a concurrent
+        worker); RAISES on a failed send so the batch counts an error.
+
+        The atomic final CLAIM is taken here, immediately before the POST — so the
+        no-send checks above it never hold a claim — and is RELEASED (token-guarded)
+        if the send fails or the claim is lost, so an immediate retry isn't blocked
+        for the whole lease. A successful POST keeps the claim; the crash-after-POST
+        duplicate window is the best-effort residual tracked in #1606.
+        """
+        # Reporting period for daily frequency: yesterday (full day).
+        start_date_obj = datetime.now(UTC).date() - timedelta(days=1)
+        end_date_obj = datetime.now(UTC)
+
+        # Create a ResolvedIdentity for the delivery call
+        from src.core.resolved_identity import ResolvedIdentity
+
+        identity = ResolvedIdentity(
+            principal_id=media_buy.principal_id,
+            tenant_id=media_buy.tenant_id,
+            tenant={"tenant_id": media_buy.tenant_id},
+            protocol="rest",
+        )
+
+        # The impl reports on exactly REPORTABLE_CANONICAL_STATUSES: the
+        # scheduler already filters by persisted DB status
+        # (REPORTABLE_PERSISTED_STATUSES — serving + completed) at query time
+        # and skips buys that resolve outside the reportable set, so both
+        # still-serving and ended (persisted "completed") campaigns are
+        # included rather than filtered out and reported as "not found" errors.
+        from adcp.types import MediaBuyStatus
+
+        req = GetMediaBuyDeliveryRequest(
+            media_buy_ids=[media_buy.media_buy_id],
+            status_filter=[MediaBuyStatus(s) for s in sorted(REPORTABLE_CANONICAL_STATUSES)],
+            start_date=start_date_obj.strftime("%Y-%m-%d"),
+            end_date=end_date_obj.strftime("%Y-%m-%d"),
+            context=None,
+        )
+
+        delivery_response = _get_media_buy_delivery_impl(req, identity)
+
+        if not isinstance(delivery_response, GetMediaBuyDeliveryResponse):
+            logger.warning(
+                f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. Result is {delivery_response.model_dump()}"
+            )
+            return False
+
+        if delivery_response.errors is not None:
+            logger.warning(
+                f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. We have recieved error in the result. Result is {delivery_response.model_dump()}"
+            )
+            return False
+
+        # Sequence number for this webhook: max SUCCESSFULLY DELIVERED
+        # sequence + 1 (spec: "Sequential notification number ... starts at
+        # 1"). Failed/retrying sends also log the sequence they attempted;
+        # counting them — while the dedup above counts only successes —
+        # would burn numbers the buyer never received, so a buyer's
+        # first-ever webhook could start above 1. A query failure
+        # propagates and aborts this send loudly: a quiet fallback to 1
+        # would put an already-consumed sequence on the wire.
+        sequence_number = (
+            delivery_repo.get_max_sequence_number(media_buy.media_buy_id, task_type="media_buy_delivery") + 1
+        )
+
+        # Set webhook-specific metadata directly on the response model (#1570).
+        # These fields are webhook-only ("only present in webhook deliveries" —
+        # get-media-buy-delivery-response.json @ v3.1-04f59d2d5), so the polling
+        # impl never sets them; this webhook path is the single place they are
+        # attached to the wire.
+        #
+        # notification_type: derived from the reported statuses — "final" when
+        # every buy will never produce more data ("one final notification when
+        # the campaign completes", optimization-reporting.mdx §Publisher
+        # Commitment), "scheduled" otherwise.
+        derived = derive_notification_type(enum_value(d.status) for d in delivery_response.media_buy_deliveries or [])
+        delivery_response.notification_type = NotificationType(derived) if derived else None
+
+        # next_expected_at: only present when notification_type is not "final"
+        # (spec, same schema — a non-nullable date-time, so a final webhook
+        # must OMIT the field; leaving it None lets the response's
+        # exclude-None serialization drop it from the wire). Daily
+        # frequency -> start of next day (UTC).
+        if derived == "final":
+            delivery_response.next_expected_at = None
+        elif derived == "scheduled":
+            next_day = datetime.now(UTC).date() + timedelta(days=1)
+            delivery_response.next_expected_at = utc_flight_start(next_day)
+        # derived is None (zero deliveries) -> leave next_expected_at unset;
+        # notification_type is None too, so the pair stays consistent.
+
+        delivery_response.sequence_number = sequence_number
+        delivery_response.partial_data = False  # TODO: Check for reporting_delayed status
+        delivery_response.unavailable_count = 0  # TODO: Count reporting_delayed/failed deliveries
+
+        # Extract webhook URL and authentication
+        webhook_url = reporting_webhook.get("url")
+        if not webhook_url:
+            logger.warning(f"No webhook URL configured for media buy {media_buy.media_buy_id}")
+            return False
+
+        # Try to find existing push notification config or create a temporary one
+        auth_config = reporting_webhook.get("authentication", {})
+        auth_type = None
+        auth_token = None
+
+        if auth_config:
+            schemes = auth_config.get("schemes", [])
+            auth_type = schemes[0] if schemes else None
+            auth_token = auth_config.get("credentials")
+
+        # Query for existing push notification config for this media buy
+        config_stmt = select(DBPushNotificationConfig).where(
+            DBPushNotificationConfig.principal_id == media_buy.principal_id,
+            DBPushNotificationConfig.tenant_id == media_buy.tenant_id,
+            DBPushNotificationConfig.url == webhook_url,
+            DBPushNotificationConfig.is_active,
+        )
+        push_notification_config = session.scalars(config_stmt).first()
+
+        # Extract webhook config data before session closes
+        if push_notification_config:
+            # Detach from session and extract data
+            session.expunge(push_notification_config)
+        else:
+            # Create a detached temporary config (not attached to session)
+            push_notification_config = DBPushNotificationConfig(
+                id=f"temp_{media_buy.media_buy_id}",
                 tenant_id=media_buy.tenant_id,
-                tenant={"tenant_id": media_buy.tenant_id},
-                protocol="rest",
+                principal_id=media_buy.principal_id,
+                url=webhook_url,
+                authentication_type=auth_type,
+                authentication_token=auth_token,
+                is_active=True,
             )
 
-            # The impl reports on exactly REPORTABLE_CANONICAL_STATUSES: the
-            # scheduler already filters by persisted DB status
-            # (REPORTABLE_PERSISTED_STATUSES — serving + completed) at query time
-            # and skips buys that resolve outside the reportable set, so both
-            # still-serving and ended (persisted "completed") campaigns are
-            # included rather than filtered out and reported as "not found" errors.
-            from adcp.types import MediaBuyStatus
+        # Wire vs internal task_type distinction:
+        # - metadata["task_type"] = "media_buy_delivery" -- internal logging/dedup label
+        #   used by protocol_webhook_service guards and WebhookDeliveryLog queries.
+        # - SDK task_type = "update_media_buy" -- AdCP spec TaskType enum value
+        #   for the wire payload (delivery reports are status updates on media buys).
+        # These are intentionally different: the internal label predates the SDK enum
+        # and is used for DB filtering, while the wire value must be spec-compliant.
+        # Renaming the metadata key is not safe without migrating DB records and
+        # updating all 6 protocol_webhook_service guard checks.
+        metadata = {
+            "task_type": "media_buy_delivery",
+            "tenant_id": media_buy.tenant_id,
+            "principal_id": media_buy.principal_id,
+            "media_buy_id": media_buy.media_buy_id,
+        }
 
-            req = GetMediaBuyDeliveryRequest(
-                media_buy_ids=[media_buy.media_buy_id],
-                status_filter=[MediaBuyStatus(s) for s in sorted(REPORTABLE_CANONICAL_STATUSES)],
-                start_date=start_date_obj.strftime("%Y-%m-%d"),
-                end_date=end_date_obj.strftime("%Y-%m-%d"),
-                context=None,
+        # SDK 5.7: returns McpWebhookPayload directly; 3rd arg is task_type.
+        # Delivery reports are status updates on existing media buys,
+        # so we use update_media_buy as the canonical task type.
+        media_buy_delivery_payload = create_mcp_webhook_payload(
+            task_id=media_buy.media_buy_id,
+            task_type="update_media_buy",
+            result=delivery_response,
+            status=AdcpTaskStatus.completed,
+        )
+
+        # Atomic concurrency claim, taken NOW — immediately before the POST — so the
+        # definitive no-send paths above never hold a claim. The loser skips; the
+        # winner's claim is released below on a failed send (token-guarded) so an
+        # immediate retry isn't blocked for the lease. (#1575; crash-after-POST
+        # residual -> #1606.)
+        claim_token = self._claim_final_webhook(session, media_buy) if is_final else None
+        if is_final and claim_token is None:
+            logger.info(
+                "Final delivery webhook for media buy %s is claimed by another worker – skipping",
+                media_buy.media_buy_id,
             )
+            return False
 
-            delivery_response = _get_media_buy_delivery_impl(req, identity)
-
-            if not isinstance(delivery_response, GetMediaBuyDeliveryResponse):
-                logger.warning(
-                    f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. Result is {delivery_response.model_dump()}"
-                )
-                return False
-
-            if delivery_response.errors is not None:
-                logger.warning(
-                    f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. We have recieved error in the result. Result is {delivery_response.model_dump()}"
-                )
-                return False
-
-            # Sequence number for this webhook: max SUCCESSFULLY DELIVERED
-            # sequence + 1 (spec: "Sequential notification number ... starts at
-            # 1"). Failed/retrying sends also log the sequence they attempted;
-            # counting them — while the dedup above counts only successes —
-            # would burn numbers the buyer never received, so a buyer's
-            # first-ever webhook could start above 1. A query failure
-            # propagates and aborts this send loudly: a quiet fallback to 1
-            # would put an already-consumed sequence on the wire.
-            sequence_number = (
-                delivery_repo.get_max_sequence_number(media_buy.media_buy_id, task_type="media_buy_delivery") + 1
-            )
-
-            # Set webhook-specific metadata directly on the response model (#1570).
-            # These fields are webhook-only ("only present in webhook deliveries" —
-            # get-media-buy-delivery-response.json @ v3.1-04f59d2d5), so the polling
-            # impl never sets them; this webhook path is the single place they are
-            # attached to the wire.
-            #
-            # notification_type: derived from the reported statuses — "final" when
-            # every buy will never produce more data ("one final notification when
-            # the campaign completes", optimization-reporting.mdx §Publisher
-            # Commitment), "scheduled" otherwise.
-            derived = derive_notification_type(
-                enum_value(d.status) for d in delivery_response.media_buy_deliveries or []
-            )
-            delivery_response.notification_type = NotificationType(derived) if derived else None
-
-            # next_expected_at: only present when notification_type is not "final"
-            # (spec, same schema — a non-nullable date-time, so a final webhook
-            # must OMIT the field; leaving it None lets the response's
-            # exclude-None serialization drop it from the wire). Daily
-            # frequency -> start of next day (UTC).
-            if derived == "final":
-                delivery_response.next_expected_at = None
-            elif derived == "scheduled":
-                next_day = datetime.now(UTC).date() + timedelta(days=1)
-                delivery_response.next_expected_at = utc_flight_start(next_day)
-            # derived is None (zero deliveries) -> leave next_expected_at unset;
-            # notification_type is None too, so the pair stays consistent.
-
-            delivery_response.sequence_number = sequence_number
-            delivery_response.partial_data = False  # TODO: Check for reporting_delayed status
-            delivery_response.unavailable_count = 0  # TODO: Count reporting_delayed/failed deliveries
-
-            # Extract webhook URL and authentication
-            webhook_url = reporting_webhook.get("url")
-            if not webhook_url:
-                logger.warning(f"No webhook URL configured for media buy {media_buy.media_buy_id}")
-                return False
-
-            # Try to find existing push notification config or create a temporary one
-            auth_config = reporting_webhook.get("authentication", {})
-            auth_type = None
-            auth_token = None
-
-            if auth_config:
-                schemes = auth_config.get("schemes", [])
-                auth_type = schemes[0] if schemes else None
-                auth_token = auth_config.get("credentials")
-
-            # Query for existing push notification config for this media buy
-            config_stmt = select(DBPushNotificationConfig).where(
-                DBPushNotificationConfig.principal_id == media_buy.principal_id,
-                DBPushNotificationConfig.tenant_id == media_buy.tenant_id,
-                DBPushNotificationConfig.url == webhook_url,
-                DBPushNotificationConfig.is_active,
-            )
-            push_notification_config = session.scalars(config_stmt).first()
-
-            # Extract webhook config data before session closes
-            if push_notification_config:
-                # Detach from session and extract data
-                session.expunge(push_notification_config)
-            else:
-                # Create a detached temporary config (not attached to session)
-                push_notification_config = DBPushNotificationConfig(
-                    id=f"temp_{media_buy.media_buy_id}",
-                    tenant_id=media_buy.tenant_id,
-                    principal_id=media_buy.principal_id,
-                    url=webhook_url,
-                    authentication_type=auth_type,
-                    authentication_token=auth_token,
-                    is_active=True,
-                )
-
-            # Wire vs internal task_type distinction:
-            # - metadata["task_type"] = "media_buy_delivery" -- internal logging/dedup label
-            #   used by protocol_webhook_service guards and WebhookDeliveryLog queries.
-            # - SDK task_type = "update_media_buy" -- AdCP spec TaskType enum value
-            #   for the wire payload (delivery reports are status updates on media buys).
-            # These are intentionally different: the internal label predates the SDK enum
-            # and is used for DB filtering, while the wire value must be spec-compliant.
-            # Renaming the metadata key is not safe without migrating DB records and
-            # updating all 6 protocol_webhook_service guard checks.
-            metadata = {
-                "task_type": "media_buy_delivery",
-                "tenant_id": media_buy.tenant_id,
-                "principal_id": media_buy.principal_id,
-                "media_buy_id": media_buy.media_buy_id,
-            }
-
-            # SDK 5.7: returns McpWebhookPayload directly; 3rd arg is task_type.
-            # Delivery reports are status updates on existing media buys,
-            # so we use update_media_buy as the canonical task type.
-            media_buy_delivery_payload = create_mcp_webhook_payload(
-                task_id=media_buy.media_buy_id,
-                task_type="update_media_buy",
-                result=delivery_response,
-                status=AdcpTaskStatus.completed,
-            )
-
-            # Send webhook notification OUTSIDE the session context
-            # This ensures the session is closed before async webhook call
+        # Send webhook notification OUTSIDE the session context
+        # This ensures the session is closed before async webhook call
+        try:
             delivered = await self.webhook_service.send_notification(
                 push_notification_config=push_notification_config, payload=media_buy_delivery_payload, metadata=metadata
             )
-
             if not delivered:
                 # send_notification returns False (never raises) on permanent
                 # 4xx / exhausted retries and has already written the failed
@@ -473,16 +521,16 @@ class DeliveryWebhookScheduler:
                     f"Delivery report webhook send failed for media buy {media_buy.media_buy_id} "
                     "(see webhook service logs for the HTTP failure detail)"
                 )
-
-            logger.info(f"Sent delivery report webhook for media buy {media_buy.media_buy_id}")
-            return True
-
-        except Exception as e:
-            # Re-raise for the caller (batch loop / manual trigger) to own the
-            # single ERROR line. Log at DEBUG here to avoid a duplicate full
-            # traceback on the common send_notification -> False path.
-            logger.debug("Error sending delivery report for media buy %s: %s", media_buy.media_buy_id, e, exc_info=True)
+        except Exception:
+            # Definitive failure: release our final claim (token-guarded) so an
+            # immediate retry isn't blocked for the lease. Lease recovery still
+            # covers an actual crash (where this release never runs).
+            if claim_token is not None:
+                self._release_final_claim(session, media_buy, claim_token)
             raise
+
+        logger.info(f"Sent delivery report webhook for media buy {media_buy.media_buy_id}")
+        return True
 
 
 # Global scheduler instance

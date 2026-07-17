@@ -80,6 +80,29 @@ class MediaBuyRepository:
         ).scalar_one_or_none()
         return claimed_id is not None
 
+    def release_final_webhook_claim(self, media_buy_id: str, *, claimed_at: datetime.datetime) -> bool:
+        """Release THIS worker's final-webhook claim so a definitive failure/no-send
+        doesn't block an immediate retry for the whole lease. True if the claim was cleared.
+
+        Token-guarded (#1575): clears ``final_webhook_claimed_at`` only when it still
+        equals ``claimed_at`` — the exact timestamp this worker wrote in
+        ``try_claim_final_webhook``. If the lease already expired and another worker
+        re-claimed with a newer timestamp, the ``== claimed_at`` predicate matches 0
+        rows, so this never clears a newer owner's claim. Lease recovery still covers
+        an actual crash (where no release runs). The caller MUST commit.
+        """
+        released_id = self._session.execute(
+            update(MediaBuy)
+            .where(
+                MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.media_buy_id == media_buy_id,
+                MediaBuy.final_webhook_claimed_at == claimed_at,
+            )
+            .values(final_webhook_claimed_at=None)
+            .returning(MediaBuy.media_buy_id)
+        ).scalar_one_or_none()
+        return released_id is not None
+
     # ------------------------------------------------------------------
     # Single MediaBuy lookups
     # ------------------------------------------------------------------

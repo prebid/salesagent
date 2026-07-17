@@ -332,10 +332,11 @@ class TestConcurrentFinalWebhookClaim:
     """The final webhook is serialized across concurrent workers by an atomic claim.
 
     Two workers that both observe "no final logged" must not both send: the first to
-    win the conditional-UPDATE claim sends, the loser skips. A stale claim (crashed
-    worker) self-heals and the final is re-sent rather than stranded. This closes the
-    concurrency duplicate (#1575); the crash-after-POST window remains and is deferred
-    to #1606.
+    win the conditional-UPDATE claim sends, the loser skips (proven here with two
+    genuinely independent sessions/connections). A stale claim (crashed worker)
+    self-heals; a definitive failure/no-send RELEASES the claim so an immediate retry
+    isn't blocked for the lease. This closes the concurrency duplicate (#1575); the
+    crash-after-POST window remains and is deferred to #1606.
 
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
     """
@@ -369,24 +370,83 @@ class TestConcurrentFinalWebhookClaim:
             assert len(wires) == 1, "a stale claim must be reclaimed so the final is not stranded"
             assert wires[0]["result"]["notification_type"] == "final"
 
-    def test_repo_claim_serializes_concurrent_callers(self, integration_db):
+    def test_two_independent_sessions_only_one_wins_the_claim(self, integration_db):
+        """Real two-connection contention: exactly one winner, cross-session commit visibility.
+
+        Unlike a same-session predicate check, this uses TWO independent SQLAlchemy
+        sessions (separate connections). Session 1 claims and COMMITS; session 2 — a
+        genuinely separate transaction — then attempts the same claim and must LOSE,
+        proving the committed claim is visible across connections and that the atomic
+        UPDATE serializes real concurrent workers. A released claim frees the row for
+        a fresh winner.
+        """
+        from sqlalchemy.orm import Session
+
+        from src.core.database.database_session import get_engine
         from src.core.database.repositories.media_buy import MediaBuyRepository
         from tests.harness import DeliveryPollEnv
 
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             buy = _serving_webhook_buy(env, flight="completed")
-            repo = MediaBuyRepository(env.get_session(), "t1")
-            now = datetime.now(UTC)
-            fresh_cutoff = now - timedelta(minutes=15)
+            mb_id = buy.media_buy_id
+            env.get_session().commit()  # ensure the buy is visible to other connections
 
-            # First caller wins the claim; a second concurrent caller (same fresh
-            # cutoff) loses it — the atomic UPDATE matches exactly one of them.
-            assert repo.try_claim_final_webhook(buy.media_buy_id, now=now, stale_before=fresh_cutoff) is True
-            assert repo.try_claim_final_webhook(buy.media_buy_id, now=now, stale_before=fresh_cutoff) is False
-            # A caller whose cutoff post-dates the claim (claim now stale) reclaims it.
-            assert (
-                repo.try_claim_final_webhook(buy.media_buy_id, now=now, stale_before=now + timedelta(minutes=1)) is True
-            )
+            now = datetime.now(UTC)
+            cutoff = now - timedelta(minutes=15)
+            engine = get_engine()
+            s1, s2 = Session(bind=engine), Session(bind=engine)
+            try:
+                won1 = MediaBuyRepository(s1, "t1").try_claim_final_webhook(mb_id, now=now, stale_before=cutoff)
+                s1.commit()  # commit so s2's independent connection observes the claim
+                won2 = MediaBuyRepository(s2, "t1").try_claim_final_webhook(mb_id, now=now, stale_before=cutoff)
+                s2.commit()
+                assert (won1, won2) == (True, False), "exactly one of two independent sessions must win the claim"
+
+                # Session 1 releases (token-guarded) -> session 2 can now win.
+                assert MediaBuyRepository(s1, "t1").release_final_webhook_claim(mb_id, claimed_at=now) is True
+                s1.commit()
+                won2_after_release = MediaBuyRepository(s2, "t1").try_claim_final_webhook(
+                    mb_id, now=now, stale_before=cutoff
+                )
+                s2.commit()
+                assert won2_after_release is True, "a released claim must be reclaimable by another session"
+            finally:
+                s1.close()
+                s2.close()
+
+    @pytest.mark.asyncio
+    async def test_failed_send_releases_the_claim_for_immediate_retry(self, integration_db):
+        """A definitive send failure releases the final claim so a retry isn't blocked for the lease.
+
+        Contradicting the earlier behavior where a failed final held its claim for 15
+        minutes: the claim is now released (token-guarded) on a failed POST, so
+        ``final_webhook_claimed_at`` returns to NULL and an immediate re-claim succeeds.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+        from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            buy = _serving_webhook_buy(env, flight="completed")
+            mb_id = buy.media_buy_id
+
+            scheduler = DeliveryWebhookScheduler()
+            # The outbound send fails (returns False -> the scheduler raises).
+            with patch.object(
+                scheduler.webhook_service, "send_notification", new_callable=AsyncMock, return_value=False
+            ):
+                with pytest.raises(Exception, match="send failed"):
+                    await scheduler._send_report_for_media_buy(
+                        buy, buy.raw_request["reporting_webhook"], env.get_session(), force=True
+                    )
+
+            # The claim was released: the row is NULL again and immediately re-claimable.
+            session = env.get_session()
+            session.expire_all()
+            refreshed = MediaBuyRepository(session, "t1").get_by_id(mb_id)
+            assert refreshed.final_webhook_claimed_at is None, "a failed final send must release its claim"
 
 
 # ---------------------------------------------------------------------------
