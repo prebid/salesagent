@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 from fastmcp.server.dependencies import get_http_headers
 from sqlalchemy import select
 
-from src.core.auth_utils import get_principal_from_token
+from src.core.auth_utils import get_principal_from_token, reject_invalid_token
 from src.core.config_loader import (
     get_current_tenant,
     get_tenant_by_id,
@@ -261,12 +261,11 @@ def get_principal_from_context(
     # This distinguishes between "no auth" (OK) and "bad auth" (error or warning)
     if principal_id is None:
         if require_valid_token:
-            from src.core.exceptions import INVALID_TOKEN_MESSAGE, AdCPAuthenticationError
-
             # Redact the resolved tenant from the caller-facing message (it is an
-            # internal identifier); keep it in the server log only.
-            logger.warning("Invalid token presented for tenant '%s'", requested_tenant_id or "any")
-            raise AdCPAuthenticationError(INVALID_TOKEN_MESSAGE)
+            # internal identifier); keep it in the server log only. Shared with
+            # resolve_identity so the message and its compensating log line
+            # cannot drift.
+            reject_invalid_token(requested_tenant_id)
         else:
             # For discovery endpoints, treat invalid token like missing token
             logger.debug(

@@ -174,7 +174,9 @@ class TestResolveIdentity:
         mock_get_principal.return_value = (None, None)  # token does not resolve
 
         with (
-            caplog.at_level(logging.WARNING, logger="src.core.resolved_identity"),
+            # The warn-then-raise lives in the shared auth_utils.reject_invalid_token
+            # both resolvers route through, so the compensating log rides its logger.
+            caplog.at_level(logging.WARNING, logger="src.core.auth_utils"),
             pytest.raises(AdCPAuthenticationError) as exc,
         ):
             resolve_identity(

@@ -101,13 +101,25 @@ class TestAuthHelperFamilySuggestion:
     def test_invalid_token_carries_suggestion(self, integration_db):
         """get_principal_from_context with an invalid token (require_valid_token=True)
         raises AUTH_REQUIRED whose envelope must carry the top-level suggestion.
+
+        Doubles as the deletion oracle for the ``auth.py`` half of the tenant-id
+        redaction: this is the one test that already drives
+        ``get_principal_from_context`` with an invalid token, so the tenant here is
+        a UUID (the previous slug could not detect a disclosure even incidentally)
+        and the envelope must leak it nowhere. Revert the raise site to the
+        tenant-disclosing f-string and this fails. The sibling
+        ``resolve_identity`` path is pinned by
+        test_resolved_identity.py::test_invalid_token_error_does_not_disclose_tenant_id.
         """
+        import json
+
         from src.core.auth import get_principal_from_context
         from tests.factories import TenantFactory
         from tests.harness._base import BareIntegrationEnv
 
-        with BareIntegrationEnv(tenant_id="auth_sugg_t2") as env:
-            TenantFactory(tenant_id="auth_sugg_t2")
+        tenant_uuid = "5c1d2f6a-9b3e-4a71-8f04-2d6b7c9e1a35"
+        with BareIntegrationEnv(tenant_id=tenant_uuid) as env:
+            TenantFactory(tenant_id=tenant_uuid)
             env.get_session()  # commit factory data
 
             class _HeaderCarrier:
@@ -117,10 +129,16 @@ class TestAuthHelperFamilySuggestion:
 
                 headers = {
                     "x-adcp-auth": "not-a-real-token",
-                    "x-adcp-tenant": "auth_sugg_t2",
+                    "x-adcp-tenant": tenant_uuid,
                 }
 
             with pytest.raises(AdCPError) as exc_info:
                 get_principal_from_context(_HeaderCarrier())
 
-        _assert_auth_required_with_suggestion(build_two_layer_error_envelope(exc_info.value))
+        envelope = build_two_layer_error_envelope(exc_info.value)
+        _assert_auth_required_with_suggestion(envelope)
+        # Non-disclosure: the resolved tenant is an internal identifier. Assert it
+        # rides neither the message nor ANY other envelope field (a serializer that
+        # re-added it under details/context would pass a message-only check).
+        assert tenant_uuid not in str(exc_info.value), f"auth error leaked the tenant id: {exc_info.value}"
+        assert tenant_uuid not in json.dumps(envelope), f"tenant id leaked into the wire envelope: {envelope}"

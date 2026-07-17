@@ -2,6 +2,7 @@
 
 import hmac
 import logging
+from typing import NoReturn
 
 from sqlalchemy import select
 
@@ -9,6 +10,29 @@ from src.core.database.database_session import execute_with_retry
 from src.core.database.models import Principal, Tenant
 
 logger = logging.getLogger(__name__)
+
+
+def reject_invalid_token(tenant_id: str | None) -> NoReturn:
+    """Reject a present-but-invalid token: log the tenant, raise the generic message.
+
+    Single source for the invalid-token 401 shared by ``resolve_identity`` and
+    ``get_principal_from_context`` — two parallel implementations of the same
+    detect-tenant → resolve-principal flow, which both reach this rejection.
+
+    The resolved tenant is an internal identifier and must never ride the
+    caller-facing message (disclosing it to an unauthenticated caller is the leak
+    this exists to prevent); it stays in this server-side warning instead. That
+    warning is the compensating control for the redaction and a security-relevant
+    record, so keeping it byte-identical across both callers matters for
+    log-based detection — hand-copying the block is exactly what let the two log
+    lines drift apart (``%r`` vs ``'%s'``) on the push that introduced them.
+    """
+    # Local import: src.core.exceptions is imported lazily at the existing raise
+    # sites for the same reason (auth_utils is imported from the database layer).
+    from src.core.exceptions import INVALID_TOKEN_MESSAGE, AdCPAuthenticationError
+
+    logger.warning("Invalid token presented for tenant %r", tenant_id or "any")
+    raise AdCPAuthenticationError(INVALID_TOKEN_MESSAGE)
 
 
 def get_principal_from_token(token: str, tenant_id: str | None = None) -> tuple[str | None, dict | None]:
