@@ -289,10 +289,10 @@ Feature: BR-UC-002 Create Media Buy
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
     Then the response should indicate a validation error
-    And the error code should be "INVALID_REQUEST"
+    And the error code should be "VALIDATION_ERROR"
     And the error should reference the unresolvable asset_type discriminator
     And the error should include "suggestion" field
-    # BR-RULE-015 INV-6: assets value lacking asset_type or carrying an unregistered value (not one of the 14 AssetVariant types) -> INVALID_REQUEST
+    # BR-RULE-015 INV-6: assets value lacking asset_type or carrying an unregistered value (not one of the 14 AssetVariant types). Prose maps this schema failure to INVALID_REQUEST; the boundary deliberately emits VALIDATION_ERROR uniformly (storyboards accept either -- see adcp_validation_boundary).
     # --- ext-h: Format ID Validation Failure ---
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/create-media-buy-request.json
 

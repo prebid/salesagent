@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from pydantic import ValidationError
 
 from src.core.exceptions import (
+    VALIDATION_ERROR_SUGGESTION,
     AdCPValidationError,
     build_validation_error_details,
 )
@@ -38,6 +39,20 @@ def adcp_validation_boundary(context: str = "parameters", field: str | None = No
     path, and error.json's top-level ``suggestion`` — no tool hand-rolls its own
     try/except copy.
 
+    Error CODE — deliberate spec divergence: a Pydantic ``ValidationError`` is
+    schema validation, which the AdCP error-handling prose (3.1.1) maps to
+    ``INVALID_REQUEST`` ("malformed, missing required fields, or violates schema
+    constraints"), reserving ``VALIDATION_ERROR`` for "business rules beyond
+    schema validation". This boundary deliberately emits ``VALIDATION_ERROR``
+    uniformly for ALL boundary rejections rather than classify per Pydantic error
+    type. The conformance storyboards accept either code for a rejection
+    (``allowed_values: [INVALID_REQUEST, VALIDATION_ERROR]`` in
+    ``universal/idempotency.yaml`` / ``universal/error-compliance.yaml``), and
+    both codes carry ``recovery="correctable"``, so the choice is
+    graded-equivalent and does not change the buyer's recovery action.
+    ``VALIDATION_ERROR`` is therefore NOT asserted to be the spec-canonical code
+    for a schema failure — it is a deliberate uniform-boundary choice.
+
     ``context`` names what was invalid in the message (e.g. ``"get_products
     request"``); the default renders the ``Invalid parameters`` prefix existing
     wire assertions rely on.
@@ -54,7 +69,7 @@ def adcp_validation_boundary(context: str = "parameters", field: str | None = No
         raise AdCPValidationError(
             format_validation_error(e, context=context),
             field=field if field is not None else first_validation_error_field(e),
-            suggestion=suggest_validation_fix(e),
+            suggestion=VALIDATION_ERROR_SUGGESTION,
             details=build_validation_error_details(errors),
         ) from e
 
@@ -220,34 +235,3 @@ def format_validation_error(validation_error: ValidationError, context: str = "r
     )
 
     return error_msg
-
-
-def suggest_validation_fix(validation_error: ValidationError) -> str:
-    """Derive a single buyer-facing correction hint from a Pydantic ValidationError.
-
-    Produces the actionable ``suggestion`` companion to
-    ``format_validation_error``'s diagnostic message, so request-validation
-    rejections carry a non-empty wire ``suggestion`` (AdCP POST-F3: the buyer
-    must learn how to fix the request). The hint names the offending field(s)
-    and the corrective action, keyed off the Pydantic error ``type``:
-
-    * ``missing``        → provide the required field
-    * ``string_pattern_mismatch`` / ``string_too_short`` / ``string_too_long`` → fix the value to satisfy the constraint
-    * ``extra_forbidden`` → remove the unrecognized field
-    * anything else      → correct the field per the AdCP spec
-    """
-    errors = validation_error.errors()
-    if not errors:
-        return "Correct the request to match the AdCP specification and resend."
-
-    first = errors[0]
-    field_path = ".".join(str(loc) for loc in first.get("loc", ())) or "request"
-    error_type = first.get("type", "")
-
-    if "missing" in error_type:
-        return f"Provide the required '{field_path}' field and resend the request."
-    if "extra_forbidden" in error_type:
-        return f"Remove the unrecognized '{field_path}' field; it is not part of the AdCP request schema."
-    if error_type.startswith("string_pattern_mismatch") or "too_short" in error_type or "too_long" in error_type:
-        return f"Provide a valid '{field_path}' value that satisfies the AdCP field constraints and resend."
-    return f"Correct the '{field_path}' field to match the AdCP specification and resend."

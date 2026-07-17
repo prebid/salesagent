@@ -607,6 +607,44 @@ def _first_package(ctx: dict) -> dict:
     return packages[0]
 
 
+@given('a create_media_buy request with an inline creative whose assets map value lacks an "asset_type" field')
+def given_inline_creative_asset_missing_asset_type(ctx: dict) -> None:
+    """Attach an inline creative whose assets-map value omits the asset_type discriminator.
+
+    BR-RULE-015 INV-6: an assets-map value lacking asset_type (or carrying an
+    unregistered value) is unresolvable against the 14 AssetVariant types and
+    should be rejected. Production types ``Creative.assets`` as ``dict[str, Any]``
+    (untyped) and does NOT yet validate the discriminator, so the request is
+    accepted — a production gap. The scenario is strict-xfailed (``_XFAIL_TAGS``)
+    until BR-RULE-015 validation lands; dispatching RAW exercises the future
+    boundary validation on the wire so the xfail flips the moment it ships.
+    """
+    from tests.bdd.steps.generic.given_media_buy import _add_inline_creatives, _ensure_request_defaults
+
+    _ensure_request_defaults(ctx)
+    _add_inline_creatives(ctx, count=1)  # builds an assets-map value with no asset_type
+    ctx["dispatch_mode"] = "create_raw"
+
+
+@then("the error should reference the unresolvable asset_type discriminator")
+def then_error_references_asset_type(ctx: dict) -> None:
+    """The wire error names the unresolvable asset_type discriminator/field.
+
+    Wire-first (reads the real two-layer envelope). Reached only once production
+    validates asset_type (BR-RULE-015); until then the earlier validation-error
+    Then fails first and the scenario strict-xfails.
+    """
+    from tests.bdd.steps.generic.then_error import _wire_error_object
+
+    err = _wire_error_object(ctx)
+    assert err is not None, "Expected a wire error envelope referencing asset_type"
+    haystack = f"{err.get('field', '')} {err.get('message', '')}".lower()
+    assert "asset_type" in haystack, (
+        f"error should reference the unresolvable asset_type discriminator; "
+        f"got field={err.get('field')!r} message={err.get('message')!r}"
+    )
+
+
 @given(parsers.parse('a package has optimization_goal with kind "metric" and metric "{metric}" not in supported set'))
 def given_package_optimization_unsupported_metric(ctx: dict, metric: str) -> None:
     """Attach an optimization_goal whose metric is outside the seller's supported set.
@@ -1552,10 +1590,9 @@ def given_request_idempotency_key_omitted(ctx: dict) -> None:
     Uses the harness OMIT sentinel: the request assembler keeps it, and
     MediaBuyCreateEnv._ensure_idempotency_key pops it so the constructed
     CreateMediaBuyRequest is missing the REQUIRED field — production rejects it
-    with a VALIDATION_ERROR naming idempotency_key and a buyer-facing
-    ``suggestion`` derived by ``suggest_validation_fix`` ("Provide the required
-    'idempotency_key' field ..."), surfaced on the wire across all transports
-    (#1417/gh8p.10).
+    with a VALIDATION_ERROR naming idempotency_key (on the ``field`` path) and the
+    canonical buyer-facing ``suggestion`` ("review error details and fix field
+    values"), surfaced on the wire across all transports (#1417/gh8p.10).
     """
     from tests.harness.media_buy_create import OMIT_IDEMPOTENCY_KEY
 

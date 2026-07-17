@@ -180,6 +180,39 @@ class TestShouldRetry:
         with patch("src.core.config.is_production", return_value=True):
             assert middleware._should_retry(exc) is False
 
+    @pytest.mark.asyncio
+    async def test_real_fastmcp_typeadapter_title_starts_with_call(self):
+        """Assumption-pin: the ``call[`` prefix the detection predicate keys on is
+        grounded in REAL FastMCP/Pydantic behavior, not the synthesized
+        ``title="call[...]"`` the other tests in this class build.
+
+        FastMCP validates tool arguments by wrapping the tool callable in a
+        Pydantic ``TypeAdapter`` and calling ``validate_python``; Pydantic titles a
+        callable schema ``call[<fn_name>]``. ``_is_typeadapter_validation_error``
+        relies on that convention via ``exc.title.startswith("call[")``. The
+        synthesized-title tests cannot catch a convention drift; this pin reddens
+        with a targeted diagnostic if the real title ever changes — before it
+        surfaces downstream as a raw-validation leak on the wire. The full
+        behavioral oracle (a real TypeAdapter failure producing an AdCP envelope
+        end-to-end) is
+        ``tests/integration/test_mcp_typeadapter_validation_envelope.py``.
+        """
+        from pydantic import TypeAdapter, ValidationError
+
+        from src.core.main import mcp
+
+        tool = await mcp.get_tool("list_creatives")
+        with pytest.raises(ValidationError) as exc_info:
+            # concept_ids=[] violates the >=1 minItems constraint (a real structural
+            # failure), exercising the same TypeAdapter path FastMCP uses at runtime.
+            TypeAdapter(tool.fn).validate_python({"filters": {"concept_ids": []}})
+        assert exc_info.value.title.startswith("call["), (
+            f"FastMCP/Pydantic TypeAdapter title convention changed: got "
+            f"{exc_info.value.title!r}, expected a 'call[...]' prefix. Update "
+            f"RequestCompatMiddleware._is_typeadapter_validation_error (which keys on "
+            f"exc.title.startswith('call[')) and this pin together."
+        )
+
 
 class TestTypeAdapterValidationEnvelope:
     """FastMCP TypeAdapter validation errors become AdCP wire envelopes."""

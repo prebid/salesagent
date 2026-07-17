@@ -183,6 +183,11 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-002-inv-087-5": "duplicate optimization_goals priority: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
     "T-UC-002-inv-087-6": "empty optimization_goals array: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
     "T-UC-002-inv-087-7": "per_ad_spend without value_field: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
+    # FIXME(#1652): BR-RULE-015 INV-6 — Creative.assets is dict[str, Any] (untyped), so
+    # production does not validate the asset_type discriminator; an inline asset lacking
+    # asset_type is accepted (no error). Scenario is wired through the real harness and
+    # strict-xfailed until asset validation lands, at which point it flips to VALIDATION_ERROR.
+    "T-UC-002-inv-015-6": "asset_type discriminator not validated (Creative.assets untyped) — production gap",
     # FIXME(beads-dul): disclosure_positions filter not implemented in production
     # Note: violated/nofield pass vacuously (field rejected at schema level)
     "T-UC-005-inv-049-8-holds": "disclosure_positions filter not implemented",
@@ -286,10 +291,11 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-002-ext-j": "adapter failure raises exception, no failed result envelope or suggestion — spec-production gap",
     "T-UC-002-inv-026-2": "INVALID_CREATIVES error lacks suggestion field",
     "T-UC-002-inv-026-4": "INVALID_CREATIVES error lacks suggestion field",
-    # Graduated (#1417/gh8p.10): the request-construction boundary now derives a
-    # field-aware suggestion (suggest_validation_fix) and attaches it to the
-    # AdCPValidationError, so a missing idempotency_key rejects with a non-empty
-    # wire suggestion. T-UC-002-v31-idempotency-missing passes.
+    # Graduated (#1417/gh8p.10): the request-construction boundary attaches the
+    # canonical VALIDATION_ERROR suggestion ("review error details and fix field
+    # values") to the AdCPValidationError (the offending field is surfaced
+    # separately on the ``field`` path), so a missing idempotency_key rejects with
+    # a non-empty wire suggestion. T-UC-002-v31-idempotency-missing passes.
     # FIXME(salesagent-9vgz.17): optimization_goals not in adcp v3.6.0 or production schemas
     # PackageRequest(extra='forbid') rejects the field with generic validation error,
     # not spec-expected UNSUPPORTED_FEATURE / INVALID_REQUEST with structured codes.
@@ -3225,6 +3231,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             any(t.startswith("T-UC-002-ext-") for t in marker_names)
             or "nfr-highvalue" in marker_names
             or "T-UC-002-nfr-001-enforcement" in marker_names
+            or "T-UC-002-inv-015-6" in marker_names
         ):
             # Extension/error scenarios: budget validation, pricing errors, etc.
             # Plus the nfr-highvalue >$10k Seller-alert scenario (#1417),
@@ -3270,8 +3277,6 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["default_product"] = product
                 ctx["default_pricing_option"] = pricing_option
                 yield
-        elif "T-UC-002-inv-015-6" in marker_names:
-            pytest.xfail("T-UC-002-inv-015-6 create_media_buy harness wiring is tracked in #1652")
         else:
             # Restore the xfail guard every other use case keeps on its catch-all:
             # non-account / non-extension UC-002 scenarios are NOT yet wired (no

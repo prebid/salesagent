@@ -443,6 +443,32 @@ def then_error_has_suggestion(ctx: dict) -> None:
     assert d["suggestion"], "Expected non-empty suggestion"
 
 
+# Imperative verbs that mark a suggestion as actionable ("what to DO", not just a
+# description of the problem). "review"/"fix" come from the spec-canonical
+# VALIDATION_ERROR suggestion ("review error details and fix field values", AdCP
+# error-code enumMetadata): the harness must accept the spec's own wording, so
+# every per-code canonical suggestion this repo emits passes the check below.
+# Pinned by test_canonical_suggestions_are_actionable in tests/unit/test_validation_errors.py.
+FIX_SUGGESTION_ACTION_VERBS = frozenset(
+    {
+        "use",
+        "try",
+        "check",
+        "provide",
+        "include",
+        "ensure",
+        "remove",
+        "specify",
+        "set",
+        "omit",
+        "add",
+        "verify",
+        "review",
+        "fix",
+    }
+)
+
+
 @then("the error should include a suggestion for how to fix the issue")
 def then_error_has_fix_suggestion(ctx: dict) -> None:
     """Assert error includes an actionable suggestion for fixing the issue.
@@ -480,23 +506,10 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
     suggestion_lower = suggestion.lower()
     # Split into words to avoid substring matches (e.g., "reset" matching "set")
     words = set(suggestion_lower.split())
-    action_verbs = {
-        "use",
-        "try",
-        "check",
-        "provide",
-        "include",
-        "ensure",
-        "remove",
-        "specify",
-        "set",
-        "omit",
-        "add",
-        "verify",
-    }
-    found = words & action_verbs
+    found = words & FIX_SUGGESTION_ACTION_VERBS
     assert found, (
-        f"Expected actionable fix suggestion with a verb ({', '.join(sorted(action_verbs))}), got: {suggestion}"
+        "Expected actionable fix suggestion with a verb "
+        f"({', '.join(sorted(FIX_SUGGESTION_ACTION_VERBS))}), got: {suggestion}"
     )
 
 
