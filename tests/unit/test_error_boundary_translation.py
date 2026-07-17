@@ -433,6 +433,32 @@ class TestSafeAdcpErrorSuggestionMatchesRecovery:
         for e in (v, a, s):
             assert "hunter2" not in e.message and "secret" not in e.message and "token" not in e.message
 
+    def test_sanitized_category_registry_covers_all_correctable_builtin_targets(self):
+        """Completeness guard reconciling ``_BUILTIN_NORMALIZATION`` with ``_SANITIZED_BY_WIRE_CODE``.
+
+        Every raw built-in that normalizes to a CLIENT-CORRECTABLE standard wire code MUST have a
+        category ``(message, suggestion)`` entry — otherwise a future mapping (e.g.
+        ``KeyError → AdCPNotFoundError``) would silently fall back to the misleading generic
+        'internal error occurred' message when scrubbed. Internal-bucket / non-standard targets are
+        exempt (the generic message is correct there). This is the enforcement the registry lacked.
+        """
+        from src.core.exceptions import (
+            _BUILTIN_NORMALIZATION,
+            _SANITIZED_BY_WIRE_CODE,
+            INTERNAL_WIRE_CODES,
+            WIRE_STANDARD_CODES,
+        )
+
+        for _exc_type, adcp_class in _BUILTIN_NORMALIZATION:
+            wire_code = adcp_class("x").wire_error_code
+            if wire_code in INTERNAL_WIRE_CODES or wire_code not in WIRE_STANDARD_CODES:
+                continue  # internal/non-standard → generic internal message is correct
+            assert wire_code in _SANITIZED_BY_WIRE_CODE, (
+                f"{adcp_class.__name__} normalizes to client-correctable {wire_code!r}, but "
+                f"_SANITIZED_BY_WIRE_CODE has no entry — a scrubbed built-in would read "
+                f"'An internal error occurred'. Add a category (message, suggestion) for {wire_code!r}."
+            )
+
 
 # ---------------------------------------------------------------------------
 # A2A Boundary: AdCPError → A2AError with proper JSON-RPC error code

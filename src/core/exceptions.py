@@ -1026,21 +1026,32 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
     return envelope
 
 
+# Ordered registry mapping a raw built-in exception type → the typed AdCPError it normalizes to.
+# The SINGLE SOURCE OF TRUTH for ``normalize_to_adcp_error`` AND the completeness guard
+# (``test_error_boundary_translation`` / ``test_sanitized_category_registry_covers_...``) that pins
+# every CLIENT-CORRECTABLE target code into ``_SANITIZED_BY_WIRE_CODE`` — so a future mapping (e.g.
+# ``KeyError → AdCPNotFoundError``) can't silently fall through to the misleading generic internal
+# message when scrubbed. Order matters: first isinstance match wins (as the old if-chain did).
+_BUILTIN_NORMALIZATION: tuple[tuple[type[Exception], type[AdCPError]], ...] = (
+    (ValueError, AdCPValidationError),
+    (PermissionError, AdCPAuthorizationError),
+)
+
+
 def normalize_to_adcp_error(exc: Exception) -> AdCPError:
     """Normalize untyped exceptions to typed AdCPError subclasses.
 
     Single source of truth for the wrapping applied at all three transport
     boundaries (MCP, A2A, REST).  Already-typed ``AdCPError`` passes through
     unchanged.  ``ValueError`` maps to ``AdCPValidationError``,
-    ``PermissionError`` to ``AdCPAuthorizationError``, and anything else
-    wraps in base ``AdCPError`` (INTERNAL_ERROR).
+    ``PermissionError`` to ``AdCPAuthorizationError`` (see ``_BUILTIN_NORMALIZATION``),
+    and anything else wraps in base ``AdCPError`` (INTERNAL_ERROR).
     """
     if isinstance(exc, AdCPError):
         return exc
-    if isinstance(exc, ValueError):
-        return AdCPValidationError(str(exc))
-    if isinstance(exc, PermissionError):
-        return AdCPAuthorizationError(str(exc))
+    for exc_type, adcp_class in _BUILTIN_NORMALIZATION:
+        if isinstance(exc, exc_type):
+            return adcp_class(str(exc))
     return AdCPError(str(exc) or type(exc).__name__)
 
 
