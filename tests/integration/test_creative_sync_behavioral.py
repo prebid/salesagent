@@ -78,8 +78,7 @@ def _assert_correctable(result) -> None:
     assert "VALIDATION_ERROR" in codes, f"expected VALIDATION_ERROR, got {codes}"
     validation = [e for e in errors if getattr(e, "code", None) == "VALIDATION_ERROR"]
     assert validation and all(e.recovery is not None and e.recovery.value == "correctable" for e in validation), (
-        f"VALIDATION_ERROR must carry recovery=correctable, got "
-        f"{[getattr(e, 'recovery', None) for e in validation]!r}"
+        f"VALIDATION_ERROR must carry recovery=correctable, got {[getattr(e, 'recovery', None) for e in validation]!r}"
     )
 
 
