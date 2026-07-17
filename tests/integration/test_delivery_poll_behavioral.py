@@ -332,11 +332,13 @@ class TestConcurrentFinalWebhookClaim:
     """The final webhook is serialized across concurrent workers by an atomic claim.
 
     Two workers that both observe "no final logged" must not both send: the first to
-    win the conditional-UPDATE claim sends, the loser skips (proven here with two
-    genuinely independent sessions/connections). A stale claim (crashed worker)
-    self-heals; a definitive failure/no-send RELEASES the claim so an immediate retry
-    isn't blocked for the lease. This closes the concurrency duplicate (#1575); the
-    crash-after-POST window remains and is deferred to #1606.
+    win the conditional-UPDATE claim sends, the loser skips — proven here with two
+    OS threads racing the SAME claim (and, separately, the SAME public entrypoint)
+    via a ``threading.Barrier`` so the contention genuinely overlaps, not just two
+    sequential sessions. A stale claim (crashed worker) self-heals; a definitive
+    failure/no-send RELEASES the claim so an immediate retry isn't blocked for the
+    lease. This closes the concurrency duplicate (#1575); the crash-after-POST
+    window remains and is deferred to #1606.
 
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
     """
@@ -370,16 +372,21 @@ class TestConcurrentFinalWebhookClaim:
             assert len(wires) == 1, "a stale claim must be reclaimed so the final is not stranded"
             assert wires[0]["result"]["notification_type"] == "final"
 
-    def test_two_independent_sessions_only_one_wins_the_claim(self, integration_db):
-        """Real two-connection contention: exactly one winner, cross-session commit visibility.
+    def test_concurrent_claim_attempts_exactly_one_winner(self, integration_db):
+        """Genuine overlapping contention: two OS threads race the SAME conditional UPDATE.
 
-        Unlike a same-session predicate check, this uses TWO independent SQLAlchemy
-        sessions (separate connections). Session 1 claims and COMMITS; session 2 — a
-        genuinely separate transaction — then attempts the same claim and must LOSE,
-        proving the committed claim is visible across connections and that the atomic
-        UPDATE serializes real concurrent workers. A released claim frees the row for
-        a fresh winner.
+        Unlike a sequential same-row check, this uses a ``threading.Barrier`` to release
+        two threads — each holding its own SQLAlchemy session/connection — at (as close
+        as achievable) the same instant, so their UPDATEs genuinely overlap in Postgres.
+        Whichever arrives first takes the row lock; the second BLOCKS on that lock, and
+        once the first commits, Postgres re-evaluates the second's WHERE predicate against
+        the now-committed row (EvalPlanQual "first updater wins") — it no longer matches
+        (claimed_at is neither NULL nor stale), so it updates 0 rows and loses. This holds
+        regardless of which thread happens to arrive first; the property under test is
+        that EXACTLY ONE thread ever wins, never zero and never two.
         """
+        import threading
+
         from sqlalchemy.orm import Session
 
         from src.core.database.database_session import get_engine
@@ -394,25 +401,86 @@ class TestConcurrentFinalWebhookClaim:
             now = datetime.now(UTC)
             cutoff = now - timedelta(minutes=15)
             engine = get_engine()
-            s1, s2 = Session(bind=engine), Session(bind=engine)
-            try:
-                won1 = MediaBuyRepository(s1, "t1").try_claim_final_webhook(mb_id, now=now, stale_before=cutoff)
-                s1.commit()  # commit so s2's independent connection observes the claim
-                won2 = MediaBuyRepository(s2, "t1").try_claim_final_webhook(mb_id, now=now, stale_before=cutoff)
-                s2.commit()
-                assert (won1, won2) == (True, False), "exactly one of two independent sessions must win the claim"
+            barrier = threading.Barrier(2)
+            results: list[bool] = [False, False]
+            errors: list[BaseException] = []
 
-                # Session 1 releases (token-guarded) -> session 2 can now win.
-                assert MediaBuyRepository(s1, "t1").release_final_webhook_claim(mb_id, claimed_at=now) is True
-                s1.commit()
-                won2_after_release = MediaBuyRepository(s2, "t1").try_claim_final_webhook(
-                    mb_id, now=now, stale_before=cutoff
-                )
-                s2.commit()
-                assert won2_after_release is True, "a released claim must be reclaimable by another session"
-            finally:
-                s1.close()
-                s2.close()
+            def worker(index: int) -> None:
+                session = Session(bind=engine)
+                try:
+                    barrier.wait(timeout=5)  # release both threads together
+                    won = MediaBuyRepository(session, "t1").try_claim_final_webhook(mb_id, now=now, stale_before=cutoff)
+                    session.commit()
+                    results[index] = won
+                except BaseException as exc:  # noqa: BLE001 - surfaced via `errors` for the assertion below
+                    errors.append(exc)
+                finally:
+                    session.close()
+
+            threads = [threading.Thread(target=worker, args=(i,)) for i in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
+
+            assert not errors, f"worker thread(s) raised: {errors}"
+            assert sorted(results) == [False, True], (
+                f"exactly one of two genuinely concurrent threads must win the claim, got {results}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_concurrent_entrypoints_produce_exactly_one_webhook(self, integration_db):
+        """Two real scheduler/manual entrypoints racing the SAME buy produce exactly one POST.
+
+        Drives the actual public entrypoint (``_send_report_for_media_buy``, the method
+        both the hourly batch and the manual trigger call) from two OS threads — each with
+        its own event loop, DB session, and freshly loaded MediaBuy row — released together
+        via a ``threading.Barrier`` so the calls genuinely overlap. Only the outbound HTTP
+        POST is mocked (shared across both threads, same scheduler instance). Asserts the
+        webhook was sent exactly once and exactly one thread's call reports success.
+        """
+        import asyncio
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+
+        from sqlalchemy.orm import Session
+
+        from src.core.database.database_session import get_engine
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+        from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+        from tests.harness import DeliveryPollEnv
+        from tests.harness.delivery_poll import mock_webhook_post
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            buy = _serving_webhook_buy(env, flight="completed")
+            mb_id = buy.media_buy_id
+            reporting_webhook = dict(buy.raw_request["reporting_webhook"])
+            env.get_session().commit()  # ensure the buy is visible to other connections/threads
+
+            scheduler = DeliveryWebhookScheduler()  # shared instance -> shared webhook_service
+            engine = get_engine()
+            barrier = threading.Barrier(2)
+
+            def worker() -> bool:
+                session = Session(bind=engine)
+                try:
+                    media_buy = MediaBuyRepository(session, "t1").get_by_id(mb_id)
+                    barrier.wait(timeout=5)  # release both threads together
+                    return asyncio.run(
+                        scheduler._send_report_for_media_buy(media_buy, reporting_webhook, session, force=True)
+                    )
+                finally:
+                    session.close()
+
+            with mock_webhook_post(scheduler) as mock_post:
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    results = [f.result(timeout=10) for f in [pool.submit(worker) for _ in range(2)]]
+
+            assert mock_post.call_count == 1, (
+                f"two concurrent entrypoints racing the same buy must produce exactly one outbound "
+                f"webhook, got {mock_post.call_count}"
+            )
+            assert sorted(results) == [False, True], f"exactly one entrypoint call must report success, got {results}"
 
     @pytest.mark.asyncio
     async def test_failed_send_releases_the_claim_for_immediate_retry(self, integration_db):

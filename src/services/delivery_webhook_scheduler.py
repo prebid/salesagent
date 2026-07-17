@@ -506,8 +506,9 @@ class DeliveryWebhookScheduler:
             )
             return False
 
-        # Send webhook notification OUTSIDE the session context
-        # This ensures the session is closed before async webhook call
+        # Send webhook notification. ``session`` stays open here — it's reused below
+        # on a failed send to release the claim — only the claim's transaction was
+        # committed above (for cross-connection visibility, see _claim_final_webhook).
         try:
             delivered = await self.webhook_service.send_notification(
                 push_notification_config=push_notification_config, payload=media_buy_delivery_payload, metadata=metadata

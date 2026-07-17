@@ -24,12 +24,36 @@ Available mocks via env.mock:
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 from src.core.schemas import AdapterGetMediaBuyDeliveryResponse, GetMediaBuyDeliveryResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import DeliveryPollMixin
+
+
+@contextmanager
+def mock_webhook_post(scheduler: Any):
+    """Stub a scheduler's outbound webhook POST with a 200 success response.
+
+    Single source of truth for the mocked-POST shape every delivery-webhook
+    integration test needs (CLAUDE.md DRY invariant — this exact
+    ``MagicMock(status_code=200, ...)`` + ``patch.object(..._session, "post", ...)``
+    pair previously lived twice in this file). Reaches into
+    ``webhook_service._session`` (private) because that is the only seam where
+    the serialized outbound body is observable; if the service ever swaps its
+    HTTP client this AttributeErrors loudly rather than silently no-op'ing.
+    Everything above the HTTP call (delivery impl, derivation, sequence,
+    serialization, the atomic final claim) runs for real.
+
+    Yields the ``mock_post`` patch object so callers can assert on
+    ``call_count`` / ``call_args_list`` after driving one or more sends.
+    """
+    mock_response = MagicMock(status_code=200, text="OK")
+    mock_response.raise_for_status.return_value = None
+    with patch.object(scheduler.webhook_service._session, "post", return_value=mock_response) as mock_post:
+        yield mock_post
 
 
 class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
@@ -100,14 +124,7 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
         from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
 
         scheduler = DeliveryWebhookScheduler()
-        mock_response = MagicMock(status_code=200, text="OK")
-        mock_response.raise_for_status.return_value = None
-        # Stub only the outbound HTTP client — everything above it (delivery
-        # impl, derivation, sequence, serialization) runs for real. This reaches
-        # into webhook_service._session (private) because that is the only seam
-        # where the serialized body is observable; if the service ever swaps its
-        # HTTP client this AttributeErrors loudly rather than silently no-op'ing.
-        with patch.object(scheduler.webhook_service._session, "post", return_value=mock_response) as mock_post:
+        with mock_webhook_post(scheduler) as mock_post:
             await scheduler._send_report_for_media_buy(
                 buy, buy.raw_request["reporting_webhook"], self.get_session(), force=True
             )
@@ -127,8 +144,6 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
         from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
 
         scheduler = DeliveryWebhookScheduler()
-        mock_response = MagicMock(status_code=200, text="OK")
-        mock_response.raise_for_status.return_value = None
-        with patch.object(scheduler.webhook_service._session, "post", return_value=mock_response) as mock_post:
+        with mock_webhook_post(scheduler) as mock_post:
             await scheduler._send_reports()
         return [call.kwargs["json"] for call in mock_post.call_args_list]
