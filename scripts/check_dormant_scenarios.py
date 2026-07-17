@@ -3,10 +3,9 @@
 The failure mode this surfaces (#1603): a branch edits step modules, feature
 files, or the BDD conftest, CI stays green, and nothing anywhere says that the
 scenarios involved are auto-xfailed — dormant steps look like coverage. This
-is the local, informational companion to ``run_all_tests.sh`` Konstantin
-suggested in #1603: it never fails your build (unless you opt into
-``--strict``), it just tells you what is NOT running before you claim
-coverage.
+is the local, informational companion to ``run_all_tests.sh`` suggested in
+#1603: it never fails your build (unless you opt into ``--strict``), it just
+tells you what is NOT running before you claim coverage.
 
 How it works
 ------------
@@ -64,6 +63,11 @@ _XFAIL_LINE = re.compile(r"^XFAIL\s+(\S+?)(?:\s+-\s+(.*))?$")
 _UC_IN_NAME = re.compile(r"uc(\d+)", re.IGNORECASE)
 
 
+def _norm(path: str) -> str:
+    """Normalize a path for comparison: strip whitespace, backslashes -> slashes."""
+    return path.strip().replace("\\", "/")
+
+
 def _git(*args: str) -> str:
     out = subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, check=False)
     return out.stdout.strip()
@@ -85,14 +89,14 @@ def changed_paths(base_ref: str) -> list[str]:
     working = [line[3:] for line in _git("status", "--porcelain").splitlines() if len(line) > 3]
     seen: list[str] = []
     for p in committed + working:
-        p = p.strip().replace("\\", "/")
+        p = _norm(p)
         if p and p not in seen:
             seen.append(p)
     return seen
 
 
 def is_bdd_relevant(path: str) -> bool:
-    p = path.replace("\\", "/")
+    p = _norm(path)
     return p.startswith(("tests/bdd/", "tests/harness/"))
 
 
@@ -108,7 +112,7 @@ def map_paths_to_modules(paths: list[str]) -> tuple[set[Path], list[str]]:
     all_test_modules = sorted((REPO_ROOT / BDD_DIR).glob("test_*.py"))
 
     for raw in paths:
-        p = raw.replace("\\", "/")
+        p = _norm(raw)
         name = p.rsplit("/", 1)[-1]
 
         if p.startswith("tests/bdd/test_") and p.endswith(".py"):
@@ -134,8 +138,13 @@ def map_paths_to_modules(paths: list[str]) -> tuple[set[Path], list[str]]:
     return modules, notes
 
 
-def run_without_db(modules: list[Path]) -> str:
-    """Run the modules with DATABASE_URL removed; return pytest's stdout."""
+def run_without_db(modules: list[Path]) -> subprocess.CompletedProcess[str]:
+    """Run the modules with DATABASE_URL removed; return the completed process.
+
+    The caller must inspect ``returncode``: pytest exits >= 2 when it could not
+    validly execute the modules (collection error, internal error, no tests),
+    where an empty XFAIL list means "the run broke", not "no dormant scenarios".
+    """
     env = {k: v for k, v in os.environ.items() if k != "DATABASE_URL"}
     env["PYTHONUTF8"] = "1"
     cmd = [
@@ -151,8 +160,7 @@ def run_without_db(modules: list[Path]) -> str:
         "-rxX",
         "--no-header",
     ]
-    out = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, env=env, check=False)
-    return out.stdout
+    return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, env=env, check=False)
 
 
 def classify(pytest_output: str) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
@@ -215,7 +223,23 @@ def main() -> int:
         f"check-dormant: running {len(modules)} module(s) without a database "
         "(wired scenarios skip, dormant ones xfail)..."
     )
-    dormant, documented = classify(run_without_db(modules))
+    result = run_without_db(modules)
+    # The clean no-DB run is exit 0: wired scenarios SKIP and dormant ones XFAIL,
+    # neither of which produces a nonzero exit. ANY nonzero code means the run did
+    # not complete as that clean skip/xfail pass -- a collection/import error (this
+    # repo surfaces those as exit 1 via the step-plugin import), a failed test, or
+    # an internal error -- so an empty XFAIL list is a broken run, not "no dormant
+    # scenarios". Surface it and fail rather than reporting a false all-clear.
+    if result.returncode != 0:
+        print(
+            f"\ncheck-dormant: pytest did not run cleanly (exit {result.returncode}); "
+            "cannot assess dormant scenarios -- the 'no dormant' result would be false. "
+            "Last stderr/stdout lines:"
+        )
+        for line in ((result.stderr or "") + (result.stdout or "")).splitlines()[-25:]:
+            print(f"    {line}")
+        return 1
+    dormant, documented = classify(result.stdout)
 
     if documented:
         n = sum(len(v) for v in documented.values())
