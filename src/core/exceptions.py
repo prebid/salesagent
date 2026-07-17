@@ -1070,16 +1070,24 @@ def build_validation_error_details(errors: Sequence[Mapping[str, Any]]) -> dict[
     }
 
 
-def _normalize_pydantic_validation_error(exc: ValidationError) -> AdCPError:
-    """Structured, sanitized ``AdCPValidationError`` from a Pydantic ``ValidationError`` — carries
-    the offending ``field`` path + per-error ``details`` instead of only the rendered message."""
+def _pydantic_validation_error_kwargs(exc: ValidationError) -> dict[str, Any]:
+    """Constructor kwargs for a structured ``AdCPValidationError``.
+
+    The projector can populate message/field/details, but it cannot choose the semantic error
+    class or wire code; the registry's single ``adcp_class`` authority does that at runtime.
+    """
     errors = exc.errors()
-    return AdCPValidationError(
-        errors[0].get("msg") if errors else "Request failed schema validation",
-        field=first_validation_error_field(exc),
-        suggestion=VALIDATION_ERROR_SUGGESTION,
-        details=build_validation_error_details(errors),
-    )
+    return {
+        "message": errors[0].get("msg") if errors else "Request failed schema validation",
+        "field": first_validation_error_field(exc),
+        "suggestion": VALIDATION_ERROR_SUGGESTION,
+        "details": build_validation_error_details(errors),
+    }
+
+
+def _message_only_kwargs(exc: Exception) -> dict[str, Any]:
+    """Constructor kwargs for built-ins whose semantic mapping needs only their message."""
+    return {"message": str(exc)}
 
 
 # Ordered registry of EVERY raw-exception → typed-AdCPError normalizer. The SINGLE SOURCE OF TRUTH
@@ -1087,18 +1095,35 @@ def _normalize_pydantic_validation_error(exc: ValidationError) -> AdCPError:
 # (``test_sanitized_category_registry_covers_all_correctable_builtin_targets``), which pins every
 # CLIENT-CORRECTABLE target code into ``_SANITIZED_BY_WIRE_CODE`` — so a future mapping (e.g.
 # ``KeyError → AdCPNotFoundError``, or another SPECIAL normalizer) can't silently fall through to
-# the misleading generic internal message when scrubbed. Each entry is ``(builtin_type, factory)``:
-# the FACTORY is the only authority for the target code — there is no separate declared class that
-# could drift from what the factory actually returns. The guard derives the target by INVOKING the
-# factory on a representative exception. A factory is either a plain ``adcp_class(str(exc))`` OR a
-# custom structured constructor (the Pydantic entry). ``ValidationError`` is listed FIRST because it
-# IS-A ``ValueError`` and needs the structured factory; first ``isinstance`` match wins.
-_BuiltinNormalizer = tuple[type[Exception], "Callable[[Any], AdCPError]"]
+# the misleading generic internal message when scrubbed. Each entry is
+# ``(builtin_type, adcp_class, kwargs_projector)``. ``adcp_class`` is the ONE semantic authority:
+# runtime always instantiates it, and the completeness guard reads it. The projector can only return
+# constructor kwargs (message/field/details/etc.), so input-dependent projection cannot change the
+# error class or wire code. ``ValidationError`` is listed FIRST because it IS-A ``ValueError`` and
+# needs structured kwargs; first ``isinstance`` match wins.
+_BuiltinNormalizer = tuple[type[Exception], type["AdCPError"], "Callable[[Any], dict[str, Any]]"]
 _BUILTIN_NORMALIZATION: tuple[_BuiltinNormalizer, ...] = (
-    (ValidationError, _normalize_pydantic_validation_error),
-    (ValueError, lambda exc: AdCPValidationError(str(exc))),
-    (PermissionError, lambda exc: AdCPAuthorizationError(str(exc))),
+    (ValidationError, AdCPValidationError, _pydantic_validation_error_kwargs),
+    (ValueError, AdCPValidationError, _message_only_kwargs),
+    (PermissionError, AdCPAuthorizationError, _message_only_kwargs),
 )
+
+# Projectors may populate buyer-facing presentation fields only. Semantic identity belongs solely
+# to the registry's ``adcp_class``; allowing constructor overrides such as ``error_code`` or
+# ``recovery`` would recreate a second authority behind the completeness guard's back. ``context``
+# is also forbidden because it bypasses the raw-exception scrubbing applied to messages/details.
+_NORMALIZATION_PROJECTOR_KEYS = frozenset({"message", "field", "suggestion", "retry_after", "details"})
+
+
+def _build_normalized_error(adcp_class: type[AdCPError], projected_kwargs: dict[str, Any]) -> AdCPError:
+    """Instantiate the registry's fixed semantic class from presentation-only kwargs."""
+    forbidden = set(projected_kwargs) - _NORMALIZATION_PROJECTOR_KEYS
+    if forbidden:
+        raise TypeError(
+            "normalization projector may only supply presentation fields; "
+            f"semantic/unknown fields are forbidden: {sorted(forbidden)}"
+        )
+    return adcp_class(**projected_kwargs)
 
 
 def normalize_to_adcp_error(exc: Exception) -> AdCPError:
@@ -1113,9 +1138,9 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
     """
     if isinstance(exc, AdCPError):
         return exc
-    for exc_type, factory in _BUILTIN_NORMALIZATION:
+    for exc_type, adcp_class, kwargs_projector in _BUILTIN_NORMALIZATION:
         if isinstance(exc, exc_type):
-            return factory(exc)
+            return _build_normalized_error(adcp_class, kwargs_projector(exc))
     return AdCPError(str(exc) or type(exc).__name__)
 
 
