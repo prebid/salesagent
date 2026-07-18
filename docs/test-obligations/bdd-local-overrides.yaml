@@ -33,34 +33,32 @@ overrides:
         Then the duplicate request should fail with a VALIDATION_ERROR wire envelope
   - feature: BR-UC-005-discover-creative-formats.feature
     scenario_id: T-UC-005-main-filtered
-    authority: "Pinned AdCP 3.1.1 media-buy list-creative-formats request schema"
-    reason: "The type filter belongs to the creative-agent role, not this media-buy request contract."
+    authority: "AdCP 3.1.1 media-buy list-creative-formats request schema: properties omit type; additionalProperties=true"
+    reason: "The type filter belongs to the creative-agent role, while the media-buy schema remains forward-compatible with extension properties."
     gherkin: |
-      @T-UC-005-main-filtered @UC-005-MAIN-MCP-05 @main-flow @post-s3
-      Scenario: Media-buy request does not expose the creative-agent type filter
-        Given the creative agent registry has formats of types "display" and "video"
-        When the Buyer Agent submits unsupported media-buy type field "display"
-        Then the unsupported type request should fail with a VALIDATION_ERROR wire envelope
+      @T-UC-005-main-filtered @UC-005-MAIN-MCP-05 @main-flow @post-s3 @schema-contract
+      Scenario: Media-buy request does not define the creative-agent type filter
+        When the Buyer Agent inspects the media-buy list_creative_formats request contract
+        Then the media-buy request contract should not define a type filter
+        And the production request models should ignore extension properties
   - feature: BR-UC-005-discover-creative-formats.feature
     scenario_id: T-UC-005-partition-type-filter
-    authority: "AdCP 3.1.1 media-buy list-creative-formats request schema (see manifest grounding)"
-    reason: "Retire the incompatible creative-agent type outline; the media-buy boundary rejects an unsupported raw type field."
+    authority: "AdCP 3.1.1 media-buy list-creative-formats request schema: additionalProperties=true"
+    reason: "Retire the incompatible creative-agent type outline without turning field absence into request-model rejection; production request models ignore extension properties for forward compatibility."
     gherkin: |
-      @T-UC-005-partition-type-filter @partition @format_type_filter
-      Scenario: Media-buy type filter is rejected at the request boundary
-        Given a seller with formats of various types
-        When the Buyer Agent submits unsupported media-buy type field "invalid_type"
-        Then the unsupported type request should fail with a VALIDATION_ERROR wire envelope
+      @T-UC-005-partition-type-filter @partition @format_type_filter @schema-contract
+      Scenario: Unknown media-buy type extension is ignored by production request models
+        When production request-model validation receives media-buy extension field type "invalid_type"
+        Then the media-buy type extension should be ignored rather than used as a filter
   - feature: BR-UC-005-discover-creative-formats.feature
     scenario_id: T-UC-005-boundary-type-filter
-    authority: "AdCP 3.1.1 media-buy list-creative-formats request schema (see manifest grounding)"
-    reason: "Retire the incompatible creative-agent type boundary outline; the media-buy boundary rejects an unsupported raw type field."
+    authority: "AdCP 3.1.1 media-buy list-creative-formats request schema: properties omit type; additionalProperties=true"
+    reason: "A value that is valid for the creative-agent role is still only an extension in the media-buy request models and must not become a filter."
     gherkin: |
-      @T-UC-005-boundary-type-filter @boundary @format_type_filter
-      Scenario: Unsupported media-buy type field is rejected
-        Given a seller with formats of various types
-        When the Buyer Agent submits unsupported media-buy type field "invalid_type"
-        Then the unsupported type request should fail with a VALIDATION_ERROR wire envelope
+      @T-UC-005-boundary-type-filter @boundary @format_type_filter @schema-contract
+      Scenario: Creative-agent type value remains an ignored media-buy request-model extension
+        When production request-model validation receives media-buy extension field type "display"
+        Then the media-buy type extension should be ignored rather than used as a filter
   - feature: BR-UC-005-discover-creative-formats.feature
     scenario_id: T-UC-005-inv-031-1-holds
     authority: "Pinned AdCP 3.1.1 media-buy list-creative-formats request schema"

@@ -431,12 +431,6 @@ def then_duplicate_request_wire_error(ctx: dict) -> None:
     _assert_validation_wire_error(ctx, message_substr="duplicate", label="duplicate")
 
 
-@then("the unsupported type request should fail with a VALIDATION_ERROR wire envelope")
-def then_unsupported_type_request_wire_error(ctx: dict) -> None:
-    """Assert an unsupported raw field through the canonical transport error oracle."""
-    _assert_validation_wire_error(ctx, message_substr="type", label="unsupported type")
-
-
 @then("the error message should indicate FormatId must include agent_url and id")
 def then_error_format_id_structure(ctx: dict) -> None:
     """Assert error message mentions both agent_url AND id as required FormatId fields."""

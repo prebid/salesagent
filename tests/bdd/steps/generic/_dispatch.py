@@ -11,6 +11,18 @@ from typing import Any
 _SENTINEL = object()
 
 
+def stash_transport_result(ctx: dict, result: Any) -> None:
+    """Expose a normalized transport result to downstream BDD assertions."""
+    ctx["result"] = result
+    if result.is_error:
+        ctx["error"] = result.error
+        ctx["wire_error_envelope"] = result.wire_error_envelope
+        ctx["synthesized_error_envelope"] = result.synthesized_error_envelope
+    else:
+        ctx["response"] = result.payload
+        ctx["wire_response"] = result.wire_response
+
+
 def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> None:
     """Dispatch a request through ctx['transport'] via call_via, or direct call_impl.
 
@@ -59,24 +71,6 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
         # Expose the normalized TransportResult so Then-steps can use the
         # harness-provided, transport-independent assertions (result.assert_wire_error)
         # instead of hand-rolling envelope parsing.
-        ctx["result"] = result
-        if result.is_error:
-            ctx["error"] = result.error
-            # Capture the real wire envelope (A2A/REST/MCP) and the
-            # synthesized envelope (IMPL has no wire) so Then steps can
-            # assert the two-layer AdCP shape per the Error Verification
-            # Policy. Both are None-safe; absent keys mean "no envelope".
-            ctx["wire_error_envelope"] = result.wire_error_envelope
-            ctx["synthesized_error_envelope"] = result.synthesized_error_envelope
-        else:
-            ctx["response"] = result.payload
-            # Propagate the real serialized success-path wire body so Then steps
-            # can assert on what the buyer actually receives (ctx["wire_response"]),
-            # not the reconstructed typed payload (REST HTTP body; A2A/MCP artifact
-            # only when the env routes through _run_a2a_handler/_run_mcp_client).
-            # None on IMPL / non-stashing envs; the wire_field() helper guards
-            # against silent tautologies (#1417). See tests/CLAUDE.md
-            # "TransportResult.wire_response".
-            ctx["wire_response"] = result.wire_response
+        stash_transport_result(ctx, result)
     except Exception as exc:
         ctx["error"] = exc

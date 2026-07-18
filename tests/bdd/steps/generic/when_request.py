@@ -15,7 +15,9 @@ from typing import Any
 from pytest_bdd import given, parsers, when
 
 from src.core.schemas import FormatId, ListCreativeFormatsRequest
+from tests.bdd.steps.generic._dispatch import stash_transport_result
 from tests.harness.transport import Transport
+from tests.helpers.creative_formats_schema import validate_list_creative_formats_in_production
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
@@ -66,16 +68,7 @@ def _call_via(
 
     try:
         result = env.call_via(t, **kwargs)
-        ctx["result"] = result
-        if result.is_error:
-            ctx["error"] = result.error
-            ctx["wire_error_envelope"] = result.wire_error_envelope
-            ctx["synthesized_error_envelope"] = result.synthesized_error_envelope
-        else:
-            ctx["response"] = result.payload
-            # Real serialized wire (REST/A2A/MCP); None on IMPL — surfaced for
-            # success-path wire-shape steps (e.g. format_id federation contract).
-            ctx["wire_response"] = result.wire_response
+        stash_transport_result(ctx, result)
     except Exception as exc:
         ctx["error"] = exc
 
@@ -206,10 +199,16 @@ def when_request_type_filter(ctx: dict, fmt_type: str) -> None:
     _call(ctx)
 
 
-@when(parsers.parse('the Buyer Agent submits unsupported media-buy type field "{fmt_type}"'))
-def when_submit_unsupported_media_buy_type_field(ctx: dict, fmt_type: str) -> None:
-    """Exercise the real boundary: type is not a media-buy request field."""
-    _call_via(ctx, ctx["transport"], raw_params={"type": fmt_type})
+@when("the Buyer Agent inspects the media-buy list_creative_formats request contract")
+def when_inspect_media_buy_creative_formats_contract(ctx: dict) -> None:
+    """Capture the real request model for role-boundary assertions."""
+    ctx["creative_formats_request_model"] = ListCreativeFormatsRequest
+
+
+@when(parsers.parse('production request-model validation receives media-buy extension field type "{fmt_type}"'))
+def when_production_validates_media_buy_type_extension(ctx: dict, fmt_type: str) -> None:
+    """Validate through the real request model in a fresh production process."""
+    ctx["validated_creative_formats_request"] = validate_list_creative_formats_in_production({"type": fmt_type})
 
 
 # ── Filter: format_ids ───────────────────────────────────────────────

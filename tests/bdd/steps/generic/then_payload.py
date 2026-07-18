@@ -16,6 +16,10 @@ from typing import Any
 from pytest_bdd import parsers, then
 
 from tests.bdd.steps._outcome_helpers import wire_field
+from tests.helpers.creative_formats_schema import (
+    validate_list_creative_formats_in_production,
+    validate_list_creative_formats_rest_body_in_production,
+)
 
 # -- Helpers -------------------------------------------------------------------
 
@@ -687,3 +691,24 @@ def then_boundary_handling_result(ctx: dict, field: str, expected: str) -> None:
     if expected == "valid":
         _assert_returned_formats_subset_of_registry(ctx, field, label="Boundary")
         _assert_filter_content(ctx, field, label="Boundary")
+
+
+@then("the media-buy request contract should not define a type filter")
+def then_media_buy_request_omits_type_filter(ctx: dict) -> None:
+    """The creative-agent ``type`` field is absent from the media-buy role."""
+    request_model = ctx["creative_formats_request_model"]
+    assert "type" not in request_model.model_fields
+
+
+@then("the production request models should ignore extension properties")
+def then_media_buy_request_allows_extensions(ctx: dict) -> None:
+    """Production's extra=ignore policy preserves AdCP forward compatibility."""
+    payload = {"future_extension": "value"}
+    assert validate_list_creative_formats_in_production(payload) == {}
+    assert validate_list_creative_formats_rest_body_in_production(payload) == {}
+
+
+@then("the media-buy type extension should be ignored rather than used as a filter")
+def then_media_buy_type_extension_is_ignored(ctx: dict) -> None:
+    """Production accepts the extension but does not promote it to a local filter."""
+    assert ctx["validated_creative_formats_request"] == {}

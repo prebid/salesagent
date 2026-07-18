@@ -29,6 +29,28 @@ _MOCK_IDENTITY = PrincipalFactory.make_identity(
 class TestA2AParameterMapping:
     """Test parameter extraction and mapping in A2A skill handlers."""
 
+    def test_list_creative_formats_forwards_disclosure_filters(self):
+        """A2A forwards both disclosure filters into the shared request model."""
+        import asyncio
+
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        handler = AdCPRequestHandler()
+        parameters = {
+            "disclosure_positions": ["prominent", "footer"],
+            "disclosure_persistence": ["continuous"],
+            "type": "display",
+        }
+
+        with patch("src.a2a_server.adcp_a2a_server.core_list_creative_formats_tool") as mock_list:
+            mock_list.return_value = MagicMock()
+            asyncio.run(handler._handle_list_creative_formats_skill(parameters, _MOCK_IDENTITY))
+
+        request = mock_list.call_args.kwargs["req"]
+        assert [position.value for position in request.disclosure_positions] == ["prominent", "footer"]
+        assert [mode.value for mode in request.disclosure_persistence] == ["continuous"]
+        assert "type" not in type(request).model_fields
+
     def test_update_media_buy_uses_packages_parameter(self):
         """
         Test that update_media_buy skill handler extracts 'packages' parameter.

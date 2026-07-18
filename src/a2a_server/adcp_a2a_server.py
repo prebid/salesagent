@@ -1919,6 +1919,8 @@ class AdCPRequestHandler(RequestHandler):
                 max_width=parameters.get("max_width"),
                 min_height=parameters.get("min_height"),
                 max_height=parameters.get("max_height"),
+                disclosure_positions=parameters.get("disclosure_positions"),
+                disclosure_persistence=parameters.get("disclosure_persistence"),
                 context=parameters.get("context"),
             )
 

@@ -80,7 +80,8 @@ Source: BR-UC-005-main-mcp.md
 **Given** the Buyer uses the media-buy `list_creative_formats` request
 **When** the request contract is inspected
 **Then** it has no `type` field
-**And** type filtering remains the creative-agent-role contract
+**And** its `additionalProperties: true` extension policy remains forward-compatible
+**And** production request models ignore an extension named `type` instead of applying it as a filter
 **Business Rule** Role boundary
 **Priority** P1 -- contract correctness
 

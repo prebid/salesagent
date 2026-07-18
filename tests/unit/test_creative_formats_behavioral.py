@@ -363,12 +363,18 @@ class TestAssetTypesFilterChecksGroupAssets:
 class TestPartitionTypeFilterIsCreativeAgentRoleBoundary:
     """T-UC-005-partition-type-filter: the media-buy request has no `type` filter (creative-agent role boundary, SDK #971)."""
 
-    def test_type_filter_no_longer_accepted(self):
-        """type= is not accepted on the media-buy request — `type` is a creative-agent-role field by design (SDK adcp-client-python#971 role boundary)."""
+    def test_type_extension_rejected_by_development_strictness(self):
+        """Development rejects unknown fields even though production remains forward-compatible."""
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError, match="type"):
             ListCreativeFormatsRequest(type="native")
+
+    def test_type_extension_ignored_by_production_validation(self):
+        """Production accepts the extension without treating it as a media-buy filter."""
+        from tests.helpers.creative_formats_schema import validate_list_creative_formats_in_production
+
+        assert validate_list_creative_formats_in_production({"type": "native"}) == {}
 
 
 class TestPartitionFormatIdsNoMatch:

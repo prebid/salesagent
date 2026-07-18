@@ -34,11 +34,11 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-S1: Complete catalog returned
     # POST-S2: Asset requirements included per format
 
-  @T-UC-005-main-filtered @UC-005-MAIN-MCP-05 @main-flow @post-s3
-  Scenario: Media-buy request does not expose the creative-agent type filter
-    Given the creative agent registry has formats of types "display" and "video"
-    When the Buyer Agent submits unsupported media-buy type field "display"
-    Then the unsupported type request should fail with a VALIDATION_ERROR wire envelope
+  @T-UC-005-main-filtered @UC-005-MAIN-MCP-05 @main-flow @post-s3 @schema-contract
+  Scenario: Media-buy request does not define the creative-agent type filter
+    When the Buyer Agent inspects the media-buy list_creative_formats request contract
+    Then the media-buy request contract should not define a type filter
+    And the production request models should ignore extension properties
 
   @T-UC-005-main-referrals @UC-005-MAIN-MCP-13 @main-flow @post-s4
   Scenario: Creative agent referrals included in response
@@ -511,11 +511,10 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F2: Error explains invalid structure
     # POST-F3: Suggestion for correct FormatId structure
 
-  @T-UC-005-partition-type-filter @partition @format_type_filter
-  Scenario: Media-buy type filter is rejected at the request boundary
-    Given a seller with formats of various types
-    When the Buyer Agent submits unsupported media-buy type field "invalid_type"
-    Then the unsupported type request should fail with a VALIDATION_ERROR wire envelope
+  @T-UC-005-partition-type-filter @partition @format_type_filter @schema-contract
+  Scenario: Unknown media-buy type extension is ignored by production request models
+    When production request-model validation receives media-buy extension field type "invalid_type"
+    Then the media-buy type extension should be ignored rather than used as a filter
 
   @T-UC-005-partition-format-ids @UC-005-MAIN-MCP-06 @partition @format_ids_filter
   Scenario Outline: Format IDs filter partition - <partition>
@@ -692,11 +691,10 @@ Feature: BR-UC-005 Discover Creative Formats
       | invalid_format_id_missing_agent_url | invalid  |
       | invalid_format_id_missing_id        | invalid  |
 
-  @T-UC-005-boundary-type-filter @boundary @format_type_filter
-  Scenario: Unsupported media-buy type field is rejected
-    Given a seller with formats of various types
-    When the Buyer Agent submits unsupported media-buy type field "invalid_type"
-    Then the unsupported type request should fail with a VALIDATION_ERROR wire envelope
+  @T-UC-005-boundary-type-filter @boundary @format_type_filter @schema-contract
+  Scenario: Creative-agent type value remains an ignored media-buy request-model extension
+    When production request-model validation receives media-buy extension field type "display"
+    Then the media-buy type extension should be ignored rather than used as a filter
 
   @T-UC-005-boundary-format-ids @UC-005-MAIN-MCP-06 @boundary @format_ids_filter
   Scenario Outline: Format IDs filter boundary - <boundary_point>
