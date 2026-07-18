@@ -82,6 +82,20 @@ def _get_local_schema_classes() -> dict[str, type]:
     return classes
 
 
+def _nearest_adcp_base(cls: type) -> type | None:
+    """The nearest ancestor of ``cls`` defined in the ``adcp`` package, or None.
+
+    Keys the redeclaration guard on the MRO rather than the ``Library*`` import
+    alias, so a subclass whose adcp parent is imported under any alias
+    (``AdCP*``, direct name) is still checked (#1618).
+    """
+    for base in inspect.getmro(cls)[1:]:
+        module = getattr(base, "__module__", "") or ""
+        if module.startswith("adcp") and hasattr(base, "model_fields"):
+            return base
+    return None
+
+
 # Cache for AST-based field detection (parsed once)
 _CLASS_OWN_FIELDS: dict[str, set[str]] | None = None
 
@@ -161,7 +175,6 @@ class TestSchemaInheritance:
         Redefinition means the field was copied instead of inherited, which causes
         drift when the library updates the field's type or validator.
         """
-        mapping = _get_library_type_mapping()
         local_classes = _get_local_schema_classes()
 
         ALIAS_ONLY_TYPES = {
@@ -251,35 +264,84 @@ class TestSchemaInheritance:
             ("GetProductsResponse", "products"),
         }
 
+        # Field redeclarations that the previous alias-only check never saw and
+        # that are not yet reconciled — a DECREASE-ONLY allowlist (#1618). Each is
+        # a subclass that copies a parent field instead of inheriting it; the
+        # content fix is tracked in #1620. Do NOT add entries — remove one only
+        # when its class is migrated to inherit the field.
+        REDECLARATION_FIXME_1618: set[tuple[str, str]] = {
+            # Surfaced by the MRO re-key; NOT yet reconciled. Some are intentional
+            # (e.g. CreateMediaBuySuccess redeclares the success-only status/
+            # confirmed_at/revision with spec-correct defaults, per its docstring)
+            # and belong in KNOWN_OVERRIDES; others may be real drift. #1620 triages
+            # each and shrinks this set — do NOT grow it.
+            ("CreateMediaBuySuccess", "confirmed_at"),
+            ("CreateMediaBuySuccess", "revision"),
+            ("CreateMediaBuySuccess", "status"),
+            ("UpdateMediaBuySuccess", "affected_packages"),
+            ("UpdateMediaBuySuccess", "revision"),
+            ("UpdateMediaBuySuccess", "status"),
+            ("SyncAccountsResponse", "accounts"),
+            ("SyncAccountsResponse", "context"),
+            ("SyncAccountsResponse", "dry_run"),
+            ("SyncAccountsResponse", "ext"),
+            ("SyncCreativesResponse", "creatives"),
+            ("Targeting", "frequency_cap"),
+            ("Targeting", "geo_countries_exclude"),
+            ("Targeting", "geo_metros_exclude"),
+            ("Targeting", "geo_postal_areas_exclude"),
+            ("Targeting", "geo_regions_exclude"),
+        }
+
         violations = []
-        for local_name, lib_type in sorted(mapping.items()):
+        # Key on the MRO base, not the Library* alias: a class is a library
+        # subclass iff any ancestor is defined in the adcp package, however it was
+        # imported (Library*/AdCP*/direct). This catches the field-redeclaring
+        # subclasses the alias-only check missed (#1618).
+        for local_name, local_cls in sorted(local_classes.items()):
             if local_name in ALIAS_ONLY_TYPES:
                 continue
 
-            local_cls = local_classes.get(local_name)
-            if local_cls is None:
+            lib_type = _nearest_adcp_base(local_cls)
+            if lib_type is None or not hasattr(lib_type, "model_fields"):
                 continue
 
-            mro = inspect.getmro(local_cls)
-            if lib_type not in mro:
-                continue  # Already flagged by previous test
-
-            # Get fields defined DIRECTLY on the local class (not inherited).
-            # Can't use __annotations__ — Pydantic model_rebuild populates it
-            # with inherited fields. Use AST to find source-level declarations.
-            if not hasattr(lib_type, "model_fields"):
-                continue
-
+            # Fields declared DIRECTLY on the local class (not inherited). Can't
+            # use __annotations__ — Pydantic model_rebuild pollutes it with
+            # inherited fields — so read source-level declarations via AST.
             lib_fields = set(lib_type.model_fields.keys())
             local_own_annotations = _get_class_own_field_names(local_name)
 
             for field_name in local_own_annotations & lib_fields:
-                if (local_name, field_name) not in KNOWN_OVERRIDES:
-                    violations.append(
-                        f"{local_name}.{field_name} redefines field from "
-                        f"{lib_type.__name__} — inherit instead of redeclare"
-                    )
+                key = (local_name, field_name)
+                if key in KNOWN_OVERRIDES or key in REDECLARATION_FIXME_1618:
+                    continue
+                violations.append(
+                    f"{local_name}.{field_name} redefines field from {lib_type.__name__} — inherit instead of redeclare"
+                )
 
         assert not violations, "Schema classes redefining library fields (should inherit):\n" + "\n".join(
             f"  - {v}" for v in violations
         )
+
+    @pytest.mark.arch_guard
+    def test_mro_rekey_recognizes_adcp_base_under_any_alias(self):
+        """The redeclaration check keys on the MRO, so a subclass whose adcp
+        parent is imported under a NON-``Library`` alias is still recognized —
+        the #1618 blind spot. Positive: an adcp subclass resolves to its adcp
+        base regardless of alias, and the base exposes ``model_fields`` so the
+        ``own & lib_fields`` overlap can flag a redeclaration. Negative: a class
+        with no adcp ancestor resolves to None and is skipped.
+        """
+        from adcp.types import Product as _PlainAliasedProduct  # deliberately NOT "LibraryProduct"
+
+        class _SubclassUnderPlainAlias(_PlainAliasedProduct):
+            pass
+
+        class _NoAdcpAncestor:
+            pass
+
+        base = _nearest_adcp_base(_SubclassUnderPlainAlias)
+        assert base is _PlainAliasedProduct, "MRO base must be found regardless of import alias"
+        assert hasattr(base, "model_fields") and base.model_fields, "base must expose fields to compare against"
+        assert _nearest_adcp_base(_NoAdcpAncestor) is None, "a non-adcp class must not be treated as a subclass"
