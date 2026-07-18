@@ -30,6 +30,7 @@ from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 from src.core.exceptions import AdCPAdapterError, AdCPMediaBuyRejectedError, build_two_layer_error_envelope
+from src.core.logging_utils import sanitize_log_value
 from src.core.media_buy_flight import lifecycle_status_for_window, resolve_flight_window_utc
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess, Package
 from src.core.thread_registry import ThreadRegistry
@@ -471,9 +472,13 @@ def _record_takeover_incident(
     repo.record_finalize_reconcile_incident(media_buy_id, reason)
     session.commit()
     logger.error(
-        f"Media buy {media_buy_id} (tenant {tenant_id}, step {step_id}) ran its adapter but lost the "
-        f"finalize lease to a newer owner: {reason}. Recorded a possible-duplicate reconcile incident "
-        f"(ownership-independent) — the new owner may publish a SECOND remote order; reconcile the remote state."
+        "Media buy %s (tenant %s, step %s) ran its adapter but lost the finalize lease to a newer owner: "
+        "%s. Recorded a possible-duplicate reconcile incident (ownership-independent) — the new owner may "
+        "publish a SECOND remote order; reconcile the remote state.",
+        sanitize_log_value(media_buy_id),
+        sanitize_log_value(tenant_id),
+        sanitize_log_value(step_id),
+        sanitize_log_value(reason),
     )
 
 
@@ -543,11 +548,16 @@ def _record_manual_reconciliation(
     repo.record_finalize_reconcile_incident(media_buy_id, reason)
     session.commit()
     logger.error(
-        f"Media buy {media_buy_id} (tenant {tenant_id}, step {step_id}) could not be confirmed "
-        f"as successfully created: {reason}. Marked finalize_recovery_mode=manual_required and recorded a "
-        f"possible-duplicate reconcile incident — reconcile the remote state, then RE-APPROVE the buy "
-        f"(preferred) or clear BOTH flags to let the reconciler retry: UPDATE media_buys SET "
-        f"finalize_recovery_mode = NULL, finalize_adapter_invoked_at = NULL WHERE media_buy_id = '{media_buy_id}'."
+        "Media buy %s (tenant %s, step %s) could not be confirmed as successfully created: %s. Marked "
+        "finalize_recovery_mode=manual_required and recorded a possible-duplicate reconcile incident — "
+        "reconcile the remote state, then RE-APPROVE the buy (preferred) or clear BOTH flags to let the "
+        "reconciler retry: UPDATE media_buys SET finalize_recovery_mode = NULL, "
+        "finalize_adapter_invoked_at = NULL WHERE media_buy_id = '%s'.",
+        sanitize_log_value(media_buy_id),
+        sanitize_log_value(tenant_id),
+        sanitize_log_value(step_id),
+        sanitize_log_value(reason),
+        sanitize_log_value(media_buy_id),
     )
 
 
@@ -641,7 +651,11 @@ def _run_adapter_and_finalize(
         # automatic state — marker, lease, and any manual_required flag a
         # reconciler set while this (expired-lease but alive) worker was in
         # flight. compute_target=None leaves the status at ``finalizing``.
-        logger.warning(f"Adapter idempotency uncertain for media buy {media_buy_id}; will retry: {exc}")
+        logger.warning(
+            "Adapter idempotency uncertain for media buy %s; will retry: %s",
+            sanitize_log_value(media_buy_id),
+            sanitize_log_value(exc),
+        )
         repo.update_status_computed(
             media_buy_id,
             lambda _mb: None,

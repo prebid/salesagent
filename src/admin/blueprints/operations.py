@@ -15,6 +15,7 @@ from src.admin.services.media_buy_completion import (
 )
 from src.admin.utils import require_auth, require_tenant_access
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.logging_utils import sanitize_log_value
 
 logger = logging.getLogger(__name__)
 
@@ -322,11 +323,11 @@ def _select_actionable_create_step(db_session, tenant_id: str, media_buy_id: str
     if len(actionable_steps) > 1:
         logger.warning(
             "Media buy %s (tenant %s) has %d actionable create workflow steps %s; acting on the newest (%s).",
-            media_buy_id,
-            tenant_id,
+            sanitize_log_value(media_buy_id),
+            sanitize_log_value(tenant_id),
             len(actionable_steps),
-            [s.step_id for s in actionable_steps],
-            actionable_steps[0].step_id,
+            sanitize_log_value([s.step_id for s in actionable_steps]),
+            sanitize_log_value(actionable_steps[0].step_id),
         )
     return actionable_steps[0] if actionable_steps else None
 
@@ -424,7 +425,10 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         # (shared with the workflow approve route): CLAIM pending_approval
                         # under the row lock, stamp the approval instant + flight-derived
                         # status, run the adapter, terminalize the step + emit. See #1544.
-                        logger.info(f"[APPROVAL] Finalizing approved media buy {media_buy_id}")
+                        logger.info(
+                            "[APPROVAL] Finalizing approved media buy %s",
+                            sanitize_log_value(media_buy_id),
+                        )
                         outcome, error_msg = finalize_pending_media_buy_approval(
                             db_session,
                             tenant_id,
