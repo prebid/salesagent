@@ -271,7 +271,11 @@ def media_buy_detail(tenant_id, media_buy_id):
                             "by_package": delivery_response.by_package,
                         }
                 except Exception as e:
-                    logger.warning(f"Could not fetch delivery metrics for {media_buy_id}: {e}")
+                    logger.warning(
+                        "Could not fetch delivery metrics for %s: %s",
+                        sanitize_log_value(media_buy_id),
+                        sanitize_log_value(e),
+                    )
                     # Continue without metrics - don't fail the whole page
 
             return render_template(
@@ -289,7 +293,7 @@ def media_buy_detail(tenant_id, media_buy_id):
                 delivery_metrics=delivery_metrics,
             )
     except Exception as e:
-        logger.error(f"Error viewing media buy: {e}", exc_info=True)
+        logger.error("Error viewing media buy: %s", sanitize_log_value(e), exc_info=True)
         return "Error loading media buy", 500
 
 
@@ -524,7 +528,12 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
             return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
     except Exception as e:
-        logger.error(f"Error approving/rejecting media buy {media_buy_id}: {e}", exc_info=True)
+        logger.error(
+            "Error approving/rejecting media buy %s: %s",
+            sanitize_log_value(media_buy_id),
+            sanitize_log_value(e),
+            exc_info=True,
+        )
         flash("Error processing approval", "error")
         return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
@@ -550,7 +559,12 @@ def trigger_delivery_webhook(tenant_id, media_buy_id, **kwargs):
         return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
     except Exception as e:
-        logger.error(f"Error triggering delivery webhook for {media_buy_id}: {e}", exc_info=True)
+        logger.error(
+            "Error triggering delivery webhook for %s: %s",
+            sanitize_log_value(media_buy_id),
+            sanitize_log_value(e),
+            exc_info=True,
+        )
         flash("Error triggering delivery webhook", "error")
         return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
@@ -619,5 +633,5 @@ def webhooks(tenant_id, **kwargs):
             )
 
     except Exception as e:
-        logger.error(f"Error loading webhooks dashboard: {e}", exc_info=True)
+        logger.error("Error loading webhooks dashboard: %s", sanitize_log_value(e), exc_info=True)
         return "Error loading webhooks dashboard", 500

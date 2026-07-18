@@ -229,7 +229,7 @@ class TestWorkflowApproval:
         assert stored.approved_at is not None
         assert before_approval <= stored.approved_at <= after_approval
 
-        # Wire read-back: buyer-visible revision advanced (1 → 2) and confirmed_at
+        # Protocol-model read-back: buyer-visible revision advanced (1 → 2) and confirmed_at
         # is the approval instant (== approved_at), NOT the buy's created_at.
         identity = PrincipalFactory.make_identity(tenant_id=test_tenant, principal_id="wf_test_principal")
         item = read_back_media_buy(identity, buy.media_buy_id)

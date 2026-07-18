@@ -6,6 +6,7 @@ import logging
 
 import pytest
 
+from src.core.logging_config import SingleLineFormatter
 from src.core.logging_utils import sanitize_log_value
 
 
@@ -15,6 +16,14 @@ from src.core.logging_utils import sanitize_log_value
         ("line one\rline two", r"line one\rline two"),
         ("line one\nline two", r"line one\nline two"),
         ("line one\r\nline two", r"line one\r\nline two"),
+        ("line one\vline two", r"line one\vline two"),
+        ("line one\fline two", r"line one\fline two"),
+        ("line one\x1cline two", r"line one\x1cline two"),
+        ("line one\x1dline two", r"line one\x1dline two"),
+        ("line one\x1eline two", r"line one\x1eline two"),
+        ("line one\x85line two", r"line one\x85line two"),
+        ("line one\u2028line two", r"line one\u2028line two"),
+        ("line one\u2029line two", r"line one\u2029line two"),
         (42, "42"),
     ],
 )
@@ -40,3 +49,24 @@ def test_sanitized_value_cannot_forge_a_second_log_line(caplog: pytest.LogCaptur
 
     assert caplog.messages == [r"media buy safe\nFORGED record"]
     assert len(caplog.text.splitlines()) == 1
+
+
+def test_single_line_formatter_sanitizes_exception_traceback() -> None:
+    formatter = SingleLineFormatter("%(levelname)s %(message)s")
+
+    try:
+        raise ValueError("remote failure\u2028FORGED record")
+    except ValueError:
+        record = logging.getLogger("tests.log_sanitizer").makeRecord(
+            "tests.log_sanitizer",
+            logging.ERROR,
+            __file__,
+            1,
+            "operation failed",
+            (),
+            exc_info=__import__("sys").exc_info(),
+        )
+
+    rendered = formatter.format(record)
+    assert len(rendered.splitlines()) == 1
+    assert r"remote failure\u2028FORGED record" in rendered

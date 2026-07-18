@@ -11,6 +11,8 @@ import os
 from datetime import UTC, datetime
 from typing import Any
 
+from src.core.logging_utils import sanitize_log_value
+
 
 class ClientDisconnectFilter(logging.Filter):
     """Filter out noisy ClientDisconnect errors from MCP library.
@@ -89,6 +91,13 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(log_entry)
 
 
+class SingleLineFormatter(logging.Formatter):
+    """Keep development logs and rendered tracebacks on one physical line."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return sanitize_log_value(super().format(record), max_length=20_000)
+
+
 def setup_structured_logging() -> None:
     """Setup structured JSON logging for production environments.
 
@@ -136,11 +145,9 @@ def setup_structured_logging() -> None:
     else:
         # Development mode - use standard format
         # force=True ensures configuration is applied even if logging was already configured
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            force=True,
-        )
+        handler = logging.StreamHandler()
+        handler.setFormatter(SingleLineFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+        logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
 
 
 # Create custom logger for OAuth operations

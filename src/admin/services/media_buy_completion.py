@@ -173,7 +173,10 @@ def finalize_lease_heartbeat(
                     break
                 last_success = _now()
             except Exception:  # noqa: BLE001 - renewal is best-effort; never break the adapter run
-                logger.exception(f"[FINALIZE] lease heartbeat renew failed for {media_buy_id}")
+                logger.exception(
+                    "[FINALIZE] lease heartbeat renew failed for %s",
+                    sanitize_log_value(media_buy_id),
+                )
                 # (b) If renewals have been failing longer than the full TTL, the lease has
                 # CERTAINLY expired since the last successful renewal — signal loss and stop.
                 if _now() - last_success > lease_ttl:
@@ -276,9 +279,13 @@ def emit_media_buy_webhook(
         )
         # CreateMediaBuyError (reject path) carries no media_buy_id — fall back to the step id.
         result_media_buy_id = getattr(result, "media_buy_id", None) or step_data["step_id"]
-        logger.info(f"Sent {status} webhook notification for media buy {result_media_buy_id}")
+        logger.info(
+            "Sent %s webhook notification for media buy %s",
+            sanitize_log_value(status),
+            sanitize_log_value(result_media_buy_id),
+        )
     except Exception as webhook_err:
-        logger.warning(f"Failed to send webhook notification: {webhook_err}")
+        logger.warning("Failed to send webhook notification: %s", sanitize_log_value(webhook_err))
 
 
 def emit_media_buy_completion(
@@ -832,8 +839,9 @@ def resume_finalizing_media_buy(
             # instead of re-raising into the scheduler and retrying (and
             # error-logging) the same row on every pass forever.
             logger.exception(
-                f"Capability resolution failed for media buy {media_buy_id} (tenant {tenant_id}); "
-                f"treating adapter as non-replayable"
+                "Capability resolution failed for media buy %s (tenant %s); treating adapter as non-replayable",
+                sanitize_log_value(media_buy_id),
+                sanitize_log_value(tenant_id),
             )
             replayable = False
         if not replayable:

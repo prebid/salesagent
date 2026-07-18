@@ -1,4 +1,4 @@
-"""Persisted media-buy revision counter on the wire (AdCP 3.1.1 fields).
+"""Persisted media-buy revision counter on the production read path (AdCP 3.1.1 fields).
 
 ``revision`` is a persisted monotonic counter (``media_buys.revision``), not a
 timestamp-derived value: two updates within the same second MUST still yield
@@ -40,7 +40,7 @@ def _update_budget(env, media_buy_id: str, budget: float) -> UpdateMediaBuySucce
 
 
 @pytest.mark.requires_db
-class TestPersistedRevisionOnTheWire:
+class TestPersistedRevisionOnReadPath:
     """create → update → get report the persisted counter consistently."""
 
     def test_create_reports_revision_1_and_persisted_confirmed_at(self, integration_db):
