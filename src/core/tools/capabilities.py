@@ -15,6 +15,7 @@ from adcp.types.generated_poc.core.postal_area_support import (
     PostalAreaSupport,  # adcp 6.6: standalone GeoPostalAreas removed; capabilities use PostalAreaSupport
 )
 from adcp.types.generated_poc.enums.channels import MediaChannel
+from adcp.types.generated_poc.enums.pricing_model import PricingModel
 from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Adcp,
@@ -245,11 +246,21 @@ def _get_adcp_capabilities_impl(
         targeting=targeting,
     )
 
+    # Pricing models the bound adapter supports (buyer-visible capability).
+    # supported_pricing_models has min_length=1 on the wire, so an adapter that
+    # reports none leaves the field None (unknown) rather than an empty list.
+    supported_pricing_models = None
+    if adapter and hasattr(adapter, "get_supported_pricing_models"):
+        _pricing = sorted(adapter.get_supported_pricing_models())
+        if _pricing:
+            supported_pricing_models = [PricingModel(m) for m in _pricing]
+
     # Build media_buy capabilities
     media_buy = MediaBuy(
         portfolio=portfolio,
         features=features,
         execution=execution,
+        supported_pricing_models=supported_pricing_models,
     )
 
     # Build response

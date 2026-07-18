@@ -339,6 +339,59 @@ class TestGetAdcpCapabilitiesWithTenant:
         finally:
             current_tenant.set(None)
 
+    def test_impl_includes_supported_pricing_models_from_adapter(self):
+        """supported_pricing_models is wired from the adapter and mapped to PricingModel.
+
+        Deletion oracle: dropping the ``supported_pricing_models=`` kwarg on MediaBuy
+        leaves the field at its None default, so both asserts below fail.
+        """
+        from adcp.types.generated_poc.enums.pricing_model import PricingModel
+
+        from src.core.config_loader import current_tenant
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        mock_tenant = {"tenant_id": "test-tenant-456", "name": "GAM Publisher", "subdomain": "gampub"}
+        current_tenant.set(mock_tenant)
+
+        try:
+            mock_adapter = MagicMock()
+            mock_adapter.default_channels = ["display"]
+            mock_adapter.get_supported_pricing_models.return_value = {"cpm", "cpc"}
+
+            mock_repo = MagicMock()
+            mock_repo.list_publisher_partners.return_value = []
+            mock_uow = MagicMock()
+            mock_uow.__enter__ = MagicMock(return_value=mock_uow)
+            mock_uow.__exit__ = MagicMock(return_value=False)
+            mock_uow.tenant_config = mock_repo
+
+            with patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow):
+                from tests.factories import PrincipalFactory
+
+                identity = PrincipalFactory.make_identity(
+                    principal_id="principal-123",
+                    tenant_id="test-tenant-456",
+                    tenant=mock_tenant,
+                    protocol="mcp",
+                )
+
+                with patch("src.core.tools.capabilities.get_principal_object") as mock_principal:
+                    mock_principal.return_value = MagicMock()
+
+                    with patch("src.core.tools.capabilities.get_adapter") as mock_get_adapter:
+                        mock_get_adapter.return_value = mock_adapter
+
+                        response = _get_adcp_capabilities_impl(None, identity)
+
+                        assert response.media_buy is not None
+                        assert response.media_buy.supported_pricing_models is not None
+                        assert set(response.media_buy.supported_pricing_models) == {
+                            PricingModel("cpm"),
+                            PricingModel("cpc"),
+                        }
+        finally:
+            current_tenant.set(None)
+
 
 class TestGetAdcpCapabilitiesA2AIntegration:
     """Test A2A integration for get_adcp_capabilities."""
