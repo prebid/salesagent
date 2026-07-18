@@ -92,29 +92,37 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
         Recovery is transient — the pinned enumMetadata classification of the
         SERVICE_UNAVAILABLE wire code (salesagent-nr2q).
         """
+        from src.core.exceptions import WIRE_STANDARD_CODES, to_wire_error_code
+
+        generic = WIRE_STANDARD_CODES[to_wire_error_code("INTERNAL_ERROR")]["message"]
         cm, mock_update = _new_ctx_manager_with_mocked_update()
 
         cm.audit_workflow_step_failure("step_abc", RuntimeError("kaboom"))
 
+        # 'kaboom' (the raw exc text) must never reach the buyer-facing webhook
+        # payload (#1587); it carries the generic wire message instead.
         mock_update.assert_called_once_with(
             "step_abc",
             status="failed",
-            error_message="kaboom",
-            response_data=_expected_response_data("SERVICE_UNAVAILABLE", "kaboom", recovery="transient"),
+            error_message=generic,
+            response_data=_expected_response_data("SERVICE_UNAVAILABLE", generic, recovery="transient"),
         )
 
-    def test_empty_exception_message_falls_back_to_type_name(self):
+    def test_empty_exception_message_uses_generic_wire_message(self):
+        from src.core.exceptions import WIRE_STANDARD_CODES, to_wire_error_code
+
+        generic = WIRE_STANDARD_CODES[to_wire_error_code("INTERNAL_ERROR")]["message"]
         cm, mock_update = _new_ctx_manager_with_mocked_update()
 
         cm.audit_workflow_step_failure("step_abc", RuntimeError())
 
-        # Empty message is replaced with type name so the wire envelope and
-        # error_message never carry blank strings.
+        # An empty exception message still yields the non-empty generic wire message
+        # (never a blank string, never the exception class name) — #1587.
         mock_update.assert_called_once_with(
             "step_abc",
             status="failed",
-            error_message="RuntimeError",
-            response_data=_expected_response_data("SERVICE_UNAVAILABLE", "RuntimeError", recovery="transient"),
+            error_message=generic,
+            response_data=_expected_response_data("SERVICE_UNAVAILABLE", generic, recovery="transient"),
         )
 
 
