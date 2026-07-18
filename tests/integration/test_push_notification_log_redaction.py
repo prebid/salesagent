@@ -1,20 +1,22 @@
 """#1617: the buyer's webhook credential must never reach the logs.
 
 Drives the real create_media_buy path with a push_notification_config carrying a
-credential and asserts that the credential value appears in no log record. Goes
-red if a log site is reverted to rendering the raw config.
+credential and asserts the credential value appears in no log call. Goes red if a
+log site is reverted to rendering the raw config.
 
-Capture is taken via a handler attached directly to the ``media_buy_create``
-logger, NOT via ``caplog``: caplog captures through the root logger and depends
-on propagation, which another test earlier in a full-suite run can disable — that
-leaves caplog with zero records and the assertion reading an empty string. A
-direct handler on the specific logger is immune to that global-logging leak.
+Capture is taken by patching the ``media_buy_create`` logger object and reading
+its ``info`` call args, NOT via caplog or a handler: a full-suite run can leave
+``logging.disable()`` set (or propagation off, or the root level raised) by an
+earlier test, which suppresses records BEFORE any handler sees them and leaves a
+capture-based assertion reading an empty string. A MagicMock logger records the
+call regardless of that global logging state, while the create path under test
+still runs for real.
 """
 
 from __future__ import annotations
 
 import asyncio
-import logging
+from unittest.mock import patch
 
 import pytest
 
@@ -24,19 +26,6 @@ from tests.integration.test_create_media_buy_behavioral import _env, _make_reque
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 _SECRET = "buyer-webhook-bearer-SECRET-should-never-be-logged"
-_LOG_SITE = "src.core.tools.media_buy_create"
-
-
-class _RecordCollector(logging.Handler):
-    """Collects records emitted by a specific logger, independent of the root
-    logger's level and of whether propagation is enabled."""
-
-    def __init__(self) -> None:
-        super().__init__(level=logging.INFO)
-        self.records: list[logging.LogRecord] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.records.append(record)
 
 
 def test_create_media_buy_registration_log_redacts_webhook_credential(integration_db):
@@ -55,25 +44,21 @@ def test_create_media_buy_registration_log_redacts_webhook_credential(integratio
     }
     req = _make_request()
 
-    logger = logging.getLogger(_LOG_SITE)
-    collector = _RecordCollector()
-    prev_level = logger.level
-    logger.addHandler(collector)
-    logger.setLevel(logging.INFO)
-    try:
+    with patch("src.core.tools.media_buy_create.logger") as mock_logger:
         with _env() as env:
             tenant, _principal = env.setup_default_data()
             env.setup_product_chain(tenant)
             env._commit_factory_data()
             identity = enrich_identity_with_account(env.identity, req.account)
             result = asyncio.run(_create_media_buy_impl(req=req, identity=identity, push_notification_config=pnc))
-    finally:
-        logger.removeHandler(collector)
-        logger.setLevel(prev_level)
 
     assert isinstance(result.response, CreateMediaBuySuccess)
-    logged = "\n".join(r.getMessage() for r in collector.records)
-    # The registration log site actually ran (so this test guards it), ...
+    # Render every logger.info call (message template + args). A MagicMock records
+    # the call even when logging.disable()/propagation/level would suppress the
+    # record — so this observes the real registration log site, not a caplog buffer.
+    logged = "\n".join(str(call.args) + str(call.kwargs) for call in mock_logger.info.call_args_list)
+    # The registration log site ran (so this test guards it) and carries the
+    # redacted view ...
     assert "***REDACTED***" in logged, "registration log did not run — the test would not guard the leak"
-    # ... and the credential itself never appears anywhere in the logs.
+    # ... and the credential itself never appears in any log call.
     assert _SECRET not in logged, "buyer webhook credential leaked to the logs (#1617)"
