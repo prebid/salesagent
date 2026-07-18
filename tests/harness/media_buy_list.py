@@ -52,10 +52,8 @@ class MediaBuyListDispatchMixin:
         return self._run_a2a_handler("get_media_buys", GetMediaBuysResponse, **kwargs)
 
     def _call_list_mcp(self, **kwargs: Any) -> Any:
-        """Call get_media_buys MCP wrapper."""
-        from src.core.tools.media_buy_list import get_media_buys
-
-        return self._run_mcp_wrapper(get_media_buys, GetMediaBuysResponse, **kwargs)
+        """Dispatch get_media_buys through the real FastMCP client pipeline."""
+        return self._run_mcp_client("get_media_buys", GetMediaBuysResponse, **kwargs)
 
     def _build_list_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to GetMediaBuysBody shape for REST POST."""
