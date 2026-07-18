@@ -22,7 +22,7 @@ from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowSte
 from src.core.database.models import Context as DBContext
 from src.core.database.repositories.workflow import WorkflowRepository
 from src.core.exceptions import build_two_layer_error_envelope
-from src.core.webhook_validator import validate_webhook_task_type
+from src.core.webhook_validator import resolve_webhook_task_id, validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -859,7 +859,7 @@ class ContextManager(DatabaseManager):
             # (external_task_id) at create time; the buyer polls / receives the
             # webhook against THAT id, not the internal step_id. MCP/REST have no
             # outer id, so they fall back to step_id (unchanged behavior). #1544 B6.
-            correlation_task_id = (step.request_data or {}).get("external_task_id") or step.step_id
+            correlation_task_id = resolve_webhook_task_id(step.request_data, step.step_id)
             try:
                 status_enum = GeneratedTaskStatus(new_status)
             except ValueError:

@@ -18,7 +18,7 @@ from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 from src.core.exceptions import AdCPMediaBuyRejectedError
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess
-from src.core.webhook_validator import validate_webhook_task_type
+from src.core.webhook_validator import resolve_webhook_task_id, validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -520,11 +520,12 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         protocol = step_data["request_data"].get(
                             "protocol", "mcp"
                         )  # Default to MCP for backward compatibility
+                        correlation_task_id = resolve_webhook_task_id(step_data["request_data"], step_data["step_id"])
 
                         # Create appropriate webhook payload based on protocol
                         if protocol == "a2a":
                             create_media_buy_approved_payload = create_a2a_webhook_payload(
-                                task_id=step_data["step_id"],
+                                task_id=correlation_task_id,
                                 status=AdcpTaskStatus.completed,
                                 result=create_media_buy_approved_result,
                                 context_id=step_data["context_id"],
@@ -534,7 +535,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                             # Validate a COPY for the SDK payload; metadata keeps
                             # the original label (salesagent-yi3s, salesagent-yk7o).
                             create_media_buy_approved_payload = create_mcp_webhook_payload(
-                                task_id=step_data["step_id"],
+                                task_id=correlation_task_id,
                                 task_type=validate_webhook_task_type(step_data.get("tool_name", "create_media_buy")),
                                 result=create_media_buy_approved_result,
                                 status=AdcpTaskStatus.completed,
@@ -627,11 +628,12 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     protocol = step_data["request_data"].get(
                         "protocol", "mcp"
                     )  # Default to MCP for backward compatibility
+                    correlation_task_id = resolve_webhook_task_id(step_data["request_data"], step_data["step_id"])
 
                     # Create appropriate webhook payload based on protocol
                     if protocol == "a2a":
                         create_media_buy_rejected_payload = create_a2a_webhook_payload(
-                            task_id=step_data["step_id"],
+                            task_id=correlation_task_id,
                             status=AdcpTaskStatus.rejected,
                             result=create_media_buy_rejected_result,
                             context_id=step_data["context_id"],
@@ -641,7 +643,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         # Validate a COPY for the SDK payload; metadata keeps the
                         # original label (salesagent-yi3s, salesagent-yk7o).
                         create_media_buy_rejected_payload = create_mcp_webhook_payload(
-                            task_id=step_data["step_id"],
+                            task_id=correlation_task_id,
                             task_type=validate_webhook_task_type(step_data.get("tool_name", "create_media_buy")),
                             result=create_media_buy_rejected_result,
                             status=AdcpTaskStatus.rejected,

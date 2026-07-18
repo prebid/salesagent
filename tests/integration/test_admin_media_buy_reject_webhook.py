@@ -61,7 +61,11 @@ def make_pending_media_buy(integration_db):
     engine = get_engine()
     session = SASession(bind=engine)
 
-    def _make(request_data_context: dict | None = None, protocol: str = "mcp"):
+    def _make(
+        request_data_context: dict | None = None,
+        protocol: str = "mcp",
+        external_task_id: str | None = None,
+    ):
         tenant = TenantFactory(tenant_id="reject_wh_tenant")
         PropertyTagFactory(tenant=tenant, tag_id="all_inventory", name="All Inventory")
         principal = PrincipalFactory(
@@ -118,6 +122,8 @@ def make_pending_media_buy(integration_db):
         }
         if request_data_context is not None:
             request_data["context"] = request_data_context
+        if external_task_id is not None:
+            request_data["external_task_id"] = external_task_id
         cm = ContextManager()
         context = cm.create_context(
             tenant_id=tenant.tenant_id,
@@ -143,6 +149,7 @@ def make_pending_media_buy(integration_db):
             "tenant_id": tenant.tenant_id,
             "media_buy_id": media_buy.media_buy_id,
             "workflow_step_id": step.step_id,
+            "external_task_id": external_task_id,
         }
 
     try:
@@ -384,6 +391,24 @@ class TestAdminMediaBuyRejectWebhook:
         assert not result_data.get("confirmed_at"), (
             "A2A reject artifact embeds confirmed_at — the buy was rejected, not confirmed"
         )
+
+    @pytest.mark.parametrize("action", ["approve", "reject"])
+    def test_a2a_decision_webhook_uses_buyer_task_id(
+        self,
+        authenticated_admin_session,
+        make_pending_media_buy,
+        webhook_capture,
+        action,
+    ):
+        """Admin decisions correlate their webhook to the outer A2A task id."""
+        buyer_task_id = f"task_buyer_{action}"
+        ids = make_pending_media_buy(protocol="a2a", external_task_id=buyer_task_id)
+
+        _post_approval_action(authenticated_admin_session, ids, {"action": action, "reason": "test"})
+        task = webhook_capture["payload"]
+
+        assert task.id == buyer_task_id
+        assert task.id != ids["workflow_step_id"]
 
     def test_approve_webhook_echoes_buyer_request_context(
         self, authenticated_admin_session, make_pending_media_buy, webhook_capture

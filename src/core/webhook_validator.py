@@ -5,6 +5,8 @@ Server-Side Request Forgery (SSRF) attacks where malicious users could
 trick the server into making requests to internal services.
 """
 
+from typing import Any
+
 from adcp.types import TaskType
 
 from src.core.security.url_validator import check_url_ssrf
@@ -41,6 +43,20 @@ def validate_webhook_task_type(task_type: str, fallback: str = WEBHOOK_TASK_TYPE
     except ValueError:
         return fallback
     return task_type
+
+
+def resolve_webhook_task_id(request_data: dict[str, Any] | str | None, step_id: str) -> str:
+    """Return the buyer-visible task id, falling back for legacy workflow rows.
+
+    A2A persists its outer task id in ``request_data.external_task_id``. MCP/REST
+    workflows and older A2A rows do not have that field and continue to use the
+    internal workflow step id.
+    """
+    if isinstance(request_data, dict):
+        external_task_id = request_data.get("external_task_id")
+        if isinstance(external_task_id, str) and external_task_id:
+            return external_task_id
+    return step_id
 
 
 class WebhookURLValidator:
