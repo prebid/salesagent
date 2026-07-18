@@ -1,7 +1,12 @@
 import pytest
 from pydantic import ValidationError
 
-from src.core.exceptions import AdCPValidationError, normalize_to_adcp_error
+from src.core.exceptions import (
+    WIRE_STANDARD_CODES,
+    AdCPValidationError,
+    normalize_to_adcp_error,
+    to_wire_error_code,
+)
 from src.core.validation_helpers import adcp_validation_boundary
 from tests.helpers import assert_no_raw_validation_leak
 
@@ -67,3 +72,21 @@ def test_a2a_validation_boundary_preserves_contextual_error_format():
     }
     assert "buyer-input" not in exc_info.value.message
     assert_no_raw_validation_leak(exc_info.value.message)
+
+
+def test_untyped_exception_message_is_generic_not_raw():
+    """An untyped exception normalizes to a base INTERNAL_ERROR whose buyer-facing
+    message is the generic wire message — never the raw str(exc), which can carry
+    SQL fragments, table names, or filesystem paths that reach the wire envelope
+    and the A2A failed-Task webhook body. Deletion oracle: reverting the sink to
+    ``AdCPError(str(exc))`` leaks 'secret_table' here.
+    """
+    leaky = RuntimeError("SELECT token FROM secret_table WHERE tenant='acme'")
+
+    normalized = normalize_to_adcp_error(leaky)
+
+    generic = WIRE_STANDARD_CODES[to_wire_error_code("INTERNAL_ERROR")]["message"]
+    assert normalized.error_code == "INTERNAL_ERROR"
+    assert normalized.message == generic
+    assert "secret_table" not in normalized.message
+    assert "SELECT" not in normalized.message
