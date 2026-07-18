@@ -469,6 +469,17 @@ FIX_SUGGESTION_ACTION_VERBS = frozenset(
 )
 
 
+def suggestion_has_action_verb(suggestion: str) -> bool:
+    """True if ``suggestion`` contains an imperative action verb.
+
+    Word-level match (splits on whitespace) to avoid substrings like "reset"
+    matching "set". Single source for the actionability check, shared by the
+    ``@then`` step below and its unit-test oracle
+    (``test_canonical_suggestions_are_actionable``).
+    """
+    return bool(set(suggestion.lower().split()) & FIX_SUGGESTION_ACTION_VERBS)
+
+
 @then("the error should include a suggestion for how to fix the issue")
 def then_error_has_fix_suggestion(ctx: dict) -> None:
     """Assert error includes an actionable suggestion for fixing the issue.
@@ -503,11 +514,7 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
     assert suggestion, "Expected non-empty suggestion"
     # A fix suggestion must contain actionable guidance — a verb telling the
     # caller what to DO, not just describing the problem.
-    suggestion_lower = suggestion.lower()
-    # Split into words to avoid substring matches (e.g., "reset" matching "set")
-    words = set(suggestion_lower.split())
-    found = words & FIX_SUGGESTION_ACTION_VERBS
-    assert found, (
+    assert suggestion_has_action_verb(suggestion), (
         "Expected actionable fix suggestion with a verb "
         f"({', '.join(sorted(FIX_SUGGESTION_ACTION_VERBS))}), got: {suggestion}"
     )

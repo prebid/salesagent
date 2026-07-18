@@ -45,13 +45,17 @@ def adcp_validation_boundary(context: str = "parameters", field: str | None = No
     constraints"), reserving ``VALIDATION_ERROR`` for "business rules beyond
     schema validation". This boundary deliberately emits ``VALIDATION_ERROR``
     uniformly for ALL boundary rejections rather than classify per Pydantic error
-    type. The conformance storyboards accept either code for a rejection
+    type. SOME conformance storyboards grade a rejection either-way
     (``allowed_values: [INVALID_REQUEST, VALIDATION_ERROR]`` in
-    ``universal/idempotency.yaml`` / ``universal/error-compliance.yaml``), and
-    both codes carry ``recovery="correctable"``, so the choice is
-    graded-equivalent and does not change the buyer's recovery action.
-    ``VALIDATION_ERROR`` is therefore NOT asserted to be the spec-canonical code
-    for a schema failure — it is a deliberate uniform-boundary choice.
+    ``universal/idempotency.yaml`` / ``universal/error-compliance.yaml``), but
+    OTHERS grade a schema-invalid path as strict ``INVALID_REQUEST``
+    (``domains/media-buy/scenarios/refine_finalize_exclusivity.yaml``,
+    ``negative_path: schema_invalid``) — so on those shapes the uniform choice is
+    a deliberate divergence, not a graded equivalence. It is latent here (those
+    paths are unsupported), and both codes carry ``recovery="correctable"`` so the
+    buyer's recovery action is unchanged. ``VALIDATION_ERROR`` is therefore NOT
+    asserted to be the spec-canonical code for a schema failure — it is a
+    deliberate uniform-boundary choice.
 
     ``context`` names what was invalid in the message (e.g. ``"get_products
     request"``); the default renders the ``Invalid parameters`` prefix existing

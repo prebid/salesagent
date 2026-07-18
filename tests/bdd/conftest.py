@@ -180,14 +180,26 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME(salesagent-12nd): UC-002 ASAP — response doesn't expose resolved start_time
     "T-UC-002-alt-asap": "response lacks resolved start_time field — spec-production gap",
     # FIXME(salesagent-fie): UC-002 error code mismatch — Pydantic VALIDATION_ERROR vs spec INVALID_REQUEST
-    "T-UC-002-inv-087-5": "duplicate optimization_goals priority: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
-    "T-UC-002-inv-087-6": "empty optimization_goals array: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
-    "T-UC-002-inv-087-7": "per_ad_spend without value_field: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
-    # FIXME(#1652): BR-RULE-015 INV-6 — Creative.assets is dict[str, Any] (untyped), so
-    # production does not validate the asset_type discriminator; an inline asset lacking
-    # asset_type is accepted (no error). Scenario is wired through the real harness and
-    # strict-xfailed until asset validation lands, at which point it flips to VALIDATION_ERROR.
-    "T-UC-002-inv-015-6": "asset_type discriminator not validated (Creative.assets untyped) — production gap",
+    # Deliberate uniform divergence (NOT a gap): the boundary emits VALIDATION_ERROR for these
+    # schema-validation failures while the storyboard grades INVALID_REQUEST — see the CODE-choice
+    # note in adcp_validation_boundary. Scenario asserts the storyboard code, so it stays xfailed.
+    "T-UC-002-inv-087-5": "duplicate optimization_goals priority: boundary emits VALIDATION_ERROR, storyboard grades INVALID_REQUEST — deliberate divergence",
+    "T-UC-002-inv-087-6": "empty optimization_goals array: boundary emits VALIDATION_ERROR, storyboard grades INVALID_REQUEST — deliberate divergence",
+    "T-UC-002-inv-087-7": "per_ad_spend without value_field: boundary emits VALIDATION_ERROR, storyboard grades INVALID_REQUEST — deliberate divergence",
+    # FIXME(#1652): BR-RULE-015 INV-6 — production DOES validate asset_type (the CreativeAsset
+    # discriminated union raises union_tag_not_found), but the WIRE outcome differs per transport
+    # and none matches the scenario's graded "VALIDATION_ERROR referencing asset_type" shape:
+    #   a2a / rest: creative processing rejects with CREATIVE_REJECTED (not VALIDATION_ERROR) — fails
+    #               the earlier validation-error Then.
+    #   mcp: an earlier crash in the idempotency canonical hash (media_buy_create.py
+    #        canonical_payload_hash(raw_wire_payload) -> rfc8785 chokes on a live FormatId ->
+    #        CanonicalizationError) is normalized to VALIDATION_ERROR "unsupported type: FormatId";
+    #        passes Thens 1-2 off that crash envelope, fails Then#3 (message is FormatId, not asset_type).
+    #        (a2a/rest use canonical_request_hash(req), which model_dumps the FormatId, so they don't hit
+    #        it.) That FormatId crash is a separate production bug (tracked in #1679).
+    # Strict-xfailed until the code reconciles (fix the mcp crash AND surface the asset_type rejection
+    # as VALIDATION_ERROR, or reconcile the scenario to CREATIVE_REJECTED); flips XPASS->FAILED then.
+    "T-UC-002-inv-015-6": "asset_type IS validated but wire code differs per transport (a2a/rest CREATIVE_REJECTED; mcp FormatId CanonicalizationError) — not yet the graded VALIDATION_ERROR",
     # FIXME(beads-dul): disclosure_positions filter not implemented in production
     # Note: violated/nofield pass vacuously (field rejected at schema level)
     "T-UC-005-inv-049-8-holds": "disclosure_positions filter not implemented",
@@ -3417,6 +3429,8 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             with _db_scope_for(request, e2e_config), CreativeListEnv(e2e_config=e2e_config) as env:
                 ctx["env"] = env
                 yield
+        # FIXME(#1652): dormant list_creatives validation scenario, pending real-harness wiring
+        # (allowlisted in test_architecture_bdd_no_dormant_scenario_xfail._KNOWN_DORMANT).
         elif "T-UC-018-ext-c" in marker_names:
             pytest.xfail("T-UC-018-ext-c list_creatives validation harness wiring is tracked in #1652")
         else:

@@ -59,6 +59,7 @@ def test_create_media_buy_boundary_validation_emits_canonical_suggestion():
         )
 
     error = exc_info.value
+    assert error.error_code == "VALIDATION_ERROR"
     assert error.field == "idempotency_key"
     assert error.suggestion == "review error details and fix field values"
 
@@ -75,11 +76,10 @@ def test_canonical_suggestions_are_actionable():
     spec-correct output; this pins that alignment so it reddens HERE first.
     """
     from src.core.exceptions import INVALID_REQUEST_SUGGESTION, VALIDATION_ERROR_SUGGESTION
-    from tests.bdd.steps.generic.then_error import FIX_SUGGESTION_ACTION_VERBS
+    from tests.bdd.steps.generic.then_error import FIX_SUGGESTION_ACTION_VERBS, suggestion_has_action_verb
 
     for suggestion in (VALIDATION_ERROR_SUGGESTION, INVALID_REQUEST_SUGGESTION):
-        words = set(suggestion.lower().split())
-        assert words & FIX_SUGGESTION_ACTION_VERBS, (
+        assert suggestion_has_action_verb(suggestion), (
             f"Canonical suggestion {suggestion!r} contains no harness action verb "
             f"({', '.join(sorted(FIX_SUGGESTION_ACTION_VERBS))}) — a graduating BDD "
             "scenario asserting actionable guidance would fail on spec-correct output."

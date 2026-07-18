@@ -17,7 +17,7 @@ Why the shape is a defect:
     underlying behavior becomes gradable the scenario stays green-dormant instead
     of flipping to a failure that forces the gate to be removed.
   * ``make quality`` does not run BDD, so the whole class is invisible to the
-    normal gate. The idiom already appears ~10x in ``_harness_env``; a new
+    normal gate. The idiom already appears repeatedly in ``_harness_env``; a new
     dormant scenario is a 2-line copy-paste.
 
 The correct home for a specific expected-to-fail scenario is the declarative
@@ -82,14 +82,23 @@ def _specific_scenario_tags(test: ast.expr) -> set[str]:
     ``"T-UC-x" in names``, ``names == "T-UC-x"``, ``names & {"T-UC-x"}``,
     ``names in {"T-UC-x", ...}`` — while excluding ``startswith`` family gates.
 
-    KNOWN LIMITATION (FIXME(#1652)): membership against a NAMED set constant
-    (``marker_names & _UC0XX_DORMANT_TAGS`` — the prevailing idiom elsewhere in
-    ``_harness_env``) is NOT resolved: the tags live in a module-level assignment,
-    not the test expression, so a dormant branch gated by a named set evades this
-    guard. Full module-level set-constant resolution (plus triage of the existing
-    named-set xfail branches) is tracked as guard hardening. Until then the guard
-    covers the inline-literal + ``skip``/``xfail`` forms — which is how the
-    recurrence it targets (a copy-pasted inline dormant branch) is introduced.
+    KNOWN LIMITATION (FIXME(#1652)): four shapes escape the matcher — each has
+    ZERO live occurrences today and is pinned by an ``assert _violations == []``
+    meta-test below, so modeling one later flips its pin red:
+      * NAMED set-constant membership (``marker_names & _UC0XX_TAGS``) — the tags
+        live in a module-level assignment, not the test expression. (The existing
+        named-set intersections in ``_harness_env`` all gate YIELDING branches, so
+        there is no dormant named-set branch to catch yet.)
+      * else-branch dormancy (``if "T-UC-x" not in names: <yield> else:
+        pytest.xfail()``) — only ``node.body`` is inspected, not ``node.orelse``.
+      * local-variable indirection (``d = "T-UC-x" in names; if d: xfail()``) —
+        the if-test carries no string constant.
+      * ternary dispatch (``xfail() if "T-UC-x" in names else …``) — an
+        ``ast.IfExp``, not an ``ast.If``.
+    Full modeling (plus triage of any branch it would newly flag) is tracked as
+    guard hardening. Until then the guard covers the inline-literal ``in`` / ``==``
+    / ``& {...}`` forms with a ``skip``/``xfail`` body — which is how the recurrence
+    it targets (a copy-pasted inline dormant branch) is introduced.
     """
     excluded = _prefix_match_constants(test)
     tags: set[str] = set()
@@ -155,8 +164,9 @@ def _body_has_yield(body: list[ast.stmt]) -> bool:
 
 
 def _violations(source: str) -> list[tuple[int, str]]:
-    """(lineno, tag) for each if/elif that singles out a specific scenario tag
-    and whose body only ``pytest.xfail()``s (no ``yield`` into a harness env)."""
+    """(lineno, tag) for each if/elif that singles out a specific scenario tag and
+    whose body only ``pytest.xfail()``s or ``pytest.skip()``s (no ``yield`` into a
+    harness env)."""
     func = _get_harness_env(source)
     bad: list[tuple[int, str]] = []
     for node in ast.walk(func):
@@ -197,8 +207,8 @@ def test_no_new_dormant_scenario_specific_xfail():
         found,
         allowlist,
         fix_hint=(
-            "A scenario-specific imperative pytest.xfail() aborts the scenario at setup "
-            "(before any @then step) and can never XPASS — it stays green-dormant. Move the "
+            "A scenario-specific imperative pytest.xfail()/pytest.skip() aborts the scenario at "
+            "setup (before any @then step) and can never XPASS/FAIL — it stays green-dormant. Move the "
             "tag to the declarative strict-xfail registry consumed by pytest_collection_modifyitems "
             "(e.g. _UC002_VALIDATION_XFAIL), which runs the body and flips XPASS->FAILED when "
             "wired, OR wire the scenario into its harness env."
@@ -358,3 +368,67 @@ def test_guard_ignores_env_availability_skip():
     """A ``pytest.skip()`` with no specific ``T-UC-*`` tag (env-availability guard)
     is not flagged — adding ``skip`` to the matcher introduces no false positive."""
     assert _violations(_NEG_ENV_SKIP) == []
+
+
+# --- KNOWN LIMITATION pins: shapes the matcher does NOT model yet (0 live
+# occurrences). Each asserts ``== []`` documenting current non-detection; modeling
+# the shape later flips its pin red, forcing the KNOWN LIMITATION docstring update. ---
+
+_ESC_NAMED_SET = """
+def _harness_env(request, ctx):
+    marker_names = {m.name for m in request.node.iter_markers()}
+    if marker_names & _UC0XX_DORMANT_TAGS:
+        pytest.xfail("dormant via a named set constant — tags not in the test expression")
+    else:
+        with Env() as env:
+            ctx["env"] = env
+            yield
+"""
+
+_ESC_ELSE_BRANCH = """
+def _harness_env(request, ctx):
+    marker_names = {m.name for m in request.node.iter_markers()}
+    if "T-UC-002-esc-1" not in marker_names:
+        with Env() as env:
+            ctx["env"] = env
+            yield
+    else:
+        pytest.xfail("dormant in the else branch — only node.body is inspected")
+"""
+
+_ESC_LOCAL_VAR = """
+def _harness_env(request, ctx):
+    marker_names = {m.name for m in request.node.iter_markers()}
+    is_dormant = "T-UC-002-esc-2" in marker_names
+    if is_dormant:
+        pytest.xfail("dormant via a local var — the if-test carries no string constant")
+    else:
+        with Env() as env:
+            ctx["env"] = env
+            yield
+"""
+
+_ESC_TERNARY = """
+def _harness_env(request, ctx):
+    marker_names = {m.name for m in request.node.iter_markers()}
+    pytest.xfail("dormant via ternary") if "T-UC-002-esc-3" in marker_names else None
+    with Env() as env:
+        ctx["env"] = env
+        yield
+"""
+
+
+def test_limitation_named_set_constant_not_modeled():
+    assert _violations(_ESC_NAMED_SET) == []
+
+
+def test_limitation_else_branch_dormancy_not_modeled():
+    assert _violations(_ESC_ELSE_BRANCH) == []
+
+
+def test_limitation_local_var_indirection_not_modeled():
+    assert _violations(_ESC_LOCAL_VAR) == []
+
+
+def test_limitation_ternary_dispatch_not_modeled():
+    assert _violations(_ESC_TERNARY) == []

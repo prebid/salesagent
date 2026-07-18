@@ -73,12 +73,13 @@ def test_create_media_buy_typeadapter_missing_field_emits_validation_error():
     Deliberate spec divergence (see ``adcp_validation_boundary``): the AdCP prose
     (3.1.1) maps a missing required field to INVALID_REQUEST, but this boundary
     emits VALIDATION_ERROR uniformly for all schema-validation failures (#1417,
-    the same uniform treatment applied to the account-reference oneOf). The
-    conformance storyboards accept either code (``allowed_values:
-    [INVALID_REQUEST, VALIDATION_ERROR]``) with identical ``correctable``
-    recovery, so reconciling the @T-UC-002-inv-015-6 grading to VALIDATION_ERROR
-    is graded-equivalent — NOT a claim that VALIDATION_ERROR is the spec-canonical
-    code for a missing field.
+    the same uniform treatment applied to the account-reference oneOf). Some
+    storyboards grade such a rejection either-way (idempotency.yaml /
+    error-compliance.yaml); refine_finalize_exclusivity.yaml grades a
+    schema-invalid path strict INVALID_REQUEST — so this is a deliberate
+    divergence on the strict-graded shapes (latent), with identical ``correctable``
+    recovery, NOT a claim that VALIDATION_ERROR is the spec-canonical code for a
+    missing field. Reconciles the #1604 tracking item (@T-UC-002-inv-015-6).
     """
     package = create_test_package_request_dict(
         product_id="prod_missing",
@@ -99,4 +100,7 @@ def test_create_media_buy_typeadapter_missing_field_emits_validation_error():
     )
 
     assert is_error
+    assert envelope is not None
     assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable", message_substr="Field required")
+    assert envelope["errors"][0].get("field") == "packages[0].product_id"
+    assert_no_raw_validation_leak(envelope["errors"][0]["message"])

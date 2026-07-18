@@ -611,18 +611,30 @@ def _first_package(ctx: dict) -> dict:
 def given_inline_creative_asset_missing_asset_type(ctx: dict) -> None:
     """Attach an inline creative whose assets-map value omits the asset_type discriminator.
 
-    BR-RULE-015 INV-6: an assets-map value lacking asset_type (or carrying an
-    unregistered value) is unresolvable against the 14 AssetVariant types and
-    should be rejected. Production types ``Creative.assets`` as ``dict[str, Any]``
-    (untyped) and does NOT yet validate the discriminator, so the request is
-    accepted — a production gap. The scenario is strict-xfailed (``_XFAIL_TAGS``)
-    until BR-RULE-015 validation lands; dispatching RAW exercises the future
-    boundary validation on the wire so the xfail flips the moment it ships.
+    BR-RULE-015 INV-6: an assets-map value lacking asset_type is unresolvable
+    against the ``CreativeAsset`` discriminated union (keyed on ``asset_type``).
+    Production DOES validate this — a missing discriminator raises a Pydantic
+    ``union_tag_not_found`` during creative processing — but the per-transport WIRE
+    outcome does not yet match the scenario's graded shape (see the
+    ``_XFAIL_TAGS`` note for T-UC-002-inv-015-6 for the observed a2a/rest/mcp
+    reality). The scenario is strict-xfailed until the code reconciles; dispatching
+    RAW drives the real wire path so the xfail flips the moment it does.
+
+    Self-sufficient probe: the invalidity is OWNED here — we explicitly strip
+    ``asset_type`` from every built asset value rather than rely on
+    ``_add_inline_creatives`` happening to omit it. If that helper's default later
+    gains an ``asset_type`` (to keep valid-creative scenarios valid), this probe
+    stays invalid instead of being silently defused.
     """
     from tests.bdd.steps.generic.given_media_buy import _add_inline_creatives, _ensure_request_defaults
 
-    _ensure_request_defaults(ctx)
-    _add_inline_creatives(ctx, count=1)  # builds an assets-map value with no asset_type
+    kwargs = _ensure_request_defaults(ctx)
+    _add_inline_creatives(ctx, count=1)
+    for pkg in kwargs.get("packages") or []:
+        for creative in pkg.get("creatives") or []:
+            for asset_value in (creative.get("assets") or {}).values():
+                if isinstance(asset_value, dict):
+                    asset_value.pop("asset_type", None)
     ctx["dispatch_mode"] = "create_raw"
 
 
@@ -630,9 +642,12 @@ def given_inline_creative_asset_missing_asset_type(ctx: dict) -> None:
 def then_error_references_asset_type(ctx: dict) -> None:
     """The wire error names the unresolvable asset_type discriminator/field.
 
-    Wire-first (reads the real two-layer envelope). Reached only once production
-    validates asset_type (BR-RULE-015); until then the earlier validation-error
-    Then fails first and the scenario strict-xfails.
+    Wire-first (reads the real two-layer envelope). Not green on any transport yet:
+    a2a/rest fail the EARLIER validation-error Then (wire code is CREATIVE_REJECTED,
+    not the graded VALIDATION_ERROR); mcp reaches THIS Then but the wire message is
+    the FormatId CanonicalizationError crash (see #1679), not the
+    asset_type discriminator. Graduates when the code reconciles to a
+    VALIDATION_ERROR that references asset_type.
     """
     from tests.bdd.steps.generic.then_error import _wire_error_object
 
@@ -1901,9 +1916,22 @@ def then_response_includes_previously_created(ctx: dict, field: str) -> None:
 def then_error_references_missing_field(ctx: dict, field: str) -> None:
     """Assert the validation error names the missing required field.
 
-    The error message (or Pydantic field locations) must mention ``field`` so
-    the buyer knows which required field was omitted.
+    Wire-first: when the scenario dispatched through a wire transport the buyer
+    contract is the wire envelope's ``field``/``message`` (read via
+    ``_wire_error_object``), not the lossy reconstructed ``ctx['error']``. Falls
+    back to the reconstructed exception on IMPL / no-wire scenarios.
     """
+    from tests.bdd.steps.generic.then_error import _wire_error_object
+
+    wire = _wire_error_object(ctx)
+    if wire is not None:
+        haystack = f"{wire.get('field', '')} {wire.get('message', '')}"
+        assert field in haystack, (
+            f"Wire error does not reference the missing '{field}' field; "
+            f"got field={wire.get('field')!r} message={wire.get('message')!r}"
+        )
+        return
+
     error = ctx.get("error")
     assert error is not None, f"No error in ctx — expected a validation error naming the missing '{field}' field"
 
