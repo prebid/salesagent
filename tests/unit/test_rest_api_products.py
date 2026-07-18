@@ -57,6 +57,29 @@ class TestRESTProductsEndpoint:
 
     @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.core.tools.products._get_products_impl")
+    def test_endpoint_accepts_buying_mode(self, mock_impl, mock_resolve):
+        """A spec-valid ``buying_mode`` must be accepted, not 422'd.
+
+        buying_mode is a GetProductsRequest field on the spec that MCP/A2A accept,
+        so REST must too. Under the dev/CI extra="forbid" policy an undeclared field
+        422s — this pins that GetProductsBody declares it. Deletion oracle: drop
+        ``buying_mode`` from GetProductsBody and this returns 422.
+        """
+        from src.core.schemas import GetProductsResponse
+
+        mock_impl.return_value = GetProductsResponse(products=[], message="test")
+
+        response = client.post(
+            "/api/v1/products",
+            json={"brief": "video ads", "buying_mode": "brief"},
+            headers={"Authorization": "Bearer test-token"},
+        )
+        assert response.status_code == 200, (
+            f"buying_mode should be accepted, got {response.status_code}: {response.text}"
+        )
+
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
+    @patch("src.core.tools.products._get_products_impl")
     def test_response_has_products_field(self, mock_impl, mock_resolve):
         """Response must contain 'products' list."""
         from src.core.schemas import GetProductsResponse

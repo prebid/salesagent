@@ -70,6 +70,11 @@ class GetProductsBody(SalesAgentBaseModel):
     # dict BrandReference or string domain/URL shorthand (#1324)
     brand: dict[str, Any] | str | None = None
     filters: dict[str, Any] | None = None
+    # BuyingMode on the spec; declared so a spec-valid request is accepted for
+    # parity with MCP/A2A (extra="forbid" otherwise 400s it). Not acted on here —
+    # the internal GetProductsRequest widens buying_mode to str|None; kept loose
+    # so REST accepts every mode the other transports do.
+    buying_mode: str | None = None
     adcp_version: str = "1.0.0"
 
 
