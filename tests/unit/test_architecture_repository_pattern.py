@@ -1142,7 +1142,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_media_buy_status_scheduler.py", "_create_media_buy"),
     ("tests/integration/test_media_buy_status_scheduler.py", "_create_test_principal"),
     ("tests/integration/test_media_buy_status_scheduler.py", "_create_test_tenant"),
-    ("tests/integration/test_media_buy_status_scheduler.py", "_get_media_buy_status"),
     ("tests/integration/test_media_buy_v3.py", "mb_creatives"),
     ("tests/integration/test_media_buy_v3.py", "mb_tenant_with_approval"),
     ("tests/integration/test_media_buy_v3.py", "test_adapter_failure_no_db_changes"),

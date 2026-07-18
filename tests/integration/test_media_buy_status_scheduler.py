@@ -9,6 +9,7 @@ based on flight dates:
 Uses real PostgreSQL database via integration_db fixture.
 """
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -165,24 +166,35 @@ def _create_creative_assignment(
         session.commit()
 
 
-def _get_media_buy_status(tenant_id: str, media_buy_id: str) -> str:
-    """Get the current status of a media buy."""
-    with get_db_session() as session:
-        from sqlalchemy import select
-
-        stmt = select(MediaBuy).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)
-        media_buy = session.scalars(stmt).first()
-        return media_buy.status if media_buy else None
+@dataclass(frozen=True)
+class _MediaBuyState:
+    status: str
+    revision: int | None
 
 
-def _get_media_buy_revision(tenant_id: str, media_buy_id: str) -> int | None:
-    """Get the current persisted revision of a media buy (read via a tenant-scoped UoW)."""
+def _load_media_buy_state(tenant_id: str, media_buy_id: str) -> _MediaBuyState | None:
+    """Capture persisted state inside a tenant-scoped UoW session."""
     from src.core.database.repositories import MediaBuyUoW
 
     with MediaBuyUoW(tenant_id) as uow:
         assert uow.media_buys is not None
         media_buy = uow.media_buys.get_by_id(media_buy_id)
-        return media_buy.revision if media_buy else None
+        if media_buy is None:
+            return None
+        return _MediaBuyState(status=media_buy.status, revision=media_buy.revision)
+
+
+def _get_media_buy_status(tenant_id: str, media_buy_id: str) -> str:
+    """Get the current persisted status of a media buy."""
+    state = _load_media_buy_state(tenant_id, media_buy_id)
+    assert state is not None, f"media buy {media_buy_id!r} not found for tenant {tenant_id!r}"
+    return state.status
+
+
+def _get_media_buy_revision(tenant_id: str, media_buy_id: str) -> int | None:
+    """Get the current persisted revision of a media buy (read via a tenant-scoped UoW)."""
+    state = _load_media_buy_state(tenant_id, media_buy_id)
+    return state.revision if state else None
 
 
 @pytest.mark.requires_db

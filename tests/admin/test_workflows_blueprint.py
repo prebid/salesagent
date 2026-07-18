@@ -186,9 +186,8 @@ class TestWorkflowApproval:
 
         from src.core.database.models import Principal, Tenant
         from src.core.database.repositories import MediaBuyRepository, WorkflowRepository
-        from src.core.schemas._base import GetMediaBuysRequest
-        from src.core.tools.media_buy_list import _get_media_buys_impl
         from tests.factories import CreativeAssignmentFactory, CreativeFactory, MediaBuyFactory, PrincipalFactory
+        from tests.helpers.media_buy import read_back_media_buy
 
         _auth_session(client, test_tenant)
 
@@ -233,13 +232,7 @@ class TestWorkflowApproval:
         # Wire read-back: buyer-visible revision advanced (1 → 2) and confirmed_at
         # is the approval instant (== approved_at), NOT the buy's created_at.
         identity = PrincipalFactory.make_identity(tenant_id=test_tenant, principal_id="wf_test_principal")
-        listed = _get_media_buys_impl(
-            req=GetMediaBuysRequest(media_buy_ids=[buy.media_buy_id]),
-            identity=identity,
-            include_snapshot=False,
-        )
-        assert len(listed.media_buys) == 1
-        item = listed.media_buys[0]
+        item = read_back_media_buy(identity, buy.media_buy_id)
         assert item.revision == 2
         assert item.confirmed_at == stored.approved_at
         assert item.confirmed_at != item.created_at

@@ -8,17 +8,57 @@ Tests write operations against real PostgreSQL to verify:
 beads: salesagent-dyb6
 """
 
+import threading
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import cast
 
 import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal, Tenant
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
+from tests.helpers.media_buy import read_back_media_buy
 from tests.integration.conftest import cleanup_tenant, make_media_buy, make_package
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+_MISSING = object()
+
+
+def _run_concurrently[T](
+    workers: Sequence[Callable[[threading.Barrier], T]],
+    *,
+    thread_name_prefix: str,
+    join_timeout: float = 60,
+) -> list[T]:
+    """Run synchronized workers and surface hangs/errors in the main thread."""
+    barrier = threading.Barrier(len(workers), timeout=30)
+    results: list[object] = [_MISSING] * len(workers)
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+
+    def run_worker(index: int, worker: Callable[[threading.Barrier], T]) -> None:
+        try:
+            results[index] = worker(barrier)
+        except BaseException as exc:  # noqa: BLE001 - surfaced to the main thread below
+            with lock:
+                errors.append(exc)
+
+    threads = [
+        threading.Thread(target=run_worker, args=(index, worker), name=f"{thread_name_prefix}-{index}")
+        for index, worker in enumerate(workers)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=join_timeout)
+
+    assert not any(thread.is_alive() for thread in threads), f"{thread_name_prefix} thread hung (possible deadlock)"
+    assert not errors, f"concurrent {thread_name_prefix} thread(s) failed: {errors}"
+    assert all(result is not _MISSING for result in results), f"{thread_name_prefix} worker returned no result"
+    return [cast(T, result) for result in results]
 
 
 # ---------------------------------------------------------------------------
@@ -295,8 +335,6 @@ class TestRevisionBumpsOnStatusTransition:
     def test_manual_approval_stamps_confirmed_at_and_bumps_revision(self, tenant_a, principal_a):
         """create (pending_approval) → approve → get: confirmed_at is the approval
         instant (not created_at) and revision advanced past the create value."""
-        from src.core.schemas import GetMediaBuysRequest
-        from src.core.tools.media_buy_list import _get_media_buys_impl
         from tests.factories.principal import PrincipalFactory
 
         with MediaBuyUoW(tenant_a) as uow:
@@ -307,9 +345,7 @@ class TestRevisionBumpsOnStatusTransition:
         identity = PrincipalFactory.make_identity(
             tenant_id=tenant_a, principal_id=principal_a, tenant={"tenant_id": tenant_a}
         )
-        before = _get_media_buys_impl(
-            req=GetMediaBuysRequest(media_buy_ids=["mb_approve_life"]), identity=identity, include_snapshot=False
-        ).media_buys[0]
+        before = read_back_media_buy(identity, "mb_approve_life")
         assert before.confirmed_at is None
         assert before.revision == 1
 
@@ -320,9 +356,7 @@ class TestRevisionBumpsOnStatusTransition:
                 "mb_approve_life", "active", approved_at=approve_time, approved_by="admin@test.com"
             )
 
-        after = _get_media_buys_impl(
-            req=GetMediaBuysRequest(media_buy_ids=["mb_approve_life"]), identity=identity, include_snapshot=False
-        ).media_buys[0]
+        after = read_back_media_buy(identity, "mb_approve_life")
         # confirmed_at is the approval instant, NOT the buyer's create time.
         assert after.confirmed_at == approve_time
         assert after.confirmed_at != after.created_at
@@ -337,8 +371,6 @@ class TestRevisionBumpsOnStatusTransition:
         creative-sync reported confirmed_at=None forever. All three status seams now
         route through MediaBuyRepository._stamp_confirmation_if_needed.
         """
-        from src.core.schemas import GetMediaBuysRequest
-        from src.core.tools.media_buy_list import _get_media_buys_impl
         from tests.factories.principal import PrincipalFactory
 
         with MediaBuyUoW(tenant_a) as uow:
@@ -352,9 +384,7 @@ class TestRevisionBumpsOnStatusTransition:
         identity = PrincipalFactory.make_identity(
             tenant_id=tenant_a, principal_id=principal_a, tenant={"tenant_id": tenant_a}
         )
-        after = _get_media_buys_impl(
-            req=GetMediaBuysRequest(media_buy_ids=["mb_transition_confirm"]), identity=identity, include_snapshot=False
-        ).media_buys[0]
+        after = read_back_media_buy(identity, "mb_transition_confirm")
         # No manual approval, so confirmed_at falls back to the create instant — but
         # it IS set, which the pre-fix seam failed to do.
         assert after.confirmed_at is not None
@@ -553,8 +583,6 @@ class TestRevisionBumpsOnStatusTransition:
     def test_update_fields_staged_status_stamps_confirmed_at(self, tenant_a, principal_a):
         """A staged status change through update_fields (the update tool's approval
         path) also stamps confirmed_at — the third blessed seam. #1544."""
-        from src.core.schemas import GetMediaBuysRequest
-        from src.core.tools.media_buy_list import _get_media_buys_impl
         from tests.factories.principal import PrincipalFactory
 
         with MediaBuyUoW(tenant_a) as uow:
@@ -566,9 +594,7 @@ class TestRevisionBumpsOnStatusTransition:
         identity = PrincipalFactory.make_identity(
             tenant_id=tenant_a, principal_id=principal_a, tenant={"tenant_id": tenant_a}
         )
-        after = _get_media_buys_impl(
-            req=GetMediaBuysRequest(media_buy_ids=["mb_fields_confirm"]), identity=identity, include_snapshot=False
-        ).media_buys[0]
+        after = read_back_media_buy(identity, "mb_fields_confirm")
         assert after.confirmed_at is not None
         assert after.confirmed_at == after.created_at
 
@@ -963,8 +989,6 @@ class TestConcurrentRevisionBump:
     """
 
     def test_two_concurrent_bumps_yield_distinct_revisions(self, tenant_a, principal_a):
-        import threading
-
         with MediaBuyUoW(tenant_a) as uow:
             uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_concurrent_rev"))
 
@@ -973,34 +997,19 @@ class TestConcurrentRevisionBump:
             start_rev = uow.media_buys.get_by_id("mb_concurrent_rev").revision
         assert start_rev == 1
 
-        both_preloaded = threading.Barrier(2, timeout=30)
-        errors: list[BaseException] = []
-        errors_lock = threading.Lock()
+        def bump_once(barrier: threading.Barrier) -> None:
+            with MediaBuyUoW(tenant_a) as uow:
+                # Preload the row into THIS transaction's identity map at the
+                # current revision, before either thread bumps. This is the
+                # stale-read setup that a naive Python increment would lose.
+                preloaded = uow.media_buys.get_by_id("mb_concurrent_rev")
+                assert preloaded is not None
+                barrier.wait()
+                updated = uow.media_buys.bump_revision("mb_concurrent_rev")
+                assert updated is not None
+                # UoW commit happens on clean exit.
 
-        def bump_once() -> None:
-            try:
-                with MediaBuyUoW(tenant_a) as uow:
-                    # Preload the row into THIS transaction's identity map at the
-                    # current revision, before either thread bumps. This is the
-                    # stale-read setup that a naive Python increment would lose.
-                    preloaded = uow.media_buys.get_by_id("mb_concurrent_rev")
-                    assert preloaded is not None
-                    both_preloaded.wait()
-                    updated = uow.media_buys.bump_revision("mb_concurrent_rev")
-                    assert updated is not None
-                    # UoW commit happens on clean exit.
-            except BaseException as exc:  # noqa: BLE001 - surfaced to the main thread below
-                with errors_lock:
-                    errors.append(exc)
-
-        threads = [threading.Thread(target=bump_once, name=f"bump-{i}") for i in range(2)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=60)
-
-        assert not any(t.is_alive() for t in threads), "a bump thread hung (possible deadlock)"
-        assert not errors, f"concurrent bump thread(s) failed: {errors}"
+        _run_concurrently([bump_once, bump_once], thread_name_prefix="bump")
 
         with MediaBuyUoW(tenant_a) as uow:
             final_rev = uow.media_buys.get_by_id("mb_concurrent_rev").revision
@@ -1019,8 +1028,6 @@ class TestConcurrentRevisionBump:
         read-modify-write (both threads would write ``2``, leaving the final
         revision at 2 instead of 3). #1544.
         """
-        import threading
-
         # Start already 'active' so both threads transition active→active: the
         # source status is unchanged under lock, so both legitimately proceed and
         # bump. (A stale transition against a CHANGED status now no-ops — covered
@@ -1028,32 +1035,17 @@ class TestConcurrentRevisionBump:
         with MediaBuyUoW(tenant_a) as uow:
             uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_ast_concurrent", status="active"))
 
-        both_loaded = threading.Barrier(2, timeout=30)
-        errors: list[BaseException] = []
-        errors_lock = threading.Lock()
+        def transition_once(barrier: threading.Barrier) -> None:
+            with MediaBuyUoW(tenant_a) as uow:
+                # Plain get_by_id: unlocked, no populate_existing — the stale
+                # in-memory revision both threads hold before either commits.
+                mb = uow.media_buys.get_by_id("mb_ast_concurrent")
+                assert mb is not None
+                barrier.wait()
+                MediaBuyRepository.apply_status_transition(mb, "active")
+                # UoW commit happens on clean exit.
 
-        def transition_once() -> None:
-            try:
-                with MediaBuyUoW(tenant_a) as uow:
-                    # Plain get_by_id: unlocked, no populate_existing — the stale
-                    # in-memory revision both threads hold before either commits.
-                    mb = uow.media_buys.get_by_id("mb_ast_concurrent")
-                    assert mb is not None
-                    both_loaded.wait()
-                    MediaBuyRepository.apply_status_transition(mb, "active")
-                    # UoW commit happens on clean exit.
-            except BaseException as exc:  # noqa: BLE001 - surfaced to the main thread below
-                with errors_lock:
-                    errors.append(exc)
-
-        threads = [threading.Thread(target=transition_once, name=f"ast-{i}") for i in range(2)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=60)
-
-        assert not any(t.is_alive() for t in threads), "a transition thread hung (possible deadlock)"
-        assert not errors, f"concurrent apply_status_transition thread(s) failed: {errors}"
+        _run_concurrently([transition_once, transition_once], thread_name_prefix="apply-status-transition")
 
         with MediaBuyUoW(tenant_a) as uow:
             final_rev = uow.media_buys.get_by_id("mb_ast_concurrent").revision
@@ -1188,47 +1180,29 @@ class TestExpectedRevisionUnderLock:
         gate that only checks the unlocked snapshot admits both writes
         (#1544 round-7): this test is red under gate-only enforcement.
         """
-        import threading
-
         from src.core.exceptions import AdCPConflictError
 
         with MediaBuyUoW(tenant_a) as uow:
             uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_token_race"))
 
-        both_preloaded = threading.Barrier(2, timeout=30)
-        outcomes: list[str] = []
-        errors: list[BaseException] = []
-        results_lock = threading.Lock()
+        def update_with_token(barrier: threading.Barrier, budget: str) -> str:
+            with MediaBuyUoW(tenant_a) as uow:
+                # Preload at revision 1 in THIS transaction — the unlocked
+                # snapshot both writers' fast gates would see.
+                preloaded = uow.media_buys.get_by_id("mb_token_race")
+                assert preloaded is not None and (preloaded.revision or 1) == 1
+                barrier.wait()
+                try:
+                    uow.media_buys.update_fields_or_raise("mb_token_race", expected_revision=1, budget=Decimal(budget))
+                except AdCPConflictError:
+                    return "conflict"
+            return "applied"
 
-        def update_with_token(budget: str) -> None:
-            try:
-                with MediaBuyUoW(tenant_a) as uow:
-                    # Preload at revision 1 in THIS transaction — the unlocked
-                    # snapshot both writers' fast gates would see.
-                    preloaded = uow.media_buys.get_by_id("mb_token_race")
-                    assert preloaded is not None and (preloaded.revision or 1) == 1
-                    both_preloaded.wait()
-                    try:
-                        uow.media_buys.update_fields_or_raise(
-                            "mb_token_race", expected_revision=1, budget=Decimal(budget)
-                        )
-                    except AdCPConflictError:
-                        with results_lock:
-                            outcomes.append("conflict")
-                        return
-                with results_lock:
-                    outcomes.append("applied")
-            except BaseException as exc:  # noqa: BLE001 - surfaced to the main thread below
-                with results_lock:
-                    errors.append(exc)
+        outcomes = _run_concurrently(
+            [lambda barrier, budget=budget: update_with_token(barrier, budget) for budget in ("100.00", "200.00")],
+            thread_name_prefix="update-with-token",
+        )
 
-        threads = [threading.Thread(target=update_with_token, args=(b,)) for b in ("100.00", "200.00")]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=60)
-
-        assert not errors, f"unexpected thread errors: {errors}"
         assert sorted(outcomes) == ["applied", "conflict"], (
             f"exactly one writer must win and one must CONFLICT, got outcomes: {outcomes}"
         )

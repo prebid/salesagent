@@ -2277,7 +2277,7 @@ def then_valid_actions_are_enum_members(ctx: dict) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Dry-run mode (INV-5): the simulated success arm carries the GA fields,
+# Dry-run mode (INV-5): the simulated success arm carries revision and confirmed_at,
 # never invokes the adapter, and persists nothing (T-UC-002-inv-020-5, #1544)
 # ═══════════════════════════════════════════════════════════════════════
 

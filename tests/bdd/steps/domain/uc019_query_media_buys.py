@@ -2781,10 +2781,9 @@ def when_seller_approves(ctx: dict, label: str) -> None:
     env = ctx["env"]
     real_id = resolve_media_buy_id(ctx, label)
     approval_instant = datetime.now(UTC)
-    media_buy = _media_buy_repo(ctx).update_status(
+    _media_buy_repo(ctx).update_status_or_raise(
         real_id, "scheduled", approved_at=approval_instant, approved_by="seller-admin@example.com"
     )
-    assert media_buy is not None, f"media buy {label!r} ({real_id}) not found for approval"
     env._commit_factory_data()
     ctx["approval_instant"] = approval_instant
 

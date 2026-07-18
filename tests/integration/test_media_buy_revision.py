@@ -17,9 +17,9 @@ import pytest
 from src.core.schemas import UpdateMediaBuyRequest
 from src.core.schemas._base import (
     CreateMediaBuySuccess,
-    GetMediaBuysRequest,
     UpdateMediaBuySuccess,
 )
+from tests.helpers.media_buy import read_back_media_buy
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -39,19 +39,6 @@ def _update_budget(env, media_buy_id: str, budget: float) -> UpdateMediaBuySucce
     return result.response
 
 
-def _get_buy(env, media_buy_id: str):
-    """Fetch the buy back through the real get_media_buys impl."""
-    from src.core.tools.media_buy_list import _get_media_buys_impl
-
-    response = _get_media_buys_impl(
-        req=GetMediaBuysRequest(media_buy_ids=[media_buy_id]),
-        identity=env.identity,
-        include_snapshot=False,
-    )
-    assert len(response.media_buys) == 1
-    return response.media_buys[0]
-
-
 @pytest.mark.requires_db
 class TestPersistedRevisionOnTheWire:
     """create → update → get report the persisted counter consistently."""
@@ -66,7 +53,7 @@ class TestPersistedRevisionOnTheWire:
             assert created.revision == 1
             assert created.confirmed_at is not None
 
-            item = _get_buy(env, created.media_buy_id)
+            item = read_back_media_buy(env.identity, created.media_buy_id)
             assert item.revision == 1
             # Same persisted source everywhere: create's confirmed_at is the
             # row's created_at, and get_media_buys echoes both.
@@ -84,7 +71,7 @@ class TestPersistedRevisionOnTheWire:
             updated = _update_budget(env, created.media_buy_id, 6000.0)
             assert updated.revision == 2
 
-            item = _get_buy(env, created.media_buy_id)
+            item = read_back_media_buy(env.identity, created.media_buy_id)
             assert item.revision == 2
             # confirmed_at is stable after set — an update never moves it.
             assert item.confirmed_at == created.confirmed_at
@@ -120,7 +107,7 @@ class TestPersistedRevisionOnTheWire:
             # Budget + dates in one call → exactly one increment.
             assert result.response.revision == 2
 
-            item = _get_buy(env, created.media_buy_id)
+            item = read_back_media_buy(env.identity, created.media_buy_id)
             assert item.revision == 2
 
     def test_rapid_consecutive_updates_yield_strictly_increasing_revisions(self, integration_db):
@@ -145,7 +132,7 @@ class TestPersistedRevisionOnTheWire:
             assert (first.revision, second.revision) == (2, 3)
 
             # And the read tool agrees with the last write.
-            item = _get_buy(env, created.media_buy_id)
+            item = read_back_media_buy(env.identity, created.media_buy_id)
             assert item.revision == second.revision
 
     def test_pause_bumps_persisted_revision(self, integration_db):
@@ -167,14 +154,14 @@ class TestPersistedRevisionOnTheWire:
             # setup state there (itself a bump), then capture the pre-pause value.
             with MediaBuyUoW(tenant.tenant_id) as uow:
                 uow.media_buys.update_status(created.media_buy_id, "active")
-            pre_pause = _get_buy(env, created.media_buy_id).revision
+            pre_pause = read_back_media_buy(env.identity, created.media_buy_id).revision
 
             result = env.call_impl(req=UpdateMediaBuyRequest(media_buy_id=created.media_buy_id, paused=True))
             assert isinstance(result.response, UpdateMediaBuySuccess), f"pause must succeed, got {result!r}"
 
             # Pause advanced the revision by exactly one, and the read tool agrees.
             assert result.response.revision == pre_pause + 1
-            assert _get_buy(env, created.media_buy_id).revision == result.response.revision
+            assert read_back_media_buy(env.identity, created.media_buy_id).revision == result.response.revision
 
 
 @pytest.mark.requires_db
@@ -208,7 +195,7 @@ class TestRevisionOptimisticConcurrency:
             assert exc_info.value.details["resource_id"] == created.media_buy_id
 
             # Rejected update wrote nothing: revision unchanged on a fresh read.
-            assert _get_buy(env, created.media_buy_id).revision == 1
+            assert read_back_media_buy(env.identity, created.media_buy_id).revision == 1
 
     def test_terminal_and_stale_revision_prefers_conflict_over_gone(self, integration_db):
         """CONFLICT precedence: a stale token against a buy that has since reached a

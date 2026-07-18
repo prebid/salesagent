@@ -9,6 +9,7 @@ from __future__ import annotations
 from pytest_bdd import parsers, then
 
 from src.core.helpers import enum_value
+from src.core.schemas import UpdateMediaBuySuccess
 
 # The "no media buy record should be persisted[ in the database]" steps are
 # owned by the now-registered then_media_buy.py (upstream #1417 canonicalized
@@ -47,15 +48,19 @@ def then_response_status(ctx: dict, status: str) -> None:
     # Determine if response type declares a ``status`` field via Pydantic metadata.
     # Uses getattr on the class (not instance) to handle non-Pydantic test doubles.
     resp_fields = getattr(type(resp), "model_fields", {})
-    if "status" in resp_fields and resp.status is not None:
-        # status may be a non-StrEnum (e.g. a test double); enum_value normalizes to str.
-        actual_str = enum_value(resp.status)
-        assert actual_str == status, f"Expected status '{status}', got '{actual_str}'"
-        return
+    if "status" in resp_fields:
+        if resp.status is not None:
+            # status may be a non-StrEnum (e.g. a test double); enum_value normalizes to str.
+            actual_str = enum_value(resp.status)
+            assert actual_str == status, f"Expected status '{status}', got '{actual_str}'"
+            return
+        assert isinstance(resp, UpdateMediaBuySuccess), (
+            f"Response {type(resp).__name__} declares status but left it unset; "
+            "only UpdateMediaBuySuccess may use status-less completion evidence"
+        )
 
-    # Status-less response (no field, or the payload leaves it unset — e.g.
-    # UpdateMediaBuySuccess.status is the media-buy lifecycle status, conveyed
-    # only at the protocol envelope): only completed/success is representable.
+    # A truly status-less response, or the explicitly supported legacy
+    # UpdateMediaBuySuccess(status=None), can only represent completed/success.
     if status != "completed":
         raise AssertionError(
             f"Status '{status}' requested but response {type(resp).__name__} "
