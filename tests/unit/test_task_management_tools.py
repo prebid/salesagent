@@ -4,10 +4,12 @@ These tests verify that the task management tools work correctly.
 Issue #816 revealed that list_tasks was broken but had no test coverage.
 """
 
+import json
 from datetime import UTC, datetime
 from unittest.mock import ANY, MagicMock, Mock, patch
 
 import pytest
+from fastmcp import Client
 
 from src.core.database.models import WorkflowStep
 from src.core.exceptions import AdCPTaskNotFoundError
@@ -69,6 +71,71 @@ class TestListTasksTool:
             tenant=sample_tenant,
             protocol="mcp",
         )
+
+    @pytest.mark.parametrize(
+        "arguments",
+        ({}, {"idempotency_key": "valid-read-key-0001"}),
+        ids=("omitted-grace", "valid-supplied"),
+    )
+    async def test_registered_list_tasks_real_mcp_ingress_accepts_read_key_grace(
+        self,
+        arguments,
+        mock_uow,
+        mock_workflow_repo,
+        sample_tenant,
+    ):
+        """The authoritative registered name crosses the real middleware stack."""
+        from src.core.main import mcp
+
+        identity = self._make_identity(sample_tenant)
+        mock_workflow_repo.count_by_tenant.return_value = 0
+        mock_workflow_repo.list_by_tenant.return_value = []
+        mock_workflow_repo.get_mappings_for_steps.return_value = {}
+
+        with (
+            patch("src.core.mcp_auth_middleware.resolve_identity_from_context", return_value=identity),
+            patch("src.core.tools.task_management.WorkflowUoW", return_value=mock_uow),
+        ):
+            async with Client(mcp) as client:
+                result = await client.call_tool("list_tasks", arguments, raise_on_error=False)
+
+        assert not result.is_error, result.content
+        assert result.structured_content["total"] == 0
+        mock_workflow_repo.count_by_tenant.assert_called_once_with(
+            status=None,
+            object_type=None,
+            object_id=None,
+        )
+
+    async def test_registered_list_tasks_real_mcp_ingress_rejects_explicit_null(
+        self,
+        mock_uow,
+        sample_tenant,
+    ):
+        """Malformed supplied metadata fails before repository dispatch."""
+        from src.core.main import mcp
+        from tests.helpers import assert_envelope_shape
+
+        identity = self._make_identity(sample_tenant)
+        with (
+            patch("src.core.mcp_auth_middleware.resolve_identity_from_context", return_value=identity),
+            patch("src.core.tools.task_management.WorkflowUoW", return_value=mock_uow) as uow_factory,
+        ):
+            async with Client(mcp) as client:
+                result = await client.call_tool(
+                    "list_tasks",
+                    {"idempotency_key": None},
+                    raise_on_error=False,
+                )
+
+        assert result.is_error
+        assert_envelope_shape(
+            json.loads(result.content[0].text),
+            "VALIDATION_ERROR",
+            recovery="correctable",
+            message_substr="idempotency_key must be a string",
+        )
+        uow_factory.assert_not_called()
 
     async def test_list_tasks_returns_tasks(self, mock_uow, mock_workflow_repo, sample_tenant, sample_workflow_step):
         """Test that list_tasks returns workflow steps correctly."""

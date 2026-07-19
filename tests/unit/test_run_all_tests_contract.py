@@ -101,3 +101,60 @@ def test_e2e_test_control_secret_reaches_server_and_bdd_tox_env():
     assert f'if [ -z "${{{token_name}:-}}" ]' not in runner_text, "runner must not reuse a caller's stale secret"
     assert compose_text.count(f"{token_name}:") >= 2, "compose must pass the secret to server and test runner"
     assert token_name in pass_env, "tox strips the E2E control secret before the BDD process starts"
+
+
+def _shell_function(name: str) -> str:
+    match = re.search(rf"^{name}\(\) \{{.*?^\}}", _RUNNER.read_text(), re.MULTILINE | re.DOTALL)
+    assert match, f"run_all_tests.sh has no {name} function"
+    return match.group(0)
+
+
+def test_in_network_report_extraction_avoids_host_bind_mounts():
+    """JSON reports cross Docker Desktop's worktree boundary via docker cp.
+
+    Mounting RESULTS_DIR into a throwaway container asks the Docker daemon to
+    chown a linked-worktree path and fails on macOS before any reports can be
+    copied. The tox_data source stays a named volume; the host destination must
+    only appear as the destination of ``docker cp``.
+    """
+    runner_text = _RUNNER.read_text()
+    extraction = _shell_function("extract_json_reports")
+
+    assert "$(pwd)/${RESULTS_DIR}:/out" not in runner_text
+    assert '--mount "type=volume,src=${COMPOSE_PROJECT_NAME}_tox_data,dst=/t,readonly"' in extraction
+    assert 'docker cp "${REPORT_EXTRACTOR}:/out/." "$RESULTS_DIR/"' in extraction
+    assert 'if [ ! -f "$RESULTS_DIR/$suite.json" ]' in extraction
+    assert (
+        extraction.index('mkdir -p "$RESULTS_DIR"')
+        < extraction.index("if ! docker create")
+        < extraction.index("elif ! docker start")
+        < extraction.index("elif ! docker cp")
+    )
+
+
+@pytest.mark.parametrize(
+    ("suite_rc", "gate_rc", "expected"),
+    [
+        (0, 1, 1),
+        (7, 1, 7),
+    ],
+)
+def test_later_gate_failure_never_masks_suite_status(suite_rc, gate_rc, expected):
+    """Extraction/audit failures fail green runs but preserve suite failures."""
+    runner_text = _RUNNER.read_text()
+    function = _shell_function("record_gate_failure")
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f'{function}\nRC={suite_rc}; record_gate_failure {gate_rc}; printf "%s" "$RC"',
+        ],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == str(expected)
+    assert re.search(r"if ! extract_json_reports; then\s+record_gate_failure 1\s+fi", runner_text)

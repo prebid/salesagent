@@ -29,8 +29,14 @@ import asyncio
 from typing import Any
 from unittest.mock import MagicMock
 
-from src.core.schemas.account import SyncAccountsResponse
+from src.core.schemas.account import SyncAccountsRequest, SyncAccountsResponse
 from tests.harness._base import IntegrationEnv
+from tests.harness._idempotency import ensure_idempotency_key
+
+
+def make_sync_accounts_request(**kwargs: Any) -> SyncAccountsRequest:
+    """Build an ordinary sync request with a fresh spec-valid key by default."""
+    return SyncAccountsRequest(**ensure_idempotency_key(kwargs))
 
 
 class AccountSyncEnv(IntegrationEnv):
@@ -153,8 +159,13 @@ class AccountSyncEnv(IntegrationEnv):
         from src.core.tools.accounts import _sync_accounts_impl
 
         self._commit_factory_data()
-        kwargs.setdefault("identity", self.identity)
-        return await _sync_accounts_impl(**kwargs)
+        identity = kwargs.pop("identity", self.identity)
+        req = kwargs.pop("req", None)
+        if req is None:
+            req = make_sync_accounts_request(**kwargs)
+        elif kwargs:
+            raise TypeError(f"Unexpected fields beside req: {sorted(kwargs)}")
+        return await _sync_accounts_impl(req=req, identity=identity)
 
     def call_impl(self, **kwargs: Any) -> SyncAccountsResponse:
         """Call _sync_accounts_impl with real DB (sync wrapper).
@@ -165,13 +176,23 @@ class AccountSyncEnv(IntegrationEnv):
 
     def call_a2a(self, **kwargs: Any) -> SyncAccountsResponse:
         """Call sync_accounts via real AdCPRequestHandler — full A2A pipeline."""
+        if "req" not in kwargs:
+            kwargs = ensure_idempotency_key(kwargs)
         return self._run_a2a_handler("sync_accounts", SyncAccountsResponse, **kwargs)
 
     def call_mcp(self, **kwargs: Any) -> SyncAccountsResponse:
         """Call sync_accounts via Client(mcp) — full pipeline dispatch."""
+        if "req" not in kwargs:
+            kwargs = ensure_idempotency_key(kwargs)
         return self._run_mcp_client("sync_accounts", SyncAccountsResponse, **kwargs)
 
     REST_ENDPOINT = "/api/v1/accounts/sync"
+
+    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        """Serialize a typed request or add the ordinary-request key to flat kwargs."""
+        if "req" in kwargs:
+            return super().build_rest_body(**kwargs)
+        return ensure_idempotency_key(kwargs)
 
     def parse_rest_response(self, data: dict[str, Any]) -> SyncAccountsResponse:
         """Parse REST JSON into SyncAccountsResponse."""

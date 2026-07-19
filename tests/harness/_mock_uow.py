@@ -56,14 +56,13 @@ def make_mock_uow(
         mock_repo.get_packages.return_value = []
         mock_uow.media_buys = mock_repo
 
-    # Idempotency cache defaults to a MISS — idempotency_key is required on
-    # create requests, so the probe runs on every create; a bare MagicMock would
-    # read as a cache hit (truthy) with a mismatching hash → spurious conflict.
+    # Keep a dormant idempotency repository on the shared UoW double for tests
+    # that exercise the retained repository primitives directly.  Production
+    # create paths advertise idempotency as unsupported and never consult it.
     if repos is None or "idempotency_attempts" not in repos:
         attempts_repo = MagicMock()
         attempts_repo.find_by_key.return_value = None
-        # The admission policy unpacks (count, oldest) from the two scope
-        # queries — empty scope by default so the ceiling never trips in units.
+        # Direct primitive tests expect an empty admission scope by default.
         attempts_repo.count_inserts_since.return_value = (0, None)
         attempts_repo.count_active.return_value = (0, None)
         mock_uow.idempotency_attempts = attempts_repo

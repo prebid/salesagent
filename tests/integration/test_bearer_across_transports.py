@@ -18,10 +18,10 @@ no ``_get_auth_token`` mock, so ``extract_auth_token`` runs for real:
   DB lookup. The A2A bearer seam IS UnifiedAuthMiddleware (shared with REST);
   the harness normally injects a pre-built AuthContext, so this is the first
   end-to-end grading of the real A2A parse.
-- MCP: resolve_identity_from_context (the MCP wrapper's identity resolver)
-  reads headers via get_http_headers and runs extract_auth_token → DB lookup.
-  Patching get_http_headers with a raw ``Authorization: Bearer`` value (not a
-  pre-extracted x-adcp-auth) exercises the bearer parse at the MCP boundary.
+- MCP: in-memory FastMCP Client → middleware → TypeAdapter → wrapper →
+  resolve_identity_from_context → extract_auth_token → DB lookup. ``WireAuth``
+  supplies the raw ``Authorization`` value unchanged, rather than injecting a
+  pre-resolved identity or a pre-extracted ``x-adcp-auth`` token.
 """
 
 from __future__ import annotations
@@ -40,8 +40,9 @@ _BEARER_IDS = ["canonical", "padded", "lowercase-scheme"]
 
 @pytest.mark.requires_db
 @pytest.mark.parametrize("transport", ["mcp", "a2a", "rest"])
-def test_valid_wire_auth_roundtrips_through_each_harness_boundary(integration_db, transport):
-    """Control for WireAuth: raw valid headers must reach each real resolver."""
+@pytest.mark.parametrize("authorization_template", _BEARER_FORMS, ids=_BEARER_IDS)
+def test_valid_wire_auth_roundtrips_through_each_harness_boundary(integration_db, transport, authorization_template):
+    """Every accepted bearer form must traverse each transport's full harness boundary."""
     from tests.harness.creative_list import CreativeListEnv
     from tests.harness.transport import Transport, WireAuth
 
@@ -50,14 +51,14 @@ def test_valid_wire_auth_roundtrips_through_each_harness_boundary(integration_db
         tenant, principal = env.setup_default_data()
         wire_auth = WireAuth(
             headers={
-                "Authorization": f"Bearer {principal.access_token}",
+                "Authorization": authorization_template.format(token=principal.access_token),
                 "x-adcp-tenant": tenant.tenant_id,
             }
         )
 
         result = env.call_via(selected, identity=wire_auth)
 
-    assert result.is_success, f"WireAuth was dropped on {transport}: {result.error}"
+    assert result.is_success, f"WireAuth {authorization_template!r} was dropped on {transport}: {result.error}"
     assert result.payload is not None
     assert result.payload.creatives == []
 

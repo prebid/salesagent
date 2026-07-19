@@ -7,7 +7,6 @@ to ensure our A2A server properly handles the evolving AdCP spec.
 """
 
 import logging
-import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -16,6 +15,7 @@ from adcp.types import AccountReference as LibraryAccountReference
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from tests.factories.creative_asset import build_assets, image_spec
+from tests.harness._idempotency import fresh_idempotency_key
 from tests.utils.a2a_helpers import (
     assert_delivery_forwarded_account,
     create_a2a_message_with_skill,
@@ -367,7 +367,7 @@ class TestA2ASkillInvocation:
 
             skill_params = {
                 "brand": {"domain": "testbrand.com"},
-                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+                "idempotency_key": fresh_idempotency_key("int-key"),
                 "packages": [
                     {
                         "product_id": sample_products[0],  # Use product_id per AdCP spec
@@ -478,7 +478,7 @@ class TestA2ASkillInvocation:
 
             skill_params = {
                 "brand": {"domain": "testbrand.com"},
-                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+                "idempotency_key": fresh_idempotency_key("int-key"),
                 "packages": [
                     {
                         "product_id": sample_products[0],
@@ -791,6 +791,7 @@ class TestA2ASkillInvocation:
             skill_params = {
                 "media_buy_id": "mb_test_123",
                 "budget": 15000.0,  # Float per AdCP spec, not Budget object
+                "idempotency_key": fresh_idempotency_key(),
             }
             message = create_a2a_message_with_skill("update_media_buy", skill_params)
             params = SendMessageRequest(message=message)
@@ -942,7 +943,8 @@ class TestA2ASkillInvocation:
                         "format_id": "display_300x250",
                         "assets": build_assets(image_spec("asset_1", url="https://example.com/creative.jpg")),
                     }
-                ]
+                ],
+                "idempotency_key": fresh_idempotency_key(),
             }
             message = create_a2a_message_with_skill("sync_creatives", skill_params)
             params = SendMessageRequest(message=message)

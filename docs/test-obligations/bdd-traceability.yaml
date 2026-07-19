@@ -1903,6 +1903,12 @@ mappings:
       business_rules: []
       status: new
   UC-003:
+    - adcp_scenario_id: "T-UC-003-local-required-idempotency-v311"
+      adcp_feature: "local-uc003-required-idempotency-v311.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-003-main-mcp"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-003-ext-dual-emit"
       adcp_feature: "BR-UC-002-media-buy-status-dual-emit.feature"
       obligation_id: null
@@ -4072,6 +4078,12 @@ mappings:
       business_rules: []
       status: new
   UC-006:
+    - adcp_scenario_id: "T-UC-006-local-idempotency-v311"
+      adcp_feature: "local-uc006-idempotency-v311.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main-sync"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-006-all-failed-success-variant"
       adcp_feature: "BR-UC-006-creatives-invariants.feature"
       obligation_id: null
@@ -6284,6 +6296,30 @@ mappings:
       upstream_refs: ["BR-UC-010-ext-d"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-010-local-capability-filter-v311"
+      adcp_feature: "local-uc010-capability-filter-v311.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-010-ext-d"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-local-capability-filter-invalid-v311"
+      adcp_feature: "local-uc010-capability-filter-v311.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-010-ext-d"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-local-capability-filter-empty-v311"
+      adcp_feature: "local-uc010-capability-filter-v311.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-010-ext-d"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-local-capability-filter-unsupported-v311"
+      adcp_feature: "local-uc010-capability-filter-v311.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-010-ext-d"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-010-ext-e-mcp"
       adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
       obligation_id: null
@@ -6309,6 +6345,12 @@ mappings:
       business_rules: []
       status: new
     - adcp_scenario_id: "T-UC-010-ext-e-empty"
+      adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-010-ext-e", "BR-RULE-043"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-ext-e-gap"
       adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
       obligation_id: null
       upstream_refs: ["BR-UC-010-ext-e", "BR-RULE-043"]
@@ -6627,6 +6669,12 @@ mappings:
       business_rules: []
       status: new
   UC-011:
+    - adcp_scenario_id: "T-UC-011-local-required-idempotency-v311"
+      adcp_feature: "local-uc011-required-idempotency-v311.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-main-sync"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-011-sync-brandless"
       adcp_feature: "BR-UC-011-account-validation.feature"
       obligation_id: null

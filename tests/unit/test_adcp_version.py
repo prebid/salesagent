@@ -1,5 +1,6 @@
 """Unit tests for src/core/adcp_version.py — SDK-derived AdCP version."""
 
+import json
 import re
 
 import adcp
@@ -12,6 +13,7 @@ from src.core.adcp_version import (
     validate_adcp_version_pins,
 )
 from src.core.exceptions import AdCPConfigurationError, AdCPValidationError, AdCPVersionUnsupportedError
+from src.core.version import get_version
 
 
 def _request_compat_log_messages(caplog: pytest.LogCaptureFixture) -> list[str]:
@@ -100,9 +102,18 @@ def test_supported_versions_normalizes_full_semver_prerelease_not_to_bare_stable
         adcp_version_module._spec_release_components.cache_clear()
 
 
-def test_build_version_is_full_sdk_semver():
-    """build_version is the advisory full-semver spec pin (version-unsupported.json)."""
-    assert adcp_build_version() == adcp.get_adcp_spec_version()
+def test_build_version_is_sales_agent_deployment_semver():
+    """build_version identifies this seller build, not the AdCP spec release."""
+    assert adcp_build_version() == get_version()
+    assert re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?", adcp_build_version())
+
+
+def test_malformed_sales_agent_build_version_raises_typed_configuration_error(monkeypatch):
+    """A non-semver seller deployment version cannot leak into capabilities."""
+    monkeypatch.setattr("src.core.adcp_version.get_version", lambda: "not-semver")
+
+    with pytest.raises(AdCPConfigurationError, match="Sales Agent build version"):
+        adcp_build_version()
 
 
 class TestTestingVersionPolicyControl:
@@ -193,10 +204,12 @@ def test_malformed_sdk_spec_pin_raises_typed_configuration_error(monkeypatch, ma
     av._spec_release_components.cache_clear()
     monkeypatch.setattr(adcp, "get_adcp_spec_version", lambda: malformed_pin)
     try:
-        # Both siblings degrade the same way, and the request-path entry point does too.
-        for call in (av.adcp_major_version, av.supported_adcp_versions, av.adcp_build_version):
+        # Spec-derived siblings degrade the same way, and the request-path entry point does too.
+        for call in (av.adcp_major_version, av.supported_adcp_versions):
             with pytest.raises(AdCPConfigurationError):
                 call()
+        # Deployment lineage is independent from the malformed AdCP spec pin.
+        assert av.adcp_build_version() == get_version()
         with pytest.raises(AdCPConfigurationError):
             av.validate_adcp_version_pins({"adcp_major_version": 99})
     finally:
@@ -532,6 +545,19 @@ class TestRESTVersionNegotiation:
     def test_rest_query_pin_rejected_on_get(self):
         response = self._client().get("/api/v1/capabilities", params={"adcp_version": "4.0"})
         self._assert_version_unsupported(response)
+
+    def test_rest_query_pin_rejection_echoes_json_context(self):
+        request_context = {
+            "correlation_id": "rest-query-version-context",
+            "nested": {"preserve": True},
+        }
+        response = self._client().get(
+            "/api/v1/capabilities",
+            params={"adcp_version": "4.0", "context": json.dumps(request_context)},
+        )
+
+        self._assert_version_unsupported(response)
+        assert response.json()["context"] == request_context
 
     def test_rest_query_major_pin_is_coerced_then_rejected(self):
         """The URL's textual integer representation reaches the strict core as an int."""

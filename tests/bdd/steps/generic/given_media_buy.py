@@ -21,6 +21,7 @@ from tests.factories import (
     PricingOptionFactory,
     ProductFactory,
 )
+from tests.harness._idempotency import fresh_idempotency_key
 
 # Gherkin date token resolver — single source for all BDD step files.
 # Matches {now}, {N days from now}, {N days ago}.
@@ -78,10 +79,10 @@ def _ensure_request_defaults(ctx: dict) -> dict[str, Any]:
                 }
             ],
         }
-    # idempotency_key is REQUIRED on CreateMediaBuyRequest (AdCP 3.0.1). Default a
-    # per-scenario-unique key so scenarios not exercising idempotency stay valid —
-    # a reused key would replay the original response instead of creating a buy.
-    ctx["request_kwargs"].setdefault("idempotency_key", f"bdd-key-{uuid.uuid4().hex}")
+    # idempotency_key is REQUIRED on CreateMediaBuyRequest (AdCP 3.1.1). Default a
+    # per-scenario-unique value for traceability; while supported=false a reused
+    # value remains inert and would execute another create.
+    ctx["request_kwargs"].setdefault("idempotency_key", fresh_idempotency_key("bdd-key"))
     return ctx["request_kwargs"]
 
 

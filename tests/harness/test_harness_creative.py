@@ -86,7 +86,9 @@ class TestCreativeSyncEnvContract:
 
         env = CreativeSyncEnv()
         body = env.build_rest_body(creatives=[], dry_run=True)
-        assert body == {"creatives": [], "dry_run": True}
+        assert body["creatives"] == []
+        assert body["dry_run"] is True
+        assert body["idempotency_key"].startswith("test-key-")
 
     def test_has_parse_rest_response(self):
         """CreativeSyncEnv implements parse_rest_response."""

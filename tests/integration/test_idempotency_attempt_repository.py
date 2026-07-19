@@ -1,9 +1,9 @@
-"""Integration tests for IdempotencyAttemptRepository.
+"""Integration tests for the dormant IdempotencyAttemptRepository substrate.
 
-Backs the AdCP 3.0.1 idempotency contract: retrying a mutating tool call with
-the same idempotency_key must replay the original SUCCESS verbatim (errors are
-never cached). The repository encapsulates the per-tenant, per-principal,
-per-account, per-tool, per-key uniqueness contract and TTL-driven expiry.
+The current seller advertises ``idempotency.supported=false`` and no production
+tool calls this repository. These tests retain coverage of its tenant/principal/
+account/key uniqueness and TTL mechanics for migration safety; they do not
+claim that retries currently replay.
 
 The stored envelope is structured ``{"status": <protocol task status>,
 "response": <serialized domain model>}`` — the protocol status rides alongside
@@ -120,7 +120,7 @@ class TestRecordSuccess:
             assert attempt.expires_at == now + timedelta(minutes=30)
 
     def test_duplicate_raises_integrity_error(self, integration_db):
-        """Unique index on (tenant, principal, account, tool, key) prevents double-cache."""
+        """The dormant (tenant, principal, account, key) index rejects duplicates."""
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 
         with BareIntegrationEnv() as env:
@@ -175,7 +175,7 @@ class TestRecordSuccess:
 
 
 class TestFindByKey:
-    """find_by_key returns the cached attempt or None when absent/expired."""
+    """find_by_key returns a stored primitive row or None when absent/expired."""
 
     def test_returns_cached_attempt(self, integration_db):
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
@@ -265,7 +265,7 @@ class TestFindByKey:
                 idempotency_key="shared-key",
             )
 
-        assert found is None, "Tenant t2 must not see tenant t1's cached success"
+        assert found is None, "Tenant t2 must not see tenant t1's stored row"
 
     def test_principal_isolation(self, integration_db):
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
@@ -292,7 +292,7 @@ class TestFindByKey:
                 idempotency_key="shared-key",
             )
 
-        assert found is None, "Principal b must not see principal a's cached success"
+        assert found is None, "Principal b must not see principal a's stored row"
 
     def test_account_isolation(self, integration_db):
         """Two accounts under one principal reusing a key are independent (AdCP scope)."""
@@ -323,16 +323,14 @@ class TestFindByKey:
                 account_id="acct_a",
             )
 
-        assert other is None, "account acct_b must not see acct_a's cached success"
-        assert same is not None, "account acct_a must replay its own cached success"
+        assert other is None, "account acct_b must not see acct_a's stored row"
+        assert same is not None, "account acct_a must retrieve its own stored row"
 
     def test_key_scope_has_no_tool_dimension(self, integration_db):
-        """The spec scope is (agent, account, key) — a key is ONE row across tools.
+        """The dormant tuple keeps one key row across tool labels.
 
-        A different tool probing the same key MUST hit the row the first tool
-        wrote (so its differing payload hash conflicts at the caller layer)
-        rather than getting an independent per-tool cache. ``tool_name`` is
-        recorded for observability only.
+        ``tool_name`` is recorded for observability only and is not part of the
+        unique storage scope. No production conflict behavior is implied.
         """
         from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 

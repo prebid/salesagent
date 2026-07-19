@@ -39,13 +39,37 @@ def _parse_json_list(text: str) -> list[str]:
     return json.loads(text)
 
 
+def _webhook_payload_from_call(call: Any) -> dict[str, Any]:
+    """Decode a webhook payload from the production byte-body POST seam."""
+    call_kwargs = call[1]
+    if "body" in call_kwargs:
+        payload = json.loads(call_kwargs["body"])
+    else:
+        payload = call_kwargs.get("json") or call_kwargs.get("data") or {}
+    assert isinstance(payload, dict), f"Webhook payload must be an object, got {payload!r}"
+    return payload
+
+
+def _webhook_media_buy_ids(payload: dict[str, Any]) -> list[str]:
+    """Return media-buy IDs from current and legacy delivery payload shapes."""
+    media_buy_ids = []
+    if isinstance(payload.get("media_buy_id"), str):
+        media_buy_ids.append(payload["media_buy_id"])
+    media_buy_ids.extend(
+        delivery["media_buy_id"]
+        for delivery in payload.get("media_buy_deliveries", [])
+        if isinstance(delivery, dict) and isinstance(delivery.get("media_buy_id"), str)
+    )
+    return media_buy_ids
+
+
 def _get_last_webhook_payload(ctx: dict) -> dict[str, Any]:
     """Extract the JSON payload from the most recent webhook POST call."""
     mock_post = ctx["env"].mock["post"]
     assert mock_post.called, "No webhook POST was made"
-    call_kwargs = mock_post.call_args_list[-1][1]  # kwargs of last call
-    payload = call_kwargs.get("json") or call_kwargs.get("data") or {}
-    assert payload, f"Webhook POST had no JSON payload: {call_kwargs}"
+    last_call = mock_post.call_args_list[-1]
+    payload = _webhook_payload_from_call(last_call)
+    assert payload, f"Webhook POST had no JSON payload: {last_call[1]}"
     return payload
 
 
@@ -327,6 +351,7 @@ def given_adapter_no_data_period(ctx: dict, mb_id: str) -> None:
 
 
 _WEBHOOK_URL = "https://buyer.example.com/webhook"
+_CONFIG_VALIDATION_WEBHOOK_URL = "https://example.com/webhook"
 
 
 def _set_active_webhook(ctx: dict, mb_id: str) -> None:
@@ -525,16 +550,13 @@ def given_webhook_returns_status(ctx: dict, status_code: int, reason: str) -> No
 def given_webhook_unreachable(ctx: dict) -> None:
     """Configure webhook endpoint to timeout.
 
-    Uses ``httpx.ConnectError`` (a subclass of ``httpx.RequestError``) so
-    :class:`WebhookDeliveryService`, which catches ``httpx.RequestError`` and
-    retries with backoff, exercises the network-error retry path. Plain
-    builtin ``ConnectionError`` would fall through to the catch-all
-    ``except Exception`` branch and skip retries.
+    ``requests.ConnectTimeout`` exercises the production retryable network
+    error path used by the shared pinned webhook transport.
     """
-    import httpx
+    import requests
 
     env = ctx["env"]
-    env.mock["post"].side_effect = httpx.ConnectError("Connection timeout")
+    env.mock["post"].side_effect = requests.ConnectTimeout("Connection timeout")
 
 
 @given(parsers.parse("the webhook endpoint returns {status_code:d} Unauthorized"))
@@ -567,6 +589,10 @@ def given_circuit_breaker_state(ctx: dict, mb_id: str, state: str) -> None:
     """Set circuit breaker to specific state by directly manipulating CB internals."""
     from src.services.webhook_delivery_service import CircuitBreaker, CircuitState
 
+    # The scenario describes a media buy whose reporting webhook is guarded by
+    # this breaker. Persist that webhook so the subsequent probe exercises the
+    # production delivery path instead of merely mutating breaker internals.
+    _set_active_webhook(ctx, mb_id)
     env = ctx["env"]
     service = env.get_service()
     webhook_url = ctx.get("webhook_config", {}).get(mb_id, {}).get("url", _WEBHOOK_URL)
@@ -914,15 +940,14 @@ def when_evaluate_circuit_breaker(ctx: dict) -> None:
 
 @when(parsers.parse("the system delivers {n:d} successful probe reports"))
 def when_deliver_probe_reports(ctx: dict, n: int) -> None:
-    """Record n successful deliveries on the circuit breaker (simulates probe recovery)."""
+    """Deliver n real successful reports through the half-open breaker."""
     env = ctx["env"]
-    service = env.get_service()
-    endpoint_key = ctx.get("circuit_breaker_endpoint_key", f"{env._tenant_id}:{_WEBHOOK_URL}")
-    cb = service._circuit_breakers.get(endpoint_key)
-    if cb is not None:
-        for _ in range(n):
-            cb.record_success()
-    ctx["probe_count"] = n
+    successful_probes = 0
+    for _ in range(n):
+        result = env.call_send()
+        assert result is True, f"Expected recovery probe {successful_probes + 1} to succeed"
+        successful_probes += 1
+    ctx["probe_count"] = successful_probes
 
 
 @when("the system delivers a webhook report with retry")
@@ -957,7 +982,11 @@ def when_validate_webhook_config(ctx: dict) -> None:
     if pricing_option is not None:
         kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(pricing_option)
     kwargs["reporting_webhook"] = {
-        "url": _WEBHOOK_URL,
+        # This scenario intentionally crosses the production callback-registration
+        # boundary. Use a public-resolvable documentation host so the accepted
+        # credential case reaches its credential oracle without weakening SSRF
+        # validation. Other UC-004 webhook scenarios keep their mocked endpoint.
+        "url": _CONFIG_VALIDATION_WEBHOOK_URL,
         "reporting_frequency": "daily",
         "authentication": {"schemes": ["Bearer"], "credentials": secret},
     }
@@ -1521,7 +1550,7 @@ def then_webhook_post(ctx: dict) -> None:
     env = ctx["env"]
     assert env.mock["post"].called, "Expected webhook POST but none was made"
     call_args = env.mock["post"].call_args
-    called_url = call_args[0][0] if call_args[0] else call_args[1].get("url", "")
+    called_url = call_args.args[1]
     configured_url = ctx.get("webhook_url", "https://example.com/webhook")
     assert called_url == configured_url, (
         f"Webhook POST went to wrong URL: expected {configured_url!r}, got {called_url!r}"
@@ -1612,7 +1641,7 @@ def then_sequence_ascending(ctx: dict) -> None:
     """Assert sequence numbers are strictly increasing across consecutive POST calls."""
     calls = ctx["env"].mock["post"].call_args_list
     assert len(calls) >= 2, f"Expected at least 2 webhook POSTs for sequence check, got {len(calls)}"
-    seq_nums = [call[1].get("json", {}).get("sequence_number") for call in calls]
+    seq_nums = [_webhook_payload_from_call(call).get("sequence_number") for call in calls]
     for i in range(1, len(seq_nums)):
         assert seq_nums[i] is not None, f"POST call {i} payload missing sequence_number"
         assert seq_nums[i] > seq_nums[i - 1], (
@@ -1625,7 +1654,7 @@ def then_first_sequence(ctx: dict) -> None:
     """Assert first webhook POST has sequence_number >= 1."""
     calls = ctx["env"].mock["post"].call_args_list
     assert calls, "No webhook POSTs were made"
-    first_payload = calls[0][1].get("json", {})
+    first_payload = _webhook_payload_from_call(calls[0])
     seq = first_payload.get("sequence_number")
     assert seq is not None, f"First webhook POST payload missing sequence_number: {list(first_payload.keys())}"
     assert seq >= 1, f"Expected sequence_number >= 1, got {seq}"
@@ -1798,23 +1827,13 @@ def then_single_probe(ctx: dict) -> None:
         # Probe count was explicitly recorded by the When step
         assert probe_count == 1, f"Expected exactly 1 probe delivery attempt, got {probe_count}"
     else:
-        # Check mock POST call count as evidence of dispatch
-        mock_post = env.mock.get("httpx_post") or env.mock.get("webhook_post")
-        if mock_post is not None:
-            # Count calls that happened during the half-open phase
-            pre_open_calls = ctx.get("pre_open_call_count", 0)
-            probe_dispatches = mock_post.call_count - pre_open_calls
-            assert probe_dispatches == 1, (
-                f"Expected exactly 1 probe dispatch in half-open state, "
-                f"got {probe_dispatches} (total={mock_post.call_count}, pre-open={pre_open_calls})"
-            )
-        else:
-            # No dispatch mock — verify the CB gate at least allowed the attempt
-            cb_can_attempt = ctx.get("cb_can_attempt")
-            assert cb_can_attempt is True, (
-                f"Circuit breaker did not allow the probe attempt (can_attempt={cb_can_attempt!r})"
-            )
-            pytest.xfail("HARNESS GAP: no webhook POST mock — cannot count probe dispatches")
+        mock_post = env.mock["post"]
+        pre_open_calls = ctx.get("pre_open_call_count", 0)
+        probe_dispatches = mock_post.call_count - pre_open_calls
+        assert probe_dispatches == 1, (
+            f"Expected exactly 1 probe dispatch in half-open state, "
+            f"got {probe_dispatches} (total={mock_post.call_count}, pre-open={pre_open_calls})"
+        )
 
 
 @then("normal scheduled deliveries should resume")
@@ -2076,9 +2095,10 @@ def then_skip_no_webhook(ctx: dict, mb_id: str) -> None:
     env = ctx["env"]
     real_id = _resolve_media_buy_id(ctx, mb_id)
     post_mock = env.mock["post"]
-    # Collect all media_buy_ids that received webhook POSTs
     posted_mb_ids = [
-        call[1].get("json", {}).get("media_buy_id") for call in post_mock.call_args_list if call[1].get("json")
+        media_buy_id
+        for call in post_mock.call_args_list
+        for media_buy_id in _webhook_media_buy_ids(_webhook_payload_from_call(call))
     ]
     assert real_id not in posted_mb_ids, (
         f"Webhook POST was made for '{real_id}' but it should have been skipped "
@@ -3302,10 +3322,7 @@ def _call_webhook_service(
 
 def _get_webhook_payload(ctx: dict) -> dict:
     """Extract the JSON payload from the most recent webhook POST call."""
-    env = ctx["env"]
-    call_args = env.mock["post"].call_args
-    assert call_args is not None, "No POST call recorded"
-    return call_args.kwargs.get("json") or call_args[1].get("json", {})
+    return _get_last_webhook_payload(ctx)
 
 
 _DEFAULT_PLACEMENT_DATA: list[dict[str, Any]] = [

@@ -268,17 +268,15 @@ class TestUpdateRequestPackagesFlow:
 
 
 # ---------------------------------------------------------------------------
-# Advisory is computed at FRESH create time; replays never recompute it
+# Advisory is computed independently for every create execution
 # ---------------------------------------------------------------------------
 
 
-class TestAdvisoryComputedOnFreshCreate:
-    """The advisory is computed live at FRESH create time from the current
-    adapter capability. Replays never recompute it: a verbatim replay returns
-    the STORED envelope (the advisory frozen exactly as cached — AdCP 3.0.1
-    byte-for-byte), and the degraded path fails closed rather than rebuild it
-    entirely (the original is unrecoverable there; a live rebuild would leak
-    current capability state into a replayed response).
+class TestAdvisoryComputedPerCreate:
+    """Each create uses the adapter's current property-list capability.
+
+    With idempotency unsupported, a repeated key executes again and therefore
+    recomputes this advisory from current adapter state.
     """
 
     def test_fresh_create_advisory_present_when_capability_off(self):
@@ -314,8 +312,7 @@ class TestAdvisoryComputedOnFreshCreate:
     def test_fresh_create_advisory_absent_when_capability_on(self):
         """A fresh create against a compiling adapter carries no advisory.
 
-        Capability flips affect FRESH creates only — a replay of an older buy
-        still returns its original cached advisory verbatim.
+        A later create observes a capability flip independently.
         """
         from tests.helpers.adcp_factories import create_test_package_request
 

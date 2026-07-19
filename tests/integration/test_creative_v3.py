@@ -33,6 +33,7 @@ from src.core.database.models import Product as DBProduct
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeStatusEnum, SyncCreativesResponse
 from src.core.testing_hooks import AdCPTestContext
+from tests.harness._idempotency import fresh_idempotency_key
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -173,6 +174,7 @@ class TestCrossPrincipalIsolation:
         identity = _make_identity(self.TENANT_ID, principal_id)
         return sync_creatives_raw(
             creatives=[_make_creative_dict(creative_id=creative_id)],
+            idempotency_key=fresh_idempotency_key(),
             identity=identity,
         )
 
@@ -289,6 +291,7 @@ class TestApprovalWorkflow:
         identity = _make_identity(self.TENANT_ID, self.PRINCIPAL_ID, approval_mode=approval_mode)
         return sync_creatives_raw(
             creatives=[_make_creative_dict(creative_id=creative_id)],
+            idempotency_key=fresh_idempotency_key(),
             identity=identity,
         )
 
@@ -340,6 +343,7 @@ class TestApprovalWorkflow:
         )
         sync_creatives_raw(
             creatives=[_make_creative_dict(creative_id="c_default")],
+            idempotency_key=fresh_idempotency_key(),
             identity=identity,
         )
         assert self._get_db_status("c_default") == CreativeStatusEnum.pending_review.value
@@ -402,7 +406,11 @@ class TestBatchSync:
         from src.core.tools.creatives import sync_creatives_raw
 
         creatives = [_make_creative_dict(creative_id=f"c_{i}", name=f"Creative {i}") for i in range(5)]
-        result = sync_creatives_raw(creatives=creatives, identity=self._identity())
+        result = sync_creatives_raw(
+            creatives=creatives,
+            idempotency_key=fresh_idempotency_key(),
+            identity=self._identity(),
+        )
 
         assert len(result.creatives) == 5
         result_ids = {r.creative_id for r in result.creatives}
@@ -428,6 +436,7 @@ class TestBatchSync:
         # First sync: create
         result1 = sync_creatives_raw(
             creatives=[_make_creative_dict(creative_id="c_upsert", name="Original Name")],
+            idempotency_key=fresh_idempotency_key(),
             identity=identity,
         )
         action1 = result1.creatives[0].action
@@ -438,6 +447,7 @@ class TestBatchSync:
         # Second sync: update
         result2 = sync_creatives_raw(
             creatives=[_make_creative_dict(creative_id="c_upsert", name="Updated Name")],
+            idempotency_key=fresh_idempotency_key(),
             identity=identity,
         )
         action2 = result2.creatives[0].action
@@ -553,6 +563,7 @@ class TestFormatCompatibility:
         # First sync the display creative (so it exists in DB)
         sync_creatives_raw(
             creatives=[_make_creative_dict(creative_id="c_display")],
+            idempotency_key=fresh_idempotency_key(),
             identity=identity,
         )
 
@@ -562,6 +573,7 @@ class TestFormatCompatibility:
                 creatives=[_make_creative_dict(creative_id="c_display")],
                 assignments={"c_display": ["pkg_video"]},
                 validation_mode="strict",
+                idempotency_key=fresh_idempotency_key(),
                 identity=identity,
             )
 
@@ -665,6 +677,7 @@ class TestMediaBuyStatusTransition:
         sync_creatives_raw(
             creatives=[_make_creative_dict(creative_id="c_transition")],
             assignments={"c_transition": ["pkg_draft"]},
+            idempotency_key=fresh_idempotency_key(),
             identity=identity,
         )
 

@@ -1100,7 +1100,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_media_buy_repository.py", "seed_data"),
     ("tests/integration/test_media_buy_repository.py", "tenant_a"),
     ("tests/integration/test_media_buy_repository.py", "tenant_b"),
-    ("tests/integration/test_media_buy_repository.py", "test_create_from_request_stores_idempotency_key"),
     ("tests/integration/test_media_buy_repository.py", "test_does_not_return_other_tenant_media_buy"),
     ("tests/integration/test_media_buy_repository.py", "test_excludes_other_tenant_packages"),
     ("tests/integration/test_media_buy_repository.py", "test_find_by_idempotency_key_returns_existing"),

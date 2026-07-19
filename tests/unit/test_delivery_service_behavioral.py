@@ -573,7 +573,7 @@ class TestResetSequence:
 
 
 class TestDeliverWithBackoffGenericException:
-    """_deliver_with_backoff breaks on non-httpx exceptions.
+    """_deliver_with_backoff breaks on unexpected transport exceptions.
 
     Covers lines 514-516 of webhook_delivery_service.py (pre-removal line numbers).
     """
@@ -605,14 +605,10 @@ class TestDeliverWithBackoffGenericException:
             }
         )
 
-        with patch("src.services.webhook_delivery_service.httpx") as mock_httpx:
-            mock_httpx.Client.return_value.__enter__ = MagicMock(
-                return_value=MagicMock(post=MagicMock(side_effect=RuntimeError("unexpected")))
-            )
-            mock_httpx.Client.return_value.__exit__ = MagicMock(return_value=False)
-            mock_httpx.TimeoutException = type("TimeoutException", (Exception,), {})
-            mock_httpx.RequestError = type("RequestError", (Exception,), {})
-
+        with patch(
+            "src.services.webhook_delivery_service.post_webhook_status",
+            side_effect=RuntimeError("unexpected"),
+        ):
             result = svc._deliver_with_backoff("test_endpoint", cb, queue)
 
         assert result is False

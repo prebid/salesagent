@@ -277,6 +277,10 @@ def when_sync_creative(ctx: dict) -> None:
         kwargs["validation_mode"] = ctx["validation_mode"]
     if "idempotency_key" in ctx:
         kwargs["idempotency_key"] = ctx["idempotency_key"]
+    elif ctx.get("idempotency_key_absent"):
+        from tests.harness._idempotency import OMIT_IDEMPOTENCY_KEY
+
+        kwargs["idempotency_key"] = OMIT_IDEMPOTENCY_KEY
     if ctx.get("has_auth") is False:
         dispatch_request(ctx, identity=ctx.get("identity"), **kwargs)
     else:
@@ -443,11 +447,6 @@ def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
         "ASSIGNMENT_PACKAGE_ID_REQUIRED",
         "ASSIGNMENT_WEIGHT_BELOW_MINIMUM",
         "ASSIGNMENT_WEIGHT_ABOVE_MAXIMUM",
-        # Idempotency-key length codes — merged from the shadowed duplicate step
-        # def this literal used to have (#1417): production does not
-        # validate idempotency_key length yet.
-        "IDEMPOTENCY_KEY_TOO_SHORT",
-        "IDEMPOTENCY_KEY_TOO_LONG",
     }
 
     error = ctx.get("error")
@@ -468,6 +467,14 @@ def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
         f"Expected error code '{error_code}', got '{actual_code}' ({type(error).__name__}: {error})"
     )
     assert suggestion, f"Expected non-empty suggestion on {error_code} error, got {suggestion!r} ({error!r})"
+
+
+@then(parsers.parse("the wire error should be {error_code} with suggestion"))
+def then_wire_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
+    """Grade the actual transport envelope, not a reconstructed exception."""
+    result = ctx.get("result")
+    assert result is not None, "Expected the transport dispatcher result"
+    result.assert_wire_error(error_code, require_suggestion=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -4423,32 +4430,6 @@ def _expand_length_notation(value: str) -> str:
         length = int(match.group(2))
         return char * length
     return value
-
-
-@then("the request should proceed without idempotency check")
-def then_proceed_without_idempotency(ctx: dict) -> None:
-    """Assert request completed as a fresh sync (no idempotency short-circuit).
-
-    When idempotency_key is absent, the request must proceed as a normal
-    first-time sync: no error, and the response carries synced creative results.
-    """
-    error = ctx.get("error")
-    assert error is None, (
-        f"Expected request to proceed without idempotency check, but production raised {type(error).__name__}: {error}"
-    )
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response when idempotency_key is absent"
-    # Verify the response represents a successful sync, not an error envelope
-    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
-    assert results, (
-        "Expected at least one creative result from a fresh sync without idempotency key, "
-        f"but got empty results from {type(resp).__name__}"
-    )
-    # Verify at least one creative was actually processed (created/updated)
-    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
-    assert any(a in ("created", "updated") for a in actions), (
-        f"Expected a fresh sync action (created/updated), got {actions}"
-    )
 
 
 @then("the request should proceed normally")

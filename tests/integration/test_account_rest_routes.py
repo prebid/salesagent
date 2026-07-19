@@ -60,13 +60,14 @@ class TestSyncAccountsRestRoute:
             rest_response = client.post(
                 "/api/v1/accounts/sync",
                 json={
+                    "idempotency_key": "account-rest-route-0001",
                     "accounts": [
                         {
                             "brand": {"domain": "rest-test.com"},
                             "operator": "rest-test.com",
                             "billing": "operator",
                         }
-                    ]
+                    ],
                 },
             )
             assert rest_response.status_code == 200, (

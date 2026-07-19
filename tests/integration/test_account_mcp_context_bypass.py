@@ -173,6 +173,7 @@ class TestMCPContextDirectCalls:
             tool_result = asyncio.run(
                 sync_accounts(
                     accounts=[{"brand": {"domain": "ctx-sync.com"}, "operator": "ctx-sync.com", "billing": "operator"}],
+                    idempotency_key="account-mcp-context-0001",
                     ctx=mock_ctx,
                     context=context_obj,
                 )

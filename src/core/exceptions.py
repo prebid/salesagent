@@ -14,7 +14,9 @@ import logging
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
+
+from src.core.application_context import serialize_application_context
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
@@ -190,7 +192,7 @@ def to_wire_error_code(code: str) -> str:
 def _serialize_context(
     context: ContextObject | dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Serialize an AdCP ContextObject (or dict) into a JSON-safe dict.
+    """Serialize an AdCP ContextObject (or dict) without losing buyer data.
 
     Single source of truth for context serialization — used by ``to_dict``,
     ``to_adcp_error``, and ``build_two_layer_error_envelope`` so all three
@@ -198,29 +200,21 @@ def _serialize_context(
 
     Behavior:
         - ``None`` → ``None`` (caller decides whether to omit the key).
-        - ``dict`` → shallow copy. Prevents aliasing footguns when one
-          serialization layer mutates its copy and accidentally mutates
-          the source context still held on the exception.
-        - ``ContextObject`` → ``model_dump(mode="json", exclude_none=True)``.
-          ``mode="json"`` coerces datetimes/UUIDs/etc. to JSON-serializable
-          primitives; ``exclude_none=True`` matches the spec's emit-only-
-          populated-fields norm.
+        - ``dict`` → detached copy, preserving every opaque JSON value.
+        - ``ContextObject`` → only unset schema fields are omitted; explicitly
+          supplied nulls remain present, as required for opaque context echo.
         - anything else → log a warning and return ``None``. This is reached
           from ``to_dict``/``to_adcp_error``/``build_two_layer_error_envelope``,
           all of which run inside exception handlers — raising here would shadow
           the original exception and the boundary translator would fail open
           with no envelope. A malformed context drops to ``None`` instead.
     """
-    if context is None:
-        return None
-    if isinstance(context, dict):
-        return dict(context)
-    if not isinstance(context, BaseModel):
+    serialized = serialize_application_context(context)
+    if context is not None and serialized is None:
         logger.warning(
             "_serialize_context expected dict or BaseModel, got %s; dropping context", type(context).__name__
         )
-        return None
-    return context.model_dump(mode="json", exclude_none=True)
+    return serialized
 
 
 class AdCPError(Exception):
@@ -844,11 +838,15 @@ class AdCPCapabilityNotSupportedError(AdCPError):
 
 
 class AdCPIdempotencyConflictError(AdCPConflictError):
-    """idempotency_key reused with a different request payload (409, IDEMPOTENCY_CONFLICT).
+    """Standard 409 ``IDEMPOTENCY_CONFLICT`` error type.
+
+    The current seller advertises ``idempotency.supported=false`` and therefore
+    does not emit this for repeated request keys. The type remains available for
+    protocol parsing and a future universal implementation.
 
     Recovery=correctable: the buyer can fix this and resend — either replay the
     ORIGINAL bytes under the same key, or mint a fresh idempotency_key for the
-    new payload. This matches the AdCP 3.0.1 prose example envelope and the
+    new payload. This matches the pinned AdCP 3.1.1 standard error semantics and the
     conformance storyboard's stated expectation. The SDK's
     ``STANDARD_ERROR_CODES`` table classifies the code ``terminal``, but that
     table is only a default applied when no recovery is supplied — an explicit
@@ -861,13 +859,11 @@ class AdCPIdempotencyConflictError(AdCPConflictError):
 
 
 class AdCPIdempotencyExpiredError(AdCPConflictError):
-    """idempotency_key seen before, but its replay window has expired (409, IDEMPOTENCY_EXPIRED).
+    """Standard 409 ``IDEMPOTENCY_EXPIRED`` error type.
 
-    Raised when a same-key buy exists but outlived the advertised replay TTL
-    (``get_adcp_capabilities.adcp.idempotency.replay_ttl_seconds``): per
-    security.mdx#idempotency rule 6, a request arriving after eviction with a
-    key the seller has seen SHOULD be rejected with ``IDEMPOTENCY_EXPIRED``
-    rather than silently treated as new or answered with another buy's data.
+    The current seller advertises ``idempotency.supported=false``, announces no
+    replay TTL, and does not emit this for repeated request keys. The class is
+    retained for protocol parsing and a future universal implementation.
 
     Recovery=correctable, matching the sibling ``IDEMPOTENCY_CONFLICT``: the
     buyer agent recovers autonomously — a natural-key existence check (e.g.
@@ -1107,7 +1103,11 @@ def build_validation_error_details(errors: Sequence[Mapping[str, Any]]) -> dict[
     }
 
 
-def normalize_to_adcp_error(exc: Exception) -> AdCPError:
+def normalize_to_adcp_error(
+    exc: Exception,
+    *,
+    context: Any = None,
+) -> AdCPError:
     """Normalize untyped exceptions to typed AdCPError subclasses.
 
     Single source of truth for the wrapping applied at all three transport
@@ -1118,17 +1118,33 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
     anything else wraps in base ``AdCPError`` (INTERNAL_ERROR).
     """
     if isinstance(exc, AdCPError):
-        return exc
-    if isinstance(exc, ValidationError):
+        typed = exc
+    elif isinstance(exc, ValidationError):
         errors = exc.errors()
-        return AdCPValidationError(
-            errors[0].get("msg") if errors else "Request failed schema validation",
-            field=first_validation_error_field(exc),
+        field = first_validation_error_field(exc)
+        message = errors[0].get("msg") if errors else "Request failed schema validation"
+        if field == "idempotency_key" and errors[0].get("type") in {"missing", "missing_argument"}:
+            message = "idempotency_key is required."
+        typed = AdCPValidationError(
+            message,
+            field=field,
             suggestion=VALIDATION_ERROR_SUGGESTION,
             details=build_validation_error_details(errors),
         )
-    if isinstance(exc, ValueError):
-        return AdCPValidationError(str(exc))
-    if isinstance(exc, PermissionError):
-        return AdCPAuthorizationError(str(exc))
-    return AdCPError(str(exc) or type(exc).__name__)
+    elif isinstance(exc, ValueError):
+        typed = AdCPValidationError(str(exc))
+    elif isinstance(exc, PermissionError):
+        typed = AdCPAuthorizationError(str(exc))
+    else:
+        typed = AdCPError(str(exc) or type(exc).__name__)
+
+    # A raw transport boundary can still see a valid application context when
+    # request-model validation fails before a typed request exists. Attach that
+    # context only when the original exception did not already carry one.
+    # _serialize_context is deliberately non-throwing and rejects invalid
+    # candidates, so error translation cannot replace the buyer's real error.
+    if typed.context is None:
+        serialized_context = _serialize_context(context)
+        if serialized_context is not None:
+            typed.context = serialized_context
+    return typed

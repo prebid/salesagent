@@ -91,10 +91,6 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
         "test_hmac_signature_header_present_when_secret_configured",
     ),
     ("tests/integration/test_delivery_service_behavioral.py", "test_bearer_token_sent_in_authorization_header"),
-    (
-        "tests/integration/test_delivery_service_behavioral.py",
-        "test_happy_path_delivers_payload_to_configured_endpoint",
-    ),
     ("tests/integration/test_delivery_webhooks_force.py", "test_trigger_report_for_media_buy_public_method"),
     ("tests/integration/test_gam_tenant_setup.py", "test_command_line_parsing_network_code_optional"),
     ("tests/integration/test_targeting_values_endpoint.py", "test_get_targeting_values_endpoint"),

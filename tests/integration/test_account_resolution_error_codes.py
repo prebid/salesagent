@@ -24,6 +24,7 @@ from src.core.exceptions import (
 from src.core.helpers.account_helpers import _require_account_access, resolve_account
 from src.core.resolved_identity import ResolvedIdentity
 from tests.harness._base import IntegrationEnv
+from tests.harness._idempotency import fresh_idempotency_key
 from tests.harness.transport import Transport
 from tests.helpers import assert_envelope_shape
 
@@ -201,7 +202,6 @@ class TestAccountNotFoundViaTransports:
 
     def _nonexistent_account_req(self):
         from datetime import UTC, datetime, timedelta
-        from uuid import uuid4
 
         from src.core.schemas import CreateMediaBuyRequest
 
@@ -215,7 +215,7 @@ class TestAccountNotFoundViaTransports:
             # idempotency_key is REQUIRED on CreateMediaBuyRequest (16-255 chars, #1312).
             # Tests going through the harness get a default via _ensure_idempotency_key;
             # this helper builds the request directly, so supply one explicitly.
-            idempotency_key=f"test-acct-notfound-{uuid4().hex}",
+            idempotency_key=fresh_idempotency_key("test-acct-notfound"),
         )
 
     def test_account_not_found_via_a2a(self, env_with_data):

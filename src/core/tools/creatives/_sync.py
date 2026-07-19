@@ -15,6 +15,7 @@ from src.core.exceptions import AdCPError
 from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
+from src.core.schemas._base import validate_idempotency_key_shape
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
 
 from ._assignments import _process_assignments
@@ -44,6 +45,7 @@ def _sync_creatives_impl(
     validation_mode: str = "strict",
     push_notification_config: PushNotificationConfig | dict | None = None,
     context: ContextObject | dict | None = None,
+    idempotency_key: str | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> SyncCreativesResponse:
     """Sync creative assets to centralized library (AdCP v2.5 spec compliant endpoint).
@@ -66,12 +68,18 @@ def _sync_creatives_impl(
         validation_mode: Validation strictness (strict or lenient)
         push_notification_config: Push notification config for status updates (AdCP spec, optional)
         context: Application level context per adcp spec
+        idempotency_key: Required on protocol requests; accepted without replay
+            guarantees while capabilities declare idempotency unsupported.
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
 
     Returns:
         SyncCreativesResponse with synced creatives and assignments
     """
     from pydantic import ValidationError
+
+    # Protocol wrappers enforce requiredness. Keep the implementation tolerant
+    # for internal callers while still rejecting a malformed supplied key.
+    validate_idempotency_key_shape(idempotency_key)
 
     # Phase 1a: Models flow through to helpers (which convert via isinstance guard).
     # No model_dump at orchestrator level — helpers handle dict conversion transitionally.

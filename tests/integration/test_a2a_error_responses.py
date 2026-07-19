@@ -10,7 +10,6 @@ through the A2A wrapper layer, including:
 """
 
 import logging
-import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
@@ -20,6 +19,7 @@ from a2a.types import Message, SendMessageRequest, Task
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from tests.factories.principal import PrincipalFactory
+from tests.harness._idempotency import fresh_idempotency_key
 from tests.helpers import assert_envelope_shape, assert_no_raw_validation_leak
 from tests.helpers.adcp_factories import create_test_package_request_dict
 from tests.integration.conftest import seed_error_test_tenant
@@ -165,7 +165,7 @@ class TestA2AErrorPropagation:
 
         skill_params = {
             "brand": {"domain": "testbrand.com"},
-            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+            "idempotency_key": fresh_idempotency_key("int-key"),
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -222,7 +222,7 @@ class TestA2AErrorPropagation:
         end = start - timedelta(days=1)  # end before start
         skill_params = {
             "brand": {"domain": "testbrand.com"},
-            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+            "idempotency_key": fresh_idempotency_key("int-key"),
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -310,7 +310,7 @@ class TestA2AErrorPropagation:
 
         skill_params = {
             "brand": {"domain": "testbrand.com"},
-            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+            "idempotency_key": fresh_idempotency_key("int-key"),
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -368,7 +368,7 @@ class TestA2AErrorPropagation:
         params = SendMessageRequest(
             message=message,
             configuration=SendMessageConfiguration(
-                task_push_notification_config=TaskPushNotificationConfig(url="http://169.254.169.254/latest/meta-data")
+                task_push_notification_config=TaskPushNotificationConfig(url="https://169.254.169.254/latest/meta-data")
             ),
         )
 
@@ -378,6 +378,12 @@ class TestA2AErrorPropagation:
         assert result.artifacts is not None and len(result.artifacts) > 0
         artifact_data = self.extract_data_from_artifact(result.artifacts[0])
         assert_envelope_shape(artifact_data, "VALIDATION_ERROR", message_substr="SSRF", recovery="correctable")
+        wire_error = artifact_data["errors"][0]
+        assert wire_error["field"] == "push_notification_config.url"
+        assert wire_error["suggestion"] == (
+            "Supply a publicly routable HTTPS callback URL without embedded credentials."
+        )
+        assert "169.254.169.254" not in wire_error["message"], "metadata address leaked into buyer error"
         assert handler._task_push_configs == {}, "a rejected callback must never be stored"
 
     async def test_create_media_buy_success_has_no_errors_field(self, handler, test_tenant, test_principal):
@@ -402,7 +408,7 @@ class TestA2AErrorPropagation:
 
         skill_params = {
             "brand": {"domain": "testbrand.com"},
-            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+            "idempotency_key": fresh_idempotency_key("int-key"),
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -506,7 +512,7 @@ class TestA2AErrorPropagation:
 
         skill_params = {
             "brand": {"domain": "testbrand.com"},
-            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+            "idempotency_key": fresh_idempotency_key("int-key"),
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -663,7 +669,11 @@ class TestA2AErrorPropagation:
 
         # Send paused=True so _update_media_buy_impl has ≥1 updatable field and
         # reaches _verify_principal where the lookup fires the typed exception.
-        skill_params = {"media_buy_id": "mb_does_not_exist_a2a_wire", "paused": True}
+        skill_params = {
+            "media_buy_id": "mb_does_not_exist_a2a_wire",
+            "paused": True,
+            "idempotency_key": fresh_idempotency_key(),
+        }
         message = self.create_message_with_skill("update_media_buy", skill_params)
         params = SendMessageRequest(message=message)
 
@@ -770,7 +780,12 @@ class TestA2AErrorPropagation:
 
         set_current_tenant(test_tenant)
 
-        skill_params = {"media_buy_id": active_media_buy, "budget": 888_888_888.0, "currency": "USD"}
+        skill_params = {
+            "media_buy_id": active_media_buy,
+            "budget": 888_888_888.0,
+            "currency": "USD",
+            "idempotency_key": fresh_idempotency_key(),
+        }
         message = self.create_message_with_skill("update_media_buy", skill_params)
         params = SendMessageRequest(message=message)
 
@@ -812,6 +827,7 @@ class TestA2AErrorPropagation:
         skill_params = {
             "media_buy_id": active_media_buy,
             "packages": [{"package_id": "pkg-1", "budget": 0.50}],
+            "idempotency_key": fresh_idempotency_key(),
         }
         message = self.create_message_with_skill("update_media_buy", skill_params)
         params = SendMessageRequest(message=message)

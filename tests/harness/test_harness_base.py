@@ -461,6 +461,12 @@ class TestBaseClassContract:
             advertised = [sv.root for sv in block.supported_versions]
             assert advertised == ["3.0", "3.1"]
 
+    def test_capabilities_rest_preserves_explicit_empty_protocol_filter(self):
+        """An explicit [] becomes a present blank query value, never absence."""
+        env = _make_unit_capabilities_env()
+
+        assert env.build_rest_body(protocols=[]) == {"protocols": ""}
+
     def test_capabilities_e2e_policy_setup_is_secret_gated_and_reset_on_failure(self):
         """Live-server setup sends a leased snapshot and teardown always resets it."""
         from tests.harness.transport import E2EConfig, Transport

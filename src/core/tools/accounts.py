@@ -30,6 +30,7 @@ from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import Field
 
+from src.core.application_context import dump_adcp_response
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.models import Account as DBAccount
@@ -37,6 +38,7 @@ from src.core.database.repositories.uow import AccountUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value
 from src.core.resolved_identity import ResolvedIdentity
+from src.core.schemas import RawIdempotencyKey
 from src.core.schemas.account import (
     Account,
     ListAccountsRequest,
@@ -203,7 +205,7 @@ async def list_accounts(
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _list_accounts_impl(req, identity)
 
-    return ToolResult(content=str(response), structured_content=response)
+    return ToolResult(content=str(response), structured_content=dump_adcp_response(response, context=context))
 
 
 # ---------------------------------------------------------------------------
@@ -689,22 +691,13 @@ async def _sync_accounts_impl(
 
 
 async def sync_accounts(
+    idempotency_key: RawIdempotencyKey,
     accounts: list[SyncAccountInput] | None = None,
     delete_missing: Annotated[
         bool | None, Field(description="Deactivate accounts not present in the sync list")
     ] = None,
     dry_run: Annotated[bool | None, Field(description="Preview sync results without making changes")] = None,
     context: ContextObject | None = None,
-    idempotency_key: Annotated[
-        str | None,
-        Field(
-            description=(
-                "Client-generated idempotency key (AdCP). Accepted, but this seller does NOT "
-                "deduplicate retries — sync_accounts is not idempotent here, so a repeated "
-                "request re-executes. Retry-safe dedup lives on feat/adcp-idempotency-concurrency."
-            )
-        ),
-    ] = None,
     ctx: Context | ToolContext | None = None,
 ) -> Any:
     """Sync accounts by natural key (MCP tool).
@@ -717,30 +710,28 @@ async def sync_accounts(
         delete_missing: Deactivate accounts not in the list.
         dry_run: Preview changes without persisting.
         context: Application-level context per AdCP spec.
-        idempotency_key: Client-generated idempotency key. Declared here only so the
-            envelope-tolerance middleware does not strip it. NOTE: sync_accounts does
-            NOT implement idempotent replay/dedup (that engine lives on branch
-            feat/adcp-idempotency-concurrency), so this key is accepted but has no
-            effect — a retry re-executes rather than replaying the first result.
+        idempotency_key: Required client-generated key. This seller advertises
+            idempotency unsupported, so the validated key is inert: a retry
+            re-executes rather than replaying the first result.
         ctx: FastMCP context for authentication.
 
     Returns:
         ToolResult with human-readable text and structured data.
     """
+    from src.core.schemas._base import require_idempotency_key
+
+    require_idempotency_key(idempotency_key)
     req = SyncAccountsRequest(
         accounts=accounts or [],
         delete_missing=delete_missing,
         dry_run=dry_run,
         context=context,
-        # The SDK request model requires idempotency_key; synthesize one when the
-        # client omits it purely to satisfy construction. It has no dedup effect
-        # (see the note above) — sync_accounts is not idempotent on this branch.
-        idempotency_key=idempotency_key or str(uuid.uuid4()),
+        idempotency_key=idempotency_key,
     )
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = await _sync_accounts_impl(req, identity)
 
-    return ToolResult(content=str(response), structured_content=response)
+    return ToolResult(content=str(response), structured_content=dump_adcp_response(response, context=context))
 
 
 # ---------------------------------------------------------------------------

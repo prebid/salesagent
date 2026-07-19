@@ -816,10 +816,16 @@ def when_send_update_request(ctx: dict) -> None:
         ctx["error"] = e
         return
 
+    dispatch_kwargs: dict[str, object] = {"req": req}
+    if ctx.get("omit_update_idempotency_key"):
+        from tests.harness._idempotency import OMIT_IDEMPOTENCY_KEY
+
+        dispatch_kwargs["idempotency_key"] = OMIT_IDEMPOTENCY_KEY
+
     if ctx.get("has_auth") is False:
-        dispatch_request(ctx, req=req, identity=None)
+        dispatch_request(ctx, identity=None, **dispatch_kwargs)
     else:
-        dispatch_request(ctx, req=req)
+        dispatch_request(ctx, **dispatch_kwargs)
 
     # Post-process: promote error responses to ctx["error"]
     _promote_update_errors(ctx)
@@ -1346,6 +1352,13 @@ def given_idempotency_key(ctx: dict, value: str) -> None:
 
     # Empty string or any other value — set as-is
     kwargs["idempotency_key"] = value
+
+
+@given("the update request explicitly omits idempotency_key from the wire")
+def given_update_omits_idempotency_key_on_wire(ctx: dict) -> None:
+    """Preserve intentional omission past the harness's safe defaulting."""
+    _ensure_update_defaults(ctx).pop("idempotency_key", None)
+    ctx["omit_update_idempotency_key"] = True
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -113,7 +113,7 @@ class TestExceptionHierarchy:
     def test_idempotency_conflict_wire_envelope(self):
         """The two-layer envelope carries IDEMPOTENCY_CONFLICT + correctable in both layers.
 
-        Correctable per the AdCP 3.0.1 prose example and storyboard expectation:
+        Correctable per the pinned AdCP 3.1.1 error semantics:
         the buyer can resend the original bytes or mint a fresh key.
         """
         from src.core.exceptions import AdCPIdempotencyConflictError, build_two_layer_error_envelope
@@ -287,8 +287,8 @@ class TestRecoveryClassification:
         """AdCPIdempotencyConflictError is recovery='correctable'.
 
         The buyer can fix the conflict — resend the original bytes under the
-        same key, or mint a fresh key for the new payload (AdCP 3.0.1 prose
-        example + storyboard expectation).
+        same key, or mint a fresh key for the new payload (pinned AdCP 3.1.1
+        standard error semantics).
         """
         from src.core.exceptions import AdCPIdempotencyConflictError
 

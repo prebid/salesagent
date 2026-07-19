@@ -8,6 +8,7 @@ Transforms are registered per-tool and only applied for pre-3.0 clients.
 
 from typing import Any
 
+from src.core.application_context import dump_adcp_response
 from src.core.product_conversion import dump_products_v2_compat, needs_v2_compat
 
 
@@ -40,11 +41,11 @@ def apply_version_compat(
 
     # V3+ clients: standard serialization, no compat needed
     if not needs_v2_compat(adcp_version):
-        return response.model_dump(mode="json")
+        return dump_adcp_response(response)
 
     # Pre-3.0 clients: apply model-level v2 compat transforms
     if tool_name == "get_products" and hasattr(response, "products"):
-        response_dict = response.model_dump(mode="json")
+        response_dict = dump_adcp_response(response)
         # Replace pricing_options with v2-compat serialization from models
         if response.products:
             v2_products = dump_products_v2_compat(response.products)
@@ -52,4 +53,4 @@ def apply_version_compat(
         return response_dict
 
     # Unknown tool or no transform: standard serialization
-    return response.model_dump(mode="json")
+    return dump_adcp_response(response)

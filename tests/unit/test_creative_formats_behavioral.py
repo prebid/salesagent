@@ -739,7 +739,7 @@ class TestAllAgentsFailReturnsEmptyFormatsAndErrors:
 class TestRegistryCreationFailureRaisesServiceUnavailable:
     """UC-005-EXT-C-03: Registry creation failure raises AdCPServiceUnavailableError.
 
-    Per AdCP 3.0.1 error-handling: operation-level failures (registry init) raise,
+    Per AdCP 3.1.1 error-handling: operation-level failures (registry init) raise,
     so the boundary translator produces a two-layer envelope. Per-item advisory
     errors (partial-agent failure inside a successful discovery) stay in errors[].
     """

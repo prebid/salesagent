@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -22,11 +21,13 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     ReportingDimensions,
 )
 from fastapi import APIRouter, Depends, Query, Request
+from pydantic import Field
 
 from src.core.adcp_version import validate_adcp_version_pins
+from src.core.application_context import dump_adcp_response
 from src.core.auth_context import require_auth, resolve_auth
 from src.core.exceptions import AdCPValidationError
-from src.core.request_compat import ADCP_NEGOTIATION_FIELDS
+from src.core.request_compat import ADCP_NEGOTIATION_FIELDS, validate_standard_read_idempotency_key
 from src.core.schema_helpers import (
     coerce_creative_filters,
     to_account_reference,
@@ -35,7 +36,13 @@ from src.core.schema_helpers import (
     to_push_notification_config,
     to_reporting_webhook,
 )
-from src.core.schemas import SalesAgentBaseModel
+from src.core.schemas import (
+    RawIdempotencyKey,
+    RawOptionalIdempotencyKey,
+    RawUnsupportedRevision,
+    SalesAgentBaseModel,
+    require_idempotency_key,
+)
 from src.core.tools import accounts as accounts_module
 from src.core.tools import capabilities as capabilities_module
 from src.core.tools import creative_formats as creative_formats_module
@@ -49,8 +56,32 @@ from src.core.tools.creatives import listing as creatives_listing_module
 from src.core.tools.creatives import sync_wrappers as creatives_sync_module
 from src.core.validation_helpers import adcp_validation_boundary
 from src.core.version_compat import apply_version_compat
+from src.core.webhook_validator import validated_callback_url_scope
 
 logger = logging.getLogger(__name__)
+
+
+def _invalid_rest_query_context() -> AdCPValidationError:
+    """Build the shared buyer-correctable error for a non-object context."""
+    return AdCPValidationError(
+        "context query parameter must be a JSON-encoded object.",
+        field="context",
+        suggestion='Pass context as a URL-encoded JSON object, e.g. context={"session_id":"abc"}.',
+    )
+
+
+def _decode_rest_query_context(context: str | None) -> dict[str, Any] | None:
+    """Decode one JSON query context for negotiation and the tool call."""
+    if context is None:
+        return None
+    with adcp_validation_boundary(context="get_capabilities request"):
+        try:
+            decoded = json.loads(context)
+        except (ValueError, TypeError) as exc:
+            raise _invalid_rest_query_context() from exc
+        if not isinstance(decoded, dict):
+            raise _invalid_rest_query_context()
+    return decoded
 
 
 def _coerce_rest_query_version_pins(query_params: Mapping[str, str]) -> dict[str, Any]:
@@ -62,7 +93,10 @@ def _coerce_rest_query_version_pins(query_params: Mapping[str, str]) -> dict[str
     ingress. Non-integer spellings remain strings so the core emits the proper
     ``VALIDATION_ERROR`` instead of silently normalizing malformed input.
     """
-    pins: dict[str, Any] = dict(query_params)
+    pins: dict[str, Any] = {field: query_params[field] for field in ADCP_NEGOTIATION_FIELDS if field in query_params}
+    context = _decode_rest_query_context(query_params.get("context"))
+    if context is not None:
+        pins["context"] = context
     raw_major = pins.get("adcp_major_version")
     if isinstance(raw_major, str):
         digits = raw_major[1:] if raw_major.startswith("-") else raw_major
@@ -83,6 +117,8 @@ def _merge_rest_version_pins(
 ) -> dict[str, Any]:
     """Build one negotiation snapshot across REST query and JSON locations."""
     merged = {field: query_pins[field] for field in ADCP_NEGOTIATION_FIELDS if field in query_pins}
+    if isinstance(query_pins.get("context"), dict):
+        merged["context"] = query_pins["context"]
     context = body.get("context")
     if isinstance(context, dict):
         merged["context"] = context
@@ -209,6 +245,11 @@ router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 # extra="ignore" in prod) — the same validation the MCP/A2A request models get.
 
 
+def _omitted_read_idempotency_key_default() -> Any:
+    """Represent omission internally without advertising JSON null as a default."""
+    return None
+
+
 class _VersionedBody(SalesAgentBaseModel):
     """Shared AdCP version-negotiation pins accepted on every REST body.
 
@@ -220,11 +261,22 @@ class _VersionedBody(SalesAgentBaseModel):
 
     adcp_version: str = "1.0.0"
     adcp_major_version: int | None = None
+    # Omission alone receives the pinned 3.1 read grace. SkipValidation keeps
+    # an explicit null or wrong JSON type intact until the route-level shared
+    # validator runs after auth and version negotiation.
+    idempotency_key: RawOptionalIdempotencyKey = Field(default_factory=_omitted_read_idempotency_key_default)
 
 
 # Negotiation pins are protocol framing, not tool params — strip them before
 # building the request models handed to the shared _impl/_raw functions.
 _NEGOTIATION_EXCLUDE = frozenset({"adcp_version", "adcp_major_version"})
+_READ_ENVELOPE_EXCLUDE = _NEGOTIATION_EXCLUDE | {"idempotency_key"}
+
+
+def _validate_rest_read_idempotency(tool_name: str, body: _VersionedBody) -> None:
+    """Validate a present read key after auth/version dependencies have run."""
+    if "idempotency_key" in body.model_fields_set:
+        validate_standard_read_idempotency_key(tool_name, {"idempotency_key": body.idempotency_key})
 
 
 class GetProductsBody(_VersionedBody):
@@ -248,7 +300,11 @@ class CreateMediaBuyBody(_VersionedBody):
     push_notification_config: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
     ext: dict[str, Any] | None = None
-    idempotency_key: str | None = None
+    # Keep the raw JSON value until the shared protocol boundary validates it.
+    # A ``str`` annotation would make FastAPI convert a numeric-key failure into
+    # generic INVALID_REQUEST before require_idempotency_key can emit the same
+    # VALIDATION_ERROR used by MCP and A2A.
+    idempotency_key: RawIdempotencyKey
     # AdCP 3.1.1 create-in-paused-state. Declared but NOT forwarded to the raw wrapper
     # below, and not honored by _impl even if it were — see #1619.
     paused: bool | None = None
@@ -274,11 +330,12 @@ class UpdateMediaBuyBody(_VersionedBody):
     context: dict[str, Any] | None = None
     reporting_webhook: dict[str, Any] | None = None
     ext: dict[str, Any] | None = None
-    idempotency_key: str | None = None
-    # Declared (int | str | None so a wrong-typed value reaches the wrapper's guard
-    # rather than a bare 422) so a supplied revision is rejected fail-loud, consistent
-    # with MCP/A2A — optimistic concurrency is not implemented (see media_buy_update).
-    revision: int | str | None = None
+    # Preserve the raw JSON type for cross-transport validation parity.
+    idempotency_key: RawIdempotencyKey
+    # Keep every supplied raw value (including JSON null) for the shared fail-loud
+    # guard.  The default factory preserves omission as a distinct singleton while
+    # OpenAPI continues to advertise an optional integer >= 1, never null.
+    revision: RawUnsupportedRevision = Field(default_factory=media_buy_update_module.revision_omitted_default)
 
 
 class GetMediaBuyDeliveryBody(_VersionedBody):
@@ -303,6 +360,8 @@ class SyncCreativesBody(_VersionedBody):
     push_notification_config: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
     account: dict[str, Any] | None = None  # AccountReference; resolved at the transport boundary
+    # Preserve the raw JSON type for cross-transport validation parity.
+    idempotency_key: RawIdempotencyKey
 
 
 class ListCreativesBody(_VersionedBody):
@@ -371,7 +430,9 @@ class SyncAccountsBody(_VersionedBody):
     # Declared so the body model never drops a REST buyer's key (forbidden as an
     # undeclared extra in dev, silently ignored in prod) — REST must preserve it
     # like the MCP/A2A siblings do (#1512), not be the transport that loses it.
-    idempotency_key: str | None = None
+    # Preserve the raw JSON type for cross-transport validation parity, while
+    # leaving the field required in OpenAPI.
+    idempotency_key: RawIdempotencyKey
     context: dict[str, Any] | None = None
 
 
@@ -391,6 +452,7 @@ async def get_products(
     ``ToolError`` propagates to the global handler in ``src.app`` for envelope
     translation; no defensive catch needed here.
     """
+    _validate_rest_read_idempotency("get_products", body)
     with adcp_validation_boundary(context="get_products request"):
         req = products_module.create_get_products_request(
             brief=body.brief,
@@ -422,6 +484,7 @@ async def get_products(
 # Module-level FastAPI marker singleton (B008: never call Query() in an argument
 # default). Mirrors the ``resolve_auth = Depends(...)`` pattern used across this router.
 _protocols_query: Any = Query(default=None)
+_idempotency_key_query: Any = Query(default=None)
 
 
 def _parse_protocols_query(raw: list[str] | None) -> list[str] | None:
@@ -457,11 +520,12 @@ async def get_capabilities(
     identity: ResolvedIdentity | None = resolve_auth,
     context: str | None = None,
     protocols: list[str] | None = _protocols_query,
+    idempotency_key: str | None = _idempotency_key_query,
 ):
     """Get AdCP capabilities (auth-optional discovery skill).
 
-    ``/capabilities`` is a GET with no request body, but the buyer still has two
-    query channels:
+    ``/capabilities`` is a GET with no request body, but accepts three query
+    parameters:
 
     * ``context`` — a JSON-encoded AdCP context object, echoed unchanged on the
       response (BR-RULE-043 / POST-S9). Malformed JSON is a VALIDATION_ERROR.
@@ -470,23 +534,20 @@ async def get_capabilities(
       (``?protocols=media_buy,signals``) forms. An unknown protocol is a
       VALIDATION_ERROR (raised in ``get_adcp_capabilities_raw``'s validation
       boundary when the request model rejects the enum value).
+    * ``idempotency_key`` — optional 3.1 read-envelope metadata. A supplied
+      value is shape-validated, then ignored while support is advertised false.
     """
-    context_obj = None
-    if context is not None:
-        with adcp_validation_boundary(context="get_capabilities request"):
-            try:
-                decoded = json.loads(context)
-            except (ValueError, TypeError) as exc:
-                raise AdCPValidationError(
-                    "context query parameter must be a JSON-encoded object.",
-                    field="context",
-                    suggestion='Pass context as a URL-encoded JSON object, e.g. context={"session_id":"abc"}.',
-                ) from exc
-            context_obj = to_context_object(decoded)
+    if idempotency_key is not None:
+        validate_standard_read_idempotency_key(
+            "get_adcp_capabilities",
+            {"idempotency_key": idempotency_key},
+        )
+    with adcp_validation_boundary(context="get_capabilities request"):
+        context_obj = to_context_object(_decode_rest_query_context(context))
     response = await capabilities_module.get_adcp_capabilities_raw(
         identity=identity, context=context_obj, protocols=_parse_protocols_query(protocols)
     )
-    return response.model_dump(mode="json")
+    return dump_adcp_response(response)
 
 
 @router.post("/creative-formats", dependencies=[Depends(_version_after_resolve)])
@@ -494,12 +555,13 @@ async def list_creative_formats(body: ListCreativeFormatsBody, identity: Resolve
     """List available creative formats (auth-optional discovery skill)."""
     from src.core.schemas import ListCreativeFormatsRequest
 
-    body_fields = body.model_dump(exclude=_NEGOTIATION_EXCLUDE, exclude_none=True)
+    _validate_rest_read_idempotency("list_creative_formats", body)
+    body_fields = body.model_dump(exclude=_READ_ENVELOPE_EXCLUDE, exclude_none=True)
     with adcp_validation_boundary(context="list_creative_formats request"):
         req = ListCreativeFormatsRequest(**body_fields) if body_fields else None
 
     response = creative_formats_module.list_creative_formats_raw(req=req, identity=identity)
-    return response.model_dump(mode="json")
+    return dump_adcp_response(response)
 
 
 @router.post("/authorized-properties", dependencies=[Depends(_version_after_resolve)])
@@ -509,12 +571,14 @@ async def list_authorized_properties(
     """List authorized properties (auth-optional discovery skill)."""
     from src.core.schemas import ListAuthorizedPropertiesRequest
 
-    body_fields = body.model_dump(exclude=_NEGOTIATION_EXCLUDE, exclude_none=True)
+    # Local/non-standard read: tolerate the shared envelope field without
+    # inventing AdCP validation semantics for this custom tool.
+    body_fields = body.model_dump(exclude=_READ_ENVELOPE_EXCLUDE, exclude_none=True)
     with adcp_validation_boundary(context="list_authorized_properties request"):
         req = ListAuthorizedPropertiesRequest(**body_fields) if body_fields else None
 
     response = properties_module.list_authorized_properties_raw(req=req, identity=identity)
-    return response.model_dump(mode="json")
+    return dump_adcp_response(response)
 
 
 # ---------------------------------------------------------------------------
@@ -522,32 +586,10 @@ async def list_authorized_properties(
 # ---------------------------------------------------------------------------
 
 
-async def _raw_json_body(request: Request) -> dict[str, Any]:
-    """The HTTP body as sent on the wire — the idempotency payload-hash input.
-
-    A dependency rather than a route ``request`` parameter, so route signatures
-    stay Depends-only (the rest-depends-auth guard). Prefers the pre-rewrite
-    bytes stashed by ``RestCompatMiddleware`` — when a deprecated-field
-    translation fires, ``request.json()`` would observe the NORMALIZED body,
-    not the bytes the buyer sent, and seller-side compat-table changes would
-    flip honest retries into conflicts mid-TTL. Starlette caches the body, so
-    the fallback read does not consume it before model parsing.
-    """
-    raw = getattr(request.state, "raw_wire_payload", None)
-    if raw is not None:
-        return json.loads(raw)
-    return await request.json()
-
-
-# Module-level singleton, matching require_auth (ruff B008 forbids Depends() in defaults).
-raw_json_body = Depends(_raw_json_body)
-
-
 @router.post("/media-buys", dependencies=[Depends(_version_after_require)])
 async def create_media_buy(
     body: CreateMediaBuyBody,
     identity: ResolvedIdentity = require_auth,
-    raw_wire_payload: dict[str, Any] = raw_json_body,
 ):
     """Create a new media buy (auth required).
 
@@ -580,9 +622,8 @@ async def create_media_buy(
         ext=body.ext,
         idempotency_key=body.idempotency_key,
         identity=identity,
-        raw_wire_payload=raw_wire_payload,
     )
-    return response.model_dump(mode="json")
+    return dump_adcp_response(response)
 
 
 @router.put("/media-buys/{media_buy_id}", dependencies=[Depends(_version_after_require)])
@@ -594,34 +635,43 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         push_notification_config = to_push_notification_config(body.push_notification_config)
         context = to_context_object(body.context)
         reporting_webhook = to_reporting_webhook(body.reporting_webhook)
-    response = media_buy_update_module.update_media_buy_raw(
-        media_buy_id=media_buy_id,
-        paused=body.paused,
-        flight_start_date=body.flight_start_date,
-        flight_end_date=body.flight_end_date,
-        budget=body.budget,
-        currency=body.currency,
-        start_time=body.start_time,
-        end_time=body.end_time,
-        pacing=body.pacing,
-        daily_budget=body.daily_budget,
-        # packages stay wire dicts: UpdateMediaBuyRequest validates them as the
-        # request's packages[] field, preserving full-request error field paths.
-        packages=body.packages,
-        push_notification_config=push_notification_config,
-        context=context,
-        reporting_webhook=reporting_webhook,
-        ext=body.ext,
+    media_buy_update_module.validate_update_media_buy_protocol_fields(
         idempotency_key=body.idempotency_key,
         revision=body.revision,
-        identity=identity,
     )
-    return response.model_dump(mode="json")
+    async with validated_callback_url_scope(
+        push_notification_config=push_notification_config,
+        reporting_webhook=reporting_webhook,
+    ):
+        response = media_buy_update_module.update_media_buy_raw(
+            media_buy_id=media_buy_id,
+            paused=body.paused,
+            flight_start_date=body.flight_start_date,
+            flight_end_date=body.flight_end_date,
+            budget=body.budget,
+            currency=body.currency,
+            start_time=body.start_time,
+            end_time=body.end_time,
+            pacing=body.pacing,
+            daily_budget=body.daily_budget,
+            # packages stay wire dicts: UpdateMediaBuyRequest validates them as the
+            # request's packages[] field, preserving full-request error field paths.
+            packages=body.packages,
+            push_notification_config=push_notification_config,
+            context=context,
+            reporting_webhook=reporting_webhook,
+            ext=body.ext,
+            idempotency_key=body.idempotency_key,
+            revision=body.revision,
+            identity=identity,
+        )
+    return dump_adcp_response(response)
 
 
 @router.post("/media-buys/delivery", dependencies=[Depends(_version_after_require)])
 async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: ResolvedIdentity = require_auth):
     """Get delivery metrics for media buys (auth required)."""
+    _validate_rest_read_idempotency("get_media_buy_delivery", body)
     if body.account is not None:
         from src.core.transport_helpers import enrich_identity_with_account
 
@@ -642,7 +692,7 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: Resolv
         context=to_context_object(body.context),
         identity=identity,
     )
-    return response.model_dump(mode="json")
+    return dump_adcp_response(response)
 
 
 @router.post("/creatives/sync", dependencies=[Depends(_version_after_require)])
@@ -651,31 +701,37 @@ async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = r
     # Coerce the raw account dict into an AccountReference so sync_creatives_raw
     # resolves it at the transport boundary (mirror create_media_buy / the sibling
     # handlers above — #1417).
+    require_idempotency_key(body.idempotency_key)
     with adcp_validation_boundary(context="sync_creatives request"):
         account_ref = to_account_reference(body.account)
         push_notification_config = to_push_notification_config(body.push_notification_config)
         context = to_context_object(body.context)
 
-    response = creatives_sync_module.sync_creatives_raw(
-        # creatives stay wire dicts: _sync_creatives_impl validates each entry
-        # individually (partial-success semantics with per-creative results).
-        creatives=body.creatives,
-        assignments=body.assignments,
-        creative_ids=body.creative_ids,
-        delete_missing=body.delete_missing,
-        dry_run=body.dry_run,
-        validation_mode=body.validation_mode,
+    async with validated_callback_url_scope(
         push_notification_config=push_notification_config,
-        context=context,
-        account=account_ref,
-        identity=identity,
-    )
-    return response.model_dump(mode="json")
+    ):
+        response = creatives_sync_module.sync_creatives_raw(
+            # creatives stay wire dicts: _sync_creatives_impl validates each entry
+            # individually (partial-success semantics with per-creative results).
+            creatives=body.creatives,
+            assignments=body.assignments,
+            creative_ids=body.creative_ids,
+            delete_missing=body.delete_missing,
+            dry_run=body.dry_run,
+            validation_mode=body.validation_mode,
+            push_notification_config=push_notification_config,
+            context=context,
+            account=account_ref,
+            idempotency_key=body.idempotency_key,
+            identity=identity,
+        )
+    return dump_adcp_response(response)
 
 
 @router.post("/creatives", dependencies=[Depends(_version_after_require)])
 async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = require_auth):
     """List creatives (auth required)."""
+    _validate_rest_read_idempotency("list_creatives", body)
     # Coerce the raw wire filters dict into a typed CreativeFilters here (#1493): the
     # merged list_creatives_raw expects a typed object (it calls .model_dump()), and
     # this is where an empty concept_ids etc. surfaces the VALIDATION_ERROR envelope.
@@ -701,7 +757,7 @@ async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = r
         context=to_context_object(body.context),
         identity=identity,
     )
-    return response.model_dump(mode="json")
+    return dump_adcp_response(response)
 
 
 @router.post("/performance-index", dependencies=[Depends(_version_after_require)])
@@ -713,7 +769,7 @@ async def update_performance_index(body: UpdatePerformanceIndexBody, identity: R
         context=to_context_object(body.context),
         identity=identity,
     )
-    return response.model_dump(mode="json")
+    return dump_adcp_response(response)
 
 
 @router.post("/accounts", dependencies=[Depends(_version_after_require)])
@@ -721,10 +777,11 @@ async def list_accounts(body: ListAccountsBody, identity: ResolvedIdentity = req
     """List accounts accessible to the authenticated agent (auth required)."""
     from src.core.schemas.account import ListAccountsRequest
 
+    _validate_rest_read_idempotency("list_accounts", body)
     with adcp_validation_boundary(context="list_accounts request"):
-        req = ListAccountsRequest(**body.model_dump(exclude_none=True, exclude=_NEGOTIATION_EXCLUDE))
+        req = ListAccountsRequest(**body.model_dump(exclude_none=True, exclude=_READ_ENVELOPE_EXCLUDE))
     response = accounts_module.list_accounts_raw(req=req, identity=identity)
-    return response.model_dump(mode="json")
+    return dump_adcp_response(response)
 
 
 @router.post("/accounts/sync", dependencies=[Depends(_version_after_require)])
@@ -732,10 +789,8 @@ async def sync_accounts(body: SyncAccountsBody, identity: ResolvedIdentity = req
     """Sync accounts by natural key (auth required)."""
     from src.core.schemas.account import SyncAccountsRequest
 
+    require_idempotency_key(body.idempotency_key)
     with adcp_validation_boundary(context="sync_accounts request"):
         req = SyncAccountsRequest(**body.model_dump(exclude_none=True, exclude=_NEGOTIATION_EXCLUDE))
-    # Preserve the buyer's idempotency_key; synthesize only when omitted (#1512), matching
-    # the MCP/A2A siblings so a retry carrying the same key is not fabricated a fresh UUID.
-    req.idempotency_key = req.idempotency_key or str(uuid.uuid4())
     response = await accounts_module.sync_accounts_raw(req=req, identity=identity)
-    return response.model_dump(mode="json")
+    return dump_adcp_response(response)

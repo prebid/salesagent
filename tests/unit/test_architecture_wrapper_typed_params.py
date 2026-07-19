@@ -23,10 +23,6 @@ ALLOWED_DICT_PARAMS = {
     "ext",  # AdCP ExtensionObject — intentionally free-form JSON
     "assignments",  # Bulk assignment map (creative_id -> package_ids), no SDK type
     "performance_data",  # Performance data list, no SDK type
-    # The request as sent on the wire — the idempotency payload-hash input.
-    # MUST stay a raw dict: model coercion would normalize the payload and
-    # defeat wire-level RFC 8785 hashing.
-    "raw_wire_payload",
 }
 
 # MCP wrapper functions to check (module_path, function_name)

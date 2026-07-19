@@ -14,6 +14,7 @@ from src.core.webhook_validator import (
     WebhookURLValidator,
     validate_webhook_task_type,
 )
+from tests.helpers.protocol_webhook import assert_protocol_webhook_post
 
 
 class TestValidateWebhookTaskType:
@@ -49,13 +50,19 @@ class TestWebhookURLValidator:
 
     def test_valid_public_https_url(self):
         """Valid public HTTPS URLs should pass."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("https://example.com/webhook")
+        from unittest.mock import patch
+
+        with patch("src.core.security.url_validator._resolve_ips", return_value=["93.184.216.34"]):
+            is_valid, error = WebhookURLValidator.validate_webhook_url("https://example.com/webhook")
         assert is_valid
         assert error == ""
 
     def test_valid_public_http_url(self):
         """Valid public HTTP URLs should pass (for testing)."""
-        is_valid, error = WebhookURLValidator.validate_webhook_url("http://example.com/webhook")
+        from unittest.mock import patch
+
+        with patch("src.core.security.url_validator._resolve_ips", return_value=["93.184.216.34"]):
+            is_valid, error = WebhookURLValidator.validate_webhook_url("http://example.com/webhook")
         assert is_valid
         assert error == ""
 
@@ -112,6 +119,19 @@ class TestWebhookURLValidator:
         is_valid, error = WebhookURLValidator.validate_webhook_url("http:///webhook")
         assert not is_valid
         assert "hostname" in error.lower()
+
+    def test_callback_rejects_embedded_url_credentials_before_dns(self):
+        """Callback auth must come from its config, never URL userinfo."""
+        from unittest.mock import patch
+
+        with patch("src.core.security.url_validator._resolve_ips") as resolve:
+            is_valid, error = WebhookURLValidator.validate_callback_url(
+                "https://url-user:url-password@buyer.example/webhook"
+            )
+
+        assert is_valid is False
+        assert error == "URL failed SSRF validation"
+        resolve.assert_not_called()
 
     def test_invalid_url_format(self):
         """Should reject malformed URLs."""
@@ -301,9 +321,9 @@ class TestPinnedOutboundClient:
 
         import requests
 
-        from src.services import protocol_webhook_service as pws
+        from src.core.security import webhook_http
 
-        adapter = pws._PinningHTTPAdapter()
+        adapter = webhook_http.PinningHTTPAdapter()
         request = requests.Request("POST", "https://buyer.example.com:8443/webhook").prepare()
 
         captured: dict = {}
@@ -313,7 +333,7 @@ class TestPinnedOutboundClient:
             return MagicMock()
 
         with (
-            patch.object(pws, "resolve_and_validate_target", return_value=("93.184.216.34", "")),
+            patch.object(webhook_http, "resolve_and_validate_target", return_value=("93.184.216.34", "")),
             patch.object(adapter.poolmanager, "connection_from_host", _fake_connection_from_host),
         ):
             adapter.get_connection_with_tls_context(request, verify=True)
@@ -331,14 +351,37 @@ class TestPinnedOutboundClient:
 
         import requests
 
-        from src.services import protocol_webhook_service as pws
+        from src.core.security import webhook_http
 
-        adapter = pws._PinningHTTPAdapter()
+        adapter = webhook_http.PinningHTTPAdapter()
         request = requests.Request("POST", "https://evil.example.com/webhook").prepare()
 
-        with patch.object(pws, "resolve_and_validate_target", return_value=(None, "blocked internal target")):
+        with patch.object(webhook_http, "resolve_and_validate_target", return_value=(None, "blocked internal target")):
             with pytest.raises(requests.RequestException, match="SSRF"):
                 adapter.get_connection_with_tls_context(request, verify=True)
+
+    def test_pinning_adapter_rejects_embedded_url_credentials_before_dns(self):
+        """A stale persisted URL cannot replace configured Bearer auth with URL Basic auth."""
+        from unittest.mock import patch
+
+        import requests
+
+        from src.core.security import webhook_http
+
+        adapter = webhook_http.PinningHTTPAdapter()
+        request = requests.Request(
+            "POST",
+            "https://url-user:url-password@buyer.example.com/webhook",
+            headers={"Authorization": "Bearer configured-token"},
+        ).prepare()
+
+        # requests has already replaced the configured Bearer header with URL Basic
+        # auth while preparing this request. The adapter must fail closed before DNS.
+        assert request.headers["Authorization"].startswith("Basic ")
+        with patch.object(webhook_http, "resolve_and_validate_target") as resolve:
+            with pytest.raises(webhook_http.UnsafeWebhookTargetError, match="embedded credentials"):
+                adapter.get_connection_with_tls_context(request, verify=True)
+        resolve.assert_not_called()
 
     def test_session_ignores_environment_proxies_and_netrc(self):
         """trust_env=False: no HTTP(S)_PROXY / NO_PROXY / ~/.netrc injection on egress."""
@@ -353,14 +396,14 @@ class TestPinnedOutboundClient:
 
         import requests
 
-        from src.services import protocol_webhook_service as pws
+        from src.core.security import webhook_http
 
-        adapter = pws._PinningHTTPAdapter()
+        adapter = webhook_http.PinningHTTPAdapter()
         request = requests.Request("POST", "https://buyer.example.com/webhook").prepare()
 
         with (
-            patch.object(pws, "resolve_and_validate_target", return_value=("93.184.216.34", "")),
-            patch.object(pws, "select_proxy", return_value="http://proxy.internal:3128"),
+            patch.object(webhook_http, "resolve_and_validate_target", return_value=("93.184.216.34", "")),
+            patch.object(webhook_http, "select_proxy", return_value="http://proxy.internal:3128"),
         ):
             with pytest.raises(requests.RequestException, match="proxy"):
                 adapter.get_connection_with_tls_context(request, verify=True)
@@ -436,9 +479,9 @@ class TestPinnedOutboundClient:
         assert captured["kwargs"]["headers"]["Host"] == "buyer.example.com"
 
     def test_send_notification_treats_3xx_as_failed_delivery(self):
-        """A 3xx (refused redirect) must NOT be recorded as a successful delivery."""
+        """A refused redirect is permanent and must be attempted exactly once."""
         import asyncio
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import AsyncMock, MagicMock, patch
 
         from src.core.database.models import PushNotificationConfig
         from src.services.protocol_webhook_service import ProtocolWebhookService
@@ -454,7 +497,10 @@ class TestPinnedOutboundClient:
         redirect_resp = MagicMock()
         redirect_resp.status_code = 302
 
-        with patch("requests.sessions.Session.post", return_value=redirect_resp):
+        with (
+            patch("requests.sessions.Session.post", return_value=redirect_resp) as mock_post,
+            patch("src.services.protocol_webhook_service.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        ):
             delivered = asyncio.run(
                 ProtocolWebhookService().send_notification(
                     config, {"status": "completed"}, metadata={"task_type": "create_media_buy"}
@@ -462,3 +508,55 @@ class TestPinnedOutboundClient:
             )
 
         assert delivered is False, "a 3xx response must be treated as a failed delivery"
+        assert_protocol_webhook_post(
+            mock_post,
+            url="https://buyer.example.com/webhook",
+            body=b'{"status":"completed"}',
+            host="buyer.example.com",
+        )
+        mock_sleep.assert_not_awaited()
+
+    def test_send_notification_does_not_retry_unsafe_target(self):
+        """An SSRF/pinning policy refusal is permanent, not a network retry."""
+        import asyncio
+        from unittest.mock import ANY, AsyncMock, patch
+
+        from src.core.database.models import PushNotificationConfig
+        from src.core.security.webhook_http import UnsafeWebhookTargetError
+        from src.services.protocol_webhook_service import ProtocolWebhookService
+
+        config = PushNotificationConfig(
+            id="pnc-unsafe",
+            tenant_id="t",
+            principal_id="p",
+            url="https://buyer.example.com/webhook",
+            authentication_type=None,
+            authentication_token=None,
+        )
+
+        with (
+            patch(
+                "src.services.protocol_webhook_service.post_webhook_status_async",
+                new_callable=AsyncMock,
+                side_effect=UnsafeWebhookTargetError("unsafe target"),
+            ) as mock_post,
+            patch("src.services.protocol_webhook_service.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        ):
+            delivered = asyncio.run(
+                ProtocolWebhookService().send_notification(
+                    config, {"status": "completed"}, metadata={"task_type": "create_media_buy"}
+                )
+            )
+
+        assert delivered is False
+        mock_post.assert_awaited_once_with(
+            ANY,
+            "https://buyer.example.com/webhook",
+            body=b'{"status":"completed"}',
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "AdCP-Sales-Agent/1.0",
+            },
+            timeout=10.0,
+        )
+        mock_sleep.assert_not_awaited()

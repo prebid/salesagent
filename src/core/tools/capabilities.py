@@ -20,7 +20,6 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Adcp,
     Execution,
     GeoMetros,
-    Idempotency,
     MajorVersion,
     MediaBuy,
     Portfolio,
@@ -29,6 +28,9 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     SupportedVersion,
     # FIXME(#1388): Targeting has a local subclass; import from src.core.schemas (Pattern #7/#4).
     Targeting,
+)
+from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+    Idempotency3 as IdempotencyUnsupported,
 )
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
@@ -40,8 +42,8 @@ from fastmcp.tools.tool import ToolResult
 # applied at src.core.adcp_version.* would not reach — splitting what capabilities
 # advertises from what validate_adcp_version_pins negotiates (#1512).
 from src.core import adcp_version
+from src.core.application_context import dump_adcp_response
 from src.core.auth import get_principal_object, require_identity
-from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value
@@ -61,12 +63,12 @@ def _filter_supported_protocols(req: GetAdcpCapabilitiesRequest | None) -> list[
     """Intersect the seller's supported protocols with the buyer's ``protocols`` filter.
 
     No filter (``req.protocols is None``) returns the full supported set. Otherwise
-    return only the supported protocols the buyer asked for (matched by enum value),
-    so ``protocols=["signals"]`` against a media_buy-only seller returns ``[]`` — the
-    buyer learns the seller does not offer signals, rather than being handed the
-    unfiltered default set. Empty-array and unknown-enum inputs are rejected upstream
-    by the request model (minItems=1 + the ``Protocol`` enum), which the transport
-    boundaries translate to VALIDATION_ERROR.
+    return the supported intersection, matched by enum value. A valid request with
+    no overlap (for example ``["signals"]`` against this media_buy-only seller) is
+    rejected with ``VALIDATION_ERROR`` because the response schema requires at least
+    one ``supported_protocols`` entry; returning the unfiltered default would lie
+    about the requested view. Empty-array and unknown-enum inputs are rejected by the
+    request model (minItems=1 + the ``Protocol`` enum) at the transport boundary.
     """
     full = list(_DEFAULT_PROTOCOLS)
     requested = req.protocols if req else None
@@ -104,7 +106,11 @@ def _build_adcp_block() -> Adcp:
         major_versions=[MajorVersion(root=adcp_version.adcp_major_version())],
         supported_versions=[SupportedVersion(root=v) for v in adcp_version.supported_adcp_versions()],
         build_version=adcp_version.adcp_build_version(),
-        idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
+        # The official 3.1.1 schema models this as a discriminated union. This
+        # seller validates request keys but does not cache or deduplicate
+        # retries; read keys are inert envelope metadata. Advertise the honest
+        # unsupported variant, which omits replay-TTL and in-flight fields.
+        idempotency=IdempotencyUnsupported(supported=False),
     )
 
 
@@ -416,7 +422,7 @@ async def get_adcp_capabilities(
     # AdCP-canonical shape REST/A2A emit — in particular it OMITS an absent `context`
     # (INV-2: context absence echoed as absence) rather than FastMCP's object
     # serialization, which would emit `context: null` (a present field).
-    return ToolResult(content=summary, structured_content=response.model_dump(mode="json"))
+    return ToolResult(content=summary, structured_content=dump_adcp_response(response, context=context))
 
 
 async def get_adcp_capabilities_raw(

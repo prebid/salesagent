@@ -34,6 +34,7 @@ from src.core.schemas import (
     UpdateMediaBuyRequest,
 )
 from src.core.testing_hooks import AdCPTestContext
+from tests.harness._idempotency import fresh_idempotency_key
 from tests.integration.media_buy_helpers import (
     _get_tenant_dict,
     _make_create_request,
@@ -665,6 +666,7 @@ class TestGetMediaBuysResponseFields:
                     }
                 ],
                 assignments={"c_approval_test": [package_id]},
+                idempotency_key=fresh_idempotency_key(),
                 identity=mb_identity,
             )
 

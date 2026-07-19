@@ -20,7 +20,6 @@ test_mcp_error_envelope.py cover the downstream serialization path.
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -34,6 +33,7 @@ from src.core.schemas import CreateMediaBuyRequest, GetMediaBuysRequest, UpdateM
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.media_buy_list import _get_media_buys_impl
 from src.core.tools.media_buy_update import _update_media_buy_impl
+from tests.harness._idempotency import fresh_idempotency_key
 from tests.helpers.adcp_factories import create_test_package_request_dict
 from tests.integration.conftest import seed_error_test_tenant
 
@@ -94,7 +94,7 @@ class TestTypedAdCPErrorRaises:
             ],
             start_time=future_start.isoformat(),
             end_time=future_end.isoformat(),
-            idempotency_key=f"int-key-{uuid.uuid4().hex}",
+            idempotency_key=fresh_idempotency_key("int-key"),
         )
 
         with pytest.raises(AdCPBudgetTooLowError) as exc_info:

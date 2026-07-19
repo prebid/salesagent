@@ -63,6 +63,8 @@ from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+_UPDATE_IDEMPOTENCY_KEY = "unit-test-update-key-0001"
+
 
 def _future(days: int = 7) -> str:
     """Return an ISO 8601 datetime string N days in the future."""
@@ -77,8 +79,8 @@ def _make_request(**overrides) -> CreateMediaBuyRequest:
         "start_time": _future(1),
         "end_time": _future(8),
         "packages": [{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
-        # Required by AdCP 3.0.1; mocked-UoW tests must stub the probe to a miss
-        # (find_by_key -> None) — make_mock_uow does this by default.
+        # Required by AdCP 3.1.1. The key is inert while the seller advertises
+        # idempotency unsupported; mocked UoWs need no cache/probe setup.
         "idempotency_key": "unit-test-default-key-0001",
     }
     defaults.update(overrides)
@@ -319,12 +321,11 @@ class TestCreateMediaBuyResponseShapes:
         assert dumped["media_buy_id"] == "mb_1"
 
     def test_result_serializes_replayed_marker_when_set(self):
-        """`replayed=True` surfaces as a top-level boolean; omitted when False.
+        """The schema-compatible marker serializes when parsing external data.
 
-        Spec: AdCP 3.0.1 idempotency — a replayed cached success carries a
-        top-level ``replayed: true`` envelope marker; fresh responses omit it
-        so they stay byte-identical. Injected at response time via
-        CreateMediaBuyResult._serialize, never stored in the cached body.
+        Production create responses keep it false while this seller advertises
+        idempotency unsupported; the wrapper still accepts/serializes the AdCP
+        field so shared clients can round-trip the envelope type.
         """
         success = _make_success(media_buy_id="mb_1")
 
@@ -332,11 +333,11 @@ class TestCreateMediaBuyResponseShapes:
         fresh = CreateMediaBuyResult(status="completed", response=success).model_dump()
         assert "replayed" not in fresh
 
-        # Replay: top-level replayed=True alongside status and the payload fields.
-        replay = CreateMediaBuyResult(status="completed", response=success, replayed=True).model_dump()
-        assert replay["replayed"] is True
-        assert replay["status"] == "completed"
-        assert replay["media_buy_id"] == "mb_1"
+        # Explicit external/schema value remains top-level.
+        marked = CreateMediaBuyResult(status="completed", response=success, replayed=True).model_dump()
+        assert marked["replayed"] is True
+        assert marked["status"] == "completed"
+        assert marked["media_buy_id"] == "mb_1"
 
     def test_replayed_defaults_false_and_preserves_unpacking(self):
         """replayed defaults False and does not disturb (response, status) unpacking."""
@@ -407,9 +408,6 @@ class TestCreateMediaBuyValidation:
         session.scalars.return_value = scalars_result
 
         mock_uow = MagicMock()
-        mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-        mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-        mock_uow.idempotency_attempts.count_active.return_value = (0, None)
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=None)
         mock_uow.session = session
@@ -487,9 +485,6 @@ class TestCreateMediaBuyValidation:
         session.scalars.return_value = scalars_result
 
         mock_uow = MagicMock()
-        mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-        mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-        mock_uow.idempotency_attempts.count_active.return_value = (0, None)
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=None)
         mock_uow.session = session
@@ -1278,12 +1273,13 @@ class TestCreateMediaBuyImplAuth:
 
 
 class TestIdempotencyKeyRequired:
-    """CreateMediaBuyRequest.idempotency_key is required and spec-shaped (AdCP 3.0.1).
+    """CreateMediaBuyRequest.idempotency_key is required and spec-shaped (AdCP 3.1.1).
 
     The create-side optional override was removed: the field inherits the library's
     required str with MinLen(16) + pattern ^[A-Za-z0-9_.:-]{16,255}$. A missing key
-    rejects at the schema boundary (storyboard missing_key step). update_media_buy's
-    enforcement is a deliberate fast-follow and stays optional.
+    rejects at the schema boundary (storyboard missing_key step). The update model
+    remains optional internally so all wire transports can emit the shared typed
+    required-key error before dispatch.
     """
 
     def _kwargs(self, **overrides):
@@ -1317,147 +1313,14 @@ class TestIdempotencyKeyRequired:
         req = CreateMediaBuyRequest(**self._kwargs(idempotency_key="buy-2026-q3-abc123def"))
         assert req.idempotency_key == "buy-2026-q3-abc123def"
 
-    def test_update_request_key_still_optional(self):
-        """update_media_buy required-key enforcement is a deliberate fast-follow."""
+    def test_update_request_model_defers_requiredness_to_transport_boundary(self):
+        """The model permits omission so every transport emits the shared typed error.
+
+        MCP, A2A, and REST call ``require_idempotency_key`` before dispatch;
+        model-level optionality is not permission to omit the wire field.
+        """
         req = UpdateMediaBuyRequest(media_buy_id="mb_update_optional")
         assert req.idempotency_key is None
-
-
-class TestCreateMediaBuyIdempotency:
-    """UC-002 idempotency: _create_media_buy_impl returns existing media buy on replay.
-
-    Per adcp 3.12, retrying with the same idempotency_key must return the original
-    media_buy_id without creating a duplicate ad-server booking.
-    Covers: UC-002-MAIN-IDEMPOTENCY
-    """
-
-    @pytest.mark.asyncio
-    async def test_idempotency_replay_returns_existing(self):
-        """Retry with the same key replays the cached success verbatim, marked replayed.
-
-        Covers: UC-002-MAIN-IDEMPOTENCY
-        """
-        from src.core.idempotency_canonical import canonical_request_hash
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
-        idem_key = "550e8400-e29b-41d4-a716-446655440000"
-        req = _make_request(idempotency_key=idem_key)
-        identity = _make_identity()
-
-        # What the first call cached: {status: <protocol>, response: <domain dump>}.
-        original = _make_success(media_buy_id="mb_original_123")
-        cached_attempt = MagicMock()
-        cached_attempt.response_envelope = {"status": "completed", "response": original.model_dump(mode="json")}
-        # Matching hash → a true replay (a mismatch would be IDEMPOTENCY_CONFLICT).
-        cached_attempt.payload_hash = canonical_request_hash(req)
-
-        mock_attempts = MagicMock()
-        mock_attempts.find_by_key.return_value = cached_attempt
-
-        mock_uow = MagicMock()
-        mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-        mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-        mock_uow.idempotency_attempts.count_active.return_value = (0, None)
-        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-        mock_uow.__exit__ = MagicMock(return_value=None)
-        mock_uow.idempotency_attempts = mock_attempts
-
-        with (
-            patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
-            patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
-        ):
-            mock_princ = MagicMock()
-            mock_princ.principal_id = "test_principal"
-            mock_princ.name = "Test Buyer"
-            mock_principal.return_value = mock_princ
-
-            result = await _create_media_buy_impl(req, identity=identity)
-
-        assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result.response, CreateMediaBuySuccess)
-        assert result.response.media_buy_id == "mb_original_123"
-        assert result.status == "completed"
-        assert result.replayed is True  # spec replay marker, injected at replay time (never stored)
-        mock_attempts.find_by_key.assert_called_once_with(
-            principal_id="test_principal",
-            account_id=identity.account_id,
-            idempotency_key=idem_key,
-        )
-
-    @pytest.mark.asyncio
-    async def test_idempotency_new_key_proceeds(self):
-        """Different idempotency_key creates a new media buy (no match found).
-
-        Covers: UC-002-MAIN-IDEMPOTENCY
-        """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
-        req = _make_request(idempotency_key="new-key-never-seen")
-        identity = _make_identity()
-
-        # Mock repo returns None (no match for this key)
-        mock_idem_repo = MagicMock()
-        mock_idem_repo.find_by_idempotency_key.return_value = None
-
-        # β success cache returns None (no cached success) → probe misses, flow proceeds
-        mock_idem_attempts_repo = MagicMock()
-        mock_idem_attempts_repo.find_by_key.return_value = None
-        mock_idem_attempts_repo.count_inserts_since.return_value = (0, None)
-        mock_idem_attempts_repo.count_active.return_value = (0, None)
-
-        mock_idem_uow = MagicMock()
-        mock_idem_uow.__enter__ = MagicMock(return_value=mock_idem_uow)
-        mock_idem_uow.__exit__ = MagicMock(return_value=None)
-        mock_idem_uow.media_buys = mock_idem_repo
-        mock_idem_uow.idempotency_attempts = mock_idem_attempts_repo
-
-        # Validation UoW (for product lookup — will fail with no products)
-        session = MagicMock()
-        scalars_result = MagicMock()
-        scalars_result.all.return_value = []
-        scalars_result.first.return_value = None
-        session.scalars.return_value = scalars_result
-
-        mock_validation_uow = MagicMock()
-        mock_validation_uow.__enter__ = MagicMock(return_value=mock_validation_uow)
-        mock_validation_uow.__exit__ = MagicMock(return_value=None)
-        mock_validation_uow.session = session
-        mock_validation_uow.media_buys = MagicMock()
-        mock_validation_uow.media_buys.get_by_principal.return_value = []
-
-        # Two separate MediaBuyUoW calls: first for idempotency, second for validation
-        uow_instances = [mock_idem_uow, mock_validation_uow]
-
-        with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
-            patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
-            patch("src.core.tools.media_buy_create.get_context_manager") as mock_ctx_mgr,
-            patch("src.core.database.repositories.MediaBuyUoW", side_effect=uow_instances),
-        ):
-            mock_princ = MagicMock()
-            mock_princ.principal_id = "test_principal"
-            mock_princ.name = "Test Buyer"
-            mock_principal.return_value = mock_princ
-
-            ctx_mgr = MagicMock()
-            ctx_mgr.create_context.return_value = MagicMock(context_id="ctx_1")
-            ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
-            mock_ctx_mgr.return_value = ctx_mgr
-
-            # Idempotency probe miss → flow continues into product validation,
-            # which fails with the typed AdCPProductNotFoundError. Capture it so
-            # we can still assert the idempotency probe ran.
-            with pytest.raises(AdCPProductNotFoundError):
-                await _create_media_buy_impl(req, identity=identity)
-
-        # β idempotency probe ran (verbatim success cache), found nothing → proceeded
-        mock_idem_attempts_repo.find_by_key.assert_called_once_with(
-            principal_id="test_principal",
-            account_id=identity.account_id,
-            idempotency_key="new-key-never-seen",
-        )
 
 
 class TestCreateMediaBuyAdapterInteraction:
@@ -1615,9 +1478,6 @@ class TestCreateMediaBuyAdapterInteraction:
         mock_session.scalars.side_effect = scalars_side_effect
 
         mock_uow = MagicMock()
-        mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-        mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-        mock_uow.idempotency_attempts.count_active.return_value = (0, None)
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=None)
         mock_uow.session = mock_session
@@ -1679,13 +1539,29 @@ class TestUpdateMediaBuySchemaCompliance:
 
         # A well-formed revision is still rejected: we cannot honor CONFLICT-on-mismatch.
         with pytest.raises(AdCPInvalidRequestError):
-            _build_update_request(media_buy_id="mb_1", paused=True, revision=5)
+            _build_update_request(media_buy_id="mb_1", paused=True, idempotency_key=_UPDATE_IDEMPOTENCY_KEY, revision=5)
         with pytest.raises(AdCPInvalidRequestError):
-            _build_update_request(media_buy_id="mb_1", paused=True, revision="5")
+            _build_update_request(
+                media_buy_id="mb_1", paused=True, idempotency_key=_UPDATE_IDEMPOTENCY_KEY, revision="5"
+            )
 
-        # Absent revision (the normal case) still builds a valid request.
-        req = _build_update_request(media_buy_id="mb_1", paused=True, revision=None)
+        # Explicit JSON null is still a supplied revision and must not collapse
+        # into the omission path.
+        with pytest.raises(AdCPInvalidRequestError):
+            _build_update_request(
+                media_buy_id="mb_1", paused=True, idempotency_key=_UPDATE_IDEMPOTENCY_KEY, revision=None
+            )
+
+        # Truly absent revision (the normal case) still builds a valid request.
+        req = _build_update_request(media_buy_id="mb_1", paused=True, idempotency_key=_UPDATE_IDEMPOTENCY_KEY)
         assert req.media_buy_id == "mb_1"
+
+    def test_build_update_request_requires_idempotency_key(self):
+        """The shared MCP/A2A/REST builder enforces AdCP 3.1.1 requiredness."""
+        from src.core.tools.media_buy_update import _build_update_request
+
+        with pytest.raises(AdCPValidationError, match="idempotency_key is required"):
+            _build_update_request(media_buy_id="mb_1", paused=True)
 
     def test_update_request_parses_iso_datetime_strings(self):
         """UC-003-S02: ISO datetime strings parsed in pre-validator.
@@ -1852,9 +1728,6 @@ class TestUpdateMediaBuyMainFlow:
 
         # Build mock UoW
         mock_uow = MagicMock()
-        mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-        mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-        mock_uow.idempotency_attempts.count_active.return_value = (0, None)
         mock_session = MagicMock()
         mock_uow.session = mock_session
         mock_uow.media_buys = MagicMock()
@@ -1932,7 +1805,7 @@ class TestUpdateMediaBuyMainFlow:
 
         # Update with only the identifier and nothing to change
         with pytest.raises(AdCPValidationError, match="at least one updatable field"):
-            _build_update_request(media_buy_id="mb_empty")
+            _build_update_request(media_buy_id="mb_empty", idempotency_key=_UPDATE_IDEMPOTENCY_KEY)
 
 
 class TestUpdateMediaBuyPauseResume:
@@ -1981,9 +1854,6 @@ class TestUpdateMediaBuyPauseResume:
             mock_adapter.return_value = adapter
 
             mock_uow = MagicMock()
-            mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
             # State-machine precondition guard needs a non-terminal status
@@ -2045,9 +1915,6 @@ class TestUpdateMediaBuyPauseResume:
             mock_adapter.return_value = adapter
 
             mock_uow = MagicMock()
-            mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
             # State-machine precondition: 'resume' is only valid from 'paused'
@@ -2108,9 +1975,6 @@ class TestUpdateMediaBuyPauseResume:
             mock_adapter.return_value = adapter
 
             mock_uow = MagicMock()
-            mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
             # State-machine precondition guard needs a non-terminal status
@@ -2200,9 +2064,6 @@ class TestUpdateMediaBuyTiming:
             mock_adapter.return_value = adapter
 
             mock_uow = MagicMock()
-            mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow_session = MagicMock()
             mock_uow.session = mock_uow_session
             mock_uow.media_buys = MagicMock()
@@ -2276,9 +2137,6 @@ class TestUpdateMediaBuyTiming:
             mock_adapter.return_value = adapter
 
             mock_uow = MagicMock()
-            mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow_session = MagicMock()
             mock_uow.session = mock_uow_session
             mock_uow.media_buys = MagicMock()
@@ -2435,9 +2293,6 @@ class TestUpdateMediaBuyCreativeIds:
             mock_adapter.return_value = adapter
 
             mock_uow = MagicMock()
-            mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
@@ -2516,9 +2371,6 @@ class TestUpdateMediaBuyCreativeIds:
             mock_adapter.return_value = adapter
 
             mock_uow = MagicMock()
-            mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
@@ -2600,9 +2452,6 @@ class TestUpdateMediaBuyCreativeIds:
             mock_adapter.return_value = adapter
 
             mock_uow = MagicMock()
-            mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
@@ -2686,9 +2535,6 @@ class TestUpdateMediaBuyCreativeIds:
             mock_adapter.return_value = adapter
 
             mock_uow = MagicMock()
-            mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
@@ -2788,9 +2634,6 @@ class TestUpdateMediaBuyCreativeIds:
             mock_adapter.return_value = adapter
 
             mock_uow = MagicMock()
-            mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
@@ -2888,9 +2731,6 @@ class TestUpdateMediaBuyIdentification:
             mock_ctx_mgr.return_value = ctx_mgr
 
             mock_uow = MagicMock()
-            mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
             mock_uow.media_buys.get_by_id.return_value = None
@@ -2956,9 +2796,6 @@ class TestUpdateMediaBuyOwnership:
             mock_buy.tenant_id = "test_tenant"
 
             mock_uow = MagicMock()
-            mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
             mock_uow.media_buys.get_by_id.return_value = mock_buy
@@ -3014,9 +2851,6 @@ class TestUpdateMediaBuyManualApproval:
             mock_adapter.return_value = adapter
 
             mock_uow = MagicMock()
-            mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
             # State-machine precondition guard needs a non-terminal status
@@ -3084,9 +2918,6 @@ class TestUpdateMediaBuyManualApproval:
             mock_adapter.return_value = adapter
 
             mock_uow = MagicMock()
-            mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
             # State-machine precondition guard needs a non-terminal status
@@ -3154,9 +2985,6 @@ class TestUpdateMediaBuyAdapterFailure:
             mock_adapter.return_value = adapter
 
             mock_uow = MagicMock()
-            mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
             # State-machine precondition guard needs a non-terminal status
@@ -3231,9 +3059,6 @@ class TestUpdateMediaBuyAdapterFailure:
             mock_adapter.return_value = adapter
 
             mock_uow = MagicMock()
-            mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             uow_session = MagicMock()
             mock_uow.session = uow_session
             mock_uow.media_buys = MagicMock()
@@ -3286,9 +3111,6 @@ class TestUpdateMediaBuyAdapterFailure:
             mock_ctx_mgr.return_value = ctx_mgr
 
             mock_uow = MagicMock()
-            mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-            mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-            mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.media_buys = MagicMock()
             mock_uow.media_buys.get_by_id.return_value = mock_buy
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)

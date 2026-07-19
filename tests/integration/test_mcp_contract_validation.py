@@ -11,7 +11,6 @@ Updated for adcp 3.12:
 - UpdateMediaBuyRequest.media_buy_id is now required
 """
 
-import uuid
 from unittest.mock import Mock, patch
 
 import pytest
@@ -26,6 +25,7 @@ from src.core.schemas import (
     ListAuthorizedPropertiesRequest,  # Removed from adcp 3.2.0, defined locally
     UpdateMediaBuyRequest,
 )
+from tests.harness._idempotency import fresh_idempotency_key
 from tests.helpers.adcp_factories import create_test_package_request
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -98,7 +98,7 @@ class TestMCPContractValidation:
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
             po_number="PO-12345",
-            idempotency_key=f"int-key-{uuid.uuid4().hex}",
+            idempotency_key=fresh_idempotency_key("int-key"),
         )
 
         assert request.po_number == "PO-12345"
@@ -122,7 +122,7 @@ class TestMCPContractValidation:
             ],
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
-            idempotency_key=f"int-key-{uuid.uuid4().hex}",
+            idempotency_key=fresh_idempotency_key("int-key"),
         )
         # Should return unique product IDs
         product_ids = request.get_product_ids()
@@ -242,7 +242,7 @@ class TestSchemaDefaultValues:
             start_time="2025-02-15T00:00:00Z",
             end_time="2025-02-28T23:59:59Z",
             po_number="test",
-            idempotency_key=f"int-key-{uuid.uuid4().hex}",
+            idempotency_key=fresh_idempotency_key("int-key"),
         )
         # Per AdCP spec, all fields are spec-compliant with library defaults
         assert req.po_number == "test"

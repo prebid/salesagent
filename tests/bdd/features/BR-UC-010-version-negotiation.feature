@@ -1,7 +1,8 @@
 # Hand-authored feature — not compiled from adcp-req.
 #
 # Companion coverage for the release-resolution boundaries in the pinned AdCP
-# 3.1.0-beta.3 Versioning & Governance prose (`docs/reference/versioning.mdx`).
+# published 3.1.0 Versioning & Governance prose used by the pinned 3.1.1 patch
+# release (`dist/docs/3.1.0/building/...`).
 # The generated BR-UC-010 feature covers the VERSION_UNSUPPORTED payload shape,
 # but its derived schema scenarios do not exercise all normative resolution
 # branches. These cases are ungraded by the pinned compliance storyboards, so

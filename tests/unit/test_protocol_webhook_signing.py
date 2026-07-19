@@ -12,12 +12,15 @@ transmitted bytes and assert it matches the header the service sent.
 import asyncio
 import hashlib
 import hmac
+from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import requests
 from adcp import create_mcp_webhook_payload
 
-from src.services.protocol_webhook_service import ProtocolWebhookService
+from src.services.protocol_webhook_service import ProtocolWebhookService, _canonical_body_bytes
+from tests.helpers.protocol_webhook import assert_protocol_webhook_post
 
 
 def _capture_service():
@@ -130,3 +133,78 @@ class TestBearerAndUnauthenticatedBytes:
         assert "json" not in kwargs
         assert isinstance(kwargs["data"], bytes)
         assert b", " not in kwargs["data"]
+
+
+def test_client_error_from_shared_post_is_closed_and_not_retried():
+    """A falsey requests.Response still carries its 4xx status into retry policy."""
+    config = SimpleNamespace(
+        url="https://buyer.example.com/webhook",
+        authentication_type=None,
+        authentication_token=None,
+    )
+    service, mock_session = _capture_service()
+    response = requests.Response()
+    response.status_code = 404
+    response.close = MagicMock()
+    mock_session.post.return_value = response
+    payload = _payload()
+
+    assert (
+        asyncio.run(
+            service.send_notification(
+                push_notification_config=config,
+                payload=payload,
+                metadata={},
+            )
+        )
+        is False
+    )
+
+    assert_protocol_webhook_post(
+        mock_session.post,
+        url="https://buyer.example.com/webhook",
+        body=_canonical_body_bytes(payload.model_dump(mode="json", exclude_none=True)),
+        host="buyer.example.com",
+    )
+    response.close.assert_called_once_with()
+
+
+def test_retry_timestamp_rolls_into_next_minute():
+    """A retry scheduled at second 59 must not construct an invalid second 60."""
+    config = SimpleNamespace(
+        url="https://buyer.example.com/webhook",
+        authentication_type=None,
+        authentication_token=None,
+    )
+    service = ProtocolWebhookService()
+    service._write_delivery_log = MagicMock()
+    retry_base = datetime(2026, 7, 18, 12, 34, 59, 900_000, tzinfo=UTC)
+
+    with (
+        patch(
+            "src.services.protocol_webhook_service.post_webhook_status_async",
+            new_callable=AsyncMock,
+            side_effect=[500, 200],
+        ),
+        patch("src.services.protocol_webhook_service.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        patch("src.services.protocol_webhook_service.datetime") as mock_datetime,
+    ):
+        mock_datetime.now.return_value = retry_base
+        delivered = asyncio.run(
+            service.send_notification(
+                push_notification_config=config,
+                payload=_payload(),
+                metadata={
+                    "task_type": "delivery_report",
+                    "tenant_id": "tenant-1",
+                    "principal_id": "principal-1",
+                    "media_buy_id": "buy-1",
+                },
+            )
+        )
+
+    assert delivered is True
+    mock_sleep.assert_awaited_once_with(1)
+    retry_log = service._write_delivery_log.call_args_list[0].kwargs
+    assert retry_log["status"] == "retrying"
+    assert retry_log["next_retry_at"] == datetime(2026, 7, 18, 12, 35, 0, tzinfo=UTC)

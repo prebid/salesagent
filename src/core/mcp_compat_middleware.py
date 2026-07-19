@@ -25,6 +25,7 @@ from src.core.request_compat import (
     strip_negotiation_fields,
     strip_undeclared_envelope_fields,
     strip_unknown_params,
+    validate_standard_read_idempotency_key,
 )
 from src.core.tool_error_logging import (
     _reject_at_mcp_boundary,
@@ -42,16 +43,18 @@ class RequestCompatMiddleware(Middleware):
     1. Translate deprecated field names via normalize_request_params()
     2. Reject an unsupported AdCP version pin via validate_adcp_version_pins()
        (VERSION_UNSUPPORTED) — before the fields are stripped below.
-    3. Drop AdCP version-negotiation envelope fields (adcp_version,
+    3. Validate a supplied idempotency_key on registered standard reads. With
+       idempotency.supported=false it is inert metadata; omission is tolerated.
+    4. Drop AdCP version-negotiation envelope fields (adcp_version,
        adcp_major_version) via strip_negotiation_fields() — all environments,
        since no tool wrapper declares them (issue #1512).
-    4. Drop standard AdCP envelope fields the tool doesn't declare
+    5. Drop standard AdCP envelope fields the tool doesn't declare
        (ADCP_ENVELOPE_FIELDS: context, ext, push_notification_config,
-       idempotency_key, revision) via strip_undeclared_envelope_fields() —
+       idempotency_key) via strip_undeclared_envelope_fields() —
        all environments (issue #1512).
-    5. Strip fields not in the tool's JSON Schema via strip_unknown_params()
+    6. Strip fields not in the tool's JSON Schema via strip_unknown_params()
        (production only).
-    6. If TypeAdapter rejects the arguments, always translate and record the
+    7. If TypeAdapter rejects the arguments, always translate and record the
        failure as an AdCP validation envelope (normalize_to_adcp_error +
        record_boundary_error + translate_to_tool_error). In production only,
        first deep-strip schema-unknown nested fields and retry when that changes
@@ -68,9 +71,12 @@ class RequestCompatMiddleware(Middleware):
         context: MiddlewareContext,
         call_next,
     ) -> ToolResult:
-        arguments = context.message.arguments
-        if not arguments:
-            return await call_next(context)
+        # ``None`` and ``{}`` both mean an argument-less tool call, but they
+        # must still pass through the TypeAdapter fallback. Required-field
+        # failures happen precisely on this path; bypassing middleware leaked
+        # FastMCP's raw Pydantic text instead of an AdCP error envelope.
+        arguments = context.message.arguments or {}
+        application_context = arguments.get("context")
 
         tool_name = context.message.name
         normalized = dict(arguments)
@@ -94,6 +100,10 @@ class RequestCompatMiddleware(Middleware):
         # (VERSION_UNSUPPORTED).
         try:
             validate_adcp_version_pins(normalized)
+            # Step 3: optional read-key shape. Authentication already ran in
+            # MCPAuthMiddleware, and VERSION wins when both fields are bad.
+            # Validate before Step 5 strips an undeclared envelope key.
+            validate_standard_read_idempotency_key(tool_name, normalized)
         except AdCPError as exc:
             identity = None
             try:
@@ -101,9 +111,9 @@ class RequestCompatMiddleware(Middleware):
                     identity = await context.fastmcp_context.get_state("identity")
             except Exception:  # best-effort — never mask the version error
                 identity = None
-            _reject_at_mcp_boundary(tool_name, exc, identity)
+            _reject_at_mcp_boundary(tool_name, exc, identity, context=application_context)
 
-        # Step 3: Drop AdCP version-negotiation envelope fields (all environments).
+        # Step 4: Drop AdCP version-negotiation envelope fields (all environments).
         # Every AdCP SDK client injects adcp_version / adcp_major_version for
         # version negotiation; no tool wrapper declares them, so FastMCP's strict
         # per-tool arg-validation would reject conformant clients (#1512). These
@@ -117,9 +127,9 @@ class RequestCompatMiddleware(Middleware):
         # (all environments) and the production unknown-field strip below.
         known_params = await self._get_known_params(context, tool_name)
 
-        # Step 4: Drop standard AdCP envelope fields the tool doesn't declare
+        # Step 5: Drop standard AdCP envelope fields the tool doesn't declare
         # (ADCP_ENVELOPE_FIELDS — context / ext / push_notification_config /
-        # idempotency_key / revision), all environments. SDK clients send
+        # idempotency_key), all environments. SDK clients send
         # these on any request; a tool that declares one receives it, a tool
         # that doesn't would otherwise reject it (#1512). Protocol envelope,
         # not business data — unlike Step 5's general unknown strip.
@@ -127,7 +137,7 @@ class RequestCompatMiddleware(Middleware):
         modified = modified or bool(dropped_env)
         _log_dropped_fields(tool_name, "undeclared AdCP envelope", dropped_env)
 
-        # Step 5: Strip unknown fields (schema-aware, production only)
+        # Step 6: Strip unknown fields (schema-aware, production only)
         # In dev mode, unknown fields reach TypeAdapter and fail loudly —
         # this is how we detect that the seller agent doesn't support a
         # field the spec requires. In production, strip silently to avoid
@@ -151,9 +161,15 @@ class RequestCompatMiddleware(Middleware):
             )
             context = context.copy(message=new_message)
 
-        # Step 6: Dispatch — with production fallback on TypeAdapter rejection.
+        # Step 7: Dispatch — with production fallback on TypeAdapter rejection.
         # Extracted to keep this method's cyclomatic size bounded (ADR-009 / #1610).
-        return await self._dispatch_with_typeadapter_fallback(context, tool_name, normalized, call_next)
+        return await self._dispatch_with_typeadapter_fallback(
+            context,
+            tool_name,
+            normalized,
+            call_next,
+            application_context=application_context,
+        )
 
     async def _dispatch_with_typeadapter_fallback(
         self,
@@ -161,6 +177,8 @@ class RequestCompatMiddleware(Middleware):
         tool_name: str,
         normalized: dict,
         call_next,
+        *,
+        application_context: Any = None,
     ) -> ToolResult:
         """Dispatch to the tool; on a TypeAdapter structural validation failure, retry
         (production only) after schema-aware deep-strip, then translate the failure to
@@ -201,7 +219,7 @@ class RequestCompatMiddleware(Middleware):
             # Normalize once for the audit record, then pass the raw exception to
             # translate_to_tool_error so the emitted AdCPToolError keeps it as
             # __cause__. The translator intentionally normalizes it a second time.
-            typed = normalize_to_adcp_error(exc)
+            typed = normalize_to_adcp_error(exc, context=application_context)
             tenant_id = None
             principal_id = None
             if context.fastmcp_context is not None:
@@ -219,7 +237,7 @@ class RequestCompatMiddleware(Middleware):
                 tenant_id=tenant_id,
                 principal_id=principal_id,
             )
-            translate_to_tool_error(exc)
+            translate_to_tool_error(exc, context=application_context)
 
     @staticmethod
     def _should_retry(exc: Exception) -> bool:

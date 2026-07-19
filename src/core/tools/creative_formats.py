@@ -40,6 +40,7 @@ from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import Field
 
+from src.core.application_context import dump_adcp_response
 from src.core.exceptions import AdCPError, AdCPServiceUnavailableError
 from src.core.helpers import enum_value
 from src.core.tool_context import ToolContext
@@ -591,7 +592,7 @@ async def list_creative_formats(
 
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _list_creative_formats_impl(req, identity)
-    return ToolResult(content=str(response), structured_content=response)
+    return ToolResult(content=str(response), structured_content=dump_adcp_response(response, context=context))
 
 
 def list_creative_formats_raw(

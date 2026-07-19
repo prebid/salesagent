@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import copy, deepcopy
 from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,6 +13,34 @@ from fastmcp.server.context import Context
 from src.core.tools.media_buy_update import update_media_buy
 
 MODULE = "src.core.tools.media_buy_update"
+
+
+def test_revision_omission_survives_schema_default_copying():
+    """FastMCP/Pydantic copies of internal defaults remain omission, not wire input."""
+    from src.core.tools.media_buy_update import (
+        _MCP_REVISION_DEFAULT,
+        REVISION_OMITTED,
+        validate_update_media_buy_protocol_fields,
+    )
+
+    for copied_default in (copy(_MCP_REVISION_DEFAULT), deepcopy(REVISION_OMITTED)):
+        validate_update_media_buy_protocol_fields(
+            idempotency_key="transport-key-0001",
+            revision=copied_default,
+        )
+
+
+def test_revision_omission_survives_a_prior_module_definition():
+    """An already-imported transport sentinel remains omission after reload."""
+    from src.core.tools.media_buy_update import validate_update_media_buy_protocol_fields
+
+    class PriorRevisionOmitted(int):
+        _adcp_revision_omitted = True
+
+    validate_update_media_buy_protocol_fields(
+        idempotency_key="transport-key-0001",
+        revision=PriorRevisionOmitted(0),
+    )
 
 
 def _make_identity(tenant_id: str = "tenant_test"):
@@ -94,6 +123,7 @@ def test_mcp_wrapper_preserves_existing_currency_for_float_budget():
             update_media_buy(
                 media_buy_id="mb_transport",
                 budget=5000.0,
+                idempotency_key="transport-key-0001",
                 ctx=mock_ctx,
             )
         )

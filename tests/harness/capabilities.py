@@ -181,6 +181,11 @@ class CapabilitiesEnv(IntegrationEnv):
         import json
 
         params = {k: v for k, v in kwargs.items() if v is not None}
+        if params.get("protocols") == []:
+            # HTTP clients omit a list with zero items, collapsing explicit []
+            # into field absence. Preserve presence as ``?protocols=`` so the
+            # REST boundary applies the schema's minItems validation.
+            params["protocols"] = ""
         if "context" in params and not isinstance(params["context"], str):
             params["context"] = json.dumps(params["context"])
         return params

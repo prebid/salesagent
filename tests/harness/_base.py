@@ -406,6 +406,11 @@ class BaseTestEnv:
         # A2A/MCP dispatchers. None unless such a path ran — REST builds its
         # own from the HTTP body; legacy/_raw paths and IMPL leave it None.
         self._last_wire_response: dict[str, Any] | None = None
+        # Raw FastMCP CallToolResult returned by the last _run_mcp_client call.
+        # McpDispatcher exposes this through TransportResult.raw_response so
+        # authenticity checks can compare the captured wire dict to the object
+        # that actually crossed the in-memory MCP client boundary.
+        self._last_mcp_raw_response: Any = None
         # Raw A2A Task returned by the last _run_a2a_handler call. The submitted
         # (manual-approval) contract lives on the Task itself — state=SUBMITTED
         # with NO artifacts — and the synthesized submitted wire above cannot
@@ -542,6 +547,7 @@ class BaseTestEnv:
         # Reset success-path wire capture; _run_a2a_handler / _run_mcp_client
         # set it fresh on success so A2A/MCP dispatchers can surface real wire.
         self._last_wire_response = None
+        self._last_mcp_raw_response = None
         return dispatcher.dispatch(self, **kwargs)
 
     # -- Per-transport hooks (override in subclass) -------------------------
@@ -812,6 +818,12 @@ class BaseTestEnv:
         else:
             arguments = dict(kwargs)
 
+        def _capture_result(result: Any) -> Any:
+            """Stash one MCP result before constructing the typed payload."""
+            self._last_mcp_raw_response = result
+            self._last_wire_response = result.structured_content
+            return response_cls(**result.structured_content)
+
         # Choose auth strategy based on whether production should resolve the
         # request from raw headers or the unit harness must inject an identity.
         headers: dict[str, str] | None = None
@@ -842,8 +854,7 @@ class BaseTestEnv:
                         assert patched_th.called or patched_mw.called, (
                             f"Auth chain not exercised for {tool_name} — get_http_headers patches were not called"
                         )
-                        self._last_wire_response = result.structured_content
-                        return response_cls(**result.structured_content)
+                        return _capture_result(result)
 
         else:
             # Unit mode: inject identity directly.
@@ -854,8 +865,7 @@ class BaseTestEnv:
                 ):
                     async with Client(mcp) as client:
                         result = await client.call_tool(tool_name, arguments)
-                        self._last_wire_response = result.structured_content
-                        return response_cls(**result.structured_content)
+                        return _capture_result(result)
 
         try:
             return asyncio.run(_call())

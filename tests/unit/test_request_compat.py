@@ -9,14 +9,19 @@ equivalents, mirroring the JS adcp-client's normalizeRequestParams() logic.
 
 import logging
 
+import pytest
+
+from src.core.exceptions import AdCPValidationError
 from src.core.request_compat import (
     ADCP_NEGOTIATION_FIELDS,
+    STANDARD_ADCP_READ_TOOLS,
     _log_dropped_fields,
     _strip_fields,
     normalize_request_params,
     strip_negotiation_fields,
     strip_undeclared_envelope_fields,
     strip_unknown_params,
+    validate_standard_read_idempotency_key,
 )
 
 # ---------------------------------------------------------------------------
@@ -496,3 +501,62 @@ class TestStripUndeclaredEnvelopeFields:
         )
         assert cleaned == {"some_business_field": 1}
         assert stripped == ["context"]
+
+
+class TestStandardReadIdempotencyEnvelope:
+    """Pinned 3.1 reads validate a supplied key but accept omission."""
+
+    _EXPECTED_REGISTERED_READS = frozenset(
+        {
+            "get_adcp_capabilities",
+            "get_media_buy_delivery",
+            "get_media_buys",
+            "get_products",
+            "list_accounts",
+            "list_creative_formats",
+            "list_creatives",
+            "list_tasks",
+        }
+    )
+
+    def test_read_registry_is_exact_and_includes_registered_list_tasks(self):
+        """The ingress set mirrors the eight standard reads registered in core.main."""
+        assert STANDARD_ADCP_READ_TOOLS == self._EXPECTED_REGISTERED_READS
+
+    @pytest.mark.parametrize("tool_name", sorted(_EXPECTED_REGISTERED_READS))
+    def test_valid_supplied_key_is_accepted_for_every_registered_read(self, tool_name):
+        validate_standard_read_idempotency_key(
+            tool_name,
+            {"idempotency_key": "valid-read-key-0001"},
+        )
+
+    @pytest.mark.parametrize("tool_name", sorted(_EXPECTED_REGISTERED_READS))
+    def test_omitted_key_gets_the_31_read_grace(self, tool_name):
+        validate_standard_read_idempotency_key(tool_name, {})
+
+    @pytest.mark.parametrize(
+        ("value", "message"),
+        [
+            (None, "must be a string"),
+            (123, "must be a string"),
+            ("short", "too short"),
+            ("a" * 256, "too long"),
+            ("valid-read-key-0001!", "contains characters"),
+            ("valid-read-key-0001\n", "contains characters"),
+        ],
+        ids=("null", "numeric", "short", "long", "invalid-char", "trailing-newline"),
+    )
+    def test_malformed_supplied_key_uses_one_shape_validator(self, value, message):
+        with pytest.raises(AdCPValidationError, match=message) as exc_info:
+            validate_standard_read_idempotency_key(
+                "get_products",
+                {"idempotency_key": value},
+            )
+
+        assert exc_info.value.field == "idempotency_key"
+
+    def test_nonstandard_local_tool_is_unchanged(self):
+        validate_standard_read_idempotency_key(
+            "list_authorized_properties",
+            {"idempotency_key": None},
+        )

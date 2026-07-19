@@ -13,8 +13,8 @@ from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
 
-from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _unambiguous_invocation_context
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError, AdCPVersionUnsupportedError
 from tests.factories.principal import PrincipalFactory
 
 
@@ -30,6 +30,77 @@ class TestAuthOptionalSkills:
         self.anon_identity = PrincipalFactory.make_identity(
             principal_id=None, tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
         )
+
+    _STANDARD_READ_HANDLERS = (
+        ("get_adcp_capabilities", "_handle_get_adcp_capabilities_skill"),
+        ("get_media_buy_delivery", "_handle_get_media_buy_delivery_skill"),
+        ("get_media_buys", "_handle_get_media_buys_skill"),
+        ("get_products", "_handle_get_products_skill"),
+        ("list_accounts", "_handle_list_accounts_skill"),
+        ("list_creative_formats", "_handle_list_creative_formats_skill"),
+        ("list_creatives", "_handle_list_creatives_skill"),
+    )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("skill_name", "handler_name"), _STANDARD_READ_HANDLERS)
+    @pytest.mark.parametrize(
+        "parameters",
+        ({}, {"idempotency_key": "valid-read-key-0001"}),
+        ids=("omitted-grace", "valid-supplied"),
+    )
+    async def test_standard_read_key_is_omitted_or_consumed_before_handler(
+        self,
+        skill_name,
+        handler_name,
+        parameters,
+    ):
+        """All A2A-exposed reads see neither an omitted nor a valid inert key."""
+        handler_stub = AsyncMock(return_value={"ok": True})
+
+        with patch.object(self.handler, handler_name, handler_stub):
+            result = await self.handler._handle_explicit_skill(
+                skill_name,
+                parameters,
+                self.mock_identity,
+            )
+
+        assert result == {"ok": True}
+        handler_stub.assert_awaited_once_with({}, self.mock_identity)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("skill_name", "handler_name"), _STANDARD_READ_HANDLERS)
+    async def test_explicit_null_read_key_rejects_before_every_handler(self, skill_name, handler_name):
+        handler_stub = AsyncMock(return_value={"ok": True})
+
+        with (
+            patch.object(self.handler, handler_name, handler_stub),
+            pytest.raises(AdCPValidationError, match="idempotency_key must be a string"),
+        ):
+            await self.handler._handle_explicit_skill(
+                skill_name,
+                {"idempotency_key": None},
+                self.mock_identity,
+            )
+
+        handler_stub.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_authentication_precedes_malformed_read_key(self):
+        with pytest.raises(AdCPAuthenticationError):
+            await self.handler._handle_explicit_skill(
+                "get_media_buys",
+                {"idempotency_key": None},
+                None,
+            )
+
+    @pytest.mark.asyncio
+    async def test_version_precedes_malformed_read_key(self):
+        with pytest.raises(AdCPVersionUnsupportedError):
+            await self.handler._handle_explicit_skill(
+                "get_products",
+                {"adcp_version": "4.0", "idempotency_key": None},
+                None,
+            )
 
     @pytest.mark.asyncio
     async def test_list_creative_formats_without_auth(self):
@@ -162,10 +233,18 @@ class TestAuthOptionalSkills:
         from tests.helpers import assert_envelope_shape
         from tests.utils.a2a_helpers import create_a2a_message_with_skill
 
+        application_context = {
+            "correlation_id": "a2a-missing-auth-context",
+            "nullable": None,
+        }
         params = SendMessageRequest(
             message=create_a2a_message_with_skill(
                 "update_media_buy",
-                {"adcp_version": "4.0", "media_buy_id": "mb_1"},
+                {
+                    "adcp_version": "4.0",
+                    "media_buy_id": "mb_1",
+                    "context": application_context,
+                },
             ),
             configuration=SendMessageConfiguration(
                 task_push_notification_config=TaskPushNotificationConfig(url="https://attacker.example/webhook")
@@ -183,6 +262,7 @@ class TestAuthOptionalSkills:
         # BEFORE identity resolution, task creation, or callback persistence
         # (#1417) — carrying the buyer-facing two-layer envelope in ``data``.
         assert_envelope_shape(exc_info.value.data, "AUTH_REQUIRED", recovery="correctable")
+        assert exc_info.value.data["context"] == application_context
         send_webhook.assert_not_awaited()
         # Pre-auth rejection short-circuits before the boundary-telemetry helper:
         # nothing is recorded for an unauthenticated sender, so no tenant-scoped
@@ -191,6 +271,66 @@ class TestAuthOptionalSkills:
         record_error.assert_not_called()
         assert self.handler.tasks == {}
         assert self.handler._task_push_configs == {}
+
+    @pytest.mark.asyncio
+    async def test_invalid_token_error_echoes_unambiguous_application_context(self):
+        """Identity-resolution failures retain context in JSON-RPC error data."""
+        from a2a.server.routes.common import ServerCallContext
+        from a2a.types import InternalError, SendMessageRequest
+
+        from tests.helpers import assert_envelope_shape
+        from tests.utils.a2a_helpers import create_a2a_message_with_skill
+
+        application_context = {
+            "correlation_id": "a2a-invalid-auth-context",
+            "nullable": None,
+        }
+        params = SendMessageRequest(
+            message=create_a2a_message_with_skill(
+                "update_media_buy",
+                {
+                    "media_buy_id": "mb_1",
+                    "context": application_context,
+                },
+            )
+        )
+
+        with (
+            patch.object(self.handler, "_get_auth_token", return_value="invalid-token"),
+            patch.object(
+                self.handler,
+                "_resolve_a2a_identity",
+                side_effect=AdCPAuthenticationError("Invalid authentication token"),
+            ),
+            patch("src.a2a_server.adcp_a2a_server.record_boundary_error_for_identity"),
+            pytest.raises(InternalError) as exc_info,
+        ):
+            await self.handler.on_message_send(params, ServerCallContext())
+
+        assert_envelope_shape(exc_info.value.data, "AUTH_REQUIRED", recovery="correctable")
+        assert exc_info.value.data["context"] == application_context
+
+    def test_multi_skill_context_is_echoed_only_when_unambiguous(self):
+        shared = {"correlation_id": "shared", "nullable": None}
+        assert (
+            _unambiguous_invocation_context(
+                [
+                    {"skill": "one", "parameters": {"context": shared}},
+                    {"skill": "two", "parameters": {}},
+                    {"skill": "three", "parameters": {"context": dict(shared)}},
+                ]
+            )
+            == shared
+        )
+        assert (
+            _unambiguous_invocation_context(
+                [
+                    {"skill": "one", "parameters": {"context": shared}},
+                    {"skill": "two", "parameters": {"context": {"correlation_id": "other"}}},
+                ]
+            )
+            is None
+        )
 
     @pytest.mark.asyncio
     async def test_generic_processing_error_with_no_identity_skips_tenant_scoped_sinks(self):
@@ -235,13 +375,13 @@ class TestAuthOptionalSkills:
 
     @pytest.mark.asyncio
     async def test_anonymous_discovery_callback_is_refused_and_never_persisted(self):
-        """Auth-optional discovery carrying a push callback must not register it (SSRF, #1512).
+        """Anonymous discovery cannot register even an otherwise-safe callback (#1512).
 
         The prior regression covered a *rejected-auth* request dropping its callback.
         This closes the sibling gap: an auth-optional discovery request that resolves
-        an anonymous identity SUCCESSFULLY and carries a callback. The callback must be
-        refused before storage, so the later status/failure webhook has no
-        attacker-chosen target (e.g. http://169.254.169.254/latest/meta-data) to POST to.
+        an anonymous identity SUCCESSFULLY and carries a callback. URL validation is
+        made to pass so this test proves the independent authentication gate refuses
+        the callback before storage.
 
         The rejection surfaces as a buyer-CORRECTABLE FAILED Task (not a JSON-RPC
         InternalError) — the wire-envelope shape is pinned by the raw-wire test in
@@ -256,32 +396,50 @@ class TestAuthOptionalSkills:
             TaskState,
         )
 
-        from tests.utils.a2a_helpers import create_a2a_message_with_skill
+        from tests.helpers import assert_envelope_shape
+        from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
 
         params = SendMessageRequest(
             message=create_a2a_message_with_skill("get_adcp_capabilities", {}),
             configuration=SendMessageConfiguration(
-                task_push_notification_config=TaskPushNotificationConfig(url="http://169.254.169.254/latest/meta-data")
+                task_push_notification_config=TaskPushNotificationConfig(url="https://buyer.example/webhook")
             ),
         )
 
-        with patch.object(self.handler, "_resolve_a2a_identity", return_value=self.anon_identity):
+        with (
+            patch.object(self.handler, "_resolve_a2a_identity", return_value=self.anon_identity),
+            patch(
+                "src.core.webhook_validator._validate_callback_url_with_policy",
+                return_value=(True, ""),
+            ) as validate_url,
+        ):
             result = await self.handler.on_message_send(params, ServerCallContext())
 
         # Buyer-correctable FAILED task, NOT an InternalError; callback never stored so
         # the status/failure webhook has nothing to deliver.
         assert isinstance(result, Task)
         assert result.status.state == TaskState.TASK_STATE_FAILED
+        assert result.artifacts
+        envelope = extract_data_from_artifact(result.artifacts[0])
+        assert_envelope_shape(
+            envelope,
+            "VALIDATION_ERROR",
+            message_substr="requires authentication",
+            recovery="correctable",
+        )
+        validate_url.assert_called_once_with("https://buyer.example/webhook", allow_private=False)
         assert self.handler._task_push_configs == {}
 
     def test_validate_push_callback_rejects_ssrf_url_for_authenticated_caller(self):
         """Even an authenticated caller cannot register an internal/metadata callback URL (#1512)."""
         from a2a.types import TaskPushNotificationConfig
 
-        config = TaskPushNotificationConfig(url="http://169.254.169.254/latest/meta-data")
+        config = TaskPushNotificationConfig(url="https://169.254.169.254/latest/meta-data")
         with pytest.raises(AdCPValidationError) as exc:
             self.handler._validate_push_callback(config, self.mock_identity)
         assert "SSRF" in str(exc.value)
+        assert exc.value.field == "push_notification_config.url"
+        assert exc.value.suggestion == "Supply a publicly routable HTTPS callback URL without embedded credentials."
 
     def test_validate_push_callback_allows_safe_url_for_authenticated_caller(self):
         """A safe callback URL from an authenticated caller is accepted (no over-rejection)."""
@@ -289,7 +447,7 @@ class TestAuthOptionalSkills:
 
         config = TaskPushNotificationConfig(url="https://buyer.example.com/webhook")
         with patch(
-            "src.a2a_server.adcp_a2a_server.WebhookURLValidator.validate_callback_url",
+            "src.core.webhook_validator._validate_callback_url_with_policy",
             return_value=(True, ""),
         ):
             self.handler._validate_push_callback(config, self.mock_identity)  # must not raise
@@ -303,7 +461,7 @@ class TestAuthOptionalSkills:
         # Simulate a callback that reached storage (e.g. via a non-on_message_send path,
         # or a hostname that only now resolves to a link-local address).
         self.handler._task_push_configs["task_ssrf"] = TaskPushNotificationConfig(
-            url="http://169.254.169.254/latest/meta-data"
+            url="https://169.254.169.254/latest/meta-data"
         )
 
         with patch("src.a2a_server.adcp_a2a_server.get_protocol_webhook_service") as mock_service:

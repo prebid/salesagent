@@ -18,6 +18,7 @@ from typing import Any, Self
 from unittest.mock import MagicMock, patch
 
 from src.core.schemas import UpdateMediaBuyRequest
+from tests.harness._idempotency import ensure_idempotency_key
 from tests.harness._mixins import make_adapter_update_side_effect
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.harness.media_buy_update import _WRAPPER_UNSUPPORTED_FIELDS
@@ -177,12 +178,12 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         """
         req = kwargs.pop("req", None)
         if req is None:
-            return dict(kwargs)
+            return ensure_idempotency_key(dict(kwargs))
         flat = req.model_dump(mode="json", exclude_none=True)
         for key in _WRAPPER_UNSUPPORTED_FIELDS:
             flat.pop(key, None)
         flat.update(kwargs)
-        return flat
+        return ensure_idempotency_key(flat)
 
     def _call_update_a2a(self, **kwargs: Any) -> Any:
         # Drive the REAL on_message_send → _serialize_for_a2a → Task/Artifact
@@ -221,9 +222,14 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         if req is not None:
             body = req.model_dump(mode="json", exclude_none=True)
             body.pop("media_buy_id", None)
-            return body
+            # Allow an omission regression to override a pre-built internal
+            # request with OMIT_IDEMPOTENCY_KEY; normal calls receive the shared
+            # valid harness default below.
+            if "idempotency_key" in kwargs:
+                body["idempotency_key"] = kwargs["idempotency_key"]
+            return ensure_idempotency_key(body)
         kwargs.pop("media_buy_id", None)
-        return kwargs
+        return ensure_idempotency_key(kwargs)
 
     def _run_update_rest_request(self, **kwargs: Any) -> Any:
         # Shared preamble (identity resolution + commit + client + auth-dep

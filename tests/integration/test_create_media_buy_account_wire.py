@@ -15,8 +15,8 @@ wrapper drops the field, enrich is a no-op, no account lookup runs, and the
 ACCOUNT_NOT_FOUND assertion fails, reddening the matching transport's test.
 
 Account resolution raises ``AdCPAccountNotFoundError`` in the wrapper (before
-``_impl``), so this surfaces as a transport *error* envelope (a replayed cached
-success, by contrast, surfaces as a success envelope) — asserted via
+``_impl``), so this surfaces as a transport *error* envelope (a successful
+create, by contrast, surfaces as a success envelope) — asserted via
 ``assert_rejected``.
 """
 

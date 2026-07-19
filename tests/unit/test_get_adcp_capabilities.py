@@ -170,10 +170,12 @@ class TestGetAdcpCapabilitiesImpl:
         assert response.adcp is not None
         assert response.adcp.major_versions[0].root == 3
         assert SupportedProtocol.media_buy in response.supported_protocols
-        # Idempotency must declare supported=True since MediaBuyRepository.find_by_idempotency_key
-        # actually dedupes against idx_media_buys_idempotency_key.
-        assert response.adcp.idempotency.supported is True
-        assert response.adcp.idempotency.replay_ttl_seconds == 86400
+        # The declaration is seller-wide. Requests may re-execute, so
+        # supported:false is the only honest 3.1.1 capability variant.
+        assert response.adcp.idempotency.supported is False
+        assert not hasattr(response.adcp.idempotency, "replay_ttl_seconds")
+        assert not hasattr(response.adcp.idempotency, "in_flight_max_seconds")
+        assert response.adcp.idempotency.model_dump(mode="json") == {"supported": False}
         # Specialism declaration activates storyboard scenarios bundled under
         # sales-non-guaranteed (inventory_list_*, delivery_reporting, etc.).
         assert response.specialisms is not None
@@ -402,9 +404,11 @@ class TestGetAdcpCapabilitiesWithTenant:
                 assert response.adcp is not None
                 assert response.adcp.major_versions[0].root == 3
                 assert SupportedProtocol.media_buy in response.supported_protocols
-                # Full response must also declare idempotency support consistently.
-                assert response.adcp.idempotency.supported is True
-                assert response.adcp.idempotency.replay_ttl_seconds == 86400
+                # Full response must carry the same honest seller-wide posture.
+                assert response.adcp.idempotency.supported is False
+                assert not hasattr(response.adcp.idempotency, "replay_ttl_seconds")
+                assert not hasattr(response.adcp.idempotency, "in_flight_max_seconds")
+                assert response.adcp.idempotency.model_dump(mode="json") == {"supported": False}
                 # Specialism declaration must be consistent across minimal and full paths.
                 assert response.specialisms is not None
                 assert AdcpSpecialism.sales_non_guaranteed in response.specialisms

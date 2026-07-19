@@ -32,8 +32,60 @@ two-layer envelope. Every A2A case drives the REAL wire — ``on_message_send``
 
 import pytest
 
+from tests.harness._idempotency import fresh_idempotency_key
+
 INVALID_STATUS_FILTER = ["nonexistent_status"]  # rejected by GetMediaBuyDeliveryRequest
 INVALID_ASSET_TYPES = ["not_an_asset_type"]  # rejected by ListCreativeFormatsRequest
+
+
+@pytest.mark.requires_db
+class TestRequestValidationContextEchoParity:
+    """A valid application context survives pre-tool validation on every wire."""
+
+    @pytest.mark.parametrize(
+        ("transport_name", "expected_code"),
+        [
+            ("A2A", "VALIDATION_ERROR"),
+            ("MCP", "VALIDATION_ERROR"),
+            ("REST", "INVALID_REQUEST"),
+        ],
+    )
+    def test_malformed_packages_echoes_exact_context(
+        self,
+        integration_db,
+        transport_name: str,
+        expected_code: str,
+    ) -> None:
+        """Validation before request construction still echoes opaque context."""
+        from tests.harness.media_buy_create import MediaBuyCreateEnv
+        from tests.harness.transport import Transport
+
+        transport = Transport[transport_name]
+        application_context = {
+            "correlation_id": f"ctx-validation-{transport.value}",
+            "nullable": None,
+            "nested": {"value": None},
+        }
+        with MediaBuyCreateEnv() as env:
+            env.setup_media_buy_data()
+            result = env.call_via(
+                transport,
+                brand={"domain": "acme.example"},
+                packages="not-a-list",
+                start_time="asap",
+                end_time="2099-12-31T23:59:59Z",
+                idempotency_key="context-echo-error-0001",
+                context=application_context,
+            )
+
+        assert result.is_error, f"{transport.value}: malformed packages unexpectedly succeeded"
+        result.assert_wire_error(
+            expected_code,
+            recovery="correctable",
+            require_suggestion=True,
+            message_substr="list",
+        )
+        assert result.wire_error_envelope["context"] == application_context
 
 
 @pytest.mark.requires_db
@@ -328,6 +380,7 @@ class TestCreateMediaBuyRestWebhookSuggestionParity:
                     "packages": [],
                     "start_time": "asap",
                     "end_time": "2099-12-31T23:59:59Z",
+                    "idempotency_key": "reporting-webhook-test-0001",
                     "reporting_webhook": {"not_a_webhook_field": True},
                 },
             )
@@ -436,6 +489,7 @@ class TestSyncCreativesA2ASuggestionParity:
             result = env.call_via(
                 Transport.A2A,
                 creatives=[{"creative_id": "cr-invalid-1", "name": "No format"}],
+                idempotency_key=fresh_idempotency_key(),
             )
 
             assert result.is_error, (
@@ -520,7 +574,10 @@ class TestSyncAccountsRestSuggestionParity:
 
             response = client.post(
                 "/api/v1/accounts/sync",
-                json={"accounts": [{"operator": "no-brand.example"}]},
+                json={
+                    "accounts": [{"operator": "no-brand.example"}],
+                    "idempotency_key": "account-validation-parity-0001",
+                },
             )
 
             assert response.status_code == 400, (

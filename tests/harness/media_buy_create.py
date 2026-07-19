@@ -23,25 +23,12 @@ from src.core.schemas._base import (
     CreateMediaBuySuccess,
 )
 from tests.harness._base import IntegrationEnv
-
-# Sentinel for missing-key tests: pass idempotency_key=OMIT_IDEMPOTENCY_KEY to send a
-# request with NO key (the schema rejects it as "Field required" — AdCP 3.0.1).
-OMIT_IDEMPOTENCY_KEY: Any = object()
-
-
-def _ensure_idempotency_key(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """Default a per-call-unique idempotency_key unless the test controls it.
-
-    ``idempotency_key`` is REQUIRED on ``CreateMediaBuyRequest``; most tests don't
-    care, so the harness supplies a fresh spec-shaped key per call — unique because
-    a reused key would replay the original response (or raise IDEMPOTENCY_CONFLICT)
-    instead of creating a new buy. Pass ``OMIT_IDEMPOTENCY_KEY`` to send no key.
-    """
-    if kwargs.get("idempotency_key") is OMIT_IDEMPOTENCY_KEY:
-        kwargs.pop("idempotency_key")
-    else:
-        kwargs.setdefault("idempotency_key", f"test-key-{uuid.uuid4().hex}")
-    return kwargs
+from tests.harness._idempotency import (
+    OMIT_IDEMPOTENCY_KEY as OMIT_IDEMPOTENCY_KEY,
+)
+from tests.harness._idempotency import (
+    ensure_idempotency_key as _ensure_idempotency_key,
+)
 
 
 def _restore_creative_ids(req: CreateMediaBuyRequest, flat: dict[str, Any]) -> None:
@@ -216,16 +203,11 @@ class MediaBuyCreateEnv(IntegrationEnv):
         payload_hash: str,
         media_buy_id: str = "mb_seeded",
     ) -> None:
-        """Persist a cached create_media_buy SUCCESS for this env's principal.
+        """Seed a dormant historical cache row for supported=false probes.
 
-        Writes a real ``IdempotencyAttempt`` row via a real ``MediaBuyUoW`` so the
-        production replay lookup (``find_by_key``) serves it VERBATIM on the next
-        call carrying the same ``idempotency_key``. ``payload_hash`` must be the
-        canonical hash of the request the test will retry (compute it with
-        ``canonical_request_hash``) for a replay; pass a non-matching hash to
-        exercise the ``IDEMPOTENCY_CONFLICT`` path. The stored envelope is the
-        structured ``{status, response}`` shape production caches — errors are
-        never cached.
+        New create calls must ignore this row completely. Keeping the seeder in
+        the harness lets no-op tests prove that even an exact key collision with
+        historical substrate cannot replay, conflict, rate-limit, or mutate it.
         """
         from tests.helpers import make_active_cached_success, seed_cached_success
 
@@ -295,9 +277,8 @@ class MediaBuyCreateEnv(IntegrationEnv):
         mock_slack.notify_media_buy_event.return_value = None
         self.mock["slack"].return_value = mock_slack
 
-        # Context manager: mock returning objects with .context_id / .step_id.
-        # The replay and adapter-rejection paths return before a WorkflowStep is
-        # linked to a media buy, so no real ObjectWorkflowMapping FK row is needed.
+        # Context manager: preserve real context/workflow persistence behind a
+        # mock surface so FK-linked media-buy writes remain production-shaped.
         self.mock["context_mgr"].return_value = self._build_mock_context_manager(tool_name="create_media_buy")
 
         # Setup checklist: pass by default
@@ -411,9 +392,9 @@ class MediaBuyCreateEnv(IntegrationEnv):
         """Parse a flattened create_media_buy wire body back into a CreateMediaBuyResult.
 
         ``CreateMediaBuyResult`` serializes flat: the response fields plus a
-        top-level protocol ``status`` and, on a cached idempotency replay, the
-        spec's top-level ``replayed: true`` marker — both are popped back onto
-        the wrapper so wire tests can assert ``result.payload.replayed``. The
+        top-level protocol ``status`` and schema-compatible optional ``replayed``
+        marker. Both are popped back onto the wrapper; this seller leaves
+        ``replayed`` false because idempotency is advertised unsupported. The
         CreateMediaBuySuccess|CreateMediaBuyError|CreateMediaBuySubmitted union
         mirrors the production A2A discrimination (adcp_a2a_server.py): submitted
         first (status="submitted" + task_id, no media_buy_id — a submitted

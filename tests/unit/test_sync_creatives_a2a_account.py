@@ -20,6 +20,7 @@ _MOCK_IDENTITY = ResolvedIdentity(
     tenant={"tenant_id": "tenant_123"},
     protocol="a2a",
 )
+_IDEMPOTENCY_KEY = "sync-creatives-test-key"
 
 
 def test_to_account_reference_handles_supported_inputs():
@@ -70,7 +71,11 @@ class TestSyncCreativesAccountCoercion:
 
             asyncio.run(
                 handler._handle_sync_creatives_skill(
-                    parameters={"creatives": [], "account": account_param},
+                    parameters={
+                        "creatives": [],
+                        "account": account_param,
+                        "idempotency_key": _IDEMPOTENCY_KEY,
+                    },
                     identity=_MOCK_IDENTITY,
                 )
             )
@@ -127,7 +132,10 @@ class TestSyncCreativesAssetsDefault:
 
             asyncio.run(
                 handler._handle_sync_creatives_skill(
-                    parameters={"creatives": [creative_dict]},
+                    parameters={
+                        "creatives": [creative_dict],
+                        "idempotency_key": _IDEMPOTENCY_KEY,
+                    },
                     identity=_MOCK_IDENTITY,
                 )
             )

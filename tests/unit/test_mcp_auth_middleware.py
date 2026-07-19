@@ -159,6 +159,8 @@ class TestMCPAuthMiddlewareBehavior:
 
         mock_context.message = MagicMock()
         mock_context.message.name = "create_media_buy"
+        application_context = {"correlation_id": "mcp-invalid-auth", "nullable": None}
+        mock_context.message.arguments = {"context": application_context}
 
         call_next = AsyncMock()
 
@@ -171,6 +173,7 @@ class TestMCPAuthMiddlewareBehavior:
 
         # Wire envelope carries the auth code — not a code-less error.
         assert exc.value.envelope["errors"][0]["code"] == "AUTH_REQUIRED"
+        assert exc.value.envelope["context"] == application_context
         # Tool was NOT called
         call_next.assert_not_awaited()
 
@@ -189,6 +192,8 @@ class TestMCPAuthMiddlewareBehavior:
 
         mock_context.message = MagicMock()
         mock_context.message.name = "create_media_buy"  # auth-required
+        application_context = {"correlation_id": "mcp-missing-auth", "nullable": None}
+        mock_context.message.arguments = {"context": application_context}
 
         principal_less = MagicMock(spec=ResolvedIdentity)
         principal_less.principal_id = None
@@ -202,6 +207,7 @@ class TestMCPAuthMiddlewareBehavior:
                 await middleware.on_call_tool(mock_context, call_next)
 
         assert exc.value.envelope["errors"][0]["code"] == "AUTH_REQUIRED"
+        assert exc.value.envelope["context"] == application_context
         call_next.assert_not_awaited()
 
     @pytest.mark.asyncio

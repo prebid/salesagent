@@ -1,9 +1,9 @@
 """Domain step definitions for UC-010 version negotiation (VERSION_UNSUPPORTED).
 
-Covers the four BR-UC-010 scenarios derived from the pinned schema
-(``error-details/version-unsupported.json`` + ``core/version-envelope.json``
-at v3.1.0-beta.3, @source commit 04f59d2d5), plus the hand-authored
-release-resolution companion grounded in ``docs/reference/versioning.mdx``:
+Covers the four BR-UC-010 scenarios derived from the pinned AdCP 3.1.1
+``error-details/version-unsupported.json`` and ``core/version-envelope.json``
+schemas, plus the hand-authored release-resolution companion grounded in the
+published 3.1.0 versioning prose used by the 3.1.1 patch release:
 
 - version-unsupported (string ``adcp_version`` pin)
 - version-unsupported-major-fallback (deprecated int ``adcp_major_version``)
@@ -26,37 +26,8 @@ import re
 
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps._outcome_helpers import wire_dict
 from tests.bdd.steps.generic._dispatch import dispatch_request
-
-# ── context echo helpers (BR-RULE-043 / POST-S9) ─────────────────────
-
-
-_CONTEXT_ABSENT = object()  # sentinel: the `context` key is not present on the wire body
-
-
-def _response_context(ctx: dict) -> object:
-    """The echoed context as a plain JSON value, read from the REAL wire body.
-
-    When a wire body exists (REST/MCP/A2A) it is the SOLE authority — a missing
-    echo must surface to the assertion, never be silently patched from the typed
-    payload. A wire body that OMITS ``context`` returns the ``_CONTEXT_ABSENT``
-    sentinel; a wire body carrying ``"context": null`` returns ``None``. The two
-    are distinct: callers must not treat an explicit null as an omitted field.
-
-    Only when NO wire body was stashed (IMPL, which has no wire by definition) does
-    it fall back to the typed payload.
-    """
-    wire = ctx.get("wire_response")
-    if isinstance(wire, dict):
-        return wire["context"] if "context" in wire else _CONTEXT_ABSENT
-    # No wire body (IMPL only): fall back to the typed payload.
-    resp = ctx.get("response")
-    assert resp is not None, f"Expected a capabilities response, got error: {ctx.get('error')!r}"
-    context = getattr(resp, "context", None)
-    if context is None:
-        return _CONTEXT_ABSENT
-    return context.model_dump(mode="json") if hasattr(context, "model_dump") else context
-
 
 # Release-precision wire pattern for negotiation pins (version-envelope.json).
 _RELEASE_PIN_PATTERN = r"^\d+\.\d+(-[a-zA-Z0-9.-]+)?$"
@@ -209,6 +180,29 @@ def when_call_capabilities_without_context(ctx: dict) -> None:
     # and forward no context kwarg — the request carries none.
     ctx["sent_context"] = None
     dispatch_request(ctx)
+
+
+@when(
+    parsers.re(
+        r"the Buyer queries capabilities with protocols (?P<protocols_json>\[.*\]) "
+        r"and context (?P<context_json>\{.*\})$"
+    )
+)
+def when_query_capabilities_with_protocols_and_context(
+    ctx: dict,
+    protocols_json: str,
+    context_json: str,
+) -> None:
+    """Dispatch the published filtered-discovery request on the real wire."""
+    context = json.loads(context_json)
+    ctx["sent_context"] = context
+    dispatch_request(ctx, protocols=json.loads(protocols_json), context=context)
+
+
+@when(parsers.re(r"the Buyer queries capabilities with protocols (?P<protocols_json>\[.*\])$"))
+def when_query_capabilities_with_protocols(ctx: dict, protocols_json: str) -> None:
+    """Dispatch a schema-bound protocols input without pre-validating it in test code."""
+    dispatch_request(ctx, protocols=json.loads(protocols_json))
 
 
 @when("the Buyer Agent inspects the error details")
@@ -390,7 +384,9 @@ def then_response_context_equals(ctx: dict, ctx_json: str) -> None:
     """
     assert ctx.get("response") is not None, f"Expected a success response, got error: {ctx.get('error')!r}"
     expected = json.loads(ctx_json)
-    actual = _response_context(ctx)
+    response_body = wire_dict(ctx)
+    assert "context" in response_body, "Expected the response to contain the echoed context field"
+    actual = response_body["context"]
     assert actual == expected, f"Echoed context {actual!r} != request context {expected!r}"
 
 
@@ -402,5 +398,46 @@ def then_response_no_context(ctx: dict) -> None:
     wire is a *present* field and violates 'should not contain a context field'.
     """
     assert ctx.get("response") is not None, f"Expected a success response, got error: {ctx.get('error')!r}"
-    actual = _response_context(ctx)
-    assert actual is _CONTEXT_ABSENT, f"Expected the context field to be absent, got {actual!r}"
+    response_body = wire_dict(ctx)
+    assert "context" not in response_body, f"Expected the context field to be absent, got {response_body['context']!r}"
+
+
+@then("context SHOULD be echoed per schema specification")
+def then_generated_gap_context_is_now_echoed(ctx: dict) -> None:
+    """Keep the upstream-generated former gap live without editing its artifact."""
+    assert ctx.get("response") is not None, f"Expected a success response, got error: {ctx.get('error')!r}"
+    response_body = wire_dict(ctx)
+    assert response_body.get("context") == ctx["sent_context"], (
+        f"Echoed context {response_body.get('context')!r} != request context {ctx['sent_context']!r}"
+    )
+
+
+@then(parsers.re(r"supported_protocols on the wire should equal (?P<protocols_json>\[.*\])$"))
+def then_supported_protocols_equal(ctx: dict, protocols_json: str) -> None:
+    """Assert the real response body carries the requested supported intersection."""
+    assert ctx.get("response") is not None, f"Expected a success response, got error: {ctx.get('error')!r}"
+    expected = json.loads(protocols_json)
+    actual = wire_dict(ctx)["supported_protocols"]
+    assert actual == expected, f"Wire supported_protocols {actual!r} != requested supported set {expected!r}"
+
+
+@then("only requested protocol sections should be present on the wire")
+def then_only_requested_protocol_sections_present(ctx: dict) -> None:
+    """The filtered response includes media_buy and no unrequested domain body."""
+    response_body = wire_dict(ctx)
+    assert response_body.get("media_buy") is not None, "Filtered media_buy capabilities section is absent"
+    unexpected = {
+        protocol: response_body[protocol]
+        for protocol in ("signals", "governance", "sponsored_intelligence", "creative")
+        if response_body.get(protocol) is not None
+    }
+    assert unexpected == {}, f"Unrequested protocol sections were present: {sorted(unexpected)}"
+
+
+@then("the protocols filter should fail with a correctable VALIDATION_ERROR")
+def then_protocols_filter_validation_error(ctx: dict) -> None:
+    """Schema and no-overlap rejections must survive each real wire boundary."""
+    from tests.helpers.envelope_assertions import assert_envelope_shape
+
+    assert ctx.get("response") is None, f"Expected an error, got a success response: {ctx.get('response')!r}"
+    assert_envelope_shape(ctx["wire_error_envelope"], "VALIDATION_ERROR", recovery="correctable")

@@ -11,6 +11,7 @@ from adcp.types import ContextObject
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
+from src.core.application_context import dump_adcp_response
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -145,7 +146,7 @@ async def update_performance_index(
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     req = _build_update_performance_index_request(media_buy_id, performance_data, context)
     response = _update_performance_index_impl(req=req, identity=identity)
-    return ToolResult(content=str(response), structured_content=response)
+    return ToolResult(content=str(response), structured_content=dump_adcp_response(response, context=context))
 
 
 def update_performance_index_raw(

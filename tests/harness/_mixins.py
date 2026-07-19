@@ -364,6 +364,18 @@ class CircuitBreakerMixin:
 
     _service: WebhookDeliveryService | None
 
+    def _configure_http_mocks(self) -> None:
+        """Wire the shared pinned-session seams for unit and integration envs."""
+        self.mock["random"].return_value = 0.0  # type: ignore[attr-defined]
+
+        session = self.mock["session"].return_value.__enter__.return_value  # type: ignore[attr-defined]
+        self.mock["session"].return_value.__exit__.return_value = False  # type: ignore[attr-defined]
+        self.mock["post"] = self.mock["post_status"]  # type: ignore[attr-defined]
+        self.mock["client"] = MagicMock()  # type: ignore[attr-defined]
+        self.mock["client"].return_value.__enter__.return_value = session  # type: ignore[attr-defined]
+        self.mock["client"].return_value.__enter__.return_value.post = self.mock["post"]  # type: ignore[attr-defined]
+        self.set_http_response(200)
+
     def get_service(self) -> WebhookDeliveryService:
         """Return a WebhookDeliveryService instance (cached per env)."""
         if self._service is None:
@@ -375,24 +387,17 @@ class CircuitBreakerMixin:
         return CircuitBreaker(**kwargs)
 
     def set_http_response(self, status_code: int) -> None:
-        """Configure the httpx Client mock to return the given status code."""
-        mock_response = MagicMock()
-        mock_response.status_code = status_code
-        self.mock["client"].return_value.__enter__.return_value.post.return_value = mock_response  # type: ignore[attr-defined]
+        """Configure the pinned webhook POST seam to return a status code."""
+        self.mock["post"].return_value = status_code  # type: ignore[attr-defined]
+        self.mock["post"].side_effect = None  # type: ignore[attr-defined]
 
     def set_http_status(self, code: int, text: str = "") -> None:
         """Alias for set_http_response — BDD steps use this name consistently."""
         self.set_http_response(code)
 
     def set_http_sequence(self, responses: list[tuple[int, str]]) -> None:
-        """Configure httpx Client to return a sequence of responses."""
-        mocks = []
-        for code, text in responses:
-            r = MagicMock()
-            r.status_code = code
-            r.text = text
-            mocks.append(r)
-        self.mock["client"].return_value.__enter__.return_value.post.side_effect = mocks  # type: ignore[attr-defined]
+        """Configure the pinned webhook POST seam to return status codes in order."""
+        self.mock["post"].side_effect = [code for code, _text in responses]  # type: ignore[attr-defined]
 
     def call_send(
         self,

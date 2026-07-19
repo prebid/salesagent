@@ -41,14 +41,14 @@ uv run python -c "import adcp; print(adcp.get_adcp_spec_version())"
 across `pyproject.toml`, the test's `EXPECTED_SPEC_VERSION` constant, and
 this document.
 
-## Behavior target vs SDK pin
+## Behavior target and historical migration note
 
-The SDK **pin** (3.1.1, GA) fixes the request/response *type shapes* we
-build against. It does **not** always fix the graded *behavior*. One field
-diverges deliberately: the `media_buy_status` dual-emit on
-create-/update-media-buy responses. (The pin is now the 3.1.1 GA release; the
-beta.3-vs-GA history below is retained as the rationale for the wire we ship —
-under the GA pin our wire and the graded GA behavior already agree.)
+The SDK pin and the behavior target are both AdCP 3.1.1 GA. There is no current
+deliberate divergence between this seller's media-buy status wire shape, the
+SDK 6.6.0 types, and the 3.1.1 graded behavior.
+
+The following history explains the regression guards retained in this
+repository; it is not a present compatibility exception:
 
 - **beta.3 storyboard** (`dist/compliance/3.1.0-beta.3/.../pending_creatives_to_start.yaml`,
   ~L131-134) grades the body `status` as `field_value_or_absent` that MUST equal
@@ -60,7 +60,7 @@ under the GA pin our wire and the graded GA behavior already agree.)
   `field_value` `'completed'` (the PROTOCOL `TaskStatus`, protocol envelope).
   The two are DIFFERENT namespaces and are NOT identical.
 
-Our wire already implements the divergent (target GA) model:
+Our current wire implements the GA model:
 `TaskResultEnvelope._serialize` sets the top-level `status` to the protocol
 `TaskStatus`, while the domain status survives under `media_buy_status`
 (`src/core/schemas/_base.py` `_mirror_media_buy_status`). The dual-emit
@@ -68,22 +68,23 @@ validator only backfills the deprecated **body** `status` from the domain
 `media_buy_status` for the deprecation window; it does not touch the wire
 top-level `status`.
 
-**Known SDK type defect (SDK not authoritative):** adcp 5.7 types the response
-`status` as `MediaBuyStatus | None`, but the wire top-level `status` carries a
-protocol `TaskStatus` (`submitted` / `completed`). This is fine because that
-protocol value lives on `TaskResultEnvelope.status` (typed `str`), never on the
-SDK-typed body field. Grounding for the divergent behavior is the value-pinned
-`media_buy_status` assertions in
+Historically, adcp 5.7 (the 3.1.0-beta.3 SDK) typed the response body `status`
+as `MediaBuyStatus | None`. SDK 6.6.0's GA models now represent the protocol
+completion status and domain `media_buy_status` consistently with 3.1.1. The
+value-pinned regression coverage remains in
 `tests/bdd/features/BR-UC-002-media-buy-status-dual-emit.feature` and the
 `then_dual_emit_media_buy_status` step in
 `tests/bdd/steps/domain/uc002_create_media_buy.py` (see PR #1417).
-`tests/unit/test_adcp_spec_version.py` only guards the SDK pin, not this behavior.
+`tests/unit/test_adcp_spec_version.py` guards the SDK pin; the BDD scenarios
+guard behavior.
 
 ## Wire negotiation
 
 AdCP wire values for `adcp_version` are release-precision (`"3.0"`,
-`"3.1"`). The SDK accepts patch-precision input for backwards
-compatibility but normalizes to release-precision on the wire.
+`"3.1"`). Buyer-supplied patch-precision pins such as `"3.1.1"` are rejected;
+they are not silently normalized. The SDK's internal spec metadata remains the
+full build target (`3.1.1`), while the seller advertises and negotiates the
+release-precision value (`3.1`) on the wire.
 
 ## Bumping the spec version
 

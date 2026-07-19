@@ -10,9 +10,8 @@ BR-RULE-061 (delete_missing), BR-RULE-062 (dry_run)
 
 import pytest
 
-from src.core.schemas.account import SyncAccountsRequest
 from tests.harness import Transport
-from tests.harness.account_sync import AccountSyncEnv
+from tests.harness.account_sync import AccountSyncEnv, make_sync_accounts_request
 from tests.helpers import assert_envelope_shape
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -38,7 +37,7 @@ class TestSyncAccountsCreate:
         with AccountSyncEnv(tenant_id="sync_t1", principal_id="agent_sync") as env:
             env.setup_default_data()
 
-            req = SyncAccountsRequest(
+            req = make_sync_accounts_request(
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -61,7 +60,7 @@ class TestSyncAccountsCreate:
         with AccountSyncEnv(tenant_id="sync_t2", principal_id="agent_sync2") as env:
             env.setup_default_data()
 
-            req = SyncAccountsRequest(
+            req = make_sync_accounts_request(
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -91,7 +90,7 @@ class TestSyncAccountsUpdate:
             env.setup_default_data()
 
             # Create account first
-            req1 = SyncAccountsRequest(
+            req1 = make_sync_accounts_request(
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -103,7 +102,7 @@ class TestSyncAccountsUpdate:
             await env.call_impl_async(req=req1)
 
             # Sync again with updated billing
-            req2 = SyncAccountsRequest(
+            req2 = make_sync_accounts_request(
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -123,7 +122,7 @@ class TestSyncAccountsUpdate:
         with AccountSyncEnv(tenant_id="sync_t4", principal_id="agent_sync4") as env:
             env.setup_default_data()
 
-            req = SyncAccountsRequest(
+            req = make_sync_accounts_request(
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -151,7 +150,7 @@ class TestSyncAccountsAuth:
         with AccountSyncEnv(tenant_id="sync_t5", principal_id="agent_sync5") as env:
             env.setup_default_data()
 
-            req = SyncAccountsRequest(
+            req = make_sync_accounts_request(
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -173,7 +172,7 @@ class TestSyncAccountsDeleteMissing:
             env.setup_default_data()
 
             # Create two accounts
-            req1 = SyncAccountsRequest(
+            req1 = make_sync_accounts_request(
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -190,7 +189,7 @@ class TestSyncAccountsDeleteMissing:
             await env.call_impl_async(req=req1)
 
             # Sync with only one account + delete_missing=True
-            req2 = SyncAccountsRequest(
+            req2 = make_sync_accounts_request(
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -221,7 +220,7 @@ class TestSyncAccountsDryRun:
         with AccountSyncEnv(tenant_id="sync_t7", principal_id="agent_sync7") as env:
             env.setup_default_data()
 
-            req = SyncAccountsRequest(
+            req = make_sync_accounts_request(
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -245,7 +244,7 @@ class TestSyncAccountsDryRun:
         with AccountSyncEnv(tenant_id="sync_t8", principal_id="agent_sync8") as env:
             env.setup_default_data()
 
-            req = SyncAccountsRequest(
+            req = make_sync_accounts_request(
                 accounts=[
                     {
                         "brand": {"domain": "dryrun.com"},
@@ -278,7 +277,7 @@ class TestSyncAccountsDryRun:
             env.setup_default_data()
             env.set_approval_mode("credit_review")
 
-            req = SyncAccountsRequest(
+            req = make_sync_accounts_request(
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                 ],
@@ -312,7 +311,7 @@ class TestSyncAccountsBillingPolicy:
         ) as env:
             env.setup_default_data()
 
-            req = SyncAccountsRequest(
+            req = make_sync_accounts_request(
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -341,7 +340,7 @@ class TestSyncAccountsBillingPolicy:
         ) as env:
             env.setup_default_data()
 
-            req = SyncAccountsRequest(
+            req = make_sync_accounts_request(
                 accounts=[
                     {
                         "brand": {"domain": "good.com"},
@@ -376,7 +375,7 @@ class TestSyncAccountsApproval:
         ) as env:
             env.setup_default_data()
 
-            req = SyncAccountsRequest(
+            req = make_sync_accounts_request(
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -446,7 +445,7 @@ class TestSyncAccountsBillingPolicyTransport:
             env.setup_default_data()
             env.set_billing_policy(["agent"])
 
-            req = SyncAccountsRequest(
+            req = make_sync_accounts_request(
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                 ],
@@ -473,7 +472,7 @@ class TestSyncAccountsBillingPolicyTransport:
             env.setup_default_data()
             env.set_billing_policy(["agent"])
 
-            req = SyncAccountsRequest(
+            req = make_sync_accounts_request(
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                 ],
@@ -494,7 +493,7 @@ class TestSyncAccountsBillingPolicyTransport:
         ) as env:
             env.setup_default_data()
 
-            req = SyncAccountsRequest(
+            req = make_sync_accounts_request(
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                     {"brand": {"domain": "beta.com"}, "operator": "example.com", "billing": "agent"},
@@ -523,7 +522,7 @@ class TestSyncAccountsApprovalTransport:
             env.setup_default_data()
             env.set_approval_mode("credit_review")
 
-            req = SyncAccountsRequest(
+            req = make_sync_accounts_request(
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                 ],
@@ -548,7 +547,7 @@ class TestSyncAccountsApprovalTransport:
             env.setup_default_data()
             env.set_approval_mode("legal_review")
 
-            req = SyncAccountsRequest(
+            req = make_sync_accounts_request(
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                 ],
@@ -572,7 +571,7 @@ class TestSyncAccountsApprovalTransport:
         ) as env:
             env.setup_default_data()
 
-            req = SyncAccountsRequest(
+            req = make_sync_accounts_request(
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                 ],
@@ -616,7 +615,7 @@ class TestSyncAccountsBrandlessEntryRejected:
             env.setup_default_data()
 
             # Accounts3 arm: omits brand entirely → parses with brand=None.
-            req = SyncAccountsRequest(
+            req = make_sync_accounts_request(
                 accounts=[{"account": {"account_id": "x"}, "operator": "example.com"}],
             )
             result = env.call_via(transport, req=req)

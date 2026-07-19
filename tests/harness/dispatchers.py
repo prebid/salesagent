@@ -214,6 +214,7 @@ class McpDispatcher:
                 error = _unwrap_mcp_tool_error(exc)
             return TransportResult(
                 error=error,
+                raw_response=env._last_mcp_raw_response,
                 wire_error_envelope=wire,
                 # What production WOULD emit for the same exception — see the
                 # ImplDispatcher caveat; never a substitute for the wire field.
@@ -224,6 +225,7 @@ class McpDispatcher:
         return TransportResult(
             payload=payload,
             envelope={"transport": "mcp"},
+            raw_response=env._last_mcp_raw_response,
             wire_response=env._last_wire_response,
         )
 

@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from tests.factories.creative_asset import build_assets, image_spec
+from tests.harness._idempotency import fresh_idempotency_key
 
 
 def generate_buyer_ref(prefix: str = "test") -> str:
@@ -115,9 +116,9 @@ def build_adcp_media_buy_request(
         ],
         "start_time": start_time,
         "end_time": end_time,
-        # Required by AdCP 3.0.1 — unique per call (a reused key would replay the
-        # original response instead of creating a new buy).
-        "idempotency_key": f"e2e-key-{uuid.uuid4().hex}",
+        # Required by AdCP 3.1.1; supported=false means a reused value would
+        # still execute again, but ordinary E2E requests use fresh values.
+        "idempotency_key": fresh_idempotency_key(),
     }
 
     # Add optional fields
@@ -184,6 +185,7 @@ def build_sync_creatives_request(
         "dry_run": dry_run,
         "validation_mode": validation_mode,
         "delete_missing": delete_missing,
+        "idempotency_key": fresh_idempotency_key(),
     }
 
     if assignments:
@@ -264,7 +266,10 @@ def build_update_media_buy_request(
     Returns:
         Valid AdCP UpdateMediaBuyRequest dict
     """
-    request: dict[str, Any] = {"media_buy_id": media_buy_id}
+    request: dict[str, Any] = {
+        "media_buy_id": media_buy_id,
+        "idempotency_key": fresh_idempotency_key(),
+    }
 
     # Add optional fields
     if active is not None:

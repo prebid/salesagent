@@ -407,11 +407,15 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # BR-RULE-043 INV-1: Even empty object is echoed
     # Empty context is a valid context — echoed as empty object
 
-  # (Retired) The former ext-e-gap known-gap scenario asserted context
-  # echo was UNIMPLEMENTED. It is implemented now: _get_adcp_capabilities_impl echoes
-  # req.context unchanged (capabilities.py), and all transports forward it (MCP/A2A
-  # wrappers + the REST GET context= query param). The @context scenarios above grade
-  # the round-trip, so the known-gap placeholder is removed.
+  @T-UC-010-ext-e-gap @context @known-gap
+  Scenario: Context echo implementation gap in capabilities endpoint
+    Given a tenant is resolvable from the request context
+    When the Buyer Agent calls get_adcp_capabilities MCP tool with context {"tracking": "id-456"}
+    Then context SHOULD be echoed per schema specification
+    # BR-RULE-043 INV-1 — KNOWN GAP
+    # capabilities.py line 271: req = GetAdcpCapabilitiesRequest() ignores request params
+    # Schema supports context echo but implementation does not copy it
+    # @known-gap: Implementation does not echo context (unlike properties.py and performance.py)
 
   @T-UC-010-channel-mapping @channel @invariant @partition @boundary
   Scenario Outline: Channel name resolution from adapter to MediaChannel enum

@@ -15,6 +15,7 @@ from adcp.types import ContextObject
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
+from src.core.application_context import dump_adcp_response
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_tenant
 from src.core.database.repositories.uow import TenantConfigUoW
@@ -220,7 +221,7 @@ async def list_authorized_properties(
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _list_authorized_properties_impl(req, identity)
 
-    return ToolResult(content=str(response), structured_content=response)
+    return ToolResult(content=str(response), structured_content=dump_adcp_response(response, context=context))
 
 
 def list_authorized_properties_raw(

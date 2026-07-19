@@ -34,6 +34,7 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TRACEABILITY_PATH = PROJECT_ROOT / "docs" / "test-obligations" / "bdd-traceability.yaml"
 OUTPUT_DIR = PROJECT_ROOT / "tests" / "bdd" / "features"
+OVERLAY_DIR = PROJECT_ROOT / "tests" / "bdd" / "overlays"
 
 DEFAULT_ADCP_REQ_PATH = Path(os.environ.get("ADCP_REQ_PATH", str(Path.home() / "projects" / "adcp-req")))
 
@@ -819,6 +820,7 @@ def compile_feature(
     output_text, new_mappings, all_scenario_ids = _render_feature(
         feature, traceability, uc_key, feature_filename, commit_sha
     )
+    output_text = _apply_scenario_overlays(feature_filename, output_text)
 
     if not dry_run:
         output_path = OUTPUT_DIR / feature_filename
@@ -947,6 +949,8 @@ def compile_features(
 #   LEGACY-DELETE         — id only in LEGACY, no hand-edit marker. Drop.
 #   LEGACY-PRESERVE       — id only in LEGACY, has @hand-edited tag or a
 #                           "# HAND-EDITED" comment in the preamble. Keep.
+#   LOCAL-OVERLAY         — exact scenario id has a deterministic local
+#                           capability/spec reconciliation. Render the overlay.
 
 
 HAND_EDITED_RE = re.compile(r"@hand-edited\b|#\s*HAND-EDITED", re.IGNORECASE)
@@ -1086,13 +1090,81 @@ def _render_scenario_lines(scenario: Scenario) -> list[str]:
     return lines
 
 
+def _load_scenario_overlays(feature_filename: str) -> dict[str, Scenario]:
+    """Load local compiled-scenario replacements for one generated feature.
+
+    Overlay scenarios use the generated ``@T-...`` scenario id as their join
+    key. They are intentionally compiled-form Gherkin: no source
+    ``# @contextgit`` metadata or traceability mutation is required because an
+    overlay reconciles an existing upstream scenario rather than inventing a
+    new contract id.
+    """
+    overlay_path = OVERLAY_DIR / feature_filename
+    if not overlay_path.exists():
+        return {}
+
+    overlays: dict[str, Scenario] = {}
+    overlay_feature = parse_feature_file(overlay_path.read_text())
+    for scenario in overlay_feature.scenarios:
+        scenario_id = _scenario_id(scenario)
+        if scenario_id is None:
+            raise ValueError(f"BDD overlay scenario in {overlay_path} has no @T-... id")
+        if scenario_id in overlays:
+            raise ValueError(f"BDD overlay {overlay_path} repeats scenario id {scenario_id}")
+        overlays[scenario_id] = scenario
+    return overlays
+
+
+def _apply_scenario_overlays(feature_filename: str, output_text: str) -> str:
+    """Replace exact generated scenario blocks with local reconciliations.
+
+    This post-render hook is shared by wholesale compilation and verify mode.
+    Merge mode consumes the same overlay objects before classification so it
+    neither emits a false semantic-merge conflict nor restores stale upstream
+    behavior on the next regeneration.
+    """
+    overlays = _load_scenario_overlays(feature_filename)
+    if not overlays:
+        return output_text
+
+    lines = output_text.splitlines()
+    provenance = f"# Local scenario overlays applied: tests/bdd/overlays/{feature_filename}"
+    if provenance not in lines:
+        lines.insert(2, provenance)
+    starts: list[tuple[str, int]] = []
+    for line_index, line in enumerate(lines):
+        if not _is_tag_line(line):
+            continue
+        scenario_id = _extract_id_from_tags(_parse_tags(line))
+        if scenario_id is not None:
+            starts.append((scenario_id, line_index))
+
+    ranges: dict[str, tuple[int, int]] = {}
+    for position, (scenario_id, start) in enumerate(starts):
+        if scenario_id in ranges:
+            raise ValueError(f"Compiled feature {feature_filename} repeats scenario id {scenario_id}")
+        end = starts[position + 1][1] if position + 1 < len(starts) else len(lines)
+        ranges[scenario_id] = (start, end)
+
+    missing = sorted(set(overlays) - set(ranges))
+    if missing:
+        raise ValueError(f"BDD overlay {feature_filename} targets missing generated scenarios: {missing}")
+
+    replacements = sorted(overlays.items(), key=lambda item: ranges[item[0]][0], reverse=True)
+    for scenario_id, scenario in replacements:
+        start, end = ranges[scenario_id]
+        lines[start:end] = [*_render_scenario_lines(scenario), ""]
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
 # ---------------------------------------------------------------------------
 # Binding ground truth (which scenarios actually have step-defs in salesagent)
 # ---------------------------------------------------------------------------
 #
 # Empirical truth from pytest-bdd baseline collection (see
 # phase5-snapshot/baseline-2026-06-01/bdd.json):
-#   - Only 8 UCs have a test_<uc>_*.py driver that loads the feature file.
+#   - Only 9 UCs have a test_<uc>_*.py driver that loads the generated feature.
 #     Scenarios in unwired UCs cannot have bindings (pytest-bdd never sees
 #     them), so v3.1 TARGET wins unconditionally.
 #   - Within wired UCs, only scenarios whose baseline outcome was 'passed'
@@ -1109,6 +1181,7 @@ WIRED_UCS = frozenset(
         "UC-004",
         "UC-005",
         "UC-006",
+        "UC-010",
         "UC-011",
         "UC-019",
         "UC-026",
@@ -1166,6 +1239,7 @@ def merge_feature(
     target_feature = parse_feature_file(target_source_path.read_text())
     feature_filename = target_source_path.name
     uc_key = _extract_uc_key(feature_filename)
+    scenario_overlays = _load_scenario_overlays(feature_filename)
 
     # Index TARGET by id (skip scenarios without id — orphan source error)
     target_by_id: dict[str, Scenario] = {}
@@ -1274,6 +1348,10 @@ def merge_feature(
             # Source scenario without an id — skip (operator error in adcp-req)
             continue
         all_scenario_ids.add(sid)
+        if sid in scenario_overlays:
+            bucket_counts["LOCAL-OVERLAY"] = bucket_counts.get("LOCAL-OVERLAY", 0) + 1
+            merged_scenarios.append(scenario_overlays[sid])
+            continue
         legacy_scen = legacy_by_id.get(sid)
         bucket = classify_scenario_pair(legacy_scen, scen)
         bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
@@ -1427,7 +1505,7 @@ def merge_feature(
         out_lines.extend(_render_scenario_lines(scen))
         out_lines.append("")
 
-    output_text = "\n".join(out_lines) + "\n"
+    output_text = _apply_scenario_overlays(feature_filename, "\n".join(out_lines) + "\n")
 
     # Also pass through new mappings so the caller can update traceability
     # (mirrors compile_feature's contract for the prune step).
@@ -1598,6 +1676,7 @@ def verify_features(adcp_req_path: Path) -> bool:
         feature = parse_feature_file(text)
         uc_key = _extract_uc_key(source_path.name)
         expected, _new = _render_feature(feature, traceability, uc_key, source_path.name, commit_sha)
+        expected = _apply_scenario_overlays(source_path.name, expected)
         actual = output_path.read_text()
         # Compare ignoring timestamp differences in the generation stamp
         # (first two lines contain the timestamp)

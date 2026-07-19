@@ -1,7 +1,7 @@
-"""Unit tests for the idempotency canonical-payload hasher.
+"""Unit tests for the dormant idempotency canonical-payload hasher.
 
-Verifies the RFC 8785 + closed-exclusion-set contract: key-order invariance,
-excluded fields not affecting the hash, and real payload differences changing it.
+These pin the retained primitive's RFC 8785 mechanics; they do not claim the
+current ``idempotency.supported=false`` seller hashes production requests.
 """
 
 from __future__ import annotations
@@ -116,8 +116,7 @@ def test_exclusion_set_is_the_spec_closed_list() -> None:
 
 
 def test_pathological_nesting_rejects_as_validation_error() -> None:
-    """A payload too deep to canonicalize rejects as a typed buyer error, never
-    an unhandled RecursionError at the boundary."""
+    """A deeply nested direct helper input raises the retained typed error."""
     from src.core.exceptions import AdCPValidationError
 
     deep: dict = {"leaf": True}
@@ -134,7 +133,7 @@ class TestRfc8785AppendixVectors:
     ``TestSdkEquivalencePin`` catches local-vs-SDK drift but both wrap the same
     ``rfc8785`` library — a shared conformance bug would pass it. These vectors
     pin the canonical BYTES against data published in the RFC itself, hashed
-    through our production entrypoint (``canonical_payload_hash``; no key in
+    through our dormant wrapper (``canonical_payload_hash``; no key in
     the payloads is in the exclusion set, so stripping is a no-op).
     """
 

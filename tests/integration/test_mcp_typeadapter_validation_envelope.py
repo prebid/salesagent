@@ -60,7 +60,27 @@ def test_create_media_buy_missing_key_preserves_field_on_mcp_wire():
         envelope,
         "VALIDATION_ERROR",
         recovery="correctable",
-        message_substr="Required field is missing",
+        message_substr="idempotency_key is required",
+    )
+    assert envelope["errors"][0].get("field") == "idempotency_key"
+    assert_no_raw_validation_leak(envelope["errors"][0]["message"])
+
+
+def test_create_media_buy_empty_arguments_emit_adcp_envelope_on_mcp_wire():
+    """An empty mapping cannot bypass the TypeAdapter envelope translator."""
+    is_error, envelope = call_mcp_tool_capturing_envelope(
+        "create_media_buy",
+        {},
+        stub_lifecycle_schedulers=True,
+    )
+
+    assert is_error
+    assert envelope is not None
+    assert_envelope_shape(
+        envelope,
+        "VALIDATION_ERROR",
+        recovery="correctable",
+        message_substr="idempotency_key is required",
     )
     assert envelope["errors"][0].get("field") == "idempotency_key"
     assert_no_raw_validation_leak(envelope["errors"][0]["message"])

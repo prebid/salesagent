@@ -105,10 +105,24 @@ fi
 
 RESULTS_DIR="test-results/innet_$(date +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
+REPORT_EXTRACTOR="${COMPOSE_PROJECT_NAME}-report-extractor"
 
 dc() { docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" --profile runner "$@"; }
 
+remove_report_extractor() {
+    docker rm -f "$REPORT_EXTRACTOR" >/dev/null 2>&1 || true
+}
+
+record_gate_failure() {
+    # Preserve the tox/suite status when it already failed; otherwise make a
+    # later gate failure (report extraction or security audit) fail the run.
+    if [ "$RC" -eq 0 ]; then
+        RC="${1:-1}"
+    fi
+}
+
 cleanup() {
+    remove_report_extractor
     # Per-worker e2e servers are `docker compose run` containers (not `up`), so
     # `dc down` won't remove them — do it explicitly.
     docker ps -aq --filter "name=${COMPOSE_PROJECT_NAME}-server-gw" | xargs -r docker rm -f >/dev/null 2>&1 || true
@@ -209,10 +223,51 @@ dc run --rm --use-aliases $E2E_ENV_ARGS tests tox -e "$SUITES" || RC=$?
 # .tox is therefore empty — extract the reports from the volume with a throwaway
 # container before the cleanup trap runs `down -v` and removes it.
 echo "Extracting JSON reports from the tox_data volume..."
-docker run --rm \
-    -v "${COMPOSE_PROJECT_NAME}_tox_data:/t:ro" \
-    -v "$(pwd)/${RESULTS_DIR}:/out" \
-    alpine sh -c 'cp /t/*.json /out/ 2>/dev/null || true' || true
+extract_json_reports() {
+    local extraction_rc=0
+    local suite
+    local -a expected_suites
+
+    # A suite may remove ignored/generated directories while exercising cleanup
+    # paths. Re-create the host destination at the point of use so docker cp
+    # never depends on the directory surviving the preceding test run.
+    mkdir -p "$RESULTS_DIR"
+
+    # Keep /out in the extractor's writable container layer. A host bind mount
+    # here fails on Docker Desktop when the repository is a linked worktree:
+    # the daemon attempts to chown the mount source through the parent checkout.
+    # A stopped container remains available to `docker cp`, which crosses that
+    # boundary without asking the daemon to mount or chown the host directory.
+    if ! docker create --name "$REPORT_EXTRACTOR" \
+            --mount "type=volume,src=${COMPOSE_PROJECT_NAME}_tox_data,dst=/t,readonly" \
+            alpine sh -c \
+            'mkdir -p /out; set -- /t/*.json; [ -e "$1" ] || { echo "no JSON reports found in tox_data" >&2; exit 1; }; cp "$@" /out/' \
+            >/dev/null; then
+        echo "ERROR: could not create the JSON report extractor" >&2
+        extraction_rc=1
+    elif ! docker start -a "$REPORT_EXTRACTOR"; then
+        echo "ERROR: could not stage JSON reports from the tox_data volume" >&2
+        extraction_rc=1
+    elif ! docker cp "${REPORT_EXTRACTOR}:/out/." "$RESULTS_DIR/"; then
+        echo "ERROR: could not copy JSON reports from the extractor to $RESULTS_DIR" >&2
+        extraction_rc=1
+    else
+        IFS=',' read -r -a expected_suites <<< "$SUITES"
+        for suite in "${expected_suites[@]}"; do
+            if [ ! -f "$RESULTS_DIR/$suite.json" ]; then
+                echo "ERROR: expected report was not extracted: $suite.json" >&2
+                extraction_rc=1
+            fi
+        done
+    fi
+
+    remove_report_extractor
+    return "$extraction_rc"
+}
+
+if ! extract_json_reports; then
+    record_gate_failure 1
+fi
 echo "Reports: $RESULTS_DIR/"
 ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports extracted)"
 
@@ -228,14 +283,14 @@ if [ "${RUN_ALL_SKIP_AUDIT:-0}" = "1" ]; then
     echo "Security audit skipped (RUN_ALL_SKIP_AUDIT=1 — owned by the dedicated CI check)"
 elif ! command -v uvx >/dev/null 2>&1; then
     echo "Security audit FAILED — uvx not on PATH (install uv or set RUN_ALL_SKIP_AUDIT=1)"
-    [ "$RC" -eq 0 ] && RC=1
+    record_gate_failure 1
 else
     echo "Running security audit (uv-secure)..."
     if ./scripts/security-audit.sh --no-check-uv-tool 2>/dev/null; then
         echo "Security audit passed"
     else
         echo "Security audit FAILED — run: ./scripts/security-audit.sh"
-        [ "$RC" -eq 0 ] && RC=1
+        record_gate_failure 1
     fi
 fi
 

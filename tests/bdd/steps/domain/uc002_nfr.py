@@ -11,11 +11,10 @@ beads: salesagent-9vgz.92
 
 from __future__ import annotations
 
-import uuid
-
 from pytest_bdd import given, then
 
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.harness._idempotency import fresh_idempotency_key  # Shared by NFR follow-up requests.
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — NFR preconditions
@@ -63,6 +62,7 @@ def given_budget_below_minimum(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 # THEN steps — NFR enforcement (restructured scenarios)
 # ═══════════════════════════════════════════════════════════════════════
+# Legacy scenarios farther below remain covered by the dispatch-in-Then ratchet.
 
 
 @then("the operation should fail with authentication error")
@@ -205,13 +205,13 @@ def then_rate_limiting_enforced(ctx: dict) -> None:
     assert resp is not None, "Expected a successful response from the original request"
 
     # Make a rapid follow-up call THROUGH THE WIRE to trigger rate limiting.
-    # The follow-up needs a FRESH idempotency_key — reusing the original's
-    # would replay the cached success instead of exercising a second real
-    # request. Dispatching through the parametrized transport means a
+    # Use a fresh required key so this NFR scenario is independent of any
+    # future idempotency-capability change; under the current supported=false
+    # posture either key would execute. Dispatching through the parametrized transport means a
     # rate-limit gate (when implemented) would surface as a RATE_LIMITED wire
     # envelope on a2a/mcp/rest.
     request_kwargs = deepcopy(ctx.get("request_kwargs", {}))
-    request_kwargs["idempotency_key"] = f"bdd-key-{uuid.uuid4().hex}"
+    request_kwargs["idempotency_key"] = fresh_idempotency_key("bdd-key")
     req = CreateMediaBuyRequest(**request_kwargs)
 
     rate_ctx: dict = {k: ctx[k] for k in ("env", "transport", "e2e_config") if k in ctx}

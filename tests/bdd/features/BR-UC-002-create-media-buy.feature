@@ -1,5 +1,6 @@
 # Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
+# Local scenario overlays applied: tests/bdd/overlays/BR-UC-002-create-media-buy.feature
 
 @analysis-2026-03-09 @schema-v3.1
 Feature: BR-UC-002 Create Media Buy
@@ -1879,19 +1880,17 @@ Feature: BR-UC-002 Create Media Buy
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/create-media-buy-request.json
 
   @T-UC-002-v31-idempotency-replay @v31 @idempotency-key @post-s1 @ext-w @happy-path
-  Scenario: v3.1 idempotency_key replay returns existing media buy without re-execution
+  Scenario: Advertised unsupported idempotency_key does not suppress create execution
     Given the tenant is configured for auto-approval
-    And a valid create_media_buy request with idempotency_key "abc123-replay-xyz-9876"
+    And a valid create_media_buy request with idempotency_key "abc123-noop-xyz-987654"
     And the account "acc-001" exists and is active
-    And a media buy was already created for the same seller with that idempotency_key
+    And a prior create_media_buy request already succeeded with that idempotency_key
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And the response status should be "completed"
-    And the response should include the previously created "media_buy_id"
-    And no new ad platform order should have been created
-    # v3.1: idempotency_key uniquely identifies (seller, request) pair
-    # POST-S5: Buyer receives an unambiguous success confirmation
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/create-media-buy-request.json
+    And the response should include a newly created "media_buy_id"
+    And exactly one new media buy should have been persisted
+    And the response should not be marked as replayed
 
   @T-UC-002-v31-idempotency-missing @v31 @idempotency-key @validation @post-f2 @ext-w
   Scenario: v3.1 idempotency_key missing fails request validation
@@ -1916,11 +1915,11 @@ Feature: BR-UC-002 Create Media Buy
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/create-media-buy-request.json
 
     Examples:
-      | value                                                | violation                              |
-      | short                                                | minLength 16 violated                  |
-      | key with spaces in it that is long enough           | pattern [A-Za-z0-9_.:-] violated       |
-      | key/with/slashes/that/is/also/long/enough           | pattern [A-Za-z0-9_.:-] violated       |
-      | AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA | maxLength 255 violated                 |
+      | value                                      | violation                        |
+      | short                                      | minLength 16 violated            |
+      | key with spaces in it that is long enough | pattern [A-Za-z0-9_.:-] violated |
+      | key/with/slashes/that/is/also/long/enough | pattern [A-Za-z0-9_.:-] violated |
+      | <256 chars>                                | maxLength 255 violated           |
 
   @T-UC-002-v31-idempotency-in-flight @v31 @idempotency-key @error-details @post-f2 @post-f3 @ext-w
   Scenario: v3.1 idempotency_key matching an in-flight request rejects with IDEMPOTENCY_IN_FLIGHT

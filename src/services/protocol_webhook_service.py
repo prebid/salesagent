@@ -16,149 +16,28 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
 import requests
 from a2a.types import Task, TaskStatusUpdateEvent
-from adcp import extract_webhook_result_data, sign_legacy_webhook
+from adcp import extract_webhook_result_data, sign_legacy_webhook, to_wire_dict
 from adcp.types import McpWebhookPayload
-from google.protobuf.json_format import MessageToDict
-from requests.adapters import HTTPAdapter
-from requests.utils import select_proxy
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.lifecycle import register_shutdown
-from src.core.security.url_validator import resolve_and_validate_target
-from src.core.webhook_validator import _allow_private_webhook_targets
+from src.core.security.webhook_http import (
+    UnsafeWebhookTargetError,
+    create_pinned_webhook_session,
+    post_webhook_status_async,
+)
 
 logger = logging.getLogger(__name__)
-
-
-class _PinningHTTPAdapter(HTTPAdapter):
-    """requests adapter that SSRF-validates each webhook target and pins the TCP
-    connection to the validated IP, keeping TLS SNI + certificate verification bound
-    to the ORIGINAL hostname.
-
-    Mounted ONCE on the service's long-lived pooled ``requests.Session`` — so connection
-    pooling (and any test that patches ``session.post``) is preserved. Overriding the
-    per-request connection seam closes the validate-then-reconnect (DNS-rebinding) gap:
-    the address checked by ``resolve_and_validate_target`` is exactly the address the
-    socket connects to. Every A/AAAA record is validated; redirects are disabled by the
-    caller so a validated URL cannot 302 to a private/metadata target after the check.
-    """
-
-    def get_connection_with_tls_context(
-        self,
-        request: requests.PreparedRequest,
-        verify: bool | str | None,
-        proxies: Mapping[str, str] | None = None,
-        cert: Any = None,
-    ) -> Any:
-        url = request.url or ""
-        allow_private = _allow_private_webhook_targets()
-        pinned_ip, ssrf_error = resolve_and_validate_target(
-            url, require_https=not allow_private, allow_private=allow_private
-        )
-        if pinned_ip is None:
-            raise requests.RequestException(f"Webhook URL failed SSRF validation: {ssrf_error}")
-
-        # An egress proxy would perform its OWN resolution, defeating host-pinning
-        # (the socket connects to the proxy, then the proxy re-resolves the
-        # original hostname — reopening the DNS-rebinding gap this adapter closes).
-        # No proxy is ever configured intentionally here (the session sets
-        # trust_env=False, so env proxies cannot activate this branch), so refuse
-        # to deliver via a proxy rather than silently unpinning.
-        if select_proxy(url, proxies):
-            raise requests.RequestException(
-                "Webhook delivery refused: a proxy is configured for this target, which "
-                "would bypass SSRF connection-pinning. Webhook egress must be direct."
-            )
-
-        # ``verify`` reaches this override typed as Optional to match the base signature;
-        # normalize None -> True (default verification) without collapsing an explicit False.
-        resolved_verify: bool | str = True if verify is None else verify
-        host_params, pool_kwargs = self.build_connection_pool_key_attributes(request, resolved_verify, cert)
-        hostname = host_params["host"]
-        host_params["host"] = pinned_ip  # connect the socket to the validated IP
-        pinned_kwargs: dict[str, Any] = dict(pool_kwargs)
-        if host_params["scheme"] == "https":
-            # Send SNI for, and verify the certificate against, the ORIGINAL hostname — not the IP.
-            pinned_kwargs["server_hostname"] = hostname
-            pinned_kwargs["assert_hostname"] = hostname
-        return self.poolmanager.connection_from_host(**host_params, pool_kwargs=cast(Any, pinned_kwargs))
-
-
-# FIXME(gh-#1299): behaviour-identical backport of adcp 5.4.0
-# ``adcp.to_wire_dict`` + ``_normalize_a2a_task_state_to_v03`` (adcp #602).
-# salesagent is pinned to adcp 4.3.0, which predates that public seam.
-# Delete this block and call ``adcp.to_wire_dict()`` directly once salesagent
-# bumps adcp to the version that ships it.
-def _normalize_message_role(message: dict[str, Any]) -> None:
-    """Rewrite a2a-sdk 1.0 ``ROLE_*`` to the A2A 0.3 lowercase wire form."""
-    role = message.get("role")
-    if isinstance(role, str) and role.startswith("ROLE_"):
-        message["role"] = role[len("ROLE_") :].lower()
-
-
-def _normalize_a2a_task_state_to_v03(payload: dict[str, Any]) -> None:
-    """Rewrite a2a-sdk 1.0 ``TASK_STATE_*`` / ``ROLE_*`` enums to A2A 0.3
-    lowercase wire strings in-place. Buyer receivers parse the 0.3 shape
-    (``"state": "completed"``); the 1.0 protobuf JSON emitter produces
-    ``"state": "TASK_STATE_COMPLETED"`` by default.
-    """
-    status = payload.get("status")
-    if isinstance(status, dict):
-        state = status.get("state")
-        if isinstance(state, str) and state.startswith("TASK_STATE_"):
-            # Spec uses hyphens for multi-word states (e.g. "auth-required").
-            status["state"] = state[len("TASK_STATE_") :].lower().replace("_", "-")
-        message = status.get("message")
-        if isinstance(message, dict):
-            _normalize_message_role(message)
-    history = payload.get("history")
-    if isinstance(history, list):
-        for entry in history:
-            if isinstance(entry, dict):
-                _normalize_message_role(entry)
-    if "role" in payload:
-        _normalize_message_role(payload)
-
-
-def _to_wire_dict(payload: Any) -> dict[str, Any]:
-    """Serialize any AdCP webhook payload to a JSON-ready dict.
-
-    Behaviour-identical backport of adcp 5.4.0 ``adcp.to_wire_dict``:
-
-    * a2a ``Task`` / ``TaskStatusUpdateEvent`` (protobuf, a2a-sdk 1.0+) ->
-      ``MessageToDict(preserving_proto_field_name=False)`` so JSON keys are
-      the A2A wire camelCase (``id``, ``contextId``, ``taskId``), then enum
-      values normalized from the 1.0 form (``TASK_STATE_COMPLETED``,
-      ``ROLE_AGENT``) to the 0.3-spec lowercase form (``completed``,
-      ``agent``).
-    * Any Pydantic model (``McpWebhookPayload`` ...) ->
-      ``model_dump(mode="json", exclude_none=True)``.
-    * ``Mapping`` -> coerced to ``dict`` (legacy hand-built passthrough).
-    """
-    if isinstance(payload, (Task, TaskStatusUpdateEvent)):
-        data: dict[str, Any] = MessageToDict(payload, preserving_proto_field_name=False)
-        _normalize_a2a_task_state_to_v03(data)
-        return data
-    if hasattr(payload, "model_dump"):
-        return cast(dict[str, Any], payload.model_dump(mode="json", exclude_none=True))
-    if isinstance(payload, Mapping):
-        return dict(payload)
-    raise TypeError(
-        f"Unsupported webhook payload type {type(payload).__name__}: expected "
-        "a2a Task / TaskStatusUpdateEvent (protobuf), an AdCP Pydantic model "
-        "(e.g. McpWebhookPayload), or a Mapping[str, Any]."
-    )
 
 
 def _canonical_body_bytes(payload_dict: dict[str, Any]) -> bytes:
@@ -203,18 +82,7 @@ class ProtocolWebhookService:
     """
 
     def __init__(self):
-        self._session = requests.Session()
-        # Ignore the process environment for egress: no HTTP(S)_PROXY / NO_PROXY,
-        # no ~/.netrc credential injection. An env proxy would defeat the SSRF
-        # connection-pinning (see _PinningHTTPAdapter, which now REFUSES a proxied
-        # target); netrc could leak credentials to a buyer-controlled webhook host.
-        self._session.trust_env = False
-        # Pin every webhook delivery to an SSRF-validated IP while preserving the
-        # long-lived pooled session (see _PinningHTTPAdapter). One adapter instance
-        # serves both schemes.
-        pinning_adapter = _PinningHTTPAdapter()
-        self._session.mount("https://", pinning_adapter)
-        self._session.mount("http://", pinning_adapter)
+        self._session = create_pinned_webhook_session()
 
     async def send_notification(
         self,
@@ -258,10 +126,9 @@ class ProtocolWebhookService:
         }
         logger.info(f"push_notification_config (sanitized): {safe_config}")
 
-        # Serialize payload to dict at the delivery boundary (for HMAC signing
-        # and JSON send). Single seam: a2a protobuf -> camelCase + A2A 0.3
-        # lowercase enum values; Pydantic -> model_dump; Mapping -> dict.
-        payload_dict: dict[str, Any] = _to_wire_dict(payload)
+        # The pinned SDK owns the canonical A2A protobuf / MCP Pydantic wire
+        # conversion; do not fork that behavior locally.
+        payload_dict: dict[str, Any] = to_wire_dict(payload)
 
         # Serialize the body to exact bytes ONCE. Whatever we sign, we transmit
         # THESE bytes verbatim (``data=body_bytes`` in _post, never ``json=`` which
@@ -392,43 +259,30 @@ class ProtocolWebhookService:
 
         for attempt in range(max_attempts):
             try:
-                logger.info(f"Sending webhook for task {task_id} to {url} (attempt {attempt + 1}/{max_attempts})")
+                logger.info(f"Sending webhook for task {task_id} (attempt {attempt + 1}/{max_attempts})")
 
-                def _post() -> requests.Response:
-                    # Redirect-disabled POST over the pooled session whose pinning adapter
-                    # (#1512 SSRF) resolves + validates every A/AAAA record and pins the
-                    # connection to the validated IP — so a validated URL cannot be
-                    # re-resolved (DNS rebinding) or 302-redirected to a private/metadata
-                    # target after validation. Host is set explicitly so vhost routing stays
-                    # correct even though the socket connects by IP.
-                    return self._session.post(
-                        url,
-                        data=body,
-                        headers={**headers, "Host": urlparse(url).netloc},
-                        timeout=10.0,
-                        allow_redirects=False,
-                        # Only the status code is consumed — do not buffer the
-                        # (buyer-controlled, potentially large) response body.
-                        stream=True,
-                    )
-
-                response = await asyncio.to_thread(_post)
-                # The status code is available from the response line/headers without
-                # reading the body; close immediately to return the connection to the
-                # pool without downloading the buyer-controlled body.
-                response.close()
+                status_code = await post_webhook_status_async(
+                    self._session,
+                    url,
+                    body=body,
+                    headers=headers,
+                    timeout=10.0,
+                )
                 # Require a 2xx. raise_for_status() does NOT raise for 3xx, and with
                 # redirects disabled a 3xx is a REFUSED redirect — a failed delivery,
                 # not a success. Treat any non-2xx uniformly via the HTTPError path.
-                if not (200 <= response.status_code < 300):
+                if not (200 <= status_code < 300):
+                    response = requests.Response()
+                    response.status_code = status_code
                     raise requests.HTTPError(
-                        f"Webhook returned non-2xx status {response.status_code}", response=response
+                        f"Webhook returned non-2xx status {status_code}",
+                        response=response,
                     )
 
                 # Calculate response time
                 response_time_ms = int((time.time() - start_time) * 1000)
 
-                logger.info(f"Successfully sent webhook for task {task_id} (status: {response.status_code})")
+                logger.info(f"Successfully sent webhook for task {task_id} (status: {status_code})")
 
                 # Write to webhook_delivery_log (success)
                 if (
@@ -448,7 +302,7 @@ class ProtocolWebhookService:
                         sequence_number=sequence_number,
                         notification_type=notification_type,
                         attempt_count=attempt + 1,
-                        http_status_code=response.status_code,
+                        http_status_code=status_code,
                         payload_size_bytes=payload_size_bytes,
                         response_time_ms=response_time_ms,
                         completed_at=datetime.now(UTC),
@@ -464,13 +318,17 @@ class ProtocolWebhookService:
                 return True
 
             except requests.HTTPError as e:
-                status_code = e.response.status_code if e.response else None
+                error_status_code = e.response.status_code if e.response is not None else None
                 response_time_ms = int((time.time() - start_time) * 1000)
-                error_message = f"HTTP {status_code}: {str(e)}"
+                error_message = f"HTTP {error_status_code}: {str(e)}"
 
-                # Don't retry on 4xx errors (client errors - permanent failures)
-                if status_code and 400 <= status_code < 500:
-                    logger.error(f"Webhook failed for task {task_id} with client error {status_code} - not retrying")
+                # Refused redirects and client errors are permanent for this
+                # delivery attempt. Retrying cannot make a 3xx/4xx target safe
+                # or valid, and would multiply outbound traffic.
+                if error_status_code and 300 <= error_status_code < 500:
+                    logger.error(
+                        f"Webhook failed for task {task_id} with permanent HTTP {error_status_code} - not retrying"
+                    )
 
                     # Write to webhook_delivery_log (failed)
                     if (
@@ -490,7 +348,7 @@ class ProtocolWebhookService:
                             sequence_number=sequence_number,
                             notification_type=notification_type,
                             attempt_count=attempt + 1,
-                            http_status_code=status_code,
+                            http_status_code=error_status_code,
                             error_message=error_message,
                             payload_size_bytes=payload_size_bytes,
                             response_time_ms=response_time_ms,
@@ -499,7 +357,7 @@ class ProtocolWebhookService:
 
                     # Log to audit system (failure)
                     if audit_logger:
-                        audit_logger.log_warning(f"{task_type} webhook failed with client error {status_code}")
+                        audit_logger.log_warning(f"{task_type} webhook failed with permanent HTTP {error_status_code}")
 
                     return False
 
@@ -507,7 +365,7 @@ class ProtocolWebhookService:
                 if attempt < max_attempts - 1:
                     wait_seconds = min(2**attempt, 60)  # Exponential backoff, max 60 seconds
                     logger.warning(
-                        f"Webhook failed for task {task_id}: HTTP {status_code}. "
+                        f"Webhook failed for task {task_id}: HTTP {error_status_code}. "
                         f"Retrying in {wait_seconds}s (attempt {attempt + 1}/{max_attempts})"
                     )
 
@@ -518,8 +376,7 @@ class ProtocolWebhookService:
                         and tenant_id
                         and principal_id
                     ):
-                        next_retry = datetime.now(UTC).replace(microsecond=0)
-                        next_retry = next_retry.replace(second=next_retry.second + int(wait_seconds))
+                        next_retry = datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=wait_seconds)
                         self._write_delivery_log(
                             log_id=log_id,
                             tenant_id=tenant_id,
@@ -531,7 +388,7 @@ class ProtocolWebhookService:
                             sequence_number=sequence_number,
                             notification_type=notification_type,
                             attempt_count=attempt + 1,
-                            http_status_code=status_code,
+                            http_status_code=error_status_code,
                             error_message=error_message,
                             payload_size_bytes=payload_size_bytes,
                             response_time_ms=response_time_ms,
@@ -540,7 +397,9 @@ class ProtocolWebhookService:
 
                     await asyncio.sleep(wait_seconds)
                 else:
-                    logger.error(f"Webhook failed for task {task_id} after {max_attempts} attempts: HTTP {status_code}")
+                    logger.error(
+                        f"Webhook failed for task {task_id} after {max_attempts} attempts: HTTP {error_status_code}"
+                    )
 
                     # Write to webhook_delivery_log (failed after all retries)
                     if (
@@ -560,7 +419,7 @@ class ProtocolWebhookService:
                             sequence_number=sequence_number,
                             notification_type=notification_type,
                             attempt_count=max_attempts,
-                            http_status_code=status_code,
+                            http_status_code=error_status_code,
                             error_message=error_message,
                             payload_size_bytes=payload_size_bytes,
                             response_time_ms=response_time_ms,
@@ -572,6 +431,15 @@ class ProtocolWebhookService:
                         audit_logger.log_warning(f"{task_type} webhook failed after {max_attempts} attempts")
 
                     return False
+
+            except UnsafeWebhookTargetError as e:
+                # SSRF, embedded-credential, and proxy-bypass refusals are
+                # deterministic policy failures. Never retry them as if they
+                # were transient network outages.
+                logger.error(f"Webhook target refused for task {task_id} - not retrying ({type(e).__name__})")
+                if audit_logger:
+                    audit_logger.log_warning(f"{task_type} webhook target refused by security policy")
+                return False
 
             except requests.RequestException as e:
                 response_time_ms = int((time.time() - start_time) * 1000)

@@ -130,7 +130,27 @@ app.mount("/mcp", mcp_app)
 # ---------------------------------------------------------------------------
 
 
-def _envelope_response(request: Request, exc: AdCPError) -> JSONResponse:
+async def _rest_application_context(request: Request) -> dict[str, object] | None:
+    """Best-effort extraction of a valid application context for error echo."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if isinstance(body, dict) and isinstance(body.get("context"), dict):
+        return dict(body["context"])
+
+    raw_query_context = request.query_params.get("context")
+    if raw_query_context is not None:
+        try:
+            query_context = json.loads(raw_query_context)
+        except (TypeError, ValueError):
+            query_context = None
+        if isinstance(query_context, dict):
+            return query_context
+    return None
+
+
+async def _envelope_response(request: Request, exc: AdCPError) -> JSONResponse:
     """Build a JSONResponse carrying the two-layer envelope for ``exc``.
 
     Single source of truth for the REST envelope-response shape — used by
@@ -148,6 +168,8 @@ def _envelope_response(request: Request, exc: AdCPError) -> JSONResponse:
     a lookup miss degrades to anonymous and ``record_boundary_error`` falls
     back to the WARNING log line carrying the error code, message, and path.
     """
+    if exc.context is None:
+        exc = normalize_to_adcp_error(exc, context=await _rest_application_context(request))
     tenant_id, principal_id = _best_effort_rest_identity(request)
     record_boundary_error("rest", request.url.path, exc, tenant_id=tenant_id, principal_id=principal_id)
     return JSONResponse(
@@ -193,7 +215,7 @@ async def adcp_error_handler(request: Request, exc: AdCPError) -> JSONResponse:
     in ``_envelope_response`` so all three handlers leave a uniform
     breadcrumb.
     """
-    return _envelope_response(request, exc)
+    return await _envelope_response(request, exc)
 
 
 @app.exception_handler(ValueError)
@@ -209,7 +231,7 @@ async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse
     Does NOT catch FastAPI's ``RequestValidationError`` (separate class, not a
     ValueError subclass) — that has its own handler below.
     """
-    return _envelope_response(request, normalize_to_adcp_error(exc))
+    return await _envelope_response(request, normalize_to_adcp_error(exc))
 
 
 @app.exception_handler(RequestValidationError)
@@ -238,6 +260,10 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     loc = raw_loc[1:] if raw_loc and raw_loc[0] in ("body", "query", "path") else raw_loc
     field = ".".join(loc) or None
     message = first.get("msg") or "Request failed schema validation"
+    if field == "idempotency_key" and first.get("type") == "missing":
+        # Match the shared MCP/A2A boundary's buyer-facing error instead of
+        # leaking Pydantic's context-free "Field required" wording.
+        message = "idempotency_key is required."
     # Code selection by failure semantics, grounded in the AdCP graded
     # error-compliance storyboard: a VALUE/enum/range violation on a
     # structurally-valid field is canonically VALIDATION_ERROR; a missing/
@@ -245,7 +271,7 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     # value-vs-structural reclassification across all fields is a repo-wide
     # follow-up; for now the attribution_window family — reconciled to
     # VALIDATION_ERROR upstream in adcp-req — is mapped explicitly. (salesagent-meho)
-    if field and field.startswith("attribution_window"):
+    if field == "idempotency_key" or (field and field.startswith("attribution_window")):
         exc_cls, suggestion = AdCPValidationError, VALIDATION_ERROR_SUGGESTION
     else:
         exc_cls, suggestion = AdCPInvalidRequestError, INVALID_REQUEST_SUGGESTION
@@ -255,7 +281,7 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
         suggestion=suggestion,
         details=build_validation_error_details(errors),
     )
-    return _envelope_response(request, adcp_exc)
+    return await _envelope_response(request, adcp_exc)
 
 
 @app.exception_handler(PermissionError)
@@ -268,7 +294,7 @@ async def permission_error_handler(request: Request, exc: PermissionError) -> JS
     error instead of the 403 authorization envelope every transport should
     emit for the same condition.
     """
-    return _envelope_response(request, normalize_to_adcp_error(exc))
+    return await _envelope_response(request, normalize_to_adcp_error(exc))
 
 
 @app.exception_handler(ToolError)

@@ -14,6 +14,7 @@ from typing import Any, NoReturn, cast, get_args
 from fastapi.responses import JSONResponse
 from fastmcp.exceptions import ToolError
 from fastmcp.server import Context as FastMCPContext
+from pydantic import BaseModel
 
 from src.core.exceptions import (
     ERROR_CODE_MAPPING,
@@ -295,7 +296,7 @@ def _log_tool_error(tool_name: str, error: Exception, tenant_id: str | None, pri
     record_boundary_error("mcp", tool_name, error, tenant_id=tenant_id, principal_id=principal_id)
 
 
-def translate_to_tool_error(error: Exception) -> NoReturn:
+def translate_to_tool_error(error: Exception, *, context: Any = None) -> NoReturn:
     """Translate typed exceptions to AdCPToolError at the MCP boundary.
 
     AdCPError → AdCPToolError carrying a two-layer envelope built by
@@ -317,17 +318,24 @@ def translate_to_tool_error(error: Exception) -> NoReturn:
     # AdCPError; the wrap-vs-passthrough branches produce byte-identical
     # AdCPToolError values, so the function unconditionally builds the
     # envelope and chains the original exception for traceback fidelity.
-    typed = normalize_to_adcp_error(error)
+    typed = normalize_to_adcp_error(error, context=context)
     raise AdCPToolError(build_two_layer_error_envelope(typed), status_code=typed.status_code) from error
 
 
-def _reject_at_mcp_boundary(tool_name: str, error: AdCPError, identity: Any) -> NoReturn:
+def _reject_at_mcp_boundary(
+    tool_name: str,
+    error: AdCPError,
+    identity: Any,
+    *,
+    context: Any = None,
+) -> NoReturn:
     """Record and translate a typed error rejected before MCP tool dispatch.
 
     MCP middleware failures bypass ``with_error_logging`` because the tool
     wrapper never runs. Both middleware layers therefore use this boundary
     helper to keep observability and the two-layer wire translation coupled.
     """
+    error = normalize_to_adcp_error(error, context=context)
     record_boundary_error_for_identity("mcp", tool_name, error, identity)
     translate_to_tool_error(error)
 
@@ -357,7 +365,12 @@ def _handle_tool_exception(tool_func: Callable, error: Exception, args: tuple, k
 
     tenant_id, principal_id = _extract_tenant_and_principal(context) if context else (None, None)
     _log_tool_error(tool_func.__name__, error, tenant_id, principal_id)
-    translate_to_tool_error(error)
+    application_context = kwargs.get("context")
+    if application_context is None:
+        request = kwargs.get("req")
+        if isinstance(request, BaseModel) and "context" in type(request).model_fields:
+            application_context = request.model_dump(include={"context"}, mode="python").get("context")
+    translate_to_tool_error(error, context=application_context)
 
 
 def with_error_logging(tool_func: Callable) -> Callable:

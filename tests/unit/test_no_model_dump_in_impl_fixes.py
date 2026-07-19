@@ -57,6 +57,9 @@ class TestMediaBuyRepositoryCreateFromRequest:
         assert isinstance(result, MediaBuy)
         assert result.media_buy_id == "mb_test_001"
         assert result.tenant_id == "tenant_1"
+        assert result.idempotency_key is None
+        assert result.payload_hash is None
+        assert result.raw_request["idempotency_key"] == req.idempotency_key
 
     def test_create_from_request_serializes_raw_request(self):
         """raw_request must be a dict (serialized from the model), not a Pydantic object."""

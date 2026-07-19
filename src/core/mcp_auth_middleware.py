@@ -45,6 +45,7 @@ class MCPAuthMiddleware(Middleware):
     ) -> ToolResult:
         tool_name = context.message.name
         require_auth = tool_name not in AUTH_OPTIONAL_TOOLS
+        application_context = (context.message.arguments or {}).get("context")
 
         # AUTH before VERSION (cross-transport parity, #1546). resolve_identity
         # raises for an INVALID token; a MISSING token returns a principal-less
@@ -66,18 +67,10 @@ class MCPAuthMiddleware(Middleware):
             if require_auth and (identity is None or not identity.principal_id):
                 raise AdCPAuthenticationError("Authentication required")
         except AdCPError as exc:
-            _reject_at_mcp_boundary(tool_name, exc, identity)
+            _reject_at_mcp_boundary(tool_name, exc, identity, context=application_context)
 
         if context.fastmcp_context:
             await context.fastmcp_context.set_state("identity", identity, serializable=False)
-
-            # Raw wire arguments, captured BEFORE RequestCompatMiddleware
-            # normalizes them — the idempotency payload-hash input (AdCP defines
-            # payload equivalence over the request as the buyer sent it).
-            if context.message.arguments is not None:
-                await context.fastmcp_context.set_state(
-                    "raw_wire_payload", dict(context.message.arguments), serializable=False
-                )
 
             # Extract x-context-id from HTTP headers for tools that need it
             try:

@@ -45,6 +45,7 @@ from typing import Any
 import adcp
 
 from src.core.exceptions import AdCPConfigurationError, AdCPValidationError, AdCPVersionUnsupportedError
+from src.core.version import get_version
 
 _RELEASE_PIN_RE = re.compile(r"^(?P<major>[0-9]+)\.(?P<minor>[0-9]+)(?:-(?P<prerelease>[a-zA-Z0-9.-]+))?$")
 _SEMVER_PRERELEASE_IDENTIFIER = r"(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
@@ -92,8 +93,8 @@ def _spec_release_components() -> tuple[int, int, str | None]:
     """Parse ``(major, minor, prerelease)`` from the SDK spec pin, typed-erroring on garbage.
 
     Both ``adcp_major_version()`` and ``supported_adcp_versions()`` derive from
-    this single parse, while ``adcp_build_version()`` uses the same complete
-    semantic-version validator, so all advertised forms fail consistently.
+    this single parse. ``adcp_build_version()`` is intentionally independent:
+    it identifies the Sales Agent deployment lineage, not the AdCP spec pin.
     The prerelease is retained so the advertised release-precision wire value
     preserves it (a prerelease pin such as ``"4.2.0-rc.1"`` -> ``"4.2-rc.1"``);
     only PATCH is dropped. The pin (``adcp.get_adcp_spec_version()``, e.g.
@@ -105,12 +106,19 @@ def _spec_release_components() -> tuple[int, int, str | None]:
     other server-side failure honors — rather than letting a bare ``ValueError``
     (int cast or tuple-unpack) escape as an untyped 500.
     """
-    _raw, major, minor, prerelease = _validate_sdk_build_version(adcp.get_adcp_spec_version())
+    _raw, major, minor, prerelease = _validate_full_semver(
+        adcp.get_adcp_spec_version(),
+        subject="AdCP SDK spec version",
+    )
     return major, minor, prerelease
 
 
-def _validate_sdk_build_version(raw: Any) -> tuple[str, int, int, str | None]:
-    """Validate the SDK's complete full-semver pin and return its release.
+def _validate_full_semver(
+    raw: Any,
+    *,
+    subject: str,
+) -> tuple[str, int, int, str | None]:
+    """Validate a complete semantic version and return its release parts.
 
     Returns ``(raw, major, minor, prerelease)``. The prerelease segment is
     carried through because the release-precision wire value PRESERVES it
@@ -120,14 +128,14 @@ def _validate_sdk_build_version(raw: Any) -> tuple[str, int, int, str | None]:
     """
     try:
         if not isinstance(raw, str):
-            raise TypeError("SDK spec version must be a string")
+            raise TypeError(f"{subject} must be a string")
         match = _BUILD_VERSION_RE.fullmatch(raw)
         if match is None:
-            raise ValueError("SDK spec version must be full semantic version")
+            raise ValueError(f"{subject} must be full semantic version")
         return raw, int(match.group("major")), int(match.group("minor")), match.group("prerelease")
     except (TypeError, ValueError) as exc:
         raise AdCPConfigurationError(
-            f"AdCP SDK spec version {raw!r} is malformed; expected a full semantic version MAJOR.MINOR.PATCH."
+            f"{subject} {raw!r} is malformed; expected a full semantic version MAJOR.MINOR.PATCH."
         ) from exc
 
 
@@ -180,15 +188,20 @@ def supported_adcp_versions() -> tuple[str, ...]:
 
 
 def adcp_build_version() -> str:
-    """Full-semver build identifier of this deployment's AdCP spec pin.
+    """Full-semver build identifier of the Sales Agent deployment lineage.
 
-    Advisory only (incident triage) — buyers MUST NOT use it for negotiation,
-    per ``error-details/version-unsupported.json``.
+    ``supported_versions`` identifies the AdCP spec releases this seller can
+    negotiate. ``build_version`` instead identifies the seller implementation
+    for incident triage and buyers MUST NOT use it for negotiation, per the
+    capabilities and VERSION_UNSUPPORTED schemas.
     """
     testing_policy = _active_testing_policy()
     if testing_policy is not None:
         return testing_policy.build_version
-    raw, _major, _minor, _prerelease = _validate_sdk_build_version(adcp.get_adcp_spec_version())
+    raw, _major, _minor, _prerelease = _validate_full_semver(
+        get_version(),
+        subject="Sales Agent build version",
+    )
     return raw
 
 

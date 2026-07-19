@@ -41,3 +41,12 @@ class TestNeedsV2Compat:
         """Malformed version strings should default to applying compat (safe default)."""
         assert needs_v2_compat("not-a-version") is True
         assert needs_v2_compat("") is True
+
+    def test_malformed_version_does_not_echo_buyer_value_into_logs(self, caplog):
+        """Control characters in a buyer pin cannot forge adjacent log records."""
+        buyer_value = "invalid\nFORGED-LOG-RECORD"
+
+        assert needs_v2_compat(buyer_value) is True
+
+        assert buyer_value not in caplog.text
+        assert "FORGED-LOG-RECORD" not in caplog.text

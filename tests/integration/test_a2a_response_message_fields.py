@@ -14,7 +14,6 @@ If these services are unavailable (HTTP 5xx, connection errors), tests will skip
 rather than fail, since external service availability is outside our control.
 """
 
-import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -23,6 +22,7 @@ import pytest
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.factories.principal import PrincipalFactory
+from tests.harness._idempotency import fresh_idempotency_key
 from tests.helpers.a2a_response_validator import assert_valid_skill_response
 from tests.helpers.external_service import is_external_service_exception
 
@@ -95,7 +95,7 @@ class TestA2AMessageFieldValidation:
             # CreateMediaBuyRequest validates strictly.
             params = {
                 "brand": {"domain": "testbrand.com"},
-                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+                "idempotency_key": fresh_idempotency_key("int-key"),
                 "packages": [
                     {
                         "product_id": sample_products[0],
@@ -134,6 +134,7 @@ class TestA2AMessageFieldValidation:
                     }
                 ],
                 "validation_mode": "strict",
+                "idempotency_key": fresh_idempotency_key(),
             }
 
             # Call handler directly - may fail if external creative agent is unavailable

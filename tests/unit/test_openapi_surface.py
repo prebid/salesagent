@@ -16,6 +16,13 @@ from src.app import app
 client = TestClient(app)
 
 
+def _component_schema(schemas: dict, property_schema: dict) -> dict:
+    """Resolve an OpenAPI property that may reference a component schema."""
+    if "$ref" not in property_schema:
+        return property_schema
+    return schemas[property_schema["$ref"].rsplit("/", maxsplit=1)[-1]]
+
+
 # ---------------------------------------------------------------------------
 # OpenAPI Availability
 # ---------------------------------------------------------------------------
@@ -38,6 +45,63 @@ class TestOpenAPIAvailability:
         assert "openapi" in schema
         assert "paths" in schema
         assert "info" in schema
+
+    def test_mutating_bodies_advertise_required_idempotency_key_contract(self):
+        """REST discovery must not weaken the pinned AdCP key contract."""
+        schemas = client.get("/openapi.json").json()["components"]["schemas"]
+        expected = {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 255,
+            "pattern": r"^[A-Za-z0-9_.:-]{16,255}$",
+        }
+
+        for model_name in (
+            "CreateMediaBuyBody",
+            "UpdateMediaBuyBody",
+            "SyncCreativesBody",
+            "SyncAccountsBody",
+        ):
+            schema = schemas[model_name]
+            assert "idempotency_key" in schema["required"]
+            property_schema = _component_schema(schemas, schema["properties"]["idempotency_key"])
+            assert {key: property_schema[key] for key in expected} == expected
+
+    def test_read_bodies_advertise_optional_non_nullable_idempotency_key(self):
+        """Omission gets the 3.1 grace; supplied read metadata remains a string."""
+        schemas = client.get("/openapi.json").json()["components"]["schemas"]
+        expected = {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 255,
+            "pattern": r"^[A-Za-z0-9_.:-]{16,255}$",
+        }
+
+        for model_name in (
+            "GetProductsBody",
+            "GetMediaBuyDeliveryBody",
+            "ListCreativeFormatsBody",
+            "ListCreativesBody",
+            "ListAccountsBody",
+        ):
+            schema = schemas[model_name]
+            assert "idempotency_key" not in schema.get("required", [])
+            property_schema = _component_schema(schemas, schema["properties"]["idempotency_key"])
+            assert {key: property_schema[key] for key in expected} == expected
+            assert "default" not in property_schema
+
+    def test_update_revision_is_optional_but_never_nullable(self):
+        """OpenAPI must distinguish field omission from an explicit JSON null."""
+        schemas = client.get("/openapi.json").json()["components"]["schemas"]
+        body_schema = schemas["UpdateMediaBuyBody"]
+
+        assert "revision" not in body_schema.get("required", [])
+        revision_schema = _component_schema(schemas, body_schema["properties"]["revision"])
+        assert {key: revision_schema[key] for key in ("type", "minimum")} == {
+            "type": "integer",
+            "minimum": 1,
+        }
+        assert "default" not in revision_schema
 
 
 # ---------------------------------------------------------------------------

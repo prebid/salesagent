@@ -1,30 +1,15 @@
-"""Canonical payload hashing for idempotency replay-conflict detection.
+"""Dormant RFC 8785 payload-hashing primitives.
 
-The AdCP idempotency contract (the ``replay_ttl_seconds`` capability) defines
-payload equivalence as RFC 8785 JSON Canonicalization Scheme over the request
-as sent, with a CLOSED exclusion list: two requests carrying the same
-``idempotency_key`` and the same canonical hash are replays of each other; the
-same key with a different canonical hash is an ``IDEMPOTENCY_CONFLICT``.
+The seller advertises AdCP 3.1.1 ``idempotency.supported=false``. Consequently,
+no production transport or tool hashes a request for replay/conflict handling;
+valid keys are operationally inert after shape validation. These helpers remain
+as tested substrate for a future, separately grounded universal implementation.
 
-The hashing ENGINE is the SDK's ``adcp.server.idempotency`` canonicalizer
-(strip the spec exclusion list → ``rfc8785`` → SHA-256) — the same algorithm
-the reference implementation ships. This module is the single production seam
-in front of it, deliberately:
-
-- production code never imports the SDK module directly, so swapping the
-  engine (back to a local implementation, or forward to a future SDK's) is a
-  change to THIS file only;
-- the RFC 8785 vectors in ``tests/unit/test_idempotency_canonical.py`` pin the
-  BEHAVIOR against RFC-published bytes independently of who implements it — an
-  SDK bump that changes hashing fails OUR vectors, and we choose;
-- boundary translation stays ours: a pathologically nested payload raises a
-  typed ``AdCPValidationError`` instead of the engine's raw ``RecursionError``.
-
-``canonical_request_hash`` (model-dump indirection) exists so transport-
-agnostic ``_impl`` bodies never call ``.model_dump()`` directly (the
-no-model-dump-in-impl guard). It is the documented fallback for impl-direct
-callers ONLY — transport wrappers thread the raw wire payload to
-``canonical_payload_hash``, the spec's equivalence input.
+The SDK's ``adcp.server.idempotency`` canonicalizer is kept behind this single
+import seam. RFC 8785 vectors pin the helper's mechanics, and boundary
+translation turns pathological recursion into ``AdCPValidationError``. Those
+primitive guarantees do not imply that the current seller offers replay,
+conflict detection, or any other idempotency behavior.
 """
 
 from __future__ import annotations
@@ -54,7 +39,7 @@ def canonical_payload_hash(payload: dict[str, Any]) -> str:
     Excluded fields (the spec's closed list, re-exported as
     :data:`_EXCLUDED_FIELDS`) are stripped first. The digest is stable across
     key ordering, so two requests differing only in field order (or in
-    excluded fields) hash equal — the equivalence test for replay vs conflict.
+    excluded fields) hash equal. Current production paths do not call it.
     """
     try:
         return _canonical_json_sha256(payload)
@@ -67,8 +52,7 @@ def canonical_payload_hash(payload: dict[str, Any]) -> str:
 def canonical_request_hash(request: BaseModel) -> str:
     """Canonical hash of a Pydantic request model.
 
-    Thin wrapper over :func:`canonical_payload_hash` that performs the
-    ``model_dump(mode="json")`` here, so transport-agnostic ``_impl`` bodies never
-    call ``.model_dump()`` directly (the no-model-dump-in-impl architecture guard).
+    Thin dormant wrapper over :func:`canonical_payload_hash` that performs the
+    ``model_dump(mode="json")`` in one place.
     """
     return canonical_payload_hash(request.model_dump(mode="json"))

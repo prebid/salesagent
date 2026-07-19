@@ -19,6 +19,7 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import Field
 
 from src.adapters import get_adapter_default_channels
+from src.core.application_context import dump_adcp_response
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object, require_identity, require_tenant
 from src.core.exceptions import (
@@ -829,7 +830,7 @@ async def get_products(
     response = await _get_products_impl(req, identity)
 
     # Return ToolResult with human-readable text and structured data
-    return ToolResult(content=str(response), structured_content=response.model_dump(mode="json"))
+    return ToolResult(content=str(response), structured_content=dump_adcp_response(response, context=context))
 
 
 async def get_products_raw(

@@ -28,6 +28,43 @@ _BRAND_TOOLS: frozenset[str] = frozenset({"get_products", "create_media_buy"})
 # clients. See https://github.com/prebid/salesagent/issues/1512.
 ADCP_NEGOTIATION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version"})
 
+# Standard read names registered by this seller.  Each transport applies the
+# validator only to names it actually exposes; notably, ``list_tasks`` remains
+# MCP-only.  The 3.1 compatibility grace permits omission, while security-layer
+# envelope tolerance permits a supplied key even when the individual request
+# schema does not declare it.  With idempotency.supported=false the key is
+# validated then ignored — it never reaches business logic or a replay cache.
+STANDARD_ADCP_READ_TOOLS: frozenset[str] = frozenset(
+    {
+        "get_adcp_capabilities",
+        "get_media_buy_delivery",
+        "get_media_buys",
+        "get_products",
+        "list_accounts",
+        "list_creative_formats",
+        "list_creatives",
+        "list_tasks",
+    }
+)
+
+
+def validate_standard_read_idempotency_key(tool_name: str, params: dict[str, Any]) -> None:
+    """Validate a supplied read key as inert protocol metadata.
+
+    Omission is accepted for the pinned 3.1 compatibility grace.  Presence is
+    shape-checked before any transport strips undeclared envelope fields;
+    explicit JSON null is presence and therefore invalid.  Non-standard/local
+    tools are untouched.
+    """
+    if tool_name not in STANDARD_ADCP_READ_TOOLS or "idempotency_key" not in params:
+        return
+
+    # Lazy import avoids request_compat -> schema_helpers -> schemas import
+    # cycles during startup while keeping one canonical shape validator.
+    from src.core.schemas._base import validate_idempotency_key_shape
+
+    validate_idempotency_key_shape(params["idempotency_key"], allow_none=False)
+
 
 @dataclass
 class NormalizationResult:
@@ -202,8 +239,7 @@ ADCP_ENVELOPE_FIELDS: frozenset[str] = frozenset(
         # NOTE: `revision` is deliberately NOT tolerated. It is an optimistic-
         # concurrency control (update-media-buy-request.json, 3.1.1): a mismatch
         # MUST return CONFLICT, atomically with the write. This agent does not
-        # implement that (the concurrency engine lives on branch
-        # feat/adcp-idempotency-concurrency). Silently stripping `revision` would
+        # implement that concurrency control. Silently stripping `revision` would
         # drop the buyer's stale-write guard and perform an unprotected update the
         # buyer believed was guarded. Instead, update_media_buy declares `revision`
         # and rejects any supplied value fail-loud on every transport, so the

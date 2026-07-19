@@ -53,6 +53,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from src.core.schemas import SyncCreativesResponse
 from tests.harness._base import IntegrationEnv
+from tests.harness._idempotency import ensure_idempotency_key
 
 
 class CreativeSyncEnv(IntegrationEnv):
@@ -176,6 +177,7 @@ class CreativeSyncEnv(IntegrationEnv):
         """
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
+        kwargs = ensure_idempotency_key(kwargs)
         self._commit_factory_data()
         kwargs.setdefault("identity", self.identity)
         kwargs.setdefault("creatives", [])
@@ -204,6 +206,7 @@ class CreativeSyncEnv(IntegrationEnv):
         """
         from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
 
+        kwargs = ensure_idempotency_key(kwargs)
         self._commit_factory_data()
         kwargs.setdefault("identity", self.identity)
         kwargs.setdefault("creatives", [])
@@ -214,11 +217,13 @@ class CreativeSyncEnv(IntegrationEnv):
 
         No enum coercion needed — FastMCP's TypeAdapter handles it automatically.
         """
+        kwargs = ensure_idempotency_key(kwargs)
         kwargs.setdefault("creatives", [])
         return self._run_mcp_client("sync_creatives", SyncCreativesResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to SyncCreativesBody shape for REST POST."""
+        kwargs = ensure_idempotency_key(kwargs)
         # The REST body expects 'creatives' as list[dict], matching SyncCreativesBody
         body: dict[str, Any] = {}
         if "creatives" in kwargs:
@@ -238,8 +243,25 @@ class CreativeSyncEnv(IntegrationEnv):
         if "account" in kwargs and kwargs["account"] is not None:
             account = kwargs["account"]
             body["account"] = account.model_dump(mode="json") if hasattr(account, "model_dump") else account
+        if "idempotency_key" in kwargs:
+            body["idempotency_key"] = kwargs["idempotency_key"]
         return body
 
     def parse_rest_response(self, data: dict[str, Any]) -> SyncCreativesResponse:
         """Parse REST JSON into SyncCreativesResponse."""
         return SyncCreativesResponse(**data)
+
+
+class CreativeSyncIdempotencyWireEnv(CreativeSyncEnv):
+    """UC-006 v3.1.1 key harness with genuine A2A Task framing.
+
+    The broad generated UC-006 suite still uses the raw A2A seam while its
+    per-creative validation divergences are reconciled. The hand-authored key
+    companion has no such divergence, so it must grade the actual handler and
+    capture the failed-Task artifact envelope.
+    """
+
+    def call_a2a(self, **kwargs: Any) -> SyncCreativesResponse:
+        kwargs = ensure_idempotency_key(kwargs)
+        kwargs.setdefault("creatives", [])
+        return self._run_a2a_handler("sync_creatives", SyncCreativesResponse, **kwargs)

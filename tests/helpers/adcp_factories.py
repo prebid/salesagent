@@ -7,7 +7,6 @@ instead of manually constructing objects to avoid validation errors.
 All factories use sensible defaults for required fields and accept overrides for customization.
 """
 
-import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -20,6 +19,7 @@ from adcp.types.generated_poc.brand import Brand  # TODO: no stable alias in adc
 from src.core.schemas import Package, PackageRequest, url
 from src.core.schemas.product import Product
 from tests.factories.creative_asset import build_assets, image_spec
+from tests.harness._idempotency import fresh_idempotency_key
 
 
 def create_test_product(
@@ -707,9 +707,9 @@ def create_test_media_buy_request_dict(
         "packages": packages,
         "start_time": start_time,
         "end_time": end_time,
-        # Required by AdCP 3.0.1 — unique per call (a reused key would replay the
-        # original response instead of creating a new buy). Override via kwargs.
-        "idempotency_key": f"test-key-{uuid.uuid4().hex}",
+        # Required by AdCP 3.1.1. Use a unique value to keep fixture requests
+        # independently identifiable; supported=false means reuse still executes.
+        "idempotency_key": fresh_idempotency_key(),
     }
 
     # Handle targeting_overlay specially (goes in all packages, not top-level)

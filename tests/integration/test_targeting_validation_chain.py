@@ -11,7 +11,6 @@ managed-only fields; extra="forbid" rejects unknown fields before validators run
 Covers: salesagent-31v (PR review #10).
 """
 
-import uuid
 from decimal import Decimal
 
 import pytest
@@ -23,6 +22,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
+from tests.harness._idempotency import fresh_idempotency_key
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.utils.database_helpers import future_iso_date_range, seed_targeting_test_tenant
 
@@ -102,7 +102,7 @@ async def test_geo_overlap_rejected_through_full_path(targeting_tenant):
         ],
         start_time=start,
         end_time=end,
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+        idempotency_key=fresh_idempotency_key("int-key"),
     )
 
     with pytest.raises(AdCPValidationError) as excinfo:
@@ -132,7 +132,7 @@ async def test_geo_metro_overlap_rejected_through_full_path(targeting_tenant):
         ],
         start_time=start,
         end_time=end,
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+        idempotency_key=fresh_idempotency_key("int-key"),
     )
 
     with pytest.raises(AdCPValidationError) as excinfo:

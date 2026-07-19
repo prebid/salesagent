@@ -10,7 +10,7 @@ import pytest
 
 from src.core.exceptions import AdCPValidationError
 from src.core.mcp_compat_middleware import RequestCompatMiddleware
-from src.core.request_compat import NormalizationResult
+from src.core.request_compat import STANDARD_ADCP_READ_TOOLS, NormalizationResult
 from src.core.tool_error_logging import AdCPToolError
 from tests.helpers import assert_envelope_shape, assert_no_raw_validation_leak
 
@@ -187,6 +187,66 @@ class TestMiddlewareDropsUndeclaredEnvelopeFields:
         # no envelope strip happened → original context passes through unchanged
         call_args = captured_ctx.message.arguments if captured_ctx is not None else ctx.message.arguments
         assert call_args.get("context") == {"correlation_id": "c1"}
+
+
+class TestMiddlewareReadIdempotencyEnvelope:
+    """Every registered standard read consumes one validated inert key."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", sorted(STANDARD_ADCP_READ_TOOLS))
+    async def test_valid_key_is_consumed_before_dispatch_for_every_read(self, middleware, tool_name):
+        ctx = _make_context(tool_name, {"idempotency_key": "valid-read-key-0001"})
+        captured_ctx = None
+
+        async def capturing_call_next(context):
+            nonlocal captured_ctx
+            captured_ctx = context
+
+        with (
+            patch.object(middleware, "_get_known_params", AsyncMock(return_value=set())),
+            patch("src.core.config.is_production", return_value=False),
+        ):
+            await middleware.on_call_tool(ctx, capturing_call_next)
+
+        assert captured_ctx is not None
+        assert captured_ctx.message.arguments == {}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", sorted(STANDARD_ADCP_READ_TOOLS))
+    async def test_explicit_null_rejects_before_envelope_strip_for_every_read(self, middleware, tool_name):
+        ctx = _make_context(tool_name, {"idempotency_key": None})
+        call_next = AsyncMock()
+
+        with pytest.raises(AdCPToolError) as exc_info:
+            await middleware.on_call_tool(ctx, call_next)
+
+        assert_envelope_shape(
+            exc_info.value,
+            "VALIDATION_ERROR",
+            recovery="correctable",
+            message_substr="idempotency_key must be a string",
+            check_mcp_tool_error=True,
+        )
+        call_next.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_version_error_precedes_malformed_read_key(self, middleware):
+        ctx = _make_context(
+            "get_products",
+            {"adcp_version": "4.0", "idempotency_key": None},
+        )
+        call_next = AsyncMock()
+
+        with pytest.raises(AdCPToolError) as exc_info:
+            await middleware.on_call_tool(ctx, call_next)
+
+        assert_envelope_shape(
+            exc_info.value,
+            "VERSION_UNSUPPORTED",
+            recovery="correctable",
+            check_mcp_tool_error=True,
+        )
+        call_next.assert_not_awaited()
 
 
 class TestMiddlewareDropsNegotiationFields:
@@ -403,18 +463,22 @@ class TestTypeAdapterValidationEnvelope:
 
 
 class TestMiddlewareEdgeCases:
-    """Edge cases: None arguments, empty arguments."""
+    """Argument-less calls still cross the validation-envelope boundary."""
 
     @pytest.mark.asyncio
-    async def test_none_arguments_passthrough(self, middleware):
+    async def test_none_arguments_are_normalized_before_dispatch(self, middleware):
         ctx = _make_context("get_products", None)
         call_next = AsyncMock()
 
-        await middleware.on_call_tool(ctx, call_next)
-        call_next.assert_called_once_with(ctx)
+        with patch("src.core.mcp_compat_middleware.normalize_request_params") as mock_norm:
+            mock_norm.return_value = NormalizationResult(params={}, translations_applied=[])
+            await middleware.on_call_tool(ctx, call_next)
+
+        mock_norm.assert_called_once_with("get_products", {})
+        call_next.assert_awaited_once_with(ctx)
 
     @pytest.mark.asyncio
-    async def test_empty_arguments_passthrough(self, middleware):
+    async def test_empty_arguments_are_normalized_before_dispatch(self, middleware):
         ctx = _make_context("get_products", {})
         call_next = AsyncMock()
 
@@ -422,4 +486,5 @@ class TestMiddlewareEdgeCases:
             mock_norm.return_value = NormalizationResult(params={}, translations_applied=[])
             await middleware.on_call_tool(ctx, call_next)
 
-            call_next.assert_called_once_with(ctx)
+        mock_norm.assert_called_once_with("get_products", {})
+        call_next.assert_awaited_once_with(ctx)

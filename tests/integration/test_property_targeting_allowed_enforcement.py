@@ -10,8 +10,6 @@ Covers: UC-002-MAIN-14b
 Covers: UC-003-MAIN-14
 """
 
-import uuid
-
 import pytest
 
 from src.core.database.database_session import get_db_session
@@ -26,6 +24,7 @@ from src.core.schemas import (
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.media_buy_update import _update_media_buy_impl
 from tests.factories import PrincipalFactory
+from tests.harness._idempotency import fresh_idempotency_key
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.utils.database_helpers import (
     add_targeting_test_product,
@@ -111,7 +110,7 @@ async def test_create_rejects_property_list_when_product_disallows(property_targ
         ],
         start_time=start,
         end_time=end,
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+        idempotency_key=fresh_idempotency_key("int-key"),
     )
 
     with pytest.raises(AdCPValidationError) as excinfo:
@@ -147,7 +146,7 @@ async def test_create_accepts_property_list_when_product_allows(property_targeti
         ],
         start_time=start,
         end_time=end,
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+        idempotency_key=fresh_idempotency_key("int-key"),
     )
 
     response, _ = await _create_media_buy_impl(req=request, identity=_make_identity())
@@ -185,7 +184,7 @@ async def test_create_accepts_collection_list_without_property_list(property_tar
         ],
         start_time=start,
         end_time=end,
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+        idempotency_key=fresh_idempotency_key("int-key"),
     )
 
     response, _ = await _create_media_buy_impl(req=request, identity=_make_identity())
