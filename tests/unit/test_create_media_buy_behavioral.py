@@ -19,7 +19,6 @@ Obligation IDs:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -28,17 +27,11 @@ from src.core.helpers.creative_helpers import _brand_str_to_ref
 from src.core.schemas import CreateMediaBuyRequest
 from tests.factories import PrincipalFactory
 from tests.helpers.create_media_buy_capture import capture_a2a_forwarded_pnc, capture_mcp_forwarded_pnc
-from tests.unit._media_buy_mock_helpers import mock_pricing_option
+from tests.unit._media_buy_mock_helpers import future as _future, mock_pricing_option
 
 # ---------------------------------------------------------------------------
 # Shared helpers for TestMediaBuyBrandPropagation
 # ---------------------------------------------------------------------------
-
-
-def _future(days: int = 7) -> str:
-    """Return an ISO 8601 datetime string N days in the future."""
-    dt = datetime.now(UTC) + timedelta(days=days)
-    return dt.isoformat()
 
 
 def _make_request(**overrides) -> CreateMediaBuyRequest:

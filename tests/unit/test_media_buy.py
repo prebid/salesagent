@@ -56,17 +56,11 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
-from tests.unit._media_buy_mock_helpers import mock_pricing_option
+from tests.unit._media_buy_mock_helpers import future as _future, mock_pricing_option
 
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-
-
-def _future(days: int = 7) -> str:
-    """Return an ISO 8601 datetime string N days in the future."""
-    dt = datetime.now(UTC) + timedelta(days=days)
-    return dt.isoformat()
 
 
 def _make_request(**overrides) -> CreateMediaBuyRequest:

@@ -14,6 +14,32 @@ from src.core.creative_agent_registry import (
 from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError, AdCPServiceUnavailableError
 
 
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_capture_client():
+    """Return (captured_requests, mock_adcp_client) for build_creative capture tests.
+
+    Sets up a mock ADCPMultiAgentClient whose agent().build_creative() appends
+    each request to the returned list and returns {"status": "draft"}.
+    """
+    from adcp import BuildCreativeRequest
+
+    captured: list[BuildCreativeRequest] = []
+
+    async def _capture(request):
+        captured.append(request)
+        return {"status": "draft"}
+
+    mock_agent_client = Mock()
+    mock_agent_client.build_creative = _capture
+    mock_adcp_client = Mock()
+    mock_adcp_client.agent = Mock(return_value=mock_agent_client)
+    return captured, mock_adcp_client
+
+
 class TestCacheKeyAcceptsAnyUrl:
     """Regression tests for #1106: _cache_key must accept Pydantic AnyUrl.
 
@@ -486,21 +512,8 @@ class TestBuildCreativeUsesADCPClient:
     @pytest.mark.asyncio
     async def test_build_creative_passes_idempotency_key(self):
         """build_creative must pass idempotency_key in the BuildCreativeRequest."""
-        from adcp import BuildCreativeRequest
-
         registry = CreativeAgentRegistry()
-
-        captured_request: list[BuildCreativeRequest] = []
-
-        async def capture_build(request):
-            captured_request.append(request)
-            return {"status": "draft"}
-
-        mock_agent_client = Mock()
-        mock_agent_client.build_creative = capture_build
-
-        mock_adcp_client = Mock()
-        mock_adcp_client.agent = Mock(return_value=mock_agent_client)
+        captured_request, mock_adcp_client = _make_capture_client()
 
         with patch.object(registry, "_build_adcp_client", return_value=mock_adcp_client):
             await registry.build_creative(
@@ -519,22 +532,10 @@ class TestBuildCreativeUsesADCPClient:
     @pytest.mark.asyncio
     async def test_build_creative_brand_str_converted_to_ref(self):
         """build_creative converts brand string to typed BrandReference before the request."""
-        from adcp import BuildCreativeRequest
         from adcp.types import BrandReference
 
         registry = CreativeAgentRegistry()
-
-        captured_request: list[BuildCreativeRequest] = []
-
-        async def capture_build(request):
-            captured_request.append(request)
-            return {"status": "draft"}
-
-        mock_agent_client = Mock()
-        mock_agent_client.build_creative = capture_build
-
-        mock_adcp_client = Mock()
-        mock_adcp_client.agent = Mock(return_value=mock_agent_client)
+        captured_request, mock_adcp_client = _make_capture_client()
 
         with patch.object(registry, "_build_adcp_client", return_value=mock_adcp_client):
             await registry.build_creative(
@@ -645,22 +646,10 @@ class TestBuildCreativeManifestValidation:
     @pytest.mark.asyncio
     async def test_realistic_complete_manifest_forwarded(self):
         """A complete, valid creative_manifest dict is forwarded as a typed CreativeManifest."""
-        from adcp import BuildCreativeRequest
         from adcp.types.generated_poc.core.creative_manifest import CreativeManifest
 
         registry = CreativeAgentRegistry()
-
-        captured_request: list[BuildCreativeRequest] = []
-
-        async def capture_build(request):
-            captured_request.append(request)
-            return {"status": "draft"}
-
-        mock_agent_client = Mock()
-        mock_agent_client.build_creative = capture_build
-
-        mock_adcp_client = Mock()
-        mock_adcp_client.agent = Mock(return_value=mock_agent_client)
+        captured_request, mock_adcp_client = _make_capture_client()
 
         manifest_dict = {
             "format_id": {"id": "display_300x250", "agent_url": "https://creative.example.com"},
