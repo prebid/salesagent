@@ -186,6 +186,12 @@ REPORTABLE_CANONICAL_STATUSES: frozenset[str] = frozenset({CANONICAL_SERVING, CA
 # sent. Selecting completed too lets the batch send the final, de-duplicated on
 # a best-effort basis by DeliveryRepository.has_successful_final (a true
 # exactly-once final under concurrency/crash needs the outbox tracked in #1606).
+#
+# Consumer note: this constant is now referenced only by the test suite — the
+# scheduler selects SERVING_PERSISTED_STATUSES and relies on the exact-set
+# relation REPORTABLE == SERVING | {"completed"} being pinned (see
+# test_media_buy_status_consistency.py). Keep it: deleting it as "unused" would
+# silently unpin the relation the scheduler's serving-substitution depends on.
 REPORTABLE_PERSISTED_STATUSES: frozenset[str] = frozenset(
     k for k, v in PERSISTED_STATUS_TO_CANONICAL.items() if v in REPORTABLE_CANONICAL_STATUSES
 )

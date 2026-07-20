@@ -40,9 +40,14 @@ from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
 
-# 1 hour because AdCP protocol has frequency options hourly, daily and monthly
+# 1 hour because AdCP protocol has frequency options hourly, daily and monthly.
+# The shipped default is a named constant so invariants about the production
+# cadence (e.g. the completed-selection horizon test) can bind to it rather than
+# to the env-resolved value — test runs export DELIVERY_WEBHOOK_INTERVAL=5,
+# which would otherwise collapse a derived bound to seconds.
+DEFAULT_SLEEP_INTERVAL_SECONDS = 3600
 # Configurable via env var for testing
-SLEEP_INTERVAL_SECONDS = int(os.getenv("DELIVERY_WEBHOOK_INTERVAL") or "3600")
+SLEEP_INTERVAL_SECONDS = int(os.getenv("DELIVERY_WEBHOOK_INTERVAL") or str(DEFAULT_SLEEP_INTERVAL_SECONDS))
 
 # Lease for the best-effort atomic "final webhook" claim (#1575). A claim older
 # than this is treated as stale (crashed/failed worker) and can be re-claimed, so

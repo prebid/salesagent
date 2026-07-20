@@ -1617,15 +1617,21 @@ def _assert_next_expected_presence(payload: dict, phrase: str, *, context: str) 
         assert has_key, (
             f"{context}: a non-final notification must include 'next_expected_at'; keys={list(payload.keys())}"
         )
-        # The schema types it a non-nullable date-time — present-but-null or
-        # non-timestamp values are equally non-conforming.
+        # The schema types it a non-nullable date-time — present-but-null,
+        # date-only, or non-timestamp values are equally non-conforming.
         from datetime import datetime
 
         value = payload["next_expected_at"]
         assert isinstance(value, str) and value, (
             f"{context}: next_expected_at must be a date-time string, got {value!r}"
         )
-        datetime.fromisoformat(value.replace("Z", "+00:00"))
+        assert "T" in value, (
+            f"{context}: next_expected_at must be a full date-time (schema format 'date-time'), got date-only {value!r}"
+        )
+        try:
+            datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            raise AssertionError(f"{context}: next_expected_at is not a parseable date-time: {value!r}") from None
 
 
 @then(parsers.re(r"the payload (?P<next_expected>.+) include next_expected_at"))

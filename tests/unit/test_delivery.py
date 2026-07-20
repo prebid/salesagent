@@ -2557,6 +2557,10 @@ class TestFinalWebhookSchedulingInvariants:
         )
 
         assert FINAL_WEBHOOK_COMPLETED_HORIZON >= 10 * FINAL_WEBHOOK_CLAIM_LEASE
-        from src.services.delivery_webhook_scheduler import SLEEP_INTERVAL_SECONDS
+        # Bind to the SHIPPED default cadence, not the env-resolved SLEEP_INTERVAL_SECONDS:
+        # test runs export DELIVERY_WEBHOOK_INTERVAL=5, which would collapse this bound to
+        # seconds and make the invariant vacuous. FINAL_WEBHOOK_COMPLETED_HORIZON is not
+        # env-configurable, so it is pinned against the constant, not the resolved value.
+        from src.services.delivery_webhook_scheduler import DEFAULT_SLEEP_INTERVAL_SECONDS
 
-        assert FINAL_WEBHOOK_COMPLETED_HORIZON >= 24 * timedelta(seconds=SLEEP_INTERVAL_SECONDS)
+        assert FINAL_WEBHOOK_COMPLETED_HORIZON >= 24 * timedelta(seconds=DEFAULT_SLEEP_INTERVAL_SECONDS)

@@ -582,10 +582,10 @@ def _get_media_buy_delivery_impl(
                 )
                 # Skip this media buy and continue with others
 
-        # NOTE (#1570): notification_type / next_expected_at / sequence_number
-        # are webhook-only fields ("only present in webhook deliveries" —
-        # get-media-buy-delivery-response.json @ v3.1-04f59d2d5), so this
-        # polling impl does NOT set them. The delivery webhook scheduler
+        # NOTE (#1570): the WEBHOOK_ONLY_FIELDS (notification_type, sequence_number,
+        # next_expected_at, partial_data, unavailable_count) are "only present in
+        # webhook deliveries" (get-media-buy-delivery-response.json @ v3.1-04f59d2d5),
+        # so this polling impl does NOT set them. The delivery webhook scheduler
         # decorates the response with them (derive_notification_type +
         # its own WebhookDeliveryLog-backed sequence) before sending.
 
