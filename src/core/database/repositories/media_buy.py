@@ -16,7 +16,7 @@ import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import Session, joinedload
 
 from src.core.database.models import MediaBuy, MediaPackage
@@ -646,3 +646,41 @@ class MediaBuyRepository:
         media buys regardless of tenant. Not tenant-scoped.
         """
         return list(session.scalars(select(MediaBuy).where(MediaBuy.status.in_(statuses))).all())
+
+    @staticmethod
+    def get_reportable_for_delivery(
+        session: Session, *, serving_statuses: list[str], completed_horizon: datetime.timedelta
+    ) -> list[MediaBuy]:
+        """Select the delivery webhook batch's buys: serving (unbounded) + recent ``completed``.
+
+        System-level cross-tenant query for the delivery webhook scheduler ONLY (the
+        status scheduler keeps the unbounded ``get_all_by_statuses`` — its selection
+        is lifecycle-bounded by construction). ``completed`` is a permanent terminal
+        status, so an unbounded selection would materialize every completed buy that
+        ever existed on every hourly batch; bound it to rows touched within
+        ``completed_horizon`` via ``updated_at``, which the status scheduler's flip,
+        the final-webhook claim, AND the claim release all bump (``onupdate``) — so:
+          - the flip starts the clock even after scheduler downtime (flip time, not
+            flight end);
+          - a buy with ongoing failed-final retries re-enters the window on every
+            claim/release write and never silently ages out mid-retry;
+          - a buy whose final SUCCEEDED stops being written and ages out, so the
+            hourly scan cost decays instead of growing forever.
+        Deliberately NOT bounded via ``final_webhook_claimed_at IS NULL``: a
+        crashed-mid-send buy leaves its claim set and stale-lease recovery depends on
+        the buy being re-selected. Completed buys whose ``updated_at`` predates the
+        horizon (ancient backlog from before the completed-selection existed) are
+        intentionally excluded — a final months after campaign end is more surprising
+        than none; the durable answer is the #1606 outbox.
+        """
+        cutoff = datetime.datetime.now(datetime.UTC) - completed_horizon
+        return list(
+            session.scalars(
+                select(MediaBuy).where(
+                    or_(
+                        MediaBuy.status.in_(serving_statuses),
+                        and_(MediaBuy.status == "completed", MediaBuy.updated_at >= cutoff),
+                    )
+                )
+            ).all()
+        )

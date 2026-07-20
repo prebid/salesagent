@@ -516,6 +516,111 @@ class TestConcurrentFinalWebhookClaim:
             refreshed = MediaBuyRepository(session, "t1").get_by_id(mb_id)
             assert refreshed.final_webhook_claimed_at is None, "a failed final send must release its claim"
 
+    def test_release_only_clears_own_token(self, integration_db):
+        """A's late release must NOT clear B's newer claim (the token guard's one invariant).
+
+        Sequence: worker A claims at T1; A goes silent past the lease; worker B
+        re-claims at T2 (stale takeover). A's delayed release, still holding token
+        T1, must match 0 rows — clearing B's T2 claim here would re-open the
+        concurrent-duplicate-final window the claim exists to close. Distinguishes
+        the ``== claimed_at`` predicate from a clear-any-claim (``IS NOT NULL``)
+        implementation, which every other test is blind to.
+        """
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            buy = _serving_webhook_buy(env, flight="completed")
+            mb_id = buy.media_buy_id
+            session = env.get_session()
+            repo = MediaBuyRepository(session, "t1")
+
+            t2 = datetime.now(UTC)
+            t1 = t2 - timedelta(minutes=16)  # older than the 15-min lease at t2
+
+            # A wins the fresh claim at T1.
+            assert repo.try_claim_final_webhook(mb_id, now=t1, stale_before=t1 - timedelta(minutes=15)) is True
+            # B re-claims at T2: A's T1 claim is stale by then (t1 < t2 - lease).
+            assert repo.try_claim_final_webhook(mb_id, now=t2, stale_before=t2 - timedelta(minutes=15)) is True
+
+            # A's late release with its stale token must NOT clear B's claim.
+            assert repo.release_final_webhook_claim(mb_id, claimed_at=t1) is False
+            session.expire_all()
+            assert repo.get_by_id(mb_id).final_webhook_claimed_at == t2, (
+                "a stale-token release must leave the newer owner's claim intact"
+            )
+
+    @pytest.mark.asyncio
+    async def test_ancient_completed_buys_age_out_of_selection(self, integration_db):
+        """The batch's completed arm is bounded by the updated_at recency horizon.
+
+        A completed buy last touched beyond FINAL_WEBHOOK_COMPLETED_HORIZON is not
+        selected (its would-be final would otherwise SEND — no success log exists —
+        so this reddens if the horizon is removed). A recently-touched completed buy
+        is still selected and gets its final: the bound trims the ever-growing
+        backlog without breaking the live handoff path.
+        """
+        from tests.factories import PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            session = env.get_session()
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+
+            ancient = _serving_webhook_buy(
+                env, flight="completed", mb_id="mb_ancient", tenant=tenant, principal=principal
+            )
+            # The horizon bounds the PERSISTED-"completed" arm (the serving arm is
+            # lifecycle-bounded), so persist the status-scheduler flip, backdated
+            # beyond the horizon (explicit updated_at assignment beats onupdate).
+            ancient.status = "completed"
+            ancient.updated_at = datetime.now(UTC) - timedelta(days=3)
+            session.commit()
+
+            assert await env.run_delivery_batch() == [], (
+                "a completed buy beyond the recency horizon must not be selected"
+            )
+
+            fresh = _serving_webhook_buy(env, flight="completed", mb_id="mb_fresh", tenant=tenant, principal=principal)
+            # Recently flipped to persisted "completed" (updated_at bumps to now).
+            fresh.status = "completed"
+            session.commit()
+            wires = await env.run_delivery_batch()
+            assert len(wires) == 1, "a recently-completed buy must still be selected"
+            assert wires[0]["result"]["notification_type"] == "final"
+            assert wires[0]["result"]["media_buy_deliveries"][0]["media_buy_id"] == fresh.media_buy_id
+
+    @pytest.mark.asyncio
+    async def test_batch_continues_after_midloop_final_commit(self, integration_db):
+        """The final claim's mid-loop session commit doesn't break later buys in the batch.
+
+        _claim_final_webhook commits the shared batch session (for cross-worker
+        visibility), which expires the remaining batch rows (expire_on_commit) —
+        they must lazily reload and still process correctly. Two completed buys in
+        one batch: the first final's commit happens mid-loop, and the second buy is
+        read and sent AFTER that commit. Both finals must go out.
+        """
+        from tests.factories import PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            buy_a = _serving_webhook_buy(
+                env, flight="completed", mb_id="mb_final_a", tenant=tenant, principal=principal
+            )
+            buy_b = _serving_webhook_buy(
+                env, flight="completed", mb_id="mb_final_b", tenant=tenant, principal=principal
+            )
+
+            wires = await env.run_delivery_batch()
+
+            assert len(wires) == 2, "both finals must be sent despite the mid-loop claim commits"
+            sent = {w["result"]["media_buy_deliveries"][0]["media_buy_id"] for w in wires}
+            assert sent == {buy_a.media_buy_id, buy_b.media_buy_id}
+            assert all(w["result"]["notification_type"] == "final" for w in wires)
+
 
 # ---------------------------------------------------------------------------
 # UC-004-ALT-WEBHOOK-PUSH-REPORTING-05

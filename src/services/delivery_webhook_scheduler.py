@@ -17,6 +17,7 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
     NotificationType,
 )  # TODO: no stable alias — response-level NotificationType differs from top-level
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
@@ -47,6 +48,15 @@ SLEEP_INTERVAL_SECONDS = int(os.getenv("DELIVERY_WEBHOOK_INTERVAL") or "3600")
 # (seconds) so an in-flight send is never reclaimed, and shorter than the hourly
 # batch so a failed/crashed final is retried on the next batch.
 FINAL_WEBHOOK_CLAIM_LEASE = timedelta(minutes=15)
+
+# Recency horizon bounding which persisted-"completed" buys the batch selects
+# (see MediaBuyRepository.get_reportable_for_delivery). "completed" is permanent,
+# so an unbounded selection would scan every completed buy that ever existed on
+# every hourly batch. INVARIANT (pinned by a unit test): the horizon must be much
+# longer than both FINAL_WEBHOOK_CLAIM_LEASE (so stale-lease recovery always
+# happens on a still-selected buy) and the batch interval (so the ~60s status
+# flip is always caught) — 2 days gives ~48x margin over the hourly batch.
+FINAL_WEBHOOK_COMPLETED_HORIZON = timedelta(days=2)
 
 
 class DeliveryWebhookScheduler:
@@ -114,8 +124,14 @@ class DeliveryWebhookScheduler:
                 # within ~60s, long before this hourly batch, so a serving-only
                 # selection would drop it and the buy's spec-required FINAL webhook
                 # would never be sent. The per-buy final gate below de-dups it on a
-                # best-effort basis (true exactly-once is #1606).
-                media_buys = MediaBuyRepository.get_all_by_statuses(session, sorted(REPORTABLE_PERSISTED_STATUSES))
+                # best-effort basis (true exactly-once is #1606). The completed arm
+                # is bounded by a recency horizon on updated_at so the hourly scan
+                # doesn't grow forever (see get_reportable_for_delivery).
+                media_buys = MediaBuyRepository.get_reportable_for_delivery(
+                    session,
+                    serving_statuses=sorted(REPORTABLE_PERSISTED_STATUSES - {"completed"}),
+                    completed_horizon=FINAL_WEBHOOK_COMPLETED_HORIZON,
+                )
 
                 reports_sent = 0
                 errors = 0
@@ -228,7 +244,7 @@ class DeliveryWebhookScheduler:
             return True
         return False
 
-    def _claim_final_webhook(self, session: Any, media_buy: Any) -> datetime | None:
+    def _claim_final_webhook(self, session: Session, media_buy: Any) -> datetime | None:
         """Atomically claim the buy's ONE final webhook. Returns the claim token
         (the exact ``claimed_at`` written) if THIS worker won, else None.
 
@@ -248,7 +264,7 @@ class DeliveryWebhookScheduler:
         session.commit()
         return now if won else None
 
-    def _release_final_claim(self, session: Any, media_buy: Any, claimed_at: datetime) -> None:
+    def _release_final_claim(self, session: Session, media_buy: Any, claimed_at: datetime) -> None:
         """Best-effort release of THIS worker's final claim after a definitive
         failure/no-send, so an immediate retry isn't blocked for the whole lease.
 
@@ -269,7 +285,7 @@ class DeliveryWebhookScheduler:
             )
 
     async def _send_report_for_media_buy(
-        self, media_buy: Any, reporting_webhook: dict, session: Any, force: bool = False
+        self, media_buy: Any, reporting_webhook: dict, session: Session, force: bool = False
     ) -> bool:
         """Send a delivery report for a single media buy.
 
@@ -321,7 +337,7 @@ class DeliveryWebhookScheduler:
 
     async def _deliver_report(
         self,
-        session: Any,
+        session: Session,
         delivery_repo: DeliveryRepository,
         media_buy: Any,
         reporting_webhook: dict,
