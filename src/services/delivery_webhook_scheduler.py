@@ -17,7 +17,6 @@ from adcp.types import MediaBuyStatus
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
     NotificationType,
 )  # TODO: no stable alias — response-level NotificationType differs from top-level
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
@@ -25,6 +24,7 @@ from src.core.database.models import MediaBuy
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.delivery import DeliveryRepository
+from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.helpers import enum_value
 from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse
 from src.core.tools._media_buy_status import (
@@ -466,14 +466,11 @@ class DeliveryWebhookScheduler:
             auth_type = schemes[0] if schemes else None
             auth_token = auth_config.get("credentials")
 
-        # Query for existing push notification config for this media buy
-        config_stmt = select(DBPushNotificationConfig).where(
-            DBPushNotificationConfig.principal_id == media_buy.principal_id,
-            DBPushNotificationConfig.tenant_id == media_buy.tenant_id,
-            DBPushNotificationConfig.url == webhook_url,
-            DBPushNotificationConfig.is_active,
-        )
-        push_notification_config = session.scalars(config_stmt).first()
+        # Reuse the principal's registered push config for this URL, if any
+        # (tenant-scoped repository lookup — no raw ORM select in the scheduler).
+        push_notification_config = PushNotificationConfigRepository(
+            session, media_buy.tenant_id
+        ).get_active_by_principal_and_url(media_buy.principal_id, webhook_url)
 
         # Extract webhook config data before session closes
         if push_notification_config:
@@ -510,10 +507,14 @@ class DeliveryWebhookScheduler:
         # SDK 5.7: returns McpWebhookPayload directly; 3rd arg is task_type.
         # Delivery reports are status updates on existing media buys,
         # so we use update_media_buy as the canonical task type.
+        # Serialize via webhook_payload(): the schema scopes aggregated_totals to
+        # "API responses (get_media_buy_delivery), not webhook notifications", and
+        # this is the exclusion seam (it also drops None fields, preserving the
+        # final-omits-next_expected_at contract).
         media_buy_delivery_payload = create_mcp_webhook_payload(
             task_id=media_buy.media_buy_id,
             task_type="update_media_buy",
-            result=delivery_response,
+            result=delivery_response.webhook_payload(),
             status=AdcpTaskStatus.completed,
         )
 

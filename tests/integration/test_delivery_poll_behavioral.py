@@ -272,6 +272,11 @@ class TestFinalWebhookSurvivesStatusHandoff:
             assert len(wires) == 1, "the just-completed buy must still receive a delivery webhook"
             assert wires[0]["result"]["notification_type"] == "final"
             assert wires[0]["result"]["media_buy_deliveries"][0]["media_buy_id"] == mb_id
+            # Schema: aggregated_totals is "Only included in API responses
+            # (get_media_buy_delivery), not in webhook notifications".
+            assert "aggregated_totals" not in wires[0]["result"], (
+                "webhook bodies must exclude the polling-only aggregated_totals"
+            )
 
             # 3) A subsequent batch does NOT re-send the final (best-effort per-buy gate).
             assert await env.run_delivery_batch() == [], "the delivered final must not be re-sent by a later batch"
