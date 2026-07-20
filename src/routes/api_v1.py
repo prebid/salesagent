@@ -34,6 +34,7 @@ from src.core.schemas import SalesAgentBaseModel
 from src.core.tools import accounts as accounts_module
 from src.core.tools import capabilities as capabilities_module
 from src.core.tools import creative_formats as creative_formats_module
+from src.core.tools import governance as governance_module
 from src.core.tools import media_buy_create as media_buy_create_module
 from src.core.tools import media_buy_delivery as media_buy_delivery_module
 from src.core.tools import media_buy_update as media_buy_update_module
@@ -211,6 +212,16 @@ class SyncAccountsBody(SalesAgentBaseModel):
     delete_missing: bool = False
     dry_run: bool = False
     push_notification_config: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
+    adcp_version: str = "1.0.0"
+
+
+class SyncGovernanceBody(SalesAgentBaseModel):
+    # idempotency_key stays optional on the HTTP body so a missing key surfaces
+    # as an AdCP validation error inside adcp_validation_boundary (SyncGovernanceRequest
+    # requires it) rather than a raw FastAPI 422.
+    idempotency_key: str | None = None
+    accounts: list[dict[str, Any]] = []
     context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
@@ -490,4 +501,15 @@ async def sync_accounts(body: SyncAccountsBody, identity: ResolvedIdentity = req
     with adcp_validation_boundary(context="sync_accounts request"):
         req = SyncAccountsRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
     response = await accounts_module.sync_accounts_raw(req=req, identity=identity)
+    return response.model_dump(mode="json")
+
+
+@router.post("/accounts/governance/sync")
+async def sync_governance(body: SyncGovernanceBody, identity: ResolvedIdentity = require_auth):
+    """Bind a governance agent per account (auth required)."""
+    from src.core.schemas.account import SyncGovernanceRequest
+
+    with adcp_validation_boundary(context="sync_governance request"):
+        req = SyncGovernanceRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
+    response = await governance_module.sync_governance_raw(req=req, identity=identity)
     return response.model_dump(mode="json")

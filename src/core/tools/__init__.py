@@ -14,6 +14,7 @@ from src.core.tools.accounts import list_accounts_raw, sync_accounts_raw
 from src.core.tools.capabilities import get_adcp_capabilities_raw
 from src.core.tools.creative_formats import list_creative_formats_raw
 from src.core.tools.creatives import list_creatives_raw, sync_creatives_raw
+from src.core.tools.governance import sync_governance_raw
 from src.core.tools.media_buy_create import create_media_buy_raw
 from src.core.tools.media_buy_delivery import get_media_buy_delivery_raw
 from src.core.tools.media_buy_list import get_media_buys_raw
@@ -27,6 +28,7 @@ from src.core.tools.properties import list_authorized_properties_raw
 __all__ = [
     "list_accounts_raw",
     "sync_accounts_raw",
+    "sync_governance_raw",
     "get_adcp_capabilities_raw",
     "get_products_raw",
     "create_media_buy_raw",

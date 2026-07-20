@@ -103,6 +103,9 @@ from src.core.tools import (
     sync_creatives_raw as core_sync_creatives_tool,
 )
 from src.core.tools import (
+    sync_governance_raw as core_sync_governance_tool,
+)
+from src.core.tools import (
     update_media_buy_raw as core_update_media_buy_tool,
 )
 from src.core.tools import (
@@ -1440,6 +1443,7 @@ class AdCPRequestHandler(RequestHandler):
             "list_creative_formats": self._handle_list_creative_formats_skill,
             "list_accounts": self._handle_list_accounts_skill,
             "sync_accounts": self._handle_sync_accounts_skill,
+            "sync_governance": self._handle_sync_governance_skill,
             "list_authorized_properties": self._handle_list_authorized_properties_skill,
             # ✅ NEW: Missing Media Buy Management Skills (CRITICAL for campaign lifecycle)
             "update_media_buy": self._handle_update_media_buy_skill,
@@ -1886,6 +1890,23 @@ class AdCPRequestHandler(RequestHandler):
                 context=parameters.get("context"),
             )
         return await core_sync_accounts_tool(req=request, identity=identity)
+
+    async def _handle_sync_governance_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
+        """Handle explicit sync_governance skill invocation.
+
+        Authentication is REQUIRED. ``idempotency_key`` is spec-required; a
+        missing/invalid key surfaces as a validation error at this boundary.
+        """
+        from src.core.schemas.account import SyncGovernanceRequest
+
+        # Same context string as the REST route's boundary (transport parity).
+        with adcp_validation_boundary(context="sync_governance request"):
+            request = SyncGovernanceRequest(
+                idempotency_key=parameters.get("idempotency_key"),
+                accounts=parameters.get("accounts", []),
+                context=parameters.get("context"),
+            )
+        return await core_sync_governance_tool(req=request, identity=identity)
 
     async def _handle_list_authorized_properties_skill(
         self, parameters: dict, identity: ResolvedIdentity | None

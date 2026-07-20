@@ -39,6 +39,8 @@ from src.core.schemas import (
     SyncAccountsResponse,
     SyncCreativesRequest,
     SyncCreativesResponse,
+    SyncGovernanceResponse,
+    SyncGovernanceResponseAccount,
     SyncResponseAccount,
     UpdateMediaBuyRequest,
     UpdateMediaBuySuccess,
@@ -807,6 +809,11 @@ _RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = [
         model=SyncAccountsResponse,
     ),
     _RegistryRow(
+        schema_ref="/schemas/account/sync-governance-response.json",
+        selector="accounts",
+        model=SyncGovernanceResponse,
+    ),
+    _RegistryRow(
         schema_ref="/schemas/creative/sync-creatives-response.json",
         selector="creatives",
         model=SyncCreativesResponse,
@@ -904,6 +911,13 @@ _SUPPLEMENTAL_ALIGNMENTS: list[ResponseAlignment] = [
         item_key="accounts",
         model=SyncResponseAccount,
         sample={"brand": {"domain": "acme.com"}, "operator": "create", "action": "created", "status": "active"},
+    ),
+    ResponseAlignment(
+        schema_ref="/schemas/account/sync-governance-response.json",
+        selector="accounts",
+        item_key="accounts",
+        model=SyncGovernanceResponseAccount,
+        sample={"account": {"account_id": "acc_1"}, "status": "synced"},
     ),
 ]
 

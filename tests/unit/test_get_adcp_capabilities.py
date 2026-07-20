@@ -178,6 +178,11 @@ class TestGetAdcpCapabilitiesImpl:
         # sales-non-guaranteed (inventory_list_*, delivery_reporting, etc.).
         assert response.specialisms is not None
         assert AdcpSpecialism.sales_non_guaranteed in response.specialisms
+        # #1329 gap 13: sandbox is declared FALSE (no behavioral isolation ships).
+        # Declaring the account capability requires the schema-required supported_billing.
+        assert response.account is not None
+        assert response.account.sandbox is False
+        assert response.account.supported_billing  # non-empty (schema-required)
 
     def test_impl_returns_valid_adcp_response(self):
         """Test that impl response can be serialized to valid JSON."""
@@ -197,6 +202,9 @@ class TestGetAdcpCapabilitiesImpl:
         assert data["supported_protocols"] == ["media_buy"]
         assert "specialisms" in data
         assert data["specialisms"] == ["sales-non-guaranteed"]
+        # #1329 gap 13: sandbox=False present at the wire (honesty assertion,
+        # mirroring the property_list_filtering / catalog_management pattern).
+        assert data["account"]["sandbox"] is False
 
 
 class TestGetAdcpCapabilitiesWithTenant:
@@ -246,6 +254,11 @@ class TestGetAdcpCapabilitiesWithTenant:
                 # Specialism declaration must be consistent across minimal and full paths.
                 assert response.specialisms is not None
                 assert AdcpSpecialism.sales_non_guaranteed in response.specialisms
+                # #1329 gap 13: sandbox declared False at the wire (honesty), consistent
+                # across minimal and full paths.
+                assert response.account is not None
+                assert response.account.sandbox is False
+                assert response.account.supported_billing
 
                 # Should have media_buy capabilities with portfolio
                 assert response.media_buy is not None

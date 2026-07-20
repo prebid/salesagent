@@ -14,8 +14,12 @@ from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures
 from adcp.types.generated_poc.core.postal_area_support import (
     PostalAreaSupport,  # adcp 6.6: standalone GeoPostalAreas removed; capabilities use PostalAreaSupport
 )
+from adcp.types.generated_poc.enums.billing_party import BillingParty
 from adcp.types.generated_poc.enums.channels import MediaChannel
 from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
+from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+    Account as AccountCapability,  # capability sub-object; distinct from the domain Account schema
+)
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Adcp,
     Execution,
@@ -71,6 +75,53 @@ CHANNEL_MAPPING: dict[str, MediaChannel] = {
 }
 
 
+# BillingParty values this seller supports. The accounts.billing column permits
+# {operator, agent} (ck_accounts_billing) and sync_accounts enforces the tenant's
+# `supported_billing` policy against those parties, so both are honest defaults.
+_DEFAULT_SUPPORTED_BILLING: list[BillingParty] = [BillingParty.operator, BillingParty.agent]
+
+
+def _build_account_capability(tenant: dict | None) -> AccountCapability:
+    """Build the `account` capability object with an HONEST sandbox declaration.
+
+    sandbox=False (#1329 gap 13): this seller stores a per-account `sandbox` flag
+    (a natural-key discriminator for sync_accounts + a list_accounts filter) but has
+    NO behavioral isolation — a media buy under a sandbox account routes to the exact
+    same live adapter path as production; `account.sandbox` is wholly disconnected
+    from the `dry_run` testing hook (the only "no real spend" switch). The spec field
+    mandates "Requests using a sandbox account perform no real platform calls or
+    spend" (get-adcp-capabilities-response.json, AdCP 3.1.1); declaring `true`
+    without that isolation is the same wire-honesty defect as `catalog_management=True`
+    (fixed in PR #1276 R7-1). Declared False until behavioral sandbox isolation ships.
+    The field is ungraded by the 3.1.1 storyboards, so there is no coverage cost to
+    declaring it honestly. Mirrors the `catalog_management` / `property_list_filtering`
+    honesty rationale on MediaBuyFeatures.
+
+    require_operator_auth=False: accounts are buyer-declared via sync_accounts
+    (brand + operator natural key, BR-RULE-056) — operators do not authenticate.
+
+    supported_billing (required by the schema): the billing parties this seller
+    accepts — from tenant config `supported_billing` when set, else {operator, agent}
+    (what the accounts.billing constraint permits).
+
+    required_for_products and account_financials default to False on the library type,
+    and False is the honest value here: get_products is auth-optional and needs no
+    account (required_for_products=False), and this seller exposes no account financial
+    detail (account_financials=False). authorization_endpoint is left absent (no
+    operator-auth endpoint, consistent with require_operator_auth=False).
+    """
+    valid_parties = {b.value for b in BillingParty}
+    configured = tenant.get("supported_billing") if tenant else None
+    billing = [BillingParty(v) for v in (configured or []) if v in valid_parties]
+    if not billing:
+        billing = list(_DEFAULT_SUPPORTED_BILLING)
+    return AccountCapability(
+        supported_billing=billing,
+        sandbox=False,
+        require_operator_auth=False,
+    )
+
+
 def _get_adcp_capabilities_impl(
     req: GetAdcpCapabilitiesRequest | None = None, identity: ResolvedIdentity | None = None
 ) -> GetAdcpCapabilitiesResponse:
@@ -98,6 +149,7 @@ def _get_adcp_capabilities_impl(
             ),
             supported_protocols=[SupportedProtocol.media_buy],
             specialisms=[AdcpSpecialism.sales_non_guaranteed],
+            account=_build_account_capability(None),
         )
 
     # If we got here, tenant is truthy, which means identity was not None on line 84
@@ -252,17 +304,46 @@ def _get_adcp_capabilities_impl(
         execution=execution,
     )
 
-    # Build response
-    # specialisms declaration activates the storyboard scenarios bundled under
-    # `sales-non-guaranteed` (`inventory_list_targeting`, `inventory_list_no_match`,
-    # `delivery_reporting`, `pending_creatives_to_start`, `invalid_transitions`).
-    # The runner gates scenarios by specialism, not by `supported_protocols` alone.
+    # Specialisms audit (AdCP 3.1.1, #1329 gap 14). Each specialism maps to a
+    # compliance storyboard bundle at /compliance/3.1.1/specialisms/{id}/, gated by
+    # BOTH its parent protocol (must appear in supported_protocols) AND its
+    # `required_tools` (compliance/3.1.1/index.json), which must all be implemented
+    # end-to-end. We declare `media_buy` only, so any specialism whose parent
+    # protocol is governance/creative/brand/signals/sponsored-intelligence is out on
+    # the parent-protocol rule alone. The full audit against index.json:
     #
-    # We declare the specialism even though `pending_creatives_to_start` and
-    # `invalid_transitions` are not yet fully green. Storyboard compliance runs
-    # are advisory — no required CI job executes them — so those scenario
-    # failures don't block merge, and the public declaration forces
-    # prioritization of the remaining gaps instead of hiding them.
+    #   DECLARED:
+    #   - sales-non-guaranteed  — required_tools {sync_governance, get_products,
+    #       create_media_buy}, all now implemented (sync_governance landed with #1329);
+    #       storyboard grades sync_governance -> accounts[0].status="synced" (met).
+    #
+    #   NOT DECLARED (media_buy protocol, tool gap):
+    #   - sales-guaranteed      — same required_tools; the submitted-task/IO-approval
+    #       path exists, but the guaranteed IO-approval storyboard is not yet verified
+    #       green end-to-end. Candidate for a follow-up once confirmed.
+    #   - sales-broadcast-tv    — needs FCC-cancellation semantics we don't implement.
+    #   - sales-catalog-driven  — needs conversion tracking + catalog we don't implement.
+    #   - sales-social          — required_tools include sync_audiences, sync_catalogs,
+    #       sync_event_sources, preview_creative (none implemented).
+    #   - sales-proposal-mode   — DEPRECATED in 3.1 (folded into sales-guaranteed); do
+    #       not declare a deprecated slot even though its tools happen to be present.
+    #   - audience-sync         — needs sync_audiences (not implemented).
+    #   - governance-aware-seller — needs the check_governance enforcement loop; we
+    #       register bindings via sync_governance but deliberately do NOT enforce them.
+    #
+    #   NOT DECLARED (parent protocol not in supported_protocols):
+    #   - collection-lists, content-standards, property-lists, governance-delivery-monitor,
+    #       governance-spend-authority (parent: governance — not declared)
+    #   - creative-ad-server, creative-generative, creative-template, creative-transformers
+    #       (parent: creative — we CALL remote creative agents' build_creative; we don't
+    #       EXPOSE it as our own tool, so the seller does not host the creative protocol)
+    #   - brand-rights (parent: brand), signal-marketplace/signal-owned (parent: signals —
+    #       signals tools were intentionally removed; they belong to dedicated signal
+    #       agents), sponsored-intelligence (parent: sponsored-intelligence; PREVIEW/ungraded)
+    #
+    #   OTHER:
+    #   - signed-requests — DEPRECATED in 3.1, no bundle; expressed via the
+    #       `request_signing.supported` capability, not a specialism.
     response = GetAdcpCapabilitiesResponse(
         adcp=Adcp(
             major_versions=[MajorVersion(root=3)],
@@ -270,6 +351,7 @@ def _get_adcp_capabilities_impl(
         ),
         supported_protocols=[SupportedProtocol.media_buy],
         specialisms=[AdcpSpecialism.sales_non_guaranteed],
+        account=_build_account_capability(tenant),
         media_buy=media_buy,
         last_updated=datetime.now(UTC),
     )

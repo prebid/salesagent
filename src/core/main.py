@@ -324,6 +324,7 @@ from src.core.tools.accounts import list_accounts, sync_accounts
 from src.core.tools.capabilities import get_adcp_capabilities
 from src.core.tools.creative_formats import list_creative_formats
 from src.core.tools.creatives import list_creatives, sync_creatives
+from src.core.tools.governance import sync_governance
 from src.core.tools.media_buy_create import create_media_buy
 from src.core.tools.media_buy_delivery import get_media_buy_delivery
 from src.core.tools.media_buy_list import get_media_buys
@@ -350,6 +351,7 @@ def _register_tool(fn: Any) -> None:
 
 _register_tool(list_accounts)
 _register_tool(sync_accounts)
+_register_tool(sync_governance)
 _register_tool(get_adcp_capabilities)
 _register_tool(get_products)
 _register_tool(list_creative_formats)
