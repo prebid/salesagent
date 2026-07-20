@@ -923,9 +923,11 @@ class MediaBuy(Base):
     strategy_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     account_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    # Dormant columns retained for migration compatibility. While the seller
-    # advertises idempotency.supported=false, production create paths write NULL
-    # to both fields so neither the legacy index nor hash can affect execution.
+    # FIXME(#1683): dormant columns retained for migration compatibility while
+    # create-replay is descoped. While the seller advertises
+    # idempotency.supported=false, production create paths write NULL to both
+    # fields so neither the legacy index nor hash can affect execution. The
+    # probe-first replay rebuild rewires them and removes this marker.
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     payload_hash: Mapped[str | None] = mapped_column(
         String(64),
@@ -991,11 +993,12 @@ class MediaBuy(Base):
 class IdempotencyAttempt(Base):
     """Dormant durable-response substrate retained for a future idempotency feature.
 
-    The table and its tenant/principal/account/key uniqueness rules predate the
-    seller's AdCP 3.1.1 ``idempotency.supported=false`` posture. No production
-    transport or tool currently reads or writes it; direct repository tests keep
-    the storage primitive migration-safe. Re-enabling it requires universal task
-    coverage and the full concurrency/security contract, not merely a call site.
+    FIXME(#1683): dormant while create-replay is descoped. The table and its
+    tenant/principal/account/key uniqueness rules predate the seller's AdCP
+    3.1.1 ``idempotency.supported=false`` posture. No production transport or
+    tool currently reads or writes it; direct repository tests keep the storage
+    primitive migration-safe. Re-enabling it requires universal task coverage
+    and the full concurrency/security contract, not merely a call site.
     """
 
     __tablename__ = "idempotency_attempts"

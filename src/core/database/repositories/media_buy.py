@@ -90,9 +90,10 @@ class MediaBuyRepository:
     ) -> MediaBuy | None:
         """Find a legacy keyed row within (tenant, principal, account).
 
-        Retained for historical rows and direct migration-safety tests. New
-        creates write NULL while ``idempotency.supported=false``, and no current
-        production path uses this helper for replay or deduplication.
+        FIXME(#1683): dormant while create-replay is descoped. Retained for
+        historical rows and direct migration-safety tests. New creates write
+        NULL while ``idempotency.supported=false``, and no current production
+        path uses this helper for replay or deduplication.
         """
         return self._session.scalars(
             select(MediaBuy).where(
@@ -109,8 +110,8 @@ class MediaBuyRepository:
     ) -> MediaBuy | None:
         """Legacy helper: get by ID first, then fall back to a stored key.
 
-        The fallback is dormant under the current supported-false behavior but
-        remains account-scoped for historical rows.
+        FIXME(#1683): the key fallback is dormant under the current
+        supported-false behavior but remains account-scoped for historical rows.
         """
         result = self.get_by_id(identifier)
         if result is None:

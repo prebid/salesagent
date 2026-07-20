@@ -1,12 +1,14 @@
-"""Structural guard: the dormant SDK canonicalizer has one import seam.
+"""Structural guard: no src/ module imports the SDK canonicalizer engine.
 
-``adcp.server.idempotency`` (the RFC 8785 canonicalizer engine) must be imported
-ONLY by ``src/core/idempotency_canonical.py`` — the single dormant seam in
-front of it. Routing all access through that one module is what lets us swap the
-hashing engine in one place and keeps the ``RecursionError`` -> typed-error
-boundary ours (see the module docstring there). A direct
-``import adcp.server.idempotency`` anywhere else silently defeats the seam's
-entire reason for existing, and no other guard would catch it.
+``adcp.server.idempotency`` (the RFC 8785 canonicalizer engine) previously had
+a single dormant import seam, ``src/core/idempotency_canonical.py``. The
+create-replay descope (#1546) deleted that seam along with the rest of the
+dormant replay machinery, so while idempotency replay is descoped the engine
+must not be imported ANYWHERE in src/. When the probe-first rebuild re-lands
+replay (#1683) and keeps the SDK canonicalizer, it restores the seam module and
+re-adds it to ``ALLOWED`` — one entry, never more: routing all access through
+one module is what keeps the hashing engine swappable in one place and the
+``RecursionError`` -> typed-error boundary ours.
 
 This enforces, as a mechanism, the architectural intent that was previously
 protected only by a docstring.
@@ -17,8 +19,9 @@ from pathlib import Path
 
 SRC = Path(__file__).parent.parent.parent / "src"
 SEAM_MODULE = "adcp.server.idempotency"
-# The single dormant source module permitted to import the engine (relative to src/).
-ALLOWED = {"core/idempotency_canonical.py"}
+# Source modules permitted to import the engine (relative to src/). Empty while
+# replay is descoped (#1546); the rebuild (#1683) may restore the single seam.
+ALLOWED: set[str] = set()
 
 
 def _attr_chain(node: ast.AST) -> str | None:
@@ -87,23 +90,10 @@ def test_sdk_idempotency_canonicalizer_has_single_import_seam():
             violations.append(f"{rel}:{line}")
 
     assert not violations, (
-        f"'{SEAM_MODULE}' may be imported only by {sorted(ALLOWED)} (the single dormant "
-        f"seam). Import the wrappers from src.core.idempotency_canonical instead, so the engine "
-        f"stays swappable in one place and the RecursionError->typed-error boundary stays ours.\n"
+        f"'{SEAM_MODULE}' must not be imported while replay is descoped (allowlist: "
+        f"{sorted(ALLOWED)}). The rebuild (#1683) restores the single canonical seam module; "
+        f"until then any import silently revives half the descoped machinery.\n"
         + "\n".join(f"  - {v}" for v in violations)
-    )
-
-
-def test_seam_module_actually_imports_the_engine():
-    """Positive control: the seam itself DOES import the engine, so the guard is live.
-
-    If this fails, the seam moved or the engine import changed shape — the
-    negative test above could then be vacuously green, so its allowlist is stale.
-    """
-    seam = SRC / "core" / "idempotency_canonical.py"
-    assert _seam_import_line(seam) is not None, (
-        "idempotency_canonical.py must import the SDK canonicalizer; if it no longer does, "
-        "update this guard (the seam moved)."
     )
 
 
