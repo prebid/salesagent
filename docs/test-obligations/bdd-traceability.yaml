@@ -6687,6 +6687,12 @@ mappings:
       upstream_refs: []
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-011-auth-missing-before-version"
+      adcp_feature: "BR-UC-011-account-validation.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-011-list-main"
       adcp_feature: "BR-UC-011-manage-accounts.feature"
       obligation_id: null

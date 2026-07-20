@@ -29,8 +29,8 @@ from adcp import get_adcp_spec_version
 
 from src.core.bounded_executor import SyncThreadPoolBulkhead
 from src.core.database.repositories.push_notification_config import PushNotificationTarget
-from src.core.logging_config import scrub_control_chars
 from src.core.database.repositories.uow import PushNotificationConfigUoW
+from src.core.logging_config import scrub_control_chars
 from src.core.security.webhook_http import (
     WEBHOOK_DELIVERY_DEADLINE_SECONDS,
     WEBHOOK_DELIVERY_MAX_WORKERS,
@@ -432,7 +432,9 @@ class WebhookDeliveryService:
     ) -> bool:
         """Queue and synchronously drain one session-independent target snapshot."""
         if isinstance(target.auth_blocked_at, datetime):
-            logger.warning(f"⚠️ Auth blocked for {scrub_control_chars(target.url)}, skipping until credentials reconfigured")
+            logger.warning(
+                f"⚠️ Auth blocked for {scrub_control_chars(target.url)}, skipping until credentials reconfigured"
+            )
             return False
 
         endpoint_key = f"{tenant_id}:{target.url}"
@@ -467,7 +469,9 @@ class WebhookDeliveryService:
                     timestamp,
                 )
             else:
-                logger.warning(f"⚠️ Webhook secret for {scrub_control_chars(config.url)} is too weak (min 32 characters required)")
+                logger.warning(
+                    f"⚠️ Webhook secret for {scrub_control_chars(config.url)} is too weak (min 32 characters required)"
+                )
         if config.authentication_type == "bearer" and config.authentication_token:
             headers["Authorization"] = f"Bearer {config.authentication_token}"
         return headers
@@ -543,7 +547,9 @@ class WebhookDeliveryService:
                     # Refused redirects and client errors are permanent for this
                     # payload/configuration. Redirects are never followed.
                     if 300 <= status_code < 500:
-                        logger.warning(f"Webhook delivery to {scrub_control_chars(config.url)} returned non-retryable status {status_code}")
+                        logger.warning(
+                            f"Webhook delivery to {scrub_control_chars(config.url)} returned non-retryable status {status_code}"
+                        )
                         circuit_breaker.record_failure()
                         return False
 
@@ -558,13 +564,17 @@ class WebhookDeliveryService:
                     logger.warning(f"Webhook delivery to {scrub_control_chars(config.url)} refused: {e}")
                     break
                 except requests.Timeout:
-                    logger.warning(f"Webhook delivery to {scrub_control_chars(config.url)} timed out (attempt: {attempt + 1}/{max_retries})")
+                    logger.warning(
+                        f"Webhook delivery to {scrub_control_chars(config.url)} timed out (attempt: {attempt + 1}/{max_retries})"
+                    )
                 except requests.RequestException as e:
                     logger.warning(
                         f"Webhook delivery to {config.url} failed: {e} (attempt: {attempt + 1}/{max_retries})"
                     )
                 except Exception as e:
-                    logger.error(f"Unexpected error delivering to {scrub_control_chars(config.url)}: {e}", exc_info=True)
+                    logger.error(
+                        f"Unexpected error delivering to {scrub_control_chars(config.url)}: {e}", exc_info=True
+                    )
                     break
 
         # All retries failed
