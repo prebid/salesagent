@@ -8,8 +8,25 @@ Supports two modes:
 import json
 import logging
 import os
+import re
 from datetime import UTC, datetime
 from typing import Any
+
+# C0 controls, DEL, and C1 controls — everything that can forge or corrupt an
+# adjacent plain-text log record.
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def scrub_control_chars(value: str) -> str:
+    """Escape control characters so a buyer-controlled string is log-safe.
+
+    Callback URLs and validation details are buyer-controlled. ``urlparse``
+    strips CR/LF/TAB from *parsed components*, but VT/FF/ESC survive parsing and
+    the raw stored string (CR/LF included) is what log sites interpolate — in
+    plain-text log mode one request could forge adjacent records. Escape each
+    control character to its ``\\xNN`` form at the log seam.
+    """
+    return _CONTROL_CHARS.sub(lambda match: repr(match.group())[1:-1], value)
 
 
 class ClientDisconnectFilter(logging.Filter):
@@ -89,15 +106,29 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(log_entry)
 
 
+def _is_production_log_env() -> bool:
+    """True when the deploy should get JSON (single-line, forge-resistant) logs.
+
+    Self-hosted deploys signal production via ``ENVIRONMENT=production`` (the
+    documented switch — see CLAUDE.md pattern #7); Fly.io deploys via
+    ``FLY_APP_NAME``. Honor all three so a self-hosted production deploy gets
+    JSON log escaping too, not plain-text logs.
+    """
+    return bool(
+        os.environ.get("FLY_APP_NAME")
+        or os.environ.get("PRODUCTION")
+        or os.environ.get("ENVIRONMENT", "").lower() == "production"
+    )
+
+
 def setup_structured_logging() -> None:
     """Setup structured JSON logging for production environments.
 
-    In production (Fly.io), configures all loggers to output single-line JSON.
-    This prevents multiline log messages from appearing as separate log entries.
+    In production (Fly.io or ENVIRONMENT=production), configures all loggers to
+    output single-line JSON. This prevents multiline log messages from
+    appearing as separate log entries.
     """
-    is_production = bool(os.environ.get("FLY_APP_NAME") or os.environ.get("PRODUCTION"))
-
-    if is_production:
+    if _is_production_log_env():
         # Configure root logger with JSON formatter
         root_logger = logging.getLogger()
         root_logger.setLevel(logging.INFO)

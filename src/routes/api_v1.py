@@ -267,10 +267,10 @@ class _VersionedBody(SalesAgentBaseModel):
     idempotency_key: RawOptionalIdempotencyKey = Field(default_factory=_omitted_read_idempotency_key_default)
 
 
-# Negotiation pins are protocol framing, not tool params — strip them before
-# building the request models handed to the shared _impl/_raw functions.
-_NEGOTIATION_EXCLUDE = frozenset({"adcp_version", "adcp_major_version"})
-_READ_ENVELOPE_EXCLUDE = _NEGOTIATION_EXCLUDE | {"idempotency_key"}
+# Negotiation pins are protocol framing, not tool params — strip them
+# (ADCP_NEGOTIATION_FIELDS, the canonical set) before building the request
+# models handed to the shared _impl/_raw functions.
+_READ_ENVELOPE_EXCLUDE = ADCP_NEGOTIATION_FIELDS | {"idempotency_key"}
 
 
 def _validate_rest_read_idempotency(tool_name: str, body: _VersionedBody) -> None:
@@ -791,6 +791,6 @@ async def sync_accounts(body: SyncAccountsBody, identity: ResolvedIdentity = req
 
     require_idempotency_key(body.idempotency_key)
     with adcp_validation_boundary(context="sync_accounts request"):
-        req = SyncAccountsRequest(**body.model_dump(exclude_none=True, exclude=_NEGOTIATION_EXCLUDE))
+        req = SyncAccountsRequest(**body.model_dump(exclude_none=True, exclude=ADCP_NEGOTIATION_FIELDS))
     response = await accounts_module.sync_accounts_raw(req=req, identity=identity)
     return dump_adcp_response(response)

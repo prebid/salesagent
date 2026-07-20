@@ -160,6 +160,13 @@ SPEC_CODES: frozenset[str] = frozenset(
 _NON_STANDARD_TARGETS = set(ERROR_CODE_MAPPING.values()) - set(WIRE_STANDARD_CODES)
 assert not _NON_STANDARD_TARGETS, f"ERROR_CODE_MAPPING contains non-standard targets: {_NON_STANDARD_TARGETS}"
 
+# Every code ``to_wire_error_code`` may return: the wire table plus the pinned-spec
+# codes, which ``translate_error_code`` and the compliance guard already treat as
+# legal wire codes. Without the SPEC_CODES union, routing an advisory carrying
+# BILLING_NOT_SUPPORTED / VERSION_UNSUPPORTED through the helper would collapse a
+# legal spec code to SERVICE_UNAVAILABLE.
+_GUARANTEED_WIRE_CODES: frozenset[str] = frozenset(WIRE_STANDARD_CODES) | SPEC_CODES
+
 
 def translate_error_code(code: str) -> str:
     """Translate a server-side error code to its wire-compliant equivalent.
@@ -175,18 +182,18 @@ def translate_error_code(code: str) -> str:
 def to_wire_error_code(code: str) -> str:
     """Normalize a hand-built advisory code to a guaranteed-standard wire code.
 
-    Like ``translate_error_code`` but, unlike it, GUARANTEES the result is in
-    ``WIRE_STANDARD_CODES`` (the SDK's ``STANDARD_ERROR_CODES`` plus the
-    pinned-spec supplement): an internal-only code that has no mapping
-    entry (e.g. ``API_ERROR``, ``FLIGHT_NOT_FOUND``) would otherwise pass through
-    ``translate_error_code`` verbatim and leak. Use this for ``errors[]``
-    advisories, which serialize verbatim and never pass through the boundary
-    translator that handles raised ``AdCPError``s. Anything still non-standard
-    after translation collapses to ``SERVICE_UNAVAILABLE`` (the generic
-    server-side advisory), so no internal code can reach the buyer.
+    Like ``translate_error_code`` but, unlike it, GUARANTEES the result is a
+    legal wire code — ``WIRE_STANDARD_CODES`` (the SDK's ``STANDARD_ERROR_CODES``
+    plus ``_SPEC_SUPPLEMENT_CODES``) or ``SPEC_CODES``: an internal-only code
+    that has no mapping entry (e.g. ``API_ERROR``, ``FLIGHT_NOT_FOUND``) would
+    otherwise pass through ``translate_error_code`` verbatim and leak. Use this
+    for ``errors[]`` advisories, which serialize verbatim and never pass through
+    the boundary translator that handles raised ``AdCPError``s. Anything still
+    non-standard after translation collapses to ``SERVICE_UNAVAILABLE`` (the
+    generic server-side advisory), so no internal code can reach the buyer.
     """
     translated = translate_error_code(code)
-    return translated if translated in WIRE_STANDARD_CODES else "SERVICE_UNAVAILABLE"
+    return translated if translated in _GUARANTEED_WIRE_CODES else "SERVICE_UNAVAILABLE"
 
 
 def _serialize_context(

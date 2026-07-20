@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.resolved_identity import ResolvedIdentity
+from tests.helpers import assert_envelope_shape
 
 
 class TestMCPAuthMiddlewareExists:
@@ -171,8 +172,9 @@ class TestMCPAuthMiddlewareBehavior:
             with pytest.raises(AdCPToolError) as exc:
                 await middleware.on_call_tool(mock_context, call_next)
 
-        # Wire envelope carries the auth code — not a code-less error.
-        assert exc.value.envelope["errors"][0]["code"] == "AUTH_REQUIRED"
+        # Wire envelope carries the auth code — not a code-less error. The helper
+        # pins the full two-layer shape (adcp_error + errors[0]) and recovery.
+        assert_envelope_shape(exc.value, "AUTH_REQUIRED", recovery="correctable")
         assert exc.value.envelope["context"] == application_context
         # Tool was NOT called
         call_next.assert_not_awaited()
@@ -206,7 +208,7 @@ class TestMCPAuthMiddlewareBehavior:
             with pytest.raises(AdCPToolError) as exc:
                 await middleware.on_call_tool(mock_context, call_next)
 
-        assert exc.value.envelope["errors"][0]["code"] == "AUTH_REQUIRED"
+        assert_envelope_shape(exc.value, "AUTH_REQUIRED", recovery="correctable")
         assert exc.value.envelope["context"] == application_context
         call_next.assert_not_awaited()
 

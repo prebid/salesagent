@@ -752,6 +752,20 @@ class TestErrorCodeWireTranslation:
             assert standard in STANDARD_ERROR_CODES
             assert to_wire_error_code(standard) == standard
 
+    def test_to_wire_error_code_passes_spec_codes_through(self):
+        """Pinned-spec codes are legal wire codes and must survive the helper.
+
+        ``translate_error_code`` and the compliance guard treat SPEC_CODES as
+        legal on the wire; collapsing them to SERVICE_UNAVAILABLE would undo
+        the BILLING_NOT_SUPPORTED advisory fix the moment any caller routes a
+        spec-code advisory through the guaranteed helper.
+        """
+        from src.core.exceptions import SPEC_CODES, to_wire_error_code
+
+        assert SPEC_CODES == {"BILLING_NOT_SUPPORTED", "VERSION_UNSUPPORTED"}
+        for spec_code in sorted(SPEC_CODES):
+            assert to_wire_error_code(spec_code) == spec_code
+
     def test_wire_error_code_property_translates(self):
         """``wire_error_code`` exposes the translated code on an instance."""
         from src.core.exceptions import AdCPError

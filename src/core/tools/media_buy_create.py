@@ -9,6 +9,7 @@ Handles media buy creation including:
 """
 
 import logging
+import re
 import secrets
 import time
 import uuid
@@ -798,9 +799,13 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                 # carry an explicit null in raw_request. This is an internal reconstruction
                 # of an already-validated request (the approval path never consults
                 # the idempotency cache), so a synthetic spec-shaped key keeps
-                # reconstruction valid.
+                # reconstruction valid. media_buy_id is system-generated and
+                # conforming today, but sanitize defensively so the synthetic key
+                # satisfies the spec constraint ^[A-Za-z0-9_.:-]{16,255}$ even for
+                # a historical or imported id.
                 if raw_request_data.get("idempotency_key") is None:
-                    raw_request_data["idempotency_key"] = f"legacy-approval-{media_buy_id}"
+                    safe_id = re.sub(r"[^A-Za-z0-9_.:-]", "-", str(media_buy_id))
+                    raw_request_data["idempotency_key"] = f"legacy-approval-{safe_id}"[:255]
 
                 request = CreateMediaBuyRequest(**raw_request_data)
                 # Mark this request as already approved to skip adapter's approval workflow

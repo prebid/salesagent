@@ -65,6 +65,13 @@ LOCAL_HOSTNAMES = {
 # Backward-compatible union (importers depend on this name).
 BLOCKED_HOSTNAMES = METADATA_HOSTNAMES | LOCAL_HOSTNAMES
 
+# Exact prefix of the scheme-rejection detail below. Callers that classify a
+# rejection as "HTTPS required" (to show the buyer a scheme hint) match on this
+# constant rather than substring-searching the detail — a hostname containing
+# the literal text "https" (e.g. an unresolvable https-portal.invalid) must not
+# be misclassified as a scheme error.
+HTTPS_SCHEME_ERROR_PREFIX = "URL must use HTTPS scheme"
+
 
 def check_url_ssrf(url: str, *, require_https: bool = False, allow_private: bool = False) -> tuple[bool, str]:
     """Check a URL for SSRF safety.
@@ -101,7 +108,7 @@ def resolve_and_validate_target(
 
         if require_https:
             if parsed.scheme != "https":
-                return None, f"URL must use HTTPS scheme, got '{parsed.scheme}'"
+                return None, f"{HTTPS_SCHEME_ERROR_PREFIX}, got '{parsed.scheme}'"
         elif parsed.scheme not in ("http", "https"):
             return None, "URL must use http or https protocol"
 

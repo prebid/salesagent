@@ -29,6 +29,7 @@ from adcp import get_adcp_spec_version
 
 from src.core.bounded_executor import SyncThreadPoolBulkhead
 from src.core.database.repositories.push_notification_config import PushNotificationTarget
+from src.core.logging_config import scrub_control_chars
 from src.core.database.repositories.uow import PushNotificationConfigUoW
 from src.core.security.webhook_http import (
     WEBHOOK_DELIVERY_DEADLINE_SECONDS,
@@ -431,18 +432,18 @@ class WebhookDeliveryService:
     ) -> bool:
         """Queue and synchronously drain one session-independent target snapshot."""
         if isinstance(target.auth_blocked_at, datetime):
-            logger.warning(f"⚠️ Auth blocked for {target.url}, skipping until credentials reconfigured")
+            logger.warning(f"⚠️ Auth blocked for {scrub_control_chars(target.url)}, skipping until credentials reconfigured")
             return False
 
         endpoint_key = f"{tenant_id}:{target.url}"
         circuit_breaker = self._circuit_breakers.setdefault(endpoint_key, CircuitBreaker())
         queue = self._queues.setdefault(endpoint_key, WebhookQueue(max_size=1000))
         if not circuit_breaker.can_attempt():
-            logger.warning(f"⚠️ Circuit breaker OPEN for {target.url}, skipping webhook delivery")
+            logger.warning(f"⚠️ Circuit breaker OPEN for {scrub_control_chars(target.url)}, skipping webhook delivery")
             return False
 
         if not queue.enqueue({"config": target, "payload": delivery_payload, "timestamp": datetime.now(UTC)}):
-            logger.warning(f"⚠️ Queue full for {target.url}, webhook dropped")
+            logger.warning(f"⚠️ Queue full for {scrub_control_chars(target.url)}, webhook dropped")
             return False
         return self._deliver_with_backoff(endpoint_key, circuit_breaker, queue)
 
@@ -466,7 +467,7 @@ class WebhookDeliveryService:
                     timestamp,
                 )
             else:
-                logger.warning(f"⚠️ Webhook secret for {config.url} is too weak (min 32 characters required)")
+                logger.warning(f"⚠️ Webhook secret for {scrub_control_chars(config.url)} is too weak (min 32 characters required)")
         if config.authentication_type == "bearer" and config.authentication_token:
             headers["Authorization"] = f"Bearer {config.authentication_token}"
         return headers
@@ -515,7 +516,7 @@ class WebhookDeliveryService:
                 allow_nan=False,
             ).encode("utf-8")
         except (TypeError, ValueError) as exc:
-            logger.error("Webhook payload is not valid JSON for %s: %s", config.url, exc)
+            logger.error("Webhook payload is not valid JSON for %s: %s", scrub_control_chars(config.url), exc)
             circuit_breaker.record_failure()
             return False
         headers = self._build_delivery_headers(config, payload_bytes, timestamp)
@@ -535,14 +536,14 @@ class WebhookDeliveryService:
                         timeout=10.0,
                     )
                     if 200 <= status_code < 300:
-                        logger.debug(f"Webhook delivered to {config.url} (status: {status_code})")
+                        logger.debug(f"Webhook delivered to {scrub_control_chars(config.url)} (status: {status_code})")
                         circuit_breaker.record_success()
                         return True
 
                     # Refused redirects and client errors are permanent for this
                     # payload/configuration. Redirects are never followed.
                     if 300 <= status_code < 500:
-                        logger.warning(f"Webhook delivery to {config.url} returned non-retryable status {status_code}")
+                        logger.warning(f"Webhook delivery to {scrub_control_chars(config.url)} returned non-retryable status {status_code}")
                         circuit_breaker.record_failure()
                         return False
 
@@ -554,16 +555,16 @@ class WebhookDeliveryService:
                 except UnsafeWebhookTargetError as e:
                     # DNS rebinding/private targets are permanent security failures,
                     # not transient network errors. Never retry the unsafe URL.
-                    logger.warning(f"Webhook delivery to {config.url} refused: {e}")
+                    logger.warning(f"Webhook delivery to {scrub_control_chars(config.url)} refused: {e}")
                     break
                 except requests.Timeout:
-                    logger.warning(f"Webhook delivery to {config.url} timed out (attempt: {attempt + 1}/{max_retries})")
+                    logger.warning(f"Webhook delivery to {scrub_control_chars(config.url)} timed out (attempt: {attempt + 1}/{max_retries})")
                 except requests.RequestException as e:
                     logger.warning(
                         f"Webhook delivery to {config.url} failed: {e} (attempt: {attempt + 1}/{max_retries})"
                     )
                 except Exception as e:
-                    logger.error(f"Unexpected error delivering to {config.url}: {e}", exc_info=True)
+                    logger.error(f"Unexpected error delivering to {scrub_control_chars(config.url)}: {e}", exc_info=True)
                     break
 
         # All retries failed

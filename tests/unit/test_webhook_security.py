@@ -153,6 +153,40 @@ class TestWebhookURLValidator:
         assert not is_valid
 
 
+class TestCallbackRejectionHintClassification:
+    """The buyer-facing HTTPS hint fires only on the actual scheme rejection.
+
+    The hint was previously keyed on a substring match against the rejection
+    detail, so any detail containing "https" (e.g. the hostname echo of an
+    unresolvable ``https-portal.invalid``) was misclassified as a scheme error.
+    It now keys on the validator's exact scheme-error prefix.
+    """
+
+    def test_http_scheme_rejection_gets_https_hint(self):
+        from src.core.webhook_validator import _HTTPS_REQUIRED_MESSAGE, _validate_callback_url_with_policy
+
+        is_valid, message = _validate_callback_url_with_policy("http://example.com/webhook", allow_private=False)
+        assert not is_valid
+        assert message == _HTTPS_REQUIRED_MESSAGE
+
+    def test_unresolvable_host_named_https_gets_generic_rejection(self):
+        from unittest.mock import patch
+
+        from src.core.webhook_validator import (
+            _GENERIC_CALLBACK_REJECTION,
+            _HTTPS_REQUIRED_MESSAGE,
+            _validate_callback_url_with_policy,
+        )
+
+        with patch("src.core.security.url_validator._resolve_ips", side_effect=OSError("no dns")):
+            is_valid, message = _validate_callback_url_with_policy(
+                "https://https-portal.invalid/webhook", allow_private=False
+            )
+        assert not is_valid
+        assert message == _GENERIC_CALLBACK_REJECTION
+        assert message != _HTTPS_REQUIRED_MESSAGE
+
+
 class TestWebhookAuthenticator:
     """Test HMAC-SHA256 webhook authentication."""
 

@@ -23,7 +23,8 @@ from adcp.types import TaskType
 
 from src.core.bounded_executor import AsyncThreadPoolBulkhead
 from src.core.exceptions import AdCPValidationError
-from src.core.security.url_validator import check_url_ssrf
+from src.core.logging_config import scrub_control_chars
+from src.core.security.url_validator import HTTPS_SCHEME_ERROR_PREFIX, check_url_ssrf
 
 logger = logging.getLogger(__name__)
 
@@ -193,11 +194,14 @@ def _validate_callback_url_with_policy(url: str, *, allow_private: bool) -> tupl
 
     # Info-disclosure guard (#1546): never hand the resolved IP / matched CIDR
     # range back to the buyer — that is an SSRF oracle. Log the precise reason
-    # server-side; return a generic message. The HTTPS-scheme requirement is the
-    # sole exception (it is not a resolution diagnostic and helps the buyer fix
-    # a plain-http callback).
-    logger.warning("Push callback URL rejected by SSRF validation: %s", detail)
-    if require_https and "https" in detail.lower():
+    # server-side (scrubbed: the detail embeds buyer-controlled URL fragments,
+    # and VT/FF/ESC survive urlparse); return a generic message. The
+    # HTTPS-scheme requirement is the sole exception (it is not a resolution
+    # diagnostic and helps the buyer fix a plain-http callback) — classified by
+    # the validator's exact scheme-error prefix, not a substring match that an
+    # unresolvable "https-..." hostname would also satisfy.
+    logger.warning("Push callback URL rejected by SSRF validation: %s", scrub_control_chars(detail))
+    if require_https and detail.startswith(HTTPS_SCHEME_ERROR_PREFIX):
         return False, _HTTPS_REQUIRED_MESSAGE
     return False, _GENERIC_CALLBACK_REJECTION
 
