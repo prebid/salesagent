@@ -199,11 +199,19 @@ class TestCanonicalVocabularyPinnedToSdk:
         the integration cross-transport test, both via
         assert_omits_webhook_only_fields) check exactly this set. Without this pin,
         removing a field from WEBHOOK_ONLY_FIELDS would silently stop those oracles
-        from checking it. The three are the response fields the pinned schema marks
-        "only present in webhook deliveries" (get-media-buy-delivery-response.json;
-        unchanged in AdCP 3.1.1).
+        from checking it. The FIVE members are every response field the pinned schema
+        marks "only present in webhook deliveries" (get-media-buy-delivery-response.json;
+        descriptions unchanged in AdCP 3.1.1): the three notification-metadata fields
+        plus partial_data and unavailable_count (the latter scoped to
+        "when partial_data is true").
         """
-        assert WEBHOOK_ONLY_FIELDS == {"notification_type", "sequence_number", "next_expected_at"}
+        assert WEBHOOK_ONLY_FIELDS == {
+            "notification_type",
+            "sequence_number",
+            "next_expected_at",
+            "partial_data",
+            "unavailable_count",
+        }
 
 
 class TestAdcpProjectionAgreesWithCanonicalMap:

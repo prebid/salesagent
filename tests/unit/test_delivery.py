@@ -2557,4 +2557,6 @@ class TestFinalWebhookSchedulingInvariants:
         )
 
         assert FINAL_WEBHOOK_COMPLETED_HORIZON >= 10 * FINAL_WEBHOOK_CLAIM_LEASE
-        assert FINAL_WEBHOOK_COMPLETED_HORIZON >= 24 * timedelta(hours=1)
+        from src.services.delivery_webhook_scheduler import SLEEP_INTERVAL_SECONDS
+
+        assert FINAL_WEBHOOK_COMPLETED_HORIZON >= 24 * timedelta(seconds=SLEEP_INTERVAL_SECONDS)

@@ -38,9 +38,10 @@ def mock_webhook_post(scheduler: Any):
     """Stub a scheduler's outbound webhook POST with a 200 success response.
 
     Single source of truth for the mocked-POST shape every delivery-webhook
-    integration test needs (CLAUDE.md DRY invariant — this exact
+    integration test needs (CLAUDE.md DRY invariant — ``send_delivery_webhook``
+    and ``run_delivery_batch`` share it instead of each building the
     ``MagicMock(status_code=200, ...)`` + ``patch.object(..._session, "post", ...)``
-    pair previously lived twice in this file). Reaches into
+    pair). Reaches into
     ``webhook_service._session`` (private) because that is the only seam where
     the serialized outbound body is observable; if the service ever swaps its
     HTTP client this AttributeErrors loudly rather than silently no-op'ing.

@@ -230,7 +230,9 @@ async def test_delivery_webhook_sends_for_fresh_data(integration_db):
         assert result.get("notification_type") == "scheduled"
         assert result.get("next_expected_at") is not None
         assert result.get("partial_data") is False
-        assert result.get("unavailable_count") == 0
+        # "only present in webhook deliveries when partial_data is true" (schema
+        # description) — with partial_data False the field must be absent.
+        assert "unavailable_count" not in result
         assert result.get("reporting_period") is not None
         assert result.get("errors") is None
 

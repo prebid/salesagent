@@ -482,6 +482,42 @@ class TestConcurrentFinalWebhookClaim:
             )
             assert sorted(results) == [False, True], f"exactly one entrypoint call must report success, got {results}"
 
+    def test_claim_and_release_bump_updated_at(self, integration_db):
+        """The horizon's liveness rests on claim/release bumping ``updated_at`` — pin it.
+
+        get_reportable_for_delivery bounds the completed arm by ``updated_at``; the
+        no-strand-mid-retry property holds ONLY because the claim UPDATE and the
+        release UPDATE fire the column's ``onupdate`` (Core updates included). If a
+        change ever sets ``updated_at`` explicitly in those .values() or reroutes
+        them around SQLAlchemy, a retrying buy silently ages out at the horizon and
+        its final is stranded — with every other test green. This reddens instead.
+        """
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            buy = _serving_webhook_buy(env, flight="completed")
+            mb_id = buy.media_buy_id
+            session = env.get_session()
+            session.commit()
+            repo = MediaBuyRepository(session, "t1")
+
+            def _updated_at():
+                session.expire_all()
+                return repo.get_by_id(mb_id).updated_at
+
+            before = _updated_at()
+            now = datetime.now(UTC)
+            assert repo.try_claim_final_webhook(mb_id, now=now, stale_before=now - timedelta(minutes=15)) is True
+            session.commit()
+            after_claim = _updated_at()
+            assert after_claim > before, "the claim UPDATE must bump updated_at (horizon liveness)"
+
+            assert repo.release_final_webhook_claim(mb_id, claimed_at=now) is True
+            session.commit()
+            after_release = _updated_at()
+            assert after_release > after_claim, "the release UPDATE must bump updated_at (horizon liveness)"
+
     @pytest.mark.asyncio
     async def test_failed_send_releases_the_claim_for_immediate_retry(self, integration_db):
         """A definitive send failure releases the final claim so a retry isn't blocked for the lease.
@@ -505,7 +541,7 @@ class TestConcurrentFinalWebhookClaim:
             with patch.object(
                 scheduler.webhook_service, "send_notification", new_callable=AsyncMock, return_value=False
             ):
-                with pytest.raises(Exception, match="send failed"):
+                with pytest.raises(RuntimeError, match="webhook send failed"):
                     await scheduler._send_report_for_media_buy(
                         buy, buy.raw_request["reporting_webhook"], env.get_session(), force=True
                     )
@@ -943,7 +979,7 @@ class TestPausedBuyReceivesNoDeliveryWebhook:
 class TestPollOmitsWebhookOnlyFieldsOnEveryTransport:
     """The poll's actual wire body omits the webhook-only fields on MCP, A2A and REST.
 
-    The three fields are "only present in webhook deliveries" (spec, #1570).
+    The WEBHOOK_ONLY_FIELDS members are "only present in webhook deliveries" (spec, #1570).
     MCP is the transport that regressed differently: fastmcp serializes
     structured content via pydantic_core, bypassing model_dump — so before the
     fix MCP emitted explicit nulls that A2A/REST omitted. Asserting on

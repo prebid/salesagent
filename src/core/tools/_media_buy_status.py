@@ -7,8 +7,10 @@ serving states against the flight window. That map + date-refinement is ONE
 logical operation (CLAUDE.md DRY invariant), so it lives here once instead of
 being mirrored in two modules where the copies drifted (delivery dropped
 unmapped rows; list showed them). The background schedulers
-(``media_buy_status_scheduler.py``, ``delivery_webhook_scheduler.py``) consume
-``SERVING_PERSISTED_STATUSES`` below so their persisted-column queries can
+consume the derived sets below — the status scheduler
+(``media_buy_status_scheduler.py``) selects ``SERVING_PERSISTED_STATUSES`` and
+the delivery scheduler (``delivery_webhook_scheduler.py``) selects it plus
+recent persisted ``completed`` rows — so their persisted-column queries can
 never drift from what the read tools report as serving.
 
 Canonical output vocabulary — the media-buy lifecycle taxonomy plus the
@@ -25,8 +27,8 @@ the pinned commit whose shape 3.1.1 preserves, not an older spec version.)
 The two callers adapt this single result to their own surface:
 
 - ``get_media_buy_delivery`` uses the canonical string directly and overlays
-  the webhook-only ``reporting_delayed`` when the reporting circuit breaker is
-  open.
+  ``reporting_delayed`` when the reporting circuit breaker is open (the schema
+  admits it on any surface; it is not restricted to webhook deliveries).
 - ``get_media_buys`` collapses ``failed`` to ``rejected`` (the lifecycle enum
   has no ``failed``) and converts to ``MediaBuyStatus``.
 
@@ -188,11 +190,17 @@ REPORTABLE_PERSISTED_STATUSES: frozenset[str] = frozenset(
     k for k, v in PERSISTED_STATUS_TO_CANONICAL.items() if v in REPORTABLE_CANONICAL_STATUSES
 )
 
-# The three webhook-only response fields — "only present in webhook deliveries"
-# (get-media-buy-delivery-response.json @ v3.1-04f59d2d5). The polling
-# _get_media_buy_delivery_impl must omit all three; the delivery webhook
-# scheduler is the sole place they are attached to the wire (#1570).
-WEBHOOK_ONLY_FIELDS: frozenset[str] = frozenset({"notification_type", "sequence_number", "next_expected_at"})
+# The FIVE webhook-only response fields — every field whose schema description
+# says "only present in webhook deliveries" (get-media-buy-delivery-response.json
+# @ v3.1-04f59d2d5): notification_type, sequence_number, next_expected_at,
+# partial_data, and unavailable_count (the latter further scoped to
+# "when partial_data is true"). The polling _get_media_buy_delivery_impl must
+# omit all of them; the delivery webhook scheduler is the sole place they are
+# attached to the wire (#1570). Membership is pinned in
+# test_media_buy_status_consistency.py so a partial copy cannot drift silently.
+WEBHOOK_ONLY_FIELDS: frozenset[str] = frozenset(
+    {"notification_type", "sequence_number", "next_expected_at", "partial_data", "unavailable_count"}
+)
 
 
 def derive_notification_type(statuses: Iterable[str]) -> str | None:

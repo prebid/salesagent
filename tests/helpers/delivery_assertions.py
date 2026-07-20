@@ -14,8 +14,9 @@ from src.core.tools._media_buy_status import WEBHOOK_ONLY_FIELDS
 def assert_omits_webhook_only_fields(wire: dict, *, context: str = "synchronous poll") -> None:
     """Assert a serialized delivery body omits ALL webhook-only fields (#1570).
 
-    The three fields (notification_type / sequence_number / next_expected_at) are
-    "only present in webhook deliveries"; the polling response must carry none.
+    The fields in WEBHOOK_ONLY_FIELDS (notification_type / sequence_number /
+    next_expected_at / partial_data / unavailable_count) are "only present in
+    webhook deliveries"; the polling response must carry none.
     Works on any serialized dict — a real transport `wire_response` or a
     `model_dump(mode="json")` of the response.
     """

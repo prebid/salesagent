@@ -28,8 +28,10 @@ if TYPE_CHECKING:
 class MediaBuyRepository:
     """Tenant-scoped data access for MediaBuy and MediaPackage.
 
-    All queries filter by tenant_id automatically. Callers cannot bypass
-    tenant isolation — there is no way to query across tenants.
+    Instance queries filter by tenant_id automatically — callers cannot bypass
+    tenant isolation through them. The ``@staticmethod`` scheduler queries
+    (``get_all_by_statuses``, ``get_reportable_for_delivery``) are explicitly
+    system-level and cross-tenant by design.
 
     Write methods add objects to the session but never commit — the Unit of Work
     (MediaBuyUoW) handles commit/rollback at the boundary.
@@ -679,6 +681,9 @@ class MediaBuyRepository:
                 select(MediaBuy).where(
                     or_(
                         MediaBuy.status.in_(serving_statuses),
+                        # "completed" mirrors the persisted status the status scheduler
+                        # writes; the exact-set relation REPORTABLE == SERVING | {"completed"}
+                        # is pinned in test_media_buy_status_consistency.py.
                         and_(MediaBuy.status == "completed", MediaBuy.updated_at >= cutoff),
                     )
                 )

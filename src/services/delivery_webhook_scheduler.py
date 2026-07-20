@@ -13,6 +13,7 @@ from typing import Any
 
 from adcp import create_mcp_webhook_payload
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
+from adcp.types import MediaBuyStatus
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
     NotificationType,
 )  # TODO: no stable alias — response-level NotificationType differs from top-level
@@ -20,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
+from src.core.database.models import MediaBuy
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.delivery import DeliveryRepository
@@ -28,7 +30,7 @@ from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResp
 from src.core.tools._media_buy_status import (
     CANONICAL_COMPLETED,
     REPORTABLE_CANONICAL_STATUSES,
-    REPORTABLE_PERSISTED_STATUSES,
+    SERVING_PERSISTED_STATUSES,
     derive_notification_type,
     resolve_canonical_status,
 )
@@ -129,7 +131,7 @@ class DeliveryWebhookScheduler:
                 # doesn't grow forever (see get_reportable_for_delivery).
                 media_buys = MediaBuyRepository.get_reportable_for_delivery(
                     session,
-                    serving_statuses=sorted(REPORTABLE_PERSISTED_STATUSES - {"completed"}),
+                    serving_statuses=sorted(SERVING_PERSISTED_STATUSES),
                     completed_horizon=FINAL_WEBHOOK_COMPLETED_HORIZON,
                 )
 
@@ -208,7 +210,7 @@ class DeliveryWebhookScheduler:
             return False
 
     def _should_skip_send(
-        self, delivery_repo: DeliveryRepository, media_buy: Any, *, is_final: bool, force: bool
+        self, delivery_repo: DeliveryRepository, media_buy: MediaBuy, *, is_final: bool, force: bool
     ) -> bool:
         """BEST-EFFORT read-only de-dup — True if this delivery webhook should NOT be sent.
 
@@ -244,7 +246,7 @@ class DeliveryWebhookScheduler:
             return True
         return False
 
-    def _claim_final_webhook(self, session: Session, media_buy: Any) -> datetime | None:
+    def _claim_final_webhook(self, session: Session, media_buy: MediaBuy) -> datetime | None:
         """Atomically claim the buy's ONE final webhook. Returns the claim token
         (the exact ``claimed_at`` written) if THIS worker won, else None.
 
@@ -264,7 +266,7 @@ class DeliveryWebhookScheduler:
         session.commit()
         return now if won else None
 
-    def _release_final_claim(self, session: Session, media_buy: Any, claimed_at: datetime) -> None:
+    def _release_final_claim(self, session: Session, media_buy: MediaBuy, claimed_at: datetime) -> None:
         """Best-effort release of THIS worker's final claim after a definitive
         failure/no-send, so an immediate retry isn't blocked for the whole lease.
 
@@ -285,7 +287,7 @@ class DeliveryWebhookScheduler:
             )
 
     async def _send_report_for_media_buy(
-        self, media_buy: Any, reporting_webhook: dict, session: Session, force: bool = False
+        self, media_buy: MediaBuy, reporting_webhook: dict[str, Any], session: Session, force: bool = False
     ) -> bool:
         """Send a delivery report for a single media buy.
 
@@ -339,8 +341,8 @@ class DeliveryWebhookScheduler:
         self,
         session: Session,
         delivery_repo: DeliveryRepository,
-        media_buy: Any,
-        reporting_webhook: dict,
+        media_buy: MediaBuy,
+        reporting_webhook: dict[str, Any],
         *,
         is_final: bool,
     ) -> bool:
@@ -360,7 +362,11 @@ class DeliveryWebhookScheduler:
         start_date_obj = datetime.now(UTC).date() - timedelta(days=1)
         end_date_obj = datetime.now(UTC)
 
-        # Create a ResolvedIdentity for the delivery call
+        # Create a ResolvedIdentity for the delivery call. Imported lazily ON
+        # PURPOSE: tests inject a testing_context by patching
+        # src.core.resolved_identity.ResolvedIdentity, which only intercepts a
+        # call-time import — hoisting this to module scope breaks that seam
+        # (test_scheduler_uses_simulated_path_in_testing_mode).
         from src.core.resolved_identity import ResolvedIdentity
 
         identity = ResolvedIdentity(
@@ -372,12 +378,10 @@ class DeliveryWebhookScheduler:
 
         # The impl reports on exactly REPORTABLE_CANONICAL_STATUSES: the
         # scheduler already filters by persisted DB status
-        # (REPORTABLE_PERSISTED_STATUSES — serving + completed) at query time
+        # (the serving set plus recent persisted "completed") at query time
         # and skips buys that resolve outside the reportable set, so both
         # still-serving and ended (persisted "completed") campaigns are
         # included rather than filtered out and reported as "not found" errors.
-        from adcp.types import MediaBuyStatus
-
         req = GetMediaBuyDeliveryRequest(
             media_buy_ids=[media_buy.media_buy_id],
             status_filter=[MediaBuyStatus(s) for s in sorted(REPORTABLE_CANONICAL_STATUSES)],
@@ -396,7 +400,7 @@ class DeliveryWebhookScheduler:
 
         if delivery_response.errors is not None:
             logger.warning(
-                f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. We have recieved error in the result. Result is {delivery_response.model_dump()}"
+                f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. We received an error in the result. Result is {delivery_response.model_dump()}"
             )
             return False
 
@@ -440,7 +444,11 @@ class DeliveryWebhookScheduler:
 
         delivery_response.sequence_number = sequence_number
         delivery_response.partial_data = False  # TODO: Check for reporting_delayed status
-        delivery_response.unavailable_count = 0  # TODO: Count reporting_delayed/failed deliveries
+        # unavailable_count is "only present in webhook deliveries when partial_data
+        # is true" (schema description) — leave None (excluded from the wire) until
+        # partial_data reporting is implemented; setting 0 alongside partial_data
+        # False put a spec-divergent field on every webhook body.
+        delivery_response.unavailable_count = None
 
         # Extract webhook URL and authentication
         webhook_url = reporting_webhook.get("url")
