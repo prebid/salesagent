@@ -195,6 +195,23 @@ def given_invalid_wire_bearer(ctx: dict) -> None:
     )
 
 
+@given("the Buyer Agent presents no bearer token")
+def given_missing_wire_bearer(ctx: dict) -> None:
+    """Supply headers WITHOUT any bearer so the real resolver sees a missing token.
+
+    resolve_identity raises for an INVALID token but returns a principal-less
+    identity for a MISSING one, so this Given grades a different production
+    branch than the invalid-bearer sibling: the boundary guard that rejects a
+    principal-less identity before the version check can disclose
+    supported_versions.
+    """
+    tenant, _principal = _setup_tenant_and_principal(ctx)
+
+    from tests.harness.transport import WireAuth
+
+    ctx["wire_auth"] = WireAuth(headers={"x-adcp-tenant": tenant.tenant_id})
+
+
 @given("the sync_accounts response schema uses oneOf")
 def given_schema_uses_oneof(ctx: dict) -> None:
     """Acknowledge the sync_accounts response schema uses oneOf (success XOR error)."""
