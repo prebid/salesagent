@@ -318,7 +318,7 @@ class WebhookDeliveryService:
 
         except Exception as e:
             logger.error(
-                f"❌ Failed to send delivery webhook for {media_buy_id}: {e}",
+                f"❌ Failed to send delivery webhook for {media_buy_id}: {scrub_control_chars(str(e))}",
                 exc_info=True,
             )
             return False
@@ -392,7 +392,7 @@ class WebhookDeliveryService:
             return False
 
         except Exception as e:
-            logger.error(f"❌ Error in webhook delivery: {e}", exc_info=True)
+            logger.error(f"❌ Error in webhook delivery: {scrub_control_chars(str(e))}", exc_info=True)
             return False
 
     def _queue_and_deliver_target(
@@ -554,14 +554,16 @@ class WebhookDeliveryService:
                         return False
 
                     logger.warning(
-                        f"Webhook delivery to {config.url} returned status {status_code} "
+                        f"Webhook delivery to {scrub_control_chars(config.url)} returned status {status_code} "
                         f"(attempt: {attempt + 1}/{max_retries})"
                     )
 
                 except UnsafeWebhookTargetError as e:
                     # DNS rebinding/private targets are permanent security failures,
                     # not transient network errors. Never retry the unsafe URL.
-                    logger.warning(f"Webhook delivery to {scrub_control_chars(config.url)} refused: {e}")
+                    logger.warning(
+                        f"Webhook delivery to {scrub_control_chars(config.url)} refused: {scrub_control_chars(str(e))}"
+                    )
                     break
                 except requests.Timeout:
                     logger.warning(
@@ -569,11 +571,14 @@ class WebhookDeliveryService:
                     )
                 except requests.RequestException as e:
                     logger.warning(
-                        f"Webhook delivery to {config.url} failed: {e} (attempt: {attempt + 1}/{max_retries})"
+                        f"Webhook delivery to {scrub_control_chars(config.url)} failed: "
+                        f"{scrub_control_chars(str(e))} (attempt: {attempt + 1}/{max_retries})"
                     )
                 except Exception as e:
                     logger.error(
-                        f"Unexpected error delivering to {scrub_control_chars(config.url)}: {e}", exc_info=True
+                        f"Unexpected error delivering to {scrub_control_chars(config.url)}: "
+                        f"{scrub_control_chars(str(e))}",
+                        exc_info=True,
                     )
                     break
 

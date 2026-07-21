@@ -114,6 +114,10 @@ def _is_production_log_env() -> bool:
     ``FLY_APP_NAME``. Honor all three so a self-hosted production deploy gets
     JSON log escaping too, not plain-text logs.
     """
+    # PRODUCTION is read as ANY non-empty value (legacy compat: deploys set
+    # PRODUCTION=1/true interchangeably), deliberately looser than the admin
+    # UI's PRODUCTION == "true" check — tightening here would silently flip a
+    # PRODUCTION=1 deploy back to plain-text logs. Fail toward JSON escaping.
     return bool(
         os.environ.get("FLY_APP_NAME")
         or os.environ.get("PRODUCTION")

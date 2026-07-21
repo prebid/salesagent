@@ -10,7 +10,6 @@ Handles media buy creation including:
 
 import logging
 import random
-import re
 import secrets
 import time
 import uuid
@@ -152,6 +151,7 @@ from src.core.schemas import (
     RawIdempotencyKey,
     Targeting,
     require_idempotency_key,
+    sanitize_to_idempotency_key_charset,
 )
 from src.core.schemas import (
     url as make_url,
@@ -811,8 +811,10 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                 # satisfies the spec constraint ^[A-Za-z0-9_.:-]{16,255}$ even for
                 # a historical or imported id.
                 if raw_request_data.get("idempotency_key") is None:
-                    safe_id = re.sub(r"[^A-Za-z0-9_.:-]", "-", str(media_buy_id))
-                    raw_request_data["idempotency_key"] = f"legacy-approval-{safe_id}"[:255]
+                    safe_id = sanitize_to_idempotency_key_charset(str(media_buy_id))
+                    raw_request_data["idempotency_key"] = sanitize_to_idempotency_key_charset(
+                        f"legacy-approval-{safe_id}"
+                    )
 
                 request = CreateMediaBuyRequest(**raw_request_data)
                 # Mark this request as already approved to skip adapter's approval workflow

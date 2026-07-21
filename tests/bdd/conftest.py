@@ -2819,8 +2819,10 @@ _UC002_MANUAL_APPROVAL_WIRED: set[str] = {
 
 # UC-010 scenarios wired to CapabilitiesEnv — the schema-derived
 # VERSION_UNSUPPORTED set plus the hand-authored release-resolution boundaries
-# in BR-UC-010-version-negotiation.feature (#1546). Everything else in the
-# generated BR-UC-010 feature xfails at the fixture until wired.
+# in BR-UC-010-version-negotiation.feature (#1546). Any OTHER UC-010 scenario
+# that binds steps raises RuntimeError at the harness gate (fail-loud, not
+# auto-xfail — the makereport hook covers only StepDefinitionNotFoundError /
+# NotImplementedError); scenarios with no @scenario binding are never collected.
 _UC010_VERSION_NEGOTIATION_WIRED: set[str] = {
     "T-UC-010-v31-version-unsupported",
     "T-UC-010-v31-version-unsupported-major-fallback",

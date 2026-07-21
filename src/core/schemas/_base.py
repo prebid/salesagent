@@ -1947,6 +1947,16 @@ _IDEMPOTENCY_KEY_MIN = 16
 _IDEMPOTENCY_KEY_MAX = 255
 _IDEMPOTENCY_KEY_PATTERN = r"^[A-Za-z0-9_.:-]{16,255}$"
 _IDEMPOTENCY_KEY_CHARSET = re.compile(r"^[A-Za-z0-9_.:-]+$")
+# Complement of the allowed charset — the single home for sanitizing internal
+# reconstructions (e.g. the legacy-approval synthetic key) to the spec pattern,
+# so a spec charset change lands here once, never in a call-site copy.
+_IDEMPOTENCY_KEY_DISALLOWED = re.compile(r"[^A-Za-z0-9_.:-]")
+
+
+def sanitize_to_idempotency_key_charset(value: str) -> str:
+    """Replace disallowed characters with '-' and clip to the spec max length."""
+    return _IDEMPOTENCY_KEY_DISALLOWED.sub("-", value)[:_IDEMPOTENCY_KEY_MAX]
+
 
 # REST must keep malformed JSON values intact until ``require_idempotency_key``
 # can emit the same AdCP VALIDATION_ERROR as MCP/A2A. ``SkipValidation`` does

@@ -414,6 +414,7 @@ class TestCreateMediaBuyValidation:
         mock_media_buys = MagicMock()
         mock_media_buys.get_by_principal.return_value = []
         mock_uow.media_buys = mock_media_buys
+        _stub_idempotency_probe_miss(mock_uow)
 
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
@@ -491,6 +492,7 @@ class TestCreateMediaBuyValidation:
         mock_media_buys = MagicMock()
         mock_media_buys.get_by_principal.return_value = []
         mock_uow.media_buys = mock_media_buys
+        _stub_idempotency_probe_miss(mock_uow)
 
         with (
             patch("src.core.helpers.context_helpers.ensure_tenant_context"),
@@ -1323,6 +1325,18 @@ class TestIdempotencyKeyRequired:
         assert req.idempotency_key is None
 
 
+def _stub_idempotency_probe_miss(mock_uow) -> None:
+    """Configure the keyed-create idempotency probe as a MISS on a hand-rolled UoW mock.
+
+    A bare MagicMock reads as a cache HIT (truthy row) with a mismatching hash
+    -> spurious IDEMPOTENCY_CONFLICT. Mirrors make_mock_uow's defaults for
+    tests that build their own UoW double.
+    """
+    mock_uow.idempotency_attempts.find_by_key.return_value = None
+    mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
+    mock_uow.idempotency_attempts.count_active.return_value = (0, None)
+
+
 class TestCreateMediaBuyAdapterInteraction:
     """UC-002 adapter call: _execute_adapter_media_buy_creation behavior."""
 
@@ -1482,6 +1496,7 @@ class TestCreateMediaBuyAdapterInteraction:
         mock_uow.__exit__ = MagicMock(return_value=None)
         mock_uow.session = mock_session
         mock_uow.media_buys.get_by_principal.return_value = []
+        _stub_idempotency_probe_miss(mock_uow)
 
         with (
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
@@ -1534,12 +1549,15 @@ class TestUpdateMediaBuySchemaCompliance:
         routes through, so rejecting here makes the failure consistent everywhere
         instead of the prior split (MCP/A2A silently succeeded, REST returned 400).
         """
-        from src.core.exceptions import AdCPInvalidRequestError
+        from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPInvalidRequestError
         from src.core.tools.media_buy_update import _build_update_request
 
-        # A well-formed revision is still rejected: we cannot honor CONFLICT-on-mismatch.
-        with pytest.raises(AdCPInvalidRequestError):
+        # A well-formed revision is still rejected — but as UNSUPPORTED_FEATURE
+        # (the pinned enum: "a requested feature or field is not supported by
+        # this seller"), because a valid value violates no schema constraint.
+        with pytest.raises(AdCPCapabilityNotSupportedError):
             _build_update_request(media_buy_id="mb_1", paused=True, idempotency_key=_UPDATE_IDEMPOTENCY_KEY, revision=5)
+        # Schema-invalid spellings stay INVALID_REQUEST.
         with pytest.raises(AdCPInvalidRequestError):
             _build_update_request(
                 media_buy_id="mb_1", paused=True, idempotency_key=_UPDATE_IDEMPOTENCY_KEY, revision="5"

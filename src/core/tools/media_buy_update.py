@@ -164,6 +164,21 @@ def validate_update_media_buy_protocol_fields(
     """
     require_idempotency_key(idempotency_key)
     if not _revision_was_omitted(revision):
+        # Code split per the pinned 3.1.1 enum descriptions: a SCHEMA-VALID
+        # revision (int >= 1) names a field this seller does not support —
+        # verbatim UNSUPPORTED_FEATURE ("a requested feature or field is not
+        # supported by this seller"), never INVALID_REQUEST, whose definition
+        # ("malformed ... or violates schema constraints") the value does not
+        # meet. Schema-invalid spellings (JSON null, 0, negative, non-int)
+        # remain INVALID_REQUEST. Ungraded by any 3.1.1 storyboard; the local
+        # BR-UC-003 rows pin INVALID_REQUEST only for revision 0.
+        if isinstance(revision, int) and not isinstance(revision, bool) and revision >= 1:
+            raise AdCPCapabilityNotSupportedError(
+                "This seller does not support optimistic-concurrency control via `revision`; the update was not applied.",
+                suggestion=(
+                    "Retry the update without a `revision` field, or re-read the media buy's current state before updating."
+                ),
+            )
         raise AdCPInvalidRequestError(
             "This seller does not support optimistic-concurrency control via `revision`; the update was not applied.",
             suggestion=(

@@ -38,8 +38,9 @@ from src.routes.api_v1 import (
 
 # Raw-wrapper parameters that are transport plumbing, never buyer-facing body fields.
 # Server-injected plumbing, never buyer-supplied body fields: ctx/identity are
-# resolved at the transport boundary.
-_TRANSPORT_PARAMS = {"ctx", "identity"}
+# resolved at the transport boundary; raw_wire_payload is the raw wire request
+# body captured server-side for idempotency hashing (FastAPI raw_json_body dependency).
+_TRANSPORT_PARAMS = {"ctx", "identity", "raw_wire_payload"}
 # Body-only meta field (not a raw-wrapper param).
 _BODY_META = {"adcp_version"}
 

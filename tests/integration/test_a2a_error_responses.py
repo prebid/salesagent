@@ -348,7 +348,7 @@ class TestA2AErrorPropagation:
 
         Round-1 raised AdCPValidationError from the push-callback guard BEFORE the per-skill
         translation seam, so on_message_send emitted a JSON-RPC -32603 InternalError whose data
-        the A2A v0.3 adapter drops (data: null) — which also broke E2E. The rejection must instead
+        the A2A v0.3 adapter has been observed dropping on the E2E network wire (in-process the mounted app carries data; network-wire reconciliation is a tracked follow-up). The rejection must instead
         produce a buyer-CORRECTABLE two-layer envelope on the failed Task's artifact DataPart, and
         the callback must never be stored (#1512).
         """

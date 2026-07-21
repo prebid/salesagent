@@ -61,23 +61,29 @@ def _write_source(directory: Path) -> Path:
     return source
 
 
-def test_wholesale_compile_applies_supported_false_reconciliation(tmp_path):
-    """The ``--all`` path cannot restore the stale replay assertion."""
+def test_wholesale_compile_keeps_replay_live_and_applies_boundary_overlay(tmp_path):
+    """The ``--all`` path passes the upstream replay scenario through UNCHANGED.
+
+    With create_media_buy replay restored, the only local overlay is the
+    exact-length boundary fixture — regeneration must neither reconcile the
+    replay scenario away nor restore the hand-counted over-max literal.
+    """
     source = _write_source(tmp_path)
 
     _, output, _, scenario_ids = compile_bdd.compile_feature(source, {}, "test-sha", dry_run=True)
 
     assert scenario_ids == {SCENARIO_ID, BOUNDARY_SCENARIO_ID}
-    assert "Advertised unsupported idempotency_key does not suppress create execution" in output
-    assert 'the response should include a newly created "media_buy_id"' in output
-    assert "exactly one new media buy should have been persisted" in output
-    assert "include the previously created" not in output
+    # The upstream replay scenario survives verbatim — the supported=false
+    # reconciliation is gone and must not come back through regeneration.
+    assert "v3.1 idempotency_key replay returns existing media buy without re-execution" in output
+    assert 'the response should include the previously created "media_buy_id"' in output
+    assert "Advertised unsupported idempotency_key" not in output
     assert "| <256 chars>" in output
     assert "| AAAA" not in output
 
 
-def test_merge_classifies_supported_false_reconciliation_as_local_overlay(tmp_path):
-    """The ``--merge`` path applies the overlay without a semantic-merge gap."""
+def test_merge_classifies_boundary_fixture_as_local_overlay(tmp_path):
+    """The ``--merge`` path applies the boundary overlay; the replay scenario is a NO-OP."""
     source = _write_source(tmp_path)
     legacy = tmp_path / "legacy.feature"
     legacy.write_text(LEGACY_COMPILED)
@@ -91,10 +97,9 @@ def test_merge_classifies_supported_false_reconciliation_as_local_overlay(tmp_pa
 
     assert scenario_ids == {SCENARIO_ID, BOUNDARY_SCENARIO_ID}
     assert manifest_entries == []
-    assert bucket_counts == {"LOCAL-OVERLAY": 2}
-    assert "Advertised unsupported idempotency_key does not suppress create execution" in output
-    assert 'the response should include a newly created "media_buy_id"' in output
-    assert "include the previously created" not in output
+    assert bucket_counts == {"LOCAL-OVERLAY": 1, "NO-OP": 1}
+    assert 'the response should include the previously created "media_buy_id"' in output
+    assert "Advertised unsupported idempotency_key" not in output
     assert "| <256 chars>" in output
     assert "| AAAA" not in output
 

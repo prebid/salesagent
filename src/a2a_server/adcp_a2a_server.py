@@ -53,6 +53,7 @@ from adcp.types import ContextObject, CreativeAsset, GeneratedTaskStatus
 from google.protobuf import json_format, struct_pb2
 from pydantic import BaseModel
 
+from src.core.adcp_version import validate_adcp_version_pins
 from src.core.application_context import dump_adcp_response
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import AUTH_REQUIRED_SUGGESTION
@@ -69,10 +70,19 @@ from src.core.exceptions import (
     build_two_layer_error_envelope,
     normalize_to_adcp_error,
 )
-from src.core.request_compat import _log_dropped_fields, strip_undeclared_envelope_fields
+from src.core.logging_config import scrub_control_chars
+from src.core.request_compat import (
+    STANDARD_ADCP_READ_TOOLS,
+    _log_dropped_fields,
+    normalize_request_params,
+    strip_negotiation_fields,
+    strip_undeclared_envelope_fields,
+    validate_standard_read_idempotency_key,
+)
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import coerce_creative_filters, to_account_reference, to_brand_reference
-from src.core.schemas import CreativeStatusEnum
+from src.core.schemas import CreateMediaBuyRequest, CreativeStatusEnum
+from src.core.schemas._base import require_idempotency_key
 from src.core.tool_context import ToolContext
 from src.core.tool_error_logging import record_boundary_error, record_boundary_error_for_identity
 from src.core.tools import (
@@ -779,11 +789,22 @@ class AdCPRequestHandler(RequestHandler):
                     # fault. Surface it as a FAILED Task carrying the two-layer envelope
                     # DataPart (VALIDATION_ERROR) — the same shape as a failed skill —
                     # instead of letting it fall through to the outer handler, which
-                    # would emit a JSON-RPC -32603 InternalError whose data the A2A v0.3
-                    # adapter drops (data: null). The callback is never stored, so no
-                    # webhook can be driven (#1512). Like the per-skill AdCPError path,
-                    # this does not drive the audit/activity sinks for a buyer input error.
-                    logger.warning("Rejected push_notification_config callback: %s", callback_exc)
+                    # would emit a JSON-RPC -32603 InternalError — a server-fault class
+                    # for a buyer input error, and one whose ``data`` survival on the
+                    # real NETWORK wire is unverified (in-process the mounted app
+                    # carries it; the v0.3 adapter has been observed dropping it on
+                    # E2E — reconciliation tracked upstream). The callback is never
+                    # stored, so no
+                    # webhook can be driven (#1512). Boundary parity (P26): the
+                    # per-skill AdCPError path records to the audit/activity sinks
+                    # via record_boundary_error_for_identity, and MCP/REST record
+                    # buyer validation errors uniformly — so this rejection does too
+                    # (identity is already resolved here; auth precedes callback
+                    # validation).
+                    record_boundary_error_for_identity("a2a", "push_notification_config", callback_exc, identity)
+                    logger.warning(
+                        "Rejected push_notification_config callback: %s", scrub_control_chars(str(callback_exc))
+                    )
                     task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
                     del task.artifacts[:]
                     task.artifacts.append(
@@ -809,7 +830,7 @@ class AdCPRequestHandler(RequestHandler):
                     logger.info(
                         "Protocol-level push notification config provided for task %s: %s",
                         task_id,
-                        push_notification_config.url,
+                        scrub_control_chars(push_notification_config.url),
                     )
             self.tasks[task_id] = task
 
@@ -1157,12 +1178,15 @@ class AdCPRequestHandler(RequestHandler):
             # identity is None, so tenant_id degrades to None and the activity-feed
             # + audit writes are correctly skipped (a fabricated "unknown" tenant
             # would otherwise drive those sinks for an unauthenticated caller).
+            # CLASS SYMMETRY with the missing-token rejection above: an invalid
+            # bearer is a CLIENT auth error, so it surfaces as JSON-RPC
+            # InvalidRequestError carrying the AUTH_REQUIRED envelope in data —
+            # never InternalError (-32603), the server-fault class.
             contextual_error = normalize_to_adcp_error(e, context=request_application_context)
             record_boundary_error_for_identity("a2a", "message_processing", contextual_error, identity)
-            raise _internal_error_for(
-                "message processing",
-                contextual_error,
-                context=request_application_context,
+            raise InvalidRequestError(
+                message=str(contextual_error),
+                data=build_two_layer_error_envelope(contextual_error),
             ) from e
         except A2AError:
             # Re-raise A2AError as-is (will be caught by JSON-RPC handler)
@@ -1621,12 +1645,6 @@ class AdCPRequestHandler(RequestHandler):
         # recorded here (not in the handler try-block below, which this raise
         # never reaches) so version rejections land on the same observability
         # surface as every other boundary error. See #1512.
-        from src.core.adcp_version import validate_adcp_version_pins
-        from src.core.request_compat import (
-            STANDARD_ADCP_READ_TOOLS,
-            strip_negotiation_fields,
-            validate_standard_read_idempotency_key,
-        )
 
         # protobuf Struct decodes every JSON number as float. Reconstruct an
         # integral legacy major pin before validation; semantically the buyer
@@ -1671,7 +1689,6 @@ class AdCPRequestHandler(RequestHandler):
                 auth["schemes"] = [scheme_value] if scheme_value else []
             parameters = {**parameters, "push_notification_config": pnc_dict}
         # Normalize deprecated fields before any handler sees the parameters
-        from src.core.request_compat import normalize_request_params
 
         compat_result = normalize_request_params(skill_name, parameters)
         parameters = compat_result.params
@@ -1801,7 +1818,6 @@ class AdCPRequestHandler(RequestHandler):
         tool_context = self._make_tool_context(identity, "create_media_buy")
 
         # Parse parameters into typed request model (validation at A2A boundary)
-        from src.core.schemas import CreateMediaBuyRequest
 
         # Pre-process: A2A field name translations
         params = {**parameters}
@@ -1849,7 +1865,6 @@ class AdCPRequestHandler(RequestHandler):
         # emit the canonical missing-key error (one home in src.core.exceptions),
         # not this handler's aggregated Pydantic wording from full-model
         # validation below.
-        from src.core.schemas._base import require_idempotency_key
 
         require_idempotency_key(params.get("idempotency_key"))
 
@@ -1904,7 +1919,6 @@ class AdCPRequestHandler(RequestHandler):
         # Construct typed models at the A2A boundary (Pydantic validation at entry).
         # Pre-process format_id: upgrade legacy strings to FormatId models.
         from src.core.format_cache import upgrade_legacy_format_id
-        from src.core.schemas._base import require_idempotency_key
 
         require_idempotency_key(parameters.get("idempotency_key"))
         with adcp_validation_boundary(context="sync_creatives request"):
@@ -2137,7 +2151,6 @@ class AdCPRequestHandler(RequestHandler):
 
         Authentication is REQUIRED per BR-RULE-055.
         """
-        from src.core.schemas._base import require_idempotency_key
         from src.core.schemas.account import SyncAccountsRequest
 
         require_idempotency_key(parameters.get("idempotency_key"))

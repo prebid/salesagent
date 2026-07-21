@@ -34,6 +34,10 @@ ADCP_NEGOTIATION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major
 # envelope tolerance permits a supplied key even when the individual request
 # schema does not declare it.  On standard reads the key is
 # validated then ignored — it never reaches business logic or a replay cache.
+# Deliberate branch choice: read-tool-idempotency.yaml's omitted_key_grace says
+# sellers "SHOULD reject this omission but MAY accept it for compatibility";
+# this seller takes the MAY-accept branch during 3.1. Flippable when: the 3.2
+# storyboard cut turns that probe into a required rejection.
 STANDARD_ADCP_READ_TOOLS: frozenset[str] = frozenset(
     {
         "get_adcp_capabilities",

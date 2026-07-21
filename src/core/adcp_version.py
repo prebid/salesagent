@@ -56,6 +56,20 @@ _BUILD_VERSION_RE = re.compile(
 )
 _TEST_POLICY_LEASE_RE = re.compile(r"^[0-9A-Za-z_-]{16,128}$")
 
+# ---------------------------------------------------------------------------
+# The advertised protocol versions — an IN-REPO constant, not an SDK read.
+# ---------------------------------------------------------------------------
+# Advertise what this agent IMPLEMENTS, not what its dependency ships. These
+# release-precision wire values are the production source consumed by
+# capabilities (major_versions / supported_versions), request-pin negotiation,
+# and the VERSION_UNSUPPORTED error details. The installed SDK's spec pin is a
+# CROSS-CHECK only: the consistency guard in tests/unit/test_adcp_version.py
+# reddens on an adcp bump, so the bump PR consciously updates this constant
+# under schema-grounded review instead of changing the wire contract as a
+# side effect (the prerelease-advertised-as-stable bug was the SDK-derived
+# pattern biting once already).
+ADVERTISED_ADCP_VERSIONS: tuple[str, ...] = ("3.1",)
+
 
 @dataclass(frozen=True)
 class _ReleasePin:
@@ -92,19 +106,15 @@ def _active_testing_policy() -> _TestingVersionPolicy | None:
 def _spec_release_components() -> tuple[int, int, str | None]:
     """Parse ``(major, minor, prerelease)`` from the SDK spec pin, typed-erroring on garbage.
 
-    Both ``adcp_major_version()`` and ``supported_adcp_versions()`` derive from
-    this single parse. ``adcp_build_version()`` is intentionally independent:
+    Feeds ``derived_versions_from_sdk_pin()`` — the SDK cross-check — only;
+    production advertisement and negotiation read ``ADVERTISED_ADCP_VERSIONS``
+    and never parse the SDK pin, so a malformed pin can no longer break the
+    buyer request path. ``adcp_build_version()`` is intentionally independent:
     it identifies the Sales Agent deployment lineage, not the AdCP spec pin.
-    The prerelease is retained so the advertised release-precision wire value
-    preserves it (a prerelease pin such as ``"4.2.0-rc.1"`` -> ``"4.2-rc.1"``);
-    only PATCH is dropped. The pin (``adcp.get_adcp_spec_version()``, e.g.
-    ``"3.1.1"``) is a deploy-time constant, but this runs on the buyer request path
-    (``validate_adcp_version_pins`` -> ``_supported_majors`` ->
-    ``supported_adcp_versions``). A malformed pin is a broken *seller*
-    deployment, not a buyer version mismatch: surface it as a typed
-    :class:`AdCPConfigurationError` (500, terminal) — the same contract every
-    other server-side failure honors — rather than letting a bare ``ValueError``
-    (int cast or tuple-unpack) escape as an untyped 500.
+    The prerelease is retained so the derived release-precision wire value
+    preserves it (``"4.2.0-rc.1"`` -> ``"4.2-rc.1"``); only PATCH is dropped.
+    A malformed pin surfaces as a typed :class:`AdCPConfigurationError` from
+    the cross-check derivation rather than an untyped ValueError.
     """
     _raw, major, minor, prerelease = _validate_full_semver(
         adcp.get_adcp_spec_version(),
@@ -155,26 +165,24 @@ def _release_precision_wire_value(major: int, minor: int, prerelease: str | None
 
 
 def adcp_major_version() -> int:
-    """AdCP major version this build speaks, from the SDK spec pin.
+    """The highest AdCP major this build advertises.
 
-    The major is the leading component of the SDK's spec version string
-    (e.g. ``"3.1.1"`` -> ``3``), so a spec bump is reflected here with
-    no code change.
+    Derived from ``supported_adcp_versions()`` (the ``ADVERTISED_ADCP_VERSIONS``
+    constant, or the test-policy override) so capabilities' ``major_versions``,
+    request-pin negotiation, and the VERSION_UNSUPPORTED details can never
+    disagree about the advertised major set.
     """
-    return _spec_release_components()[0]
+    return max(_supported_majors())
 
 
 def supported_adcp_versions() -> tuple[str, ...]:
-    """Release-precision AdCP versions this build speaks, from the SDK spec pin.
+    """Release-precision AdCP versions this build speaks — ``ADVERTISED_ADCP_VERSIONS``.
 
-    The wire value is release precision per ``core/version-envelope.json``,
-    derived from the SDK's full-semver spec pin by dropping the PATCH component
-    but PRESERVING any prerelease segment (a prerelease pin ``"4.2.0-rc.1"`` ->
-    ``("4.2-rc.1",)``). The spec is explicit that full-semver meta-field
-    values are "NOT valid wire values", and that the prerelease must be kept —
-    dropping it to a bare ``"3.1"`` made this seller reject a correct
-    ``"3.1-beta.3"`` buyer pin with VERSION_UNSUPPORTED. Only the PATCH digit,
-    which is never negotiated, is discarded.
+    The wire values are release precision per ``core/version-envelope.json``
+    (MAJOR.MINOR, optional prerelease — never a PATCH). The advertisement is
+    an in-repo constant so it moves only through a reviewed edit; the
+    installed SDK's spec pin is demoted to a cross-check
+    (``derived_versions_from_sdk_pin`` + the consistency guard).
 
     This is the authoritative re-pin list carried in VERSION_UNSUPPORTED error
     details (``supported_versions`` is REQUIRED there with minItems 1).
@@ -183,6 +191,20 @@ def supported_adcp_versions() -> tuple[str, ...]:
     if testing_policy is not None:
         return testing_policy.supported_versions
 
+    return ADVERTISED_ADCP_VERSIONS
+
+
+def derived_versions_from_sdk_pin() -> tuple[str, ...]:
+    """Release-precision versions derived from the INSTALLED SDK's spec pin.
+
+    The CROSS-CHECK input, never the advertisement source: production reads
+    ``ADVERTISED_ADCP_VERSIONS``; the consistency guard asserts this
+    derivation equals the constant so an SDK bump fails loud instead of
+    silently moving the wire contract. Full-semver pins normalize per
+    ``core/version-envelope.json`` — PATCH dropped, prerelease PRESERVED
+    (``"3.1.0-beta.3"`` -> ``"3.1-beta.3"``); meta-field values are NOT valid
+    wire values.
+    """
     major, minor, prerelease = _spec_release_components()
     return (_release_precision_wire_value(major, minor, prerelease),)
 

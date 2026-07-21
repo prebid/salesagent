@@ -31,6 +31,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.lifecycle import register_shutdown
+from src.core.logging_config import scrub_control_chars
 from src.core.security.webhook_http import (
     UnsafeWebhookTargetError,
     create_pinned_webhook_session,
@@ -124,7 +125,7 @@ class ProtocolWebhookService:
             ),
             # DO NOT log authentication_token - security risk
         }
-        logger.info(f"push_notification_config (sanitized): {safe_config}")
+        logger.info(f"push_notification_config (sanitized): {scrub_control_chars(str(safe_config))}")
 
         # The pinned SDK owns the canonical A2A protobuf / MCP Pydantic wire
         # conversion; do not fork that behavior locally.

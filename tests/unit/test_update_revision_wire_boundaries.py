@@ -53,6 +53,38 @@ async def test_mcp_omitted_revision_reaches_impl() -> None:
 
 
 @pytest.mark.asyncio
+async def test_mcp_valid_revision_is_rejected_as_unsupported_feature() -> None:
+    """A SCHEMA-VALID revision names an unimplemented field — UNSUPPORTED_FEATURE, not INVALID_REQUEST.
+
+    Per the pinned 3.1.1 enum descriptions: a valid ``revision: 5`` violates no
+    schema constraint (INVALID_REQUEST's definition) and is verbatim
+    UNSUPPORTED_FEATURE's ("a requested feature or field is not supported by
+    this seller"). Schema-invalid spellings (null / 0) keep INVALID_REQUEST —
+    pinned by the sibling tests below.
+    """
+    with (
+        patch("src.core.mcp_auth_middleware.resolve_identity_from_context", return_value=_IDENTITY),
+        patch("src.core.tools.media_buy_update._update_media_buy_impl") as mock_impl,
+    ):
+        async with Client(mcp) as client:
+            result = await client.call_tool(
+                "update_media_buy",
+                {**_VALID_REQUEST, "revision": 5},
+                raise_on_error=False,
+            )
+
+    assert result.is_error
+    envelope = json.loads(result.content[0].text)
+    assert_envelope_shape(
+        envelope,
+        "UNSUPPORTED_FEATURE",
+        recovery="correctable",
+        message_substr="does not support optimistic-concurrency control",
+    )
+    mock_impl.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_mcp_explicit_null_revision_is_rejected_before_impl() -> None:
     """A JSON null must survive MCP parsing and hit the shared fail-loud guard."""
     with (

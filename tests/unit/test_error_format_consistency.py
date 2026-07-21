@@ -144,8 +144,13 @@ class TestA2AErrorShapes:
         self.handler = AdCPRequestHandler()
 
     @pytest.mark.asyncio
-    async def test_auth_required_error_is_server_error(self):
-        """A2A non-discovery skills raise typed auth errors when identity is None."""
+    async def test_missing_identity_raises_typed_auth_required(self):
+        """A2A non-discovery skills raise typed auth errors when identity is None.
+
+        Raise-level pin on _handle_explicit_skill (no wire, no JSON-RPC framing
+        exercised here); the wire siblings live in test_a2a_auth_optional /
+        test_a2a_error_responses / test_auth_version_precedence.
+        """
         with pytest.raises(AdCPAuthenticationError) as exc_info:
             await self.handler._handle_explicit_skill(
                 skill_name="create_media_buy",
@@ -177,8 +182,8 @@ class TestA2AErrorShapes:
         assert "Unknown skill" in str(error)
 
     @pytest.mark.asyncio
-    async def test_invalid_auth_identity_raises_server_error(self):
-        """A2A raises typed auth when identity has no principal."""
+    async def test_principal_less_identity_raises_typed_auth_required(self):
+        """A2A raises typed auth when identity has no principal (raise-level pin)."""
         # Identity with no principal_id simulates invalid auth
         invalid_identity = ResolvedIdentity(
             principal_id=None, tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"

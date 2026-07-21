@@ -41,9 +41,11 @@ def testing_version_policy_control(monkeypatch):
     assert av._reset_testing_version_policy(lease_id=lease_id)
 
 
-def test_major_version_derived_from_sdk_spec_pin():
-    """The advertised major is parsed from the SDK's spec version, not hardcoded."""
-    expected = int(adcp.get_adcp_spec_version().split(".", 1)[0])
+def test_major_version_derived_from_advertised_constant():
+    """The advertised major comes from ADVERTISED_ADCP_VERSIONS, not an SDK read."""
+    from src.core.adcp_version import ADVERTISED_ADCP_VERSIONS
+
+    expected = max(int(v.split(".", 1)[0]) for v in ADVERTISED_ADCP_VERSIONS)
     assert adcp_major_version() == expected
 
 
@@ -52,21 +54,24 @@ def test_major_version_is_current_pinned_major():
     assert adcp_major_version() == 3
 
 
-def test_supported_versions_derived_from_sdk_spec_pin():
-    """supported_versions is the release-precision form of the SDK pin: PATCH dropped, prerelease preserved.
+def test_advertised_versions_consistent_with_sdk_pin():
+    """The SDK-pin cross-check: an adcp bump must fail HERE, never move the wire silently.
 
-    The repo currently pins AdCP 3.1.1 (adcp 6.6.0), which normalizes to "3.1".
-    core/version-envelope.json constrains the wire value to
-    ``^\\d+\\.\\d+(-[a-zA-Z0-9.-]+)?$`` — MAJOR.MINOR with an optional prerelease,
-    never a PATCH. The prerelease branch is exercised with an illustrative
-    full-semver value "3.1.0-beta.3", which normalizes to "3.1-beta.3": the
-    ``.0`` patch is dropped, the ``-beta.3`` prerelease kept.
+    Production advertisement/negotiation read ADVERTISED_ADCP_VERSIONS (an
+    in-repo constant); the installed SDK's spec pin is only cross-checked.
+    When an adcp bump changes the derived release, this guard reddens and the
+    bump PR consciously updates the constant under schema-grounded review —
+    the wire contract never changes as a dependency side effect.
     """
-    m = re.fullmatch(r"(\d+)\.(\d+)\.\d+(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?", adcp.get_adcp_spec_version())
-    assert m is not None
-    major, minor, prerelease = m.group(1), m.group(2), m.group(3)
-    expected = f"{major}.{minor}" + (f"-{prerelease}" if prerelease else "")
-    assert supported_adcp_versions() == (expected,)
+    from src.core.adcp_version import ADVERTISED_ADCP_VERSIONS, derived_versions_from_sdk_pin
+
+    assert derived_versions_from_sdk_pin() == ADVERTISED_ADCP_VERSIONS, (
+        f"The installed adcp SDK derives {derived_versions_from_sdk_pin()!r} but this agent advertises "
+        f"{ADVERTISED_ADCP_VERSIONS!r}. If this is an intentional SDK bump, update "
+        "ADVERTISED_ADCP_VERSIONS in src/core/adcp_version.py in the same reviewed change "
+        "(see docs/adcp-spec-version.md for the bump procedure)."
+    )
+    assert supported_adcp_versions() == ADVERTISED_ADCP_VERSIONS
 
 
 def test_supported_versions_normalizes_full_semver_prerelease_not_to_bare_stable():
@@ -90,14 +95,17 @@ def test_supported_versions_normalizes_full_semver_prerelease_not_to_bare_stable
     assert supported_adcp_versions() == ("3.1",)
 
     # Prerelease law survives independent of the live pin: PATCH dropped,
-    # prerelease segment preserved. _spec_release_components is @cache'd, so
-    # clear it around the synthetic pin (and after, restoring the live parse).
+    # prerelease segment preserved. The derivation now lives on the SDK
+    # cross-check seam (production advertisement is the in-repo constant), so
+    # the synthetic pin is asserted there. _spec_release_components is
+    # @cache'd — clear it around the synthetic pin (and after, restoring the
+    # live parse).
     from src.core import adcp_version as adcp_version_module
 
     try:
         with patch("src.core.adcp_version.adcp.get_adcp_spec_version", return_value="3.1.0-beta.3"):
             adcp_version_module._spec_release_components.cache_clear()
-            assert supported_adcp_versions() == ("3.1-beta.3",)
+            assert adcp_version_module.derived_versions_from_sdk_pin() == ("3.1-beta.3",)
     finally:
         adcp_version_module._spec_release_components.cache_clear()
 
@@ -191,12 +199,13 @@ class TestTestingVersionPolicyControl:
     ["banana", None, 31, "3.1", "3.1.x", "03.01.0", "3.1.0-01", "3.1.0-."],
 )
 def test_malformed_sdk_spec_pin_raises_typed_configuration_error(monkeypatch, malformed_pin):
-    """A malformed SDK spec pin surfaces as a typed AdCPConfigurationError, not a bare ValueError.
+    """A malformed SDK spec pin types as AdCPConfigurationError — and cannot reach the request path.
 
-    ``supported_adcp_versions()`` runs on the buyer request path
-    (``validate_adcp_version_pins`` -> ``_supported_majors``). A broken seller
-    deployment (unparseable spec pin) must surface as a typed 500 like every
-    other server-side failure, never escape as an untyped unpack/int ValueError.
+    The advertisement is the in-repo ADVERTISED_ADCP_VERSIONS constant, so a
+    broken SDK pin no longer breaks the buyer request path at all: negotiation,
+    the advertised major, and the supported list keep serving the constant.
+    Only the cross-check derivation surfaces the malformed pin, and it does so
+    as a typed AdCPConfigurationError, never an untyped unpack/int ValueError.
     """
     from src.core import adcp_version as av
     from src.core.exceptions import AdCPConfigurationError
@@ -204,13 +213,15 @@ def test_malformed_sdk_spec_pin_raises_typed_configuration_error(monkeypatch, ma
     av._spec_release_components.cache_clear()
     monkeypatch.setattr(adcp, "get_adcp_spec_version", lambda: malformed_pin)
     try:
-        # Spec-derived siblings degrade the same way, and the request-path entry point does too.
-        for call in (av.adcp_major_version, av.supported_adcp_versions):
-            with pytest.raises(AdCPConfigurationError):
-                call()
-        # Deployment lineage is independent from the malformed AdCP spec pin.
-        assert av.adcp_build_version() == get_version()
+        # The cross-check seam degrades typed.
         with pytest.raises(AdCPConfigurationError):
+            av.derived_versions_from_sdk_pin()
+        # The request path is INDEPENDENT of the SDK pin: advertisement,
+        # major, and a cross-major rejection all keep working.
+        assert av.supported_adcp_versions() == av.ADVERTISED_ADCP_VERSIONS
+        assert av.adcp_major_version() == 3
+        assert av.adcp_build_version() == get_version()
+        with pytest.raises(AdCPVersionUnsupportedError):
             av.validate_adcp_version_pins({"adcp_major_version": 99})
     finally:
         av._spec_release_components.cache_clear()
@@ -323,11 +334,13 @@ class TestValidateAdcpVersionPins:
         """A stable same-major pin downshifts to the highest supported older stable release."""
         from src.core import adcp_version as av
 
-        # The SDK build advertises a single prerelease release (3.1-beta.3), and a
-        # stable pin never downshifts onto a prerelease. Pin a stable supported set
-        # to exercise the stable-downshift path itself.
-        monkeypatch.setattr(av, "supported_adcp_versions", lambda: (f"{adcp_major_version()}.1",))
-        validate_adcp_version_pins({"adcp_version": f"{adcp_major_version()}.99"})
+        # Pin a stable supported set to exercise the stable-downshift path.
+        # Resolve the major BEFORE patching: adcp_major_version() now derives
+        # from supported_adcp_versions(), so calling it inside the patched
+        # lambda would recurse.
+        major = adcp_major_version()
+        monkeypatch.setattr(av, "supported_adcp_versions", lambda: (f"{major}.1",))
+        validate_adcp_version_pins({"adcp_version": f"{major}.99"})
 
     def test_stable_release_downshifts_across_minor_gap(self, monkeypatch):
         """Resolution need not be adjacent: 3.4 may select the highest stable <= 3.4."""

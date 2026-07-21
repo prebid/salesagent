@@ -9,7 +9,7 @@ After the identity-at-transport-boundary refactor (salesagent-anjp), handlers re
 a pre-resolved identity parameter rather than resolving auth internally.
 """
 
-from unittest.mock import ANY, AsyncMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -276,7 +276,8 @@ class TestAuthOptionalSkills:
     async def test_invalid_token_error_echoes_unambiguous_application_context(self):
         """Identity-resolution failures retain context in JSON-RPC error data."""
         from a2a.server.routes.common import ServerCallContext
-        from a2a.types import InternalError, SendMessageRequest
+        from a2a.types import SendMessageRequest
+        from a2a.utils.errors import InvalidRequestError
 
         from tests.helpers import assert_envelope_shape
         from tests.utils.a2a_helpers import create_a2a_message_with_skill
@@ -303,7 +304,10 @@ class TestAuthOptionalSkills:
                 side_effect=AdCPAuthenticationError("Invalid authentication token"),
             ),
             patch("src.a2a_server.adcp_a2a_server.record_boundary_error_for_identity"),
-            pytest.raises(InternalError) as exc_info,
+            # Class symmetry with the missing-token rejection: an invalid bearer
+            # is a CLIENT auth error → JSON-RPC InvalidRequestError, never the
+            # server-fault InternalError (-32603).
+            pytest.raises(InvalidRequestError) as exc_info,
         ):
             await self.handler.on_message_send(params, ServerCallContext())
 
@@ -368,8 +372,20 @@ class TestAuthOptionalSkills:
         ):
             await self.handler.on_message_send(params, ServerCallContext())
 
-        # Routed through the identity-aware helper with the unresolved (None) identity…
-        record_error.assert_called_once_with("a2a", "message_processing", ANY, None)
+        # Routed through the identity-aware helper with the unresolved (None) identity.
+        # The sink receives the NORMALIZED typed error — pin its type and that it
+        # carries the original failure text, not a bare ANY (which would pass a
+        # wrong exception object straight through).
+        class _NormalizedBoom:
+            def __eq__(self, other: object) -> bool:
+                from src.core.exceptions import AdCPError
+
+                return isinstance(other, AdCPError) and "tenant lookup failed" in str(other)
+
+            def __repr__(self) -> str:
+                return "<AdCPError containing 'tenant lookup failed'>"
+
+        record_error.assert_called_once_with("a2a", "message_processing", _NormalizedBoom(), None)
         # …and never through the raw sink with a fabricated "unknown" tenant.
         record_raw.assert_not_called()
 
