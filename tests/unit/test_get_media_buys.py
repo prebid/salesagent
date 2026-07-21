@@ -700,6 +700,40 @@ class TestGetMediaBuysResponseStructure:
         assert isinstance(mb["revision"], int)
         assert mb["revision"] == 1
 
+    def test_mcp_structured_content_wire_carries_required_confirmed_at(self):
+        """The MCP transport serializes structured_content via pydantic_core
+        ``to_jsonable_python`` (FastMCP), NOT the Python ``model_dump()`` override — so
+        this pins the MCP wire independently of the sibling test above. The required
+        nullable ``confirmed_at`` reaches the MCP wire only because
+        ``NestedModelSerializerMixin`` uses a ``@model_serializer(mode="wrap")`` that
+        fires under ``to_jsonable_python`` and re-dumps each child through
+        ``GetMediaBuysMediaBuy.model_dump``. Removing the child's ``setdefault`` reddens
+        this test as well as the model_dump-path one, proving one guard covers all
+        transports.
+        """
+        from pydantic_core import to_jsonable_python
+
+        resp = GetMediaBuysResponse(
+            media_buys=[
+                GetMediaBuysMediaBuy(
+                    media_buy_id="mb_unconfirmed_mcp",
+                    status=MediaBuyStatus.pending_start,
+                    currency="USD",
+                    total_budget=1000.0,
+                    packages=[],
+                    confirmed_at=None,
+                    revision=1,
+                ),
+            ],
+        )
+
+        wire = to_jsonable_python(resp, exclude_none=True)
+
+        mb = wire["media_buys"][0]
+        assert "confirmed_at" in mb, "confirmed_at REQUIRED on the MCP structured-content wire even when null"
+        assert mb["confirmed_at"] is None
+        assert mb["revision"] == 1
+
     def test_nested_serialization_roundtrip(self):
         """model_dump() recursively serializes all nested models to plain dicts.
 
