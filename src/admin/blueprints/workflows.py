@@ -245,13 +245,16 @@ def _finalize_and_render(db, tenant_id: str, *, media_buy_id: str, step_data: di
         )
         return jsonify({"success": False, "error": MEDIA_BUY_ALREADY_DECIDED_MESSAGE}), 409
     if outcome is FinalizeOutcome.ADAPTER_FAILED:
+        # The raw adapter error may embed internal state — keep it in the logs only
+        # (sanitized above), never in the operator-facing flash/response body
+        # (CodeQL information-exposure alert, #1544).
         logger.error(
             "[APPROVAL] Adapter creation failed for %s: %s",
             sanitize_log_value(media_buy_id),
             sanitize_log_value(error_msg),
         )
-        flash(f"Workflow approved but media buy creation failed: {error_msg}", "error")
-        return jsonify({"success": False, "error": error_msg}), 500
+        flash("Workflow approved but media buy creation failed — see server logs for details", "error")
+        return jsonify({"success": False, "error": "Media buy creation failed — see server logs for details"}), 500
     if outcome is FinalizeOutcome.RETRYING:
         # #1637: approval claimed; the ad-server order completes automatically
         # via the reconciler.

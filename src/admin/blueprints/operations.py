@@ -454,7 +454,17 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                                 url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
                             )
                         if outcome is FinalizeOutcome.ADAPTER_FAILED:
-                            flash(f"Media buy approved but adapter creation failed: {error_msg}", "error")
+                            # The raw adapter error may embed internal state — keep it in the
+                            # logs only (sanitized), never in the operator-facing flash
+                            # (CodeQL information-exposure alert, #1544).
+                            logger.error(
+                                "[APPROVAL] Adapter creation failed for %s: %s",
+                                sanitize_log_value(media_buy_id),
+                                sanitize_log_value(error_msg),
+                            )
+                            flash(
+                                "Media buy approved but adapter creation failed — see server logs for details", "error"
+                            )
                             return redirect(
                                 url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
                             )
