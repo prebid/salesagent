@@ -245,7 +245,11 @@ def _finalize_and_render(db, tenant_id: str, *, media_buy_id: str, step_data: di
         )
         return jsonify({"success": False, "error": MEDIA_BUY_ALREADY_DECIDED_MESSAGE}), 409
     if outcome is FinalizeOutcome.ADAPTER_FAILED:
-        logger.error(f"[APPROVAL] Adapter creation failed for {media_buy_id}: {error_msg}")
+        logger.error(
+            "[APPROVAL] Adapter creation failed for %s: %s",
+            sanitize_log_value(media_buy_id),
+            sanitize_log_value(error_msg),
+        )
         flash(f"Workflow approved but media buy creation failed: {error_msg}", "error")
         return jsonify({"success": False, "error": error_msg}), 500
     if outcome is FinalizeOutcome.RETRYING:
@@ -258,7 +262,7 @@ def _finalize_and_render(db, tenant_id: str, *, media_buy_id: str, step_data: di
         )
         return _approval_in_progress_response()
 
-    logger.info(f"[APPROVAL] Media buy {media_buy_id} successfully created in adapter")
+    logger.info("[APPROVAL] Media buy %s successfully created in adapter", sanitize_log_value(media_buy_id))
     flash("Workflow step approved and media buy created successfully", "success")
     return None
 
@@ -304,16 +308,24 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
             mapping = next((m for m in mappings if m.object_type == "media_buy"), None)
 
             logger.info(
-                f"[APPROVAL] Checking for ObjectWorkflowMapping: step_id={step_id}, found={mapping is not None}"
+                "[APPROVAL] Checking for ObjectWorkflowMapping: step_id=%s, found=%s",
+                sanitize_log_value(step_id),
+                mapping is not None,
             )
             if mapping:
                 logger.info(
-                    f"[APPROVAL] Found mapping: object_type={mapping.object_type}, object_id={mapping.object_id}"
+                    "[APPROVAL] Found mapping: object_type=%s, object_id=%s",
+                    sanitize_log_value(mapping.object_type),
+                    sanitize_log_value(mapping.object_id),
                 )
 
             if mapping:
                 media_buy_id = mapping.object_id
-                logger.info(f"[APPROVAL] Workflow step {step_id} approved for media buy {media_buy_id}")
+                logger.info(
+                    "[APPROVAL] Workflow step %s approved for media buy %s",
+                    sanitize_log_value(step_id),
+                    sanitize_log_value(media_buy_id),
+                )
 
                 # Get the media buy
                 media_buy_repo = MediaBuyRepository(db, tenant_id)
