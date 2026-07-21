@@ -92,7 +92,7 @@ jobs:
           persist-credentials: false
       - run: |
           set -euo pipefail
-          PINACT_VERSION=3.10.1
+          PINACT_VERSION=4.1.0
           PINACT_TARBALL="pinact_linux_amd64.tar.gz"
           curl -sSfL "https://github.com/suzuki-shunsuke/pinact/releases/download/v${PINACT_VERSION}/${PINACT_TARBALL}" -o "${PINACT_TARBALL}"
           # Residual risk: checksums file is fetched from the same release tag as the binary.
@@ -102,7 +102,12 @@ jobs:
           curl -sSfL "https://github.com/suzuki-shunsuke/pinact/releases/download/v${PINACT_VERSION}/pinact_${PINACT_VERSION}_checksums.txt" -o pinact_checksums.txt
           grep "  ${PINACT_TARBALL}$" pinact_checksums.txt | sha256sum -c -
           tar -xzf "${PINACT_TARBALL}" -C /usr/local/bin/ pinact
-          pinact run --check
+          # Offline SHA-pin check only (-no-api). pinact's default path calls GitHub REST
+          # for tag resolution and flakes the gate on api.github.com 503s (5× retries
+          # still failed on amannn/action-semantic-pull-request; #1669).
+          # Job contract is "actions are full-length SHA-pinned" — syntactic check is enough.
+          pinact run -fix=false -no-api
+        # GITHUB_TOKEN unused with -no-api; kept so a future API mode can opt back in.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
