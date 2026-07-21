@@ -3677,7 +3677,7 @@ async def _create_media_buy_impl(
                 errors=property_list_unsupported_advisories(req.packages, adapter),
                 # X-Dry-Run is proprietary internal tooling, NOT an AdCP concept:
                 # the spec's only sanctioned test mode is the account-level
-                # ``sandbox`` (dist/docs/3.1.0/media-buy/advanced-topics/
+                # ``sandbox`` (dist/docs/3.1.1/media-buy/advanced-topics/
                 # sandbox.mdx — simulated data, no real spend/side effects). Mark
                 # the simulated response ``sandbox=True`` so it is honestly labelled
                 # as simulated rather than masquerading as a real create.

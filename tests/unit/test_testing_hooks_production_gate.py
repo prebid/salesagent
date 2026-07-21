@@ -1,7 +1,7 @@
 """P1 (#1544): proprietary X-* test headers are gated fail-CLOSED.
 
 The pinned AdCP sandbox guidance
-(dist/docs/3.1.0/media-buy/advanced-topics/sandbox.mdx) says sellers MUST NOT
+(dist/docs/3.1.1/media-buy/advanced-topics/sandbox.mdx) says sellers MUST NOT
 alter behavior based on X-Dry-Run / X-Mock-Time. Those headers are internal
 tooling, so ``AdCPTestContext.from_headers`` honors them ONLY on explicit
 opt-in: ``ENVIRONMENT`` set to a dev value (``development``/``test``) or
