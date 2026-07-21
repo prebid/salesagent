@@ -203,11 +203,12 @@ class MediaBuyCreateEnv(IntegrationEnv):
         payload_hash: str,
         media_buy_id: str = "mb_seeded",
     ) -> None:
-        """Seed a dormant historical cache row for supported=false probes.
+        """Seed a verbatim-cache row through the production repository.
 
-        New create calls must ignore this row completely. Keeping the seeder in
-        the harness lets no-op tests prove that even an exact key collision with
-        historical substrate cannot replay, conflict, rate-limit, or mutate it.
+        ``payload_hash`` must match the canonical hash of the request a test
+        will retry for a replay; pass a non-matching hash to exercise the
+        ``IDEMPOTENCY_CONFLICT`` path. Only successes are ever seeded — errors
+        are never cached by production, and tests mirror that.
         """
         from tests.helpers import make_active_cached_success, seed_cached_success
 

@@ -483,10 +483,11 @@ class CreateMediaBuyResult(TaskResultEnvelope):
 
     response: CreateMediaBuySuccess | CreateMediaBuyError | CreateMediaBuySubmitted
 
-    # Schema-compatible top-level replay marker. This seller advertises
-    # idempotency.supported=false and never sets it True on create responses;
-    # retain the field so callers can parse the AdCP envelope shape uniformly.
-    # False is omitted on every variant.
+    # Schema-compatible top-level replay marker (AdCP 3.1.1): True means
+    # this response is a verbatim replay of a previously cached result (success
+    # OR submitted — the replay test asserts True on a submitted replay). Injected
+    # at response time, never stored in the cached body; omitted when False on
+    # EVERY variant so fresh responses are byte-identical across variants.
     replayed: bool = False
 
     @model_serializer(mode="wrap")
@@ -2051,11 +2052,9 @@ def require_idempotency_key(key: str | None) -> None:
     separate from the capability's replay guarantee.
     """
     if key is None:
-        raise AdCPValidationError(
-            "idempotency_key is required.",
-            field="idempotency_key",
-            suggestion=("Provide a client-generated idempotency_key (16-255 characters, using only [A-Za-z0-9_.:-])."),
-        )
+        from src.core.exceptions import missing_idempotency_key_error
+
+        raise missing_idempotency_key_error()
     validate_idempotency_key_shape(key)
 
 

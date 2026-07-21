@@ -1,10 +1,10 @@
-"""Dormant idempotency-store admission policy primitives.
+"""Idempotency cache admission policy — thresholds and retry_after derivation.
 
-The seller advertises ``idempotency.supported=false``, so no production tool
-invokes this policy. It is retained with the dormant repository substrate and
-covered directly to keep a possible future implementation migration-safe. A
-future capability must be grounded and wired across every required task before
-these helpers become production behavior.
+The policy layer over :class:`IdempotencyAttemptRepository`: the repository
+answers the two scope questions (how many inserts in the trailing window, how
+many active rows — plus their oldest timestamps); this module owns the
+thresholds, the ``retry_after`` math, and the decision to reject. Data access
+stays in the repository; policy changes never touch SQL.
 """
 
 from __future__ import annotations
@@ -17,14 +17,17 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 
-# Dormant storage ceiling for active rows per (tenant, principal, account)
-# scope. Env-tunable; looked up at call time so direct primitive tests can
-# patch it. It is not enforced or advertised by current production paths.
+# Storage-abuse ceiling: active (non-expired) cached successes per
+# (tenant, principal, account) scope. Each keyed create stores one row for the
+# replay TTL, so a buyer minting fresh keys is bounded to this many creates per
+# window; the probe rejects the excess as RATE_LIMITED with retry_after set to
+# when the oldest row expires. Env-tunable; looked up at call time so tests can patch it.
 MAX_ACTIVE_ATTEMPTS_PER_SCOPE = int(os.getenv("IDEMPOTENCY_MAX_ACTIVE_ATTEMPTS_PER_SCOPE") or "1000")
 
-# Dormant insert-rate limit per (tenant, principal, account) scope. The
-# window/ceiling preserve the historical substrate defaults (300 inserts per
-# 10s). They are not enforced while idempotency is unsupported.
+# Insert-RATE limit per (tenant, principal, account) scope — the spec's MUST is
+# a rate limit on cache inserts (the row count above is the derived storage
+# bound). The window/ceiling follow the spec's SHOULD-level burst numbers
+# (300 inserts per 10s). Env-tunable; looked up at call time so tests can patch them.
 INSERT_RATE_WINDOW = timedelta(seconds=int(os.getenv("IDEMPOTENCY_INSERT_RATE_WINDOW_SECONDS") or "10"))
 MAX_INSERTS_PER_WINDOW = int(os.getenv("IDEMPOTENCY_MAX_INSERTS_PER_WINDOW") or "300")
 
@@ -52,10 +55,10 @@ def enforce_insert_ceiling(
     rate_ceiling: int | None = None,
     now: datetime | None = None,
 ) -> None:
-    """Apply dormant row-rate and active-row ceilings to a repository primitive.
+    """Raise ``RATE_LIMITED`` when the scope has no room for another cached success.
 
-    No production probe calls this while idempotency is unsupported. The helper
-    preserves two historical bounds on the
+    Called by the idempotency probe on a cache MISS, before any execution —
+    a fresh key would insert a new row. Two bounds, both on the spec's
     (tenant, principal, account) scope (no tool dimension):
 
     - **insert rate** (the spec's MUST): at most :data:`MAX_INSERTS_PER_WINDOW`
@@ -65,6 +68,7 @@ def enforce_insert_ceiling(
       :data:`MAX_ACTIVE_ATTEMPTS_PER_SCOPE` non-expired rows; ``retry_after``
       is when the oldest active row expires.
 
+    Replays and conflicts are not rate-limited — they insert nothing.
     ``retry_after`` is clamped to the spec Error model's [1, 3600] bound.
     """
     from src.core.exceptions import AdCPRateLimitError

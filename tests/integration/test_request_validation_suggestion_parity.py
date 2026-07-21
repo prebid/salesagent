@@ -89,6 +89,69 @@ class TestRequestValidationContextEchoParity:
 
 
 @pytest.mark.requires_db
+class TestMissingIdempotencyKeyParity:
+    """One buyer mistake, one wire identity: the canonical missing-key error.
+
+    ``missing_idempotency_key_error`` (src.core.exceptions) is the single home
+    for the rejection's message, ``field``, and suggestion. Each transport
+    reaches it through a DIFFERENT boundary (A2A skill-handler precedence
+    check, MCP TypeAdapter → normalize_to_adcp_error, REST
+    RequestValidationError handler) — this parity matrix reddens if any one
+    boundary regresses to a transport-local copy or a divergent suggestion.
+    """
+
+    CANONICAL_MESSAGE = "idempotency_key is required."
+    CANONICAL_SUGGESTION = "Provide a client-generated idempotency_key (16-255 characters, using only [A-Za-z0-9_.:-])."
+
+    @pytest.mark.parametrize("transport_name", ["A2A", "MCP", "REST"])
+    def test_missing_key_identical_wire_identity(self, integration_db, transport_name: str) -> None:
+        from src.core.exceptions import missing_idempotency_key_error
+        from tests.harness._idempotency import OMIT_IDEMPOTENCY_KEY
+        from tests.harness.media_buy_create import MediaBuyCreateEnv
+        from tests.harness.transport import Transport
+
+        # The factory itself is the source the wire values below must equal —
+        # loaded here so drift between the constants and the factory reddens too.
+        canonical = missing_idempotency_key_error()
+        assert str(canonical) == self.CANONICAL_MESSAGE
+        assert canonical.suggestion == self.CANONICAL_SUGGESTION
+
+        transport = Transport[transport_name]
+        from datetime import UTC, datetime, timedelta
+
+        now = datetime.now(UTC)
+        with MediaBuyCreateEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            result = env.call_via(
+                transport,
+                brand={"domain": "missing-key-parity.example"},
+                packages=[
+                    {
+                        "product_id": product.product_id,
+                        "budget": 5000.0,
+                        "pricing_option_id": "cpm_usd_fixed",
+                    }
+                ],
+                start_time=(now + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                end_time=(now + timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                idempotency_key=OMIT_IDEMPOTENCY_KEY,
+            )
+
+        assert result.is_error, f"{transport.value}: missing idempotency_key unexpectedly succeeded"
+        envelope = result.wire_error_envelope
+        assert envelope is not None, f"{transport.value}: missing-key rejection must carry the wire envelope"
+        error = envelope["errors"][0]
+        assert error.get("message") == self.CANONICAL_MESSAGE, (
+            f"{transport.value}: message diverged: {error.get('message')!r}"
+        )
+        assert error.get("field") == "idempotency_key", f"{transport.value}: field diverged: {error.get('field')!r}"
+        assert error.get("suggestion") == self.CANONICAL_SUGGESTION, (
+            f"{transport.value}: suggestion diverged: {error.get('suggestion')!r}"
+        )
+        assert error.get("code") == "VALIDATION_ERROR"
+
+
+@pytest.mark.requires_db
 class TestGetMediaBuyDeliveryRestSuggestionParity:
     """REST get_media_buy_delivery request-validation must carry a top-level suggestion."""
 

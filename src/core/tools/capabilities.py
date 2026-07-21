@@ -20,6 +20,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Adcp,
     Execution,
     GeoMetros,
+    Idempotency,
     MajorVersion,
     MediaBuy,
     Portfolio,
@@ -28,9 +29,6 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     SupportedVersion,
     # FIXME(#1388): Targeting has a local subclass; import from src.core.schemas (Pattern #7/#4).
     Targeting,
-)
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
-    Idempotency3 as IdempotencyUnsupported,
 )
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
@@ -44,6 +42,7 @@ from fastmcp.tools.tool import ToolResult
 from src.core import adcp_version
 from src.core.application_context import dump_adcp_response
 from src.core.auth import get_principal_object, require_identity
+from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value
@@ -106,11 +105,13 @@ def _build_adcp_block() -> Adcp:
         major_versions=[MajorVersion(root=adcp_version.adcp_major_version())],
         supported_versions=[SupportedVersion(root=v) for v in adcp_version.supported_adcp_versions()],
         build_version=adcp_version.adcp_build_version(),
-        # The official 3.1.1 schema models this as a discriminated union. This
-        # seller validates request keys but does not cache or deduplicate
-        # retries; read keys are inert envelope metadata. Advertise the honest
-        # unsupported variant, which omits replay-TTL and in-flight fields.
-        idempotency=IdempotencyUnsupported(supported=False),
+        # The official 3.1.1 schema models this as a discriminated union.
+        # create_media_buy implements verbatim replay (same key replays the
+        # stored success; a conflicting payload rejects), so the seller
+        # advertises supported=true with the replay window. Keys on the other
+        # mutating tools are validated and accepted but not yet deduplicated —
+        # dedupe extends through the same repository under #1607.
+        idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
     )
 
 

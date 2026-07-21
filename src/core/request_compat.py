@@ -32,7 +32,7 @@ ADCP_NEGOTIATION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major
 # validator only to names it actually exposes; notably, ``list_tasks`` remains
 # MCP-only.  The 3.1 compatibility grace permits omission, while security-layer
 # envelope tolerance permits a supplied key even when the individual request
-# schema does not declare it.  With idempotency.supported=false the key is
+# schema does not declare it.  On standard reads the key is
 # validated then ignored — it never reaches business logic or a replay cache.
 STANDARD_ADCP_READ_TOOLS: frozenset[str] = frozenset(
     {

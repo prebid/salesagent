@@ -44,7 +44,7 @@ class RequestCompatMiddleware(Middleware):
     2. Reject an unsupported AdCP version pin via validate_adcp_version_pins()
        (VERSION_UNSUPPORTED) — before the fields are stripped below.
     3. Validate a supplied idempotency_key on registered standard reads. With
-       idempotency.supported=false it is inert metadata; omission is tolerated.
+       on reads it is validated inert metadata; omission is tolerated (3.1 grace).
     4. Drop AdCP version-negotiation envelope fields (adcp_version,
        adcp_major_version) via strip_negotiation_fields() — all environments,
        since no tool wrapper declares them (issue #1512).

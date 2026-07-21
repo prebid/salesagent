@@ -9,6 +9,7 @@ Handles media buy creation including:
 """
 
 import logging
+import random
 import re
 import secrets
 import time
@@ -16,10 +17,11 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Annotated, Any, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal, NoReturn, TypedDict, cast
 from urllib.parse import urlparse
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 if TYPE_CHECKING:
@@ -40,6 +42,7 @@ from rich.console import Console
 
 from src.core.application_context import dump_adcp_response
 from src.core.database.repositories.creative import CreativeRepository
+from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthorizationError,
@@ -49,11 +52,15 @@ from src.core.exceptions import (
     AdCPCreativeRejectedError,
     AdCPError,
     AdCPFormatNotFoundError,
+    AdCPIdempotencyConflictError,
+    AdCPIdempotencyExpiredError,
     AdCPInvalidRequestError,
     AdCPProductNotFoundError,
+    AdCPServiceUnavailableError,
     AdCPValidationError,
 )
 from src.core.helpers import enum_value
+from src.core.idempotency_canonical import canonical_payload_hash, canonical_request_hash
 from src.core.webhook_validator import (
     require_valid_callback_config_urls,
     validated_callback_url_scope,
@@ -1632,6 +1639,204 @@ async def _validate_and_convert_format_ids(
     return validated_format_ids
 
 
+# Scope component of the idempotency cache key (see IdempotencyAttempt.tool_name).
+_IDEMPOTENCY_TOOL_NAME = "create_media_buy"
+
+
+def _raise_degraded_replay_outcome(
+    tenant_id: str,
+    idempotency_key: str,
+    principal_id: str,
+    *,
+    account_id: str | None = None,
+    request_hash: str | None = None,
+) -> NoReturn:
+    """Fail closed when the backstop fired but no verbatim cache row is usable.
+
+    Reached only when a same-key buy exists (the ``MediaBuy.idempotency_key``
+    backstop fired) but the verbatim success cache has no usable row — the race
+    winner has not committed its cache write yet, the row expired past the
+    replay TTL, or the stored envelope no longer validates. The lookup is
+    account-scoped (the spec idempotency scope is agent + account + key).
+
+    Per the spec, verbatim replay is byte-for-byte or nothing: a reconstructed
+    body the buyer cannot distinguish from a faithful replay is the named
+    failure mode, so this path never fabricates a response. Outcomes, in order:
+
+    - no same-key buy: terminal validation error (impossible-state guard),
+    - buy outlived the replay TTL: ``IDEMPOTENCY_EXPIRED`` (rule 6 fail-closed),
+    - canonical payload differs from the stored hash: ``IDEMPOTENCY_CONFLICT``
+      (rule 5 — exactly as at the probe),
+    - otherwise: transient ``SERVICE_UNAVAILABLE`` with a short ``retry_after``
+      — the winner's cache write is in flight; the buyer's retry replays the
+      verbatim envelope once it lands.
+    """
+    # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object.
+    from src.core.database.repositories import MediaBuyUoW
+
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        assert uow.idempotency_attempts is not None
+        existing = uow.media_buys.find_by_idempotency_key(idempotency_key, principal_id, account_id=account_id)
+        if existing is None:
+            raise AdCPValidationError(
+                f"Idempotency key {idempotency_key} not found after race resolution",
+                recovery="terminal",
+            )
+
+        # Rule 6 (security.mdx#idempotency): a key the seller has seen whose
+        # replay window has expired rejects rather than silently re-deriving —
+        # the buyer cannot tell a faithful replay from a reconstruction this old.
+        # Anchor the boundary on the cache row's STORED expires_at — the single
+        # replay-window authority the probe path filters on. Fall back to the
+        # MediaBuy creation time only when no cache row survives (evicted after
+        # expiry, or the race winner's cache write still in flight).
+        cached = uow.idempotency_attempts.find_including_expired(
+            principal_id=principal_id, idempotency_key=idempotency_key, account_id=account_id
+        )
+        now = datetime.now(UTC)
+        window_expired = (
+            cached.expires_at <= now if cached is not None else now - existing.created_at > DEFAULT_REPLAY_TTL
+        )
+        if window_expired:
+            raise AdCPIdempotencyExpiredError(
+                "idempotency_key was seen before, but its replay window "
+                f"({int(DEFAULT_REPLAY_TTL.total_seconds())}s) has expired",
+                suggestion=(
+                    "Perform a natural-key existence check (e.g. get_media_buys by "
+                    "context.internal_campaign_id) to determine whether the original "
+                    "request succeeded, then accept that result or mint a fresh "
+                    "idempotency_key for a new attempt."
+                ),
+            )
+
+        # Rule 5: same key + different canonical payload conflicts even on the
+        # degraded path — never resolve a request to a buy it does not describe.
+        # Legacy rows without a stored hash carry no conflict signal.
+        _raise_on_payload_conflict(existing.payload_hash, request_hash)
+
+    raise AdCPServiceUnavailableError(
+        "the verbatim replay for this idempotency_key is not yet available — "
+        "the original response is still being committed; retry shortly",
+        retry_after=1,
+    )
+
+
+def _raise_on_payload_conflict(stored_hash: str | None, request_hash: str | None) -> None:
+    """Raise IDEMPOTENCY_CONFLICT when the same key carries a different canonical payload.
+
+    Applied at both lookup points — the probe and the post-race recovery — so a
+    conflicting duplicate can never be resolved to someone else's response.
+    Production writes always store a hash (``record_success`` requires it); a row
+    without one carries no conflict signal, so it never conflicts (legacy tolerance).
+    """
+    if stored_hash is not None and stored_hash != request_hash:
+        raise AdCPIdempotencyConflictError("idempotency_key was reused with a different request payload")
+
+
+def _replay_cached_success(envelope: dict[str, Any]) -> CreateMediaBuyResult | None:
+    """Reconstruct a cached success from the verbatim idempotency cache, marked replayed.
+
+    The cache stores ``{"status": <protocol task status>, "response": <CreateMediaBuySuccess
+    dump>}``. The domain response carries its own valid ``MediaBuyStatus``; the protocol
+    status is applied to the plain-``str`` wrapper, and ``replayed=True`` is injected at the
+    wrapper so the wire carries the top-level marker (it is never stored in the body).
+
+    Returns ``None`` when the stored envelope no longer validates against the current
+    schema (drift between the writing and the replaying deploy inside the TTL window) —
+    callers treat that as a cache miss so the retry re-executes instead of erroring.
+    """
+    try:
+        protocol_status = envelope["status"]
+        # A cached pending-approval create is the CreateMediaBuySubmitted variant
+        # (no media_buy_id/packages) — validating it as Success would fail and
+        # degrade to a cache miss, re-executing the create and minting a SECOND
+        # workflow step for the same idempotency_key (PR #1567 round-2 item 2).
+        response: CreateMediaBuySuccess | CreateMediaBuySubmitted
+        if protocol_status == AdcpTaskStatus.submitted.value:
+            response = CreateMediaBuySubmitted.model_validate(envelope["response"])
+        else:
+            response = CreateMediaBuySuccess.model_validate(envelope["response"])
+    except (KeyError, TypeError, ValidationError):
+        logger.warning("Cached idempotency envelope failed validation — treating as a miss", exc_info=True)
+        return None
+    return CreateMediaBuyResult(response=response, status=protocol_status, replayed=True)
+
+
+def _lookup_cached_replay(
+    tenant_id: str,
+    *,
+    principal_id: str,
+    account_id: str | None,
+    idempotency_key: str,
+    request_hash: str | None,
+    enforce_ceiling: bool = False,
+) -> CreateMediaBuyResult | None:
+    """Probe the verbatim success cache: conflict-check the stored hash, then replay.
+
+    Shared read path for the front probe and the post-race recovery. The same
+    key carrying a different canonical payload raises ``IDEMPOTENCY_CONFLICT``
+    (checked BEFORE any replay); a hit whose stored envelope no longer validates
+    returns ``None`` exactly like a miss, so callers fall through to fresh
+    execution (probe) or the degraded fallback (post-race).
+
+    ``enforce_ceiling=True`` (the front probe) additionally rate-limits a MISS:
+    a fresh key would insert a new cache row, and the per-scope insert rate and
+    row count are bounded — see :mod:`src.services.idempotency_policy`. The
+    post-race path never enforces it (the loser inserts nothing).
+    """
+    # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object.
+    from src.core.database.repositories import MediaBuyUoW
+
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.idempotency_attempts is not None
+        cached = uow.idempotency_attempts.find_by_key(
+            principal_id=principal_id,
+            account_id=account_id,
+            idempotency_key=idempotency_key,
+        )
+        if cached is None:
+            if enforce_ceiling:
+                from src.services.idempotency_policy import enforce_insert_ceiling
+
+                enforce_insert_ceiling(
+                    uow.idempotency_attempts,
+                    principal_id=principal_id,
+                    account_id=account_id,
+                )
+            return None
+        _raise_on_payload_conflict(cached.payload_hash, request_hash)
+        return _replay_cached_success(cached.response_envelope)
+
+
+# Fraction of successful keyed creates that run storage reclamation. Eviction
+# is pure housekeeping (read-path TTL filtering guarantees replay correctness),
+# so the hot path almost never carries the DELETE; patchable in tests.
+_EVICTION_PROBABILITY = 0.01
+
+
+def _maybe_evict_expired(tenant_id: str) -> None:
+    """Probabilistically reclaim expired cache rows in a separate short transaction.
+
+    Runs OUTSIDE the cache-write transaction so a tenant-wide DELETE deadlock
+    can never roll back a just-cached success, and only on
+    ``_EVICTION_PROBABILITY`` of keyed successes so creates almost never pay
+    for housekeeping. Best-effort by design — a failure here affects nothing
+    the buyer sees.
+    """
+    if random.random() >= _EVICTION_PROBABILITY:
+        return
+    # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object.
+    from src.core.database.repositories import MediaBuyUoW
+
+    try:
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.idempotency_attempts is not None
+            uow.idempotency_attempts.expire_old()
+    except Exception:
+        logger.warning("Best-effort idempotency cache eviction failed for tenant %s", tenant_id, exc_info=True)
+
+
 def _submitted_approval_result(step, req: CreateMediaBuyRequest, adapter) -> CreateMediaBuyResult:
     """The submitted task envelope for a create that awaits human approval.
 
@@ -1652,11 +1857,172 @@ def _submitted_approval_result(step, req: CreateMediaBuyRequest, adapter) -> Cre
     )
 
 
+def _cache_and_return(
+    result: CreateMediaBuyResult,
+    req: CreateMediaBuyRequest,
+    identity: ResolvedIdentity,
+    request_hash: str | None,
+) -> CreateMediaBuyResult:
+    """Best-effort store of a fresh successful create into the verbatim cache, then return it.
+
+    Only a genuine success carrying an idempotency_key is cached (errors and dry-runs
+    are not). The write is best-effort — a concurrent same-key winner raises
+    ``IntegrityError`` on the unique index and is harmless (the buyer's retry replays
+    the winner). ``MediaBuy.idempotency_key`` remains the dup-booking backstop; this
+    cache only holds the response to replay verbatim.
+    """
+    if request_hash is None or not req.idempotency_key or identity.tenant_id is None or identity.principal_id is None:
+        return result
+
+    # Errors are never cached (AdCP 3.0.1 security.mdx#idempotency rule 3). The
+    # real enforcement of that invariant is the error paths' early returns —
+    # they return before reaching this helper, so every caller hands us a
+    # success or a submitted task envelope (a pending-approval create is a
+    # non-error outcome whose verbatim replay must return the SAME task_id, not
+    # mint a second workflow step). The TestErrorsAreNeverCached suite pins it.
+    # This precondition is a fail-loud contract guard: if a future refactor ever
+    # routes an error here it raises, instead of silently skipping the cache write.
+    assert isinstance(result.response, CreateMediaBuySuccess | CreateMediaBuySubmitted), (
+        "_cache_and_return must be called only with a successful or submitted result"
+    )
+
+    # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object.
+    from src.core.database.repositories import MediaBuyUoW
+
+    try:
+        with MediaBuyUoW(identity.tenant_id) as uow:
+            assert uow.idempotency_attempts is not None
+            uow.idempotency_attempts.record_success(
+                principal_id=identity.principal_id,
+                account_id=identity.account_id,
+                tool_name=_IDEMPOTENCY_TOOL_NAME,
+                idempotency_key=req.idempotency_key,
+                response_model=result.response,
+                protocol_status=result.status,
+                payload_hash=request_hash,
+            )
+    except IntegrityError:
+        logger.info(
+            "Idempotency cache race for key %s (tenant %s, principal %s) — winner already stored",
+            req.idempotency_key,
+            identity.tenant_id,
+            identity.principal_id,
+        )
+    except Exception:
+        logger.warning(
+            "Best-effort idempotency cache write failed for key %s (tenant %s, principal %s)",
+            req.idempotency_key,
+            identity.tenant_id,
+            identity.principal_id,
+            exc_info=True,
+        )
+    # Eviction runs AFTER the cache write commits, in its own transaction —
+    # a DELETE deadlock can never roll back the just-cached success.
+    _maybe_evict_expired(identity.tenant_id)
+    return result
+
+
+def _replay_after_race(
+    tenant_id: str,
+    *,
+    idempotency_key: str,
+    principal_id: str,
+    account_id: str | None,
+    request_hash: str | None,
+) -> CreateMediaBuyResult:
+    """Resolve an idempotency-race loser to the winner's verbatim cached success.
+
+    On the unique-index ``IntegrityError`` the winner has committed the MediaBuy and
+    then best-effort cached its response. The loser's payload must still match — the
+    same key with a different canonical payload is an ``IDEMPOTENCY_CONFLICT`` here
+    exactly as at the probe, never a replay of someone else's response. If the cache
+    row is visible (and validates), replay it verbatim; otherwise fail closed
+    (see ``_raise_degraded_replay_outcome``) — never a fabricated body.
+    """
+    replay = _lookup_cached_replay(
+        tenant_id,
+        principal_id=principal_id,
+        account_id=account_id,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+    )
+    if replay is not None:
+        return replay
+    _raise_degraded_replay_outcome(
+        tenant_id,
+        idempotency_key,
+        principal_id,
+        account_id=account_id,
+        request_hash=request_hash,
+    )
+
+
+# The media_buys dup-booking backstop: a unique index over the idempotency scope
+# (tenant, principal, account, key). A concurrent same-key create that loses the
+# commit race violates THIS index — the signal we resolve to the winner's reply.
+_IDEMPOTENCY_BACKSTOP_INDEX = "idx_media_buys_idempotency_key"
+
+
+def _is_idempotency_backstop_violation(exc: IntegrityError) -> bool:
+    """True iff ``exc`` is the media_buys idempotency-key unique-index collision.
+
+    The single home for the "is this the idempotency race?" decision. Prefers the
+    driver's structured constraint name (``exc.orig.diag.constraint_name``), matched
+    by PREFIX against the backstop index — so a build-time rename suffix (the
+    CONCURRENTLY swap variants ``…_acct`` / ``…_noacct``) still matches, while an
+    unrelated constraint that merely contains the column token does not. Falls back
+    to a message substring scan only when the structured diagnostic is unavailable.
+    """
+    constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+    if constraint:
+        return constraint.startswith(_IDEMPOTENCY_BACKSTOP_INDEX)
+    return "idempotency_key" in str(getattr(exc, "orig", exc))
+
+
+def _resolve_idempotency_race_or_raise(
+    exc: IntegrityError,
+    tenant_id: str,
+    *,
+    idempotency_key: str | None,
+    principal_id: str,
+    account_id: str | None,
+    request_hash: str | None,
+    media_buy_id: str | None = None,
+) -> CreateMediaBuyResult:
+    """Shared handler for the unique-index ``IntegrityError`` on both booking paths.
+
+    Decides ONCE (via :func:`_is_idempotency_backstop_violation`) whether the
+    failure is the idempotency-backstop collision; an unrelated integrity error
+    re-raises unchanged. A backstop collision means another request won the commit
+    for this key — resolve the loser to the winner's verbatim cached success
+    (fail-closed transient if the cache write is not yet visible, see
+    :func:`_replay_after_race`). An orphan adapter-side order may exist.
+    """
+    if not _is_idempotency_backstop_violation(exc):
+        raise exc
+    logger.warning(
+        "Idempotency race: another request won the commit for key %s%s. "
+        "Resolving via the winner's cached response (fail-closed transient if not "
+        "yet visible). An orphan adapter-side order may exist.",
+        idempotency_key,
+        f" ({media_buy_id})" if media_buy_id else "",
+    )
+    return _replay_after_race(
+        tenant_id,
+        # Non-null whenever the backstop index fired; `or ""` only narrows the type.
+        idempotency_key=idempotency_key or "",
+        principal_id=principal_id,
+        account_id=account_id,
+        request_hash=request_hash,
+    )
+
+
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
     push_notification_config: dict[str, Any] | None = None,
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
+    raw_wire_payload: dict[str, Any] | None = None,
 ) -> CreateMediaBuyResult:
     """Create a media buy with the specified parameters.
 
@@ -1664,6 +2030,12 @@ async def _create_media_buy_impl(
         req: Validated CreateMediaBuyRequest with all protocol fields
         push_notification_config: Push notification config dict (transport wrapper serializes models)
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
+        raw_wire_payload: The request dict as sent on the wire, threaded by the
+            transport wrappers — the idempotency payload-hash input (AdCP defines
+            payload equivalence over the request AS SENT, RFC 8785 over the wire
+            JSON). ``None`` only for impl-direct callers (tests, internal), which
+            fall back to hashing the request model's own dump.
+
     Returns:
         CreateMediaBuyResult wrapping response and status
     """
@@ -1708,10 +2080,32 @@ async def _create_media_buy_impl(
     # Cannot create context or workflow step without a valid principal.
     principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
 
-    # The request schema still requires and validates idempotency_key, but this
-    # seller advertises ``idempotency.supported=false``. Per AdCP 3.1.1 the key is
-    # therefore operationally inert: create_media_buy must not hash, look up,
-    # reserve, rate-limit, cache, replay, or deduplicate on it.
+    # Idempotency (AdCP 3.1.1): a retry with the same key replays the ORIGINAL success
+    # verbatim; the same key with a different canonical payload is a conflict; errors are
+    # never cached, so a retry after an error re-executes. The MediaBuy.idempotency_key
+    # unique index remains the dup-booking backstop — this cache holds the response to
+    # replay. request_hash is computed once here (in scope for the success-cache stores),
+    # over the WIRE payload when the transport wrapper threaded it (the spec's
+    # equivalence input); the model-dump fallback exists only for impl-direct callers.
+    request_hash = None
+    if req.idempotency_key:
+        request_hash = (
+            canonical_payload_hash(raw_wire_payload) if raw_wire_payload is not None else canonical_request_hash(req)
+        )
+    if req.idempotency_key:
+        replay = _lookup_cached_replay(
+            tenant["tenant_id"],
+            principal_id=principal_id,
+            account_id=identity.account_id,
+            idempotency_key=req.idempotency_key,
+            request_hash=request_hash,
+            enforce_ceiling=True,
+        )
+        if replay is not None:
+            logger.info("Idempotency replay: returning cached success for key %s", req.idempotency_key)
+            return replay
+        # Miss or unusable cached envelope — proceed as a fresh execution; the
+        # MediaBuy backstop resolves any resulting duplicate to the degraded path.
 
     # Context management and workflow step creation - create workflow step FIRST
     # Skip for dry_run mode (no side effects, no database writes)
@@ -2469,25 +2863,37 @@ async def _create_media_buy_impl(
             # Create media buy record in the database with permanent ID
             # Status is "pending_approval" but the ID is final
             # Repository handles raw_request serialization + package_id injection at the DB boundary
-            with MediaBuyUoW(tenant["tenant_id"]) as pending_uow:
-                assert pending_uow.media_buys is not None
-                pending_uow.media_buys.create_from_request(
-                    media_buy_id=media_buy_id,
-                    req=req,
+            try:
+                with MediaBuyUoW(tenant["tenant_id"]) as pending_uow:
+                    assert pending_uow.media_buys is not None
+                    pending_uow.media_buys.create_from_request(
+                        media_buy_id=media_buy_id,
+                        req=req,
+                        principal_id=principal.principal_id,
+                        advertiser_name=principal.name,
+                        budget=total_budget,
+                        currency=request_currency or "USD",
+                        start_time=start_time,
+                        end_time=end_time,
+                        status="pending_approval",
+                        order_name=f"{media_buy_id} - {start_time.strftime('%Y-%m-%d')}",
+                        package_id_map=package_id_map,
+                        by_alias=True,
+                        account_id=identity.account_id if identity else None,
+                        created_at=datetime.now(UTC),
+                        payload_hash=request_hash,
+                    )
+                    logger.info(f"✅ Created media buy {media_buy_id} with status=pending_approval")
+            except IntegrityError as exc:
+                return _resolve_idempotency_race_or_raise(
+                    exc,
+                    tenant["tenant_id"],
+                    idempotency_key=req.idempotency_key,
                     principal_id=principal.principal_id,
-                    advertiser_name=principal.name,
-                    budget=total_budget,
-                    currency=request_currency or "USD",
-                    start_time=start_time,
-                    end_time=end_time,
-                    status="pending_approval",
-                    order_name=f"{media_buy_id} - {start_time.strftime('%Y-%m-%d')}",
-                    package_id_map=package_id_map,
-                    by_alias=True,
-                    account_id=identity.account_id if identity else None,
-                    created_at=datetime.now(UTC),
+                    account_id=identity.account_id,
+                    request_hash=request_hash,
+                    media_buy_id=media_buy_id,
                 )
-                logger.info(f"✅ Created media buy {media_buy_id} with status=pending_approval")
 
             # Log to activity feed for manual approval case
             try:
@@ -2700,7 +3106,7 @@ async def _create_media_buy_impl(
             # Submitted task envelope (spec 3.1.1): media_buy_status/packages land on
             # the task's completion artifact, not this response — main's media_buy_status
             # addition to the old Success envelope is subsumed by the Submitted variant.
-            return _submitted_approval_result(step, req, adapter)
+            return _cache_and_return(_submitted_approval_result(step, req, adapter), req, identity, request_hash)
 
         # Get products for the media buy to check product-level auto-creation settings
         # Lazy: tests patch src.core.tools.products.get_product_catalog; the call-time import binds the patched object.
@@ -2830,7 +3236,7 @@ async def _create_media_buy_impl(
 
             # Submitted task envelope (spec 3.1.1) — see note on the manual-approval
             # branch above; main's media_buy_status addition is likewise subsumed.
-            return _submitted_approval_result(step, req, adapter)
+            return _cache_and_return(_submitted_approval_result(step, req, adapter), req, identity, request_hash)
 
         # Continue with synchronized media buy creation
 
@@ -3185,7 +3591,9 @@ async def _create_media_buy_impl(
             error_msg = response.errors[0].message if response.errors else "Unknown error"
             error_code = response.errors[0].code if response.errors else "UNKNOWN"
             logger.error(f"[ADAPTER] Adapter returned error response: {error_code} - {error_msg}")
-            # Return the adapter's typed failure unchanged.
+            # Returned UNCACHED on purpose: errors are never cached (AdCP 3.1.1
+            # idempotency), so a retry with the same key re-executes instead of
+            # replaying this failure. Pinned by TestErrorsAreNeverCached.
             return CreateMediaBuyResult(response=response, status=AdcpTaskStatus.failed.value)
 
         # At this point, response is CreateMediaBuySuccess - safe to access success-specific fields
@@ -3235,23 +3643,35 @@ async def _create_media_buy_impl(
 
         # Store the media buy in database (context_id is NULL for synchronous operations)
         # Repository handles raw_request serialization at the DB boundary
-        with MediaBuyUoW(tenant["tenant_id"]) as create_uow:
-            assert create_uow.media_buys is not None
-            create_uow.media_buys.create_from_request(
-                media_buy_id=response.media_buy_id,
-                req=req,
+        try:
+            with MediaBuyUoW(tenant["tenant_id"]) as create_uow:
+                assert create_uow.media_buys is not None
+                create_uow.media_buys.create_from_request(
+                    media_buy_id=response.media_buy_id,
+                    req=req,
+                    principal_id=principal_id,
+                    advertiser_name=principal.name,
+                    budget=total_budget,
+                    currency=request_currency,
+                    start_time=start_time,
+                    end_time=end_time,
+                    status=media_buy_status,
+                    campaign_objective=getattr(req, "campaign_objective", "") or "",
+                    kpi_goal=getattr(req, "kpi_goal", "") or "",
+                    account_id=identity.account_id if identity else None,
+                    payload_hash=request_hash,
+                )
+                # UoW auto-commits on clean exit
+        except IntegrityError as exc:
+            return _resolve_idempotency_race_or_raise(
+                exc,
+                tenant["tenant_id"],
+                idempotency_key=req.idempotency_key,
                 principal_id=principal_id,
-                advertiser_name=principal.name,
-                budget=total_budget,
-                currency=request_currency,
-                start_time=start_time,
-                end_time=end_time,
-                status=media_buy_status,
-                campaign_objective=getattr(req, "campaign_objective", "") or "",
-                kpi_goal=getattr(req, "kpi_goal", "") or "",
-                account_id=identity.account_id if identity else None,
+                account_id=identity.account_id,
+                request_hash=request_hash,
+                media_buy_id=response.media_buy_id,
             )
-            # UoW auto-commits on clean exit
 
         # Populate media_packages table for structured querying
         # This enables creative_assignments to work properly
@@ -3827,7 +4247,8 @@ async def _create_media_buy_impl(
             },
         )
 
-        return CreateMediaBuyResult(response=modified_response, status=AdcpTaskStatus.completed.value)
+        _buy_result = CreateMediaBuyResult(response=modified_response, status=AdcpTaskStatus.completed.value)
+        return _cache_and_return(_buy_result, req, identity, request_hash)
 
     except AdCPError as adcp_err:
         # Re-raise transport-agnostic errors (CREATIVE_UPLOAD_FAILED, etc.) without wrapping.
@@ -4032,8 +4453,8 @@ async def create_media_buy(
         ext: Extension object for custom fields (optional, per AdCP spec)
         account: Account reference scoping the buy to a sub-account the agent manages (optional)
         idempotency_key: Client-supplied idempotency key (REQUIRED per AdCP 3.1.1) —
-            validated for protocol shape but operationally inert because this
-            seller advertises idempotency.supported=false
+            the same key replays the original success verbatim; the same key with
+            a different payload rejects with IDEMPOTENCY_CONFLICT
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -4062,9 +4483,12 @@ async def create_media_buy(
             paused=paused,
         )
 
-    # Read identity and context_id pre-stashed by MCPAuthMiddleware.
+    # Read identity, context_id, and the raw wire arguments pre-stashed by
+    # MCPAuthMiddleware. The raw arguments (pre compat-normalization) are the
+    # idempotency payload-hash input — the request as the buyer sent it.
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
+    raw_wire_payload = (await ctx.get_state("raw_wire_payload")) if isinstance(ctx, Context) else None
 
     # Resolve account at transport boundary (before _impl)
     from src.core.transport_helpers import enrich_identity_with_account
@@ -4081,6 +4505,7 @@ async def create_media_buy(
         push_notification_config=pnc_dict,
         identity=identity,
         context_id=_ctx_id,
+        raw_wire_payload=raw_wire_payload,
     )
     return ToolResult(content=str(result), structured_content=dump_adcp_response(result, context=context))
 
@@ -4102,6 +4527,7 @@ async def create_media_buy_raw(
     paused: bool | None = None,  # AdCP 3.1.1 compatibility; pause-on-create NOT yet honored (tracked in #1619)
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
+    raw_wire_payload: dict[str, Any] | None = None,
 ):
     """Create a new media buy with specified parameters (raw function for A2A server use).
 
@@ -4122,6 +4548,8 @@ async def create_media_buy_raw(
         ext: Extension object for custom fields (optional, per AdCP spec)
         ctx: Context for authentication (deprecated, use identity)
         identity: Pre-resolved identity (if available)
+        raw_wire_payload: The request dict as sent on the wire (A2A DataPart
+            params / REST JSON body) — the idempotency payload-hash input
 
     Returns:
         Dict with status and CreateMediaBuyResponse data
@@ -4179,6 +4607,7 @@ async def create_media_buy_raw(
         push_notification_config=pnc_dict,
         identity=identity,
         context_id=_ctx_id,
+        raw_wire_payload=raw_wire_payload,
     )
 
 

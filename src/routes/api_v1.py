@@ -586,10 +586,32 @@ async def list_authorized_properties(
 # ---------------------------------------------------------------------------
 
 
+async def _raw_json_body(request: Request) -> dict[str, Any]:
+    """The HTTP body as sent on the wire — the idempotency payload-hash input.
+
+    A dependency rather than a route ``request`` parameter, so route signatures
+    stay Depends-only (the rest-depends-auth guard). Prefers the pre-rewrite
+    bytes stashed by ``RestCompatMiddleware`` — when a deprecated-field
+    translation fires, ``request.json()`` would observe the NORMALIZED body,
+    not the bytes the buyer sent, and seller-side compat-table changes would
+    flip honest retries into conflicts mid-TTL. Starlette caches the body, so
+    the fallback read does not consume it before model parsing.
+    """
+    raw = getattr(request.state, "raw_wire_payload", None)
+    if raw is not None:
+        return json.loads(raw)
+    return await request.json()
+
+
+# Module-level singleton, matching require_auth (ruff B008 forbids Depends() in defaults).
+raw_json_body = Depends(_raw_json_body)
+
+
 @router.post("/media-buys", dependencies=[Depends(_version_after_require)])
 async def create_media_buy(
     body: CreateMediaBuyBody,
     identity: ResolvedIdentity = require_auth,
+    raw_wire_payload: dict[str, Any] = raw_json_body,
 ):
     """Create a new media buy (auth required).
 
@@ -622,6 +644,7 @@ async def create_media_buy(
         ext=body.ext,
         idempotency_key=body.idempotency_key,
         identity=identity,
+        raw_wire_payload=raw_wire_payload,
     )
     return dump_adcp_response(response)
 

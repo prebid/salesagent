@@ -1642,9 +1642,9 @@ class AdCPRequestHandler(RequestHandler):
             record_boundary_error_for_identity("a2a", skill_name, boundary_exc, identity)
             raise
 
-        # With idempotency.supported=false a valid read key is inert envelope
-        # metadata. Consume it before strict task-model validation; malformed
-        # supplied values were rejected above, and omission remains accepted.
+        # On standard reads a valid supplied key is validated inert envelope
+        # metadata (the 3.1 grace accepts omission). Consume it before strict
+        # task-model validation; malformed supplied values were rejected above.
         if skill_name in STANDARD_ADCP_READ_TOOLS and "idempotency_key" in parameters:
             parameters = {key: value for key, value in parameters.items() if key != "idempotency_key"}
             _log_dropped_fields(skill_name, "inert read idempotency", ["idempotency_key"])
@@ -1844,10 +1844,19 @@ class AdCPRequestHandler(RequestHandler):
                 suggestion=f"Required: {required_params}",
             )
 
+        # Required-key precedence parity with the sync_creatives / sync_accounts
+        # siblings and the MCP/REST boundaries: an ABSENT idempotency_key must
+        # emit the canonical missing-key error (one home in src.core.exceptions),
+        # not this handler's aggregated Pydantic wording from full-model
+        # validation below.
+        from src.core.schemas._base import require_idempotency_key
+
+        require_idempotency_key(params.get("idempotency_key"))
+
         # Validate via the shared boundary so every A2A handler emits the same
         # field + message + buyer-facing suggestion (AdCP POST-F3, #1417):
-        # idempotency_key_missing / duplicate_product_id rejections include a
-        # non-empty suggestion derived by adcp_validation_boundary.
+        # duplicate_product_id rejections include a non-empty suggestion
+        # derived by adcp_validation_boundary.
         with adcp_validation_boundary():
             req = _validate_envelope_tolerant(params, CreateMediaBuyRequest, operation="create_media_buy")
 

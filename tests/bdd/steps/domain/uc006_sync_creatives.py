@@ -471,10 +471,22 @@ def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
 
 @then(parsers.parse("the wire error should be {error_code} with suggestion"))
 def then_wire_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
-    """Grade the actual transport envelope, not a reconstructed exception."""
+    """Grade the actual transport envelope, not a reconstructed exception.
+
+    Every current consumer is an idempotency-key rejection scenario (uc006 /
+    uc011 required-key rows), so this step also pins ``errors[0].field`` and a
+    message signal — without them, ANY validation rejection (e.g. an empty
+    accounts array firing first) would satisfy a code+suggestion-only check
+    and the scenario would pass for the wrong reason.
+    """
     result = ctx.get("result")
     assert result is not None, "Expected the transport dispatcher result"
-    result.assert_wire_error(error_code, require_suggestion=True)
+    result.assert_wire_error(error_code, require_suggestion=True, message_substr="idempotency_key")
+
+    envelope = result.wire_error_envelope
+    assert isinstance(envelope, dict), "No canonical wire error envelope captured"
+    field = envelope["errors"][0].get("field")
+    assert field == "idempotency_key", f"errors[0].field={field!r}, expected 'idempotency_key'"
 
 
 # ═══════════════════════════════════════════════════════════════════════

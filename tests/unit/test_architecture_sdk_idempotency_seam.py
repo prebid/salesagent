@@ -1,7 +1,7 @@
-"""Structural guard: the dormant SDK canonicalizer has one import seam.
+"""Structural guard: the SDK idempotency canonicalizer has a single import seam.
 
 ``adcp.server.idempotency`` (the RFC 8785 canonicalizer engine) must be imported
-ONLY by ``src/core/idempotency_canonical.py`` — the single dormant seam in
+ONLY by ``src/core/idempotency_canonical.py`` — the single production seam in
 front of it. Routing all access through that one module is what lets us swap the
 hashing engine in one place and keeps the ``RecursionError`` -> typed-error
 boundary ours (see the module docstring there). A direct
@@ -17,7 +17,7 @@ from pathlib import Path
 
 SRC = Path(__file__).parent.parent.parent / "src"
 SEAM_MODULE = "adcp.server.idempotency"
-# The single dormant source module permitted to import the engine (relative to src/).
+# The single production module permitted to import the engine (path relative to src/).
 ALLOWED = {"core/idempotency_canonical.py"}
 
 
@@ -87,7 +87,7 @@ def test_sdk_idempotency_canonicalizer_has_single_import_seam():
             violations.append(f"{rel}:{line}")
 
     assert not violations, (
-        f"'{SEAM_MODULE}' may be imported only by {sorted(ALLOWED)} (the single dormant "
+        f"'{SEAM_MODULE}' may be imported only by {sorted(ALLOWED)} (the single production "
         f"seam). Import the wrappers from src.core.idempotency_canonical instead, so the engine "
         f"stays swappable in one place and the RecursionError->typed-error boundary stays ours.\n"
         + "\n".join(f"  - {v}" for v in violations)

@@ -1880,17 +1880,19 @@ Feature: BR-UC-002 Create Media Buy
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/create-media-buy-request.json
 
   @T-UC-002-v31-idempotency-replay @v31 @idempotency-key @post-s1 @ext-w @happy-path
-  Scenario: Advertised unsupported idempotency_key does not suppress create execution
+  Scenario: v3.1 idempotency_key replay returns existing media buy without re-execution
     Given the tenant is configured for auto-approval
-    And a valid create_media_buy request with idempotency_key "abc123-noop-xyz-987654"
+    And a valid create_media_buy request with idempotency_key "abc123-replay-xyz-9876"
     And the account "acc-001" exists and is active
-    And a prior create_media_buy request already succeeded with that idempotency_key
+    And a media buy was already created for the same seller with that idempotency_key
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And the response status should be "completed"
-    And the response should include a newly created "media_buy_id"
-    And exactly one new media buy should have been persisted
-    And the response should not be marked as replayed
+    And the response should include the previously created "media_buy_id"
+    And no new ad platform order should have been created
+    # v3.1: idempotency_key uniquely identifies (seller, request) pair
+    # POST-S5: Buyer receives an unambiguous success confirmation
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/create-media-buy-request.json
 
   @T-UC-002-v31-idempotency-missing @v31 @idempotency-key @validation @post-f2 @ext-w
   Scenario: v3.1 idempotency_key missing fails request validation

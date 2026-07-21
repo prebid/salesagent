@@ -205,9 +205,9 @@ def then_rate_limiting_enforced(ctx: dict) -> None:
     assert resp is not None, "Expected a successful response from the original request"
 
     # Make a rapid follow-up call THROUGH THE WIRE to trigger rate limiting.
-    # Use a fresh required key so this NFR scenario is independent of any
-    # future idempotency-capability change; under the current supported=false
-    # posture either key would execute. Dispatching through the parametrized transport means a
+    # The follow-up needs a FRESH idempotency_key — reusing the original's
+    # would replay the cached success instead of exercising a second real
+    # request. Dispatching through the parametrized transport means a
     # rate-limit gate (when implemented) would surface as a RATE_LIMITED wire
     # envelope on a2a/mcp/rest.
     request_kwargs = deepcopy(ctx.get("request_kwargs", {}))

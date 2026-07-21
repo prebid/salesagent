@@ -1706,7 +1706,7 @@ def update_media_buy_raw(
     context: ContextObject | None = None,  # payload-level context
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
-    idempotency_key: str | None = None,  # Required wire key; validated, then inert under supported=false.
+    idempotency_key: str | None = None,  # Required wire key; validated, accepted, not yet deduplicated (#1607).
     revision: RawUnsupportedRevision = REVISION_OMITTED,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,

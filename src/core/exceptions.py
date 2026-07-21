@@ -845,11 +845,7 @@ class AdCPCapabilityNotSupportedError(AdCPError):
 
 
 class AdCPIdempotencyConflictError(AdCPConflictError):
-    """Standard 409 ``IDEMPOTENCY_CONFLICT`` error type.
-
-    The current seller advertises ``idempotency.supported=false`` and therefore
-    does not emit this for repeated request keys. The type remains available for
-    protocol parsing and a future universal implementation.
+    """idempotency_key reused with a different request payload (409, IDEMPOTENCY_CONFLICT).
 
     Recovery=correctable: the buyer can fix this and resend — either replay the
     ORIGINAL bytes under the same key, or mint a fresh idempotency_key for the
@@ -866,11 +862,13 @@ class AdCPIdempotencyConflictError(AdCPConflictError):
 
 
 class AdCPIdempotencyExpiredError(AdCPConflictError):
-    """Standard 409 ``IDEMPOTENCY_EXPIRED`` error type.
+    """idempotency_key seen before, but its replay window has expired (409, IDEMPOTENCY_EXPIRED).
 
-    The current seller advertises ``idempotency.supported=false``, announces no
-    replay TTL, and does not emit this for repeated request keys. The class is
-    retained for protocol parsing and a future universal implementation.
+    Raised when a same-key buy exists but outlived the advertised replay TTL
+    (``get_adcp_capabilities.adcp.idempotency.replay_ttl_seconds``): per
+    security.mdx#idempotency rule 6, a request arriving after eviction with a
+    key the seller has seen SHOULD be rejected with ``IDEMPOTENCY_EXPIRED``
+    rather than silently treated as new or answered with another buy's data.
 
     Recovery=correctable, matching the sibling ``IDEMPOTENCY_CONFLICT``: the
     buyer agent recovers autonomously — a natural-key existence check (e.g.
@@ -1073,6 +1071,29 @@ INVALID_REQUEST_SUGGESTION = "check request parameters and fix"
 VALIDATION_ERROR_SUGGESTION = "review error details and fix field values"
 
 
+def missing_idempotency_key_error(
+    *,
+    details: dict[str, Any] | None = None,
+    context: ContextObject | dict[str, Any] | None = None,
+) -> AdCPValidationError:
+    """The canonical missing-``idempotency_key`` rejection — one home for its wire identity.
+
+    Every transport boundary that rejects an absent required key MUST emit this
+    error (message, ``field``, and suggestion byte-identical across MCP, A2A,
+    and REST): ``require_idempotency_key`` (the shared funnel + A2A skill
+    handlers), the ``normalize_to_adcp_error`` ValidationError branch (MCP
+    TypeAdapter rejects), and the REST ``RequestValidationError`` handler.
+    A transport-local copy of this literal is the drift this factory removes.
+    """
+    return AdCPValidationError(
+        "idempotency_key is required.",
+        field="idempotency_key",
+        suggestion="Provide a client-generated idempotency_key (16-255 characters, using only [A-Za-z0-9_.:-]).",
+        details=details,
+        context=context,
+    )
+
+
 def first_validation_error_field(validation_error: ValidationError) -> str | None:
     """Return the bracket-notation path of the first Pydantic error, or ``None``.
 
@@ -1129,15 +1150,16 @@ def normalize_to_adcp_error(
     elif isinstance(exc, ValidationError):
         errors = exc.errors()
         field = first_validation_error_field(exc)
-        message = errors[0].get("msg") if errors else "Request failed schema validation"
-        if field == "idempotency_key" and errors[0].get("type") in {"missing", "missing_argument"}:
-            message = "idempotency_key is required."
-        typed = AdCPValidationError(
-            message,
-            field=field,
-            suggestion=VALIDATION_ERROR_SUGGESTION,
-            details=build_validation_error_details(errors),
-        )
+        if field == "idempotency_key" and errors and errors[0].get("type") in {"missing", "missing_argument"}:
+            typed = missing_idempotency_key_error(details=build_validation_error_details(errors))
+        else:
+            message = errors[0].get("msg") if errors else "Request failed schema validation"
+            typed = AdCPValidationError(
+                message,
+                field=field,
+                suggestion=VALIDATION_ERROR_SUGGESTION,
+                details=build_validation_error_details(errors),
+            )
     elif isinstance(exc, ValueError):
         typed = AdCPValidationError(str(exc))
     elif isinstance(exc, PermissionError):

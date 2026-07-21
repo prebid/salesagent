@@ -1,24 +1,29 @@
-"""Capability applicability guard for the generated UC-002 idempotency phases.
+"""Capability + storyboard applicability guard for the UC-002 idempotency phases.
 
-The derivative adcp-req storyboard currently leaves supported=true replay
-phases unconditional and carries a fragile hand-counted maxLength fixture. The
-compiler reconciles the live replay id to supported=false behavior and replaces
-the boundary value with an exact-length token; remaining upstream-only replay
-phases stay visible but are not claimed as passing scenarios for this seller.
+``create_media_buy`` implements verbatim replay, so the seller advertises the
+``supported=true`` discriminant with its replay window. The generated UC-002
+feature keeps the upstream replay scenario LIVE (graded against production —
+the proof that restoring replay cannot silently regress), the boundary outline
+uses the exact-length fixture token instead of a hand-counted literal, and the
+remaining supported=true phases production does not yet implement (in-flight
+tracking and its error-detail siblings) stay visible but unwired.
 """
 
 from pathlib import Path
 
 from src.core.config_loader import current_tenant
+from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 GENERATED_UC002 = PROJECT_ROOT / "tests" / "bdd" / "features" / "BR-UC-002-create-media-buy.feature"
-LOCAL_RECONCILIATION = PROJECT_ROOT / "tests" / "bdd" / "overlays" / "BR-UC-002-create-media-buy.feature"
+LOCAL_OVERLAYS = PROJECT_ROOT / "tests" / "bdd" / "overlays" / "BR-UC-002-create-media-buy.feature"
 
-RECONCILED_REPLAY_SCENARIO = "T-UC-002-v31-idempotency-replay"
-RECONCILED_BOUNDARY_SCENARIO = "T-UC-002-v31-idempotency-pattern-invalid"
-REMAINING_SUPPORTED_TRUE_ONLY_SCENARIOS = frozenset(
+LIVE_REPLAY_SCENARIO = "T-UC-002-v31-idempotency-replay"
+BOUNDARY_SCENARIO = "T-UC-002-v31-idempotency-pattern-invalid"
+# Upstream supported=true phases with no production implementation yet —
+# visible in the generated feature, not wired, not claimed as passing.
+REMAINING_UNIMPLEMENTED_SCENARIOS = frozenset(
     {
         "T-UC-002-v31-idempotency-in-flight",
         "T-UC-002-v31-idempotency-expired",
@@ -28,33 +33,40 @@ REMAINING_SUPPORTED_TRUE_ONLY_SCENARIOS = frozenset(
 )
 
 
-def test_generated_idempotency_reconciliations_are_durable():
-    """Pin the false discriminant and exact boundary fixture through regeneration."""
+def test_advertised_idempotency_matches_the_implemented_replay():
+    """Pin the supported=true discriminant to the implemented replay window."""
     current_tenant.set(None)
     capability = _get_adcp_capabilities_impl(None, None).adcp.idempotency
 
-    assert capability.supported is False
-    assert capability.model_dump(mode="json") == {"supported": False}
-    assert not hasattr(capability, "replay_ttl_seconds")
-    assert not hasattr(capability, "in_flight_max_seconds")
-
-    generated_text = GENERATED_UC002.read_text()
-    assert all(f"@{scenario_id}" in generated_text for scenario_id in REMAINING_SUPPORTED_TRUE_ONLY_SCENARIOS), (
-        "Keep the unreconciled upstream supported=true-only phases visible; "
-        "they are not supported=false passing claims."
+    assert capability.supported is True
+    dumped = capability.model_dump(mode="json", exclude_none=True)
+    assert dumped["replay_ttl_seconds"] == int(DEFAULT_REPLAY_TTL.total_seconds()), (
+        "The advertised replay window must equal the window the replay cache actually enforces"
     )
-    assert f"@{RECONCILED_REPLAY_SCENARIO}" in generated_text
-    assert "Local scenario overlays applied" in generated_text
-    assert "Advertised unsupported idempotency_key does not suppress create execution" in generated_text
-    assert 'the response should include a newly created "media_buy_id"' in generated_text
-    assert "exactly one new media buy should have been persisted" in generated_text
-    assert "the response should not be marked as replayed" in generated_text
-    assert f"@{RECONCILED_BOUNDARY_SCENARIO}" in generated_text
-    assert "| <256 chars>" in generated_text
 
-    local_text = LOCAL_RECONCILIATION.read_text()
-    assert "runner/fixture defects" in local_text
-    assert f"@{RECONCILED_REPLAY_SCENARIO}" in local_text
-    assert "exactly one new media buy should have been persisted" in local_text
-    assert f"@{RECONCILED_BOUNDARY_SCENARIO}" in local_text
+
+def test_generated_replay_scenario_is_live_and_boundary_fixture_durable():
+    """Pin the live upstream replay scenario and the exact boundary fixture through regeneration."""
+    generated_text = GENERATED_UC002.read_text()
+
+    # The upstream replay scenario grades production replay directly — no
+    # local overlay may reconcile it away again while replay is implemented.
+    assert f"@{LIVE_REPLAY_SCENARIO}" in generated_text
+    assert "v3.1 idempotency_key replay returns existing media buy without re-execution" in generated_text
+    assert 'the response should include the previously created "media_buy_id"' in generated_text
+    assert "no new ad platform order should have been created" in generated_text
+
+    assert all(f"@{scenario_id}" in generated_text for scenario_id in REMAINING_UNIMPLEMENTED_SCENARIOS), (
+        "Keep the unimplemented upstream supported=true phases visible; they are not passing claims."
+    )
+
+    assert f"@{BOUNDARY_SCENARIO}" in generated_text
+    assert "| <256 chars>" in generated_text
+    assert "Local scenario overlays applied" in generated_text
+
+    local_text = LOCAL_OVERLAYS.read_text()
+    assert f"@{BOUNDARY_SCENARIO}" in local_text
     assert "| <256 chars>" in local_text
+    # The supported=false replay reconciliation was removed with the restore;
+    # its return would silently un-grade production replay.
+    assert f"@{LIVE_REPLAY_SCENARIO}" not in local_text

@@ -1,8 +1,8 @@
-"""Shared seed helpers for the dormant idempotency storage substrate.
+"""Shared seed helper for the idempotency verbatim success cache.
 
-The current seller advertises ``idempotency.supported=false`` and production
-tools do not call this substrate. Direct primitive tests keep it internally
-sound; create no-op tests seed historical rows to prove they are ignored.
+Tests seed the cache through the same repository production uses (a real
+``MediaBuyUoW`` → ``IdempotencyAttemptRepository.record_success``) so the
+probe's ``find_by_key`` serves exactly what production would have stored.
 """
 
 from __future__ import annotations
@@ -48,11 +48,14 @@ def seed_cached_success(
     ttl: timedelta | None = None,
     now: datetime | None = None,
 ) -> None:
-    """Write a historical cache row via the dormant repository primitive.
+    """Write a verbatim-cache row for ``create_media_buy`` via the production repository.
 
-    ``payload_hash`` is arbitrary for supported=false create tests because the
-    production path must not read it. ``ttl``/``now`` pass through so direct
-    repository tests can still exercise expiry mechanics.
+    ``payload_hash`` must match the canonical hash of the request the test will
+    retry for a replay; pass a non-matching hash to exercise the
+    ``IDEMPOTENCY_CONFLICT`` path. Only successes are ever seeded — errors are
+    never cached by production, and tests must mirror that. ``ttl``/``now``
+    pass through to ``record_success`` so expiry tests can seed already-expired
+    rows.
     """
     from src.core.database.repositories import MediaBuyUoW
     from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
@@ -73,10 +76,10 @@ def seed_cached_success(
 
 
 def seed_principal(tenant_id: str, principal_id: str) -> None:
-    """Commit a tenant + principal for repository and create integration tests.
+    """Commit a tenant + principal so the idempotency ``_impl`` auth/FK checks pass.
 
     One home for the ``BareIntegrationEnv`` + factory seed shared by the
-    dormant-policy and supported=false create integration tests.
+    rate-limit and replay integration tests.
     """
     from tests.factories import PrincipalFactory, TenantFactory
     from tests.harness._base import BareIntegrationEnv
@@ -96,11 +99,12 @@ def seed_media_buy(
     account_id: str | None = None,
     status: str = "active",
 ) -> None:
-    """Commit legacy media-buy key data via factories for repository tests.
+    """Commit a tenant + principal + MediaBuy (the dup-booking backstop) via factories.
 
-    New production creates write NULL, but historical rows may still carry a
-    key. This helper supports direct lookup/isolation coverage without implying
-    that current create_media_buy uses that legacy column.
+    The committed MediaBuy carries the ``idempotency_key`` backstop without a
+    verbatim cache row — the state the degraded post-race path and the
+    account-scoped key lookup are tested against. One home so the seed block
+    does not duplicate across the repository and race test modules.
     """
     from tests.factories import AccountFactory, MediaBuyFactory, PrincipalFactory, TenantFactory
     from tests.harness._base import BareIntegrationEnv

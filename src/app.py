@@ -42,6 +42,7 @@ from src.core.exceptions import (
     AdCPValidationError,
     build_two_layer_error_envelope,
     build_validation_error_details,
+    missing_idempotency_key_error,
     normalize_to_adcp_error,
 )
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
@@ -261,9 +262,10 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     field = ".".join(loc) or None
     message = first.get("msg") or "Request failed schema validation"
     if field == "idempotency_key" and first.get("type") == "missing":
-        # Match the shared MCP/A2A boundary's buyer-facing error instead of
-        # leaking Pydantic's context-free "Field required" wording.
-        message = "idempotency_key is required."
+        # The canonical missing-key error (one home in src.core.exceptions) —
+        # byte-identical message/field/suggestion with the MCP and A2A boundaries.
+        adcp_exc = missing_idempotency_key_error(details=build_validation_error_details(errors))
+        return await _envelope_response(request, adcp_exc)
     # Code selection by failure semantics, grounded in the AdCP graded
     # error-compliance storyboard: a VALUE/enum/range violation on a
     # structurally-valid field is canonically VALIDATION_ERROR; a missing/

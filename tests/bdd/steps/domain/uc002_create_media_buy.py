@@ -719,8 +719,8 @@ def when_send_create_media_buy(ctx: dict) -> None:
     ``create_media_buy`` through the parametrized wire transport (a2a/mcp/rest):
 
     - v3.1 idempotency scenarios (``ctx["idempotency_create"]``) dispatch flat
-      ``request_kwargs`` so required-key validation and supported=false no-op
-      behavior run end-to-end.
+      ``request_kwargs`` so required-key validation and the production
+      idempotency replay path run end-to-end.
     - Manual-approval scenarios (``ctx["uc002_full_create"]``, PR #1567) dispatch
       the harness-seeded base request with a fresh idempotency key, carrying the
       Given-step account reference, so the submitted-envelope path runs end-to-end.
@@ -1443,7 +1443,7 @@ def given_sandbox_account_other_agent(ctx: dict) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Hand-authored: required key + supported=false behavior
+# Hand-authored: required key + idempotency replay behavior
 # ═══════════════════════════════════════════════════════════════════════
 
 
@@ -1485,7 +1485,7 @@ def given_tenant_auto_approval(ctx: dict) -> None:
     ctx["tenant_auto_approval"] = True
 
 
-# ── v3.1 required key + unsupported no-op ──
+# ── v3.1 idempotency replay / missing (T-UC-002-v31-idempotency-{replay,missing}) ──
 #
 # These steps build ctx["request_kwargs"] referencing the real product +
 # pricing option seeded into ctx by conftest's _harness_env (MediaBuyCreateEnv),
@@ -1505,9 +1505,9 @@ def _idempotency_pricing_option_id(pricing_option) -> str:
 def _build_idempotency_request_kwargs(ctx: dict) -> dict:
     """Assemble a valid create_media_buy request dict against the seeded product.
 
-    Stored on ctx["request_kwargs"]; the When step and the prior-create Given
-    dispatch this exact dict so the no-op scenario proves identical keys and
-    payloads still execute twice.
+    Stored on ctx["request_kwargs"]; the When step and the "already created"
+    Given step dispatch THIS exact dict (copied) so the canonical payload hash
+    matches between the original create and the replay.
     """
     from datetime import UTC, datetime, timedelta
 
@@ -1516,10 +1516,13 @@ def _build_idempotency_request_kwargs(ctx: dict) -> dict:
     now = datetime.now(UTC)
     ctx["request_kwargs"] = {
         "brand": {"domain": "testbrand.com"},
-        # Deliberately omit optional po_number: Docker's MockAdServer derives
-        # its platform media_buy_id from that field. Reusing this one ctx dict
-        # still makes both wire payloads identical while allowing the adapter
-        # to allocate a distinct resource for each execution.
+        # Explicit, stable po_number so the canonical payload is byte-identical
+        # between the original create and the replay across ALL transports —
+        # the canonical hash is computed over the request AS SENT, and a
+        # transport-minted random po_number would flip an honest replay into a
+        # conflict. A real buyer replaying an idempotent request resends their
+        # own po_number.
+        "po_number": "PO-IDEMPOTENCY-REPLAY-001",
         "start_time": (now + timedelta(days=1)).isoformat(),
         "end_time": (now + timedelta(days=30)).isoformat(),
         "packages": [
@@ -1585,27 +1588,30 @@ def given_request_idempotency_key_omitted(ctx: dict) -> None:
 
 
 @given("a media buy was already created for the same seller with that idempotency_key")
-@given("a prior create_media_buy request already succeeded with that idempotency_key")
 def given_media_buy_already_created_same_key(ctx: dict) -> None:
     """Perform a REAL first create through the parametrized transport.
 
-    Dispatches the same request kwargs and snapshots the persisted media-buy
-    IDs. The supported=false Then steps prove the second call adds exactly the
-    newly returned buy without relying on in-process-only mocks.
+    Dispatches the SAME request_kwargs (copied) so the canonical payload hash
+    matches the When-step replay. Records the original media_buy_id, the
+    adapter create_media_buy call count, and the persisted media-buy snapshot
+    so the Then steps can assert the replay returns the same id, does NOT
+    re-invoke the adapter, and persists no second row.
     """
     from tests.bdd.steps.generic._dispatch import dispatch_request
 
     env = ctx["env"]
+    adapter_mock = env.mock["adapter"].return_value
 
     first_ctx: dict = {"env": env, "transport": ctx.get("transport"), "tenant": ctx.get("tenant")}
     dispatch_request(first_ctx, **dict(ctx["request_kwargs"]))
 
-    assert "error" not in first_ctx, f"First create_media_buy call failed: {first_ctx.get('error')!r}"
+    assert "error" not in first_ctx, f"First create_media_buy (idempotency seed) failed: {first_ctx.get('error')!r}"
     first_resp = first_ctx.get("response")
     media_buy_id = _get_response_field(first_resp, "media_buy_id")
     assert media_buy_id, f"First create produced no media_buy_id; response={first_resp!r}"
 
     ctx["first_media_buy_id"] = media_buy_id
+    ctx["adapter_calls_after_first_create"] = adapter_mock.create_media_buy.call_count
     persisted_ids = _persisted_media_buy_ids(ctx)
     assert media_buy_id in persisted_ids, (
         f"First create returned media_buy_id={media_buy_id!r}, but the row was not persisted; "
@@ -1850,42 +1856,43 @@ def then_response_not_equals_remembered(ctx: dict, field: str, alias: str) -> No
     )
 
 
-@then(parsers.parse('the response should include a newly created "{field}"'))
-def then_response_includes_newly_created(ctx: dict, field: str) -> None:
-    """Assert the supported=false retry produced a different resource."""
+@then(parsers.parse('the response should include the previously created "{field}"'))
+def then_response_includes_previously_created(ctx: dict, field: str) -> None:
+    """Assert the idempotency replay returned the ORIGINAL create's value.
+
+    Asserts three things on the replay response:
+    1. ``response.<field>`` equals the value the FIRST create produced
+       (recorded by the "already created" Given step), proving the replay
+       served the original rather than minting a new media buy.
+    2. The replay marker is set (``CreateMediaBuyResult.replayed is True``) —
+       what production injects on a verbatim cache hit, surfaced on every
+       transport by the harness response reconstruction.
+    3. The tenant/principal-scoped persisted media-buy set is UNCHANGED from
+       the post-first-create snapshot — the replay wrote no second row.
+    """
     resp = ctx.get("response")
-    assert resp is not None, "No response in ctx — second create produced nothing"
+    assert resp is not None, "No response in ctx — replay scenario produced nothing"
     original = ctx.get("first_media_buy_id")
-    assert original is not None, "No first_media_buy_id recorded — the prior-create Given must run first"
-    actual = _get_response_field(resp, field)
-    assert actual and actual != original, (
-        f"Second create {field}={actual!r} unexpectedly matched the first {field}={original!r}; "
-        "supported=false must not deduplicate by idempotency_key"
+    assert original is not None, (
+        "No first_media_buy_id recorded — the 'already created' Given step must run before this assertion"
     )
-
-
-@then("exactly one new media buy should have been persisted")
-def then_exactly_one_new_media_buy_persisted(ctx: dict) -> None:
-    """Assert the second execution added exactly its returned buy on every transport."""
+    actual = _get_response_field(resp, field)
+    assert actual == original, (
+        f"Replay response {field}={actual!r} does not match the previously created {field}={original!r} — "
+        "the replay returned a different media buy instead of the cached original"
+    )
+    replayed = _get_response_field(resp, "replayed")
+    assert replayed is True, (
+        f"Expected the replay marker (replayed=True) on the cached-hit response, got replayed={replayed!r}. "
+        "Without it the buyer cannot tell the response was served from the idempotency cache."
+    )
     before = ctx.get("persisted_media_buy_ids_after_first")
     assert isinstance(before, frozenset), "Prior-create Given did not record persisted media-buy IDs"
-
-    response_id = _get_response_field(ctx.get("response"), "media_buy_id")
-    assert response_id, "Second create response has no media_buy_id"
     after = _persisted_media_buy_ids(ctx)
-
-    assert before <= after, f"Previously persisted media buys disappeared: {sorted(before - after)!r}"
-    assert after - before == frozenset({str(response_id)}), (
-        "Expected the second create to persist exactly its returned media_buy_id; "
-        f"before={sorted(before)!r}, after={sorted(after)!r}, response_id={response_id!r}"
+    assert after == before, (
+        f"The replay changed the persisted media-buy set: before={sorted(before)!r}, after={sorted(after)!r} — "
+        "a verbatim replay must not persist a second row"
     )
-
-
-@then("the response should not be marked as replayed")
-def then_response_not_marked_replayed(ctx: dict) -> None:
-    """Assert the optional marker is absent/false under supported=false."""
-    replayed = _get_response_field(ctx.get("response"), "replayed")
-    assert replayed in (None, False), f"Unsupported idempotency response leaked replayed={replayed!r}"
 
 
 @then(parsers.parse('the error should reference the missing "{field}" field'))

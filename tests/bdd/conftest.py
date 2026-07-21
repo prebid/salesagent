@@ -2800,7 +2800,7 @@ _TRANSPORT_SPECIFIC_TAGS = {"rest", "mcp", "a2a"}
 # create_media_buy on the wire, so they now parametrize across a2a/mcp/rest.)
 _IMPL_ONLY: set[tuple[str, str]] = set()
 
-# UC-002 required-key and supported=false scenarios wired to
+# UC-002 required-key and idempotency-replay scenarios wired to
 # MediaBuyCreateEnv (run a real create_media_buy across all 4 transports).
 _UC002_IDEMPOTENCY_WIRED: set[str] = {
     "T-UC-002-v31-idempotency-replay",

@@ -1,8 +1,10 @@
-"""Tests for the dormant idempotency insert-ceiling primitive.
+"""Integration tests for the idempotency insert ceiling (RATE_LIMITED).
 
-Direct repository/policy tests keep the future substrate correct. The final
-entrypoint regression proves create_media_buy does not invoke that substrate
-while the seller advertises ``idempotency.supported=false``.
+Each fresh idempotency_key stores a cache row for the replay TTL, so the
+per-(tenant, principal, account) scope is bounded
+(``MAX_ACTIVE_ATTEMPTS_PER_SCOPE``): the probe rejects the excess as
+``RATE_LIMITED`` with ``retry_after`` set to when the oldest active row
+expires. Replays and conflicts insert nothing and are never rate-limited.
 """
 
 import uuid
@@ -11,7 +13,6 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from src.services.idempotency_policy import enforce_insert_ceiling
-from tests.harness._idempotency import fresh_idempotency_key
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.helpers import seed_principal
 
@@ -34,10 +35,10 @@ def _seed_scope_rows(tenant_id, principal_id, count, *, ttl, now):
 
 
 class TestInsertCeilingRepository:
-    """Dormant primitive: counting, retry_after derivation, and TTL interaction."""
+    """Counting, retry_after derivation, and TTL interaction at the repository."""
 
     def test_full_scope_raises_rate_limited_with_retry_after(self, integration_db):
-        """The explicit policy call raises RATE_LIMITED at its configured ceiling."""
+        """At the ceiling, the probe gate raises RATE_LIMITED; retry_after points at the oldest expiry."""
         from src.core.database.repositories import MediaBuyUoW
         from src.core.exceptions import AdCPError
 
@@ -105,7 +106,7 @@ class TestInsertCeilingRepository:
 
 
 class TestInsertRateWindow:
-    """Dormant primitive: bound insert rate per scope, not just stored rows."""
+    """The spec's MUST: bound the INSERT RATE per scope, not just stored rows."""
 
     def test_burst_over_rate_ceiling_rejects_with_short_retry_after(self, integration_db):
         """Rows created inside the trailing window count against the rate ceiling.
@@ -182,7 +183,7 @@ class TestInsertRateWindow:
 
 
 class TestInsertCeilingThroughEntrypoint:
-    """Create never reaches the dormant ceiling while supported=false."""
+    """The probe gate end-to-end: fresh keys reject on the wire, replays never do."""
 
     @staticmethod
     def _create_kwargs(product, idem_key, *, po_number="RL-1"):
@@ -196,20 +197,43 @@ class TestInsertCeilingThroughEntrypoint:
             "idempotency_key": idem_key,
         }
 
-    def test_zero_ceiling_does_not_rate_limit_create(self, integration_db, monkeypatch):
-        """Even an impossible ceiling cannot affect a valid keyed create."""
+    def test_fresh_key_over_ceiling_rejects_rate_limited_on_wire(self, integration_db, monkeypatch):
+        """A fresh key in a full scope rejects with RATE_LIMITED + retry_after on the real wire."""
         from tests.harness.transport import Transport
+        from tests.helpers import assert_envelope_shape
 
-        monkeypatch.setattr("src.services.idempotency_policy.MAX_ACTIVE_ATTEMPTS_PER_SCOPE", 0)
-        monkeypatch.setattr("src.services.idempotency_policy.MAX_INSERTS_PER_WINDOW", 0)
+        monkeypatch.setattr("src.services.idempotency_policy.MAX_ACTIVE_ATTEMPTS_PER_SCOPE", 1)
 
         with MediaBuyCreateEnv() as env:
             _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            first = env.call_impl(**self._create_kwargs(product, f"rlfill-{uuid.uuid4().hex}", po_number="RL-FILL"))
+            assert first.status in {"completed", "submitted"}
+
             result = env.call_via(
-                Transport.REST,
-                **self._create_kwargs(product, fresh_idempotency_key("rl-noop"), po_number="RL-NOOP"),
+                Transport.REST, **self._create_kwargs(product, f"rlfresh-{uuid.uuid4().hex}", po_number="RL-FRESH")
             )
 
-        assert result.is_success, result.error
-        assert result.payload.replayed is False
-        assert result.wire_error_envelope is None
+        assert result.is_error, f"A fresh key in a full scope must reject, got: {result.payload}"
+        assert_envelope_shape(result.wire_error_envelope, "RATE_LIMITED", recovery="transient")
+        retry_after = result.wire_error_envelope["adcp_error"].get("retry_after")
+        assert isinstance(retry_after, int) and retry_after >= 1, (
+            f"RATE_LIMITED must carry integer retry_after >= 1, got {retry_after!r}"
+        )
+
+    def test_replay_is_never_rate_limited(self, integration_db, monkeypatch):
+        """Retrying a cached key replays verbatim even when the scope is at the ceiling."""
+        from src.core.schemas._base import CreateMediaBuySuccess
+
+        monkeypatch.setattr("src.services.idempotency_policy.MAX_ACTIVE_ATTEMPTS_PER_SCOPE", 1)
+
+        idem_key = f"rlreplay-{uuid.uuid4().hex}"
+        with MediaBuyCreateEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            kwargs = self._create_kwargs(product, idem_key, po_number="RL-REPLAY")
+            first = env.call_impl(**kwargs)
+            assert isinstance(first.response, CreateMediaBuySuccess)
+
+            second = env.call_impl(**kwargs)
+
+        assert second.replayed is True, "a replay inserts nothing and must never be rate-limited"
+        assert second.response.media_buy_id == first.response.media_buy_id
