@@ -162,6 +162,107 @@ def review_workflow_step(tenant_id, workflow_id, step_id):
         )
 
 
+def _approval_in_progress_response():
+    """202: the decision is claimed / in flight and completes automatically."""
+    return jsonify(
+        {
+            "success": True,
+            "pending": True,
+            "message": "Approval in progress — completes automatically",
+        }
+    ), 202
+
+
+def _hold_for_unapproved_creatives(db, tenant_id: str, media_buy_id: str, user_email: str):
+    """Park the approved buy at ``pending_creatives`` while creatives are unapproved.
+
+    Returns a ``(response, status)`` pair when the approve request is fully
+    handled here (unapproved creatives — hold claimed, or lost to a concurrent
+    decision), or ``None`` when every required creative is approved and the
+    caller should finalize.
+    """
+    from src.core.database.models import Creative as CreativeModel
+    from src.core.database.models import CreativeAssignment
+
+    stmt_assignments = select(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
+    assignments = db.scalars(stmt_assignments).all()
+    if not assignments:
+        return None
+
+    creative_ids = [a.creative_id for a in assignments]
+    stmt_creatives = select(CreativeModel).filter(CreativeModel.creative_id.in_(creative_ids))
+    creatives = db.scalars(stmt_creatives).all()
+    unapproved_creatives = [c.creative_id for c in creatives if c.status not in ["approved", "active"]]
+    if not unapproved_creatives:
+        return None
+
+    logger.warning(
+        f"[APPROVAL] Cannot execute adapter creation yet - "
+        f"{len(unapproved_creatives)} creatives not approved: {unapproved_creatives}"
+    )
+    # Shared single-winner CLAIM on pending_approval → pending_creatives, so a
+    # concurrent approve/reject that already decided the buy is not overwritten.
+    # The flash is queued ONLY after the claim is won — a lost claim must not
+    # tell the operator the buy was approved. #1544.
+    if not claim_pending_creatives_hold(db, tenant_id, media_buy_id=media_buy_id, approved_by=user_email):
+        return jsonify({"success": False, "error": MEDIA_BUY_ALREADY_DECIDED_MESSAGE}), 409
+    flash(
+        f"Media buy approved! Waiting for {len(unapproved_creatives)} creative(s) to be approved before creating in GAM.",
+        "info",
+    )
+    return jsonify({"success": True}), 200
+
+
+def _finalize_and_render(db, tenant_id: str, *, media_buy_id: str, step_data: dict, user_email: str):
+    """Finalize via the shared seam and translate the outcome to a route response.
+
+    ``step_data`` is the pre-commit snapshot of the workflow step (it carries
+    ``step_id``). Returns a ``(response, status)`` pair for the NOT_CLAIMED /
+    ADAPTER_FAILED / RETRYING outcomes, or ``None`` on success (caller falls
+    through to 200).
+    """
+    # Creatives ready → finalize atomically via the shared seam (same helper the
+    # operations approve route uses): the approval instant + flight-derived
+    # lifecycle status COMPUTED UNDER THE ROW LOCK, then the adapter, the
+    # workflow-step terminal + response artifact, and the completion webhook. The
+    # prior code stamped approved_at AFTER the adapter (so confirmed_at recorded
+    # adapter-completion) and left the step at "approved" with no artifact — the
+    # finalizer fixes both. See #1544.
+    logger.info("[APPROVAL] Finalizing approved media buy %s", sanitize_log_value(media_buy_id))
+    outcome, error_msg = finalize_pending_media_buy_approval(
+        db,
+        tenant_id,
+        media_buy_id=media_buy_id,
+        step_id=step_data["step_id"],
+        step_data=step_data,
+        approved_by=user_email,
+    )
+
+    if outcome is FinalizeOutcome.NOT_CLAIMED:
+        logger.info(
+            "[APPROVAL] Media buy %s already decided by another request",
+            sanitize_log_value(media_buy_id),
+        )
+        return jsonify({"success": False, "error": MEDIA_BUY_ALREADY_DECIDED_MESSAGE}), 409
+    if outcome is FinalizeOutcome.ADAPTER_FAILED:
+        logger.error(f"[APPROVAL] Adapter creation failed for {media_buy_id}: {error_msg}")
+        flash(f"Workflow approved but media buy creation failed: {error_msg}", "error")
+        return jsonify({"success": False, "error": error_msg}), 500
+    if outcome is FinalizeOutcome.RETRYING:
+        # #1637: approval claimed; the ad-server order completes automatically
+        # via the reconciler.
+        logger.info(
+            "[APPROVAL] Media buy %s finalization deferred: %s",
+            sanitize_log_value(media_buy_id),
+            sanitize_log_value(error_msg),
+        )
+        return _approval_in_progress_response()
+
+    logger.info(f"[APPROVAL] Media buy {media_buy_id} successfully created in adapter")
+    flash("Workflow step approved and media buy created successfully", "success")
+    return None
+
+
 @workflows_bp.route("/<tenant_id>/workflows/<workflow_id>/steps/<step_id>/approve", methods=["POST"])
 @require_tenant_access()
 @log_admin_action("approve_workflow_step")
@@ -223,88 +324,22 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                 )
 
                 if media_buy and is_media_buy_approvable(media_buy):
-                    # Check if all required creatives are approved before executing adapter creation
-                    from src.core.database.models import Creative as CreativeModel
-                    from src.core.database.models import CreativeAssignment
+                    # Check if all required creatives are approved before executing
+                    # adapter creation; unapproved creatives park the buy at
+                    # pending_creatives (single-winner claim) instead of finalizing.
+                    held = _hold_for_unapproved_creatives(db, tenant_id, media_buy_id, user_email)
+                    if held is not None:
+                        return held
 
-                    stmt_assignments = select(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
-                    assignments = db.scalars(stmt_assignments).all()
-
-                    if assignments:
-                        creative_ids = [a.creative_id for a in assignments]
-                        stmt_creatives = select(CreativeModel).filter(CreativeModel.creative_id.in_(creative_ids))
-                        creatives = db.scalars(stmt_creatives).all()
-
-                        unapproved_creatives = [
-                            c.creative_id for c in creatives if c.status not in ["approved", "active"]
-                        ]
-
-                        if unapproved_creatives:
-                            logger.warning(
-                                f"[APPROVAL] Cannot execute adapter creation yet - "
-                                f"{len(unapproved_creatives)} creatives not approved: {unapproved_creatives}"
-                            )
-                            # Shared single-winner CLAIM on pending_approval →
-                            # pending_creatives, so a concurrent approve/reject that
-                            # already decided the buy is not overwritten. The flash is
-                            # queued ONLY after the claim is won — a lost claim must not
-                            # tell the operator the buy was approved. #1544.
-                            if not claim_pending_creatives_hold(
-                                db, tenant_id, media_buy_id=media_buy_id, approved_by=user_email
-                            ):
-                                return jsonify({"success": False, "error": MEDIA_BUY_ALREADY_DECIDED_MESSAGE}), 409
-                            flash(
-                                f"Media buy approved! Waiting for {len(unapproved_creatives)} creative(s) to be approved before creating in GAM.",
-                                "info",
-                            )
-                            return jsonify({"success": True}), 200
-
-                    # Creatives ready → finalize atomically via the shared seam (same
-                    # helper the operations approve route uses): the approval instant +
-                    # flight-derived lifecycle status COMPUTED UNDER THE ROW LOCK, then
-                    # the adapter, the workflow-step terminal + response artifact, and
-                    # the completion webhook. The prior code stamped approved_at AFTER
-                    # the adapter (so confirmed_at recorded adapter-completion) and left
-                    # the step at "approved" with no artifact — the finalizer fixes
-                    # both. See #1544.
-                    logger.info("[APPROVAL] Finalizing approved media buy %s", sanitize_log_value(media_buy_id))
-                    outcome, error_msg = finalize_pending_media_buy_approval(
+                    rendered = _finalize_and_render(
                         db,
                         tenant_id,
                         media_buy_id=media_buy_id,
-                        step_id=step_id,
                         step_data=step_data,
-                        approved_by=user_email,
+                        user_email=user_email,
                     )
-
-                    if outcome is FinalizeOutcome.NOT_CLAIMED:
-                        logger.info(
-                            "[APPROVAL] Media buy %s already decided by another request",
-                            sanitize_log_value(media_buy_id),
-                        )
-                        return jsonify({"success": False, "error": MEDIA_BUY_ALREADY_DECIDED_MESSAGE}), 409
-                    if outcome is FinalizeOutcome.ADAPTER_FAILED:
-                        logger.error(f"[APPROVAL] Adapter creation failed for {media_buy_id}: {error_msg}")
-                        flash(f"Workflow approved but media buy creation failed: {error_msg}", "error")
-                        return jsonify({"success": False, "error": error_msg}), 500
-                    if outcome is FinalizeOutcome.RETRYING:
-                        # #1637: approval claimed; the ad-server order completes
-                        # automatically via the reconciler.
-                        logger.info(
-                            "[APPROVAL] Media buy %s finalization deferred: %s",
-                            sanitize_log_value(media_buy_id),
-                            sanitize_log_value(error_msg),
-                        )
-                        return jsonify(
-                            {
-                                "success": True,
-                                "pending": True,
-                                "message": "Approval in progress — completes automatically",
-                            }
-                        ), 202
-
-                    logger.info(f"[APPROVAL] Media buy {media_buy_id} successfully created in adapter")
-                    flash("Workflow step approved and media buy created successfully", "success")
+                    if rendered is not None:
+                        return rendered
                 elif media_buy is not None and media_buy.status == MEDIA_BUY_FINALIZING_STATUS:
                     # Plain in-flight ``finalizing`` (a live lease owner is completing the
                     # decision) — NOT approvable, NOT terminal. Do not claim success:
@@ -313,13 +348,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                         "[APPROVAL] Media buy %s finalization already in flight",
                         sanitize_log_value(media_buy_id),
                     )
-                    return jsonify(
-                        {
-                            "success": True,
-                            "pending": True,
-                            "message": "Approval in progress — completes automatically",
-                        }
-                    ), 202
+                    return _approval_in_progress_response()
                 else:
                     # The mapped buy is no longer pending_approval (already decided, or
                     # gone). Do NOT write the step — the step follows the buy decision and
