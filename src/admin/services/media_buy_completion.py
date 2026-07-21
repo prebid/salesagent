@@ -38,6 +38,7 @@ from src.core.exceptions import (
 from src.core.logging_utils import sanitize_log_value
 from src.core.media_buy_flight import lifecycle_status_for_window, resolve_flight_window_utc
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess, Package
+from src.core.schemas.creative import SyncCreativesResponse
 from src.core.thread_registry import ThreadRegistry
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -82,6 +83,13 @@ class FinalizeOutcome(StrEnum):
 # ALIVE worker (whose heartbeat renews every ~TTL/3) is never mistaken for abandoned: its
 # lease only ages out after the heartbeat STOPS, and takeover then waits a further full
 # grace. Keep grace ≥ the worst-case runtime if either bound is re-tuned.
+# Operator-facing conflict copy shared by the operations + workflow blueprints
+# (flash and JSON error alike), so the "lost the single-winner claim" message
+# has exactly one home. #1544.
+MEDIA_BUY_ALREADY_DECIDED_MESSAGE = "This media buy was already decided by another request"
+WORKFLOW_STEP_ALREADY_DECIDED_MESSAGE = "This workflow step was already decided"
+
+
 def _positive_duration_from_env(name: str, default: int) -> int:
     """Read a safety-critical duration and reject values that disable its fence."""
     raw = os.getenv(name)
@@ -243,21 +251,24 @@ def build_media_buy_result(
     )
 
 
-def emit_media_buy_webhook(
+async def emit_protocol_result_webhook_async(
     step_data: dict[str, Any],
     webhook_config: Any,
-    result: CreateMediaBuySuccess | CreateMediaBuyError,
+    result: CreateMediaBuySuccess | CreateMediaBuyError | SyncCreativesResponse,
     status: AdcpTaskStatus,
     metadata: dict[str, Any],
-) -> None:
-    """Send the media-buy completion/rejection notification for the buyer's protocol.
+) -> bool:
+    """Async core of :func:`emit_media_buy_webhook` (one payload-construction home).
 
+    Shared by the media-buy approval routes (via the sync wrapper) and the
+    creative-review path in ``blueprints/creatives.py`` (already inside an event
+    loop, so it awaits this directly with the ``SyncCreativesResponse`` result).
     Protocol (``mcp``/``a2a``) is read from the workflow step's ``request_data``.
     ``metadata`` carries the app-specific delivery/audit fields the protocol webhook
     service logs (task_type/tenant_id/principal_id/media_buy_id — PR #1567 round-2).
     Best-effort: a webhook failure is logged, never raised — the DB transition has
     already committed and must not be rolled back by a delivery error (mirrors the
-    approval routes). #1544.
+    approval routes). Returns ``True`` when the notification was sent. #1544.
     """
     # Default to MCP for backward compatibility with steps recorded before the
     # protocol was persisted on request_data.
@@ -286,22 +297,36 @@ def emit_media_buy_webhook(
         )
     try:
         service = get_protocol_webhook_service()
-        asyncio.run(
-            service.send_notification(
-                push_notification_config=webhook_config,
-                payload=payload,
-                metadata=metadata,
-            )
+        await service.send_notification(
+            push_notification_config=webhook_config,
+            payload=payload,
+            metadata=metadata,
         )
         # CreateMediaBuyError (reject path) carries no media_buy_id — fall back to the step id.
         result_media_buy_id = getattr(result, "media_buy_id", None) or step_data["step_id"]
         logger.info(
-            "Sent %s webhook notification for media buy %s",
+            "Sent %s webhook notification for task %s",
             sanitize_log_value(status),
             sanitize_log_value(result_media_buy_id),
         )
+        return True
     except Exception as webhook_err:
         logger.warning("Failed to send webhook notification: %s", sanitize_log_value(webhook_err))
+        return False
+
+
+def emit_media_buy_webhook(
+    step_data: dict[str, Any],
+    webhook_config: Any,
+    result: CreateMediaBuySuccess | CreateMediaBuyError,
+    status: AdcpTaskStatus,
+    metadata: dict[str, Any],
+) -> None:
+    """Sync entry point for the approval routes (no running event loop).
+
+    See :func:`emit_protocol_result_webhook_async` for the shared semantics.
+    """
+    asyncio.run(emit_protocol_result_webhook_async(step_data, webhook_config, result, status, metadata))
 
 
 def emit_media_buy_completion(

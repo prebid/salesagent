@@ -8,6 +8,7 @@ from flask import Blueprint, request
 from sqlalchemy import select
 
 from src.admin.services.media_buy_completion import (
+    MEDIA_BUY_ALREADY_DECIDED_MESSAGE,
     FinalizeOutcome,
     claim_pending_creatives_hold,
     finalize_media_buy_rejection,
@@ -448,7 +449,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                             approved_by=user_email,
                         )
                         if outcome is FinalizeOutcome.NOT_CLAIMED:
-                            flash("This media buy was already decided by another request", "warning")
+                            flash(MEDIA_BUY_ALREADY_DECIDED_MESSAGE, "warning")
                             return redirect(
                                 url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
                             )
@@ -481,7 +482,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                             "info",
                         )
                     else:
-                        flash("This media buy was already decided by another request", "warning")
+                        flash(MEDIA_BUY_ALREADY_DECIDED_MESSAGE, "warning")
                 elif media_buy is not None and media_buy.status == MEDIA_BUY_FINALIZING_STATUS:
                     # Plain in-flight ``finalizing`` (a live lease owner is completing
                     # the decision) — NOT approvable, NOT terminal. No claim was won, so
@@ -534,7 +535,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         expected_status=media_buy.status,
                     )
                     if outcome is FinalizeOutcome.NOT_CLAIMED:
-                        flash("This media buy was already decided by another request", "warning")
+                        flash(MEDIA_BUY_ALREADY_DECIDED_MESSAGE, "warning")
                     else:
                         flash("Media buy rejected", "info")
                 else:
@@ -542,7 +543,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # step to rejected (that would pair an active/decided buy with a
                     # rejected task). Discard the pending comment and surface a conflict.
                     db_session.rollback()
-                    flash("This media buy was already decided by another request", "warning")
+                    flash(MEDIA_BUY_ALREADY_DECIDED_MESSAGE, "warning")
 
             return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 

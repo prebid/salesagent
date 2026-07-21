@@ -9,11 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any
 
-from a2a.types import Task, TaskStatusUpdateEvent
-from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
 from adcp.types import (
     CreativeAction,
-    McpWebhookPayload,
 )
 from adcp.webhooks import GeneratedTaskStatus
 
@@ -23,8 +20,6 @@ from src.core.database.models import (
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.logging_utils import sanitize_log_value
 from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
-from src.core.webhook_validator import validate_webhook_task_type
-from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 # TODO: Missing module - these functions need to be implemented
 # from creative_formats import discover_creative_formats_from_url, parse_creative_spec
@@ -43,7 +38,11 @@ def discover_creative_formats_from_url(url):
 
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 
-from src.admin.services.media_buy_completion import FinalizeOutcome, finalize_unblocked_media_buy
+from src.admin.services.media_buy_completion import (
+    FinalizeOutcome,
+    emit_protocol_result_webhook_async,
+    finalize_unblocked_media_buy,
+)
 from src.admin.utils import echo_context, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.repositories.uow import AdminCreativeUoW
@@ -201,64 +200,31 @@ async def _call_webhook_for_creative_status(
 
         # --- Session closed here; webhook delivery is outside the transaction ---
 
-        service = get_protocol_webhook_service()
-        try:
-            logger.info(f"tool name: {step_tool_name}")
-            logger.info(f"task id: {step_step_id}")
-            logger.info(f"task type: {step_tool_name}")
-            logger.info("status: completed")
-            logger.info(f"result: {complete_result}")
-            logger.info("error: None")
-            logger.info(f"push_notification_config: {push_notification_config}")
-
-            # Determine protocol type from workflow step request_data
-            protocol = step_request_data.get("protocol", "mcp")  # Default to MCP for backward compatibility
-
-            # Create appropriate webhook payload based on protocol
-            # Convert result to dict for webhook payload functions
-            result_dict = complete_result.model_dump(mode="json")
-
-            # step_tool_name is untrusted (workflow_steps DB column). Validate a
-            # COPY for the SDK payload; keep the original label for metadata
-            # (salesagent-yi3s, salesagent-yk7o).
-            wire_task_type = validate_webhook_task_type(step_tool_name or "sync_creatives")
-
-            payload: Task | TaskStatusUpdateEvent | McpWebhookPayload
-            if protocol == "a2a":
-                payload = create_a2a_webhook_payload(
-                    task_id=step_step_id,
-                    status=GeneratedTaskStatus.completed,
-                    result=result_dict,
-                    context_id=step_context_id,
-                )
-            else:
-                # SDK 6.6: returns McpWebhookPayload directly
-                payload = create_mcp_webhook_payload(
-                    task_id=step_step_id,
-                    status=GeneratedTaskStatus.completed,
-                    task_type=wire_task_type,
-                    result=result_dict,
-                )
-
-            metadata = {
-                "task_type": step_tool_name
-                # TODO: @yusuf - check if we were passing principal_id and tenant to this previously
-                # TODO: @yusuf - check if we want to make metadata typed
-            }
-
-            await service.send_notification(
-                push_notification_config=push_notification_config, payload=payload, metadata=metadata
-            )
-
+        # Route through the shared protocol-webhook emitter — the same payload
+        # construction (protocol detection, buyer-facing task-id correlation,
+        # untrusted tool_name validation) the media-buy approval routes use.
+        # This path already runs inside an event loop, so it awaits the async
+        # core directly instead of the asyncio.run wrapper. #1544.
+        step_data = {
+            "step_id": step_step_id,
+            "context_id": step_context_id,
+            "tool_name": step_tool_name or "sync_creatives",
+            "request_data": step_request_data or {},
+        }
+        sent = await emit_protocol_result_webhook_async(
+            step_data,
+            push_notification_config,
+            complete_result,
+            GeneratedTaskStatus.completed,
+            metadata={"task_type": step_tool_name},
+        )
+        if sent:
             logger.info(
-                f"Successfully sent protocol webhook for sync_creatives task {step_step_id} "
-                f"with {len(all_creatives)} reviewed creatives"
+                "Successfully sent protocol webhook for sync_creatives task %s with %d reviewed creatives",
+                sanitize_log_value(step_step_id),
+                len(all_creatives),
             )
-
-            return True
-        except Exception as send_e:
-            logger.error(f"Failed to send protocol webhook for creative {creative_id}: {send_e}")
-            return False
+        return sent
 
     except Exception as e:
         logger.error(f"Error sending protocol webhook for creative {creative_id}: {e}", exc_info=True)

@@ -133,8 +133,8 @@ def _adcp_status_and_actions(
     Routes through ``get_media_buys``' ``_compute_status`` (``resolve_canonical_status``
     + the delivery-only ``failed`` -> ``rejected`` mapping) so the update-response
     ``media_buy_status`` agrees with ``get_media_buys`` for the same buy and reference
-    date — the two surfaces must describe one buy identically (the 8plg agreement;
-    salesagent-109m). A past-end serving buy therefore reports ``completed`` on both,
+    date — the two surfaces must describe one buy identically (status-parity
+    agreement, PR #1544). A past-end serving buy therefore reports ``completed`` on both,
     not the un-refined persisted ``active`` (the status scheduler that transitions the
     column may lag behind the flight window).
 
