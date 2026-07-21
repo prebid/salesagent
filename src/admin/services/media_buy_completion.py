@@ -30,7 +30,6 @@ from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 from src.core.exceptions import (
-    POLICY_VIOLATION_SUGGESTION,
     AdCPAdapterError,
     AdCPMediaBuyRejectedError,
     build_two_layer_error_envelope,
@@ -235,9 +234,10 @@ def build_media_buy_result(
                     code=rejection.wire_error_code,
                     message=rejection.message,
                     recovery=rejection.recovery,
-                    # Canonical POLICY_VIOLATION hint from the pinned 3.1.1
-                    # error-code.json enumMetadata.
-                    suggestion=POLICY_VIOLATION_SUGGESTION,
+                    # Read the canonical POLICY_VIOLATION hint off the exception's
+                    # own default, so this webhook artifact and the synchronous
+                    # tool-path wire carry identical buyer guidance (single source).
+                    suggestion=rejection.suggestion,
                 )
             ]
         )

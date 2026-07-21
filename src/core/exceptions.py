@@ -440,6 +440,14 @@ class AdCPInvalidRequestError(AdCPValidationError):
 
 AUTH_REQUIRED_SUGGESTION = "Provide valid credentials (x-adcp-auth token)."
 
+# Canonical buyer-facing suggestions from error-code.json enumMetadata (AdCP 3.1.1):
+# each code carries its own default hint, so a VALIDATION_ERROR must not borrow
+# INVALID_REQUEST's text. Declared here (above the exception classes) so a class
+# can name its own default via ``_default_suggestion``.
+INVALID_REQUEST_SUGGESTION = "check request parameters and fix"
+VALIDATION_ERROR_SUGGESTION = "review error details and fix field values"
+POLICY_VIOLATION_SUGGESTION = "review policy requirements in the error details"
+
 
 class AdCPAuthenticationError(AdCPError):
     """Missing or invalid authentication credentials (401).
@@ -997,6 +1005,9 @@ class AdCPMediaBuyRejectedError(AdCPError):
     _default_status_code: ClassVar[int] = 422
     _default_error_code: ClassVar[str] = "MEDIA_BUY_REJECTED"
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
+    # Same POLICY_VIOLATION hint on every surface — the synchronous tool-path wire
+    # and the async webhook artifact both read this default, so they cannot diverge.
+    _default_suggestion: ClassVar[str | None] = POLICY_VIOLATION_SUGGESTION
 
 
 class AdCPInventoryUnavailableError(AdCPError):
@@ -1069,14 +1080,6 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
     if serialized_context is not None:
         envelope["context"] = serialized_context
     return envelope
-
-
-# Canonical buyer-facing suggestions from error-code.json enumMetadata (AdCP 3.1.1):
-# each code carries its own default hint, so a VALIDATION_ERROR must not borrow
-# INVALID_REQUEST's text.
-INVALID_REQUEST_SUGGESTION = "check request parameters and fix"
-VALIDATION_ERROR_SUGGESTION = "review error details and fix field values"
-POLICY_VIOLATION_SUGGESTION = "review policy requirements in the error details"
 
 
 def first_validation_error_field(validation_error: ValidationError) -> str | None:
