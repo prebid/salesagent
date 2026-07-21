@@ -425,8 +425,8 @@ def finalize_media_buy_approval(
     tenant_id: str,
     *,
     media_buy_id: str,
-    step_id: str,
-    step_data: dict[str, Any],
+    step_id: str | None,
+    step_data: dict[str, Any] | None,
     compute_target: Callable[[MediaBuy], str | None],
     run_adapter: Callable[[], tuple[bool, str | None]],
     expected_status: str | tuple[str, ...],
@@ -435,6 +435,10 @@ def finalize_media_buy_approval(
     now_fn: Callable[[], datetime.datetime] | None = None,
 ) -> tuple[FinalizeOutcome, str | None]:
     """Atomic, single-winner approve finalizer (operations / workflow / creative-unblock).
+
+    ``step_id``/``step_data`` are ``None`` for the step-less creative-unblock path (no
+    async buyer task); they flow through to :func:`_run_adapter_and_finalize`, which
+    commits the serving transition on its own when there is no step to terminalize.
 
     Sequence (see #1544 review B4/B5 and the P1 single-winner fix):
 
@@ -1020,21 +1024,11 @@ def finalize_unblocked_media_buy(tenant_id: str, media_buy_id: str) -> tuple[Fin
         step = wf_repo.get_by_step_id(mapping.step_id) if mapping else None
         if step is None:
             # No workflow step (no async buyer task to notify) — still single-winner
-            # AND crash-recoverable: claim pending_creatives → finalizing + phase-2
-            # lease BEFORE the adapter, commit, then run owned phase 2 (step-less).
-            # #1544 / #1637.
-            repo = MediaBuyRepository(session, tenant_id)
-            claim = repo.claim_finalizing(
-                media_buy_id,
-                expected_status="pending_creatives",
-                lease_ttl_seconds=FINALIZE_LEASE_TTL_SECONDS,
-            )
-            if claim is None:
-                session.rollback()
-                return FinalizeOutcome.NOT_CLAIMED, None
-            session.commit()
-            _, lease_id = claim
-            return _run_adapter_and_finalize(
+            # AND crash-recoverable: the shared approve finalizer claims
+            # pending_creatives → finalizing + phase-2 lease BEFORE the adapter,
+            # commits, then runs owned phase 2. step_id/step_data=None routes the
+            # step-less serving transition. #1544 / #1637.
+            return finalize_media_buy_approval(
                 session,
                 tenant_id,
                 media_buy_id=media_buy_id,
@@ -1042,7 +1036,7 @@ def finalize_unblocked_media_buy(tenant_id: str, media_buy_id: str) -> tuple[Fin
                 step_data=None,
                 compute_target=_flight_derived_status,
                 run_adapter=lambda: execute_approved_media_buy(media_buy_id, tenant_id),
-                lease_id=lease_id,
+                expected_status="pending_creatives",
             )
 
         step_data = {
