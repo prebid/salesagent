@@ -12,6 +12,7 @@ path against a real DB:
 """
 
 import asyncio
+import json
 from unittest.mock import patch
 
 import pytest
@@ -185,13 +186,26 @@ class TestA2ATaskCorrelation:
     ):
         """P1 (#1544): an adapter failure during async approval must store a two-layer
         error envelope on the step, so a durable tasks/get poll returns a FAILED task
-        WITH the failure details — not a bare FAILED task with no artifact."""
+        WITH the failure details — not a bare FAILED task with no artifact.
+
+        SECURITY (#1544 review #1): the envelope served to the BUYER via durable
+        on_get_task must carry a STABLE generic message, never the raw adapter
+        ``str(e)`` — that text can embed internal state (here a fake secret). The
+        raw text is retained ONLY in the internal ``error_message`` column. This
+        test pins the wire code/recovery and asserts the raw text is absent from
+        the buyer-facing artifact; removing the scrub reddens it."""
         from datetime import UTC, datetime
 
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
         from src.admin.services.media_buy_completion import FinalizeOutcome, finalize_media_buy_approval
         from src.core.database.repositories import MediaBuyUoW
+        from tests.helpers import assert_envelope_shape
         from tests.integration.conftest import make_media_buy
+        from tests.utils.a2a_helpers import extract_data_from_artifact
+
+        # Raw adapter error carrying internal state that MUST NOT reach the buyer.
+        raw_adapter_error = "GAM order creation failed: package_config secret_token=INTERNAL_LEAK_abc123 corrupted"
+        stable_wire_message = "Adapter execution failed while creating the media buy"
 
         tenant_id = sample_tenant["tenant_id"]
         principal_id = sample_principal["principal_id"]
@@ -223,14 +237,15 @@ class TestA2ATaskCorrelation:
                 step_id=step.step_id,
                 step_data=step_data,
                 compute_target=lambda mb: "active",
-                run_adapter=lambda: (False, "GAM order creation failed"),
+                run_adapter=lambda: (False, raw_adapter_error),
                 expected_status="pending_approval",
                 approved_by="admin@test",
                 approved_at=datetime.now(UTC),
             )
 
         assert outcome is FinalizeOutcome.ADAPTER_FAILED
-        assert err == "GAM order creation failed"
+        # The internal outcome/error channel preserves the raw adapter text.
+        assert err == raw_adapter_error
 
         # The step is failed AND carries a buyer-facing two-layer error envelope.
         with WorkflowUoW(tenant_id) as uow:
@@ -238,8 +253,14 @@ class TestA2ATaskCorrelation:
             failed = uow.workflows.get_by_step_id(step.step_id)
             assert failed is not None
             assert failed.status == "failed"
+            # Raw text is retained ONLY in the internal error_message column.
+            assert failed.error_message == raw_adapter_error
+            # The buyer-facing envelope carries the stable message and NOT the raw text.
             assert failed.response_data is not None
-            assert failed.response_data["errors"][0]["message"]  # non-empty failure detail
+            assert failed.response_data["errors"][0]["message"] == stable_wire_message
+            assert "INTERNAL_LEAK_abc123" not in json.dumps(failed.response_data)
+            # Correlation survives via structured details, not the raw message.
+            assert failed.response_data["errors"][0]["details"]["media_buy_id"] == "mb_fail"
 
         # A durable poll returns FAILED *with* the error artifact (named as an error).
         handler = AdCPRequestHandler.__new__(AdCPRequestHandler)
@@ -255,3 +276,14 @@ class TestA2ATaskCorrelation:
         assert task.status.state == TaskState.TASK_STATE_FAILED
         assert len(task.artifacts) == 1
         assert task.artifacts[0].name == "media_buy_error"
+
+        # Pin the ACTUAL wire (artifact DataPart): AdCPAdapterError -> SERVICE_UNAVAILABLE /
+        # transient, stable message, and the raw internal text absent from the buyer artifact.
+        wire_envelope = extract_data_from_artifact(task.artifacts[0])
+        assert_envelope_shape(
+            wire_envelope,
+            "SERVICE_UNAVAILABLE",
+            recovery="transient",
+            message_substr=stable_wire_message,
+        )
+        assert "INTERNAL_LEAK_abc123" not in json.dumps(wire_envelope)

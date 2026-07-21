@@ -786,8 +786,19 @@ def _run_adapter_and_finalize(
             # Store a buyer-facing two-layer error envelope as the step's response_data
             # (NOT just error_message): durable tasks/get rebuilds the failed Task's
             # artifact from response_data. #1544 (P1).
+            #
+            # SECURITY: response_data is served to the BUYER cross-process via
+            # durable ``on_get_task``. The raw adapter ``error_msg`` (``str(e)`` /
+            # reconstruction text) may embed internal state (e.g. package_config
+            # corruption) and MUST NOT reach the wire. Use a STABLE generic message
+            # for the envelope and carry only structured ``details`` (media_buy_id)
+            # for buyer correlation. The raw ``error_msg`` stays in the internal
+            # ``error_message`` column, never on the envelope.
             error_envelope = build_two_layer_error_envelope(
-                AdCPAdapterError(error_msg or "Adapter execution failed while creating the media buy")
+                AdCPAdapterError(
+                    "Adapter execution failed while creating the media buy",
+                    details={"media_buy_id": media_buy_id},
+                )
             )
             WorkflowRepository(session, tenant_id).update_status(
                 step_id, status="failed", error_message=error_msg, response_data=error_envelope
