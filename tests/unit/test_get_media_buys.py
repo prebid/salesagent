@@ -843,11 +843,15 @@ class TestConfirmedAtStamping:
     def test_unconfirmed_statuses_are_not_stamped(self):
         from datetime import UTC, datetime
 
-        from src.core.database.models import MediaBuy
+        from src.core.database.models import MEDIA_BUY_UNCONFIRMED_STATUSES, MediaBuy
         from src.core.database.repositories.media_buy import MediaBuyRepository
 
         created = datetime(2026, 1, 1, tzinfo=UTC)
-        for status in ("draft", "pending", "pending_approval", "rejected", "failed"):
+        # Iterate the CANONICAL unconfirmed set (the production guard is
+        # ``status not in MEDIA_BUY_UNCONFIRMED_STATUSES``) rather than a
+        # hand-copied literal, so a future add/remove (e.g. ``finalizing``) is
+        # covered automatically instead of silently dropped. #1544.
+        for status in MEDIA_BUY_UNCONFIRMED_STATUSES:
             buy = MediaBuy(status=status, created_at=created, approved_at=None, confirmed_at=None)
             MediaBuyRepository._stamp_confirmation_if_needed(buy)
             assert buy.confirmed_at is None, f"{status} must not be stamped"
@@ -876,7 +880,7 @@ class TestConfirmedAtStamping:
 
         created = datetime(2026, 1, 1, tzinfo=UTC)
         approved = datetime(2026, 1, 5, tzinfo=UTC)
-        for status in ("pending_creatives", "pending_start", "active", "paused", "completed", "approved"):
+        for status in ("pending_creatives", "pending_start", "active", "paused", "completed", "approved", "canceled"):
             buy = MediaBuy(status=status, created_at=created, approved_at=approved, confirmed_at=None)
             MediaBuyRepository._stamp_confirmation_if_needed(buy)
             assert buy.confirmed_at == approved, f"{status} must stamp confirmed_at=approved_at"
