@@ -2818,7 +2818,12 @@ class GetMediaBuysMediaBuy(SalesAgentBaseModel):
     confirmed_at: datetime | None = Field(
         default=None, description="When this media buy was committed by the seller (stable after set)"
     )
-    revision: int | None = Field(default=None, description="Current revision number for optimistic-concurrency updates")
+    # Non-null and REQUIRED: 3.1.1 requires revision present as a non-null int >= 1
+    # on every returned buy, and the sole populating site (media_buy_list) always
+    # passes the persisted counter. Making it required (no default) means a
+    # constructor that forgets it fails loudly at validation instead of silently
+    # emitting revision=1. #1544.
+    revision: int = Field(..., ge=1, description="Current revision number for optimistic-concurrency updates")
 
     def model_dump(self, **kwargs):
         result = super().model_dump(**kwargs)

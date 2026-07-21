@@ -1732,6 +1732,7 @@ class TestUpdateMediaBuySchemaCompliance:
             status=MediaBuyStatus.active,
             currency="USD",
             total_budget=5000.0,
+            revision=1,
             packages=[],
         )
         dumped = mb.model_dump()
@@ -4271,6 +4272,7 @@ class TestGetMediaBuysResponseShape:
                     status=MediaBuyStatus.active,
                     currency="USD",
                     total_budget=5000.0,
+                    revision=1,
                     packages=[
                         GetMediaBuysPackage(package_id="pkg_1"),
                     ],
@@ -4297,6 +4299,7 @@ class TestGetMediaBuysResponseShape:
                     status=MediaBuyStatus.active,
                     currency="USD",
                     total_budget=5000.0,
+                    revision=1,
                     packages=[
                         GetMediaBuysPackage(package_id="pkg_1", budget=2500.0, product_id="p1"),
                         GetMediaBuysPackage(package_id="pkg_2", budget=2500.0, product_id="p2"),
