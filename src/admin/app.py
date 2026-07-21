@@ -38,6 +38,7 @@ from src.admin.blueprints.signals_agents import signals_agents_bp
 from src.admin.blueprints.tenants import tenants_bp
 from src.admin.blueprints.users import users_bp
 from src.admin.blueprints.workflows import workflows_bp
+from src.admin.utils import is_admin_production
 from src.core.config_loader import is_single_tenant_mode
 from src.core.domain_config import (
     get_session_cookie_domain,
@@ -111,7 +112,7 @@ def create_app(config=None):
     app.logger.setLevel(logging.INFO)
 
     # Configure session cookies for EventSource compatibility
-    if os.environ.get("PRODUCTION") == "true":
+    if is_admin_production():
         app.config["SESSION_COOKIE_SECURE"] = True  # Required for SameSite=None over HTTPS
         app.config["SESSION_COOKIE_HTTPONLY"] = False  # Allow EventSource to access cookies
         app.config["SESSION_COOKIE_SAMESITE"] = "None"  # Required for EventSource cross-origin requests
@@ -155,7 +156,7 @@ def create_app(config=None):
     app.jinja_env.filters["markdown"] = markdown_filter
 
     # Trust proxy headers in production
-    if os.environ.get("PRODUCTION") == "true":
+    if is_admin_production():
         app.config["PREFERRED_URL_SCHEME"] = "https"
         # Force external URLs to use HTTPS
         app.config["SERVER_NAME"] = None  # Let Flask detect from request
@@ -166,7 +167,7 @@ def create_app(config=None):
         app.config.update(config)
 
     # Apply proxy fixes for production
-    if os.environ.get("PRODUCTION") == "true":
+    if is_admin_production():
         # Create a middleware to copy Fly.io headers to standard headers
         # Fly sends Fly-Forwarded-Proto but Werkzeug expects X-Forwarded-Proto
         class FlyHeadersMiddleware:
@@ -258,7 +259,7 @@ def create_app(config=None):
             f"/admin{request.full_path}" if not request.full_path.startswith("/admin") else request.full_path
         )
 
-        if os.environ.get("PRODUCTION") == "true":
+        if is_admin_production():
             redirect_url = f"{get_tenant_url(tenant_subdomain)}{path_with_admin}"
         else:
             # Local dev: Use localhost with port (unified FastAPI port)
