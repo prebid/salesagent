@@ -1240,7 +1240,7 @@ class AdCPRequestHandler(RequestHandler):
         Identity is resolved ONCE and gates BOTH stores: the in-memory task is
         served only to its recorded owner (``_authorized_in_memory_task``), and the
         durable step lookup is tenant+principal-scoped — so a same-tenant sibling
-        principal who learns a task id can read neither (#1547 round-13 B1).
+        principal who learns a task id can read neither.
 
         The persisted workflow step is the source of truth for an async task's
         outcome: the admin decision that terminalizes it runs in a DIFFERENT
@@ -1347,7 +1347,7 @@ class AdCPRequestHandler(RequestHandler):
         Identity is resolved ONCE and gates both stores: only the recorded owner
         can observe or mutate the in-memory task, and the durable cancel is
         tenant+principal-scoped — a same-tenant sibling principal can neither
-        terminalize the in-memory task nor cancel the workflow (#1547 round-13 B1).
+        terminalize the in-memory task nor cancel the workflow.
 
         Grounding: ``tasks/cancel`` semantics are A2A-protocol-native (A2A spec
         Task Management: ``TaskNotCancelableError`` for tasks already in a
@@ -1810,7 +1810,7 @@ class AdCPRequestHandler(RequestHandler):
             # task body as a failed Task with a two-layer envelope, NOT a JSON-RPC
             # MethodNotFoundError (reserved for unknown JSON-RPC methods). Raised
             # INSIDE this try so the boundary observability below records it exactly
-            # once (Finding: unknown skills bypassed record_boundary_error); the outer
+            # once (an unknown skill must not bypass record_boundary_error); the outer
             # dispatcher's `except AdCPError` re-wraps it into a failed-skill result,
             # preserving accumulated results from earlier skills.
             if skill_name not in skill_handlers:
@@ -2633,7 +2633,7 @@ def create_agent_card() -> AgentCard:
                 tags=["creative", "library", "search", "adcp", "spec"],
             ),
             # Note: approve_creative, get_media_buy_status, and optimize_media_buy are
-            # deliberately NOT advertised (round-9 SF-B). Their handlers unconditionally
+            # deliberately NOT advertised. Their handlers unconditionally
             # raise UNSUPPORTED_FEATURE, so advertising them would promise capabilities
             # the agent does not provide. They stay registered in _skill_handler_map and
             # remain reachable-but-unsupported (structured UNSUPPORTED_FEATURE failed

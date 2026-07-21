@@ -819,7 +819,7 @@ async def get_products(
     except ValueError as e:
         # Helper raises ValueError for semantic (non-Pydantic) input problems.
         # Log the raw exception server-side; do not interpolate str(e) into the
-        # wire message (PR #1547 round-10 boundary-sanitization).
+        # wire message (boundary sanitization — the raw text may carry internals).
         logger.warning("Invalid get_products request: %s", e)
         raise AdCPValidationError(
             "Invalid get_products request.",

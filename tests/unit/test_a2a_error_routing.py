@@ -152,12 +152,16 @@ async def test_explicit_skill_untyped_crash_scrubs_secret_from_failed_task():
 
 
 @pytest.mark.asyncio
-async def test_failed_explicit_skill_task_is_remembered_and_pollable():
-    """A synchronously-returned FAILED explicit-skill Task must be remembered under its owner
-    (like the submitted/successful paths), so the buyer can poll tasks/get on it — a failed Task
-    is a Task-layer outcome, not a transport error. Regression: the failed-batch branch used to
-    return without `_remember_task`, leaving an ownerless orphan in the in-memory maps that
-    `tasks/get` could never serve (and that diverged from the pollable NL-failed path)."""
+async def test_failed_explicit_skill_task_is_pollable_via_tasks_get():
+    """The buyer must be able to poll tasks/get on a synchronously-returned FAILED explicit-skill
+    Task — a failed Task is a Task-layer outcome, not a transport error, and the NL-failed path is
+    already pollable. Regression: the failed-batch branch returned without `_remember_task`, so the
+    task was an ownerless orphan and `on_get_task` served None to its own owner.
+
+    Drives the REAL `on_get_task` (not the private owner map). No durable step exists in this
+    in-memory context (no DB), so the durable lookup is stubbed to None and the assertion rests on
+    the in-memory owned path — which is exactly what the fix populates. Before the fix this returns
+    None (mutation-verified)."""
     handler, ctx = _make_handler()
     params = SendMessageRequest(message=create_a2a_message_with_skill("get_products", {"brief": "video"}))
 
@@ -169,10 +173,17 @@ async def test_failed_explicit_skill_task_is_remembered_and_pollable():
             result = await handler.on_message_send(params, context=ctx)
 
     assert isinstance(result, Task) and result.status.state == TaskState.TASK_STATE_FAILED
-    # The fix: the failed Task is recorded WITH an owner (not an ownerless orphan) — this is what
-    # makes it servable through the memory path of tasks/get.
-    assert result.id in handler._task_owner, "failed explicit-skill Task left ownerless (not pollable)"
-    assert result.id in handler.tasks
+
+    # The owner polls tasks/get. Resolve to the same identity that created the task; no durable
+    # step in a unit context, so on_get_task must serve the failed Task from the owned in-memory
+    # path — which requires the failed branch to have remembered it under its owner.
+    handler._resolve_a2a_identity = MagicMock(return_value=_TEST_IDENTITY)
+    with patch.object(handler, "_durable_task_from_step", return_value=None):
+        polled = await handler.on_get_task(GetTaskRequest(id=result.id), context=ctx)
+
+    assert polled is not None, "owner cannot poll their failed explicit-skill task (ownerless orphan)"
+    assert polled.id == result.id
+    assert polled.status.state == TaskState.TASK_STATE_FAILED
 
 
 @pytest.mark.asyncio

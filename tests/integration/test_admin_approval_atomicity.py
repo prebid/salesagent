@@ -89,6 +89,19 @@ class TestPolicyReviewAtomicity:
         assert resp.status_code in (200, 302)
         assert _status(tenant_id, step_id) == "completed"
 
+    def test_review_unknown_action_is_bad_request_not_conflict(self, client, sample_tenant, sample_principal):
+        """An unknown/missing action is a client error (400 Bad Request), distinct from the 409
+        finalized-task conflict, and must not transition a still-pending step. Regression guard:
+        the else branch previously fell through with ``transitioned = None`` and mislabeled the
+        bad request as a 409 conflict."""
+        tenant_id = sample_tenant["tenant_id"]
+        _auth(client, tenant_id)
+        step_id = _make_step(tenant_id, sample_principal["principal_id"], "requires_approval")
+
+        resp = client.post(f"/tenant/{tenant_id}/policy/review/{step_id}", data={"action": "frobnicate", "notes": "n"})
+        assert resp.status_code == 400
+        assert _status(tenant_id, step_id) == "requires_approval", "an unknown action must not transition the step"
+
 
 class TestOperationsApproveAtomicity:
     def test_media_buy_approve_refused_claim_skips_adapter(self, client, sample_tenant, sample_principal):
