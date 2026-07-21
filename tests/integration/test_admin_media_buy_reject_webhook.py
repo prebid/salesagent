@@ -311,6 +311,12 @@ class TestAdminMediaBuyRejectWebhook:
             f"rejected webhook leaked code {errors[0]['code']!r} to the buyer — the wire code for a "
             "seller rejection is POLICY_VIOLATION (ERROR_CODE_MAPPING; MEDIA_BUY_REJECTED is internal)"
         )
+        assert errors[0].get("recovery") == "correctable", (
+            "rejected webhook must carry the correctable recovery hint from the typed rejection"
+        )
+        assert errors[0].get("suggestion") == "review policy requirements in the error details", (
+            "rejected webhook must carry the pinned POLICY_VIOLATION enumMetadata suggestion"
+        )
         assert "Budget too low" in errors[0].get("message", ""), (
             "rejection reason must reach the buyer in the error message"
         )
@@ -398,6 +404,12 @@ class TestAdminMediaBuyRejectWebhook:
         assert errors and errors[0].get("code") == "POLICY_VIOLATION", (
             f"A2A reject artifact leaked code {errors and errors[0].get('code')!r} — the wire code for a "
             "seller rejection is POLICY_VIOLATION (same contract the MCP sibling pins)"
+        )
+        assert errors[0].get("recovery") == "correctable", (
+            "A2A reject artifact must carry the correctable recovery hint from the typed rejection"
+        )
+        assert errors[0].get("suggestion") == "review policy requirements in the error details", (
+            "A2A reject artifact must carry the pinned POLICY_VIOLATION enumMetadata suggestion"
         )
         assert "Budget too low" in errors[0].get("message", ""), (
             "rejection reason must reach the buyer in the A2A error message"

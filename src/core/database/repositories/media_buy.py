@@ -143,6 +143,10 @@ class MediaBuyRepository:
                 f"Media buy '{media_buy_id}' is being modified by another request; retry shortly.",
                 field="media_buy_id",
                 suggestion="Another update holds the row lock. Re-read the media buy and retry.",
+                # Spec CONFLICT details shape (conflict.json): resource_id only —
+                # expected/current versions are genuinely unknown here (the lock
+                # timed out before the row could be read).
+                details={"resource_id": media_buy_id},
                 recovery="transient",
                 context=context,
             ) from exc

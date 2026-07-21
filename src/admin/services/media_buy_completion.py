@@ -29,7 +29,12 @@ from src.core.database.models import MEDIA_BUY_FINALIZING_STATUS
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.database.repositories.workflow import WorkflowRepository
-from src.core.exceptions import AdCPAdapterError, AdCPMediaBuyRejectedError, build_two_layer_error_envelope
+from src.core.exceptions import (
+    POLICY_VIOLATION_SUGGESTION,
+    AdCPAdapterError,
+    AdCPMediaBuyRejectedError,
+    build_two_layer_error_envelope,
+)
 from src.core.logging_utils import sanitize_log_value
 from src.core.media_buy_flight import lifecycle_status_for_window, resolve_flight_window_utc
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess, Package
@@ -216,7 +221,18 @@ def build_media_buy_result(
     """
     if rejection_reason is not None:
         rejection = AdCPMediaBuyRejectedError(f"Rejected: {rejection_reason}")
-        return CreateMediaBuyError(errors=[Error(code=rejection.wire_error_code, message=rejection.message)])
+        return CreateMediaBuyError(
+            errors=[
+                Error(
+                    code=rejection.wire_error_code,
+                    message=rejection.message,
+                    recovery=rejection.recovery,
+                    # Canonical POLICY_VIOLATION hint from the pinned 3.1.1
+                    # error-code.json enumMetadata.
+                    suggestion=POLICY_VIOLATION_SUGGESTION,
+                )
+            ]
+        )
     return CreateMediaBuySuccess.sync_success(
         media_buy_id=media_buy.media_buy_id,
         packages=[Package(package_id=p.package_id) for p in packages],

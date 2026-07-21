@@ -68,6 +68,7 @@ from src.core.exceptions import (
     build_two_layer_error_envelope,
     normalize_to_adcp_error,
 )
+from src.core.logging_utils import sanitize_log_value
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import coerce_creative_filters, to_account_reference, to_brand_reference
 from src.core.schemas import CreativeStatusEnum
@@ -1092,7 +1093,12 @@ class AdCPRequestHandler(RequestHandler):
                 if auth_token
                 else None
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                "Failed to resolve identity while rebuilding durable task %s: %s",
+                sanitize_log_value(task_id),
+                sanitize_log_value(e),
+            )
             return None
         if identity is None or not identity.tenant_id:
             return None
@@ -1107,9 +1113,10 @@ class AdCPRequestHandler(RequestHandler):
             state = self._STEP_STATUS_TO_TASK_STATE.get(step.status, TaskState.TASK_STATE_WORKING)
             task = Task(id=task_id, context_id=step.context_id, status=TaskStatus(state=state))
             if step.response_data:
-                # A failed step stores a two-layer error envelope; a completed/rejected
-                # one stores the CreateMediaBuySuccess result. Name the artifact to
-                # match so the buyer can tell a failure payload from a result. #1544.
+                # A failed step stores a two-layer error envelope. A completed step
+                # stores CreateMediaBuySuccess; a rejected one stores
+                # CreateMediaBuyError — the artifact name media_buy_result covers
+                # both, TaskState signals the outcome. #1544.
                 is_error = step.status == "failed"
                 task.artifacts.append(
                     Artifact(

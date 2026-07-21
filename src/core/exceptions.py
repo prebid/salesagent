@@ -703,7 +703,10 @@ def media_buy_revision_conflict(
         f"Revision mismatch for media buy '{media_buy_id}': request expected "
         f"revision {expected}, current revision is {current}",
         field="revision",
-        suggestion=(f"Re-read the media buy via get_media_buys and retry the update with revision {current}."),
+        suggestion=(
+            f"Re-read the media buy via get_media_buys and retry the update with "
+            f"revision {current} and a fresh idempotency_key."
+        ),
         details={"resource_id": media_buy_id, "expected_version": expected, "current_version": current},
         recovery="transient",
         context=context,
@@ -1073,6 +1076,7 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
 # INVALID_REQUEST's text.
 INVALID_REQUEST_SUGGESTION = "check request parameters and fix"
 VALIDATION_ERROR_SUGGESTION = "review error details and fix field values"
+POLICY_VIOLATION_SUGGESTION = "review policy requirements in the error details"
 
 
 def first_validation_error_field(validation_error: ValidationError) -> str | None:

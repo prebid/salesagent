@@ -48,6 +48,10 @@ def test_build_media_buy_result_rejection_is_error_with_policy_violation():
     assert isinstance(result, CreateMediaBuyError)
     assert result.errors[0].code == "POLICY_VIOLATION"
     assert "policy violation" in result.errors[0].message
+    # Structured recovery guidance rides the artifact: recovery from the typed
+    # rejection, suggestion = the pinned 3.1.1 enumMetadata hint for POLICY_VIOLATION.
+    assert result.errors[0].recovery == "correctable"
+    assert result.errors[0].suggestion == "review policy requirements in the error details"
 
 
 @pytest.mark.parametrize("protocol", ["mcp", "a2a"])
