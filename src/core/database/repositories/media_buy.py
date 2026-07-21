@@ -1267,6 +1267,15 @@ class MediaBuyRepository:
     # target derived from any of these on a STALE unlocked read can lose a race
     # (e.g. a concurrent end_time extension), so the compute must see the
     # committed values. See :meth:`apply_computed_status_transition` / #1544.
+    #
+    # GUARD: ``revision`` is deliberately EXCLUDED. The counter is bumped by a
+    # server-side ``coalesce(revision, 0) + 1`` expression (see :meth:`_bump_revision`);
+    # if it were refreshed here, the locked re-read would reload the committed value
+    # into the identity map and a Python read-modify-write bump would silently become
+    # collision-free too — masking a regression. Keeping revision OUT of this set is
+    # exactly what makes the server-side increment the SOLE protection on this seam,
+    # which ``test_two_concurrent_apply_status_transition_yield_distinct_revisions``
+    # relies on (adding "revision" here flips that test green even under a Python RMW).
     _LIFECYCLE_REFRESH_FIELDS: tuple[str, ...] = (
         "status",
         "confirmed_at",

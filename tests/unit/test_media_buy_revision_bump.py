@@ -78,8 +78,14 @@ class TestMutationLoadsAreRowLocked:
     ``populate_existing`` re-read — is itself what keeps the revision counter
     collision-free (proven by
     ``TestConcurrentRevisionBump.test_two_concurrent_bumps_yield_distinct_revisions``).
-    The server-side ``coalesce(revision, 0) + 1`` increment is the SEPARATE, sole
-    protection for the UNLOCKED seam (``apply_status_transition``), proven by
+
+    ``apply_status_transition`` (scheduler sweep, creative-sync) ALSO takes a
+    ``FOR UPDATE`` lock, but its locked refresh (``_LIFECYCLE_REFRESH_FIELDS``)
+    deliberately EXCLUDES ``revision`` — the lifecycle inputs (status/window/
+    confirmed_at) are reloaded, the counter is not — so the stale identity-mapped
+    ``revision`` is never overwritten by the re-read, leaving the server-side
+    ``coalesce(revision, 0) + 1`` increment as the SEPARATE, sole protection
+    against a lost bump on that seam, proven by
     ``TestConcurrentRevisionBump.test_two_concurrent_apply_status_transition_yield_distinct_revisions``.
     These assertions only pin that the locking read is issued; they intentionally
     say nothing about the resulting value.
@@ -105,6 +111,25 @@ class TestMutationLoadsAreRowLocked:
     def test_plain_get_by_id_is_not_locked(self):
         # A read-only lookup must NOT hold a row lock.
         assert "FOR UPDATE" not in self._first_stmt_for(lambda r: r.get_by_id("mb-rev-1"))
+
+
+class TestLifecycleRefreshExcludesRevision:
+    """``revision`` must stay OUT of ``_LIFECYCLE_REFRESH_FIELDS``.
+
+    ``apply_status_transition`` locks + refreshes the lifecycle inputs before
+    computing a target, but the revision counter is bumped by a server-side
+    expression. If ``revision`` were added to the refresh set, the locked re-read
+    would reload the committed counter and a Python read-modify-write bump would
+    become collision-free too — masking a regression the concurrent integration
+    test (``test_two_concurrent_apply_status_transition_yield_distinct_revisions``)
+    is meant to catch. This guard pins the exclusion.
+    """
+
+    def test_revision_not_in_lifecycle_refresh_fields(self):
+        assert "revision" not in MediaBuyRepository._LIFECYCLE_REFRESH_FIELDS, (
+            "revision must not be in _LIFECYCLE_REFRESH_FIELDS — refreshing it under the lock "
+            "would mask a lost-update regression in the server-side bump"
+        )
 
 
 class TestRevisionNumericStringCoercionDivergence:

@@ -981,11 +981,16 @@ class TestConcurrentRevisionBump:
       seam stays correct even under a Python read-modify-write — the lock +
       ``populate_existing`` do the work, NOT the server-side increment.
 
-    - **Unlocked seam** (``apply_status_transition``, used by the cross-tenant
-      scheduler sweep and creative-sync): no ``FOR UPDATE``, no
-      ``populate_existing`` re-read, so the server-side ``revision =
-      coalesce(revision, 0) + 1`` is the SOLE protection. This is the seam that
-      goes red if the increment regresses to a Python read-modify-write.
+    - **Revision-excluded seam** (``apply_status_transition``, used by the
+      cross-tenant scheduler sweep and creative-sync): this seam DOES take a
+      ``FOR UPDATE`` lock, but its locked refresh set
+      (``MediaBuyRepository._LIFECYCLE_REFRESH_FIELDS``) deliberately EXCLUDES
+      ``revision`` — status/window/confirmed_at are reloaded under the lock, the
+      counter is not — so the locked re-read never clobbers the pending bump, and
+      the server-side ``revision = coalesce(revision, 0) + 1`` is the SOLE
+      protection. This is the seam that goes red if the increment regresses to a
+      Python read-modify-write (adding ``revision`` to the refresh set would
+      defeat it — see the guard note on ``_LIFECYCLE_REFRESH_FIELDS``).
 
     The second test below is therefore the one that actually isolates the
     server-side increment (#1544).
@@ -1020,16 +1025,21 @@ class TestConcurrentRevisionBump:
         assert final_rev == 3, f"expected two distinct bumps 1→2→3, got final revision {final_rev}"
 
     def test_two_concurrent_apply_status_transition_yield_distinct_revisions(self, tenant_a, principal_a):
-        """The unlocked seam relies solely on the server-side increment.
+        """The revision-excluded seam relies solely on the server-side increment.
 
-        ``apply_status_transition`` (scheduler sweep, creative-sync) loads its row
-        WITHOUT ``FOR UPDATE`` and WITHOUT ``populate_existing``, so nothing
-        refreshes the stale identity-mapped counter before the bump — the
-        server-side ``coalesce(revision, 0) + 1`` is the only thing standing
-        between two concurrent transitions and a lost update. Unlike the locked
-        bump test above, THIS one goes red if the increment regresses to a Python
+        ``apply_status_transition`` (scheduler sweep, creative-sync) DOES take a
+        ``FOR UPDATE`` lock, but its locked refresh set
+        (``MediaBuyRepository._LIFECYCLE_REFRESH_FIELDS``) deliberately EXCLUDES
+        ``revision`` — the lifecycle inputs (status/window/confirmed_at) are
+        reloaded under the lock, the counter is not — so the stale identity-mapped
+        ``revision`` survives the re-read and the server-side
+        ``coalesce(revision, 0) + 1`` is the only thing standing between two
+        concurrent transitions and a lost update. Unlike the locked bump test
+        above, THIS one goes red if the increment regresses to a Python
         read-modify-write (both threads would write ``2``, leaving the final
-        revision at 2 instead of 3). #1544.
+        revision at 2 instead of 3). Verified: adding ``revision`` to the refresh
+        set flips this test green even under a Python read-modify-write, which is
+        exactly why the counter is kept out of that set. #1544.
         """
         # Start already 'active' so both threads transition active→active: the
         # source status is unchanged under lock, so both legitimately proceed and
@@ -1042,6 +1052,8 @@ class TestConcurrentRevisionBump:
             with MediaBuyUoW(tenant_a) as uow:
                 # Plain get_by_id: unlocked, no populate_existing — the stale
                 # in-memory revision both threads hold before either commits.
+                # apply_status_transition locks the row later, but its refresh set
+                # excludes revision, so this stale counter is never reloaded.
                 mb = uow.media_buys.get_by_id("mb_ast_concurrent")
                 assert mb is not None
                 barrier.wait()
