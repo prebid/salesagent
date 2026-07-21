@@ -668,6 +668,38 @@ class TestGetMediaBuysResponseStructure:
         assert "media_buys" in data
         assert data["media_buys"] == []
 
+    def test_unconfirmed_buy_wire_carries_required_confirmed_at_and_revision(self):
+        """3.1.1 requires confirmed_at (nullable) + revision on each returned buy.
+
+        For an unconfirmed buy (confirmed_at=None), the inherited exclude_none=True
+        would drop confirmed_at from the wire body — but get-media-buys-response lists
+        it REQUIRED, so the serializer re-injects it as null. revision is a non-null
+        persisted int and always survives. This exercises the production wire path
+        (model_dump(exclude_none=True), the same call the tool serialization uses).
+        """
+        resp = GetMediaBuysResponse(
+            media_buys=[
+                GetMediaBuysMediaBuy(
+                    media_buy_id="mb_unconfirmed",
+                    status=MediaBuyStatus.pending_start,
+                    currency="USD",
+                    total_budget=1000.0,
+                    packages=[],
+                    confirmed_at=None,
+                    revision=1,
+                ),
+            ],
+        )
+
+        data = resp.model_dump(exclude_none=True)
+
+        mb = data["media_buys"][0]
+        assert "confirmed_at" in mb, "confirmed_at REQUIRED on the wire even when null"
+        assert mb["confirmed_at"] is None
+        assert "revision" in mb
+        assert isinstance(mb["revision"], int)
+        assert mb["revision"] == 1
+
     def test_nested_serialization_roundtrip(self):
         """model_dump() recursively serializes all nested models to plain dicts.
 

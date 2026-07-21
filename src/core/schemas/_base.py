@@ -2807,11 +2807,14 @@ class GetMediaBuysMediaBuy(SalesAgentBaseModel):
     packages: list[GetMediaBuysPackage] = Field(..., description="Packages within this media buy")
     created_at: datetime | None = Field(default=None, description="When this media buy was created")
     updated_at: datetime | None = Field(default=None, description="When this media buy was last updated")
-    # AdCP media-buy spec PROSE (pinned 3.1.1) requires these on each
-    # returned buy; the 3.1.1 JSON schema lists them optional
-    # (get-media-buys-response media_buys[].required omits both — prose/schema
-    # divergence tracked in #1564). revision is the persisted monotonic counter;
-    # confirmed_at is the persisted, write-once seller confirmation instant.
+    # adcp 6.6 (spec 3.1.1) requires confirmed_at (nullable) and revision on each
+    # returned buy of get-media-buys-response. revision is the persisted monotonic
+    # counter (always >= 1, so it survives serialization). confirmed_at is the
+    # persisted, write-once seller confirmation instant and is nullable — None until
+    # the seller has committed to the buy. Because the inherited exclude_none=True
+    # would DROP a null confirmed_at, leaving the body missing a REQUIRED key, the
+    # serializer below re-injects it as null whenever it is absent (mirroring the
+    # CreateMediaBuySuccess.model_dump success-arm invariant). See PR #1544.
     confirmed_at: datetime | None = Field(
         default=None, description="When this media buy was committed by the seller (stable after set)"
     )
@@ -2821,6 +2824,11 @@ class GetMediaBuysMediaBuy(SalesAgentBaseModel):
         result = super().model_dump(**kwargs)
         if "packages" in result and self.packages:
             result["packages"] = [pkg.model_dump(**kwargs) for pkg in self.packages]
+        # confirmed_at is a REQUIRED (nullable) 3.1.1 field; exclude_none=True would
+        # drop it for an unconfirmed buy, so re-emit it as null when absent. The
+        # setdefault never clobbers a real committed instant already in ``result``.
+        # revision is a non-null int (persisted >= 1) so it always survives.
+        result.setdefault("confirmed_at", None)
         return result
 
 
