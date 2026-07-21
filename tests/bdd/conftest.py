@@ -2734,6 +2734,12 @@ _UC003_WIRED: set[str] = {
     # v3.1 CONFLICT details shape (error-details/conflict.json: resource_id /
     # expected_version / current_version) — #1544 round 7.
     "T-UC-003-v31-error-conflict-version",
+    # BR-RULE-215 INV-6: idempotency_key and revision are evaluated independently —
+    # a valid update carrying BOTH (matching revision + an idempotency_key) still
+    # succeeds. Same real create+update wire path as the INV-4 sibling
+    # (T-UC-003-revision-success-increments); the request-builder step already
+    # supports the idempotency_key field. #1544.
+    "T-UC-003-revision-and-idempotency-independent",
 }
 
 # UC-019 scenarios wired to MediaBuyLifecycleEnv (create/update/get composite;
