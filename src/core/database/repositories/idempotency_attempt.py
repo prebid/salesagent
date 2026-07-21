@@ -1,16 +1,11 @@
 """Dormant tenant-scoped idempotency storage primitives.
 
-FIXME(#1683): dormant while create-replay is descoped. The seller advertises
-AdCP 3.1.1 ``idempotency.supported=false``; production transports and tools do
-not consult or write this repository, and supplied keys are operationally inert
-after boundary shape validation. The repository is deliberately retained (not
-deleted with the rest of the descoped machinery) for two reasons: it is the
-schema seam over the ``idempotency_attempts`` table, and the supported=false
-contract tests (test_idempotency_wire_matrix / test_idempotency_replay) use its
-full method surface as their negative oracle — seeding a historical cache row
-and proving no method is invoked and no row changes across repeated creates.
-The probe-first replay rebuild tracked by #1683 rewires it into production and
-removes this marker.
+The seller currently advertises AdCP 3.1.1 ``idempotency.supported=false``.
+Production transports and tools therefore do not consult or write this
+repository, and supplied keys are operationally inert after boundary shape
+validation. The table and repository remain migration-safe substrate for a
+future, separately grounded implementation; direct repository tests exercise
+only these storage primitives, not a capability the seller currently exposes.
 """
 
 from __future__ import annotations
@@ -167,10 +162,9 @@ class IdempotencyAttemptRepository:
         — callers of this primitive must handle a duplicate insert themselves.
 
         ``payload_hash`` is the RFC 8785 canonical hash of the request payload
-        (the canonicalizer seam was deleted with the replay descope; the rebuild
-        restores it — #1683). It is retained so a future implementation can
-        compare the stored request without changing the schema. The currently
-        advertised unsupported behavior never reads it.
+        (see ``src.core.idempotency_canonical``). It is retained so a future
+        implementation can compare the stored request without changing the
+        schema. The currently advertised unsupported behavior never reads it.
         """
         current = now or datetime.now(UTC)
         attempt = IdempotencyAttempt(
@@ -198,8 +192,7 @@ class IdempotencyAttemptRepository:
 
         Pure scope query (expired rows included — the insert-rate question is
         about row creation, not liveness). Thresholds and the rejection
-        decision belong to the policy layer, deleted with the replay descope
-        and restored by the rebuild (#1683).
+        decision live in :mod:`src.services.idempotency_policy`.
         """
         scope = (*self._scope_prefix(principal_id, account_id), IdempotencyAttempt.created_at > since)
         return self._count_and_oldest(scope, IdempotencyAttempt.created_at)
@@ -214,8 +207,7 @@ class IdempotencyAttemptRepository:
         """COUNT and MIN(expires_at) of non-expired rows in scope.
 
         Pure scope query; the storage ceiling and ``retry_after`` derivation
-        belong to the policy layer, deleted with the replay descope and
-        restored by the rebuild (#1683).
+        live in :mod:`src.services.idempotency_policy`.
         """
         scope = (*self._scope_prefix(principal_id, account_id), IdempotencyAttempt.expires_at > now)
         return self._count_and_oldest(scope, IdempotencyAttempt.expires_at)
