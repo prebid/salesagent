@@ -920,8 +920,13 @@ class AdCPRequestHandler(RequestHandler):
                     # failed skill's two-layer envelope AND any sibling successes or
                     # pending results) ride in the Task body. Immediate terminal
                     # response returned synchronously → no webhook (a2a-guide.mdx
-                    # terminal-state rule).
+                    # terminal-state rule). Remember the task under its owner (like the
+                    # submitted/successful branches) so the buyer can poll tasks/get on a
+                    # failed explicit skill — a failed Task is a Task-layer outcome, and
+                    # leaving it unremembered both diverges from the NL-failed path and
+                    # strands an ownerless entry in the in-memory maps.
                     self._mark_task_failed(task)
+                    self._remember_task(task_id, task, identity)
                     return task
 
                 if submitted_skills:

@@ -39,6 +39,7 @@ from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _dict_to_value
 from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPValidationError
 from tests.a2a_helpers import make_a2a_context
 from tests.helpers import assert_envelope_shape
+from tests.helpers.secret_scrub import SECRET_BEARING_MESSAGE, assert_no_secret_leak
 from tests.utils.a2a_helpers import (
     create_a2a_message_with_skill,
     extract_data_from_artifact,
@@ -76,7 +77,7 @@ async def test_untyped_crash_raises_sanitized_internal_error_without_leaking_sec
     """
     handler, ctx = _make_handler()
     params = make_nl_send_message_request("Show me available products in the catalog")
-    secret = "postgresql://svc:hunter2@db.internal/prod SELECT * FROM principals"
+    secret = SECRET_BEARING_MESSAGE
 
     with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY):
         with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool", side_effect=RuntimeError(secret)):
@@ -85,8 +86,7 @@ async def test_untyped_crash_raises_sanitized_internal_error_without_leaking_sec
 
     err = exc_info.value
     client_facing = f"{err.message} {json.dumps(err.data)}"
-    for leak in ("hunter2", "postgresql://", "db.internal", "SELECT", "principals"):
-        assert leak not in client_facing, f"raw exception leaked to client ({leak!r}): {client_facing}"
+    assert_no_secret_leak(client_facing)
     # Still a structured error with a safe, generic wire code + message.
     assert err.data["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
     assert "internal error" in err.message.lower()
@@ -130,7 +130,7 @@ async def test_explicit_skill_untyped_crash_scrubs_secret_from_failed_task():
     """
     handler, ctx = _make_handler()
     params = SendMessageRequest(message=create_a2a_message_with_skill("get_products", {"brief": "video"}))
-    secret = "postgresql://svc:hunter2@db.internal/prod SELECT * FROM principals"
+    secret = SECRET_BEARING_MESSAGE
 
     with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY):
         with patch.object(handler, "_handle_explicit_skill", new_callable=AsyncMock, side_effect=RuntimeError(secret)):
@@ -145,11 +145,34 @@ async def test_explicit_skill_untyped_crash_scrubs_secret_from_failed_task():
     envelope = extract_data_from_artifact(artifact)
     text_parts = [p.text for p in artifact.parts if p.HasField("text")]
     client_facing = json.dumps(envelope) + " " + " ".join(text_parts)
-    for leak in ("hunter2", "postgresql://", "db.internal", "SELECT", "principals"):
-        assert leak not in client_facing, f"raw exception leaked to client ({leak!r}): {client_facing}"
+    assert_no_secret_leak(client_facing)
     # Sanitized to a generic internal error, not a str(exc)-derived message/code.
     assert envelope["errors"][0]["code"] == "SERVICE_UNAVAILABLE"
     assert "internal error" in envelope["errors"][0]["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_failed_explicit_skill_task_is_remembered_and_pollable():
+    """A synchronously-returned FAILED explicit-skill Task must be remembered under its owner
+    (like the submitted/successful paths), so the buyer can poll tasks/get on it — a failed Task
+    is a Task-layer outcome, not a transport error. Regression: the failed-batch branch used to
+    return without `_remember_task`, leaving an ownerless orphan in the in-memory maps that
+    `tasks/get` could never serve (and that diverged from the pollable NL-failed path)."""
+    handler, ctx = _make_handler()
+    params = SendMessageRequest(message=create_a2a_message_with_skill("get_products", {"brief": "video"}))
+
+    async def _boom(params, identity):
+        raise ValueError("boom")
+
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY):
+        with patch.object(handler, "_handle_get_products_skill", new_callable=AsyncMock, side_effect=_boom):
+            result = await handler.on_message_send(params, context=ctx)
+
+    assert isinstance(result, Task) and result.status.state == TaskState.TASK_STATE_FAILED
+    # The fix: the failed Task is recorded WITH an owner (not an ownerless orphan) — this is what
+    # makes it servable through the memory path of tasks/get.
+    assert result.id in handler._task_owner, "failed explicit-skill Task left ownerless (not pollable)"
+    assert result.id in handler.tasks
 
 
 @pytest.mark.asyncio
@@ -175,7 +198,7 @@ async def test_explicit_skill_raw_builtin_scrubs_secret_but_keeps_semantic_code(
     """
     handler, ctx = _make_handler()
     params = SendMessageRequest(message=create_a2a_message_with_skill("get_products", {"brief": "video"}))
-    secret = "postgresql://svc:hunter2@db.internal/prod SELECT * FROM principals"
+    secret = SECRET_BEARING_MESSAGE
 
     with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY):
         with patch.object(
@@ -189,8 +212,7 @@ async def test_explicit_skill_raw_builtin_scrubs_secret_but_keeps_semantic_code(
     envelope = extract_data_from_artifact(artifact)
     text_parts = [p.text for p in artifact.parts if p.HasField("text")]
     client_facing = json.dumps(envelope) + " " + " ".join(text_parts)
-    for leak in ("hunter2", "postgresql://", "db.internal", "SELECT", "principals"):
-        assert leak not in client_facing, f"raw exception leaked to client ({leak!r}): {client_facing}"
+    assert_no_secret_leak(client_facing)
     # SEMANTIC code preserved (matches the synchronous boundary), message scrubbed AND
     # category-appropriate — a VALIDATION_ERROR / AUTH_REQUIRED must not read "internal error".
     assert envelope["errors"][0]["code"] == expected_code

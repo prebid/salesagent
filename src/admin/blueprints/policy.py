@@ -259,7 +259,8 @@ def review_task(tenant_id, task_id):
                         task_id, status="failed", response_data={"approved": False, "notes": notes}
                     )
                 else:
-                    transitioned = None
+                    # An unknown/missing action is a bad request, not a finalized-task conflict.
+                    return "Invalid action", 400
 
                 if transitioned is None:
                     return "Task was already finalized (e.g. canceled) and cannot be reviewed", 409

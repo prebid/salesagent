@@ -29,6 +29,7 @@ from src.core.exceptions import (
 # the envelope is now a one-place update.
 # ---------------------------------------------------------------------------
 from tests.helpers import assert_envelope_shape  # noqa: E402
+from tests.helpers.secret_scrub import SECRET_BEARING_MESSAGE, assert_no_secret_leak
 
 # Per-boundary assertion wrappers were removed in favor of the canonical
 # `assert_envelope_shape` helper. Call sites use keyword flags directly:
@@ -733,15 +734,14 @@ class TestA2ADispatcherFailedSkillResult:
         """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
-        secret = "postgresql://svc:hunter2@db.internal/prod SELECT * FROM principals"
+        secret = SECRET_BEARING_MESSAGE
         result = AdCPRequestHandler._build_failed_skill_result(
             "create_media_buy", AdCPAdapterError(f"Failed to create media buy: {secret}")
         )
 
         env = result["error_envelope"]
         blob = json.dumps(env)
-        for leak in ("hunter2", "postgresql://", "db.internal", "SELECT", "principals"):
-            assert leak not in blob, f"internal-error message leaked {leak!r} to the wire: {blob}"
+        assert_no_secret_leak(blob)
         # Wire code preserved (adapter → SERVICE_UNAVAILABLE); recovery preserved (transient).
         assert env["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
         assert env["errors"][0]["code"] == "SERVICE_UNAVAILABLE"
@@ -761,14 +761,13 @@ class TestA2ADispatcherFailedSkillResult:
         """
         from src.a2a_server.adcp_a2a_server import _internal_error_for
 
-        secret = "postgresql://svc:hunter2@db.internal/prod SELECT * FROM principals"
+        secret = SECRET_BEARING_MESSAGE
         err = _internal_error_for(
             "set_task_push_notification_config", AdCPAdapterError(f"Failed to store config: {secret}")
         )
 
         full_wire = json.dumps({"message": err.message, "data": err.data})
-        for leak in ("hunter2", "postgresql://", "db.internal", "SELECT", "principals"):
-            assert leak not in full_wire, f"JSON-RPC wire leaked {leak!r}: {full_wire}"
+        assert_no_secret_leak(full_wire)
         # Wire code + recovery still accurate in the envelope.
         assert err.data["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
         assert err.data["errors"][0]["recovery"] == "transient"
@@ -795,7 +794,7 @@ class TestA2ADispatcherFailedSkillResult:
         import src.a2a_server.adcp_a2a_server as a2a_mod
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
-        secret = "postgresql://svc:hunter2@db.internal/prod SELECT * FROM principals"
+        secret = SECRET_BEARING_MESSAGE
 
         handler = AdCPRequestHandler()
         handler._get_auth_token = lambda context: "tok"  # noqa: ARG005
@@ -822,8 +821,7 @@ class TestA2ADispatcherFailedSkillResult:
         # Serialize through the SDK's real JSON-RPC error builder (the dispatcher's path).
         wire_dict = build_error_response("req-1", err)
         serialized = json.dumps(wire_dict if isinstance(wire_dict, dict) else wire_dict.model_dump(), default=str)
-        for leak in ("hunter2", "postgresql://", "db.internal", "SELECT", "principals"):
-            assert leak not in serialized, f"push-config handler leaked {leak!r} on the JSON-RPC wire: {serialized}"
+        assert_no_secret_leak(serialized)
         assert wire_dict["error"]["data"]["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
 
     def test_internal_error_for_preserves_correctable_message(self):

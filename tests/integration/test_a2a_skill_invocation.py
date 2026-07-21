@@ -590,7 +590,6 @@ class TestA2ASkillInvocation:
         assert refused3 is None, "approval must refuse after a cancel committed, even from a stale read (TOCTOU)"
         assert self._step_status(tenant_id, step3) == "canceled"
 
-    @pytest.mark.asyncio
     def _step_response_data(self, tenant_id: str, step_id: str) -> dict | None:
         """Read a step's committed response_data in its own fresh UoW session."""
         from src.core.database.repositories import WorkflowUoW

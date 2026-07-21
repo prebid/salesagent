@@ -212,7 +212,7 @@ def _list_creative_formats_impl(
         # infra detail (hosts, connection strings). Keep str(e) off the wire.
         logger.error(f"Failed to create creative agent registry: {e}", exc_info=True)
         raise AdCPServiceUnavailableError(
-            "Creative agent registry initialization failed.",
+            "Failed to initialize creative agent registry.",
             context=req.context,
         ) from e
 

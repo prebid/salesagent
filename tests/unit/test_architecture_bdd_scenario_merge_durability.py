@@ -194,7 +194,7 @@ def test_is_spec_artifact_ref_discriminates_source_from_requirement_id():
     # POSITIVE — a source-less scenario grounds itself in a spec ARTIFACT (prose/storyboard/schema
     # by path or URL); each must be recognized as a candidate ref.
     for ref in (
-        "dist/docs/3.1.1/building/implementation/create-media-buy.mdx",
+        "dist/docs/3.1.1/media-buy/task-reference/create_media_buy.mdx",
         "dist/compliance/3.1.1/uc-004.yaml",
         "dist/compliance/3.1.1/uc-004.yml",
         "schemas/v1/media-buy.json",
