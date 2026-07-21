@@ -7,6 +7,13 @@ connect+read ``timeout`` defaults to blocking forever. This AST guard fails the
 build on any ``requests.<method>(...)`` in ``src/adapters`` that omits ``timeout=``
 — use :data:`src.adapters.constants.ADAPTER_HTTP_TIMEOUT`.
 
+``requests.Session(...)`` construction is flagged too: calls made through a
+session-bound variable (``session.post(...)``) are invisible to the per-call
+matcher (it anchors on the ``requests`` module name), so a Session would be a
+silent escape hatch from the timeout contract. No adapter uses one today; if one
+ever must, it needs its own per-call timeout discipline plus an explicit
+allowlist entry here.
+
 Non-``requests`` clients (googleads SOAP, broadstreet client) bound themselves at
 construction and are out of scope for this text-level guard.
 """
@@ -23,17 +30,25 @@ ALLOWLIST: set[tuple[str, int]] = set()
 
 
 def _unbounded_requests_calls(tree: ast.AST) -> list[int]:
-    """Line numbers of ``requests.<method>(...)`` calls that omit a ``timeout`` kwarg."""
+    """Line numbers of unbounded ``requests`` usage.
+
+    Flags ``requests.<method>(...)`` calls that omit a ``timeout`` kwarg, and any
+    ``requests.Session(...)`` construction (calls through a session variable
+    evade the per-call matcher, so a Session is an escape hatch — see module
+    docstring).
+    """
     hits: list[int] = []
     for node in ast.walk(tree):
-        if (
+        if not (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
-            and node.func.attr in _REQUESTS_METHODS
             and isinstance(node.func.value, ast.Name)
             and node.func.value.id == "requests"
-            and not any(kw.arg == "timeout" for kw in node.keywords)
         ):
+            continue
+        if node.func.attr == "Session":
+            hits.append(node.lineno)
+        elif node.func.attr in _REQUESTS_METHODS and not any(kw.arg == "timeout" for kw in node.keywords):
             hits.append(node.lineno)
     return hits
 
@@ -56,4 +71,44 @@ def test_adapter_requests_calls_are_bounded():
             "Pass timeout=ADAPTER_HTTP_TIMEOUT (from src.adapters.constants) to every "
             "requests call so a hung ad server cannot pin an update_media_buy row lock. #1544."
         ),
+    )
+
+
+# ── Guard self-tests: synthetic snippets through the matcher ─────────────────
+# Mirrors test_architecture_media_buy_status_writes.py — a guard whose matcher
+# silently stops matching is a green build with no protection.
+
+
+def _snippet_hits(snippet: str) -> list[int]:
+    """Run the matcher over a synthetic source snippet."""
+    return _unbounded_requests_calls(ast.parse(snippet))
+
+
+def test_guard_detects_unbounded_requests_call():
+    """Known-bad: a ``requests`` call without ``timeout=`` is flagged at its line."""
+    assert _snippet_hits('import requests\n\n\ndef f(url):\n    return requests.post(url, json={"a": 1})\n') == [5]
+
+
+def test_guard_detects_session_construction():
+    """Known-bad: ``requests.Session()`` is flagged — the per-call matcher cannot
+    see calls through the session variable, so construction itself is the seam."""
+    assert _snippet_hits("import requests\n\n\ndef f():\n    s = requests.Session()\n    return s\n") == [5]
+
+
+def test_guard_accepts_bounded_requests_call():
+    """Known-good: a ``timeout=`` kwarg (any expression) satisfies the guard, and
+    non-HTTP ``requests`` attributes (exceptions module) are out of scope."""
+    assert (
+        _snippet_hits(
+            "import requests\n"
+            "from src.adapters.constants import ADAPTER_HTTP_TIMEOUT\n"
+            "\n"
+            "\n"
+            "def f(url):\n"
+            "    try:\n"
+            "        return requests.get(url, timeout=ADAPTER_HTTP_TIMEOUT)\n"
+            "    except requests.exceptions.Timeout:\n"
+            "        raise\n"
+        )
+        == []
     )
