@@ -77,8 +77,11 @@ class TestMediaBuyListEnvExists:
 
         assert MediaBuyListEnv is not None
 
-    def test_mcp_list_dispatch_uses_real_client_pipeline(self):
-        """The MCP list path must retain the success wire via FastMCP Client."""
+    def test_mcp_list_dispatch_delegates_to_run_mcp_client(self):
+        """_call_list_mcp forwards to _run_mcp_client with the tool name, response
+        type, and request kwargs. This pins the delegation wiring only; the real
+        FastMCP client wire is covered by the BDD transport-parity dispatch.
+        """
         from src.core.schemas._base import GetMediaBuysResponse
         from tests.harness.media_buy_list import MediaBuyListEnv
 
