@@ -5,7 +5,6 @@ creative-unblock routes can emit the same completion artifact (async buyers
 otherwise never get the final revision/confirmed_at). #1544.
 """
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -72,7 +71,16 @@ def test_emit_media_buy_webhook_sends_payload_carrying_reason(protocol):
 
     assert service.send_notification.call_count == 1
     payload = service.send_notification.call_args.kwargs["payload"]
-    assert "brand-safety-xyz" in json.dumps(_to_wire_dict(payload))
+    # Assert on the TYPED error message field at its exact wire location per
+    # protocol, not a blanket json.dumps substring (which would pass on the
+    # reason appearing anywhere in the payload). MCP nests the result directly;
+    # A2A wraps it in a failed-Task artifact DataPart.
+    wire = _to_wire_dict(payload)
+    if protocol == "a2a":
+        errors = wire["artifacts"][0]["parts"][0]["data"]["errors"]
+    else:
+        errors = wire["result"]["errors"]
+    assert errors[0]["message"] == "Rejected: brand-safety-xyz"
 
 
 def test_emit_media_buy_webhook_swallows_delivery_errors():
