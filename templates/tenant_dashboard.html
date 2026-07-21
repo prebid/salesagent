@@ -1254,12 +1254,15 @@ async function quickRejectWorkflow(workflowId, stepId) {
             body: JSON.stringify({ reason })
         });
 
-        if (response.ok) {
+        const data = await response.json().catch(() => null);
+        if (response.status === 409) {
+            alert((data && data.error) || 'This workflow step was already decided by another request');
+            window.location.reload();
+        } else if (response.ok) {
             alert('Workflow step rejected successfully!');
             window.location.reload();
         } else {
-            const error = await response.text();
-            alert(`Failed to reject: ${error}`);
+            alert(`Failed to reject: ${(data && data.error) || response.statusText}`);
         }
     } catch (err) {
         alert(`Error: ${err.message}`);

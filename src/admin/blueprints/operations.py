@@ -102,11 +102,12 @@ def media_buy_detail(tenant_id, media_buy_id):
     from src.core.context_manager import ContextManager
     from src.core.database.database_session import get_db_session
     from src.core.database.models import (
+        MEDIA_BUY_FINALIZING_STATUS,
         Creative,
         CreativeAssignment,
         Principal,
         Product,
-        WorkflowStep,
+        is_media_buy_approvable,
     )
 
     try:
@@ -176,20 +177,16 @@ def media_buy_detail(tenant_id, media_buy_id):
             ctx_manager = ContextManager()
             workflow_steps = ctx_manager.get_object_lifecycle("media_buy", media_buy_id, tenant_id=tenant_id)
 
-            # Find if there's a pending approval step
-            pending_approval_step = None
-            for step in workflow_steps:
-                if step.get("status") in ["requires_approval", "pending_approval"]:
-                    # Get the full workflow step for approval actions (tenant-scoped via Context join)
-                    from src.core.database.models import Context as DBContext
-
-                    stmt = (
-                        select(WorkflowStep)
-                        .join(DBContext)
-                        .where(DBContext.tenant_id == tenant_id, WorkflowStep.step_id == step["step_id"])
-                    )
-                    pending_approval_step = db_session.scalars(stmt).first()
-                    break
+            # Find the actionable CREATE approval step via the SAME selection the
+            # approve/reject POST uses (so the form only renders when the POST would
+            # actually act), and gate the approve form on the buy being (re)approvable.
+            # This includes a ``finalizing`` buy parked ``manual_required`` — its create
+            # step is deliberately left ``in_progress`` so the operator RE-APPROVAL can
+            # find it, which the old requires_approval/pending_approval filter missed. #1544.
+            media_buy_approvable = is_media_buy_approvable(media_buy)
+            pending_approval_step = (
+                _select_actionable_create_step(db_session, tenant_id, media_buy_id) if media_buy_approvable else None
+            )
 
             # Get computed readiness state (not just raw database status)
             from src.admin.services.media_buy_readiness_service import MediaBuyReadinessService
@@ -199,7 +196,15 @@ def media_buy_detail(tenant_id, media_buy_id):
 
             # Determine status message
             status_message = None
-            if pending_approval_step:
+            if pending_approval_step and media_buy.status == MEDIA_BUY_FINALIZING_STATUS:
+                status_message = {
+                    "type": "approval_required",
+                    "message": (
+                        "This media buy is parked for manual re-approval after a partial "
+                        "finalization. Verify the ad server, then re-approve."
+                    ),
+                }
+            elif pending_approval_step:
                 status_message = {
                     "type": "approval_required",
                     "message": "This media buy requires manual approval before it can be activated.",
@@ -286,6 +291,7 @@ def media_buy_detail(tenant_id, media_buy_id):
                 packages=packages,
                 workflow_steps=workflow_steps,
                 pending_approval_step=pending_approval_step,
+                media_buy_approvable=media_buy_approvable,
                 status_message=status_message,
                 creative_assignments_by_package=creative_assignments_by_package,
                 computed_state=computed_state,
@@ -396,7 +402,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 )
                 attributes.flag_modified(step, "comments")
 
-                from src.core.database.models import is_media_buy_approvable
+                from src.core.database.models import MEDIA_BUY_FINALIZING_STATUS, is_media_buy_approvable
 
                 if media_buy and is_media_buy_approvable(media_buy):
                     # Check if all creatives are approved before moving to scheduled
@@ -476,8 +482,21 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         )
                     else:
                         flash("This media buy was already decided by another request", "warning")
+                elif media_buy is not None and media_buy.status == MEDIA_BUY_FINALIZING_STATUS:
+                    # Plain in-flight ``finalizing`` (a live lease owner is completing
+                    # the decision) — NOT approvable, NOT terminal. No claim was won, so
+                    # discard the pre-claim "Approved by" comment and report the
+                    # in-progress state instead of claiming success. #1544.
+                    db_session.rollback()
+                    flash(
+                        "Media buy approval is in progress — the ad-server order will be created automatically shortly",
+                        "info",
+                    )
                 else:
-                    db_session.commit()
+                    # Already-decided (terminal) replay or buy gone — idempotent success,
+                    # but no claim was won: discard the pre-claim "Approved by" comment
+                    # rather than committing an approval comment nobody acted on. #1544.
+                    db_session.rollback()
                     flash("Media buy approved successfully", "success")
 
             elif action == "reject":

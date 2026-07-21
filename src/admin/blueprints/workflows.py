@@ -15,7 +15,12 @@ from src.admin.services.media_buy_completion import (
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
-from src.core.database.models import WORKFLOW_STEP_TERMINAL_STATUSES, Context, is_media_buy_approvable
+from src.core.database.models import (
+    MEDIA_BUY_FINALIZING_STATUS,
+    WORKFLOW_STEP_TERMINAL_STATUSES,
+    Context,
+    is_media_buy_approvable,
+)
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.workflow import WorkflowRepository
@@ -236,19 +241,21 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                                 f"[APPROVAL] Cannot execute adapter creation yet - "
                                 f"{len(unapproved_creatives)} creatives not approved: {unapproved_creatives}"
                             )
-                            flash(
-                                f"Media buy approved! Waiting for {len(unapproved_creatives)} creative(s) to be approved before creating in GAM.",
-                                "info",
-                            )
                             # Shared single-winner CLAIM on pending_approval →
                             # pending_creatives, so a concurrent approve/reject that
-                            # already decided the buy is not overwritten. #1544.
+                            # already decided the buy is not overwritten. The flash is
+                            # queued ONLY after the claim is won — a lost claim must not
+                            # tell the operator the buy was approved. #1544.
                             if not claim_pending_creatives_hold(
                                 db, tenant_id, media_buy_id=media_buy_id, approved_by=user_email
                             ):
                                 return jsonify(
                                     {"success": False, "error": "This media buy was already decided by another request"}
                                 ), 409
+                            flash(
+                                f"Media buy approved! Waiting for {len(unapproved_creatives)} creative(s) to be approved before creating in GAM.",
+                                "info",
+                            )
                             return jsonify({"success": True}), 200
 
                     # Creatives ready → finalize atomically via the shared seam (same
@@ -292,6 +299,18 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
 
                     logger.info(f"[APPROVAL] Media buy {media_buy_id} successfully created in adapter")
                     flash("Workflow step approved and media buy created successfully", "success")
+                elif media_buy is not None and media_buy.status == MEDIA_BUY_FINALIZING_STATUS:
+                    # Plain in-flight ``finalizing`` (a live lease owner is completing the
+                    # decision) — NOT approvable, NOT terminal. Do not claim success:
+                    # report the in-progress state (same 202 vocabulary as RETRYING). #1544.
+                    logger.info(f"[APPROVAL] Media buy {media_buy_id} finalization already in flight")
+                    return jsonify(
+                        {
+                            "success": True,
+                            "pending": True,
+                            "message": "Approval in progress — completes automatically",
+                        }
+                    ), 202
                 else:
                     # The mapped buy is no longer pending_approval (already decided, or
                     # gone). Do NOT write the step — the step follows the buy decision and
