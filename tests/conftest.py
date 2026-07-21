@@ -14,6 +14,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+# The X-* test-header gate is fail-CLOSED (#1544): the hooks are honored only
+# with an explicit dev/test ENVIRONMENT. The test suite IS a test environment,
+# so opt in here (setdefault keeps any explicit operator/CI value). Tests that
+# pin the closed gate clear the variable via monkeypatch.
+os.environ.setdefault("ENVIRONMENT", "test")
+
 # ---------------------------------------------------------------------------
 # Entity marker taxonomy — auto-applied to tests by filename / path patterns
 # ---------------------------------------------------------------------------

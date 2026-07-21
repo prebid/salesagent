@@ -82,8 +82,9 @@ def _resolve_rest_identity(auth_ctx: AuthContext, *, require_valid_token: bool) 
     REAL create/booking instead of a simulation, breaking transport parity for
     BR-RULE-020 INV-5 (only the e2e_rest transport exercises this path; the
     in-process rest dispatch injects testing_context directly). ``from_headers``
-    itself returns None in production (ENVIRONMENT=production), so these internal
-    headers can never activate dry-run/mock-time against a live seller.
+    itself is fail-closed (honored only with an explicit dev ENVIRONMENT or
+    ADCP_TEST_HOOKS_ENABLED=true), so these internal headers can never activate
+    dry-run/mock-time against a live seller.
     """
     if not auth_ctx.auth_token:
         return None
