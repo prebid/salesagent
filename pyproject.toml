@@ -9,6 +9,7 @@ dependencies = [
     "a2wsgi>=1.10.0",
     "adcp==6.6.0",  # exact pin — 6.6.0 (latest stable); bump WIP, see docs/adcp-spec-version.md
     "fastmcp>=3.2.0,<3.3.0", # 3.3.0 split fastmcp-slim[server] from the monolith (breaking Context/Middleware imports); stay on 3.2.x
+    "mcp>=1.28.1", # fixes CVE-2026-59950 / GHSA-vj7q-gjh5-988w
     "google-cloud-iam>=2.19.1",
     "rich>=13.7.1",
     "google-ads>=24.1.0",
@@ -42,6 +43,7 @@ dependencies = [
     "logfire>=4.16.0",
     "pydantic-ai-slim[google,openai,anthropic,cohere,mistral,groq]>=1.99.0",  # 1.99.0 fixes CVE-2026-46678 / GHSA-cqp8-fcvh-x7r3; use slim to avoid pydantic-ai meta-package pulling fastmcp>=3.3.0
     # Security patches for transitive dependencies
+    "mcp>=1.28.1",  # CVE-2026-59950 / GHSA-vj7q-gjh5-988w (via fastmcp)
     "pyjwt>=2.13.0",  # GHSA-752w-5fwx-jx9f; PYSEC-2026-175/177/178/179
     "filelock>=3.20.3",  # GHSA-qmgc-5h2g-mvrw
     "urllib3>=2.7.0",  # GHSA-38jv-5279-wg99 + GHSA-qccp-gfcp-xxvc + GHSA-mf9v-mfxr-j63j
