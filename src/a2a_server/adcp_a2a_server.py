@@ -2028,9 +2028,13 @@ class AdCPRequestHandler(RequestHandler):
         # Validate top-level fields via typed model (packages validated by _raw
         # which handles legacy formats with extra fields like 'status').
         # ``revision`` is passed raw to the core below, which validates it through
-        # the ONE sanctioned adcp_validation_boundary — emitting VALIDATION_ERROR
-        # for a schema-invalid revision, the same code every transport now returns
+        # the ONE sanctioned adcp_validation_boundary — a schema-invalid value
+        # that REACHES that boundary emits VALIDATION_ERROR on every transport
         # (#1417 reconciliation; PR1544's INVALID_REQUEST variant was reverted).
+        # Parity caveat: a wrong-TYPE token never reaches it on REST — FastAPI's
+        # body-parse (``revision: int | None``) rejects it first as
+        # INVALID_REQUEST. That structural-vs-value split (with the
+        # numeric-string coercion divergence) is tracked in #1582.
         with adcp_validation_boundary():
             req = UpdateMediaBuyRequest(
                 media_buy_id=params.get("media_buy_id"),

@@ -102,7 +102,12 @@ class UpdateMediaBuyBody(SalesAgentBaseModel):
     currency: str | None = None
     start_time: str | None = None
     end_time: str | None = None
-    # AdCP 3.1.1 optimistic-concurrency token; mismatch -> CONFLICT
+    # AdCP 3.1.1 optimistic-concurrency token; mismatch -> CONFLICT.
+    # Typing this ``int | None`` makes FastAPI reject a wrong-TYPE token at
+    # body-parse as INVALID_REQUEST before the shared adcp_validation_boundary
+    # (which emits VALIDATION_ERROR for schema-invalid values that reach it on
+    # MCP/A2A), and lax-coerces numeric strings ("7" -> 7) that the A2A raw-dict
+    # gate rejects. Both sides of that cross-transport split are tracked in #1582.
     revision: int | None = None
     # Fields update_media_buy_raw plumbs through to UpdateMediaBuyRequest. Raw dicts
     # are coerced downstream (Pattern #7 extra policy inherited from SalesAgentBaseModel).

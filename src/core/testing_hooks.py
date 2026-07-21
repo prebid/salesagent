@@ -144,6 +144,7 @@ class AdCPTestContext(BaseModel):
         # honored ONLY on explicit dev/test opt-in (fail-CLOSED: an unset
         # ENVIRONMENT disables them), so no external MCP/A2A caller can activate
         # dry-run / mock-time / forced errors against a live seller. #1544 (P1).
+        # spec-introduced: 3.0.0 (sandbox.mdx first per-version snapshot; absent 2.5.3)
         if not test_hooks_enabled():
             return None
 

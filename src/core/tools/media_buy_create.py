@@ -1928,6 +1928,9 @@ def _submitted_approval_result(step, req: CreateMediaBuyRequest, adapter) -> Cre
     revision would falsely assert seller commitment (PR #1567 round-2 item 2;
     mirrors the update-path fix b8b7e751b). Single construction site shared by the
     manual-approval and config-approval branches (DRY, PR #1567 round-3).
+
+    spec-introduced: 3.0.0 (Submitted variant); 3.1.0 (confirmed_at/revision
+    joined the Success required set, making the split load-bearing)
     """
     return CreateMediaBuyResult(
         response=CreateMediaBuySubmitted(
@@ -2170,6 +2173,7 @@ async def _create_media_buy_impl(
     # replay. request_hash is computed once here (in scope for the success-cache stores),
     # over the WIRE payload when the transport wrapper threaded it (the spec's
     # equivalence input); the model-dump fallback exists only for impl-direct callers.
+    # spec-introduced: 3.0.1 (idempotency contract in implementation prose)
     request_hash = None
     if req.idempotency_key:
         request_hash = (
@@ -3677,12 +3681,14 @@ async def _create_media_buy_impl(
                 # sandbox.mdx — simulated data, no real spend/side effects). Mark
                 # the simulated response ``sandbox=True`` so it is honestly labelled
                 # as simulated rather than masquerading as a real create.
+                # spec-introduced: 3.0.0 (sandbox.mdx first per-version snapshot)
                 sandbox=True,
                 # 3.1.1 create-media-buy-response.json oneOf[0] (CreateMediaBuySuccess)
                 # required = [media_buy_id, confirmed_at, revision, packages] (verified
                 # against authoritative dist/schemas/3.1.1/media-buy/
                 # create-media-buy-response.json). So the simulated success arm must be
                 # CONFORMANT, not thin:
+                # spec-introduced: 3.1.0 (confirmed_at/revision joined the required set)
                 #   revision=1     — the correct initial value of a would-be-fresh buy
                 #                    (schema: integer, minimum=1).
                 #   confirmed_at=None — honest (a simulation commits nothing) AND
