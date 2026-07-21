@@ -177,7 +177,7 @@ def _sync_creatives_impl(
                     # Input validation failure — buyer-correctable, not a transient
                     # outage; keep the per-creative code out of SERVICE_UNAVAILABLE.
                     results.append(
-                        _failed_sync_result(creative_id, error_msg, code="VALIDATION_ERROR", recovery="correctable")
+                        _failed_sync_result(creative_id, error_msg, recovery="correctable", code="VALIDATION_ERROR")
                     )
                     continue  # Skip to next creative
 
@@ -360,7 +360,7 @@ def _sync_creatives_impl(
                 # carry its real code/recovery so a buyer-correctable failure is not
                 # mis-reported as a transient SERVICE_UNAVAILABLE (which a conforming
                 # buyer would retry forever).
-                results.append(_failed_sync_result(creative_id, error_msg, code=e.error_code, recovery=e.recovery))
+                results.append(_failed_sync_result(creative_id, error_msg, recovery=e.recovery, code=e.error_code))
             except Exception as e:
                 # Savepoint automatically rolls back this creative only
                 creative_id = _get_field(raw_creative, "creative_id", "unknown")

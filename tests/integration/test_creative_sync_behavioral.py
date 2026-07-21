@@ -67,7 +67,8 @@ def _assert_correctable(result) -> None:
     drive the retry-forever behavior this class exists to prevent, and a code-only
     assertion would stay green. SDK ``Recovery`` is an enum (not a str-mixin) —
     compare ``.value`` (mirrors the sibling assertion at
-    test_lenient_mode_unknown_assignment_...:448). Extracted so both correctable-
+    test_lenient_mode_unknown_assignment_creative_entry_is_creative_not_found). The
+    wire twin is ``_assert_correctable_wire_entry``. Extracted so both correctable-
     code tests route through one assertion and cannot drift — a copy-paste that
     drops the recovery half in one place and not the other is exactly the risk.
     """
@@ -79,6 +80,28 @@ def _assert_correctable(result) -> None:
     validation = [e for e in errors if getattr(e, "code", None) == "VALIDATION_ERROR"]
     assert validation and all(e.recovery is not None and e.recovery.value == "correctable" for e in validation), (
         f"VALIDATION_ERROR must carry recovery=correctable, got {[getattr(e, 'recovery', None) for e in validation]!r}"
+    )
+
+
+def _assert_correctable_wire_entry(entry: dict) -> None:
+    """Wire-dict twin of :func:`_assert_correctable` — same contract, JSON shape.
+
+    The in-process helper reads typed attributes and compares ``recovery.value``
+    (SDK ``Recovery`` is a non-str-mixin enum). Off a real transport the same
+    entry is plain JSON, so ``recovery`` is already a string and the errors are
+    dicts. Kept as a separate function rather than a duck-typed branch inside
+    ``_assert_correctable`` so neither surface can silently degrade to the
+    other's read path — a wire entry that stopped serializing ``recovery`` would
+    otherwise fall through a ``getattr`` default and pass.
+    """
+    assert entry.get("action") == "failed", f"expected a failed entry, got action={entry.get('action')!r}"
+    errors = entry.get("errors") or []
+    codes = [e.get("code") for e in errors]
+    assert "SERVICE_UNAVAILABLE" not in codes, f"correctable failure mis-coded as transient on the wire: {codes}"
+    assert "VALIDATION_ERROR" in codes, f"expected VALIDATION_ERROR on the wire, got {codes}"
+    validation = [e for e in errors if e.get("code") == "VALIDATION_ERROR"]
+    assert validation and all(e.get("recovery") == "correctable" for e in validation), (
+        f"VALIDATION_ERROR must carry recovery=correctable on the wire, got {[e.get('recovery') for e in validation]!r}"
     )
 
 
@@ -321,7 +344,7 @@ class TestCreativeValidation:
         SERVICE_UNAVAILABLE → recovery ``transient``. error-handling.mdx: a
         correctable failure is fixed and resubmitted, a transient one retried
         as-is. Graded in-process here; the A2A wire equivalent is
-        test_correctable_failure_code_and_recovery_on_the_a2a_wire.
+        test_correctable_failure_code_and_recovery_on_the_rest_wire.
         """
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
@@ -367,25 +390,21 @@ class TestCreativeValidation:
             assert len(response.creatives) == 1
             _assert_correctable(response.creatives[0])
 
-    def test_correctable_failure_code_and_recovery_on_the_a2a_wire(self, integration_db):
-        """The correctable per-creative code+recovery must survive on a REAL wire, not
-        only in the in-process SyncCreativeResult the two tests above read. A
-        serialization boundary that dropped or re-coerced errors[].code / .recovery
-        would leave those in-process tests green while shipping the wrong contract.
+    def test_correctable_failure_code_and_recovery_via_a2a_raw_wrapper(self, integration_db):
+        """The correctable code+recovery holds through the A2A ``_raw()`` wrapper.
 
-        Graded on A2A specifically. Unlike the CREATIVE_NOT_FOUND wire test (:369),
-        which grades an OPERATION-level error envelope every transport emits
-        uniformly, these #1650 conditions are PER-CREATIVE validation failures: A2A
-        returns them on the success-branch Task artifact (readable creatives[]),
-        whereas the REST/MCP request path surfaces an all-invalid creatives payload
-        as an operation-level rejection before per-item results are produced — a
-        transport behavior orthogonal to this PR (the existing per-item REST wire
-        test, :962, likewise drives an *assignment* failure, not a creative one).
-        ``result.payload`` here is deserialized from the real A2A artifact DataPart,
-        so this reads the wire, not the in-process result object. Routed through the
-        same ``_assert_correctable`` as the in-process tests (a SyncCreativeResult
-        parsed off the wire has the identical shape) so the code+recovery contract is
-        asserted by one helper on both surfaces.
+        Scope, stated precisely: this does NOT cross a serialization boundary.
+        ``call_via(Transport.A2A)`` routes to ``CreativeSyncEnv.call_a2a``, which
+        calls ``sync_creatives_raw()`` directly rather than dispatching through
+        ``_run_a2a_handler``; only the latter populates ``wire_response``. So the
+        object read below is the same in-process ``SyncCreativeResult`` the two
+        tests above read, one wrapper layer out. Real transport coverage for this
+        contract lives in
+        ``test_correctable_failure_code_and_recovery_on_the_rest_wire``.
+
+        Kept as a thin guard that the wrapper forwards per-item results unchanged;
+        the earlier name and docstring here claimed an artifact-DataPart read this
+        path does not perform.
 
         Spec grounding (pinned AdCP 3.1.1, enums/error-code.json): VALIDATION_ERROR →
         recovery ``correctable``; SERVICE_UNAVAILABLE → ``transient``.
@@ -397,45 +416,92 @@ class TestCreativeValidation:
             result = env.call_via(Transport.A2A, creatives=[_make_creative_asset(creative_id="c_bad", name="")])
 
             assert not result.is_error, (
-                f"per-creative validation failure must stay on the A2A success branch: {result.wire_error_envelope}"
+                f"per-creative validation failure must stay on the success branch: {result.wire_error_envelope}"
             )
             creatives = getattr(result.payload, "creatives", None)
-            assert creatives, f"A2A wire payload must carry the per-item result: {result.payload!r}"
+            assert creatives, f"wrapper must forward the per-item result: {result.payload!r}"
             entry = next((c for c in creatives if c.creative_id == "c_bad"), None)
-            assert entry is not None, f"expected the failed creative on the A2A wire: {creatives!r}"
+            assert entry is not None, f"expected the failed creative in the wrapper result: {creatives!r}"
             _assert_correctable(entry)
 
-    def test_non_wire_typed_error_code_normalized_not_leaked(self):
-        """A non-transient typed error whose code is NOT wire-standard must never reach
-        the buyer verbatim — _failed_sync_result normalizes it through to_wire_error_code
-        at the one choke point every call site shares.
+    def test_correctable_failure_code_and_recovery_on_the_rest_wire(self, integration_db):
+        """The correctable per-creative code+recovery must survive a REAL serialization
+        boundary, not only the in-process ``SyncCreativeResult``. A boundary that
+        dropped or re-coerced ``errors[].code`` / ``.recovery`` would leave every
+        in-process test above green while shipping the wrong retry contract to buyers.
 
-        The `except AdCPError` path (_sync.py:363) forwards e.error_code straight into
-        the advisory; advisory errors[] serialize verbatim and never pass through the
-        boundary translator that handles raised AdCPErrors, so a raw internal code would
-        leak. Pre-PR this path defaulted to the safe SERVICE_UNAVAILABLE — the code-
-        carrying fix removed that safety, so the normalization moved into the helper.
-        Drives a real AdCPFormatNotFoundError (FORMAT_NOT_FOUND, recovery correctable,
-        non-transient → not re-raised → lands at :363) exactly as line 363 forwards it,
-        and asserts the emitted code is the normalized wire value INVALID_REQUEST (per
-        to_wire_error_code) with the retry signal preserved. No DB needed — this is the
-        choke-point unit check backing the in-process/wire behavioral tests above.
+        Graded on REST, which populates ``wire_response`` with the actual JSON body.
+        The payload is deliberately MIXED (one valid creative + one invalid): an
+        all-invalid payload is rejected operation-level before per-item results
+        exist, whereas a mixed one keeps the operation on the success branch and
+        rides the failure on ``creatives[]`` with ``action="failed"`` — the same
+        shape the sibling per-item wire tests read via ``_wire_entries`` (see
+        ``test_lenient_mode_orphan_assignment_surfaces_error_on_wire``).
+
+        Read through ``_assert_correctable_wire_entry`` because ``recovery`` is a
+        plain JSON string here, not the SDK ``Recovery`` enum the in-process helper
+        compares by ``.value``.
+
+        Spec grounding (pinned AdCP 3.1.1, enums/error-code.json): VALIDATION_ERROR →
+        recovery ``correctable``; SERVICE_UNAVAILABLE → ``transient``.
         """
-        from src.core.exceptions import AdCPFormatNotFoundError
-        from src.core.tools.creatives._processing import _failed_sync_result
+        from tests.harness.transport import Transport
 
-        err = AdCPFormatNotFoundError("format_does_not_exist_xyz")
-        assert err.error_code == "FORMAT_NOT_FOUND"  # a non-wire internal code
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
 
-        result = _failed_sync_result("c_leak", str(err), code=err.error_code, recovery=err.recovery)
+            result = env.call_via(
+                Transport.REST,
+                creatives=[
+                    _make_creative_asset(creative_id="c_ok", name="Valid Banner"),
+                    _make_creative_asset(creative_id="c_bad", name=""),
+                ],
+            )
 
-        emitted = result.errors[0]
-        assert emitted.code == "INVALID_REQUEST", (
-            f"non-wire typed code {err.error_code!r} must normalize to its wire value, got {emitted.code!r}"
-        )
-        assert emitted.code != "FORMAT_NOT_FOUND", "internal code leaked to the buyer verbatim"
-        # the code normalizes; the retry signal is preserved unchanged
-        assert emitted.recovery is not None and emitted.recovery.value == "correctable"
+            assert not result.is_error, (
+                f"a mixed payload must stay on the REST success branch: {result.wire_error_envelope}"
+            )
+            assert result.wire_response is not None, "REST success must expose the wire body"
+            entries = _wire_entries(result)
+            entry = entries.get("c_bad")
+            assert entry is not None, (
+                f"the failed creative must appear on the REST wire, not be dropped: {result.wire_response}"
+            )
+            _assert_correctable_wire_entry(entry)
+
+    def test_pydantic_schema_failure_uses_correctable_code(self, integration_db):
+        """The OTHER failure branch — a creative that fails PYDANTIC construction —
+        must be graded correctable too.
+
+        The sibling tests above all raise ``AdCPValidationError`` from the business
+        rules and land at the outer ``except AdCPError``. This one lands at the inner
+        ``except (ValidationError, ValueError)`` in ``_sync_creatives_impl``, which
+        this PR also moved off the default ``SERVICE_UNAVAILABLE``. Without this
+        test, reverting that branch reddens nothing.
+
+        Trigger, and it is not a contrived one: ``digital_source_type`` is OPTIONAL on
+        the adcp ``Provenance`` model but REQUIRED on the salesagent ``Provenance``
+        that ``_validate_creative_input`` converts into, so a creative that is VALID
+        per the buyer-facing schema fails the internal ``Creative(**schema_data)``
+        construction. A conforming buyer reaches this branch, which is precisely why
+        it must not tell them to retry a permanent failure forever. (The underlying
+        strictness mismatch is a separate defect, reported alongside this PR.)
+        """
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            response = env.call_impl(
+                creatives=[
+                    _make_creative_asset(
+                        creative_id="c_prov",
+                        provenance={"created_time": "2026-01-01T00:00:00Z"},
+                    )
+                ]
+            )
+            assert len(response.creatives) == 1
+            _assert_correctable(response.creatives[0])
 
 
 # ---------------------------------------------------------------------------
