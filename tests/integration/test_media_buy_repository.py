@@ -351,15 +351,15 @@ class TestMediaBuyUoW:
 
 
 # ---------------------------------------------------------------------------
-# Dormant legacy idempotency-key lookup substrate
+# Idempotency key lookup (adcp 3.12)
 # ---------------------------------------------------------------------------
 
 
 class TestIdempotencyKeyLookup:
-    """Migration-safety coverage for legacy keyed rows.
+    """Repository correctly finds media buys by idempotency_key.
 
-    New supported-false creates write NULL and production does not use these
-    helpers for replay or duplicate suppression.
+    Core invariant: duplicate idempotency_key within (tenant, principal) returns
+    existing media buy, never creates a second row.
     """
 
     def test_find_by_idempotency_key_returns_existing(self, tenant_a, principal_a):
@@ -410,23 +410,23 @@ class TestIdempotencyKeyLookup:
             assert found_b is not None
             assert found_b.media_buy_id == "mb_idem_b"
 
-    def test_create_from_request_keeps_key_audit_only(self, tenant_a, principal_a):
-        """supported=false keeps the key in raw audit data, never routing columns."""
+    def test_create_from_request_stores_idempotency_key(self, tenant_a, principal_a):
+        """create_from_request persists idempotency_key to the database."""
         from unittest.mock import MagicMock
 
-        from src.core.database.repositories import MediaBuyUoW
+        from src.core.database.repositories.media_buy import MediaBuyRepository
 
         idem_key = "create-test-uuid-123456"
         mock_req = MagicMock()
-        mock_req.model_dump.return_value = {"test": True, "idempotency_key": idem_key}
+        mock_req.model_dump.return_value = {"test": True}
         mock_req.po_number = None
         mock_req.idempotency_key = idem_key
 
         from datetime import datetime
 
-        with MediaBuyUoW(tenant_a) as uow:
-            assert uow.media_buys is not None
-            buy = uow.media_buys.create_from_request(
+        with get_db_session() as session:
+            repo = MediaBuyRepository(session, tenant_a)
+            buy = repo.create_from_request(
                 media_buy_id="mb_idem_create",
                 req=mock_req,
                 principal_id=principal_a,
@@ -436,22 +436,18 @@ class TestIdempotencyKeyLookup:
                 start_time=datetime(2026, 1, 1, tzinfo=UTC),
                 end_time=datetime(2026, 12, 31, tzinfo=UTC),
             )
-            assert buy.idempotency_key is None
-            assert buy.payload_hash is None
-            assert buy.raw_request["idempotency_key"] == idem_key
+            session.commit()
+            assert buy.idempotency_key == idem_key
 
         # Verify persisted
-        with MediaBuyUoW(tenant_a) as uow:
-            assert uow.media_buys is not None
-            found = uow.media_buys.get_by_id("mb_idem_create")
+        with get_db_session() as session:
+            repo = MediaBuyRepository(session, tenant_a)
+            found = repo.find_by_idempotency_key(idem_key, principal_a)
             assert found is not None
             assert found.media_buy_id == "mb_idem_create"
-            assert found.idempotency_key is None
-            assert found.payload_hash is None
-            assert found.raw_request["idempotency_key"] == idem_key
 
     def test_get_by_id_or_idempotency_key_threads_account_id(self, integration_db):
-        """account_id scopes the dormant legacy-key fallback.
+        """account_id scopes the idempotency-key fallback (spec: agent + account + key).
 
         The lookup falls back from media_buy_id to idempotency_key; the account
         must reach find_by_idempotency_key, or the fallback silently forces

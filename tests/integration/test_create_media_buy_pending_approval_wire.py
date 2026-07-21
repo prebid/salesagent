@@ -63,8 +63,9 @@ def _assert_submitted_shape(envelope: dict) -> None:
             f"submitted (pending-approval) create must not carry {confirmation_field!r}, "
             f"got {envelope.get(confirmation_field)!r} — the buy is NOT confirmed yet"
         )
-    # The schema-compatible replay marker is omitted when False. This seller
-    # advertises idempotency unsupported, so create never sets it True.
+    # Wrapper-owned replay marker: omitted when False on EVERY variant (fresh
+    # submitted must match fresh success — PR #1567 round-3). The replay sibling
+    # test asserts the True case.
     assert "replayed" not in envelope, (
         f"fresh submitted create leaked replayed={envelope.get('replayed')!r} — "
         "the marker is omitted when False (uniform with fresh Success)"
@@ -94,8 +95,15 @@ def test_config_approval_create_emits_submitted_not_confirmed(integration_db):
     _assert_submitted_shape(result.model_dump(mode="json"))
 
 
-def test_same_key_submitted_create_executes_again(integration_db):
-    """With supported=false, a same-key retry creates a new submitted task."""
+def test_submitted_create_replays_verbatim_without_second_workflow_step(integration_db):
+    """An idempotent retry of a SUBMITTED create replays the cached Submitted envelope.
+
+    _replay_cached_success must reconstruct the cached body as
+    CreateMediaBuySubmitted — validating it as Success would ValidationError,
+    degrade to a cache miss, re-execute the create, and mint a SECOND workflow
+    step for the same idempotency_key (breaking verbatim replay, AdCP 3.0.1
+    idempotency).
+    """
     import uuid as _uuid
 
     with MediaBuyCreateEnv(auto_create_media_buys=False) as env:
@@ -105,11 +113,14 @@ def test_same_key_submitted_create_executes_again(integration_db):
         ctx_mgr = env.mock["context_mgr"].return_value
 
         first = env.call_impl(**dict(kwargs))
+        steps_after_first = ctx_mgr.create_workflow_step.call_count
         second = env.call_impl(**dict(kwargs))
 
     first_env = first.model_dump(mode="json")
     second_env = second.model_dump(mode="json")
     _assert_submitted_shape(first_env)
-    _assert_submitted_shape(second_env)
-    assert second_env["task_id"] != first_env["task_id"]
-    assert ctx_mgr.create_workflow_step.call_count == 2
+    assert second_env.get("replayed") is True, "retry must be the verbatim replay, not a re-execution"
+    assert second_env["task_id"] == first_env["task_id"], "replay must return the SAME task_id"
+    assert ctx_mgr.create_workflow_step.call_count == steps_after_first, (
+        "replay must not mint a second workflow step for the same idempotency_key"
+    )
