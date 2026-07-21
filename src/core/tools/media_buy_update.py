@@ -149,6 +149,30 @@ def _revision_was_omitted(revision: object) -> bool:
     return isinstance(revision, FieldInfo) or getattr(revision, "_adcp_revision_omitted", False) is True
 
 
+def _revision_as_positive_int(revision: object) -> int | None:
+    """A supplied revision's NUMERIC value if it is a valid ``minimum: 1`` integer, else None.
+
+    Classifies on numeric VALUE, not Python type: the A2A JSON-RPC/protobuf
+    layer coerces every JSON integer to ``float``, so an ``isinstance(int)``
+    gate is unreachable there and would diverge A2A from MCP/REST for the same
+    wire value. Integer-valued floats (``7.0``) count as the integer; genuine
+    fractionals (``7.5``), strings (``"7"``), and booleans do not — those are
+    schema-invalid (the pinned v3.1.1 ``update-media-buy-request.json`` defines
+    ``revision`` as ``{type: integer, minimum: 1}``). Returns None for any
+    non-integer or below-minimum value, which the caller routes to
+    INVALID_REQUEST.
+    """
+    if isinstance(revision, bool):
+        return None
+    if isinstance(revision, int):
+        value = revision
+    elif isinstance(revision, float) and revision.is_integer():
+        value = int(revision)
+    else:
+        return None
+    return value if value >= 1 else None
+
+
 def validate_update_media_buy_protocol_fields(
     *,
     idempotency_key: str | None,
@@ -159,32 +183,42 @@ def validate_update_media_buy_protocol_fields(
     Async transports call this before callback validation. The shared builder
     calls it again so direct synchronous raw callers retain identical behavior.
     AdCP 3.1.1 requires the idempotency key and defines revision as an atomic
-    optimistic-concurrency precondition. Until this seller can honor the latter,
-    every supplied revision (including JSON null) is rejected fail-loud.
+    optimistic-concurrency precondition (``update-media-buy-request.json``:
+    ``{type: integer, minimum: 1}``, optional). This seller does not implement
+    optimistic concurrency yet (#1607), so a supplied revision is rejected
+    fail-loud — but with the code that matches its VALUE, uniformly across all
+    three transports.
     """
     require_idempotency_key(idempotency_key)
-    if not _revision_was_omitted(revision):
-        # Code split per the pinned 3.1.1 enum descriptions: a SCHEMA-VALID
-        # revision (int >= 1) names a field this seller does not support —
-        # verbatim UNSUPPORTED_FEATURE ("a requested feature or field is not
-        # supported by this seller"), never INVALID_REQUEST, whose definition
-        # ("malformed ... or violates schema constraints") the value does not
-        # meet. Schema-invalid spellings (JSON null, 0, negative, non-int)
-        # remain INVALID_REQUEST. Ungraded by any 3.1.1 storyboard; the local
-        # BR-UC-003 rows pin INVALID_REQUEST only for revision 0.
-        if isinstance(revision, int) and not isinstance(revision, bool) and revision >= 1:
-            raise AdCPCapabilityNotSupportedError(
-                "This seller does not support optimistic-concurrency control via `revision`; the update was not applied.",
-                suggestion=(
-                    "Retry the update without a `revision` field, or re-read the media buy's current state before updating."
-                ),
-            )
-        raise AdCPInvalidRequestError(
+
+    # Omission and explicit JSON null both mean "no precondition supplied": the
+    # SDK models revision as ``int | None = None``, so a conformant client that
+    # never set it serializes null — treating null as a rejection would reject
+    # a correct caller. Proceed in both cases.
+    if _revision_was_omitted(revision) or revision is None:
+        return
+
+    # A supplied value is rejected, but the WIRE CODE depends on its value, not
+    # its Python type — so A2A (which floats every JSON int) converges with
+    # MCP/REST. A schema-valid revision (integer >= 1, incl. 7.0) names a field
+    # this seller does not support: verbatim UNSUPPORTED_FEATURE ("a requested
+    # feature or field is not supported by this seller"). The pinned BR-UC-003
+    # partition rows grade the implemented-feature CONFLICT (unwired for this
+    # seller, #1607); revision 0 / "7" / 7.5 are schema-invalid -> INVALID_REQUEST,
+    # matching those rows' below_min / wrong_type outcomes.
+    if _revision_as_positive_int(revision) is not None:
+        raise AdCPCapabilityNotSupportedError(
             "This seller does not support optimistic-concurrency control via `revision`; the update was not applied.",
             suggestion=(
                 "Retry the update without a `revision` field, or re-read the media buy's current state before updating."
             ),
         )
+    raise AdCPInvalidRequestError(
+        "This seller does not support optimistic-concurrency control via `revision`; the update was not applied.",
+        suggestion=(
+            "Retry the update without a `revision` field, or re-read the media buy's current state before updating."
+        ),
+    )
 
 
 def _adcp_status_and_actions(

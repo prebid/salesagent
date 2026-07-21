@@ -1541,34 +1541,39 @@ class TestUpdateMediaBuySchemaCompliance:
         req = UpdateMediaBuyRequest(media_buy_id="mb_1", packages=[])
         assert req.media_buy_id == "mb_1"
 
-    def test_build_update_request_rejects_supplied_revision_fail_loud(self):
-        """A supplied `revision` is rejected fail-loud — optimistic concurrency is not
-        implemented, so a stale-write guard must NOT be silently dropped (#1546 re-review).
+    def test_build_update_request_classifies_supplied_revision_by_value(self):
+        """A supplied `revision` is rejected fail-loud, with the wire code matching its VALUE.
 
         _build_update_request is the single boundary every transport (MCP/A2A/REST)
-        routes through, so rejecting here makes the failure consistent everywhere
-        instead of the prior split (MCP/A2A silently succeeded, REST returned 400).
+        routes through. Classifying on numeric value (not Python type) keeps
+        A2A — which floats every JSON integer — converged with MCP/REST. Explicit
+        JSON null equals omission (the SDK models revision as ``int | None = None``),
+        so it proceeds rather than rejecting a conformant caller.
         """
         from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPInvalidRequestError
         from src.core.tools.media_buy_update import _build_update_request
 
-        # A well-formed revision is still rejected — but as UNSUPPORTED_FEATURE
-        # (the pinned enum: "a requested feature or field is not supported by
-        # this seller"), because a valid value violates no schema constraint.
-        with pytest.raises(AdCPCapabilityNotSupportedError):
-            _build_update_request(media_buy_id="mb_1", paused=True, idempotency_key=_UPDATE_IDEMPOTENCY_KEY, revision=5)
-        # Schema-invalid spellings stay INVALID_REQUEST.
-        with pytest.raises(AdCPInvalidRequestError):
-            _build_update_request(
-                media_buy_id="mb_1", paused=True, idempotency_key=_UPDATE_IDEMPOTENCY_KEY, revision="5"
-            )
+        # A schema-valid revision (>= 1) — as int OR integer-valued float —
+        # names an unimplemented field: UNSUPPORTED_FEATURE (the pinned enum's
+        # "a requested feature or field is not supported by this seller").
+        for valid in (5, 7.0):
+            with pytest.raises(AdCPCapabilityNotSupportedError):
+                _build_update_request(
+                    media_buy_id="mb_1", paused=True, idempotency_key=_UPDATE_IDEMPOTENCY_KEY, revision=valid
+                )
+        # Schema-invalid spellings (below minimum:1, non-integer, string) stay
+        # INVALID_REQUEST — matching BR-UC-003's below_min / wrong_type rows.
+        for invalid in (0, -3, 7.5, "5"):
+            with pytest.raises(AdCPInvalidRequestError):
+                _build_update_request(
+                    media_buy_id="mb_1", paused=True, idempotency_key=_UPDATE_IDEMPOTENCY_KEY, revision=invalid
+                )
 
-        # Explicit JSON null is still a supplied revision and must not collapse
-        # into the omission path.
-        with pytest.raises(AdCPInvalidRequestError):
-            _build_update_request(
-                media_buy_id="mb_1", paused=True, idempotency_key=_UPDATE_IDEMPOTENCY_KEY, revision=None
-            )
+        # Explicit JSON null equals omission — proceeds, does not reject.
+        req_null = _build_update_request(
+            media_buy_id="mb_1", paused=True, idempotency_key=_UPDATE_IDEMPOTENCY_KEY, revision=None
+        )
+        assert req_null.media_buy_id == "mb_1"
 
         # Truly absent revision (the normal case) still builds a valid request.
         req = _build_update_request(media_buy_id="mb_1", paused=True, idempotency_key=_UPDATE_IDEMPOTENCY_KEY)

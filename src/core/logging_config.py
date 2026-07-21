@@ -12,21 +12,27 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-# C0 controls, DEL, and C1 controls — everything that can forge or corrupt an
-# adjacent plain-text log record.
-_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+# C0 controls, DEL, C1 controls, plus the Unicode line/paragraph separators
+# (U+2028/U+2029) — everything ``str.splitlines()`` breaks on, i.e. everything
+# that can forge or corrupt an adjacent plain-text log record.
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f  ]")
 
 
-def scrub_control_chars(value: str) -> str:
-    """Escape control characters so a buyer-controlled string is log-safe.
+def scrub_control_chars(value: object) -> str:
+    """Escape control/line-separator characters so a buyer-controlled value is log-safe.
 
-    Callback URLs and validation details are buyer-controlled. ``urlparse``
-    strips CR/LF/TAB from *parsed components*, but VT/FF/ESC survive parsing and
-    the raw stored string (CR/LF included) is what log sites interpolate — in
-    plain-text log mode one request could forge adjacent records. Escape each
-    control character to its ``\\xNN`` form at the log seam.
+    Callback URLs, validation details, and exception text are buyer-controlled.
+    ``urlparse`` strips CR/LF/TAB from *parsed components*, but VT/FF/ESC survive
+    parsing and the raw stored string (CR/LF, and the Unicode separators
+    U+2028/U+2029) is what log sites interpolate — in plain-text log mode one
+    request could forge adjacent records. Each such character is escaped to its
+    ``\\xNN`` / ``\\uXXXX`` form at the log seam.
+
+    Accepts ``object`` and ``str()``-wraps: these calls sit inside ``except``
+    blocks where the value may be ``None`` or a non-string, and a ``TypeError``
+    here would shadow the original error.
     """
-    return _CONTROL_CHARS.sub(lambda match: repr(match.group())[1:-1], value)
+    return _CONTROL_CHARS.sub(lambda match: match.group().encode("unicode_escape").decode("ascii"), str(value))
 
 
 class ClientDisconnectFilter(logging.Filter):
@@ -264,11 +270,12 @@ def setup_oauth_logging() -> None:
 
 
 def log_safe(value: object) -> str:
-    """Neutralize CR/LF in request-provided values before logging.
+    """Neutralize control characters in request-provided values before logging.
 
-    Buyer-supplied ids (creative_id, package_id) flow into log lines; a
-    newline embedded in one would forge log entries (CodeQL py/log-injection).
-    Response payloads and exception messages are NOT sanitized — buyers
-    correlate on exact ids.
+    Buyer-supplied ids (creative_id, package_id) flow into log lines; a newline
+    embedded in one would forge log entries (CodeQL py/log-injection). Delegates
+    to ``scrub_control_chars`` — one home for the control-char defense — which
+    escapes (rather than strips) every forge-capable character, a superset of
+    the CR/LF this historically handled.
     """
-    return str(value).replace("\r", "").replace("\n", "")
+    return scrub_control_chars(value)

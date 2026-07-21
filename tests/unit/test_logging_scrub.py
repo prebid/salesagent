@@ -27,6 +27,18 @@ class TestScrubControlChars:
         url = "https://cb.example/webhook?a=1&b=%20&c=café"
         assert scrub_control_chars(url) == url
 
+    def test_unicode_line_separators_are_escaped(self):
+        """U+2028/U+2029 split on str.splitlines(), so they must be escaped too."""
+        raw = "a b c"
+        scrubbed = scrub_control_chars(raw)
+        assert " " not in scrubbed and " " not in scrubbed
+        assert len(scrubbed.splitlines()) == 1, "scrubbed value must be a single log line"
+
+    def test_none_and_non_string_are_str_wrapped_not_raised(self):
+        """Called inside except blocks — a None/non-str must not raise TypeError."""
+        assert scrub_control_chars(None) == "None"
+        assert scrub_control_chars(42) == "42"
+
 
 class TestProductionLogGate:
     """The production gate honors every documented production signal.
@@ -102,7 +114,15 @@ class TestStructuredLoggingSeam:
 
 
 def _raw_buyer_channel_hits(tree) -> list[str]:
-    """All raw {config.url}/{target.url}/{e} interpolations inside logger f-string calls."""
+    """Raw {config.url}/{target.url}/{e} in logger calls — BOTH f-string AND %s-positional.
+
+    The first sweep only inspected f-string args, so it was blind to the
+    ``logger.warning("... %s ...", target.url, ...)`` positional form (#1546
+    re-review SF3). This checks every ``logger.*`` argument: an f-string's
+    FormattedValues and the bare positional args a %-format string consumes.
+    A value wrapped in ``scrub_control_chars(...)`` is an ``ast.Call``, so it is
+    correctly NOT flagged.
+    """
     import ast
 
     def is_raw_buyer_channel(expr) -> str | None:
@@ -120,38 +140,51 @@ def _raw_buyer_channel_hits(tree) -> list[str]:
         if not (isinstance(node.func.value, ast.Name) and node.func.value.id == "logger"):
             continue
         for arg in node.args:
-            if not isinstance(arg, ast.JoinedStr):
-                continue
-            for fv in arg.values:
-                if isinstance(fv, ast.FormattedValue):
-                    raw = is_raw_buyer_channel(fv.value)
-                    if raw is not None:
-                        hits.append(f"line {fv.value.lineno}: raw {{{raw}}} in a logger f-string")
+            if isinstance(arg, ast.JoinedStr):
+                for fv in arg.values:
+                    if isinstance(fv, ast.FormattedValue):
+                        raw = is_raw_buyer_channel(fv.value)
+                        if raw is not None:
+                            hits.append(f"line {fv.value.lineno}: raw {{{raw}}} in a logger f-string")
+            else:
+                # A bare positional arg (the value a %s/%.1f format string consumes).
+                raw = is_raw_buyer_channel(arg)
+                if raw is not None:
+                    hits.append(f"line {arg.lineno}: raw {raw} as a positional logger arg")
     return hits
 
 
-class TestWebhookLogScrubCoverage:
-    """Every buyer-URL / exception-text interpolation in the delivery module is scrubbed.
+# The sibling webhook modules whose log seams interpolate buyer-controlled URLs
+# / exception text. Kept together so a new raw site in EITHER reddens the guard.
+_WEBHOOK_LOG_MODULES = ("webhook_delivery_service.py", "protocol_webhook_service.py")
 
-    The original scrub sweep missed the two MULTI-LINE log calls (a single-line
-    grep cannot see them); this AST oracle cannot: any f-string logger call in
-    webhook_delivery_service that interpolates ``config.url`` / ``target.url``
-    or a bare exception name must route it through ``scrub_control_chars``.
+
+class TestWebhookLogScrubCoverage:
+    """Every buyer-URL / exception-text interpolation in the webhook modules is scrubbed.
+
+    The AST oracle sees what a grep cannot: multi-line f-string calls AND the
+    ``%s``-positional form, across every module in ``_WEBHOOK_LOG_MODULES``. Any
+    ``config.url`` / ``target.url`` / bare exception name in a ``logger.*`` call
+    must route through ``scrub_control_chars``.
     """
 
-    def test_no_raw_buyer_channel_in_delivery_log_fstrings(self):
+    def test_no_raw_buyer_channel_in_webhook_log_calls(self):
         import ast
         from pathlib import Path
 
-        module = Path(__file__).resolve().parents[2] / "src" / "services" / "webhook_delivery_service.py"
-        violations = _raw_buyer_channel_hits(ast.parse(module.read_text(), filename=str(module)))
+        services = Path(__file__).resolve().parents[2] / "src" / "services"
+        violations: list[str] = []
+        for name in _WEBHOOK_LOG_MODULES:
+            module = services / name
+            for hit in _raw_buyer_channel_hits(ast.parse(module.read_text(), filename=str(module))):
+                violations.append(f"{name}: {hit}")
         assert not violations, (
-            "Buyer-controlled channels must route through scrub_control_chars in log f-strings "
-            "(wrap the value, e.g. {scrub_control_chars(config.url)}):\n  " + "\n  ".join(violations)
+            "Buyer-controlled channels must route through scrub_control_chars in logger calls "
+            "(wrap the value, e.g. scrub_control_chars(config.url)):\n  " + "\n  ".join(violations)
         )
 
     def test_oracle_matcher_catches_raw_sites_and_passes_scrubbed_ones(self):
-        """Self-test: the matcher reddens on raw interpolations and stays quiet on scrubbed ones."""
+        """Self-test: the matcher reddens on raw f-string AND %s-positional sites."""
         import ast
 
         raw = 'logger.warning(f"delivery to {config.url} failed: {e}")'
@@ -163,5 +196,10 @@ class TestWebhookLogScrubCoverage:
             ")"
         )
         assert len(_raw_buyer_channel_hits(ast.parse(multiline))) == 1
+        # The %s-positional form the first sweep was blind to.
+        positional = 'logger.warning("Webhook delivery to %s exceeded %.1fs", target.url, DEADLINE)'
+        assert len(_raw_buyer_channel_hits(ast.parse(positional))) == 1
         scrubbed = 'logger.warning(f"delivery to {scrub_control_chars(config.url)}: {scrub_control_chars(str(e))}")'
         assert _raw_buyer_channel_hits(ast.parse(scrubbed)) == []
+        scrubbed_positional = 'logger.warning("Webhook delivery to %s exceeded", scrub_control_chars(target.url))'
+        assert _raw_buyer_channel_hits(ast.parse(scrubbed_positional)) == []

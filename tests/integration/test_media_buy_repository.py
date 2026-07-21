@@ -351,15 +351,17 @@ class TestMediaBuyUoW:
 
 
 # ---------------------------------------------------------------------------
-# Dormant legacy idempotency-key lookup substrate
+# Idempotency-key lookup (live dup-booking backstop under supported=true)
 # ---------------------------------------------------------------------------
 
 
 class TestIdempotencyKeyLookup:
-    """Migration-safety coverage for legacy keyed rows.
+    """Coverage for the live idempotency-key lookup helpers.
 
-    New supported-false creates write NULL and production does not use these
-    helpers for replay or duplicate suppression.
+    create_media_buy implements verbatim replay (supported=true), and the
+    degraded post-race path consults ``find_by_idempotency_key``
+    (media_buy_create.py, via the replay-window resolution) — these helpers are
+    on the live path, not dormant.
     """
 
     def test_find_by_idempotency_key_returns_existing(self, tenant_a, principal_a):

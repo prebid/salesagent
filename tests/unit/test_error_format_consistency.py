@@ -216,7 +216,8 @@ class TestA2AErrorShapes:
 
         with pytest.raises(AdCPValidationError) as exc_info:
             await self.handler._handle_create_media_buy_skill(
-                parameters={"brand": {"domain": "testbrand.com"}},
+                # Valid key: pins the missing-PARAMS path (key precedence parity).
+                parameters={"brand": {"domain": "testbrand.com"}, "idempotency_key": "consistency-key-0123456789"},
                 identity=mock_identity,
             )
 
@@ -415,7 +416,8 @@ class TestCrossTransportErrorConsistency:
 
         with pytest.raises(AdCPValidationError) as a2a_exc_info:
             await self.handler._handle_create_media_buy_skill(
-                parameters={"brand": {"domain": "testbrand.com"}},
+                # Valid key: pins the missing-PARAMS path (key precedence parity).
+                parameters={"brand": {"domain": "testbrand.com"}, "idempotency_key": "consistency-key-0123456789"},
                 identity=mock_identity,
             )
 

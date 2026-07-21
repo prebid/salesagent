@@ -214,10 +214,12 @@ def _internal_error_for(
     ``except Exception`` branch and be flattened to a bare ``InternalError`` with no
     envelope.
     """
-    typed = normalize_to_adcp_error(exc, context=context)
     return InternalError(
         message=f"{operation} failed: {exc}",
-        data=build_two_layer_error_envelope(typed),
+        # Delegate the envelope composition to the single source of truth so
+        # both the failed-skill DataPart and this JSON-RPC error.data stay
+        # byte-identical (normalize_to_adcp_error → two-layer envelope).
+        data=AdCPRequestHandler._build_error_envelope(exc, context=context),
     )
 
 
@@ -1847,6 +1849,14 @@ class AdCPRequestHandler(RequestHandler):
             assert brand_ref is not None  # None only for None input; excluded by guard
             params["brand"] = brand_ref.model_dump(mode="json")
 
+        # Required-key precedence parity with the MCP/REST boundaries and the
+        # sync siblings: idempotency_key is the FIRST required field the MCP
+        # TypeAdapter checks, so when it AND other params are absent MCP names
+        # the missing key. Run this BEFORE the missing-params presence check so
+        # A2A emits the same canonical missing-key error (one home in
+        # src.core.exceptions), not "Missing required AdCP parameters".
+        require_idempotency_key(params.get("idempotency_key"))
+
         # Validate required AdCP parameters (packages is optional in model but required by spec).
         # Raise typed AdCPValidationError so the outer dispatcher's `except AdCPError` branch
         # routes through `_build_failed_skill_result` -> `_build_error_envelope`, producing
@@ -1859,14 +1869,6 @@ class AdCPRequestHandler(RequestHandler):
                 f"Missing required AdCP parameters: {missing_params}",
                 suggestion=f"Required: {required_params}",
             )
-
-        # Required-key precedence parity with the sync_creatives / sync_accounts
-        # siblings and the MCP/REST boundaries: an ABSENT idempotency_key must
-        # emit the canonical missing-key error (one home in src.core.exceptions),
-        # not this handler's aggregated Pydantic wording from full-model
-        # validation below.
-
-        require_idempotency_key(params.get("idempotency_key"))
 
         # Validate via the shared boundary so every A2A handler emits the same
         # field + message + buyer-facing suggestion (AdCP POST-F3, #1417):

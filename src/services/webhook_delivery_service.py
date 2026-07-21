@@ -419,7 +419,7 @@ class WebhookDeliveryService:
         except TimeoutError:
             logger.warning(
                 "Webhook delivery to %s exceeded the %.1fs total deadline",
-                target.url,
+                scrub_control_chars(target.url),
                 WEBHOOK_DELIVERY_DEADLINE_SECONDS,
             )
             return False

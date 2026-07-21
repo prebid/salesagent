@@ -44,7 +44,11 @@ _MOCK_IDENTITY = PrincipalFactory.make_identity(
                 "idempotency_key": "a2a-update-key-0001",
                 "revision": 7,
             },
-            "INVALID_REQUEST",
+            # A2A's JSON-RPC/protobuf layer coerces the integer 7 to a float, but
+            # the guard classifies on numeric VALUE (not Python type), so this
+            # converges with MCP/REST on UNSUPPORTED_FEATURE — a schema-valid
+            # revision names a field this seller does not implement.
+            "UNSUPPORTED_FEATURE",
             "does not support optimistic-concurrency control",
             id="unsupported-revision",
         ),
@@ -53,11 +57,12 @@ _MOCK_IDENTITY = PrincipalFactory.make_identity(
                 "media_buy_id": "mb-1",
                 "paused": True,
                 "idempotency_key": "a2a-update-key-0001",
-                "revision": None,
+                "revision": 0,
             },
+            # Below minimum:1 is schema-invalid -> INVALID_REQUEST (BR-UC-003 below_min).
             "INVALID_REQUEST",
             "does not support optimistic-concurrency control",
-            id="unsupported-null-revision",
+            id="below-minimum-revision",
         ),
     ],
 )
@@ -89,8 +94,21 @@ def test_update_media_buy_rejects_invalid_protocol_fields_before_core_call(
     mock_core.assert_not_called()
 
 
-def test_update_media_buy_accepts_omitted_revision_before_core_call() -> None:
-    """The real A2A path must not mistake an omitted revision for JSON null."""
+@pytest.mark.parametrize(
+    "revision_field",
+    [
+        pytest.param({}, id="omitted-revision"),
+        pytest.param({"revision": None}, id="explicit-null-revision"),
+    ],
+)
+def test_update_media_buy_accepts_omitted_or_null_revision_before_core_call(revision_field: dict) -> None:
+    """Omitted revision AND explicit JSON null both proceed to core (null == omission).
+
+    The SDK models revision as ``int | None = None``, so a conformant client
+    that never set it serializes null; the guard treats null identically to
+    omission and must not reject it. The omitted case also proves the real A2A
+    path doesn't collapse omission into null.
+    """
     from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResult, UpdateMediaBuySuccess
 
     success = UpdateMediaBuyResult(
@@ -111,6 +129,7 @@ def test_update_media_buy_accepts_omitted_revision_before_core_call() -> None:
                         "media_buy_id": "mb-1",
                         "paused": True,
                         "idempotency_key": "a2a-update-key-0001",
+                        **revision_field,
                     },
                 ),
                 headers={

@@ -874,8 +874,9 @@ class AdCPIdempotencyExpiredError(AdCPConflictError):
     buyer agent recovers autonomously — a natural-key existence check (e.g.
     ``get_media_buys`` by ``context.internal_campaign_id``) to learn whether the
     original request succeeded, then either accept that result or mint a fresh
-    idempotency_key for a new attempt. The 3.0.1 ``error-code.json`` enum
-    description classifies the code ``correctable`` (that buyer-recovery path),
+    idempotency_key for a new attempt. The ``error-code.json`` enum description
+    (introduced AdCP 3.0.1, unchanged at the pinned 3.1.1) classifies the code
+    ``correctable`` (that buyer-recovery path),
     and the recovery taxonomy reserves ``terminal`` for conditions requiring
     HUMAN action (account suspended, payment required) — not an agent-resolvable
     retry. The SDK's ``STANDARD_ERROR_CODES`` default table lists it ``terminal``,

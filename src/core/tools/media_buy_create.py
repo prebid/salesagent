@@ -1876,7 +1876,8 @@ def _cache_and_return(
     if request_hash is None or not req.idempotency_key or identity.tenant_id is None or identity.principal_id is None:
         return result
 
-    # Errors are never cached (AdCP 3.0.1 security.mdx#idempotency rule 3). The
+    # Errors are never cached (idempotency rule 3, security.mdx#idempotency —
+    # introduced AdCP 3.0.1, unchanged at the pinned 3.1.1). The
     # real enforcement of that invariant is the error paths' early returns —
     # they return before reaching this helper, so every caller hands us a
     # success or a submitted task envelope (a pending-approval create is a

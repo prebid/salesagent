@@ -110,9 +110,13 @@ class TestA2AErrorPropagation:
 
         set_current_tenant(test_tenant)
 
-        # Create message with INVALID parameters (missing required fields)
+        # Create message with INVALID parameters (missing required fields).
+        # A valid idempotency_key is supplied so this exercises the missing-
+        # PARAMS path (packages/start_time/end_time), not the earlier
+        # missing-key rejection that now fires first (key-precedence parity).
         skill_params = {
             "brand": {"domain": "testbrand.com"},
+            "idempotency_key": fresh_idempotency_key("int-key"),
             # Missing: packages, budget, start_time, end_time
         }
         message = self.create_message_with_skill("create_media_buy", skill_params)
@@ -873,7 +877,9 @@ class TestA2AErrorResponseStructure:
 
         with pytest.raises(AdCPValidationError) as exc_info:
             await handler._handle_create_media_buy_skill(
-                parameters={"brand": {"domain": "testbrand.com"}},  # Missing required fields
+                # Valid key supplied: pins the missing-PARAMS error, not the
+                # missing-key error that now precedes it.
+                parameters={"brand": {"domain": "testbrand.com"}, "idempotency_key": "int-key-0123456789ab"},
                 identity=identity,
             )
 
@@ -902,6 +908,7 @@ class TestA2AErrorResponseStructure:
             await handler._handle_create_media_buy_skill(
                 parameters={
                     "brand": {"domain": "testbrand.com"},
+                    "idempotency_key": "int-key-0123456789ab",  # Valid: pins missing-PARAMS path.
                     # Missing: packages, budget, start_time, end_time
                 },
                 identity=identity,

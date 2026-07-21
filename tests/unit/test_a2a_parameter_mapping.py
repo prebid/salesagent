@@ -356,6 +356,9 @@ class TestA2AParameterMapping:
             # Request missing required AdCP parameters
             incomplete_parameters = {
                 "po_number": "campaign_123",
+                # A valid key so this pins the missing-PARAMS error, not the
+                # missing-key error the hoisted key check now raises first.
+                "idempotency_key": "param-map-key-0123456789",
                 # Missing: brand, packages, start_time, end_time
             }
 

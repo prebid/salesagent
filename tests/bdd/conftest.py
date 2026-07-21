@@ -3282,9 +3282,10 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 # Tells the shared When step to dispatch a FULL create through
                 # the parametrized transport (not account resolution). (PR #1567)
                 ctx["uc002_full_create"] = True
-            # Required-key validation and supported=false no-op behavior run a
-            # real create_media_buy through every transport. The no-op scenario
-            # creates twice with the same key and proves a second execution.
+            # Required-key validation and idempotency replay run a real
+            # create_media_buy through every wire transport (a2a/mcp/rest). The
+            # replay scenario creates once, then repeats the same key and proves
+            # the second call replays the original without re-executing.
             from tests.harness.media_buy_create import MediaBuyCreateEnv
 
             with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:

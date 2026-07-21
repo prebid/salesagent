@@ -208,7 +208,7 @@ class ProtocolWebhookService:
                 )
                 session.commit()
         except Exception as e:
-            logger.error(f"Failed to write webhook delivery log: {e}")
+            logger.error(f"Failed to write webhook delivery log: {scrub_control_chars(str(e))}")
 
     async def _send_with_retry_and_logging(
         self,
@@ -456,7 +456,8 @@ class ProtocolWebhookService:
                     await asyncio.sleep(wait_seconds)
                 else:
                     logger.error(
-                        f"Webhook failed for task {task_id} after {max_attempts} attempts: {type(e).__name__} - {e}"
+                        f"Webhook failed for task {task_id} after {max_attempts} attempts: "
+                        f"{type(e).__name__} - {scrub_control_chars(str(e))}"
                     )
 
                     # Write to webhook_delivery_log (failed)
@@ -490,7 +491,7 @@ class ProtocolWebhookService:
                     return False
 
             except Exception as e:
-                logger.error(f"Unexpected error sending webhook for task {task_id}: {e}")
+                logger.error(f"Unexpected error sending webhook for task {task_id}: {scrub_control_chars(str(e))}")
 
                 # Write to webhook_delivery_log (unexpected failure)
                 if (

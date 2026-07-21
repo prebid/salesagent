@@ -80,12 +80,27 @@ def _build_jsonrpc_skill(skill: str, params: dict | None = None) -> dict:
 
 
 def _is_auth_rejection(body: dict) -> bool:
-    """True when a JSON-RPC A2A response is an authentication rejection."""
+    """True when a JSON-RPC A2A response is an authentication rejection.
+
+    Keys on the buyer-facing wire CODE in the two-layer envelope
+    (``error.data``), not the free-form ``message`` substring: a message check
+    would stay green if the boundary regressed the AUTH code or (per #1546 D1)
+    swapped the JSON-RPC error class, exactly the divergences this guards.
+    """
     error = body.get("error")
     if not error:
         return False
-    message = str(error.get("message", "")).lower()
-    return "auth" in message or "token" in message
+    data = error.get("data")
+    if not isinstance(data, dict):
+        return False
+    codes = set()
+    adcp_error = data.get("adcp_error")
+    if isinstance(adcp_error, dict):
+        codes.add(adcp_error.get("code"))
+    for item in data.get("errors", []) or []:
+        if isinstance(item, dict):
+            codes.add(item.get("code"))
+    return "AUTH_REQUIRED" in codes
 
 
 @pytest.mark.requires_db

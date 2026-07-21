@@ -136,42 +136,45 @@ Grading status:
   applicable; the published file notes that a complete storyboard precondition
   gate is still pending runner support.
 
-Decision for this PR: preserve and validate the buyer's required key on every
-create-media-buy, update-media-buy, sync-creatives, and sync-accounts transport
-boundary, but perform no response caching, replay, or conflict deduplication.
-On registered standard reads, accept omission under the 3.1 grace and treat a
-valid supplied key as validated inert metadata. Advertise seller-wide
-`adcp.idempotency.supported: false`; the unsupported discriminant contains no
-`replay_ttl_seconds` or `in_flight_max_seconds` fields.
+Decision for this PR: `create_media_buy` implements verbatim replay, so the
+seller advertises the `supported: true` discriminant with `replay_ttl_seconds`.
+A repeated `idempotency_key` on create replays the stored success verbatim
+(`replayed: true`); a same-key different-canonical-payload request rejects with
+`IDEMPOTENCY_CONFLICT`; errors are never cached (a retry after an error
+re-executes); the `media_buys` unique index remains the dup-booking backstop
+with a fail-closed degraded path; the per-scope insert ceiling guards
+admission. The required key is validated on every create/update/sync-creatives/
+sync-accounts boundary; on those OTHER writes it is accepted but **not yet
+deduplicated** — the partial-dedupe gap is tracked in #1607, which extends
+dedupe through the same `IdempotencyAttemptRepository`. On registered standard
+reads, omission is accepted under the 3.1 grace and a valid supplied key is
+validated inert metadata.
 
-### Generated UC-002 reconciliation
+The `dist/compliance/3.1.1/universal/idempotency.yaml` replay / changed-payload
+conflict / fresh-key / concurrent-first-insert-wins phases now grade against
+this seller's live create behavior under the advertised `supported: true`.
 
-The upstream 3.1.1 idempotency storyboard records a runner-precondition TODO:
-replay-window assertions must be gated on the seller declaring
-`idempotency.supported: true`. The derivative `adcp-req` UC-002 feature has not
-yet encoded that gate, so its replay, in-flight, expired, canonical-comparison,
-and conflict scenarios remain unconditional even when a seller validly
-advertises `supported: false`.
+### Generated UC-002 status
 
-The generated UC-002 output keeps the previously live upstream replay scenario
-ID, but `tests/bdd/overlays/BR-UC-002-create-media-buy.feature` deterministically
-reconciles that scenario with the advertised false branch: an identical key
-executes a second create, persists exactly the newly returned media buy, and
-never produces a replay marker. `compile_bdd.py` applies exact-ID overlays in both wholesale
-`--all` and scenario-merge modes, records overlay provenance in the generated
-file, and fails if the target ID disappears. Unit coverage grades both compiler
-paths, so regeneration cannot silently restore the stale replay assertion. The
-same exact-ID overlay also replaces the upstream hand-counted over-max key with
-the declarative `<256 chars>` fixture token; the bound Given step expands that
-token to exactly 256 valid-pattern characters, so the maxLength boundary cannot
-silently drift below the advertised 255-character limit during regeneration.
+The upstream replay scenario `T-UC-002-v31-idempotency-replay` is LIVE in the
+generated UC-002 feature — it grades production replay on a2a/mcp/rest as plain
+PASS (original `media_buy_id` returned, `replayed: true`, adapter not
+re-invoked, persisted set byte-stable), so no local overlay reconciles it. The
+one remaining local overlay
+(`tests/bdd/overlays/BR-UC-002-create-media-buy.feature`) is the boundary
+fixture only: it replaces the upstream hand-counted over-max key with the
+declarative `<256 chars>` token, which the bound Given step expands to exactly
+256 valid-pattern characters so the maxLength boundary cannot silently drift.
+`compile_bdd.py` applies exact-ID overlays in both `--all` and scenario-merge
+modes, records provenance, and fails if the target ID disappears; unit coverage
+grades both compiler paths.
 
-The local applicability guard separately asserts that the production
-capability uses the false discriminant with no replay-window fields and records
-the complete set of upstream supported-true-only IDs; the remaining upstream
-phases are not counted as validation of this seller's supported-false behavior.
-Retire the overlay only after the upstream storyboard/`adcp-req` runner
-precondition is fixed.
+The upstream supported-true phases this seller does NOT yet implement
+(in-flight tracking, expired-window, canonical-comparison, conflict-details)
+remain visible in the generated feature but unwired — tracked for the
+reservation-subsystem rebuild (#1683). The local applicability guard asserts
+the live `supported: true` discriminant matches the enforced replay window and
+that the unimplemented phases stay visible-not-claimed.
 
 ## Update-media-buy revision
 
