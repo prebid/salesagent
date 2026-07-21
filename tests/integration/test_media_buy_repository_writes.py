@@ -573,6 +573,9 @@ class TestRevisionBumpsOnStatusTransition:
                     waiter.media_buys.get_by_id(
                         "mb_lock_prod_path", for_update=True, populate_existing=True, lock_timeout="5s"
                     )
+            # Pin the WIRE code, not just the class: a parent-class re-raise would keep
+            # isinstance green while flipping the buyer-facing code (P38).
+            assert exc_info.value.error_code == "CONFLICT"
             # Buyer-facing recovery is transient (re-read and retry), not terminal.
             assert exc_info.value.recovery == "transient"
         finally:
@@ -1150,6 +1153,9 @@ class TestExpectedRevisionUnderLock:
             # even though this session's instance still reads 1.
             with pytest.raises(AdCPConflictError) as exc_info:
                 uow.media_buys.update_fields_or_raise("mb_lock_conflict", expected_revision=1, budget=Decimal("500.00"))
+            # Pin the WIRE code (P38): the buyer-facing contract is CONFLICT, not
+            # merely the exception class.
+            assert exc_info.value.error_code == "CONFLICT"
             assert exc_info.value.details["current_version"] == 2
             assert exc_info.value.details["expected_version"] == 1
 

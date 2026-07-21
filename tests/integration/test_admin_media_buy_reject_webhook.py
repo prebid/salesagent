@@ -219,10 +219,17 @@ def _post_approval_action(admin_session, ids: dict, data: dict):
 
 
 def _webhook_body(captured: dict) -> dict:
-    """The outbound webhook body as a plain dict (model_dump when a model)."""
+    """The outbound webhook body serialized through the PRODUCTION wire seam.
+
+    Uses ``_to_wire_dict`` — the same serializer ProtocolWebhookService applies at
+    the delivery boundary (HMAC signing + JSON send) — so these assertions grade
+    the bytes the buyer receives, not a test-local ``model_dump`` re-serialization
+    that could diverge from the wire (e.g. ``exclude_none`` handling).
+    """
+    from src.services.protocol_webhook_service import _to_wire_dict
+
     assert "payload" in captured, "route did not send a webhook payload"
-    payload = captured["payload"]
-    return payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+    return _to_wire_dict(captured["payload"])
 
 
 class TestAdminMediaBuyRejectWebhook:
@@ -367,6 +374,35 @@ class TestAdminMediaBuyRejectWebhook:
             "principal_id": "reject_wh_principal",
             "media_buy_id": media_buy_id,
         }
+
+    def test_approve_stamps_approval_instant_on_persisted_buy(
+        self, authenticated_admin_session, pending_reject_media_buy, webhook_capture
+    ):
+        """The ADMIN approve path stamps the approval instant on the persisted buy.
+
+        The BDD uc019 approval Given drives the repository seam with a
+        test-chosen ``approved_at``, so nothing there proves the PRODUCTION
+        caller supplies one. This drives the real admin approve route — which
+        finalizes via ``finalize_pending_media_buy_approval`` — and asserts the
+        persisted MediaBuy carries ``approved_at``, with ``confirmed_at``
+        recorded FROM that same instant (the write-once approval time the
+        phase-2 serving transition stamps; #1544/#1637).
+        """
+        from src.core.database.repositories import MediaBuyUoW
+
+        tenant_id = pending_reject_media_buy["tenant_id"]
+        media_buy_id = pending_reject_media_buy["media_buy_id"]
+
+        _post_approval_action(authenticated_admin_session, pending_reject_media_buy, {"action": "approve"})
+
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.media_buys is not None
+            buy = uow.media_buys.get_by_id(media_buy_id)
+            assert buy is not None, "approved media buy vanished"
+            assert buy.approved_at is not None, "admin approve must stamp approved_at"
+            assert buy.confirmed_at == buy.approved_at, (
+                f"confirmed_at ({buy.confirmed_at}) must record the approval instant ({buy.approved_at})"
+            )
 
     def test_a2a_reject_webhook_carries_policy_violation_task(
         self, authenticated_admin_session, make_pending_media_buy, webhook_capture
