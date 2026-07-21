@@ -236,11 +236,14 @@ def setup_oauth_logging() -> None:
 
 
 def log_safe(value: object) -> str:
-    """Neutralize CR/LF in request-provided values before logging.
+    """Neutralize control characters in request-provided values before logging.
 
     Buyer-supplied ids (creative_id, package_id) flow into log lines; a
     newline embedded in one would forge log entries (CodeQL py/log-injection).
-    Response payloads and exception messages are NOT sanitized — buyers
-    correlate on exact ids.
+    Delegates to :func:`src.core.logging_utils.sanitize_log_value` so the two
+    sanitizers share one escape table — note this ESCAPES control characters
+    (``\n`` renders as ``\\n``) where the historical implementation stripped
+    them; ids stay correlatable, only the rendered log text changes. No
+    truncation: callers pass whole pre-formatted messages, not single values.
     """
-    return str(value).replace("\r", "").replace("\n", "")
+    return sanitize_log_value(value, max_length=None)

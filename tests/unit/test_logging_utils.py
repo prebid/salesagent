@@ -24,6 +24,12 @@ from src.core.logging_utils import sanitize_log_value
         ("line one\x85line two", r"line one\x85line two"),
         ("line one\u2028line two", r"line one\u2028line two"),
         ("line one\u2029line two", r"line one\u2029line two"),
+        ("line one\x00line two", r"line one\x00line two"),
+        ("line one\x01line two", r"line one\x01line two"),
+        ("line one\tline two", r"line one\tline two"),
+        ("line one\x1bline two", r"line one\x1bline two"),
+        ("line one\x1fline two", r"line one\x1fline two"),
+        ("line one\x7fline two", r"line one\x7fline two"),
         (42, "42"),
     ],
 )
@@ -39,6 +45,27 @@ def test_sanitize_log_value_truncates_deterministically() -> None:
 def test_sanitize_log_value_rejects_non_positive_limit() -> None:
     with pytest.raises(ValueError, match="max_length must be positive"):
         sanitize_log_value("value", max_length=0)
+
+
+def test_sanitize_log_value_none_limit_disables_truncation() -> None:
+    long_value = "x" * 2000
+    assert sanitize_log_value(long_value, max_length=None) == long_value
+
+
+def test_every_c0_control_and_del_is_escaped() -> None:
+    for code in [*range(0x00, 0x20), 0x7F]:
+        sanitized = sanitize_log_value(f"a{chr(code)}b")
+        assert chr(code) not in sanitized, f"control 0x{code:02x} leaked through"
+        assert sanitized.startswith("a\\") and sanitized.endswith("b")
+
+
+def test_log_safe_delegates_to_shared_escape_table() -> None:
+    from src.core.logging_config import log_safe
+
+    assert log_safe("id\nFORGED") == r"id\nFORGED"
+    assert log_safe("id\x1b[31mred") == r"id\x1b[31mred"
+    # No truncation — log_safe wraps whole pre-formatted messages.
+    assert log_safe("x" * 2000) == "x" * 2000
 
 
 def test_sanitized_value_cannot_forge_a_second_log_line(caplog: pytest.LogCaptureFixture) -> None:

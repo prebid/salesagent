@@ -11,6 +11,7 @@ from src.core.exceptions import (
     AdCPPackageNotFoundError,
 )
 from src.core.logging_config import log_safe
+from src.core.logging_utils import sanitize_log_value
 from src.core.schemas import SyncCreativeResult
 from src.core.tools.creatives._processing import _failed_sync_result
 
@@ -305,7 +306,10 @@ def _process_assignments(
                     logger.info(f"[SYNC_CREATIVES] Media buy {mb_id} transitioned from draft to pending_creatives")
                 elif mb_id in media_buys_actually_mutated:
                     MediaBuyRepository.apply_revision_bump(mb_obj)
-                    logger.info(f"[SYNC_CREATIVES] Media buy {mb_id} revision bumped on creative assignment")
+                    logger.info(
+                        "[SYNC_CREATIVES] Media buy %s revision bumped on creative assignment",
+                        sanitize_log_value(mb_id),
+                    )
 
             # UoW auto-commits on clean exit
 

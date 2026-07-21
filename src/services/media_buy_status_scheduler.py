@@ -21,6 +21,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.workflow import WorkflowRepository
+from src.core.logging_utils import sanitize_log_value
 from src.core.media_buy_flight import resolve_flight_window_utc
 
 logger = logging.getLogger(__name__)
@@ -110,7 +111,10 @@ class MediaBuyStatusScheduler:
                     if media_buy.status != old_status:
                         updated_count += 1
                         logger.info(
-                            f"Updated media buy {media_buy.media_buy_id} status: {old_status} -> {media_buy.status}"
+                            "Updated media buy %s status: %s -> %s",
+                            sanitize_log_value(media_buy.media_buy_id),
+                            sanitize_log_value(old_status),
+                            sanitize_log_value(media_buy.status),
                         )
 
                 if updated_count > 0:
@@ -147,7 +151,7 @@ class MediaBuyStatusScheduler:
                     for mb in MediaBuyRepository.get_finalizing_recoverable(session, datetime.now(UTC))
                 ]
         except Exception as e:
-            logger.error(f"Failed to scan for stranded finalizing media buys: {e}", exc_info=True)
+            logger.error("Failed to scan for stranded finalizing media buys: %s", sanitize_log_value(e), exc_info=True)
             return
 
         for tenant_id, media_buy_id in stranded:
@@ -176,9 +180,18 @@ class MediaBuyStatusScheduler:
                         run_adapter=partial(execute_approved_media_buy, media_buy_id, tenant_id),
                         adapter_supports_replay=partial(adapter_supports_full_create_replay, media_buy_id, tenant_id),
                     )
-                logger.info(f"Reconciled stranded finalizing media buy {media_buy_id}: {outcome}")
+                logger.info(
+                    "Reconciled stranded finalizing media buy %s: %s",
+                    sanitize_log_value(media_buy_id),
+                    sanitize_log_value(outcome),
+                )
             except Exception as e:
-                logger.error(f"Failed to reconcile finalizing media buy {media_buy_id}: {e}", exc_info=True)
+                logger.error(
+                    "Failed to reconcile finalizing media buy %s: %s",
+                    sanitize_log_value(media_buy_id),
+                    sanitize_log_value(e),
+                    exc_info=True,
+                )
 
     def _compute_new_status(self, media_buy: MediaBuy, now: datetime, session) -> str | None:
         """Compute the new status for a media buy based on flight dates.

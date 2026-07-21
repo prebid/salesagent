@@ -24,6 +24,7 @@ from src.core.database.models import (
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.workflow import WorkflowRepository
+from src.core.logging_utils import sanitize_log_value
 
 logger = logging.getLogger(__name__)
 
@@ -266,7 +267,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                     # the adapter (so confirmed_at recorded adapter-completion) and left
                     # the step at "approved" with no artifact — the finalizer fixes
                     # both. See #1544.
-                    logger.info(f"[APPROVAL] Finalizing approved media buy {media_buy_id}")
+                    logger.info("[APPROVAL] Finalizing approved media buy %s", sanitize_log_value(media_buy_id))
                     outcome, error_msg = finalize_pending_media_buy_approval(
                         db,
                         tenant_id,
@@ -277,7 +278,10 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                     )
 
                     if outcome is FinalizeOutcome.NOT_CLAIMED:
-                        logger.info(f"[APPROVAL] Media buy {media_buy_id} already decided by another request")
+                        logger.info(
+                            "[APPROVAL] Media buy %s already decided by another request",
+                            sanitize_log_value(media_buy_id),
+                        )
                         return jsonify(
                             {"success": False, "error": "This media buy was already decided by another request"}
                         ), 409
@@ -288,7 +292,11 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                     if outcome is FinalizeOutcome.RETRYING:
                         # #1637: approval claimed; the ad-server order completes
                         # automatically via the reconciler.
-                        logger.info(f"[APPROVAL] Media buy {media_buy_id} finalization deferred: {error_msg}")
+                        logger.info(
+                            "[APPROVAL] Media buy %s finalization deferred: %s",
+                            sanitize_log_value(media_buy_id),
+                            sanitize_log_value(error_msg),
+                        )
                         return jsonify(
                             {
                                 "success": True,
@@ -303,7 +311,10 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                     # Plain in-flight ``finalizing`` (a live lease owner is completing the
                     # decision) — NOT approvable, NOT terminal. Do not claim success:
                     # report the in-progress state (same 202 vocabulary as RETRYING). #1544.
-                    logger.info(f"[APPROVAL] Media buy {media_buy_id} finalization already in flight")
+                    logger.info(
+                        "[APPROVAL] Media buy %s finalization already in flight",
+                        sanitize_log_value(media_buy_id),
+                    )
                     return jsonify(
                         {
                             "success": True,

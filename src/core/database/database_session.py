@@ -18,6 +18,7 @@ from sqlalchemy.exc import DisconnectionError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
 
 from src.core.database.db_config import DatabaseConfig, int_env
+from src.core.logging_utils import sanitize_log_value
 
 logger = logging.getLogger(__name__)
 
@@ -240,7 +241,7 @@ def get_db_session() -> Generator[Session, None, None]:
         # but leave the connection and health state intact. #1544.
         if getattr(getattr(e, "orig", None), "pgcode", None) == LOCK_NOT_AVAILABLE:
             raise
-        logger.error(f"Database connection error: {e}")
+        logger.error("Database connection error: %s", sanitize_log_value(e))
         # Remove session from registry to force reconnection
         scoped.remove()
         # Mark as unhealthy for circuit breaker

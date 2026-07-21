@@ -21,6 +21,7 @@ from src.core.database.models import (
     PushNotificationConfig as DBPushNotificationConfig,
 )
 from src.core.database.repositories.creative import CreativeRepository
+from src.core.logging_utils import sanitize_log_value
 from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -627,20 +628,37 @@ def approve_creative(tenant_id, creative_id, **kwargs):
         # hold (write-once); this system unblock is not a new approval instant. #1544.
         for action in media_buy_actions:
             media_buy_id = action["media_buy_id"]
-            logger.info(f"[CREATIVE APPROVAL] All creatives approved for media buy {media_buy_id}, finalizing")
+            logger.info(
+                "[CREATIVE APPROVAL] All creatives approved for media buy %s, finalizing",
+                sanitize_log_value(media_buy_id),
+            )
             # Session ownership + step lookup + finalize live in the admin service
             # (this blueprint is a scanned business-logic module that must route DB
             # access through repositories, not open get_db_session itself). #1544.
             outcome, error_msg = finalize_unblocked_media_buy(tenant_id, media_buy_id)
             if outcome is FinalizeOutcome.APPLIED:
-                logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} successfully created in adapter")
+                logger.info(
+                    "[CREATIVE APPROVAL] Media buy %s successfully created in adapter",
+                    sanitize_log_value(media_buy_id),
+                )
             elif outcome is FinalizeOutcome.NOT_CLAIMED:
-                logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} already finalized by another request")
+                logger.info(
+                    "[CREATIVE APPROVAL] Media buy %s already finalized by another request",
+                    sanitize_log_value(media_buy_id),
+                )
             elif outcome is FinalizeOutcome.RETRYING:
                 # #1637: claimed; the reconciler completes it automatically.
-                logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} finalization deferred: {error_msg}")
+                logger.info(
+                    "[CREATIVE APPROVAL] Media buy %s finalization deferred: %s",
+                    sanitize_log_value(media_buy_id),
+                    sanitize_log_value(error_msg),
+                )
             else:
-                logger.error(f"[CREATIVE APPROVAL] Adapter creation failed for {media_buy_id}: {error_msg}")
+                logger.error(
+                    "[CREATIVE APPROVAL] Adapter creation failed for %s: %s",
+                    sanitize_log_value(media_buy_id),
+                    sanitize_log_value(error_msg),
+                )
 
         # Retroactive push for already-live buys (#1038):
         # Buys in pending_creatives/draft were handled above. For buys that are
