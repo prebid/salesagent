@@ -3662,7 +3662,8 @@ async def _create_media_buy_impl(
             # is SILENT on a dry_run response status -> production authoritative. A dry_run
             # buyer asked to SIMULATE the would-be outcome, which IS completion, so
             # "completed" is a truthful preview (unlike the pending-approval and reject paths, where the op
-            # did not apply). Guarded by tests/unit/test_media_buy_dry_run_status.py.
+            # did not apply). Guarded by
+            # tests/integration/test_media_buy_dry_run_status.py::test_create_media_buy_dry_run_reports_completed.
             # Simulated lifecycle: a would-be-created buy starts before its flight,
             # so pending_start — the SAME value must feed both the wire field and
             # valid_actions (spec 3.1.1 pending_creatives_to_start.yaml grades
