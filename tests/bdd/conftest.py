@@ -219,12 +219,15 @@ _XFAIL_TAGS: dict[str, str] = {
     # errors whose specific code/suggestion contract is not yet implemented.
     "T-UC-005-ext-b-disclosure-invalid": "disclosure_positions validation not implemented",
     "T-UC-005-ext-b-disclosure-empty": "disclosure_positions validation not implemented",
-    # Persistence variants share the same pre-existing gap as the positions variants above:
-    # production raises a generic VALIDATION_ERROR (Pydantic enum/minItems) without the
-    # spec-specific error code or a buyer-facing `suggestion` field. These are the
-    # specific-error-code/suggestion gap; duplicate values are rejected separately.
-    "T-UC-005-ext-b-persistence-invalid": "disclosure_persistence specific error code/suggestion not implemented",
-    "T-UC-005-ext-b-persistence-empty": "disclosure_persistence specific error code/suggestion not implemented",
+    # Persistence variants are dormant at TWO layers. The operative blocker is that their
+    # assertion steps ("the error message should indicate ... persistence mode" / "the
+    # suggestion should advise ...") are undefined, so they xfail via StepDefinitionNotFound
+    # even with these entries removed. Behind that sits the production gap they will grade
+    # once the steps exist: a generic VALIDATION_ERROR (Pydantic enum/minItems) without the
+    # spec-specific error code or a buyer-facing `suggestion` field. Kept so the tag is
+    # already routed when the steps land.
+    "T-UC-005-ext-b-persistence-invalid": "assertion steps undefined; behind them, disclosure_persistence specific error code/suggestion not implemented",
+    "T-UC-005-ext-b-persistence-empty": "assertion steps undefined; behind them, disclosure_persistence specific error code/suggestion not implemented",
     # FIXME(beads-dul): specific error codes (OUTPUT_FORMAT_IDS_EMPTY etc.)
     # not produced by production — Pydantic gives generic VALIDATION_ERROR
     "T-UC-005-ext-b-output-empty": "specific validation error codes not implemented",

@@ -12,13 +12,23 @@ Two business-logic primitives live here so no caller re-expresses them:
    blueprints only orchestrate (resolve → decide → persist) instead of encoding
    the rule in the UI layer.
 
-The flight-date scheduler is deliberately NOT expressed via
-``lifecycle_status_for_window``: it is a different operation — an idempotent
-state-machine step that returns "no change" (``None``) before start and gates
-activation on creative approval — not a pure window→status mapping.
+Two deliberate divergences do NOT route through here, and are called out so the
+"lives here once" rule above is not read as absolute:
 
-Three divergent copies of the resolution (or the mapping) is a latent bug (one
-gets a tz/boundary fix, the others don't), so each lives here once. See #1544.
+- The flight-date scheduler is deliberately NOT expressed via
+  ``lifecycle_status_for_window``: it is a different operation — an idempotent
+  state-machine step that returns "no change" (``None``) before start and gates
+  activation on creative approval — not a pure window→status mapping.
+- ``resolve_canonical_status`` (``tools/_media_buy_status.py``) resolves the
+  same ``start_time`` else ``start_date`` preference at *date* granularity
+  (``start_time.date()``) for the delivery/list status surface, without the
+  ``_as_utc`` normalization ``resolve_flight_window_utc`` applies. That tz
+  asymmetry at day boundaries is a known follow-up (#1693); it is a distinct
+  date-granular operation, not a fourth copy of THIS resolver.
+
+Otherwise, three divergent copies of the resolution (or the mapping) is a latent
+bug (one gets a tz/boundary fix, the others don't), so each lives here once.
+See #1544.
 """
 
 from __future__ import annotations
