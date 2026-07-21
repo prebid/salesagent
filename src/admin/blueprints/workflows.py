@@ -192,7 +192,13 @@ def _hold_for_unapproved_creatives(db, tenant_id: str, media_buy_id: str, user_e
     creative_ids = [a.creative_id for a in assignments]
     stmt_creatives = select(CreativeModel).filter(CreativeModel.creative_id.in_(creative_ids))
     creatives = db.scalars(stmt_creatives).all()
-    unapproved_creatives = [c.creative_id for c in creatives if c.status not in ["approved", "active"]]
+    # "approved" is the ONLY creative-ready status. ``active`` is not a member of
+    # the creative status domain (CreativeStatus: processing/pending_review/
+    # approved/suspended/rejected/archived — no "active"; the DB is only ever set
+    # to those), so an "active" branch here was dead. Drop it so this route's
+    # readiness predicate matches the operations approve route (creative.status
+    # != "approved"), keeping the two approve paths in agreement. #1544.
+    unapproved_creatives = [c.creative_id for c in creatives if c.status != "approved"]
     if not unapproved_creatives:
         return None
 
