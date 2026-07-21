@@ -430,11 +430,13 @@ _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = []
 # NOTE: the former _REST_XFAIL_TAGS set was retired once the stale
 # CreativeFormatsEnv.build_rest_body override (which returned {}) was removed.
 # In-process REST now serializes the request body and filters for real, so these
-# UC-005 filter scenarios pass on [rest] like every other transport. The only
-# UC-005 filter tags that still cannot hold are not REST-specific: inv-031-1-holds
-# / inv-031-1-violated stay xfailed via _XFAIL_TAGS because the media-buy
-# ListCreativeFormatsRequest has no `type` filter for ANY transport (creative-agent
-# role boundary by design, SDK #971 triage — not a REST body issue).
+# UC-005 filter scenarios pass on [rest] like every other transport. The
+# inv-031-1-holds / inv-031-1-violated scenarios were re-authored to grade
+# SUPPORTED filters (asset_types + name_search combining as AND) and now PASS on
+# every in-process transport (no _XFAIL_TAGS entries). The only residual is
+# e2e_rest-specific and unrelated to REST bodies: inv-031-1-holds sits in
+# _UC005_E2E_FIXTURE_INJECTION_TAGS (strict=False) because set_registry_formats
+# has no sidecar mock against Docker's real creative agent.
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:

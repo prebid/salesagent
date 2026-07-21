@@ -15,7 +15,6 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
-from tests.bdd.steps._outcome_helpers import _require_response
 from tests.bdd.steps.domain._media_buy_steps_shared import (
     _media_buy_repo,
     advance_revision_to,
@@ -1133,23 +1132,16 @@ def then_response_has_errors_array(ctx: dict) -> None:
 def _submitted_wire_dict(ctx: dict) -> dict[str, Any]:
     """Return the success-path response as the buyer sees it on the serialized wire.
 
-    REST/A2A/MCP expose the real success-path wire dict via ``ctx["wire_response"]``
-    (stashed by the dispatcher). IMPL has no wire, so serialize the typed payload
-    through the production serializer — the same path that produces wire bytes for
-    the other transports. A real-wire transport that did NOT stash wire_response is
-    a loud failure, not a silent fallback to the typed model (which would let the
-    UpdateMediaBuySubmitted assertions pass vacuously). Mirrors
-    tests/bdd/steps/domain/uc005_format_id_shape.py::_serialized_formats.
+    Delegates to the shared :func:`tests.bdd.steps._outcome_helpers.wire_dict`
+    oracle — single home for the wire-vs-IMPL read: REST/A2A/MCP get the real
+    ``ctx["wire_response"]`` dict, IMPL serializes the typed payload through the
+    production serializer, and a real-wire transport that did NOT stash
+    wire_response is a loud failure, not a silent fallback to the typed model
+    (which would let the UpdateMediaBuySubmitted assertions pass vacuously).
     """
-    from tests.harness.transport import Transport
+    from tests.bdd.steps._outcome_helpers import wire_dict
 
-    wire = ctx.get("wire_response")
-    transport = ctx.get("transport")
-    if wire is None and transport not in (None, Transport.IMPL):
-        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
-    if wire is not None:
-        return wire
-    return _require_response(ctx).model_dump(mode="json")
+    return wire_dict(ctx)
 
 
 @then("the response should contain a task_id")

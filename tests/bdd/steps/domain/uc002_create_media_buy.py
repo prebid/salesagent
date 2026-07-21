@@ -1366,13 +1366,21 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
 
     if is_structured:
         expected_code = code_token
+        recovery = parts[1] if len(parts) >= 2 and parts[1] in ("terminal", "correctable", "transient") else None
+        require_suggestion = "with suggestion" in outcome.lower()
+
+        if result is not None and result.wire_error_envelope is not None:
+            # Wire-first: assert the AdCP two-layer envelope the buyer receives.
+            result.assert_wire_error(expected_code, recovery=recovery, require_suggestion=require_suggestion)
+            return
+
         assert isinstance(error, AdCPError), (
             f"Expected AdCPError with code '{expected_code}', got {type(error).__name__}: {error}"
         )
         assert error.error_code == expected_code, f"Expected error code '{expected_code}', got '{error.error_code}'"
-        if len(parts) >= 2 and parts[1] in ("terminal", "correctable", "transient"):
-            assert error.recovery == parts[1], f"Expected recovery '{parts[1]}', got '{error.recovery}'"
-        if "with suggestion" in outcome.lower():
+        if recovery is not None:
+            assert error.recovery == recovery, f"Expected recovery '{recovery}', got '{error.recovery}'"
+        if require_suggestion:
             _assert_error_has_suggestion(error)
     else:
         # Descriptive: "error unknown sort field"
@@ -2156,26 +2164,20 @@ def then_webhook_notification(ctx: dict) -> None:
 def _serialized_success_body(ctx: dict) -> dict:
     """The success response as the buyer sees it on the serialized wire.
 
-    REST/A2A/MCP expose the real success-path wire dict via ``ctx["wire_response"]``
-    (stashed by the dispatch helper); IMPL has no wire, so serialize the typed
-    payload through the production serializer — the same path that produces the
-    wire bytes for the other transports. Mirrors ``uc005_format_id_shape``.
+    Delegates to the shared :func:`tests.bdd.steps._outcome_helpers.wire_dict`
+    oracle (single home for the wire-vs-IMPL read and its loud missing-wire
+    guard), after a success-specific diagnostic: a scenario that errored fails
+    with "Expected a success response, got error: ..." instead of a bare
+    missing-response message.
 
     Asserting on this (not the already type-coerced ``ctx["response"]`` payload)
     is what makes a *serialization* claim — confirmed_at as an ISO 8601 string,
     revision as an integer — actually observe the wire.
     """
-    from tests.harness.transport import Transport
+    from tests.bdd.steps._outcome_helpers import wire_dict
 
-    wire = ctx.get("wire_response")
-    transport = ctx.get("transport")
-    # Loud guard: a real-wire transport that didn't stash wire_response would
-    # otherwise fall through to model_dump and assert nothing on the wire.
-    if wire is None and transport not in (None, Transport.IMPL):
-        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
-    if wire is not None:
-        return wire
-    return _require_success_response(ctx).model_dump(mode="json")  # type: ignore[attr-defined]
+    _require_success_response(ctx)
+    return wire_dict(ctx)
 
 
 @then(parsers.parse('the response should include "confirmed_at" as an ISO 8601 timestamp'))

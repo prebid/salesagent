@@ -65,12 +65,20 @@ def _wire_error_object(ctx: dict) -> dict | None:
     """
     result = ctx.get("result")
     envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
-    if not envelope:
-        return None
-    errors = envelope.get("errors") or []
-    if errors and errors[0]:
-        return errors[0]
-    return envelope.get("adcp_error") or {}
+    if envelope:
+        errors = envelope.get("errors") or []
+        if errors and errors[0]:
+            return errors[0]
+        return envelope.get("adcp_error") or {}
+    # Partial success: a SUCCESS wire body carrying an ``errors`` array (no
+    # two-layer error envelope). The buyer-facing error object is the wire
+    # body's errors[0], not the typed payload's reconstruction of it.
+    wire_response = ctx.get("wire_response")
+    if isinstance(wire_response, dict):
+        wire_errors = wire_response.get("errors") or []
+        if wire_errors and isinstance(wire_errors[0], dict):
+            return wire_errors[0]
+    return None
 
 
 def _wire_message(ctx: dict) -> str | None:
@@ -80,6 +88,43 @@ def _wire_message(ctx: dict) -> str | None:
         return None
     message = error.get("message")
     return str(message) if message is not None else None
+
+
+def _reconstructed_error_for_fallback(ctx: dict, what: str) -> object:
+    """Return ``ctx['error']`` for IMPL/no-wire scenarios — loud on wire transports.
+
+    A wire transport (REST/A2A/MCP) that captured neither a two-layer error
+    envelope nor a wire ``errors`` array must fail loudly instead of silently
+    grading the lossy reconstructed exception — a pass through the
+    reconstruction can be vacuous. IMPL (and the non-parametrized ``None``
+    default) legitimately have no wire.
+    """
+    from tests.harness.transport import Transport
+
+    transport = ctx.get("transport")
+    if transport not in (None, Transport.IMPL):
+        raise AssertionError(f"{transport}: wire error envelope missing — cannot grade {what}")
+    error = ctx.get("error")
+    assert error is not None, "No error recorded in ctx"
+    return error
+
+
+def _details_for_assertion(ctx: dict) -> dict:
+    """Wire-first ``details``: the captured wire error object's details dict.
+
+    Mirrors the code/message siblings: when the scenario dispatched through a
+    wire transport, ``details`` is the buyer-facing contract and must be read
+    from the real wire error object; the reconstructed ``ctx['error']`` is the
+    fallback for IMPL/no-wire scenarios only (loud otherwise).
+    """
+    wire_error = _wire_error_object(ctx)
+    if wire_error is not None:
+        details = wire_error.get("details")
+        assert isinstance(details, dict), (
+            f"Expected a details object on the wire error, got {details!r} (wire error: {wire_error!r})"
+        )
+        return details
+    return _get_error_details(_reconstructed_error_for_fallback(ctx, "error details"))
 
 
 def _get_error_code(error: object) -> str:
@@ -297,12 +342,15 @@ def then_error_code(ctx: dict, code: str) -> None:
 
 @then(parsers.parse('the error message should contain "{text}"'))
 def then_error_message_contains(ctx: dict, text: str) -> None:
-    """Assert buyer-facing error message contains text, wire-first."""
+    """Assert buyer-facing error message contains text, wire-first.
+
+    Loud on wire transports with no captured wire error (mirrors
+    ``then_error_duplicates``): silently grading the reconstructed exception
+    there could pass vacuously.
+    """
     message = _wire_message(ctx)
     if message is None:
-        error = ctx.get("error")
-        assert error is not None, "No error recorded in ctx"
-        message = _get_error_message(error)
+        message = _get_error_message(_reconstructed_error_for_fallback(ctx, "the error message"))
     msg = message.lower()
     assert text.lower() in msg, f"Expected '{text}' in error message: {message}"
 
@@ -398,14 +446,7 @@ def then_error_duplicates(ctx: dict) -> None:
     """Assert duplicate rejection on the buyer-facing wire envelope when present."""
     message = _wire_message(ctx)
     if message is None:
-        from tests.harness.transport import Transport
-
-        transport = ctx.get("transport")
-        if transport not in (None, Transport.IMPL):
-            raise AssertionError(f"{transport}: wire error envelope missing — cannot grade duplicate rejection")
-        error = ctx.get("error")
-        assert error is not None, "No wire envelope or reconstructed error recorded in ctx"
-        message = _get_error_message(error)
+        message = _get_error_message(_reconstructed_error_for_fallback(ctx, "duplicate rejection"))
     assert "duplicate" in message.lower(), f"Expected 'duplicate' in error message: {message}"
 
 
@@ -800,14 +841,14 @@ def then_error_field_with_value(ctx: dict, field: str, value: str) -> None:
 
 @then(parsers.parse("the error details should include {key} {value}"))
 def then_error_details_include_unquoted(ctx: dict, key: str, value: str) -> None:
-    """Assert error.details contains a key with the given value (numeric/unquoted).
+    """Assert error details contain a key with the given value (numeric/unquoted).
 
-    Handles numeric coercion: if the expected value looks like a number,
-    compare numerically. Otherwise compare as strings.
+    Wire-first (``_details_for_assertion``): the wire error object's details on
+    wire transports; reconstructed fallback on IMPL only. Handles numeric
+    coercion: if the expected value looks like a number, compare numerically.
+    Otherwise compare as strings.
     """
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    details = _get_error_details(error)
+    details = _details_for_assertion(ctx)
     assert key in details, f"Expected '{key}' in error details. Available keys: {list(details.keys())}"
     actual = details[key]
     _assert_detail_value_matches(key, actual, value)
@@ -815,10 +856,8 @@ def then_error_details_include_unquoted(ctx: dict, key: str, value: str) -> None
 
 @then(parsers.parse('the error details should include {key} "{value}"'))
 def then_error_details_include_quoted(ctx: dict, key: str, value: str) -> None:
-    """Assert error.details contains a key with the given string value."""
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    details = _get_error_details(error)
+    """Assert error details contain a key with the given string value (wire-first)."""
+    details = _details_for_assertion(ctx)
     assert key in details, f"Expected '{key}' in error details. Available keys: {list(details.keys())}"
     actual = details[key]
     assert str(actual) == value, f"Expected details['{key}'] = '{value}', got '{actual}'"
@@ -826,15 +865,13 @@ def then_error_details_include_quoted(ctx: dict, key: str, value: str) -> None:
 
 @then(parsers.parse('the error "details" object should include "{key}" with value {value:d}'))
 def then_error_details_object_numeric(ctx: dict, key: str, value: int) -> None:
-    """Assert error.details contains a key with an integer value.
+    """Assert error details contain a key with an integer value (wire-first).
 
     Feature-file pattern: 'the error "details" object should include "minimum_budget" with value 500'
-    Delegates to the same _get_error_details / _assert_detail_value_matches helpers
-    as the unquoted-key variant above.
+    Delegates to the same _details_for_assertion / _assert_detail_value_matches
+    helpers as the unquoted-key variant above.
     """
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    details = _get_error_details(error)
+    details = _details_for_assertion(ctx)
     assert key in details, f"Expected '{key}' in error details. Available keys: {list(details.keys())}"
     actual = details[key]
     _assert_detail_value_matches(key, actual, str(value))
@@ -842,13 +879,11 @@ def then_error_details_object_numeric(ctx: dict, key: str, value: int) -> None:
 
 @then(parsers.parse('the error "details" object should include "{key}" with value "{value}"'))
 def then_error_details_object_string(ctx: dict, key: str, value: str) -> None:
-    """Assert error.details contains a key with a string value.
+    """Assert error details contain a key with a string value (wire-first).
 
     Feature-file pattern: 'the error "details" object should include "currency" with value "USD"'
     """
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    details = _get_error_details(error)
+    details = _details_for_assertion(ctx)
     assert key in details, f"Expected '{key}' in error details. Available keys: {list(details.keys())}"
     actual = details[key]
     # A media-buy-id label in the feature (e.g. CONFLICT details resource_id
@@ -859,15 +894,13 @@ def then_error_details_object_string(ctx: dict, key: str, value: str) -> None:
 
 @then(parsers.parse('the "{field}" value should match ISO 4217 alphabetic format'))
 def then_field_matches_iso4217(ctx: dict, field: str) -> None:
-    """Assert the given field value in error details matches ISO 4217 format.
+    """Assert the given field value in error details matches ISO 4217 format (wire-first).
 
     ISO 4217 alphabetic codes are exactly 3 uppercase ASCII letters (e.g., USD, EUR, GBP).
     """
     import re
 
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    details = _get_error_details(error)
+    details = _details_for_assertion(ctx)
     actual = details.get(field)
     assert actual is not None, f"Field '{field}' not found in error details. Available keys: {list(details.keys())}"
     assert isinstance(actual, str), f"Expected '{field}' to be a string, got {type(actual).__name__}: {actual!r}"
