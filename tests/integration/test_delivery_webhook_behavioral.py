@@ -82,25 +82,18 @@ class TestWebhookHmacSha256Signing:
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
         """
-        import hashlib
-        import hmac
-
         from adcp import sign_legacy_webhook
+
+        from tests.helpers.webhook_hmac import assert_hmac_over_transmitted_bytes
 
         payload = {"media_buy_id": "mb_001", "impressions": 5000}
         secret = "test-signing-secret"
 
         headers, body_bytes = sign_legacy_webhook(secret, payload)
 
-        assert headers["X-AdCP-Signature"].startswith("sha256=")
-        assert headers["X-AdCP-Timestamp"].isdigit()
-        # Byte-equality: the signature verifies over the returned wire bytes
-        expected = hmac.new(
-            secret.encode("utf-8"),
-            headers["X-AdCP-Timestamp"].encode() + b"." + body_bytes,
-            hashlib.sha256,
-        ).hexdigest()
-        assert headers["X-AdCP-Signature"] == f"sha256={expected}"
+        # Byte-equality: the signature verifies over the returned wire bytes.
+        # No transport here, so the receiver cross-check is off.
+        assert_hmac_over_transmitted_bytes(secret, body_bytes, headers, cross_check_receivers=False)
 
 
 # ---------------------------------------------------------------------------

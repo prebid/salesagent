@@ -310,11 +310,19 @@ def test_authentication_headers(webhook_service, mock_db_session):
             spend=100.0,
         )
 
-        # Verify headers (PR #86 added X-ADCP-Timestamp, no longer uses X-Webhook-Token)
+        # Verify headers (no longer uses X-Webhook-Token)
         call_args = mock_client.return_value.__enter__.return_value.post.call_args
         headers = call_args.kwargs["headers"]
         assert headers["Authorization"] == "Bearer secret_token"
-        assert "X-ADCP-Timestamp" in headers  # NEW in PR #86
+
+        # This branch is UNSIGNED (webhook_secret is None), and replay prevention
+        # is a property of the signature — an unsigned timestamp is unverifiable
+        # decoration a receiver cannot act on. It also spelled the header
+        # X-ADCP-Timestamp, diverging from the SDK's X-AdCP-Timestamp emitted on
+        # the signed branch, and neither of the other two senders emits one.
+        # Asserted absent (not merely unasserted) so it cannot quietly return.
+        assert "X-ADCP-Timestamp" not in headers
+        assert "X-AdCP-Timestamp" not in headers
 
 
 def test_no_webhooks_configured(webhook_service, mock_db_session):

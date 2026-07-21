@@ -292,15 +292,13 @@ class TestSendWebhookEnhancedHmacSigning:
 
         Covers: UC-004-EXT-G-06
         """
-        import hashlib
-        import hmac
-
         from tests.factories import (
             PrincipalFactory,
             PushNotificationConfigFactory,
             TenantFactory,
         )
         from tests.harness import CircuitBreakerEnv
+        from tests.helpers.webhook_hmac import assert_hmac_over_transmitted_bytes
 
         secret = "b" * 32
         payload = {"media_buy_id": "mb_001", "impressions": 5000}
@@ -325,21 +323,20 @@ class TestSendWebhookEnhancedHmacSigning:
             )
 
             post_mock = env.mock["client"].return_value.__enter__.return_value.post
-            sent_headers = post_mock.call_args.kwargs["headers"]
-            headers_lower = {k.lower(): v for k, v in sent_headers.items()}
-            sent_signature = headers_lower["x-adcp-signature"].removeprefix("sha256=")
-            sent_timestamp = headers_lower["x-adcp-timestamp"]
-            sent_bytes = post_mock.call_args.kwargs["content"]
 
             # Reproduce the signature over the LITERAL transmitted bytes —
             # the AdCP byte-equality contract. (The old version of this test
             # re-serialized the payload dict to recompute, which is exactly
             # the receiver bug #1441 fixes: it only passed because sender and
-            # test shared the same wrong re-serialization.)
-            message = sent_timestamp.encode("utf-8") + b"." + sent_bytes
-            expected = hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
-
-            assert sent_signature == expected
+            # test shared the same wrong re-serialization.) Graded at the
+            # transport mock, so no receiver cross-check; the real-socket leg
+            # for this sender is test_webhook_wire_signature.py.
+            assert_hmac_over_transmitted_bytes(
+                secret,
+                post_mock.call_args.kwargs["content"],
+                post_mock.call_args.kwargs["headers"],
+                cross_check_receivers=False,
+            )
 
 
 # ---------------------------------------------------------------------------

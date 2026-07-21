@@ -1,7 +1,8 @@
 """Enhanced webhook delivery service for AdCP with security and reliability features.
 
 This service implements the AdCP webhook specification from PR #86:
-- HMAC-SHA256 signature generation with X-ADCP-Signature header
+- HMAC-SHA256 signature generation via adcp.sign_legacy_webhook, which emits the
+  spec header names (X-AdCP-Signature, sha256=-prefixed, and X-AdCP-Timestamp)
 - Circuit breaker pattern (CLOSED/OPEN/HALF_OPEN states) for fault tolerance
 - Exponential backoff with jitter for retry logic
 - Replay attack prevention with 5-minute timestamp window
@@ -11,7 +12,6 @@ This service implements the AdCP webhook specification from PR #86:
 """
 
 import atexit
-import json
 import logging
 import random
 import threading
@@ -23,6 +23,8 @@ from typing import Any
 
 import httpx
 from adcp import get_adcp_spec_version, sign_legacy_webhook
+
+from src.core.webhook_body import compact_webhook_body
 
 logger = logging.getLogger(__name__)
 
@@ -448,8 +450,12 @@ class WebhookDeliveryService:
         else:
             if webhook_secret:
                 logger.warning(f"⚠️ Webhook secret for {config.url} is too weak (min 32 characters required)")
-            body_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-            headers["X-ADCP-Timestamp"] = str(timestamp)  # For replay prevention
+            # No timestamp header on the unsigned branch: replay prevention is a
+            # property of the SIGNATURE, so an unsigned timestamp is unverifiable
+            # decoration. The other two senders emit none, and the all-caps
+            # X-ADCP-Timestamp spelled here also diverged from the SDK's
+            # X-AdCP-Timestamp used on the signed branch above.
+            body_bytes = compact_webhook_body(payload)
 
         # Add authentication
         if config.authentication_type == "bearer" and config.authentication_token:

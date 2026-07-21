@@ -8,7 +8,6 @@ This module provides reliable webhook delivery with:
 - HMAC signing via adcp.sign_legacy_webhook (spec byte-equality contract)
 """
 
-import json
 import logging
 import time
 import uuid
@@ -20,6 +19,7 @@ import requests
 from adcp import sign_legacy_webhook
 
 from src.core.database.database_session import get_db_session
+from src.core.webhook_body import compact_webhook_body
 from src.core.webhook_validator import WebhookURLValidator
 
 logger = logging.getLogger(__name__)
@@ -115,7 +115,7 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
         signed_headers, body_bytes = sign_legacy_webhook(delivery.signing_secret, delivery.payload)
         headers.update(signed_headers)
     else:
-        body_bytes = json.dumps(delivery.payload, separators=(",", ":")).encode("utf-8")
+        body_bytes = compact_webhook_body(delivery.payload)
 
     # Track delivery attempts
     attempts = 0

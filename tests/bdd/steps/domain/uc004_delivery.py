@@ -1935,7 +1935,9 @@ def then_hmac_header(ctx: dict, header: str) -> None:
     assert value is not None, f"Expected header {header!r} but got: {list(_get_last_webhook_headers(ctx))}"
     # Value may be bare hex or prefixed with "sha256="
     stripped = value.removeprefix("sha256=")
-    assert re.match(r"^[0-9a-f]{1,}$", stripped), f"Header {header!r} is not a hex-encoded HMAC: {value!r}"
+    # {64}, not {1,}: HMAC-SHA256 is a fixed-width 64-char hex digest, so a
+    # truncated or malformed signature must not satisfy this step.
+    assert re.match(r"^[0-9a-f]{64}$", stripped), f"Header {header!r} is not a hex-encoded HMAC: {value!r}"
 
 
 @then(parsers.parse('the request should include header "{header}" with unix timestamp'))

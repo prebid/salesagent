@@ -13,9 +13,10 @@ and reject valid signatures (#1441).
 
 import hashlib
 import hmac
-import json
 from datetime import UTC, datetime
 from typing import Any
+
+from src.core.webhook_body import compact_webhook_body
 
 
 class WebhookVerificationError(Exception):
@@ -77,23 +78,20 @@ class WebhookVerifier:
         """Verify timestamp is recent (within replay window).
 
         Args:
-            timestamp: Unix seconds (spec) or ISO-8601 (legacy)
+            timestamp: Unix seconds, per spec
 
         Raises:
             WebhookVerificationError: If timestamp is too old or invalid
         """
-        # Spec format: unix seconds ("1720000000")
-        webhook_time: datetime | None = None
+        # Unix seconds only ("1720000000"). The ISO-8601 fallback that used to
+        # live here accepted a timestamp the spec says to reject, and made this
+        # verifier disagree with WebhookAuthenticator (int() only), so the two
+        # in-repo references graded the same webhook differently. Every sender
+        # in this repo emits unix seconds, and nothing depended on the fallback.
         try:
             webhook_time = datetime.fromtimestamp(int(timestamp), tz=UTC)
-        except (ValueError, TypeError, OverflowError, OSError):
-            # Legacy ISO-8601 fallback
-            try:
-                webhook_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-            except (ValueError, AttributeError) as e:
-                raise WebhookVerificationError(f"Invalid timestamp format: {e}")
-            if webhook_time.tzinfo is None:
-                raise WebhookVerificationError("Timestamp must be timezone-aware (UTC)")
+        except (ValueError, TypeError, OverflowError, OSError) as e:
+            raise WebhookVerificationError(f"Invalid timestamp format, expected unix seconds: {e}")
 
         # Check age
         age_seconds = (datetime.now(UTC) - webhook_time).total_seconds()
@@ -127,10 +125,11 @@ class WebhookVerifier:
             payload_str = payload.decode("utf-8")
         elif isinstance(payload, dict):
             # Deprecated dict path: reconstruct the sender's canonical compact
-            # form. Only correct when the sender serialized compactly
-            # (separators=(",", ":"), insertion order) — raw-body input is
-            # the reliable contract.
-            payload_str = json.dumps(payload, separators=(",", ":"))
+            # form through the same helper the senders use, so the two cannot
+            # drift. Only correct when the sender serialized compactly
+            # (insertion order, compact separators) — raw-body input is the
+            # reliable contract.
+            payload_str = compact_webhook_body(payload).decode("utf-8")
         else:
             payload_str = payload
 

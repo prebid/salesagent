@@ -13,7 +13,6 @@ Application-level webhooks are configured via:
 """
 
 import asyncio
-import json
 import logging
 import time
 from collections.abc import Mapping
@@ -33,6 +32,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.lifecycle import register_shutdown
+from src.core.webhook_body import compact_webhook_body
 
 logger = logging.getLogger(__name__)
 
@@ -193,11 +193,11 @@ class ProtocolWebhookService:
             and push_notification_config.authentication_token
         ):
             signed_headers, body_bytes = sign_legacy_webhook(
-                push_notification_config.authentication_token, payload_dict, headers=headers
+                push_notification_config.authentication_token, payload_dict
             )
             headers.update(signed_headers)
         else:
-            body_bytes = json.dumps(payload_dict, separators=(",", ":")).encode("utf-8")
+            body_bytes = compact_webhook_body(payload_dict)
             if (
                 push_notification_config.authentication_type == "Bearer"
                 and push_notification_config.authentication_token
