@@ -52,7 +52,7 @@ def test_something():
 ```
 
 ## Quality Rules
-- Max 10 mocks per test file (pre-commit enforces)
+- Max 10 mocks per test file (convention — no hook enforces this; reviewers do)
 - AdCP compliance test for all client-facing models
 - Test YOUR code, not Python built-ins
 - Roundtrip test required for any operation using `apply_testing_hooks()`
