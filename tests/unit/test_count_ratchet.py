@@ -8,6 +8,7 @@ import json
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -355,6 +356,20 @@ def test_ruff_complexity_rules_match_pyproject_ratchet_bucket() -> None:
     assert match, "pyproject.toml missing Ratchet targets / Permanently accepted headers"
     from_pyproject = tuple(re.findall(r'"([A-Z0-9]+)"', match.group(1)))
     assert check_ruff_complexity_count.RULES == from_pyproject
+
+
+def test_ruff_complexity_thresholds_pinned_to_ruff_defaults() -> None:
+    """N3/#1657: pin mccabe/pylint thresholds so baseline counts stay stable.
+
+    A silent bump of max-complexity / max-branches / max-statements would
+    auto-lower ``.ruff-complexity-baseline`` without a reviewable change.
+    """
+    with (_REPO / "pyproject.toml").open("rb") as fh:
+        data = tomllib.load(fh)
+    lint = data["tool"]["ruff"]["lint"]
+    assert lint["mccabe"]["max-complexity"] == 10
+    assert lint["pylint"]["max-branches"] == 12
+    assert lint["pylint"]["max-statements"] == 50
 
 
 @pytest.mark.parametrize(
