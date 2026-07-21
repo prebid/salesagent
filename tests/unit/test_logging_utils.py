@@ -97,3 +97,43 @@ def test_single_line_formatter_sanitizes_exception_traceback() -> None:
     rendered = formatter.format(record)
     assert len(rendered.splitlines()) == 1
     assert r"remote failure\u2028FORGED record" in rendered
+
+
+def test_json_formatter_emits_single_line_for_all_line_separators() -> None:
+    """Production JSONFormatter must serialize a message carrying every line/record
+    separator onto a single physical line.
+
+    JSONFormatter relies on json.dumps' default ensure_ascii=True to escape the
+    non-ASCII separators (NEL U+0085, LS U+2028, PS U+2029) that json is NOT
+    otherwise required to escape; the C0 controls are always escaped. Pinning
+    single-line output means a future switch to ensure_ascii=False (which would
+    emit NEL/LS/PS raw) reddens this test.
+    """
+    import json
+
+    from src.core.logging_config import JSONFormatter
+
+    # CR, LF, VT, FF, FS, GS, RS, NEL, LS, PS, and a C0 control (SOH).
+    separators = "\r\n\v\f\x1c\x1d\x1e\x85\u2028\u2029\x01"
+    message = f"boundary{separators}FORGED record"
+
+    record = logging.getLogger("tests.log_sanitizer").makeRecord(
+        "tests.log_sanitizer",
+        logging.INFO,
+        __file__,
+        1,
+        message,
+        (),
+        None,
+    )
+
+    rendered = JSONFormatter().format(record)
+
+    # str.splitlines() splits on every one of the separators above, so a single
+    # element proves none of them survive raw in the serialized output.
+    assert len(rendered.splitlines()) == 1, f"JSONFormatter emitted a multi-line record: {rendered!r}"
+    for sep in separators:
+        assert sep not in rendered, f"raw separator U+{ord(sep):04X} leaked into JSON output"
+    # The output is still valid, parseable JSON and preserves the message.
+    parsed = json.loads(rendered)
+    assert parsed["message"] == message
