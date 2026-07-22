@@ -44,12 +44,20 @@ IMPL_REGISTRY = [
 # Format: "module::impl_name::wrapper_kind::param_name"
 KNOWN_VIOLATIONS: set[str] = set()
 
-# Parameters resolved at the boundary, not forwarded from the caller.
-# ``external_task_id`` is the transport's OUTER async task id — only the A2A
-# boundary has one (the ``task_*`` returned to the buyer); MCP/REST have no outer
-# id and legitimately do not forward it. So it is boundary-resolved per transport,
-# not a dropped param. #1544 B6.
-BOUNDARY_RESOLVED_PARAMS = {"identity", "external_task_id"}
+# Parameters resolved at the boundary, not forwarded from the caller — keyed to the
+# wrapper KINDS they are resolved for, so an exemption for one transport does not blind
+# the others. ``identity`` is resolved at every boundary. ``external_task_id`` is the
+# transport's OUTER async task id: only the A2A boundary has one (the ``task_*`` returned
+# to the buyer), and it MUST forward it — MCP/REST have no outer id and legitimately do
+# not. Exempting it for A2A too would leave the A2A forwarding unguarded (deleting it
+# would keep the guard green). #1544 B6.
+_ALL_WRAPPER_KINDS = frozenset({"mcp", "a2a", "rest"})
+BOUNDARY_RESOLVED_PARAMS: dict[str, frozenset[str]] = {
+    "identity": _ALL_WRAPPER_KINDS,
+    "external_task_id": frozenset({"mcp", "rest"}),
+}
+# Params resolved at EVERY boundary — stripped from the impl-param list before checking.
+_UNIVERSALLY_RESOLVED = frozenset(p for p, kinds in BOUNDARY_RESOLVED_PARAMS.items() if kinds == _ALL_WRAPPER_KINDS)
 
 
 def _module_to_filepath(module_path: str) -> Path:
@@ -70,7 +78,7 @@ def _get_impl_params(module_path: str, func_name: str) -> list[str]:
     mod = importlib.import_module(module_path)
     func = getattr(mod, func_name)
     sig = inspect.signature(func)
-    return [name for name in sig.parameters if name not in BOUNDARY_RESOLVED_PARAMS]
+    return [name for name in sig.parameters if name not in _UNIVERSALLY_RESOLVED]
 
 
 def _find_wrapper_info(module_path: str, impl_name: str) -> dict:
@@ -160,7 +168,7 @@ def _check_wrapper_completeness(
     violations = []
     for kwargs, n_positional in call_arg_sets:
         for i, param in enumerate(impl_params):
-            if param in BOUNDARY_RESOLVED_PARAMS:
+            if wrapper_kind in BOUNDARY_RESOLVED_PARAMS.get(param, frozenset()):
                 continue
             key = f"{module_path}::{impl_name}::{wrapper_kind}::{param}"
             if param not in kwargs and i >= n_positional:

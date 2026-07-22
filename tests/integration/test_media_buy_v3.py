@@ -320,6 +320,50 @@ class TestCreateMediaBuyManualApproval:
             assert mb.raw_request is not None, "raw_request should be stored"
 
     @pytest.mark.asyncio
+    async def test_a2a_external_task_id_forwarded_to_persisted_step(
+        self, mb_tenant_with_approval, mb_principal, mb_products
+    ):
+        """The A2A raw wrapper must FORWARD its outer ``external_task_id`` all the way into the
+        persisted workflow step's ``request_metadata`` — this is what lets ``tasks/get`` correlate
+        a durable poll to the id the buyer holds. Drives the real ``create_media_buy_raw`` (not the
+        hand-written metadata the durable-lookup tests use), so deleting the wrapper's forwarding
+        reddens this test as well as the boundary guard."""
+        from src.core.tools.media_buy_create import create_media_buy_raw
+
+        identity = _make_identity(
+            principal_id=mb_principal["principal_id"],
+            tenant_id=mb_tenant_with_approval["tenant_id"],
+            tenant=mb_tenant_with_approval,
+        )
+        outer_task_id = f"task_{uuid.uuid4().hex[:12]}"
+
+        result = await create_media_buy_raw(
+            brand={"domain": "testbrand.com"},
+            packages=[{"product_id": "guaranteed_display", "budget": 4000.0, "pricing_option_id": "cpm_usd_fixed"}],
+            start_time=datetime.now(UTC) + timedelta(days=1),
+            end_time=datetime.now(UTC) + timedelta(days=8),
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
+            identity=identity,
+            external_task_id=outer_task_id,
+        )
+        assert result.status == "submitted"
+
+        media_buy_id = resolve_media_buy_id_from_task(result.response.task_id)
+        with get_db_session() as session:
+            from src.core.database.models import ObjectWorkflowMapping
+
+            step = session.scalars(
+                select(WorkflowStep)
+                .join(ObjectWorkflowMapping, ObjectWorkflowMapping.step_id == WorkflowStep.step_id)
+                .where(ObjectWorkflowMapping.object_id == media_buy_id)
+            ).first()
+            assert step is not None, "manual-approval create must persist a workflow step"
+            # request_metadata is merged into request_data at the persistence boundary.
+            assert (step.request_data or {}).get("external_task_id") == outer_task_id, (
+                "the A2A outer task id must be forwarded into the persisted step's request_data"
+            )
+
+    @pytest.mark.asyncio
     async def test_execute_approved_calls_adapter(self, mb_tenant_with_approval, mb_principal, mb_products):
         """UC-002-MA03: approved buy triggers adapter creation.
 
