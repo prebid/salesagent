@@ -1095,6 +1095,31 @@ def missing_idempotency_key_error(
     )
 
 
+# The pydantic error ``type``s that mean "a required field was not supplied".
+# MCP's TypeAdapter reports ``missing_argument`` for an absent tool argument;
+# FastAPI/pydantic body validation reports ``missing`` for an absent field.
+# One set so no boundary recognizes a narrower slice than another.
+_MISSING_FIELD_ERROR_TYPES: frozenset[str] = frozenset({"missing", "missing_argument"})
+
+
+def missing_idempotency_key_error_from_validation(
+    field: str | None,
+    errors: Sequence[Mapping[str, Any]],
+) -> AdCPValidationError | None:
+    """The canonical missing-key error IFF these validation errors ARE an absent idempotency_key.
+
+    One home for the RECOGNITION rule (which pydantic ``type``s count as
+    "missing") next to ``missing_idempotency_key_error`` (the wire identity),
+    so the MCP ``normalize_to_adcp_error`` branch and the REST
+    ``RequestValidationError`` handler can never drift their trigger predicate.
+    Returns ``None`` when this is not the missing-key case, so callers fall
+    through to their normal validation handling.
+    """
+    if field == "idempotency_key" and errors and errors[0].get("type") in _MISSING_FIELD_ERROR_TYPES:
+        return missing_idempotency_key_error(details=build_validation_error_details(errors))
+    return None
+
+
 def first_validation_error_field(validation_error: ValidationError) -> str | None:
     """Return the bracket-notation path of the first Pydantic error, or ``None``.
 
@@ -1151,8 +1176,9 @@ def normalize_to_adcp_error(
     elif isinstance(exc, ValidationError):
         errors = exc.errors()
         field = first_validation_error_field(exc)
-        if field == "idempotency_key" and errors and errors[0].get("type") in {"missing", "missing_argument"}:
-            typed = missing_idempotency_key_error(details=build_validation_error_details(errors))
+        missing_key = missing_idempotency_key_error_from_validation(field, errors)
+        if missing_key is not None:
+            typed = missing_key
         else:
             message = errors[0].get("msg") if errors else "Request failed schema validation"
             typed = AdCPValidationError(

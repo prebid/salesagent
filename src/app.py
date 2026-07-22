@@ -42,7 +42,7 @@ from src.core.exceptions import (
     AdCPValidationError,
     build_two_layer_error_envelope,
     build_validation_error_details,
-    missing_idempotency_key_error,
+    missing_idempotency_key_error_from_validation,
     normalize_to_adcp_error,
 )
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
@@ -261,11 +261,13 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     loc = raw_loc[1:] if raw_loc and raw_loc[0] in ("body", "query", "path") else raw_loc
     field = ".".join(loc) or None
     message = first.get("msg") or "Request failed schema validation"
-    if field == "idempotency_key" and first.get("type") == "missing":
-        # The canonical missing-key error (one home in src.core.exceptions) —
-        # byte-identical message/field/suggestion with the MCP and A2A boundaries.
-        adcp_exc = missing_idempotency_key_error(details=build_validation_error_details(errors))
-        return await _envelope_response(request, adcp_exc)
+    # The missing-key recognition rule + wire identity both live in one home in
+    # src.core.exceptions, so this REST boundary and the MCP normalize branch
+    # can't drift their trigger predicate (they had already: "missing" here vs
+    # {"missing","missing_argument"} there).
+    missing_key_error = missing_idempotency_key_error_from_validation(field, errors)
+    if missing_key_error is not None:
+        return await _envelope_response(request, missing_key_error)
     # Code selection by failure semantics, grounded in the AdCP graded
     # error-compliance storyboard: a VALUE/enum/range violation on a
     # structurally-valid field is canonically VALIDATION_ERROR; a missing/

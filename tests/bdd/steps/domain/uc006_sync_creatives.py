@@ -473,11 +473,12 @@ def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
 def then_wire_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
     """Grade the actual transport envelope, not a reconstructed exception.
 
-    Every current consumer is an idempotency-key rejection scenario (uc006 /
-    uc011 required-key rows), so this step also pins ``errors[0].field`` and a
-    message signal — without them, ANY validation rejection (e.g. an empty
-    accounts array firing first) would satisfy a code+suggestion-only check
-    and the scenario would pass for the wrong reason.
+    Every current consumer is an idempotency-key rejection scenario (uc003
+    update + uc006 / uc011 sync required-key rows), so this step also pins
+    ``errors[0].field`` and a message signal — without them, ANY validation
+    rejection (e.g. an empty accounts array, or an update's mutated fields
+    firing first) would satisfy a code+suggestion-only check and the scenario
+    would pass for the wrong reason.
     """
     result = ctx.get("result")
     assert result is not None, "Expected the transport dispatcher result"

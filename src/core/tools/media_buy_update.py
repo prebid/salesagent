@@ -213,11 +213,14 @@ def validate_update_media_buy_protocol_fields(
                 "Retry the update without a `revision` field, or re-read the media buy's current state before updating."
             ),
         )
+    # A schema-INVALID value (below minimum:1, non-integer, wrong JSON type). The
+    # message describes the malformed VALUE the buyer sent — not an unsupported
+    # feature — which also keeps this raise textually distinct from the
+    # UNSUPPORTED_FEATURE branch above (no silent-drift copy).
     raise AdCPInvalidRequestError(
-        "This seller does not support optimistic-concurrency control via `revision`; the update was not applied.",
-        suggestion=(
-            "Retry the update without a `revision` field, or re-read the media buy's current state before updating."
-        ),
+        "`revision` must be an integer >= 1 when supplied; the update was not applied.",
+        field="revision",
+        suggestion="Omit `revision`, or supply the media buy's current integer revision (minimum 1).",
     )
 
 

@@ -222,6 +222,6 @@ def test_rest_below_minimum_revision_is_invalid_request() -> None:
         response.json(),
         "INVALID_REQUEST",
         recovery="correctable",
-        message_substr="does not support optimistic-concurrency control",
+        message_substr="must be an integer",
     )
     mock_impl.assert_not_called()

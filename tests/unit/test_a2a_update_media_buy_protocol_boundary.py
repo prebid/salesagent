@@ -61,7 +61,7 @@ _MOCK_IDENTITY = PrincipalFactory.make_identity(
             },
             # Below minimum:1 is schema-invalid -> INVALID_REQUEST (BR-UC-003 below_min).
             "INVALID_REQUEST",
-            "does not support optimistic-concurrency control",
+            "must be an integer",
             id="below-minimum-revision",
         ),
     ],

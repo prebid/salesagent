@@ -1,10 +1,13 @@
 """Single source of truth for the AdCP protocol version this build speaks.
 
-The advertised AdCP version is derived from the installed ``adcp`` SDK pin
-(see docs/adcp-spec-version.md) rather than hardcoded, so bumping the SDK
-propagates automatically to everything that advertises or negotiates the
-protocol version. A cross-major bump is guarded by
-``tests/unit/test_adcp_spec_version.py``.
+The advertised AdCP versions live in the in-repo ``ADVERTISED_ADCP_VERSIONS``
+constant below — this build advertises what it IMPLEMENTS, not what its
+dependency ships. The installed ``adcp`` SDK's spec pin is a CROSS-CHECK only:
+``test_adcp_version.py::test_advertised_versions_consistent_with_sdk_pin``
+reddens on an SDK bump so the bump PR consciously updates the constant under
+schema-grounded review, instead of a dependency bump silently changing the
+wire contract (the prerelease-advertised-as-stable bug this constant exists to
+prevent). See docs/adcp-spec-version.md for the bump procedure.
 
 Spec grounding (v3.1.1):
     - ``static/schemas/source/core/version-envelope.json`` — buyers pin either

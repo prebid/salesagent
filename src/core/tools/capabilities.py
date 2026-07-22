@@ -93,13 +93,32 @@ def _filter_supported_protocols(req: GetAdcpCapabilitiesRequest | None) -> list[
 _DEFAULT_SPECIALISMS: tuple[AdcpSpecialism, ...] = (AdcpSpecialism.sales_non_guaranteed,)
 
 
+def _build_capabilities_request(
+    protocols: list[str] | None,
+    context: ContextObject | None,
+) -> GetAdcpCapabilitiesRequest:
+    """Construct the negotiation request through the shared validation boundary.
+
+    One home for the MCP and A2A/REST wrappers so a new negotiation-relevant
+    field is added once, not in two byte-identical copies (same file, below the
+    R0801 duplication threshold, so the ratchet can't catch the drift). Forwards
+    the buyer's ``protocols`` (the impl filters ``supported_protocols`` by it)
+    and echoes ``context``; a bad ``protocols`` value becomes VALIDATION_ERROR
+    at this boundary rather than an untyped pydantic error.
+    """
+    with adcp_validation_boundary(context="get_adcp_capabilities request"):
+        return GetAdcpCapabilitiesRequest(protocols=protocols, context=context)
+
+
 def _build_adcp_block() -> Adcp:
     """Build the ``adcp`` version/idempotency envelope block for the response.
 
     Shared by both response paths (minimal, no-tenant and full-tenant) so the
-    advertised version envelope — SDK-derived ``major_versions`` /
-    ``supported_versions`` / ``build_version`` plus the idempotency posture —
-    is declared in exactly one place and cannot drift between them.
+    advertised version envelope is declared in exactly one place and cannot
+    drift between them. ``major_versions`` / ``supported_versions`` come from
+    the in-repo ``ADVERTISED_ADCP_VERSIONS`` constant (adcp_version.py) and
+    ``build_version`` from the Sales Agent build (``get_version()``) — none is
+    read from the SDK spec pin, which is only a cross-check.
     """
     return Adcp(
         major_versions=[MajorVersion(root=adcp_version.adcp_major_version())],
@@ -391,12 +410,7 @@ async def get_adcp_capabilities(
     """
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
-    # Build request object, forwarding the buyer's context (echoed back) and the
-    # requested protocols so the impl filters supported_protocols by the buyer's
-    # selection (#1546). A bad protocols value becomes VALIDATION_ERROR at this
-    # boundary rather than an untyped pydantic error.
-    with adcp_validation_boundary(context="get_adcp_capabilities request"):
-        req = GetAdcpCapabilitiesRequest(protocols=protocols, context=context)
+    req = _build_capabilities_request(protocols, context)
 
     # Call shared implementation
     response = _get_adcp_capabilities_impl(req, identity)
@@ -451,8 +465,5 @@ async def get_adcp_capabilities_raw(
         from src.core.transport_helpers import resolve_identity_from_context
 
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
-    # Forward protocols so the impl filters by the buyer's selection (#1546); a bad
-    # value becomes VALIDATION_ERROR at this boundary, not an untyped pydantic error.
-    with adcp_validation_boundary(context="get_adcp_capabilities request"):
-        req = GetAdcpCapabilitiesRequest(protocols=protocols, context=context)
+    req = _build_capabilities_request(protocols, context)
     return _get_adcp_capabilities_impl(req, identity)
