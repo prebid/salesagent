@@ -35,7 +35,7 @@ def _append_warning(result: SyncCreativeResult, warning: str) -> None:
     result.warnings = (result.warnings or []) + [warning]
 
 
-def creative_asset_from_wire_dict(raw: dict[str, Any]) -> CreativeAsset:
+def _creative_asset_from_wire_dict(raw: dict[str, Any]) -> CreativeAsset:
     """Build a ``CreativeAsset`` from a raw dict, defaulting the ``assets`` map.
 
     Names this impl's long-standing lenient normalization in one place, so the
@@ -45,7 +45,8 @@ def creative_asset_from_wire_dict(raw: dict[str, Any]) -> CreativeAsset:
     ``CreativeAsset`` in AdCP 3.1.1 and the url lives inside it (there is no
     top-level ``url``). MCP (typed ``list[CreativeAsset]``) and the A2A boundary
     both reject a creative that omits it; only the REST path reaches this
-    leniency. Making all three agree is tracked separately.
+    leniency. Removable once the REST boundary constructs ``CreativeAsset``
+    strictly, as MCP and A2A do.
 
     Raises ``pydantic.ValidationError`` when another required field is missing.
     """
@@ -171,7 +172,7 @@ def _sync_creatives_impl(
                 if isinstance(raw_creative, CreativeAsset):
                     creative = raw_creative
                 elif isinstance(raw_creative, dict):
-                    creative = creative_asset_from_wire_dict(raw_creative)
+                    creative = _creative_asset_from_wire_dict(raw_creative)
                 else:
                     creative = CreativeAsset.model_validate(raw_creative, from_attributes=True)
 

@@ -1670,8 +1670,11 @@ class AdCPRequestHandler(RequestHandler):
         # VALIDATION_ERROR. MCP rejects the same shape via its typed
         # `list[CreativeAsset]` signature, so constructing strictly keeps A2A aligned
         # with both MCP and the schema instead of silently injecting a required
-        # field. (The impl still defaults `assets` on the REST path — a pre-existing
-        # divergence tracked separately.)
+        # field. (The impl still defaults `assets` on the REST path; that divergence
+        # is removable once the REST boundary constructs CreativeAsset strictly too.
+        # Whether a schema-invalid item in a batch should fail the whole request or
+        # ride back as a per-item failure is a separate axis, and one the 3.1.1
+        # conformance storyboard does not grade.)
         with adcp_validation_boundary(context="sync_creatives request"):
             creatives = []
             for c in parameters["creatives"]:

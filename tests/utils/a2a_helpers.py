@@ -117,3 +117,23 @@ def create_a2a_text_message(text: str) -> Message:
     )
     msg.parts.append(Part(text=text))
     return msg
+
+
+def make_a2a_identity(sample_tenant, sample_principal):
+    """Build a ``ResolvedIdentity`` for an A2A test, from the standard fixtures.
+
+    Shared because the A2A integration tests all need the identical
+    ``protocol="a2a"`` identity and were each carrying a byte-identical private
+    copy. (Only the A2A shape is consolidated here; the wider ``_make_identity``
+    spread across the integration suite uses differing signatures and is a
+    separate cleanup.)
+    """
+    from tests.factories.principal import PrincipalFactory
+
+    return PrincipalFactory.make_identity(
+        principal_id=sample_principal["principal_id"],
+        tenant_id=sample_tenant["tenant_id"],
+        tenant=sample_tenant,
+        auth_token=sample_principal["access_token"],
+        protocol="a2a",
+    )

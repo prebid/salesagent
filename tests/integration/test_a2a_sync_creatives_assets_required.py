@@ -22,24 +22,16 @@ from a2a.server.routes.common import ServerCallContext
 from a2a.types import SendMessageRequest, Task, TaskState
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.resolved_identity import ResolvedIdentity
-from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape
-from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
+from tests.utils.a2a_helpers import (
+    create_a2a_message_with_skill,
+    extract_data_from_artifact,
+    make_a2a_identity,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 logger = logging.getLogger(__name__)
-
-
-def _make_identity(sample_tenant, sample_principal) -> ResolvedIdentity:
-    return PrincipalFactory.make_identity(
-        principal_id=sample_principal["principal_id"],
-        tenant_id=sample_tenant["tenant_id"],
-        tenant=sample_tenant,
-        auth_token=sample_principal["access_token"],
-        protocol="a2a",
-    )
 
 
 @pytest.mark.asyncio
@@ -47,11 +39,11 @@ async def test_sync_creatives_rejects_creative_without_assets_over_a2a(sample_te
     """A url-shaped creative (no ``assets``) draws a structured VALIDATION_ERROR.
 
     Deletion oracle: default ``assets`` at the boundary (e.g. route the dict through
-    the impl's lenient ``creative_asset_from_wire_dict``) and the request stops
+    the impl's lenient ``_creative_asset_from_wire_dict``) and the request stops
     failing — the ``TASK_STATE_FAILED`` and envelope assertions below both go red.
     """
     handler = AdCPRequestHandler()
-    identity = _make_identity(sample_tenant, sample_principal)
+    identity = make_a2a_identity(sample_tenant, sample_principal)
     handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
     handler._resolve_a2a_identity = MagicMock(return_value=identity)
 
