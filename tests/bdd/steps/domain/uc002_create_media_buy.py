@@ -2212,30 +2212,16 @@ def then_response_confirmed_at_is_iso(ctx: dict) -> None:
 def then_response_revision_is_integer_on_wire(ctx: dict) -> None:
     """revision is an integer-VALUED number on the serialized wire (not a string/None).
 
-    Transport nuance this wire check surfaced (invisible to the type-coerced
-    payload): JSON-native transports (REST/MCP) and the IMPL serializer carry
-    revision as a genuine ``int``, but A2A serializes the DataPart through a
-    protobuf ``Struct`` whose only numeric type is ``double`` — so an integer
-    arrives as a whole-number float (e.g. ``1.0``). Both are the same integer
-    value. We therefore require a true ``int`` wherever the wire can represent
-    one, and accept a whole-number float on A2A, while still rejecting a string,
-    null, bool, or fractional revision. See #1544 round-3; the wire-type
-    divergence itself is tracked in #1583 — tighten this step to require
-    ``int`` everywhere if A2A gains a JSON-native serialization.
+    The per-transport integer nuance (A2A serializes DataParts through a
+    protobuf ``Struct`` whose only numeric type is ``double``, so an integer
+    arrives as a whole-number float — #1583) lives in the shared
+    :func:`tests.bdd.steps._outcome_helpers.wire_integer` oracle, which rejects
+    a string, null, bool, or fractional revision on every transport. See #1544
+    round-3.
     """
-    from tests.harness.transport import Transport
+    from tests.bdd.steps._outcome_helpers import wire_integer
 
-    body = _serialized_success_body(ctx)
-    revision = body.get("revision")
-    if ctx.get("transport") == Transport.A2A:
-        assert isinstance(revision, (int, float)) and not isinstance(revision, bool), (
-            f"revision must be a number on the A2A wire, got {type(revision).__name__}: {revision!r}"
-        )
-        assert float(revision).is_integer(), f"revision must be a whole number on the wire, got {revision!r}"
-    else:
-        assert isinstance(revision, int) and not isinstance(revision, bool), (
-            f"revision must be a JSON integer on the wire, got {type(revision).__name__}: {revision!r}"
-        )
+    wire_integer(ctx, _serialized_success_body(ctx), "revision")
 
 
 @then(parsers.parse('the response should include "revision" with an integer value of 1'))
@@ -2244,10 +2230,13 @@ def then_response_revision_is_1(ctx: dict) -> None:
     buy starts at EXACTLY 1 — the same value the integration test pins
     (test_media_buy_revision.py). Asserting the exact initial value, not merely
     ``>= 1``, is what catches a create arm that echoes a stale/garbage counter
-    (#1544 round-2 TQ-02)."""
-    resp = _require_success_response(ctx)
-    revision = _get_response_field(resp, "revision")
-    assert isinstance(revision, int), f"Expected an integer revision, got {type(revision).__name__}: {revision!r}"
+    (#1544 round-2 TQ-02). Wire-graded via ``wire_integer`` so a serialization
+    regression of the token goes red here too (#1544 round-4)."""
+    from tests.bdd.steps._outcome_helpers import wire_integer
+
+    _require_success_response(ctx)
+    revision = wire_integer(ctx, _serialized_success_body(ctx), "revision")
+    assert revision == 1, f"Expected initial revision 1 on the wire, got {revision!r}"
     assert revision == 1, f"Expected a fresh create to report revision 1, got {revision}"
 
 

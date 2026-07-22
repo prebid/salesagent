@@ -2383,11 +2383,19 @@ def given_request_revision(ctx: dict, value: str) -> None:
 
 @then(parsers.parse("the response should contain a revision with value {revision:d}"))
 def then_response_revision_value(ctx: dict, revision: int) -> None:
-    """The success response returns the new persisted revision (BR-RULE-215 INV-4)."""
-    from tests.bdd.steps._outcome_helpers import _get_response_field, require_success_response
+    """The success WIRE body carries the new persisted revision (BR-RULE-215 INV-4).
 
-    actual = _get_response_field(require_success_response(ctx), "revision")
-    assert actual == revision, f"Expected revision {revision}, got {actual!r}"
+    Graded on the serialized wire (``wire_dict``), not the reconstructed typed
+    payload — reconstruction re-defaults absent fields, so an ``exclude_none``
+    omission or a wrong JSON type of the optimistic-concurrency token would
+    stay green there. ``wire_integer`` carries the per-transport integer
+    nuance (A2A whole-number float, #1583).
+    """
+    from tests.bdd.steps._outcome_helpers import require_success_response, wire_dict, wire_integer
+
+    require_success_response(ctx)
+    actual = wire_integer(ctx, wire_dict(ctx), "revision")
+    assert actual == revision, f"Expected revision {revision} on the wire, got {actual!r}"
 
 
 @then("the response should contain a valid_actions array")

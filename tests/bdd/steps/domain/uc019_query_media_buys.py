@@ -2791,36 +2791,60 @@ def when_seller_approves(ctx: dict, label: str) -> None:
 # ---- Then -------------------------------------------------------------
 
 
+def _wire_buys(ctx: dict) -> list[dict]:
+    """The queried media buys as dicts on the serialized wire (``wire_dict``).
+
+    Wire-graded on purpose: the reconstructed typed payload re-defaults absent
+    fields, so serialization regressions (an ``exclude_none`` omission, a wrong
+    JSON type) are only observable here. #1544.
+    """
+    from tests.bdd.steps._outcome_helpers import wire_dict
+
+    wire = wire_dict(ctx)
+    media_buys = wire.get("media_buys")
+    assert isinstance(media_buys, list) and media_buys, f"serialized query response missing media_buys: {wire!r}"
+    return media_buys
+
+
+def _wire_buy(ctx: dict, label: str) -> dict:
+    """The labeled media buy as a dict on the serialized wire."""
+    expected_id = resolve_media_buy_id(ctx, label)
+    buy = next((item for item in _wire_buys(ctx) if item.get("media_buy_id") == expected_id), None)
+    assert isinstance(buy, dict), f"media buy {label!r} missing from serialized response"
+    return buy
+
+
 @then("every returned media buy should include an integer revision field")
 def then_every_buy_has_integer_revision(ctx: dict) -> None:
-    from tests.bdd.steps._outcome_helpers import require_success_response
+    """Every buy on the serialized WIRE carries revision as an integer (3.1.1 required key)."""
+    from tests.bdd.steps._outcome_helpers import wire_integer
 
-    resp = require_success_response(ctx, "query")
-    assert resp.media_buys, "expected at least one returned media buy"
-    non_integer = [(b.media_buy_id, b.revision) for b in resp.media_buys if not isinstance(b.revision, int)]
-    assert not non_integer, f"media buys with a non-integer revision: {non_integer}"
+    for buy in _wire_buys(ctx):
+        wire_integer(ctx, buy, "revision")
 
 
 @then("every revision should be >= 1")
 def then_every_revision_at_least_1(ctx: dict) -> None:
-    from tests.bdd.steps._outcome_helpers import require_success_response
+    """Every wire revision respects the schema minimum (integer >= 1)."""
+    from tests.bdd.steps._outcome_helpers import wire_integer
 
-    resp = require_success_response(ctx, "query")
-    assert resp.media_buys, "expected at least one returned media buy"
-    below_minimum = [(b.media_buy_id, b.revision) for b in resp.media_buys if b.revision < 1]
+    revisions = [(buy.get("media_buy_id"), wire_integer(ctx, buy, "revision")) for buy in _wire_buys(ctx)]
+    below_minimum = [(mb_id, rev) for mb_id, rev in revisions if rev < 1]
     assert not below_minimum, f"media buys with revision below the schema minimum 1: {below_minimum}"
 
 
 @then(parsers.parse('the media buy "{label}" revision should be {revision:d}'))
 def then_media_buy_revision_equals(ctx: dict, label: str, revision: int) -> None:
-    """Assert the real query returns the revision produced by repository mutations."""
-    from tests.bdd.steps._outcome_helpers import require_success_response
+    """The serialized WIRE returns the revision produced by repository mutations.
 
-    response = require_success_response(ctx, "query")
-    expected_id = resolve_media_buy_id(ctx, label)
-    media_buy = next((buy for buy in response.media_buys if buy.media_buy_id == expected_id), None)
-    assert media_buy is not None, f"media buy {label!r} missing from query response"
-    assert media_buy.revision == revision, f"expected revision {revision}, got {media_buy.revision}"
+    Wire-graded (not the reconstructed payload) so a serialization regression of
+    the optimistic-concurrency token goes red across a2a/mcp/rest; the A2A
+    whole-number-float nuance lives in ``wire_integer`` (#1583).
+    """
+    from tests.bdd.steps._outcome_helpers import wire_integer
+
+    actual = wire_integer(ctx, _wire_buy(ctx, label), "revision")
+    assert actual == revision, f"expected revision {revision} on the wire, got {actual!r}"
 
 
 @then("the revision at t1 should equal the revision at t2")
@@ -2843,17 +2867,41 @@ def then_buy_includes_confirmed_at(ctx: dict, label: str) -> None:
     assert buy.confirmed_at is not None, f"media buy {label!r} is missing confirmed_at"
 
 
+@then(parsers.parse('the media buy "{label}" wire body should carry "confirmed_at" as null'))
+def then_wire_confirmed_at_present_as_null(ctx: dict, label: str) -> None:
+    """A provisional (unconfirmed) buy serializes confirmed_at PRESENT-as-null.
+
+    3.1.1 get-media-buys-response lists confirmed_at in ``media_buys[].required``
+    typed ``["string","null"]`` — null until seller commitment on the
+    deferred/manual-approval path. The inherited ``exclude_none`` serialization
+    would DROP the key entirely, emitting a body missing a REQUIRED key; the
+    production serializer re-injects it as null
+    (``GetMediaBuysMediaBuy.model_dump``), and this step is that fix's wire
+    oracle — key PRESENCE is the claim, so it must read the wire, never the
+    reconstructed payload (which re-defaults an absent key to None). #1544.
+    """
+    buy = _wire_buy(ctx, label)
+    assert "confirmed_at" in buy, f"confirmed_at key MISSING from the wire body (3.1.1 required-nullable): {buy!r}"
+    assert buy["confirmed_at"] is None, (
+        f"expected confirmed_at null for an unconfirmed buy, got {buy['confirmed_at']!r}"
+    )
+
+
+@then(parsers.parse('the media buy "{label}" wire body should carry "revision" as an integer of at least 1'))
+def then_wire_revision_present_min_1(ctx: dict, label: str) -> None:
+    """The wire carries revision as a non-null integer >= 1 even for a provisional buy."""
+    from tests.bdd.steps._outcome_helpers import wire_integer
+
+    revision = wire_integer(ctx, _wire_buy(ctx, label), "revision")
+    assert revision >= 1, f"revision must be >= 1 on the wire, got {revision!r}"
+
+
 @then(parsers.parse('the media buy "{label}" confirmed_at should be an ISO 8601 timestamp'))
 def then_buy_confirmed_at_is_iso_timestamp(ctx: dict, label: str) -> None:
     """Validate the production-created timestamp on the serialized response wire."""
-    from tests.bdd.steps._outcome_helpers import parse_iso_8601, wire_dict
+    from tests.bdd.steps._outcome_helpers import parse_iso_8601
 
-    wire = wire_dict(ctx)
-    media_buys = wire.get("media_buys")
-    assert isinstance(media_buys, list), f"serialized query response missing media_buys: {wire!r}"
-    expected_id = resolve_media_buy_id(ctx, label)
-    buy = next((item for item in media_buys if item.get("media_buy_id") == expected_id), None)
-    assert isinstance(buy, dict), f"media buy {label!r} missing from serialized response: {wire!r}"
+    buy = _wire_buy(ctx, label)
     confirmed_at = buy.get("confirmed_at")
     assert isinstance(confirmed_at, str), (
         f"confirmed_at must be an ISO 8601 string on the wire, got {type(confirmed_at).__name__}: {confirmed_at!r}"

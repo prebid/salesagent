@@ -799,6 +799,24 @@ Feature: BR-UC-019 Query Media Buys
     #       ref=v3.1-<sha>). Reconcile upstream into adcp-req so this is generated
     #       and its @source aligns automatically — tracked in #1565.
 
+  @T-UC-019-inv-confirmed-at-null-provisional @invariant @confirmed_at @schema-v3.1
+  Scenario: Provisional buy - the wire carries confirmed_at present-as-null with revision present
+    Given the tenant requires manual approval for media buys
+    And the Buyer Agent has created media buy "mb-pending" awaiting seller approval
+    When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-pending"]
+    Then the media buy "mb-pending" wire body should carry "confirmed_at" as null
+    And the media buy "mb-pending" wire body should carry "revision" as an integer of at least 1
+    # 3.1.1 get-media-buys-response media_buys[].required includes BOTH confirmed_at
+    # (typed ["string","null"] — "May be null until seller commitment occurs in
+    # deferred/manual approval flows") and revision (non-null integer >= 1). A
+    # provisional buy must serialize confirmed_at PRESENT-as-null: an exclude_none
+    # drop of the key would emit a body missing a REQUIRED key. Wire-graded (key
+    # presence is unobservable on the reconstructed payload).
+    # @source repo=adcp ref=v3.1.1 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # NOTE: hand-authored obligation (neighbors are generated from adcp-req with
+    #       ref=v3.1-<sha>). Reconcile upstream into adcp-req so this is generated
+    #       and its @source aligns automatically — tracked in #1565.
+
   @T-UC-019-partition-confirmed-at @partition @confirmed_at @schema-v3.1
   Scenario: Production-created media buy carries confirmed_at
     Given the principal "buyer-001" owns media buy "mb-001" with persisted revision 1

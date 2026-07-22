@@ -2756,6 +2756,7 @@ _UC019_WIRED: set[str] = {
     "T-UC-019-inv-291-5",
     "T-UC-019-inv-confirmed-at-present",
     "T-UC-019-inv-confirmed-at-stable",
+    "T-UC-019-inv-confirmed-at-null-provisional",
     "T-UC-019-lifecycle-approval",
     # Sales Agent-owned overrides replace unreachable corrupted-row examples with
     # real lifecycle/readback contracts. These require MediaBuyLifecycleEnv.

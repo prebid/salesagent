@@ -60,6 +60,31 @@ def wire_dict(ctx: dict) -> dict:
     return _require_response(ctx).model_dump(mode="json")
 
 
+def wire_integer(ctx: dict, container: dict, field: str) -> int:
+    """Read an integer-valued ``field`` from a serialized wire container.
+
+    ONE home for the per-transport integer nuance: JSON-native transports
+    (REST/MCP) and the IMPL serializer carry the field as a genuine ``int``, but
+    A2A serializes DataParts through a protobuf ``Struct`` whose only numeric
+    type is ``double`` — an integer arrives as a whole-number float (e.g.
+    ``1.0``). Both are the same integer value. Rejects strings, null, bool, and
+    fractional values on every transport; returns the value as ``int`` for
+    comparisons. The wire-type divergence is tracked in #1583 — tighten this to
+    require ``int`` everywhere if A2A gains a JSON-native serialization.
+    """
+    value = container.get(field)
+    if ctx.get("transport") == Transport.A2A:
+        assert isinstance(value, (int, float)) and not isinstance(value, bool), (
+            f"{field} must be a number on the A2A wire, got {type(value).__name__}: {value!r}"
+        )
+        assert float(value).is_integer(), f"{field} must be a whole number on the wire, got {value!r}"
+        return int(value)
+    assert isinstance(value, int) and not isinstance(value, bool), (
+        f"{field} must be a JSON integer on the wire, got {type(value).__name__}: {value!r}"
+    )
+    return value
+
+
 def _require(ctx: dict, key: str, *, hint: str | None = None) -> object:
     """Return ``ctx[key]``, failing with a diagnostic if it is absent.
 
