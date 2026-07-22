@@ -8,7 +8,7 @@
 # The HOST test paths, however, run pytest ON THE HOST and must reach the stack
 # over localhost, so they DO need published ports. Those paths overlay this file:
 #   - .github/workflows/ci.yml e2e-tests  (pre-starts stack, then pytest with
-#                                          ADCP_TESTING=true — #1667 / #1666)
+# ADCP_TESTING=true)
 #   - tests/e2e/conftest.py  (local standalone branch: builds + ups its own stack)
 #   - scripts/test-stack.sh  (host stack for run_all_tests.sh / make test-stack-up)
 #

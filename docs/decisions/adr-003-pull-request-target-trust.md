@@ -28,15 +28,15 @@ Current approved uses:
 - `.github/workflows/pr-title-check.yml` — reads `github.event.pull_request.title`, writes a
   PR status check. No code checkout.
 
-**IPR Agreement is no longer a `pull_request_target` consumer (#1669):**
-- Path A (verify) uses `pull_request` with a read-only `gh`/Python check against
-  `signatures/ipr-signatures.json` (no PR head checkout, no PR-comments API).
-  Tip workflow durability requires `pull_request` — `pull_request_target` always
-  loads the base-branch workflow copy, so verify/sign hardening would not apply
-  until merge.
+**IPR Agreement is no longer a `pull_request_target` consumer:**
+- Path A (verify) uses `pull_request` with a read-only check against
+  `signatures/ipr-signatures.json` via `scripts/ci/ipr_verify.py` (no PR-comments
+  API). Tip checkout under `pull_request` is allowed — ADR-003 forbids PR-head
+  checkout only under `pull_request_target`. Tip workflow durability requires
+  `pull_request` — PRT always loads the base-branch workflow copy.
 - Path B (sign) uses `issue_comment` → CLA Assistant (write) after API health wait,
-  then re-runs the same read-only verify and re-triggers failed `ipr-check` jobs
-  on the PR head SHA.
+  then the same verify module and re-triggers failed `ipr-check` jobs on the PR
+  head SHA. Path B checkouts the default branch for scripts (never PR head).
 - Residual trust note: because verify YAML comes from the PR tip, a hostile tip
   could gut the job while keeping the check name. Accepted for now —
   `ipr-check` is **not** in the org required-checks ruleset (compliance-gate
@@ -53,7 +53,7 @@ Future `pull_request_target` additions require a separate ADR entry and @chrishu
 **Bad / tradeoffs:**
 - Workflow authors must consciously opt into the trust boundary rule.
   Enforced by zizmor's `pull-request-target` finding and the `.github/zizmor.yml` allowlist
-  (currently `pr-title-check.yml` only for PRT; IPR verify moved off PRT in #1669).
+  (currently `pr-title-check.yml` only for PRT; IPR verify moved off PRT).
 - IPR tip-YAML residual (hostile gut of `ipr-check`) — see approved-uses note above.
 
 ## Alternatives considered

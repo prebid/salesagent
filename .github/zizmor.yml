@@ -17,7 +17,7 @@ rules:
   # workflows that do NOT check out PR source code (ADR-003).
   # pr-title-check.yml: reads PR title metadata only — no checkout.
   # ipr-agreement.yml: verify uses pull_request (read-only); sign uses
-  # issue_comment only — no pull_request_target (removed #1669).
+  # issue_comment only — no pull_request_target (removed).
   # ─────────────────────────────────────────────────────────────────────────────
   dangerous-triggers:
     ignore:

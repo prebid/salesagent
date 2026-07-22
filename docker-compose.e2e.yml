@@ -89,7 +89,7 @@ services:
       - single-request-reopen
     volumes:
       - .:/app
-    # Tighter probes + start_period so `compose up --wait` (CI #1667) survives
+    # Tighter probes + start_period so `compose up --wait` (CI) survives
     # alembic + cold import without waiting a full 30s interval before first check.
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -104,7 +104,7 @@ services:
       - ./config/nginx/nginx-development.conf:/etc/nginx/nginx.conf:ro
     # Wait for adcp healthy before starting nginx — otherwise /health → 502 while
     # adcp is still in its 60s start_period and `compose up --wait` can flake
-    # (proxy: 12×5s + start_period 15s after adcp is healthy; CI #1667 / #1669).
+    # (proxy: 12×5s + start_period 15s after adcp is healthy; CI).
     depends_on:
       adcp-server:
         condition: service_healthy

@@ -104,7 +104,7 @@ jobs:
           tar -xzf "${PINACT_TARBALL}" -C /usr/local/bin/ pinact
           # Offline SHA-pin check only (-no-api). pinact's default path calls GitHub REST
           # for tag resolution and flakes the gate on api.github.com 503s (5× retries
-          # still failed on amannn/action-semantic-pull-request; #1669).
+          # still failed on amannn/action-semantic-pull-request).
           # Job contract is "actions are full-length SHA-pinned" — syntactic check is enough.
           pinact run -fix=false -no-api
         # GITHUB_TOKEN unused with -no-api; kept so a future API mode can opt back in.

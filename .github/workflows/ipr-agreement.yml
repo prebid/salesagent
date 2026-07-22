@@ -1,21 +1,19 @@
 name: IPR Agreement
 
-# Two paths (durability under GitHub API Unicorn/HTML 503s — #1669):
+# Two paths (durability under GitHub API Unicorn/HTML 503s):
 #   A) pull_request → read-only check against signatures/ipr-signatures.json
 #      (no PR-comments API; that is what CLA Assistant was dying on).
 #      Uses pull_request (not pull_request_target) so the tip workflow file runs
-#      on synchronize — PRT always loads the base-branch copy. Verify is
-#      read-only (no checkout). Residual: a hostile tip could gut this job YAML;
-#      ipr-check is not in the org required-checks ruleset today (ADR-003).
+#      on synchronize — PRT always loads the base-branch copy. Verify checkouts
+#      the PR tip (safe under pull_request; ADR-003 forbids PR-head checkout only
+#      under PRT) and runs scripts/ci/ipr_verify.py.
 #   B) issue_comment sign → wait for API health, CLA Assistant, then the same
 #      read-only verify + re-run failed ipr-check on the PR head SHA so the
-#      Actions check can turn green without a new push.
+#      Actions check can turn green without a new push. Path B loads the
+#      default-branch workflow copy and checkouts that branch for scripts
+#      (never PR head).
 #
-# Do NOT check out PR head (ADR-003). Verify stays inline so Path A does not
-# depend on a base-branch script that does not exist until this merges; Path B
-# always loads the default-branch workflow copy.
-#
-# Bot allowlist SSOT: IPR_BOT_ALLOWLIST (env) — consumed by verify Python and
+# Bot allowlist SSOT: IPR_BOT_ALLOWLIST (env) — consumed by ipr_verify.py and
 # CLA Assistant `allowlist` (comma-separated globs).
 
 on:
@@ -39,6 +37,12 @@ jobs:
       contents: read
       pull-requests: read
     steps:
+      # pull_request (not PRT): tip checkout is the trust model; ADR-003 only
+      # forbids PR-head checkout under pull_request_target.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
       - name: Verify IPR signatures (read-only, with retries)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -48,44 +52,11 @@ jobs:
           IPR_BOT_ALLOWLIST: ${{ env.IPR_BOT_ALLOWLIST }}
         run: |
           set -euo pipefail
-
-          # Capture each attempt privately; promote only on success so failed
-          # Unicorn/HTML stdout cannot concatenate into the destination.
-          gh_retry_to() {
-            local dest="$1"
-            shift
-            local attempt=1
-            local max=5
-            local sleep_s
-            local rc
-            local attempt_out
-            attempt_out="$(mktemp)"
-            while true; do
-              set +e
-              "$@" >"${attempt_out}" 2>/tmp/ipr_gh_retry_err
-              rc=$?
-              set -e
-              if [ "${rc}" -eq 0 ]; then
-                mv "${attempt_out}" "${dest}"
-                return 0
-              fi
-              rm -f "${attempt_out}"
-              if [ "${attempt}" -ge "${max}" ]; then
-                echo "command failed after ${max} attempts: $*" >&2
-                head -c 200 /tmp/ipr_gh_retry_err >&2 || true
-                return 1
-              fi
-              sleep_s=$((attempt * 15))
-              echo "attempt ${attempt}/${max} failed; retrying in ${sleep_s}s..." >&2
-              sleep "${sleep_s}"
-              attempt=$((attempt + 1))
-              attempt_out="$(mktemp)"
-            done
-          }
+          # shellcheck source=scripts/ci/ipr_gh_retry.sh
+          . scripts/ci/ipr_gh_retry.sh
 
           tmp="$(mktemp -d)"
           trap 'rm -rf "${tmp}"' EXIT
-          export TMPDIR_IPR="${tmp}"
 
           echo "Fetching signatures from ipr-signatures branch..."
           gh_retry_to "${tmp}/sigs.b64" gh api \
@@ -97,70 +68,11 @@ jobs:
           gh_retry_to "${tmp}/commits.json" gh api --paginate \
             "repos/${REPO}/pulls/${PR_NUMBER}/commits"
 
-          python3 - <<'PY'
-          import json
-          import os
-          import re
-          import sys
-          from pathlib import Path
-
-          tmp = Path(os.environ["TMPDIR_IPR"])
-          sigs_doc = json.loads((tmp / "sigs.json").read_text(encoding="utf-8"))
-          commits = json.loads((tmp / "commits.json").read_text(encoding="utf-8"))
-          if not isinstance(commits, list):
-              print("expected commits list from GitHub API", file=sys.stderr)
-              sys.exit(2)
-
-          signed = {
-              (c.get("name") or "").lower()
-              for c in sigs_doc.get("signedContributors") or []
-              if c.get("name")
-          }
-          allow_globs = [
-              g.strip()
-              for g in (os.environ.get("IPR_BOT_ALLOWLIST") or "").split(",")
-              if g.strip()
-          ]
-          if not allow_globs:
-              print("IPR_BOT_ALLOWLIST is empty — refusing to verify", file=sys.stderr)
-              sys.exit(2)
-          allow_res = [
-              re.compile("^" + re.escape(g).replace(r"\*", ".*") + "$", re.I)
-              for g in allow_globs
-          ]
-
-          def allowed(login: str) -> bool:
-              return any(r.match(login) for r in allow_res)
-
-          authors: set[str] = set()
-          pr_author = (os.environ.get("PR_AUTHOR") or "").strip()
-          if pr_author:
-              authors.add(pr_author)
-          for commit in commits:
-              for key in ("author", "committer"):
-                  login = (commit.get(key) or {}).get("login")
-                  if login:
-                      authors.add(login)
-
-          if not authors:
-              print("no PR authors/committers found — cannot verify IPR", file=sys.stderr)
-              sys.exit(2)
-
-          missing = sorted(
-              a for a in authors if not allowed(a) and a.lower() not in signed
-          )
-          print(f"authors={sorted(authors)}")
-          print(f"signed_count={len(signed)} missing={missing}")
-          if missing:
-              print(
-                  "IPR Policy not signed by: "
-                  + ", ".join(missing)
-                  + ". Comment on the PR with exactly: I have read the IPR Policy",
-                  file=sys.stderr,
-              )
-              sys.exit(1)
-          print("All contributors have signed the IPR Policy.")
-          PY
+          python3 scripts/ci/ipr_verify.py verify \
+            --sigs "${tmp}/sigs.json" \
+            --commits "${tmp}/commits.json" \
+            --pr-author "${PR_AUTHOR}" \
+            --missing-message "IPR Policy not signed by: {missing}. Comment on the PR with exactly: I have read the IPR Policy"
 
   # ── B: record a new signature (comment path only) ─────────────────────────
   ipr-sign:
@@ -180,8 +92,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # Cannot reuse gh_retry_to: the probe needs the raw HTTP status that
+          # `gh api` hides; same attempt*15 backoff and max=5 as ipr_gh_retry.sh.
           attempt=1
-          max=6
+          max=5
           while true; do
             code="$(curl -sS -o /tmp/gh_api_body -w "%{http_code}" \
               -H "Authorization: Bearer ${GH_TOKEN}" \
@@ -239,6 +153,12 @@ jobs:
       # After a successful sign, the prior pull_request ipr-check on this head SHA
       # stays red until re-verified. Re-run verify here, then re-run failed
       # ipr-check jobs for the PR head so the Actions check can clear.
+      # Checkout default branch only (Path B never trusts PR head — ADR-003).
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
       - name: Re-verify IPR and re-run failed ipr-check on PR head
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -247,48 +167,16 @@ jobs:
           IPR_BOT_ALLOWLIST: ${{ env.IPR_BOT_ALLOWLIST }}
         run: |
           set -euo pipefail
-
-          gh_retry_to() {
-            local dest="$1"
-            shift
-            local attempt=1
-            local max=5
-            local sleep_s
-            local rc
-            local attempt_out
-            attempt_out="$(mktemp)"
-            while true; do
-              set +e
-              "$@" >"${attempt_out}" 2>/tmp/ipr_gh_retry_err
-              rc=$?
-              set -e
-              if [ "${rc}" -eq 0 ]; then
-                mv "${attempt_out}" "${dest}"
-                return 0
-              fi
-              rm -f "${attempt_out}"
-              if [ "${attempt}" -ge "${max}" ]; then
-                echo "command failed after ${max} attempts: $*" >&2
-                head -c 200 /tmp/ipr_gh_retry_err >&2 || true
-                return 1
-              fi
-              sleep_s=$((attempt * 15))
-              echo "attempt ${attempt}/${max} failed; retrying in ${sleep_s}s..." >&2
-              sleep "${sleep_s}"
-              attempt=$((attempt + 1))
-              attempt_out="$(mktemp)"
-            done
-          }
+          # shellcheck source=scripts/ci/ipr_gh_retry.sh
+          . scripts/ci/ipr_gh_retry.sh
 
           tmp="$(mktemp -d)"
           trap 'rm -rf "${tmp}"' EXIT
-          export TMPDIR_IPR="${tmp}"
 
           PR_META="$(mktemp)"
           gh_retry_to "${PR_META}" gh api "repos/${REPO}/pulls/${PR_NUMBER}"
           PR_AUTHOR="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["user"]["login"])' "${PR_META}")"
           HEAD_SHA="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["head"]["sha"])' "${PR_META}")"
-          export PR_AUTHOR
 
           echo "Post-sign verify for PR #${PR_NUMBER} head=${HEAD_SHA} author=${PR_AUTHOR}"
           gh_retry_to "${tmp}/sigs.b64" gh api \
@@ -298,90 +186,28 @@ jobs:
           gh_retry_to "${tmp}/commits.json" gh api --paginate \
             "repos/${REPO}/pulls/${PR_NUMBER}/commits"
 
-          python3 - <<'PY'
-          import json
-          import os
-          import re
-          import sys
-          from pathlib import Path
-
-          tmp = Path(os.environ["TMPDIR_IPR"])
-          sigs_doc = json.loads((tmp / "sigs.json").read_text(encoding="utf-8"))
-          commits = json.loads((tmp / "commits.json").read_text(encoding="utf-8"))
-          if not isinstance(commits, list):
-              print("expected commits list from GitHub API", file=sys.stderr)
-              sys.exit(2)
-
-          signed = {
-              (c.get("name") or "").lower()
-              for c in sigs_doc.get("signedContributors") or []
-              if c.get("name")
-          }
-          allow_globs = [
-              g.strip()
-              for g in (os.environ.get("IPR_BOT_ALLOWLIST") or "").split(",")
-              if g.strip()
-          ]
-          if not allow_globs:
-              print("IPR_BOT_ALLOWLIST is empty — refusing to verify", file=sys.stderr)
-              sys.exit(2)
-          allow_res = [
-              re.compile("^" + re.escape(g).replace(r"\*", ".*") + "$", re.I)
-              for g in allow_globs
-          ]
-
-          def allowed(login: str) -> bool:
-              return any(r.match(login) for r in allow_res)
-
-          authors: set[str] = set()
-          pr_author = (os.environ.get("PR_AUTHOR") or "").strip()
-          if pr_author:
-              authors.add(pr_author)
-          for commit in commits:
-              for key in ("author", "committer"):
-                  login = (commit.get(key) or {}).get("login")
-                  if login:
-                      authors.add(login)
-
-          if not authors:
-              print("no PR authors/committers found — cannot verify IPR", file=sys.stderr)
-              sys.exit(2)
-
-          missing = sorted(
-              a for a in authors if not allowed(a) and a.lower() not in signed
-          )
-          print(f"authors={sorted(authors)}")
-          print(f"signed_count={len(signed)} missing={missing}")
-          if missing:
-              print(
-                  "IPR Policy still not signed by: " + ", ".join(missing),
-                  file=sys.stderr,
-              )
-              sys.exit(1)
-          print("Post-sign verify OK — all contributors signed.")
-          PY
+          python3 scripts/ci/ipr_verify.py verify \
+            --sigs "${tmp}/sigs.json" \
+            --commits "${tmp}/commits.json" \
+            --pr-author "${PR_AUTHOR}" \
+            --missing-message "IPR Policy still not signed by: {missing}" \
+            --ok-message "Post-sign verify OK — all contributors signed."
 
           echo "Looking up IPR Agreement runs for head ${HEAD_SHA}..."
           RUNS_JSON="$(mktemp)"
           gh_retry_to "${RUNS_JSON}" gh api \
             "repos/${REPO}/actions/workflows/ipr-agreement.yml/runs?event=pull_request&per_page=30"
-          mapfile -t RUN_IDS < <(python3 -c '
-          import json, sys
-          head = sys.argv[1]
-          data = json.load(open(sys.argv[2]))
-          ids = []
-          for run in data.get("workflow_runs") or []:
-              if run.get("head_sha") == head and run.get("status") == "completed":
-                  if run.get("conclusion") in ("failure", "cancelled", "timed_out"):
-                      ids.append(str(run["id"]))
-          print("\n".join(ids))
-          ' "${HEAD_SHA}" "${RUNS_JSON}")
+          mapfile -t RUN_IDS < <(python3 scripts/ci/ipr_verify.py failed-run-ids \
+            --runs "${RUNS_JSON}" \
+            --head-sha "${HEAD_SHA}")
           if [ "${#RUN_IDS[@]}" -eq 0 ]; then
             echo "No failed completed IPR runs for this head — nothing to re-run."
           else
             for run_id in "${RUN_IDS[@]}"; do
+              [ -n "${run_id}" ] || continue
               echo "Re-running failed jobs for workflow run ${run_id}..."
+              # Fail the step if both re-run endpoints fail (do not soft-swallow).
               gh api -X POST "repos/${REPO}/actions/runs/${run_id}/rerun-failed-jobs" || \
-                gh api -X POST "repos/${REPO}/actions/runs/${run_id}/rerun" || true
+                gh api -X POST "repos/${REPO}/actions/runs/${run_id}/rerun"
             done
           fi

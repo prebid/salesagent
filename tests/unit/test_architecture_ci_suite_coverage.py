@@ -96,16 +96,30 @@ def _find_free_disk_step(steps: list) -> tuple[int, dict]:
     raise AssertionError(f"job must include uses: {_FREE_DISK_USES} (single source for runner reclaim).")
 
 
-def _assert_free_disk_action_reclaims_runner() -> None:
-    """Contract lives in a composite *run* step body — not description-only tokens."""
-    assert _FREE_DISK_ACTION.is_file(), f"missing {_FREE_DISK_ACTION}"
-    data = yaml.safe_load(_FREE_DISK_ACTION.read_text(encoding="utf-8"))
-    assert isinstance(data, dict), f"{_FREE_DISK_ACTION} must be a YAML mapping."
+def _assert_free_disk_action_reclaims_runner(action: dict | Path | None = None) -> None:
+    """Contract lives in a composite *run* step body — not description-only tokens.
+
+    Pass a parsed action mapping (or path) to exercise fixtures; default reads the
+    production ``.github/actions/_free-disk/action.yml``.
+    """
+    label: str
+    if action is None:
+        assert _FREE_DISK_ACTION.is_file(), f"missing {_FREE_DISK_ACTION}"
+        data = yaml.safe_load(_FREE_DISK_ACTION.read_text(encoding="utf-8"))
+        label = str(_FREE_DISK_ACTION)
+    elif isinstance(action, Path):
+        assert action.is_file(), f"missing {action}"
+        data = yaml.safe_load(action.read_text(encoding="utf-8"))
+        label = str(action)
+    else:
+        data = action
+        label = "parsed free-disk action"
+    assert isinstance(data, dict), f"{label} must be a YAML mapping."
     runs = data.get("runs") or {}
     steps = runs.get("steps") if isinstance(runs, dict) else None
-    assert isinstance(steps, list) and steps, f"{_FREE_DISK_ACTION} must declare ≥1 composite step."
+    assert isinstance(steps, list) and steps, f"{label} must declare ≥1 composite step."
     run_bodies = [str(step.get("run", "")) for step in steps if isinstance(step, dict)]
-    assert run_bodies, f"{_FREE_DISK_ACTION} must include a step with a run body."
+    assert run_bodies, f"{label} must include a step with a run body."
     combined = "\n".join(run_bodies)
     assert "/usr/share/dotnet" in combined, "_free-disk run step must remove /usr/share/dotnet."
     assert "docker builder prune" in combined, "_free-disk run step must prune the Docker builder cache."
@@ -151,16 +165,9 @@ class TestCISuiteCoverage:
             "description": "Reclaim /usr/share/dotnet and docker builder prune",
             "runs": {"using": "composite", "steps": []},
         }
-        text = yaml.safe_dump(vacuous)
-        data = yaml.safe_load(text)
-        runs = data.get("runs") or {}
-        steps = runs.get("steps") if isinstance(runs, dict) else None
-        assert steps == []
         # Live helper must reject description-only contracts (MUT8 class).
-        run_bodies = [str(step.get("run", "")) for step in (steps or []) if isinstance(step, dict)]
-        combined = "\n".join(run_bodies)
-        assert "/usr/share/dotnet" not in combined
-        assert "docker builder prune" not in combined
+        with pytest.raises(AssertionError):
+            _assert_free_disk_action_reclaims_runner(vacuous)
         # Production composite still passes the real assert.
         _assert_free_disk_action_reclaims_runner()
 
@@ -364,12 +371,12 @@ class TestCISuiteCoverage:
 
     @pytest.mark.arch_guard
     def test_e2e_job_prestarts_stack_with_adcp_testing(self):
-        """E2E CI must pre-start compose; pytest must not cold-build under --timeout (#1667).
+        """E2E CI must pre-start compose; pytest must not cold-build under --timeout.
 
         Regression: clearing ADCP_TESTING forced docker_services_e2e into the
         standalone build+up path inside pytest setup, which pytest-timeout=300
         killed on cold runners (~40 setup ERRORs). Inheritance alone is not
-        durable — the pytest step must pin ADCP_TESTING=true (#1669).
+        durable — the pytest step must pin ADCP_TESTING=true.
         """
         workflow = load_ci_workflow()
         workflow_env = workflow.get("env") or {}
@@ -453,7 +460,7 @@ class TestCISuiteCoverage:
 
     @pytest.mark.arch_guard
     def test_e2e_compose_proxy_waits_for_adcp_healthy(self):
-        """Proxy must not race adcp start_period under ``compose up --wait`` (#1669).
+        """Proxy must not race adcp start_period under ``compose up --wait``.
 
         Regression: proxy healthcheck (no start_period) could fail with 502
         while adcp was still inside its start_period; ``up --wait`` flaked.
@@ -505,11 +512,11 @@ class TestCISuiteCoverage:
 
     @pytest.mark.arch_guard
     def test_bdd_in_network_frees_disk_before_compose(self):
-        """In-network e2e_rest must reclaim runner disk before image build (#1662).
+        """In-network e2e_rest must reclaim runner disk before image build.
 
-        Regression: after #1613/#1634, ``uv sync`` into ``tox_data`` hit ENOSPC
-        on ubuntu-latest (image + /opt/venv + second full tox env). The job must
-        free preinstalled toolchains and cap PGDATA tmpfs for the serial leg.
+        Regression: ``uv sync`` into ``tox_data`` hit ENOSPC on ubuntu-latest
+        (image + /opt/venv + second full tox env). The job must free
+        preinstalled toolchains and cap PGDATA tmpfs for the serial leg.
         """
         job = load_ci_workflow()["jobs"]["bdd-in-network"]
         steps = job.get("steps", [])
