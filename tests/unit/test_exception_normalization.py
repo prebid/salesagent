@@ -90,3 +90,35 @@ def test_untyped_exception_message_is_generic_not_raw():
     assert normalized.message == generic
     assert "secret_table" not in normalized.message
     assert "SELECT" not in normalized.message
+
+
+def test_a2a_internal_error_message_is_sanitized_not_raw():
+    """The A2A JSON-RPC ``error.message`` must not carry the raw exception either.
+
+    ``_internal_error_for`` builds the InternalError returned by the top-level
+    ``on_message_send`` failure path and the four push-notification-config
+    methods — both reachable without authentication. It previously interpolated
+    the raw ``exc`` into ``message`` while sanitizing only ``data``, so a
+    SQLAlchemy/OS error put SQL text or a filesystem path on the wire at a sink
+    the shared normalization fix did not reach.
+
+    Deletion oracle: restore ``message=f"{operation} failed: {exc}"`` and the
+    two leak assertions below go red while the ``data`` assertions stay green —
+    which is exactly the asymmetry that hid this.
+    """
+    from src.a2a_server.adcp_a2a_server import _internal_error_for
+
+    leaky = RuntimeError("SELECT token FROM secret_table -- /var/secrets/db.key")
+
+    err = _internal_error_for("message processing", leaky)
+
+    # The parseable prefix survives (storyboard runners key off it).
+    assert err.message.startswith("message processing failed: ")
+    # ...but the raw exception text does not reach the wire message.
+    assert "secret_table" not in err.message
+    assert "/var/secrets/db.key" not in err.message
+    # The envelope half stays generic too (this was already correct). The code is
+    # the WIRE value for INTERNAL_ERROR (derived, not hardcoded: INTERNAL_ERROR is
+    # internal-only and normalizes to a wire-standard code).
+    assert err.data["adcp_error"]["code"] == to_wire_error_code("INTERNAL_ERROR")
+    assert "secret_table" not in err.data["errors"][0]["message"]

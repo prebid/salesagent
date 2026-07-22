@@ -175,9 +175,20 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     ``except Exception`` branch and be flattened to a bare ``InternalError`` with no
     envelope.
     """
+    # Normalize ONCE and reuse the normalized message. Interpolating the raw
+    # ``exc`` here would put SQL fragments, table names, or filesystem paths on
+    # the JSON-RPC ``error.message`` even though ``error.data`` is correctly
+    # generic — the same disclosure this sink exists to prevent, at a path
+    # reachable without authentication (top-level ``on_message_send`` and the
+    # four push-notification-config methods). ``normalize_to_adcp_error``
+    # returns the wire-standard message for an untyped exception (raw detail is
+    # logged server-side) and a typed ``AdCPError``'s own curated message
+    # otherwise, so the parseable ``"{operation} failed: "`` prefix is kept
+    # without leaking.
+    adcp_error = normalize_to_adcp_error(exc)
     return InternalError(
-        message=f"{operation} failed: {exc}",
-        data=build_two_layer_error_envelope(normalize_to_adcp_error(exc)),
+        message=f"{operation} failed: {adcp_error.message}",
+        data=build_two_layer_error_envelope(adcp_error),
     )
 
 
