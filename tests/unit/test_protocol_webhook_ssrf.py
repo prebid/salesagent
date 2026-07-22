@@ -31,6 +31,7 @@ from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl, _reject_unsafe_webhook_url
 from src.services.protocol_webhook_service import ProtocolWebhookService
+from tests.factories.principal import PrincipalFactory
 
 _METADATA_URL = "http://169.254.169.254/latest/meta-data/"
 _AUTH_CREDS = "x" * 32
@@ -59,12 +60,12 @@ def _reporting_webhook(url: str) -> ReportingWebhook:
 
 
 def _identity() -> ResolvedIdentity:
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id="principal_1",
         tenant_id="test_tenant",
-        tenant={"tenant_id": "test_tenant", "human_review_required": False, "auto_create_media_buys": True},
         auth_token="test-token",
         protocol="mcp",
+        tenant={"tenant_id": "test_tenant", "human_review_required": False, "auto_create_media_buys": True},
         testing_context=AdCPTestContext(dry_run=False, test_session_id="test-session"),
     )
 
