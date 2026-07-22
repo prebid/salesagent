@@ -123,8 +123,14 @@ def _wait_calls_by_branch(tree: ast.Module) -> tuple[list[ast.Call], list[ast.Ca
 
 
 def _required_kw_uses_full_hard_gate(call: ast.Call) -> bool:
-    """True when ``required=`` is omitted (default) or equals the full ordered set."""
+    """True when ``required=`` is omitted (default) or equals the full ordered set.
+
+    Fail closed on ``**kwargs`` (``kw.arg is None``): the unpacked dict can narrow
+    ``required`` without a static proof of the full hard gate.
+    """
     for kw in call.keywords:
+        if kw.arg is None:
+            return False
         if kw.arg != "required":
             continue
         if isinstance(kw.value, ast.Name) and kw.value.id == "REQUIRED_E2E_PROBES":
@@ -136,6 +142,16 @@ def _required_kw_uses_full_hard_gate(call: ast.Call) -> bool:
             return vals == _REQUIRED_ORDER
         return False
     return True
+
+
+def _wait_default_required_is_full_hard_gate(tree: ast.Module) -> bool:
+    """True when ``wait_for_e2e_stack``'s kw-default for ``required`` is ``REQUIRED_E2E_PROBES``."""
+    func = _function_def(tree, "wait_for_e2e_stack")
+    for arg, default in zip(func.args.kwonlyargs, func.args.kw_defaults, strict=True):
+        if arg.arg != "required":
+            continue
+        return isinstance(default, ast.Name) and default.id == "REQUIRED_E2E_PROBES"
+    return False
 
 
 def _assert_calls_use_full_hard_gate(calls: list[ast.Call], *, where: str) -> None:
@@ -192,6 +208,10 @@ class TestE2EStackReadinessHelperContract:
         assert order == _REQUIRED_ORDER, (
             f"REQUIRED_E2E_PROBES must be {_REQUIRED_ORDER}, got {order} — "
             "creative-agent hard gate cannot silently drop"
+        )
+        assert _wait_default_required_is_full_hard_gate(tree), (
+            "wait_for_e2e_stack default required= must be REQUIRED_E2E_PROBES "
+            "(call sites omit required= and inherit the full hard gate)"
         )
 
     def test_compose_files_ssot_exported_and_imported(self):
@@ -293,6 +313,27 @@ class TestE2EStackReadinessGuardSelfTest:
         assert not _required_kw_uses_full_hard_gate(call)
         with pytest.raises(AssertionError):
             _assert_calls_use_full_hard_gate([call], where="known-bad")
+
+    def test_hard_gate_detector_rejects_kwargs_bypass(self):
+        # **{"required": (...)} has kw.arg is None — must fail closed.
+        src = 'wait_for_e2e_stack(ports={}, **{"required": ("adcp_health",)})\n'
+        call = next(iter_call_expressions(ast.parse(src), name="wait_for_e2e_stack"))
+        assert not _required_kw_uses_full_hard_gate(call)
+        with pytest.raises(AssertionError):
+            _assert_calls_use_full_hard_gate([call], where="kwargs-bypass")
+
+    def test_default_required_detector_rejects_narrow_default(self):
+        src = (
+            "REQUIRED_E2E_PROBES = ('postgres', 'creative-agent', 'adcp_health')\n"
+            "def wait_for_e2e_stack(*, ports, required=('adcp_health',)):\n"
+            "    pass\n"
+        )
+        tree = ast.parse(src)
+        assert not _wait_default_required_is_full_hard_gate(tree)
+        with pytest.raises(AssertionError):
+            assert _wait_default_required_is_full_hard_gate(tree), (
+                "wait_for_e2e_stack default required= must be REQUIRED_E2E_PROBES"
+            )
 
     def test_inline_health_loop_detector_flags_known_bad(self):
         # Concatenate '/hea'+'lth' so this fixture source never contains a

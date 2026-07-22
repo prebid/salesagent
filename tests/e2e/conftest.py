@@ -24,7 +24,12 @@ _GETPID = os.getpid
 
 # Import contract validation - this automatically validates tool calls at test collection time
 from tests.e2e.conftest_contract_validation import pytest_collection_modifyitems  # noqa: F401
-from tests.e2e.stack_readiness import DEFAULT_E2E_COMPOSE_FILES, wait_for_e2e_stack
+from tests.e2e.stack_readiness import (
+    DEFAULT_E2E_COMPOSE_FILES,
+    _compose_argv,
+    _compose_available,
+    wait_for_e2e_stack,
+)
 
 
 def e2e_host() -> str:
@@ -186,7 +191,9 @@ def docker_services_e2e(request):
         # Always clean up existing services and volumes to ensure fresh state
         print("Cleaning up any existing Docker services and volumes...")
         subprocess.run(
-            ["docker-compose", "-f", "docker-compose.e2e.yml", "down", "-v"], capture_output=True, check=False
+            [*_compose_argv(("docker-compose.e2e.yml",)), "down", "-v"],
+            capture_output=True,
+            check=False,
         )
 
         # Explicitly remove volumes in case docker-compose down -v didn't work
@@ -252,18 +259,19 @@ def docker_services_e2e(request):
             raise subprocess.CalledProcessError(agent_build.returncode, "creative-agent-stack.sh build")
 
         print("Step 1/2: Building Docker images...")
-        compose_cli = [arg for path in DEFAULT_E2E_COMPOSE_FILES for arg in ("-f", path)]
+        # Same argv preference as readiness (`docker compose` plugin first).
+        compose_base = _compose_argv(DEFAULT_E2E_COMPOSE_FILES)
         build_result = subprocess.run(
-            ["docker-compose", *compose_cli, "build", "--progress=plain"],
+            [*compose_base, "build", "--progress=plain"],
             env=env,
             capture_output=False,  # Show build output
         )
         if build_result.returncode != 0:
             print(f"❌ Docker build failed with exit code {build_result.returncode}")
-            raise subprocess.CalledProcessError(build_result.returncode, "docker-compose build")
+            raise subprocess.CalledProcessError(build_result.returncode, [*compose_base, "build"])
 
         print("Step 2/2: Starting services...")
-        subprocess.run(["docker-compose", *compose_cli, "up", "-d"], check=True, env=env)
+        subprocess.run([*compose_base, "up", "-d"], check=True, env=env)
 
         # Same ordered readiness helper as verify-only (migrations + creative-agent start_period).
         wait_for_e2e_stack(
@@ -282,17 +290,13 @@ def docker_services_e2e(request):
     init_env["POSTGRES_PORT"] = str(postgres_port)
 
     # Seed CI test data. On the host we shell into the server container via
-    # docker-compose exec (the host process can't reach the container DB
-    # directly). In-network there is no docker-compose binary, but the runner
-    # already has DATABASE_URL=postgres:5432 and the source, so it runs the seed
-    # script itself — the script only needs a DB connection, not Docker.
-    import shutil
-
-    if shutil.which("docker-compose"):
+    # compose exec (the host process can't reach the container DB directly).
+    # In-network there is no compose CLI, but the runner already has
+    # DATABASE_URL=postgres:5432 and the source, so it runs the seed script
+    # itself — the script only needs a DB connection, not Docker.
+    if _compose_available():
         init_cmd = [
-            "docker-compose",
-            "-f",
-            "docker-compose.e2e.yml",
+            *_compose_argv(("docker-compose.e2e.yml",)),
             "exec",
             "-T",
             "adcp-server",
@@ -418,7 +422,7 @@ def docker_services_e2e(request):
         try:
             # Stop and remove containers + volumes
             subprocess.run(
-                ["docker-compose", "-f", "docker-compose.e2e.yml", "down", "-v"],
+                [*_compose_argv(("docker-compose.e2e.yml",)), "down", "-v"],
                 capture_output=True,
                 check=False,
                 timeout=30,

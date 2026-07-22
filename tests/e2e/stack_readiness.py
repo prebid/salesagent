@@ -197,13 +197,17 @@ def _compose_service_health(service: str, compose_files: Sequence[str]) -> str |
     health = records[0].get("Health") or records[0].get("health")
     if isinstance(health, str) and health.strip():
         return health.strip().lower()
-    # Some compose versions leave Health empty when healthy; State may say "running".
+    # Health empty: only treat State/Status that explicitly say healthy as ready.
+    # Bare "running"/"up" is not a healthcheck pass — probes require "healthy".
     state = str(records[0].get("State") or records[0].get("Status") or "").lower()
     if "healthy" in state:
         return "healthy"
-    if state in {"running", "up"}:
-        return "running"
-    return state or None
+    return None
+
+
+def _compose_reports_ready(health: str | None) -> bool:
+    """True only when compose reports an explicit healthcheck pass."""
+    return health == "healthy"
 
 
 def _tcp_open(host: str, port: int, *, timeout_s: float = 2.0) -> bool:
@@ -244,16 +248,14 @@ def _probe_postgres(
         # Host path publishes postgres via the ports overlay.
         return _tcp_open("127.0.0.1", int(postgres_port))
 
-    health = _compose_service_health("postgres", compose_files)
-    return health == "healthy"
+    return _compose_reports_ready(_compose_service_health("postgres", compose_files))
 
 
 def _probe_creative_agent(*, host: str, compose_files: Sequence[str]) -> bool:
     if _in_network(host):
         return _http_ok(_CREATIVE_AGENT_IN_NETWORK_HEALTH)
 
-    health = _compose_service_health("creative-agent", compose_files)
-    return health == "healthy"
+    return _compose_reports_ready(_compose_service_health("creative-agent", compose_files))
 
 
 def _probe_adcp_health(*, ports: Mapping[str, int], host: str) -> bool:
