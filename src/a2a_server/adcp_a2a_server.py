@@ -183,6 +183,13 @@ DISCOVERY_SKILLS = frozenset(
     }
 )
 
+# Skills whose handler receives the raw DataPart params for the idempotency
+# payload hash. Only create_media_buy deduplicates retries today; the other
+# mutating skills validate and accept the key without a cache read, so they
+# take no wire payload. Extend alongside the dedupe implementation, never ahead
+# of it — a threaded payload with no cache probe is a guarantee we do not keep.
+_RAW_WIRE_PAYLOAD_SKILLS = frozenset({"create_media_buy"})
+
 
 def _internal_error_for(
     operation: str,
@@ -1639,6 +1646,17 @@ class AdCPRequestHandler(RequestHandler):
             record_boundary_error_for_identity("a2a", skill_name, auth_exc, identity)
             raise auth_exc
 
+        # The DataPart params AS SENT — the idempotency payload-hash input, the
+        # A2A analogue of MCPAuthMiddleware's pre-compat capture and
+        # RestCompatMiddleware's pre-rewrite body bytes. Taken here, before the
+        # read-key drop, negotiation strip, and deprecated-field normalization
+        # below: AdCP defines payload equivalence over the request the buyer
+        # sent, so capturing post-normalization would let a seller-side compat
+        # table change flip an honest retry into a conflict mid-TTL. Without
+        # this, create_media_buy falls back to model-dump hashing and A2A
+        # computes a DIFFERENT equivalence key than MCP/REST for one request.
+        raw_wire_payload = dict(parameters)
+
         # Version-negotiation parity with the MCP RequestCompatMiddleware:
         # reject an unsupported AdCP pin after the authentication guard and
         # before any handler's strict ``model_validate``. Raises
@@ -1736,8 +1754,15 @@ class AdCPRequestHandler(RequestHandler):
 
         try:
             handler = skill_handlers[skill_name]
+            # Only the skills that actually deduplicate retries take the wire
+            # payload; the rest validate-and-accept the key without a cache
+            # read, so threading it would imply a guarantee they do not make.
+            # Extend this set as dedupe reaches the other mutating tools.
+            wire_payload_kwargs = (
+                {"raw_wire_payload": raw_wire_payload} if skill_name in _RAW_WIRE_PAYLOAD_SKILLS else {}
+            )
             # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
-            result = await handler(parameters, identity)
+            result = await handler(parameters, identity, **wire_payload_kwargs)
             # Serialize at the boundary — models become dicts with protocol fields
             return self._serialize_for_a2a(result)
         except A2AError:
@@ -1805,6 +1830,7 @@ class AdCPRequestHandler(RequestHandler):
         self,
         parameters: dict,
         identity: ResolvedIdentity,
+        raw_wire_payload: dict | None = None,
     ) -> dict:
         """Handle explicit create_media_buy skill invocation.
 
@@ -1896,6 +1922,12 @@ class AdCPRequestHandler(RequestHandler):
             account=to_account_reference(params.get("account")),
             idempotency_key=params.get("idempotency_key"),
             identity=identity,
+            # The DataPart params as sent, captured pre-normalization by
+            # _handle_explicit_skill. Without it the impl falls back to
+            # model-dump hashing, which folds in schema defaults and normalizes
+            # timestamp spellings — so A2A would compute a different
+            # equivalence key than MCP/REST for the same buyer request.
+            raw_wire_payload=raw_wire_payload,
         )
 
         return response

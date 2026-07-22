@@ -466,6 +466,73 @@ class TestCreateMediaBuyRestWebhookSuggestionParity:
 
 
 @pytest.mark.requires_db
+class TestCreateMediaBuyRestUndecodableBodySuggestionParity:
+    """An undecodable REST body must still reject through the typed boundary.
+
+    ``_raw_json_body`` (api_v1.py) is a FastAPI dependency, so it resolves
+    BEFORE the route's body model. If it raises on an empty or malformed body,
+    the ``ValueError`` lands in the generic handler and the buyer receives a
+    bare ``VALIDATION_ERROR`` carrying the json module's own message — losing
+    the ``suggestion`` / ``field`` / ``details`` that ``CreateMediaBuyBody``
+    produces, and leaking a stdlib-internal string onto the wire.
+
+    Pins that the dependency swallows the decode failure so the body model —
+    not the raw decoder — owns the rejection.
+
+    Which cases actually grade the dependency (mutation-verified by reverting
+    ``_raw_json_body`` to its raising form): ``empty`` and ``non-json content
+    type`` redden; ``malformed`` does NOT. A syntactically-invalid JSON body is
+    rejected by FastAPI's own body parsing before the dependency is resolved,
+    so it never reaches ``_raw_json_body``. It is kept here because the
+    buyer-facing outcome is part of the same contract, but it is not the oracle
+    for this fix — do not treat its green as coverage of the dependency.
+    """
+
+    @pytest.mark.parametrize(
+        ("label", "content", "content_type"),
+        [
+            ("empty", b"", "application/json"),
+            ("malformed", b"{not json", "application/json"),
+            ("non-json content type", b"plain text", "text/plain"),
+        ],
+    )
+    def test_undecodable_body_rejects_as_invalid_request_with_suggestion(
+        self, integration_db, label, content, content_type
+    ):
+        from tests.harness.media_buy_create import MediaBuyCreateEnv
+        from tests.harness.transport import extract_wire_suggestion
+        from tests.helpers import assert_envelope_shape
+        from tests.helpers.envelope_assertions import assert_no_raw_validation_leak
+
+        with MediaBuyCreateEnv() as env:
+            env.setup_media_buy_data()
+            client = env.get_rest_client()
+
+            response = client.post(
+                "/api/v1/media-buys",
+                content=content,
+                headers={"Content-Type": content_type},
+            )
+
+            assert response.status_code == 400, (
+                f"An undecodable ({label}) REST body must be rejected as a 400, got "
+                f"{response.status_code}: {response.text[:500]}"
+            )
+            envelope = response.json()
+            assert_envelope_shape(envelope, "INVALID_REQUEST", recovery="correctable")
+            suggestion = extract_wire_suggestion(envelope)
+            assert suggestion, (
+                "An undecodable body must still carry the body model's TOP-LEVEL suggestion "
+                f"(error.json @v3.1-04f59d2d5), got: {envelope}"
+            )
+            assert_no_raw_validation_leak(envelope["adcp_error"]["message"])
+            assert "Expecting value" not in envelope["adcp_error"]["message"], (
+                "The json decoder's own message must not reach the buyer; the body model owns "
+                f"this rejection. Got: {envelope['adcp_error']['message']!r}"
+            )
+
+
+@pytest.mark.requires_db
 class TestCreateMediaBuyA2AWebhookSuggestionParity:
     """A2A create_media_buy object-param rejection must carry a top-level suggestion.
 

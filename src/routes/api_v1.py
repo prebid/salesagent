@@ -596,11 +596,21 @@ async def _raw_json_body(request: Request) -> dict[str, Any]:
     not the bytes the buyer sent, and seller-side compat-table changes would
     flip honest retries into conflicts mid-TTL. Starlette caches the body, so
     the fallback read does not consume it before model parsing.
+
+    Never raises. A dependency that throws is resolved BEFORE the route's body
+    model, so a decode error here would surface as a bare ``VALIDATION_ERROR``
+    carrying the json module's own message instead of the typed
+    ``INVALID_REQUEST`` + suggestion the body model produces. An undecodable
+    body is not a hash input either — body validation rejects the request, so
+    the route never runs and this ``{}`` never reaches the idempotency hash.
     """
     raw = getattr(request.state, "raw_wire_payload", None)
-    if raw is not None:
-        return json.loads(raw)
-    return await request.json()
+    try:
+        payload = json.loads(raw) if raw is not None else await request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        logger.debug("REST raw-wire capture unavailable; body validation will reject", exc_info=True)
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 # Module-level singleton, matching require_auth (ruff B008 forbids Depends() in defaults).
