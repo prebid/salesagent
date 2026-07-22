@@ -529,7 +529,6 @@ def given_outbound_webhook_ssrf_blocked(ctx: dict) -> None:
     reject branch via CircuitBreakerEnv.set_url_invalid().
     """
     env = ctx["env"]
-    assert hasattr(env, "set_url_invalid"), f"Env {type(env).__name__} must expose set_url_invalid for SSRF grading"
     env.set_url_invalid("Webhook URL resolves to blocked IP range 169.254.0.0/16")
 
 
@@ -1773,13 +1772,14 @@ def then_circuit_breaker_recorded_failure(ctx: dict) -> None:
     """Assert the send-time SSRF path called circuit_breaker.record_failure()."""
     env = ctx["env"]
     service = env.get_service()
-    tenant_prefix = f"{env._tenant_id}:"
-    failures = [cb.failure_count for key, cb in service._circuit_breakers.items() if key.startswith(tenant_prefix)]
-    assert failures, (
-        f"Expected a circuit breaker for tenant {env._tenant_id!r} after SSRF skip, "
-        f"found keys={list(service._circuit_breakers)}"
+    endpoint_key = ctx.get("circuit_breaker_endpoint_key", f"{env._tenant_id}:{_WEBHOOK_URL}")
+    cb = service._circuit_breakers.get(endpoint_key)
+    assert cb is not None, (
+        f"Expected circuit breaker for {endpoint_key!r} after SSRF skip, found keys={list(service._circuit_breakers)}"
     )
-    assert any(count >= 1 for count in failures), f"Expected failure_count >= 1 after SSRF rejection, got {failures}"
+    assert cb.failure_count >= 1, (
+        f"Expected failure_count >= 1 after SSRF rejection for {endpoint_key!r}, got {cb.failure_count}"
+    )
 
 
 @then(parsers.parse('the circuit breaker should be in "{state}" state'))

@@ -1038,6 +1038,12 @@ mappings:
       upstream_refs: ["BR-UC-002-ext-v"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-002-ext-webhook-ssrf"
+      adcp_feature: "BR-UC-002-create-media-buy.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-002"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-002-inv-006-1"
       adcp_feature: "BR-UC-002-create-media-buy.feature"
       obligation_id: null
@@ -3224,6 +3230,12 @@ mappings:
       upstream_refs: ["BR-UC-004-alt-webhook", "BR-RULE-221"]
       business_rules: ["BR-RULE-221"]
       status: new
+    - adcp_scenario_id: "T-UC-004-webhook-ssrf-blocked"
+      adcp_feature: "BR-UC-004-deliver-media-buy-metrics.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-004-ext-g", "BR-RULE-029"]
+      business_rules: ["BR-RULE-029"]
+      status: new
     - adcp_scenario_id: "T-UC-004-package-is-final-true"
       adcp_feature: "BR-UC-004-deliver-media-buy-metrics.feature"
       obligation_id: null
@@ -4664,6 +4676,12 @@ mappings:
       adcp_feature: "BR-UC-006-sync-creatives.feature"
       obligation_id: null
       upstream_refs: ["BR-UC-006-ext-k"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-ext-webhook-ssrf"
+      adcp_feature: "BR-UC-006-sync-creatives.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006"]
       business_rules: []
       status: new
     - adcp_scenario_id: "T-UC-006-main-async-submitted"
