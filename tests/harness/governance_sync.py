@@ -62,13 +62,17 @@ class GovernanceSyncEnv(IntegrationEnv):
         return self._run_mcp_client("sync_governance", SyncGovernanceResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
-        """Build the POST body from flat kwargs (idempotency_key, accounts, context).
+        """Build the POST body from a ``req`` object OR flat kwargs.
 
-        BDD steps dispatch raw kwargs (not a pre-built ``req``) so request
-        validation fires at the transport boundary and yields a real wire
-        envelope. A missing ``idempotency_key`` is intentionally omitted here so
-        the boundary rejects it (UC-030 grades that).
+        Integration tests pass a pre-built ``req`` (delegated to the base, which
+        serializes the Pydantic model). BDD steps dispatch raw kwargs
+        (idempotency_key/accounts/context, no ``req``) so request validation fires
+        at the transport boundary and yields a real wire envelope — a missing
+        ``idempotency_key`` is intentionally omitted so the boundary rejects it
+        (UC-030 grades that).
         """
+        if kwargs.get("req") is not None:
+            return super().build_rest_body(**kwargs)
         body: dict[str, Any] = {}
         for field in ("idempotency_key", "accounts", "context"):
             if kwargs.get(field) is not None:
