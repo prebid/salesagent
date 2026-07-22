@@ -6,7 +6,7 @@ property list resolution and webhook URL validation.
 
 import ipaddress
 import socket
-from urllib.parse import urlparse
+from urllib.parse import ParseResult, urlparse
 
 # Blocked IP ranges (RFC 1918 private networks, loopback, link-local)
 BLOCKED_NETWORKS = [
@@ -33,6 +33,50 @@ BLOCKED_HOSTNAMES = {
     "gateway.docker.internal",
     "docker.host.internal",
 }
+
+
+def _scheme_error(parsed: ParseResult, *, require_https: bool) -> str | None:
+    if require_https:
+        if parsed.scheme != "https":
+            return f"URL must use HTTPS scheme, got '{parsed.scheme}'"
+        return None
+    if parsed.scheme not in ("http", "https"):
+        return "URL must use http or https protocol"
+    return None
+
+
+def _blocked_ip_error(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> str | None:
+    for network in BLOCKED_NETWORKS:
+        if ip in network:
+            return f"URL resolves to blocked IP range {network} (private/internal network)"
+    if ip.is_loopback or ip.is_link_local or ip.is_private:
+        return f"URL resolves to private/internal IP address: {ip}"
+    return None
+
+
+def _check_hostname_resolution(hostname: str, *, resolve_dns: bool) -> tuple[bool, str]:
+    """Literal-IP and optional DNS checks for a hostname already known to be non-blocked."""
+    try:
+        literal_ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        literal_ip = None
+
+    if literal_ip is not None:
+        error = _blocked_ip_error(literal_ip)
+        return (False, error) if error else (True, "")
+
+    if not resolve_dns:
+        return True, ""
+
+    try:
+        ip = ipaddress.ip_address(socket.gethostbyname(hostname))
+    except socket.gaierror:
+        return False, f"Cannot resolve hostname: {hostname}"
+    except ValueError as e:
+        return False, f"Invalid IP address from hostname resolution: {e}"
+
+    error = _blocked_ip_error(ip)
+    return (False, error) if error else (True, "")
 
 
 def check_url_ssrf(
@@ -62,12 +106,9 @@ def check_url_ssrf(
     """
     try:
         parsed = urlparse(url)
-
-        if require_https:
-            if parsed.scheme != "https":
-                return False, f"URL must use HTTPS scheme, got '{parsed.scheme}'"
-        elif parsed.scheme not in ("http", "https"):
-            return False, "URL must use http or https protocol"
+        scheme_err = _scheme_error(parsed, require_https=require_https)
+        if scheme_err:
+            return False, scheme_err
 
         hostname = parsed.hostname
         if not hostname:
@@ -76,39 +117,7 @@ def check_url_ssrf(
         if hostname.lower() in BLOCKED_HOSTNAMES:
             return False, f"URL hostname '{hostname}' is blocked (internal/private)"
 
-        # Literal IP in the hostname — check private ranges without DNS.
-        try:
-            literal_ip = ipaddress.ip_address(hostname)
-        except ValueError:
-            literal_ip = None
-
-        if literal_ip is not None:
-            for network in BLOCKED_NETWORKS:
-                if literal_ip in network:
-                    return False, f"URL resolves to blocked IP range {network} (private/internal network)"
-            if literal_ip.is_loopback or literal_ip.is_link_local or literal_ip.is_private:
-                return False, f"URL resolves to private/internal IP address: {literal_ip}"
-            return True, ""
-
-        if not resolve_dns:
-            return True, ""
-
-        try:
-            ip_str = socket.gethostbyname(hostname)
-            ip = ipaddress.ip_address(ip_str)
-        except socket.gaierror:
-            return False, f"Cannot resolve hostname: {hostname}"
-        except ValueError as e:
-            return False, f"Invalid IP address from hostname resolution: {e}"
-
-        for network in BLOCKED_NETWORKS:
-            if ip in network:
-                return False, f"URL resolves to blocked IP range {network} (private/internal network)"
-
-        if ip.is_loopback or ip.is_link_local or ip.is_private:
-            return False, f"URL resolves to private/internal IP address: {ip}"
-
-        return True, ""
+        return _check_hostname_resolution(hostname, resolve_dns=resolve_dns)
 
     except Exception as e:
         return False, f"Invalid URL: {e}"
