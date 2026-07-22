@@ -71,6 +71,12 @@ CHANNEL_MAPPING: dict[str, MediaChannel] = {
     "product_placement": MediaChannel.product_placement,
 }
 
+# Wire-legal pricing-model strings, used to filter what an adapter reports before
+# constructing the enum. Adapters return free-form strings (see
+# AdServerAdapter.get_supported_pricing_models), so the sibling channel mapping
+# above is the precedent: normalize, then skip what we don't recognize.
+_PRICING_MODEL_VALUES: frozenset[str] = frozenset(m.value for m in PricingModel)
+
 
 def _get_adcp_capabilities_impl(
     req: GetAdcpCapabilitiesRequest | None = None, identity: ResolvedIdentity | None = None
@@ -247,13 +253,28 @@ def _get_adcp_capabilities_impl(
     )
 
     # Pricing models the bound adapter supports (buyer-visible capability).
+    # Degrades exactly like the channel block above: adapters return free-form
+    # strings (base.py compares them case-insensitively), so a strict
+    # PricingModel(m) raises ValueError on e.g. "CPM" — which the boundary turns
+    # into a spurious VALIDATION_ERROR on a read-only discovery call that carries
+    # no buyer input to invalidate. Normalize case, skip+log anything off-enum,
+    # and swallow an adapter that raises — capabilities must still answer.
     # supported_pricing_models has min_length=1 on the wire, so an adapter that
-    # reports none leaves the field None (unknown) rather than an empty list.
+    # reports none (or only unrecognized values) leaves the field None (unknown)
+    # rather than an empty list.
     supported_pricing_models = None
     if adapter and hasattr(adapter, "get_supported_pricing_models"):
-        _pricing = sorted(adapter.get_supported_pricing_models())
-        if _pricing:
-            supported_pricing_models = [PricingModel(m) for m in _pricing]
+        pricing_models: list[PricingModel] = []
+        try:
+            for value in sorted({str(m).lower() for m in adapter.get_supported_pricing_models()}):
+                if value in _PRICING_MODEL_VALUES:
+                    pricing_models.append(PricingModel(value))
+                else:
+                    logger.warning(f"Ignoring unrecognized pricing model from adapter: {value!r}")
+        except Exception as e:
+            logger.warning(f"Could not get adapter pricing models: {e}")
+            pricing_models = []
+        supported_pricing_models = pricing_models or None
 
     # Build media_buy capabilities
     media_buy = MediaBuy(

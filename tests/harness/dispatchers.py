@@ -272,7 +272,13 @@ class RestE2EDispatcher:
 
         with httpx.Client(base_url=base_url, timeout=30) as client:
             method = getattr(env, "REST_METHOD", "post")
-            response = getattr(client, method)(endpoint, json=body, headers=headers)
+            if method == "get":
+                # httpx.Client.get() takes no ``json`` kwarg (bodyless verb) —
+                # passing one raises TypeError before the request is ever sent.
+                # Discovery reads (GET /api/v1/capabilities) carry no body.
+                response = client.get(endpoint, headers=headers)
+            else:
+                response = getattr(client, method)(endpoint, json=body, headers=headers)
 
         envelope = {
             "transport": "e2e_rest",

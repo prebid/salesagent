@@ -64,6 +64,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc005_format_id_shape",
     "tests.bdd.steps.domain.uc005_format_id_roundtrip",
     "tests.bdd.steps.domain.uc005_format_id_third_party",
+    "tests.bdd.steps.domain.uc010_capabilities",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
@@ -3074,6 +3075,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-005"
     if any(t.startswith("T-UC-004") for t in marker_names):
         return "UC-004"
+    if any(t.startswith("T-UC-010") for t in marker_names):
+        return "UC-010"
     if any(t.startswith("T-UC-011") for t in marker_names):
         return "UC-011"
     if any(t.startswith("T-UC-018") for t in marker_names):
@@ -3419,6 +3422,26 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 "UC-018 harness wired only for the @list-after-sync (#1405), @concept-id (#1407), "
                 "and @BR-RULE-034 isolation (#1503) scenarios"
             )
+
+    elif uc == "UC-010":
+        # get_adcp_capabilities — CapabilitiesEnv mocks nothing: the answer is
+        # derived from the tenant row, its publisher partnerships and the bound
+        # ad-server adapter, all of which are real here. Only @T-UC-010-pricing
+        # (POST-S10) has step definitions today; the other ~77 scenarios xfail
+        # fast at the fixture (mirrors UC-018) rather than spinning up a DB per
+        # scenario only to auto-xfail at the first missing step.
+        marker_names = {m.name for m in request.node.iter_markers()}
+        if "T-UC-010-pricing" in marker_names:
+            from tests.harness.capabilities import CapabilitiesEnv
+
+            with _db_scope_for(request, e2e_config), CapabilitiesEnv(e2e_config=e2e_config) as env:
+                tenant, principal = env.setup_default_data()
+                ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                yield
+        else:
+            pytest.xfail("UC-010 harness wired only for the @T-UC-010-pricing scenario")
 
     elif uc == "UC-011":
         marker_names = {m.name for m in request.node.iter_markers()}
