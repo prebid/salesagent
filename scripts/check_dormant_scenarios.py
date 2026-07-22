@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Informational check: which BDD scenarios touched by your change never run?
 
 The failure mode this surfaces (#1603): a branch edits step modules, feature
@@ -23,7 +24,9 @@ How it works
        run anywhere.
    No Docker, no Postgres, seconds not minutes.
 4. Prints the dormant scenarios grouped by reason, transport params
-   collapsed.
+   collapsed. "Dormant" is decided against ``tests/bdd/xfail_taxonomy``, the
+   same module ``tests/bdd/conftest.py`` builds those reasons from — this
+   checker never hand-copies a reason string.
 
 Usage
 -----
@@ -50,16 +53,18 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BDD_DIR = Path("tests") / "bdd"
 
-# Reasons that mean "this scenario is dormant because nothing wires it", as
-# opposed to documented spec-production gaps that are xfailed on purpose.
-_DORMANT_MARKERS = (
-    "no harness wired",
-    "not yet wired",
-    "step definition not found",
-    "step definition is not found",
-)
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-_XFAIL_LINE = re.compile(r"^XFAIL\s+(\S+?)(?:\s+-\s+(.*))?$")
+# The reason vocabulary is OWNED by tests/bdd/xfail_taxonomy and emitted by
+# tests/bdd/conftest.py. Importing it (rather than hand-copying the literals)
+# is the point: a reworded conftest reason must not silently reclassify dormant
+# scenarios as documented gaps. The module is a leaf — no pytest import — so
+# this stays a cheap script.
+from tests.bdd.xfail_taxonomy import DORMANT_REASON_MARKERS, scenario_name
+
+_XFAIL_PREFIX = re.compile(r"^XFAIL\s+")
+_XFAIL_REASON_SEP = re.compile(r"^\s+-\s+")
 _UC_IN_NAME = re.compile(r"uc(\d+)", re.IGNORECASE)
 
 
@@ -82,11 +87,22 @@ def resolve_base(base: str | None) -> str | None:
     return None
 
 
+def _porcelain_paths(lines: list[str]) -> list[str]:
+    """Working-tree paths from ``git status --porcelain`` lines.
+
+    Rename/copy entries read ``R  old.py -> new.py``; taking ``line[3:]`` whole
+    yields the pseudo-path "old.py -> new.py", which matches nothing and drops
+    the change. An uncommitted ``git mv`` of a feature/step file is exactly when
+    scenarios go dormant, so keep the DESTINATION path.
+    """
+    return [_norm(line[3:].split(" -> ")[-1]) for line in lines if len(line) > 3]
+
+
 def changed_paths(base_ref: str) -> list[str]:
     """Committed changes vs merge-base plus uncommitted working-tree changes."""
     merge_base = _git("merge-base", "HEAD", base_ref)
     committed = _git("diff", "--name-only", f"{merge_base}..HEAD").splitlines()
-    working = [line[3:] for line in _git("status", "--porcelain").splitlines() if len(line) > 3]
+    working = _porcelain_paths(_git("status", "--porcelain").splitlines())
     seen: list[str] = []
     for p in committed + working:
         p = _norm(p)
@@ -163,6 +179,45 @@ def run_without_db(modules: list[Path]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, env=env, check=False)
 
 
+def split_xfail_line(line: str) -> tuple[str, str] | None:
+    """Split one ``-rxX`` XFAIL line into (nodeid, reason), or None if not one.
+
+    A regex cannot do this: real BDD outline param ids contain spaces AND the
+    literal reason separator, e.g.
+
+        ...::test_idempotency_key_boundary_validation__boundary_point[a2a-length
+        15 (min - 1)-<15 char string>-error "VALIDATION_ERROR" with suggestion]
+        - UC-003 harness not yet wired ...
+
+    ``\\S+`` drops the line outright; splitting on the first " - " cuts the
+    nodeid mid-param and files the tail as the reason. So scan for the first
+    whitespace at bracket depth 0 — parametrization brackets nest, and the
+    separator only ever appears after them.
+    """
+    m = _XFAIL_PREFIX.match(line)
+    if not m:
+        return None
+    rest = line[m.end() :]
+    depth = 0
+    end = len(rest)
+    for i, ch in enumerate(rest):
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth = max(0, depth - 1)
+        elif depth == 0 and ch.isspace():
+            end = i
+            break
+    if depth != 0:
+        # Unbalanced brackets: fall back to the first separator rather than
+        # swallowing the reason into the nodeid.
+        head, sep, tail = rest.partition(" - ")
+        return (head, tail.strip()) if sep else (rest.strip(), "")
+    sep_match = _XFAIL_REASON_SEP.match(rest[end:])
+    reason = rest[end:][sep_match.end() :].strip() if sep_match else ""
+    return rest[:end], reason
+
+
 def classify(pytest_output: str) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
     """Split XFAIL lines into (dormant, documented) — reason -> scenario names.
 
@@ -173,20 +228,35 @@ def classify(pytest_output: str) -> tuple[dict[str, set[str]], dict[str, set[str
     dormant: dict[str, set[str]] = defaultdict(set)
     documented: dict[str, set[str]] = defaultdict(set)
     for line in pytest_output.splitlines():
-        m = _XFAIL_LINE.match(line.strip())
-        if not m:
+        parsed = split_xfail_line(line.strip())
+        if parsed is None:
             continue
-        nodeid, reason = m.group(1), (m.group(2) or "").strip()
-        # Collapse parametrization (outline rows nest brackets, so split not regex)
-        scenario = nodeid.split("::")[-1].split("[", 1)[0]
+        nodeid, reason = parsed
+        # Collapse parametrization (shared with scripts/enumerate_bdd_issues.py)
+        scenario = scenario_name(nodeid)
         reason_key = reason.split(". ")[0][:120] if reason else "(no reason recorded)"
-        bucket = dormant if any(k in reason.lower() for k in _DORMANT_MARKERS) else documented
+        lowered = reason.lower()
+        bucket = dormant if any(k in lowered for k in DORMANT_REASON_MARKERS) else documented
         bucket[reason_key].add(scenario)
     return dormant, documented
 
 
+_SUMMARY_FALLBACK = "Informational check: which BDD scenarios touched by your change never run?"
+
+
+def _summary(doc: str | None) -> str:
+    """First line of the module docstring, or a literal fallback.
+
+    Under ``python -OO`` docstrings are stripped and ``__doc__`` is None, so
+    ``__doc__.splitlines()[0]`` raises AttributeError — and ``(__doc__ or "")``
+    alone still raises IndexError on the empty list.
+    """
+    lines = (doc or "").splitlines()
+    return lines[0] if lines and lines[0].strip() else _SUMMARY_FALLBACK
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=_summary(__doc__))
     parser.add_argument("--base", help="Ref to diff against (default: upstream/main, then origin/main)")
     parser.add_argument("--paths", nargs="*", help="Check these paths instead of the git diff")
     parser.add_argument("--all", action="store_true", help="Sweep every BDD test module")
@@ -217,6 +287,9 @@ def main() -> int:
     for note in notes:
         print(f"  note: {note}")
     if not modules:
+        # Parity with the git-diff path, which says so explicitly rather than
+        # exiting 0 in silence (a silent exit reads as "checked, all clear").
+        print("check-dormant: the given path(s) map to no BDD test module — nothing to check")
         return 0
 
     print(

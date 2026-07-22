@@ -21,8 +21,16 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from collections import Counter, defaultdict
 from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+# Shared with scripts/check_dormant_scenarios.py — one nodeid->scenario collapse.
+from tests.bdd.xfail_taxonomy import scenario_name
 
 
 def load_guard_allowlist() -> set[str]:
@@ -50,7 +58,7 @@ def classify_tests(results_path: str) -> dict:
     for t in d["tests"]:
         nid = t["nodeid"]
         outcome = t["outcome"]
-        func = nid.split("::")[-1].split("[")[0]
+        func = scenario_name(nid)
         transport = "unknown"
         if "[" in nid:
             param = nid.split("[")[-1].rstrip("]")
