@@ -24,7 +24,17 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-TRANSPORTS = {"impl", "a2a", "mcp", "rest"}
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from bdd_audit_common import (  # noqa: E402
+    extract_scenario_base,
+    extract_transport,
+    outcomes_by_transport_for_base,
+    transport_coverage,
+)
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 INSPECTOR_DIR = PROJECT_ROOT / ".claude" / "reports" / "inspect-all-steps"
 CONFTEST_PATH = PROJECT_ROOT / "tests" / "bdd" / "conftest.py"
@@ -121,19 +131,6 @@ def extract_uc(nodeid: str) -> str:
     """Extract use case from nodeid (e.g., 'UC-004')."""
     m = re.search(r"test_uc(\d+)", nodeid)
     return f"UC-{m.group(1)}" if m else "GENERIC"
-
-
-def extract_transport(nodeid: str) -> str | None:
-    """Extract transport from parametrized test nodeid."""
-    m = re.search(r"\[(impl|a2a|mcp|rest)", nodeid)
-    return m.group(1) if m else None
-
-
-def extract_scenario_base(nodeid: str) -> str:
-    """Strip transport suffix to get scenario base name."""
-    # Remove everything inside [...] brackets
-    base = re.sub(r"\[.*\]", "", nodeid)
-    return base
 
 
 def parse_inspector_reports() -> list[InspectorFlag]:
@@ -299,23 +296,16 @@ def classify_xfail(entry: TestEntry, tag_reasons: dict[str, str]) -> tuple[str, 
 def classify_xpass(entry: TestEntry, all_entries: list[TestEntry]) -> tuple[str, str, str]:
     """Classify an xpassed test. Returns (bucket, category, detail).
 
-    FIX_NOW either way: GRADUATE when all four transports pass (remove the
-    stale xfail tag); PARTIAL_XPASS when only a subset passes (investigate
-    remaining gaps before graduating).
+    FIX_NOW either way: GRADUATE when every transport *present for this base*
+    passed (remove the stale xfail tag); PARTIAL_XPASS when only a subset of
+    the present transports passed (investigate remaining gaps).
     """
     base = extract_scenario_base(entry.nodeid)
-
-    passing_transports = set()
-    for e in all_entries:
-        if extract_scenario_base(e.nodeid) == base and e.outcome in ("xpassed", "passed"):
-            t = extract_transport(e.nodeid)
-            if t:
-                passing_transports.add(t)
-
-    if passing_transports >= TRANSPORTS:
-        return "FIX_NOW", "GRADUATE", f"All transports pass: {sorted(passing_transports)}"
-    missing = TRANSPORTS - passing_transports
-    return "FIX_NOW", "PARTIAL_XPASS", f"Passes: {sorted(passing_transports)}, missing: {sorted(missing)}"
+    outcomes = outcomes_by_transport_for_base(base, ((e.nodeid, e.outcome) for e in all_entries))
+    graduates, passing, missing = transport_coverage(outcomes)
+    if graduates:
+        return "FIX_NOW", "GRADUATE", f"All transports pass: {sorted(passing)}"
+    return "FIX_NOW", "PARTIAL_XPASS", f"Passes: {sorted(passing)}, missing: {sorted(missing)}"
 
 
 # ── Work item generation ─────────────────────────────────────────────
@@ -380,7 +370,7 @@ def generate_work_items(
                 )
             )
 
-    # ── 2. Xpassed tests → FIX_NOW (graduate only when all 4 transports) ─
+    # ── 2. Xpassed tests → FIX_NOW (graduate when all present transports pass) ─
     grad_groups: dict[tuple[str, str], list[TestEntry]] = defaultdict(list)
     for entry in xpassed:
         _, cat, detail = classify_xpass(entry, all_entries)

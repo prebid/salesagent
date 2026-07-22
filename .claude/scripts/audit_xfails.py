@@ -13,12 +13,14 @@ Classification categories:
     HARNESS_GAP       - Harness env not wired for this scenario
     PREMATURE_XFAIL   - Step calls pytest.xfail() before exercising production code
     MISSING_STEP      - No step definition exists for a Gherkin step
-    STALE             - Marked xfail but actually passes (xpassed) on all 4 transports
+    STALE             - Marked xfail but actually passes on every present transport
     PARTIAL_PASS      - Passes on some transports, fails on others
     UNCLASSIFIED      - Doesn't match any known pattern
 
 Graduation criteria (STALE → remove xfail):
-    1. Xpassed on ALL 4 transports (impl, a2a, mcp, rest)
+    1. Every transport *present for that scenario base* passed/xpassed
+       (a2a/mcp/rest, plus e2e_rest when in the result set; not a hardcoded
+       four-transport universe — #1417 dropped impl from BDD parametrization)
     2. Then steps are PASS in inspector report (if available)
 """
 
@@ -27,9 +29,22 @@ from __future__ import annotations
 import ast
 import json
 import re
+import sys
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from bdd_audit_common import (  # noqa: E402
+    extract_scenario_base,
+    extract_transport,
+    outcomes_by_transport_for_base,
+    transport_coverage,
+)
 
 # ── Data classes ──────────────────────────────────────────────────────
 
@@ -40,11 +55,21 @@ class XfailEntry:
 
     nodeid: str
     scenario_base: str  # nodeid without transport suffix
-    transport: str | None  # impl, a2a, mcp, rest, or None
+    transport: str | None  # a2a, mcp, rest, e2e_rest, legacy impl, or None
     category: str = "UNCLASSIFIED"
     reason: str = ""
     xfail_source: str = ""  # "conftest:tag", "conftest:auto", "step:funcname"
     tags: set[str] = field(default_factory=set)
+
+
+@dataclass(frozen=True)
+class PrematureXfail:
+    """A step function that calls pytest.xfail() before production code."""
+
+    name: str
+    path: Path
+    lineno: int
+    end_lineno: int
 
 
 @dataclass
@@ -159,29 +184,23 @@ def parse_conftest_xfail_tags(conftest_path: Path) -> dict[str, tuple[str, str]]
 # ── Step-level xfail detector ────────────────────────────────────────
 
 
-def _mentions_identifier(haystack: str, name: str) -> bool:
-    """True when ``name`` appears as an identifier boundary in ``haystack``.
-
-    Avoids bare substring false positives (``check_x`` matching ``check_xy``).
-    """
-    if not name:
-        return False
-    return bool(re.search(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])", haystack))
-
-
-def find_premature_xfails(steps_dir: Path) -> set[str]:
+def find_premature_xfails(steps_dir: Path) -> list[PrematureXfail]:
     """Find step functions that call pytest.xfail() before any production code.
 
-    Returns set of function names that unconditionally xfail.
+    Returns location-aware records so classifiers can match pytest-json-report
+    ``setup.crash`` / ``call.crash`` path+lineno to the enclosing step (step
+    function names never appear in json-report entries).
     """
-    premature: set[str] = set()
+    premature: list[PrematureXfail] = []
 
     for py_file in steps_dir.rglob("*.py"):
         try:
-            tree = ast.parse(py_file.read_text())
+            source = py_file.read_text()
+            tree = ast.parse(source)
         except SyntaxError:
             continue
 
+        resolved = py_file.resolve()
         for node in ast.walk(tree):
             if not isinstance(node, ast.FunctionDef):
                 continue
@@ -215,7 +234,15 @@ def find_premature_xfails(steps_dir: Path) -> set[str]:
                     call = stmt.value
                     if isinstance(call.func, ast.Attribute):
                         if call.func.attr == "xfail":
-                            premature.add(node.name)
+                            end = getattr(node, "end_lineno", None) or node.lineno
+                            premature.append(
+                                PrematureXfail(
+                                    name=node.name,
+                                    path=resolved,
+                                    lineno=node.lineno,
+                                    end_lineno=end,
+                                )
+                            )
                             break
                 # Any other statement means it's not premature
                 break
@@ -223,33 +250,45 @@ def find_premature_xfails(steps_dir: Path) -> set[str]:
     return premature
 
 
-# ── JSON test result parser ───────────────────────────────────────────
-
-
-def parse_test_results(json_path: Path) -> tuple[list[dict], list[dict]]:
-    """Parse BDD JSON results into xfailed and xpassed lists."""
-    data = json.loads(json_path.read_text())
-    xfailed = [t for t in data["tests"] if t["outcome"] == "xfailed"]
-    xpassed = [t for t in data["tests"] if t["outcome"] == "xpassed"]
-    return xfailed, xpassed
-
-
-def extract_transport(nodeid: str) -> str | None:
-    """Extract transport from parametrized nodeid."""
-    if "[impl" in nodeid:
-        return "impl"
-    if "[a2a" in nodeid:
-        return "a2a"
-    if "[mcp" in nodeid:
-        return "mcp"
-    if "[rest" in nodeid:
-        return "rest"
+def match_premature_by_crash(
+    test: dict,
+    premature_xfails: Sequence[PrematureXfail],
+) -> PrematureXfail | None:
+    """Map setup/call crash path+lineno to an enclosing premature step."""
+    if not premature_xfails:
+        return None
+    for phase in ("setup", "call"):
+        ph = test.get(phase) or {}
+        if not isinstance(ph, dict):
+            continue
+        crash = ph.get("crash") or {}
+        if not isinstance(crash, dict):
+            continue
+        cpath = crash.get("path")
+        clineno = crash.get("lineno")
+        if not cpath or clineno is None:
+            continue
+        try:
+            resolved = Path(cpath).resolve()
+            line = int(clineno)
+        except (OSError, TypeError, ValueError):
+            continue
+        for step in premature_xfails:
+            if resolved == step.path and step.lineno <= line <= step.end_lineno:
+                return step
     return None
 
 
-def extract_scenario_base(nodeid: str) -> str:
-    """Strip transport suffix to get scenario base name."""
-    return re.sub(r"\[(?:impl|a2a|mcp|rest).*\]$", "", nodeid)
+# ── JSON test result parser ───────────────────────────────────────────
+
+
+def parse_test_results(json_path: Path) -> tuple[list[dict], list[dict], list[dict]]:
+    """Parse BDD JSON results into (xfailed, xpassed, all_tests)."""
+    data = json.loads(json_path.read_text())
+    all_tests = list(data["tests"])
+    xfailed = [t for t in all_tests if t["outcome"] == "xfailed"]
+    xpassed = [t for t in all_tests if t["outcome"] == "xpassed"]
+    return xfailed, xpassed, all_tests
 
 
 def extract_uc(nodeid: str) -> str:
@@ -275,7 +314,7 @@ def extract_tags(test_entry: dict) -> set[str]:
 def classify_xfail(
     test: dict,
     tag_map: dict[str, tuple[str, str]],
-    premature_xfails: set[str],
+    premature_xfails: Sequence[PrematureXfail],
     xpassed_all4: set[str],
     xpassed_partial: dict[str, set[str]],
 ) -> XfailEntry:
@@ -294,16 +333,14 @@ def classify_xfail(
     )
 
     # Priority 0: Premature step-level pytest.xfail() (AST scan)
-    # Match on identifier boundaries so e.g. check_x does not hit check_xy.
-    call = test.get("call") or {}
-    longrepr = str(call.get("longrepr") or "") if isinstance(call, dict) else ""
-    haystack = f"{wasxfail}\n{longrepr}\n{nodeid}"
-    for fname in premature_xfails:
-        if fname and _mentions_identifier(haystack, fname):
-            entry.category = "PREMATURE_XFAIL"
-            entry.reason = f"step {fname} calls pytest.xfail() before production code"
-            entry.xfail_source = f"step:{fname}"
-            return entry
+    # Match via setup/call crash path+lineno → enclosing step. pytest-json-report
+    # does not emit step function names into wasxfail/longrepr/nodeid.
+    matched = match_premature_by_crash(test, premature_xfails)
+    if matched is not None:
+        entry.category = "PREMATURE_XFAIL"
+        entry.reason = f"step {matched.name} calls pytest.xfail() before production code"
+        entry.xfail_source = f"step:{matched.name}"
+        return entry
 
     # Priority 1: Missing step definition (auto-xfail from pytest hook)
     if "Step definition not found" in wasxfail:
@@ -460,25 +497,27 @@ def classify_xfail(
 
 
 def classify_xpassed(
-    xpassed_tests: list[dict],
+    all_tests: list[dict],
 ) -> tuple[set[str], dict[str, set[str]]]:
-    """Classify xpassed tests into all-4-transports vs partial.
+    """Classify xpassed scenario bases into graduate vs partial.
 
-    Returns (all4_bases, partial_bases_with_transports).
+    Graduation is relative to transports *present for that base* across the
+    full result set (not a hardcoded impl/a2a/mcp/rest universe).
+
+    Returns (graduate_bases, partial_bases_with_passing_transports).
     """
-    by_scenario = defaultdict(set)
-    for t in xpassed_tests:
-        transport = extract_transport(t["nodeid"])
-        base = extract_scenario_base(t["nodeid"])
-        if transport:
-            by_scenario[base].add(transport)
-
-    all4 = {base for base, transports in by_scenario.items() if transports == {"impl", "a2a", "mcp", "rest"}}
-    partial = {
-        base: transports for base, transports in by_scenario.items() if transports != {"impl", "a2a", "mcp", "rest"}
-    }
-
-    return all4, partial
+    xpassed_bases = {extract_scenario_base(t["nodeid"]) for t in all_tests if t.get("outcome") == "xpassed"}
+    graduate: set[str] = set()
+    partial: dict[str, set[str]] = {}
+    nodeid_outcomes = [(t["nodeid"], t["outcome"]) for t in all_tests]
+    for base in xpassed_bases:
+        outcomes = outcomes_by_transport_for_base(base, nodeid_outcomes)
+        graduates, passing, _missing = transport_coverage(outcomes)
+        if graduates:
+            graduate.add(base)
+        elif passing:
+            partial[base] = passing
+    return graduate, partial
 
 
 # ── Report generator ──────────────────────────────────────────────────
@@ -509,7 +548,7 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
         "PARTIAL_IMPL": "Partition/boundary — some values pass, others fail",
         "MISSING_STEP": "No step definition exists for a Gherkin step",
         "PREMATURE_XFAIL": "Step calls pytest.xfail() before production code",
-        "STALE": "Passes all 4 transports — should graduate",
+        "STALE": "Passes all present transports — should graduate",
         "PARTIAL_PASS": "Passes some transports, not all",
         "UNCLASSIFIED": "No matching pattern found",
     }
@@ -551,7 +590,7 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
             "",
             "## Xpassed Tests (marked xfail but pass)",
             "",
-            f"- **All 4 transports (graduation candidates)**: {len([e for e in report.xpassed_entries if e.category == 'STALE'])}",
+            f"- **All present transports (graduation candidates)**: {len([e for e in report.xpassed_entries if e.category == 'STALE'])}",
             f"- **Partial pass (keep investigating)**: {len([e for e in report.xpassed_entries if e.category == 'PARTIAL_PASS'])}",
             "",
         ]
@@ -561,7 +600,7 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
     stale = [e for e in report.xpassed_entries if e.category == "STALE"]
     if stale:
         seen_bases = set()
-        lines.append("### Graduation candidates (all 4 transports pass)")
+        lines.append("### Graduation candidates (all present transports pass)")
         lines.append("")
         for e in sorted(stale, key=lambda x: x.scenario_base):
             if e.scenario_base not in seen_bases:
@@ -573,17 +612,13 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
     partial = [e for e in report.xpassed_entries if e.category == "PARTIAL_PASS"]
     if partial:
         lines.extend(["", "### Partial pass (some transports only)", ""])
-        by_missing = defaultdict(list)
-        seen_bases = {}
+        seen_bases: dict[str, set[str | None]] = {}
         for e in partial:
-            if e.scenario_base not in seen_bases:
-                seen_bases[e.scenario_base] = set()
-            seen_bases[e.scenario_base].add(e.transport)
+            seen_bases.setdefault(e.scenario_base, set()).add(e.transport)
 
         for base, transports in sorted(seen_bases.items()):
-            missing = {"impl", "a2a", "mcp", "rest"} - transports
             short = base.split("::")[-1] if "::" in base else base
-            lines.append(f"- {short} — passes: {sorted(transports)}, missing: {sorted(missing)}")
+            lines.append(f"- {short} — passes: {sorted(t for t in transports if t)}")
 
     # Actionable summary
     lines.extend(
@@ -592,7 +627,7 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
             "## Actionable Summary",
             "",
             "### Immediate actions",
-            f"1. **Graduate {len(stale)} stale scenarios** — remove xfail tags from conftest (all 4 transports pass with strong assertions)",
+            f"1. **Graduate {len(stale)} stale scenarios** — remove xfail tags from conftest (all present transports pass with strong assertions)",
             f"2. **Fix {len(report.by_category.get('PREMATURE_XFAIL', []))} premature xfails** — step calls pytest.xfail() before production code",
             "",
             "### Tracked debt",
@@ -640,17 +675,17 @@ def main() -> None:
     # Step 2: Find premature xfails in step functions
     print("Scanning step functions for premature xfails...")
     premature_xfails = find_premature_xfails(steps_dir)
-    print(f"  Found {len(premature_xfails)} premature xfail functions: {sorted(premature_xfails)}")
+    print(f"  Found {len(premature_xfails)} premature xfail functions: {sorted(p.name for p in premature_xfails)}")
 
     # Step 3: Parse test results
     print(f"Parsing {json_path}...")
-    xfailed_tests, xpassed_tests = parse_test_results(json_path)
+    xfailed_tests, xpassed_tests, all_tests = parse_test_results(json_path)
     print(f"  {len(xfailed_tests)} xfailed, {len(xpassed_tests)} xpassed")
 
-    # Step 4: Classify xpassed tests
+    # Step 4: Classify xpassed tests (needs full suite for present-transport set)
     print("Classifying xpassed tests...")
-    all4_bases, partial_bases = classify_xpassed(xpassed_tests)
-    print(f"  {len(all4_bases)} pass all 4 transports (graduation candidates)")
+    all4_bases, partial_bases = classify_xpassed(all_tests)
+    print(f"  {len(all4_bases)} pass all present transports (graduation candidates)")
     print(f"  {len(partial_bases)} pass some transports (partial)")
 
     # Step 5: Classify each xfailed test
