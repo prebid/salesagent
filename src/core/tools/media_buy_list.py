@@ -252,13 +252,16 @@ def _get_media_buys_impl(
                             ),
                             field=f"media_buys[].packages[{pkg_id}].targeting_overlay",
                             # Buyer hint for BR-RULE-294 / UC-019: seller-side
-                            # package_config corruption — buyer cannot fix the
-                            # row; contact seller to repair persisted targeting.
+                            # persisted-targeting corruption — buyer cannot fix
+                            # the row; contact seller to repair it. recovery=
+                            # transient matches the sibling per-creative advisory
+                            # in creatives/_processing.py.
                             suggestion=(
-                                "Persisted package_config targeting could not be "
-                                "rehydrated; targeting_overlay is null for this "
-                                "package until the seller repairs the stored data."
+                                "Contact the seller to repair the stored package "
+                                "targeting data; this package's targeting_overlay "
+                                "stays null until then."
                             ),
+                            recovery="transient",
                         )
                     )
                     targeting_overlay = None

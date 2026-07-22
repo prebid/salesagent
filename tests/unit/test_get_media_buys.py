@@ -656,10 +656,15 @@ class TestTargetingOverlayRoundTrip:
         assert err.code == "SERVICE_UNAVAILABLE"
         assert "TARGETING_REHYDRATION_FAILED" in err.message
         assert err.field is not None and "targeting_overlay" in err.field
-        # BR-RULE-294 / UC-019: buyer-facing suggestion references package_config
-        # so UC-019 BDD suggestion assertions match production.
+        # BR-RULE-294 / UC-019: seller-side imperative suggestion (buyer cannot
+        # repair persisted targeting). Do not pin internal storage key names.
         assert err.suggestion is not None
-        assert "package_config" in err.suggestion
+        suggestion_lower = err.suggestion.lower()
+        assert "seller" in suggestion_lower
+        assert "repair" in suggestion_lower
+        assert "package_config" not in suggestion_lower
+        recovery = err.recovery.value if hasattr(err.recovery, "value") else err.recovery
+        assert recovery == "transient"
 
 
 class TestGetMediaBuysResponseStructure:

@@ -519,6 +519,38 @@ def given_principal_owns_mb_with_two_packages(ctx: dict, principal_id: str, mb_i
     _register_media_buy(ctx, mb_id, mb)
 
 
+@given(
+    parsers.parse(
+        'package "{pkg_id}" persisted targeting_overlay is a string (will raise TypeError on Targeting(**str))'
+    )
+)
+def given_package_targeting_overlay_is_string(ctx: dict, pkg_id: str, caplog) -> None:
+    """Corrupt persisted targeting_overlay to a string (BR-RULE-294 INV-3).
+
+    ``Targeting(**"not a dict")`` raises ``TypeError``; production catches that
+    narrowly, logs a warning, nulls the overlay, and appends a non-fatal
+    ``SERVICE_UNAVAILABLE`` advisory. Caplog is armed here (before When) so the
+    warning Then-step can assert the real logger output.
+    """
+    import logging
+
+    from sqlalchemy import select
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from src.core.database.models import MediaPackage as DBMediaPackage
+
+    caplog.set_level(logging.WARNING, logger="src.core.tools.media_buy_list")
+    env = ctx["env"]
+    assert env._session is not None, "Expected an active DB session for package_config mutation"
+    pkg_row = env._session.scalars(select(DBMediaPackage).filter_by(package_id=pkg_id)).first()
+    assert pkg_row is not None, f"Package '{pkg_id}' not found in DB — seed the media buy first"
+    config = dict(pkg_row.package_config or {})
+    config["targeting_overlay"] = "not a dict"
+    pkg_row.package_config = config
+    flag_modified(pkg_row, "package_config")
+    env._session.commit()
+
+
 @given(parsers.parse('package "{pkg_id}" has a creative with internal status "{status}"'))
 def given_package_creative_status(ctx: dict, pkg_id: str, status: str) -> None:
     """Seed a creative with the given internal status, assigned to the package."""
@@ -1626,18 +1658,42 @@ def _current_suggestion(ctx: dict) -> str:
     ``details`` does not count, #1417); no-wire runs fall back to the typed
     production exception's top-level attribute. Fails when the suggestion is
     missing or empty — never a silent escape.
+
+    Also covers success-path advisory ``errors[]`` (BR-RULE-294 targeting
+    rehydration): the buyer still receives a top-level suggestion on the
+    serialized ``wire_response.errors[0]`` even though the transport did not
+    reject. Prefer that over the reconstructed typed payload.
     """
+    from tests.harness.transport import extract_wire_suggestion
+
     suggestion = _wire_suggestion(ctx)
+    if suggestion is None:
+        # Success-path advisory errors[] captured on the real wire body.
+        suggestion = extract_wire_suggestion(ctx.get("wire_response"))
+    if suggestion is None:
+        matched = ctx.get("matched_response_error")
+        if matched is not None:
+            suggestion = (
+                matched.get("suggestion") if isinstance(matched, dict) else getattr(matched, "suggestion", None)
+            )
+    if suggestion is None:
+        resp = ctx.get("response")
+        errors = getattr(resp, "errors", None) if resp is not None else None
+        if errors:
+            first = errors[0]
+            suggestion = first.get("suggestion") if isinstance(first, dict) else getattr(first, "suggestion", None)
     if suggestion is None:
         error = ctx.get("error")
         assert error is not None, "Expected an error"
         from src.core.exceptions import AdCPError
 
-        assert isinstance(error, AdCPError), (
-            f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
-        )
-        # STRICT error.json conformance: top-level attribute only (#1417).
-        suggestion = error.suggestion
+        if isinstance(error, AdCPError):
+            # STRICT error.json conformance: top-level attribute only (#1417).
+            suggestion = error.suggestion
+        else:
+            suggestion = getattr(error, "suggestion", None)
+            if suggestion is None and isinstance(error, dict):
+                suggestion = error.get("suggestion")
     assert isinstance(suggestion, str) and suggestion.strip(), (
         f"Expected non-empty top-level suggestion string, got {suggestion!r}"
     )
@@ -2507,3 +2563,98 @@ def then_unavailable_reason_shorthand(ctx: dict, reason: str) -> None:
     raise AssertionError(
         f"snapshot_unavailable_reason='{reason}' not found on any package across {len(buys)} media buy(s)"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# BR-RULE-294 / targeting_overlay rehydration (INV-3)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _response_errors(ctx: dict) -> list:
+    """Return advisory ``errors[]`` — prefer serialized wire body over typed payload."""
+    wire = ctx.get("wire_response")
+    if isinstance(wire, dict) and isinstance(wire.get("errors"), list) and wire["errors"]:
+        return wire["errors"]
+    resp = ctx.get("response")
+    assert resp is not None, f"Expected a response with errors[], got error: {ctx.get('error')}"
+    return list(getattr(resp, "errors", None) or [])
+
+
+def _error_attr(err: object, key: str) -> object:
+    """Read a field from a dict or Error-like object."""
+    if isinstance(err, dict):
+        return err.get(key)
+    return getattr(err, key, None)
+
+
+@then(parsers.parse('a warning should be logged with media_buy_id "{mb_id}" and package_id "{pkg_id}"'))
+def then_rehydration_warning_logged(ctx: dict, mb_id: str, pkg_id: str, caplog) -> None:
+    """Assert production logged the per-package rehydration warning (BR-RULE-294 INV-3).
+
+    The log line uses the real DB ``media_buy_id`` (uuid-suffixed), not the
+    Gherkin label — resolve via the label map before matching.
+    """
+    real_mb_id = _resolve_media_buy_id(ctx, mb_id)
+    for rec in caplog.records:
+        if rec.levelname != "WARNING":
+            continue
+        msg = rec.getMessage()
+        if "Failed to rehydrate targeting_overlay" not in msg:
+            continue
+        assert real_mb_id in msg, f"Expected media_buy_id {real_mb_id!r} in warning: {msg}"
+        assert pkg_id in msg, f"Expected package_id {pkg_id!r} in warning: {msg}"
+        return
+    raise AssertionError(
+        f"Expected WARNING rehydration log for media_buy_id={real_mb_id!r} package_id={pkg_id!r}; "
+        f"captured={[r.getMessage() for r in caplog.records]}"
+    )
+
+
+@then(parsers.parse('response.errors[] should include an entry with code "{code}"'))
+def then_response_errors_include_code(ctx: dict, code: str) -> None:
+    """Assert success-path advisory ``errors[]`` carries ``code``; stash the match.
+
+    Stashing enables subsequent ``that errors[] entry …`` steps and lets
+    ``_current_suggestion`` / ``extract_wire_suggestion`` grade the buyer-facing
+    suggestion on the same advisory (not a transport rejection —
+    ``assert_wire_error`` does not apply to partial-success advisories).
+    """
+    errors = _response_errors(ctx)
+    codes = [_error_attr(e, "code") for e in errors]
+    assert code in codes, f"Expected response.errors[] entry with code {code!r}, got {codes}"
+    ctx["matched_response_error"] = next(e for e in errors if _error_attr(e, "code") == code)
+
+
+@then(parsers.parse('that errors[] entry message should start with "{prefix}"'))
+def then_matched_error_message_starts_with(ctx: dict, prefix: str) -> None:
+    """Assert the stashed ``errors[]`` entry message starts with ``prefix``."""
+    matched = ctx.get("matched_response_error")
+    assert matched is not None, "No matched_response_error — run the errors[] code step first"
+    message = _error_attr(matched, "message")
+    assert isinstance(message, str) and message.startswith(prefix), (
+        f"Expected errors[] message to start with {prefix!r}, got {message!r}"
+    )
+
+
+@then(parsers.parse('that errors[] entry field selector should be "{field}"'))
+def then_matched_error_field_selector(ctx: dict, field: str) -> None:
+    """Assert the stashed ``errors[]`` entry ``field`` selector equals ``field``."""
+    matched = ctx.get("matched_response_error")
+    assert matched is not None, "No matched_response_error — run the errors[] code step first"
+    actual = _error_attr(matched, "field")
+    assert actual == field, f"Expected errors[] field {field!r}, got {actual!r}"
+
+
+@then(parsers.parse('the package "{pkg_id}" targeting_overlay should be null'))
+def then_package_targeting_overlay_null(ctx: dict, pkg_id: str) -> None:
+    """Assert the named package's ``targeting_overlay`` is null after fail-soft rehydration."""
+    buys = _get_media_buys(ctx)
+    for buy in buys:
+        for pkg in getattr(buy, "packages", []) or []:
+            if getattr(pkg, "package_id", None) == pkg_id:
+                overlay = getattr(pkg, "targeting_overlay", None)
+                if overlay is None and isinstance(pkg, dict):
+                    overlay = pkg.get("targeting_overlay")
+                assert overlay is None, f"Expected package '{pkg_id}' targeting_overlay to be null, got {overlay!r}"
+                return
+    raise AssertionError(f"Package '{pkg_id}' not found in response media_buys")
