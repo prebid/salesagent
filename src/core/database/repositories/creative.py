@@ -43,9 +43,10 @@ class CreativeReadiness(NamedTuple):
     properties so the "what does ready mean?" decision has exactly one home:
 
     - ``ready_for_finalize`` — the admin approve gate: a zero-assignment buy is
-      NOT ready (it holds at ``pending_creatives`` — AdCP media-buy-status.json:
-      "awaiting creative assets"; creatives legitimately arrive via
-      sync_creatives after approval).
+      NOT ready (it holds at ``pending_creatives`` — per the AdCP
+      media-buy-status.json enum, "approved by the seller and has no creatives
+      assigned — the buyer must attach creatives via sync_creatives"; creatives
+      legitimately arrive after approval).
     - ``all_assigned_approved`` — the activation scheduler's policy: a
       zero-assignment buy IS ready (some campaigns run without creatives
       initially), only assigned-but-unapproved creatives block activation.
@@ -438,8 +439,10 @@ class CreativeAssignmentRepository:
                     Creative.creative_id.in_(sorted(creative_ids)),
                 )
             ).all()
-            # "approved" is the ONLY creative-ready status (CreativeStatusEnum:
-            # processing/pending_review/approved/rejected — no "active").
+            # "approved" is the ONLY creative-ready status; "active" is not a
+            # member of the creative status domain (the DB column is free-form,
+            # but no production path writes it — the schemas' CreativeStatusEnum
+            # and the pinned spec enum both lack it).
             approved.update((principal_id, c.creative_id) for c in rows if c.status == "approved")
         unapproved = sorted({a.creative_id for a in assignments if (a.principal_id, a.creative_id) not in approved})
         return CreativeReadiness(has_assignments=True, unapproved_creative_ids=unapproved)

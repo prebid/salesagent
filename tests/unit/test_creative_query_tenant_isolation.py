@@ -113,6 +113,17 @@ class TestCreativeQueryTenantIsolation:
         assert _function_calls_repo_get_by_ids("src/core/tools/media_buy_create.py", "execute_approved_media_buy"), (
             "execute_approved_media_buy must load creatives via CreativeRepository(...).get_by_ids()."
         )
+        # The assignment load is the same isolation surface: an inline
+        # select(CreativeAssignment) here (tenant-filtered or not) is a
+        # regression — it must route through the tenant-scoped
+        # CreativeAssignmentRepository.get_by_media_buy, whose scoping carries
+        # its own red oracle (test_cross_tenant_assignment_invisible).
+        assignment_selects = [s for s in selects if "assignment" in s["model"].lower()]
+        assert not assignment_selects, (
+            f"Inline CreativeAssignment select() at media_buy_create.py:"
+            f"{[s['lineno'] for s in assignment_selects]} — assignment loads must go "
+            f"through CreativeAssignmentRepository.get_by_media_buy."
+        )
 
     def test_get_creative_with_latest_review_scopes_by_tenant(self):
         """get_creative_with_latest_review must accept and filter by tenant_id.

@@ -1295,3 +1295,28 @@ def seed_error_test_tenant(
         "principal_id": principal_id,
         "access_token": access_token,
     }
+
+
+@pytest.fixture
+def env_with_media_buy(integration_db):
+    """One shared MediaBuyDualEnv + seeded media buy for update-path wire tests.
+
+    Yields ``(env, media_buy)``. This is the SINGLE home for the fixture that
+    several update-path test modules previously hand-rolled (and one copy had
+    drifted): it ALWAYS sets ``env._seeded_media_buy_id`` — the harness's REST
+    update dispatcher builds its PUT target from ``req.media_buy_id`` falling
+    back to this attribute, so a copy that forgets it silently PUTs to
+    ``/media-buys/NOT_SEEDED`` — and ``env._owner_tenant`` for tests that need
+    the tenant row (e.g. to seed sibling principals).
+    """
+    from tests.bdd.conftest import _setup_existing_media_buy
+    from tests.harness.media_buy_dual import MediaBuyDualEnv
+
+    with MediaBuyDualEnv() as env:
+        tenant, principal, product, _ = env.setup_media_buy_data()
+        ctx: dict = {}
+        _setup_existing_media_buy(ctx, env, tenant, principal, product)
+        env._seeded_media_buy_id = ctx["existing_media_buy"].media_buy_id
+        env._owner_tenant = tenant
+        env._seeded_package = ctx["existing_package"]
+        yield env, ctx["existing_media_buy"]

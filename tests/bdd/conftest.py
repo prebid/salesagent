@@ -2728,9 +2728,10 @@ _UC003_WIRED: set[str] = {
     # schema-invalid revision on ALL transports (A2A/REST via the sanctioned
     # adcp_validation_boundary, MCP via the FastMCP TypeAdapter layer) — with one
     # documented per-transport nuance: a wrong-TYPE revision on REST is rejected
-    # by FastAPI body parsing as INVALID_REQUEST before the shared boundary.
+    # by FastAPI body parsing as INVALID_REQUEST before the shared boundary
+    # (the cross-transport classification policy is tracked in #1604).
     # The storyboard/production reconciliation (regenerate the outlines to grade
-    # VALIDATION_ERROR) is tracked in #1582; these generated outlines are not
+    # VALIDATION_ERROR) is tracked in #1694; these generated outlines are not
     # patched locally to match production (xpass-graduation anti-pattern), so
     # they stay xfailed until reconciled. The emission itself is NOT ungraded:
     # tests/integration/test_update_media_buy_revision_validation_wire.py pins

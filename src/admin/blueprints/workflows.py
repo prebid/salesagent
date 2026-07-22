@@ -184,8 +184,9 @@ def _hold_for_unapproved_creatives(db, tenant_id: str, media_buy_id: str, user_e
     Readiness comes from the shared tenant-scoped gate
     ``creatives_ready_for_finalize`` — the same decision the operations approve
     route uses, so the two admin approve paths cannot drift. A ZERO-assignment
-    buy HOLDS: ``pending_creatives`` is "awaiting creative assets" (AdCP
-    media-buy-status.json), and creatives legitimately arrive via sync_creatives
+    buy HOLDS: per the AdCP media-buy-status.json enum, ``pending_creatives``
+    means "approved by the seller and has no creatives assigned — the buyer
+    must attach creatives via sync_creatives", so creatives legitimately arrive
     after approval — finalizing a creative-less buy into the ad server was the
     previous divergence between the two routes. #1544.
     """

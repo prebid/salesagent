@@ -241,11 +241,12 @@ class TestWorkflowApproval:
         """Approving a buy with NO creative assignments HOLDS at pending_creatives.
 
         Both admin approve routes decide finalize-vs-hold through the shared
-        tenant-scoped gate (``creatives_ready_for_finalize``): per AdCP
-        media-buy-status.json, ``pending_creatives`` is "awaiting creative
-        assets", and creatives legitimately arrive via sync_creatives after
-        approval. This route previously FINALIZED a creative-less buy into the
-        ad server while the operations route held — reverting the shared gate's
+        tenant-scoped gate (``creatives_ready_for_finalize``): per the AdCP
+        media-buy-status.json enum, ``pending_creatives`` means "approved by the
+        seller and has no creatives assigned — the buyer must attach creatives
+        via sync_creatives", so creatives legitimately arrive after approval.
+        This route previously FINALIZED a creative-less buy into the ad server
+        while the operations route held — reverting the shared gate's
         empty-assignments policy turns this test red. #1544.
         """
         from src.core.database.repositories import MediaBuyRepository

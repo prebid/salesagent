@@ -2400,7 +2400,13 @@ def then_response_revision_value(ctx: dict, revision: int) -> None:
 
 @then("the response should contain a valid_actions array")
 def then_response_contains_valid_actions(ctx: dict) -> None:
-    """The success response carries valid_actions (INT-002)."""
+    """The applied-update success WIRE body carries a POPULATED valid_actions array.
+
+    Shares the wire-graded + non-empty oracle with the uc002 sync-success steps
+    (INT-002): the binding scenario updates an ACTIVE buy, so an empty array
+    would be a real regression, and the reconstructed payload would hide a
+    serialization drop of the field.
+    """
     from tests.bdd.steps._outcome_helpers import assert_valid_actions_array
 
     assert_valid_actions_array(ctx)

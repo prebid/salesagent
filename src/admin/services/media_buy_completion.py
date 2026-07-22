@@ -959,7 +959,8 @@ def creatives_ready_for_finalize(
     drift on tenant scoping and on the empty-assignments case). Delegates to
     :meth:`CreativeAssignmentRepository.creative_readiness`; the gate policy is
     :attr:`CreativeReadiness.ready_for_finalize` — a zero-assignment buy HOLDS at
-    ``pending_creatives`` ("awaiting creative assets"), it does not finalize.
+    ``pending_creatives`` (per the media-buy-status.json enum: approved by the
+    seller, no creatives assigned yet), it does not finalize.
     """
     return CreativeAssignmentRepository(session, tenant_id).creative_readiness(media_buy_id)
 

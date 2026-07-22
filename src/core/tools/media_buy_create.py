@@ -1138,16 +1138,16 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             # FIXME(salesagent-9f2): creative handling should use repository methods
             assert uow2.session is not None
             session = uow2.session
-            from src.core.database.models import CreativeAssignment
 
             # Import adapter helper here (used for both creative upload and order approval)
+            # Load assignments through the tenant-scoped repository (a cross-tenant
+            # assignment row against this buy id must never feed the adapter
+            # upload; the repository's scoping carries its own red oracle —
+            # test_cross_tenant_assignment_invisible).
+            from src.core.database.repositories.creative import CreativeAssignmentRepository
             from src.core.helpers.adapter_helpers import get_adapter
 
-            # Get all creative assignments for this media buy (tenant-scoped: a
-            # cross-tenant assignment row against this buy id must never feed the
-            # adapter upload — same discipline as the approve-gate queries).
-            stmt_assignments = select(CreativeAssignment).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)
-            assignments = session.scalars(stmt_assignments).all()
+            assignments = CreativeAssignmentRepository(session, tenant_id).get_by_media_buy(media_buy_id)
 
             if assignments:
                 logger.info(f"[APPROVAL] Found {len(assignments)} creative assignments, uploading to adapter")
@@ -1387,7 +1387,10 @@ def push_creative_to_existing_buy(
             creative = uow.creatives.admin_get_by_id(creative_id)
             if not creative:
                 return False, f"Creative {creative_id} not found"
-            if creative.status not in {"approved", "active"}:
+            # "approved" is the only creative-ready status — "active" is not a
+            # member of the creative status domain (same predicate as the shared
+            # readiness gate, CreativeAssignmentRepository.creative_readiness).
+            if creative.status != "approved":
                 return False, f"Creative {creative_id} is not approved (status={creative.status})"
 
             if (creative.data or {}).get("platform_creative_id"):

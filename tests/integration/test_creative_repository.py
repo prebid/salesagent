@@ -361,7 +361,7 @@ class TestAssignmentRepoCreativeReadiness:
         """Zero assignments: the approve gate HOLDS, the activation policy is ready.
 
         Pins the one-home policy split: ready_for_finalize is False (hold at
-        pending_creatives — "awaiting creative assets") while
+        pending_creatives — seller-approved, no creatives assigned yet) while
         all_assigned_approved is vacuously True (scheduler activation). #1544.
         """
         with _RepoEnv() as env:

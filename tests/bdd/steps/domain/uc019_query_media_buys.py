@@ -2863,8 +2863,9 @@ def then_revision_increased_across_reads(ctx: dict) -> None:
 
 @then(parsers.parse('the media buy "{label}" should include a confirmed_at field'))
 def then_buy_includes_confirmed_at(ctx: dict, label: str) -> None:
-    buy = _labeled_buy_from_response(ctx, ctx.get("response"), label)
-    assert buy.confirmed_at is not None, f"media buy {label!r} is missing confirmed_at"
+    """The serialized WIRE carries a non-null confirmed_at for a confirmed buy."""
+    buy = _wire_buy(ctx, label)
+    assert buy.get("confirmed_at") is not None, f"media buy {label!r} is missing confirmed_at on the wire"
 
 
 @then(parsers.parse('the media buy "{label}" wire body should carry "confirmed_at" as null'))
@@ -2914,8 +2915,11 @@ def then_buy_confirmed_at_is_iso_timestamp(ctx: dict, label: str) -> None:
 
 @then(parsers.parse('the confirmed_at value should be the ISO 8601 timestamp "{timestamp}"'))
 def then_confirmed_at_equals_literal(ctx: dict, timestamp: str) -> None:
-    buy = _labeled_buy_from_response(ctx, ctx.get("response"), "mb-001")
-    actual = _parse_iso_utc(buy.confirmed_at)
+    """The serialized WIRE confirmed_at equals the seeded literal instant."""
+    buy = _wire_buy(ctx, "mb-001")
+    confirmed_at = buy.get("confirmed_at")
+    assert isinstance(confirmed_at, str), f"confirmed_at must be a string on the wire, got {confirmed_at!r}"
+    actual = _parse_iso_utc(confirmed_at)
     expected = _parse_iso_utc(timestamp)
     assert actual == expected, f"confirmed_at mismatch: expected {expected.isoformat()}, got {actual.isoformat()}"
 

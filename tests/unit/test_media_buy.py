@@ -1124,7 +1124,11 @@ class TestCreateMediaBuyStatusDetermination:
     def test_pending_when_missing_creatives(self):
         """UC-002-ST04: no creatives -> pending_creatives.
 
-        Spec: CONFIRMED -- media-buy-status.json: pending_creatives = "Media buy awaiting creative assets"
+        Spec: CONFIRMED -- media-buy-status.json enum, pending_creatives:
+        "approved by the seller and has no creatives assigned — the buyer must
+        attach creatives via sync_creatives". (The shorter paraphrase "awaiting
+        creative assets" is from create-media-buy-response.json's
+        media_buy_status description, not the enum file.)
         https://github.com/adcontextprotocol/adcp/blob/main/schemas/enums/media-buy-status.json
         Covers: UC-002-MAIN-21
         """

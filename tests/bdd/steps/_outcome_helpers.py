@@ -159,10 +159,25 @@ def parse_iso_8601(timestamp: str | datetime) -> datetime:
     )
 
 
-def assert_valid_actions_array(ctx: dict) -> None:
-    """The success response carries a valid_actions array (INT-002)."""
-    actions = _get_response_field(require_success_response(ctx), "valid_actions")
-    assert isinstance(actions, list), f"Expected a valid_actions array, got {type(actions).__name__}: {actions!r}"
+def assert_valid_actions_array(ctx: dict, *, require_nonempty: bool = True) -> list:
+    """The success WIRE body carries a valid_actions array (INT-002).
+
+    Wire-graded via :func:`wire_dict` (the reconstructed payload re-defaults an
+    absent field, hiding a serialization drop) and non-empty by default — every
+    scenario currently binding a valid_actions Then targets an ACTIVE buy
+    (create sync-success / applied update), for which an empty array would be a
+    real regression. Pass ``require_nonempty=False`` from a step whose scenario
+    legitimately expects no valid actions (e.g. a terminal-status buy).
+    Returns the wire array so callers can add value-level checks.
+    """
+    require_success_response(ctx)
+    actions = wire_dict(ctx).get("valid_actions")
+    assert isinstance(actions, list), (
+        f"Expected a valid_actions array on the wire, got {type(actions).__name__}: {actions!r}"
+    )
+    if require_nonempty:
+        assert actions, "valid_actions must be non-empty for an active buy"
+    return actions
 
 
 def _get_response_field(resp: object, field: str) -> object:

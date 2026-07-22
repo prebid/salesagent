@@ -5,9 +5,9 @@ T-UC-003-boundary-revision) grade ``INVALID_REQUEST`` per the generated
 storyboard, while production routes schema validation through the sanctioned
 ``adcp_validation_boundary`` — which emits ``VALIDATION_ERROR``. Those outlines
 therefore stay xfailed until the storyboard is reconciled (see
-tests/bdd/conftest.py, tracked in #1582), which would leave the changed,
-buyer-visible emission UNGRADED on the wire: reverting the boundary emission
-would keep every wired scenario green.
+tests/bdd/conftest.py; graduation tracked in #1694), which would leave the
+changed, buyer-visible emission UNGRADED on the wire: reverting the boundary
+emission would keep every wired scenario green.
 
 These tests are that grade. They pin the real wire envelope per transport via
 the harness (``result.wire_error_envelope`` + ``assert_envelope_shape``):
@@ -22,9 +22,11 @@ the harness (``result.wire_error_envelope`` + ``assert_envelope_shape``):
   the buyer contract is uniform in-process; on REST, FastAPI's typed body model
   (``revision: int | None``, src/routes/api_v1.py) rejects it during body
   parsing BEFORE the shared boundary -> ``INVALID_REQUEST``. That per-transport
-  wire-code split is the documented deliberate deviation tracked in #1582 —
-  this test pins it AS documented, so an unplanned convergence (or a new
-  divergence) goes red instead of drifting silently.
+  wire-code split is a documented deliberate deviation (in-code at
+  src/routes/api_v1.py; the cross-transport classification policy that would
+  resolve it is tracked in #1604) — this test pins it AS documented, so an
+  unplanned convergence (or a new divergence) goes red instead of drifting
+  silently.
 """
 
 from __future__ import annotations
@@ -41,18 +43,11 @@ _WIRE_TRANSPORTS = [Transport.A2A, Transport.MCP, Transport.REST]
 
 
 class TestUpdateRevisionValidationWire:
-    """Schema-invalid ``revision`` values must emit the documented wire codes."""
+    """Schema-invalid ``revision`` values must emit the documented wire codes.
 
-    @pytest.fixture
-    def env_with_media_buy(self, integration_db):
-        from tests.bdd.conftest import _setup_existing_media_buy
-        from tests.harness.media_buy_dual import MediaBuyDualEnv
-
-        with MediaBuyDualEnv() as env:
-            tenant, principal, product, _ = env.setup_media_buy_data()
-            ctx: dict = {}
-            _setup_existing_media_buy(ctx, env, tenant, principal, product)
-            yield env, ctx["existing_media_buy"]
+    Uses the shared ``env_with_media_buy`` fixture (tests/integration/conftest.py)
+    — the single home for the dual-env + seeded-buy setup.
+    """
 
     @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS, ids=lambda t: t.value)
     def test_below_min_revision_emits_validation_error_on_every_transport(self, env_with_media_buy, transport):
@@ -80,8 +75,9 @@ class TestUpdateRevisionValidationWire:
     def test_wrong_type_revision_on_rest_emits_invalid_request(self, env_with_media_buy):
         """On REST the typed body model rejects a non-integer revision during body
         parsing, before the shared boundary -> INVALID_REQUEST (documented
-        per-transport divergence, #1582). Pinned as documented: if REST converges
-        onto VALIDATION_ERROR (or diverges further), this goes red."""
+        per-transport divergence; classification policy tracked in #1604).
+        Pinned as documented: if REST converges onto VALIDATION_ERROR (or
+        diverges further), this goes red."""
         env, media_buy = env_with_media_buy
         result = env.call_via(Transport.REST, media_buy_id=media_buy.media_buy_id, paused=True, revision="not-an-int")
 
