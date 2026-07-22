@@ -26,7 +26,7 @@ from src.core.exceptions import (
 )
 from src.core.schemas import GetMediaBuyDeliveryResponse
 from tests.harness.delivery_poll import mock_send_notification
-from tests.helpers.delivery_assertions import assert_omits_webhook_only_fields
+from tests.helpers.delivery_assertions import assert_next_expected_at_shape, assert_omits_webhook_only_fields
 from tests.helpers.delivery_fixtures import DAILY_REPORTING_WEBHOOK, flight_window
 
 # ---------------------------------------------------------------------------
@@ -110,12 +110,17 @@ def _race_two_workers(worker: Any) -> list[bool]:
         finally:
             session.close()
 
-    threads = [threading.Thread(target=_run, args=(i,)) for i in range(2)]
+    threads = [threading.Thread(target=_run, args=(i,), daemon=True) for i in range(2)]
     for t in threads:
         t.start()
     for t in threads:
         t.join(timeout=10)
 
+    # A worker that never returns must FAIL, not be read as a lost race: without this a
+    # deadlock (the exact hazard these tests exist to catch) leaves results=[False, False]
+    # / a stale call_count and every downstream assertion still passes. daemon=True above
+    # keeps a hung thread from wedging the interpreter at exit.
+    assert not [t for t in threads if t.is_alive()], "worker thread(s) did not finish within the 10s join timeout"
     assert not errors, f"worker thread(s) raised: {errors}"
     return results
 
@@ -769,14 +774,10 @@ class TestWebhookNextExpectedAt:
             wire = await env.send_delivery_webhook(buy)
 
             assert wire["result"]["notification_type"] == "scheduled"
-            # Assert the date-time SHAPE, not mere presence (matches the BDD sibling
-            # _assert_next_expected_presence): a date-only or empty-string regression
-            # would slip past `is not None` but reddens fromisoformat + the "T" check.
-            next_expected = wire["result"]["next_expected_at"]
-            assert isinstance(next_expected, str) and "T" in next_expected, (
-                f"next_expected_at must be an ISO-8601 date-time string, got {next_expected!r}"
-            )
-            datetime.fromisoformat(next_expected)  # raises if not a parseable timestamp
+            # Shape, not mere presence — via the shared rule so this cannot drift from
+            # the BDD/e2e graders (a date-only or empty-string regression slips past
+            # `is not None`).
+            assert_next_expected_at_shape(wire["result"], present=True, context="scheduled webhook wire")
 
             response = env.call_impl(media_buy_ids=[buy.media_buy_id])
             assert response.next_expected_at is None

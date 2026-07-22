@@ -1607,31 +1607,12 @@ def _assert_next_expected_presence(payload: dict, phrase: str, *, context: str) 
     the real-scheduler-path step (scheduler wire ``result``) — the two differ only in
     where the payload comes from, never in the rule.
     """
-    has_key = "next_expected_at" in payload
-    if "should not" in phrase:
-        assert not has_key, (
-            f"{context}: expected 'next_expected_at' absent for a final notification, "
-            f"got {payload.get('next_expected_at')!r} (explicit null is non-conforming)"
-        )
-    else:
-        assert has_key, (
-            f"{context}: a non-final notification must include 'next_expected_at'; keys={list(payload.keys())}"
-        )
-        # The schema types it a non-nullable date-time — present-but-null,
-        # date-only, or non-timestamp values are equally non-conforming.
-        from datetime import datetime
+    # This step owns only the Gherkin phrase -> boolean translation; the RULE itself
+    # lives once in tests/helpers/delivery_assertions.py so the BDD, integration and
+    # e2e graders cannot drift apart (CLAUDE.md DRY invariant).
+    from tests.helpers.delivery_assertions import assert_next_expected_at_shape
 
-        value = payload["next_expected_at"]
-        assert isinstance(value, str) and value, (
-            f"{context}: next_expected_at must be a date-time string, got {value!r}"
-        )
-        assert "T" in value, (
-            f"{context}: next_expected_at must be a full date-time (schema format 'date-time'), got date-only {value!r}"
-        )
-        try:
-            datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            raise AssertionError(f"{context}: next_expected_at is not a parseable date-time: {value!r}") from None
+    assert_next_expected_at_shape(payload, present="should not" not in phrase, context=context)
 
 
 @then(parsers.re(r"the payload (?P<next_expected>.+) include next_expected_at"))

@@ -119,13 +119,18 @@ def force_complete_media_buy_in_db(live_server: dict, media_buy_id: str):
     inside the completed-selection recency horizon. Fails loud if the buy is absent.
     """
     from src.core.database.models import MediaBuy
+    from src.core.tools._media_buy_status import COMPLETED_PERSISTED_STATUSES
+
+    # Derived, not a re-typed "completed": this must stay the same persisted status the
+    # delivery scheduler's completed arm selects, or the FINAL webhook is never sent.
+    (completed_status,) = sorted(COMPLETED_PERSISTED_STATUSES)
 
     with live_db_env(live_server) as env:
         session = env.get_session()
         buy = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
         if buy is None:
             raise RuntimeError(f"media buy {media_buy_id!r} not found in the live e2e DB")
-        buy.status = "completed"
+        buy.status = completed_status
         session.commit()
 
 

@@ -3,12 +3,22 @@
 Single source of truth for schema-shape assertions in tests (e.g. the BDD step
 "the response should be schema-valid against <file>"). Reads the committed
 fixtures under ``tests/fixtures/adcp_schemas_pinned/``, pinned at
-adcontextprotocol/adcp@04f59d2d5 (tag ``v3.1-04f59d2d5``). This SHA predates the
-``v3.1.1`` release tag but its schema CONTENT is verified equal to the released
-``dist/schemas/3.1.1/...`` (the spec version the repo targets, adcp==6.6.0), so
-validations here are against current-3.1.1 content — see the content note in
-``tests/fixtures/adcp_schemas_pinned/_refresh.py``. It never fetches the network —
-``/schemas/latest`` drifts and would make tests non-deterministic.
+adcontextprotocol/adcp@04f59d2d5 (tag ``v3.1-04f59d2d5``).
+
+**This tree PREDATES the ``v3.1.1`` release the repo targets (adcp==6.6.0) and is
+NOT equivalent to it — a pass here is NOT a 3.1.1 conformance pass.** Verified
+2026-07-22 against the released schemas: 70 of the 244 vendored files differ from
+``dist/schemas/3.1.1/``, including ``enums/error-code.json`` (missing 15+ released
+codes) and every ``media-buy/*`` file. ``get-media-buy-delivery-response.json``
+specifically lacks the ``media_buy_deliveries[]`` fields ``is_final`` /
+``finalized_at`` / ``windows`` and the ``core/protocol-envelope.json`` ``allOf``
+member. What IS byte-identical to v3.1.1 — and all that schema-grounded oracles may
+rely on — is that file's top-level property names, descriptions and ``required``,
+plus the ``media_buy_deliveries[].status`` enum. Re-pinning to ``v3.1.1`` is tracked
+separately (the error-code additions ripple into the error-enum conformance guards).
+
+It never fetches the network — ``/schemas/latest`` drifts and would make tests
+non-deterministic.
 
 ``$ref`` resolution (e.g. ``/schemas/core/format-id.json``) is wired through a
 ``referencing.Registry`` retrieve callback that loads each referenced schema from

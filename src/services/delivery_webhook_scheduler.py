@@ -29,6 +29,7 @@ from src.core.helpers import enum_value
 from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse
 from src.core.tools._media_buy_status import (
     CANONICAL_COMPLETED,
+    COMPLETED_PERSISTED_STATUSES,
     REPORTABLE_CANONICAL_STATUSES,
     SERVING_PERSISTED_STATUSES,
     derive_notification_type,
@@ -137,7 +138,7 @@ class DeliveryWebhookScheduler:
                 media_buys = MediaBuyRepository.get_reportable_for_delivery(
                     session,
                     serving_statuses=sorted(SERVING_PERSISTED_STATUSES),
-                    completed_status=CANONICAL_COMPLETED,
+                    completed_statuses=sorted(COMPLETED_PERSISTED_STATUSES),
                     completed_horizon=FINAL_WEBHOOK_COMPLETED_HORIZON,
                 )
 
@@ -399,16 +400,24 @@ class DeliveryWebhookScheduler:
         delivery_response = _get_media_buy_delivery_impl(req, identity)
 
         if not isinstance(delivery_response, GetMediaBuyDeliveryResponse):
+            # %r, not %s: this branch proved the object is NOT the response model, so its
+            # type is unknown (dict/None/other) — repr is unambiguous where a __str__
+            # summary would not be. (Never .model_dump() here: that AttributeErrors on a
+            # non-model and would raise from inside the error path.)
             logger.warning(
-                "`Couldn't get media_delivery` for %s. Result is %s", media_buy.media_buy_id, delivery_response
+                "`Couldn't get media_delivery` for %s. Result is %r", media_buy.media_buy_id, delivery_response
             )
             return False
 
         if delivery_response.errors is not None:
+            # Log the ERRORS, not the response: GetMediaBuyDeliveryResponse.__str__ is a
+            # human-readable envelope summary ("No delivery data found for the specified
+            # period."), so "%s" of the model renders a success-shaped sentence with the
+            # error payload absent — the one diagnostic this branch exists to emit.
             logger.warning(
-                "`Couldn't get media_delivery` for %s. We received an error in the result. Result is %s",
+                "`Couldn't get media_delivery` for %s. We received an error in the result. errors=%s",
                 media_buy.media_buy_id,
-                delivery_response,
+                delivery_response.errors,
             )
             return False
 

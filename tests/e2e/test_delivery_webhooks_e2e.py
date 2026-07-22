@@ -30,6 +30,7 @@ from tests.e2e.utils import (
     set_live_adapter_behavior,
     wait_for_server_readiness,
 )
+from tests.helpers.delivery_assertions import assert_next_expected_at_shape
 
 
 class DeliveryWebhookReceiver(WebhookCaptureHandler):
@@ -230,11 +231,19 @@ class TestDailyDeliveryWebhookFlow:
                 assert result.get("notification_type") == "scheduled", (
                     f"Expected notification_type 'scheduled', got {result.get('notification_type')}"
                 )
-                assert "next_expected_at" in result, "Missing next_expected_at in result"
+                # Shared rule (shape, not mere presence) so the e2e wire grader cannot
+                # drift from the BDD/integration ones.
+                assert_next_expected_at_shape(result, present=True, context="scheduled webhook (real e2e wire)")
                 # partial_data is on the wire (hardcoded False today) — pin it so a future
                 # partial-data change can't silently put a spec-divergent shape on the webhook.
                 assert result.get("partial_data") is False, (
                     f"Expected partial_data False on the scheduled webhook, got {result.get('partial_data')!r}"
+                )
+                # Schema pairs the two: unavailable_count is "only present ... when
+                # partial_data is true", so with partial_data False it must be absent.
+                assert "unavailable_count" not in result, (
+                    f"unavailable_count must be absent when partial_data is False, "
+                    f"got {result.get('unavailable_count')!r}"
                 )
 
             # 6. Final webhook on completion — grade the `final` derivation on the REAL wire.
@@ -264,7 +273,4 @@ class TestDailyDeliveryWebhookFlow:
             )
             assert final_webhook.get("task_id") == media_buy_id
             final_result = final_webhook.get("result") or {}
-            assert "next_expected_at" not in final_result, (
-                "AdCP 3.1.1: next_expected_at must be OMITTED for a final notification; "
-                f"got {final_result.get('next_expected_at')!r} on the real webhook wire"
-            )
+            assert_next_expected_at_shape(final_result, present=False, context="final webhook (real e2e wire)")

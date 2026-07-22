@@ -187,14 +187,21 @@ REPORTABLE_CANONICAL_STATUSES: frozenset[str] = frozenset({CANONICAL_SERVING, CA
 # a best-effort basis by DeliveryRepository.has_successful_final (a true
 # exactly-once final under concurrency/crash needs the outbox tracked in #1606).
 #
-# Consumer note: this constant is now referenced only by the test suite — the
-# scheduler selects SERVING_PERSISTED_STATUSES and relies on the exact-set
-# relation REPORTABLE == SERVING | {"completed"} being pinned (see
-# test_media_buy_status_consistency.py). Keep it: deleting it as "unused" would
-# silently unpin the relation the scheduler's serving-substitution depends on.
 REPORTABLE_PERSISTED_STATUSES: frozenset[str] = frozenset(
     k for k, v in PERSISTED_STATUS_TO_CANONICAL.items() if v in REPORTABLE_CANONICAL_STATUSES
 )
+
+# The reportable-but-not-serving remainder: the PERSISTED status(es) a buy carries once
+# its flight has ended. The delivery scheduler passes BOTH halves of REPORTABLE into
+# MediaBuyRepository.get_reportable_for_delivery, so the entire selection derives from
+# PERSISTED_STATUS_TO_CANONICAL and neither arm can drift a partial copy (#1556).
+#
+# PERSISTED, not canonical: the query filters MediaBuy.status, which holds a map KEY.
+# CANONICAL_COMPLETED is a map VALUE (the wire status, pinned to the SDK enum). The two
+# read as "completed" today only because the map has an identity row for it — filtering
+# the column by the canonical constant would silently select nothing the day a persisted
+# key is renamed. Membership is pinned in test_media_buy_status_consistency.py.
+COMPLETED_PERSISTED_STATUSES: frozenset[str] = REPORTABLE_PERSISTED_STATUSES - SERVING_PERSISTED_STATUSES
 
 # The FIVE webhook-only response fields — every field whose schema description
 # says "only present in webhook deliveries" (get-media-buy-delivery-response.json

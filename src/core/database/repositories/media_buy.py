@@ -654,10 +654,20 @@ class MediaBuyRepository:
         session: Session,
         *,
         serving_statuses: list[str],
-        completed_status: str,
+        completed_statuses: list[str],
         completed_horizon: datetime.timedelta,
     ) -> list[MediaBuy]:
         """Select the delivery webhook batch's buys: serving (unbounded) + recent ``completed``.
+
+        Args:
+            serving_statuses: PERSISTED statuses (``PERSISTED_STATUS_TO_CANONICAL`` keys)
+                that mean "still serving" — selected unbounded.
+            completed_statuses: PERSISTED statuses that mean "flight ended"
+                (``COMPLETED_PERSISTED_STATUSES``) — selected only within
+                ``completed_horizon``. Both arms take the persisted vocabulary because
+                ``MediaBuy.status`` stores a map key, never a canonical/wire value.
+            completed_horizon: how far back an already-``completed`` buy stays selectable,
+                measured on ``updated_at``.
 
         System-level cross-tenant query for the delivery webhook scheduler ONLY (the
         status scheduler keeps the unbounded ``get_all_by_statuses`` — its selection
@@ -685,12 +695,12 @@ class MediaBuyRepository:
                 select(MediaBuy).where(
                     or_(
                         MediaBuy.status.in_(serving_statuses),
-                        # ``completed_status`` is the caller's ``CANONICAL_COMPLETED`` — passed
-                        # in (not hardcoded) so renaming the persisted "completed" value
-                        # propagates here instead of leaving a stale literal. The exact-set
-                        # relation REPORTABLE == SERVING | {completed_status} is pinned in
-                        # test_media_buy_status_consistency.py.
-                        and_(MediaBuy.status == completed_status, MediaBuy.updated_at >= cutoff),
+                        # Both arms take PERSISTED statuses (map keys — what MediaBuy.status
+                        # holds), derived by the caller from PERSISTED_STATUS_TO_CANONICAL, so
+                        # neither can drift a partial copy (#1556). Passing the CANONICAL
+                        # "completed" here would be a vocabulary error: it is a map VALUE and
+                        # would stop matching the day a persisted key is renamed.
+                        and_(MediaBuy.status.in_(completed_statuses), MediaBuy.updated_at >= cutoff),
                     )
                 )
             ).all()

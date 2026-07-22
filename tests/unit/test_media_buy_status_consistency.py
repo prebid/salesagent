@@ -19,6 +19,7 @@ from adcp.types import MediaBuyStatus
 
 from src.core.tools._media_buy_status import (
     CANONICAL_STATUSES,
+    COMPLETED_PERSISTED_STATUSES,
     LEGACY_SERVING_ALIASES,
     NO_MORE_DATA_STATUSES,
     PENDING_PERSISTED_STATUSES,
@@ -213,30 +214,63 @@ class TestCanonicalVocabularyPinnedToSdk:
             "unavailable_count",
         }
 
-    def test_webhook_only_fields_grounded_on_pinned_schema(self):
-        """Ground WEBHOOK_ONLY_FIELDS on the pinned schema, not just a re-typed literal.
+    def test_completed_persisted_statuses_is_the_reportable_remainder(self):
+        """Pin COMPLETED_PERSISTED_STATUSES — the delivery scheduler's completed arm.
 
-        The pin above documents the set; this derives it from the vendored
-        get-media-buy-delivery-response.json (the AdCP 3.1.1 delivery-response schema)
-        by selecting every response property whose description marks it
-        "only present in webhook deliveries", and asserts the constant equals it. Without
-        this, a hand-list that omits a field the spec newly marks webhook-only would sail
-        past every omission oracle (which all key on WEBHOOK_ONLY_FIELDS) — the exact
-        oracle-is-ungrounded gap. If AdCP adds/removes a webhook-only response field, this
-        reddens and forces the constant to track the schema.
+        The scheduler passes SERVING_PERSISTED_STATUSES and COMPLETED_PERSISTED_STATUSES
+        into get_reportable_for_delivery, so together they must reconstitute REPORTABLE
+        exactly — a drift in either arm silently changes which buys get a final webhook.
+        Pinned as a literal too, because a purely derived assertion would be a tautology.
         """
-        from tests.helpers.pinned_schema import load_pinned_schema
+        assert COMPLETED_PERSISTED_STATUSES == {"completed"}
+        assert SERVING_PERSISTED_STATUSES | COMPLETED_PERSISTED_STATUSES == REPORTABLE_PERSISTED_STATUSES
+        assert not (SERVING_PERSISTED_STATUSES & COMPLETED_PERSISTED_STATUSES), (
+            "the serving and completed arms must be disjoint or the batch double-selects"
+        )
+        # Persisted vocabulary, not canonical: these are PERSISTED_STATUS_TO_CANONICAL keys.
+        assert COMPLETED_PERSISTED_STATUSES <= set(PERSISTED_STATUS_TO_CANONICAL)
 
-        schema = load_pinned_schema("get-media-buy-delivery-response.json")
+    def test_webhook_only_fields_grounded_on_the_pinned_sdk(self):
+        """Ground WEBHOOK_ONLY_FIELDS on the PINNED SDK's schema, not a re-typed literal.
+
+        The pin above documents the set; this derives it from
+        ``adcp.types.GetMediaBuyDeliveryResponse`` — whose field descriptions are
+        code-generated verbatim from the spec schema — and asserts the constant equals
+        it. Without this, a hand-list that omits a field the schema marks webhook-only
+        would sail past every omission oracle (they all key on WEBHOOK_ONLY_FIELDS).
+
+        Why the SDK and not ``tests/fixtures/adcp_schemas_pinned/``: that fixture tree is
+        frozen at 04f59d2d5 and PREDATES the targeted 3.1.1 (see pinned_schema.py), so a
+        fixture-derived oracle is blind to exactly the staleness it appears to rule out.
+        The SDK moves with the ``adcp==`` pin, which ``test_adcp_spec_version.py`` guards.
+
+        Scope of the guarantee (stated precisely, per charter §12): this reddens when the
+        pinned SDK's marked set changes — i.e. on an ``adcp`` bump. It does NOT observe
+        upstream AdCP releases before that bump; nothing in this repo fetches the spec.
+        """
+        from adcp.types import GetMediaBuyDeliveryResponse, MediaBuyDeliveryWebhookResult
+
+        descriptions = {name: (f.description or "") for name, f in GetMediaBuyDeliveryResponse.model_fields.items()}
+        # Deliberately loose ("only" + "webhook deliver") rather than one exact sentence:
+        # a paraphrase of the marker must not silently drop a field from the derived set.
         derived = {
-            name
-            for name, prop in schema.get("properties", {}).items()
-            if "only present in webhook deliveries" in (prop.get("description") or "")
+            name for name, desc in descriptions.items() if "only" in desc.lower() and "webhook deliver" in desc.lower()
         }
-        assert derived, "the pinned schema marks no field webhook-only — the derivation matcher is stale"
+        assert derived, "the pinned SDK marks no field webhook-only — the derivation matcher is stale"
         assert WEBHOOK_ONLY_FIELDS == derived, (
-            "WEBHOOK_ONLY_FIELDS drifted from the pinned get-media-buy-delivery-response.json "
-            f"'only present in webhook deliveries' set — constant={set(WEBHOOK_ONLY_FIELDS)} schema={derived}"
+            "WEBHOOK_ONLY_FIELDS drifted from the pinned SDK's webhook-only set — "
+            f"constant={set(WEBHOOK_ONLY_FIELDS)} sdk={derived}"
+        )
+
+        # Structural complement to the description matcher: the spec ships a dedicated
+        # webhook payload type, and aggregated_totals is the polling-only field the
+        # webhook body must exclude. This holds even if every description is reworded.
+        polling_only = set(GetMediaBuyDeliveryResponse.model_fields) - set(MediaBuyDeliveryWebhookResult.model_fields)
+        assert "aggregated_totals" in polling_only, (
+            f"aggregated_totals must be absent from the webhook payload type — polling_only={sorted(polling_only)}"
+        )
+        assert not (WEBHOOK_ONLY_FIELDS & polling_only), (
+            f"a webhook-only field cannot also be polling-only — overlap={sorted(WEBHOOK_ONLY_FIELDS & polling_only)}"
         )
 
 
