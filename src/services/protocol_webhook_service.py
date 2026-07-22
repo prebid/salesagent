@@ -33,6 +33,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.lifecycle import register_shutdown
+from src.core.log_safety import redact_push_notification_config
 
 logger = logging.getLogger(__name__)
 
@@ -166,8 +167,6 @@ class ProtocolWebhookService:
         headers = {"Content-Type": "application/json", "User-Agent": "AdCP-Sales-Agent/1.0"}
 
         # Single redaction path (#1617) — the authentication credential is never logged.
-        from src.core.log_safety import redact_push_notification_config
-
         logger.info(
             "push_notification_config (sanitized): %s",
             redact_push_notification_config(push_notification_config),
