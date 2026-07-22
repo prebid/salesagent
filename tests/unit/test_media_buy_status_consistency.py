@@ -213,6 +213,32 @@ class TestCanonicalVocabularyPinnedToSdk:
             "unavailable_count",
         }
 
+    def test_webhook_only_fields_grounded_on_pinned_schema(self):
+        """Ground WEBHOOK_ONLY_FIELDS on the pinned schema, not just a re-typed literal.
+
+        The pin above documents the set; this derives it from the vendored
+        get-media-buy-delivery-response.json (the AdCP 3.1.1 delivery-response schema)
+        by selecting every response property whose description marks it
+        "only present in webhook deliveries", and asserts the constant equals it. Without
+        this, a hand-list that omits a field the spec newly marks webhook-only would sail
+        past every omission oracle (which all key on WEBHOOK_ONLY_FIELDS) — the exact
+        oracle-is-ungrounded gap. If AdCP adds/removes a webhook-only response field, this
+        reddens and forces the constant to track the schema.
+        """
+        from tests.helpers.pinned_schema import load_pinned_schema
+
+        schema = load_pinned_schema("get-media-buy-delivery-response.json")
+        derived = {
+            name
+            for name, prop in schema.get("properties", {}).items()
+            if "only present in webhook deliveries" in (prop.get("description") or "")
+        }
+        assert derived, "the pinned schema marks no field webhook-only — the derivation matcher is stale"
+        assert WEBHOOK_ONLY_FIELDS == derived, (
+            "WEBHOOK_ONLY_FIELDS drifted from the pinned get-media-buy-delivery-response.json "
+            f"'only present in webhook deliveries' set — constant={set(WEBHOOK_ONLY_FIELDS)} schema={derived}"
+        )
+
 
 class TestAdcpProjectionAgreesWithCanonicalMap:
     """The update-response lifecycle projection stays in lockstep with the canonical map.

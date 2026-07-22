@@ -332,13 +332,14 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   # ABOVE the tag line so the compiler classifies it LEGACY-PRESERVE).
   @T-UC-004-poll-omits-webhook-fields @main-flow @polling @v3-1 @invariant @BR-RULE-029 @hand-edited
   Scenario: Synchronous poll omits the webhook-only fields
-    # #1570: notification_type / sequence_number / next_expected_at are "only
-    # present in webhook deliveries" — the synchronous poll must omit all three,
-    # on every transport.
+    # #1570: the webhook-only fields (notification_type, sequence_number,
+    # next_expected_at, partial_data, unavailable_count) are "only present in
+    # webhook deliveries" — the synchronous poll must omit them all, on every
+    # transport. The step enforces the full WEBHOOK_ONLY_FIELDS set.
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
-    Then the response omits notification_type, sequence_number, and next_expected_at
+    Then the response omits the webhook-only fields
 
   @T-UC-004-webhook-retry-5xx @async @extension @ext-g @webhook-reliability @invariant @BR-RULE-029 @nfr @nfr-005
   Scenario: Webhook delivery retries on 5xx response

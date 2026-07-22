@@ -137,6 +137,7 @@ class DeliveryWebhookScheduler:
                 media_buys = MediaBuyRepository.get_reportable_for_delivery(
                     session,
                     serving_statuses=sorted(SERVING_PERSISTED_STATUSES),
+                    completed_status=CANONICAL_COMPLETED,
                     completed_horizon=FINAL_WEBHOOK_COMPLETED_HORIZON,
                 )
 
@@ -260,7 +261,7 @@ class DeliveryWebhookScheduler:
         crashed worker's claim self-heals). Runs on the caller's ``session`` and
         COMMITS it so the claim is immediately visible to a racing worker (whose
         UPDATE then matches 0 rows and loses). The returned token is passed to
-        _release_final_claim on a definitive failure/no-send so the claim doesn't
+        _release_final_webhook_claim on a definitive failure/no-send so the claim doesn't
         block an immediate retry for the whole lease. Does NOT close the
         crash-after-POST window — #1606.
         """
@@ -271,7 +272,7 @@ class DeliveryWebhookScheduler:
         session.commit()
         return now if won else None
 
-    def _release_final_claim(self, session: Session, media_buy: MediaBuy, claimed_at: datetime) -> None:
+    def _release_final_webhook_claim(self, session: Session, media_buy: MediaBuy, claimed_at: datetime) -> None:
         """Best-effort release of THIS worker's final claim after a definitive
         failure/no-send, so an immediate retry isn't blocked for the whole lease.
 
@@ -399,13 +400,15 @@ class DeliveryWebhookScheduler:
 
         if not isinstance(delivery_response, GetMediaBuyDeliveryResponse):
             logger.warning(
-                f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. Result is {delivery_response.model_dump()}"
+                "`Couldn't get media_delivery` for %s. Result is %s", media_buy.media_buy_id, delivery_response
             )
             return False
 
         if delivery_response.errors is not None:
             logger.warning(
-                f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. We received an error in the result. Result is {delivery_response.model_dump()}"
+                "`Couldn't get media_delivery` for %s. We received an error in the result. Result is %s",
+                media_buy.media_buy_id,
+                delivery_response,
             )
             return False
 
@@ -458,7 +461,7 @@ class DeliveryWebhookScheduler:
         # Extract webhook URL and authentication
         webhook_url = reporting_webhook.get("url")
         if not webhook_url:
-            logger.warning(f"No webhook URL configured for media buy {media_buy.media_buy_id}")
+            logger.warning("No webhook URL configured for media buy %s", media_buy.media_buy_id)
             return False
 
         # Try to find existing push notification config or create a temporary one
@@ -557,10 +560,10 @@ class DeliveryWebhookScheduler:
             # immediate retry isn't blocked for the lease. Lease recovery still
             # covers an actual crash (where this release never runs).
             if claim_token is not None:
-                self._release_final_claim(session, media_buy, claim_token)
+                self._release_final_webhook_claim(session, media_buy, claim_token)
             raise
 
-        logger.info(f"Sent delivery report webhook for media buy {media_buy.media_buy_id}")
+        logger.info("Sent delivery report webhook for media buy %s", media_buy.media_buy_id)
         return True
 
 

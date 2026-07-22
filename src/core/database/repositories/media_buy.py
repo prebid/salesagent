@@ -651,7 +651,11 @@ class MediaBuyRepository:
 
     @staticmethod
     def get_reportable_for_delivery(
-        session: Session, *, serving_statuses: list[str], completed_horizon: datetime.timedelta
+        session: Session,
+        *,
+        serving_statuses: list[str],
+        completed_status: str,
+        completed_horizon: datetime.timedelta,
     ) -> list[MediaBuy]:
         """Select the delivery webhook batch's buys: serving (unbounded) + recent ``completed``.
 
@@ -681,10 +685,12 @@ class MediaBuyRepository:
                 select(MediaBuy).where(
                     or_(
                         MediaBuy.status.in_(serving_statuses),
-                        # "completed" mirrors the persisted status the status scheduler
-                        # writes; the exact-set relation REPORTABLE == SERVING | {"completed"}
-                        # is pinned in test_media_buy_status_consistency.py.
-                        and_(MediaBuy.status == "completed", MediaBuy.updated_at >= cutoff),
+                        # ``completed_status`` is the caller's ``CANONICAL_COMPLETED`` — passed
+                        # in (not hardcoded) so renaming the persisted "completed" value
+                        # propagates here instead of leaving a stale literal. The exact-set
+                        # relation REPORTABLE == SERVING | {completed_status} is pinned in
+                        # test_media_buy_status_consistency.py.
+                        and_(MediaBuy.status == completed_status, MediaBuy.updated_at >= cutoff),
                     )
                 )
             ).all()

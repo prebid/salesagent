@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.core.schemas import AdapterGetMediaBuyDeliveryResponse, GetMediaBuyDeliveryResponse
 from tests.harness._base import IntegrationEnv
@@ -55,6 +55,25 @@ def mock_webhook_post(scheduler: Any):
     mock_response.raise_for_status.return_value = None
     with patch.object(scheduler.webhook_service._session, "post", return_value=mock_response) as mock_post:
         yield mock_post
+
+
+@contextmanager
+def mock_send_notification(scheduler: Any, *, delivered: bool = True):
+    """Stub a scheduler's ``webhook_service.send_notification`` with a fixed outcome.
+
+    Single source of truth for the mocked-``send_notification`` shape the claim/dedup
+    integration tests need (CLAUDE.md DRY invariant — they were each hand-rolling the
+    identical ``patch.object(..., new_callable=AsyncMock, return_value=<bool>)``). This
+    is one seam ABOVE ``mock_webhook_post``: it short-circuits the whole send (payload
+    build, POST, delivery-log write) with a boolean, where ``delivered=False`` models a
+    permanent failure that makes ``_deliver_report`` raise ``RuntimeError``.
+
+    Yields the ``AsyncMock`` so callers keep ``await_count`` / ``assert_not_awaited()``.
+    """
+    with patch.object(
+        scheduler.webhook_service, "send_notification", new_callable=AsyncMock, return_value=delivered
+    ) as mock_send:
+        yield mock_send
 
 
 class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):

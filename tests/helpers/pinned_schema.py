@@ -3,8 +3,12 @@
 Single source of truth for schema-shape assertions in tests (e.g. the BDD step
 "the response should be schema-valid against <file>"). Reads the committed
 fixtures under ``tests/fixtures/adcp_schemas_pinned/``, pinned at
-adcontextprotocol/adcp@04f59d2d5 (tag ``v3.1-04f59d2d5``). It never fetches the
-network — ``/schemas/latest`` drifts and would make tests non-deterministic.
+adcontextprotocol/adcp@04f59d2d5 (tag ``v3.1-04f59d2d5``). This SHA predates the
+``v3.1.1`` release tag but its schema CONTENT is verified equal to the released
+``dist/schemas/3.1.1/...`` (the spec version the repo targets, adcp==6.6.0), so
+validations here are against current-3.1.1 content — see the content note in
+``tests/fixtures/adcp_schemas_pinned/_refresh.py``. It never fetches the network —
+``/schemas/latest`` drifts and would make tests non-deterministic.
 
 ``$ref`` resolution (e.g. ``/schemas/core/format-id.json``) is wired through a
 ``referencing.Registry`` retrieve callback that loads each referenced schema from
@@ -57,12 +61,23 @@ def _retrieve(uri: str) -> referencing.Resource:
     return DRAFT7.create_resource(_load_by_ref(uri))
 
 
+def load_pinned_schema(filename: str) -> dict[str, Any]:
+    """Load a pinned AdCP schema dict by bare filename (offline, from the vendored tree).
+
+    The read-only companion to ``validate_against_pinned_schema`` — lets a test read the
+    schema's own field metadata (e.g. which properties are marked "only present in webhook
+    deliveries") so a hand-maintained constant can be grounded against the spec rather than
+    re-typed. A missing schema is a HARD FAILURE (see ``_resolve_filename``), never a skip.
+    """
+    return json.loads(_resolve_filename(filename).read_text())
+
+
 def validate_against_pinned_schema(filename: str, data: Any) -> None:
     """Assert *data* is schema-valid against the pinned AdCP schema *filename*.
 
     Raises ``AssertionError`` listing every JSON-path violation on failure.
     """
-    schema = json.loads(_resolve_filename(filename).read_text())
+    schema = load_pinned_schema(filename)
     registry: referencing.Registry = referencing.Registry(retrieve=_retrieve)
     root_id = schema.get("$id")
     if root_id:

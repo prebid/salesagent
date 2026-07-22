@@ -25,6 +25,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.schemas import GetMediaBuyDeliveryResponse
+from tests.harness.delivery_poll import mock_send_notification
 from tests.helpers.delivery_assertions import assert_omits_webhook_only_fields
 from tests.helpers.delivery_fixtures import DAILY_REPORTING_WEBHOOK, flight_window
 
@@ -76,6 +77,47 @@ def _serving_webhook_buy(
     buy = MediaBuyFactory(**kwargs)
     env.set_adapter_response(buy.media_buy_id, impressions=5000)
     return buy
+
+
+def _race_two_workers(worker: Any) -> list[bool]:
+    """Run ``worker(session, barrier)`` on two OS threads released together, return both bools.
+
+    Single source of truth for the two-connection contention scaffold the concurrent
+    claim/entrypoint tests share (CLAUDE.md DRY invariant — each was re-implementing the
+    same ``threading.Barrier(2)`` + per-thread ``Session(bind=get_engine())`` + join-with-
+    timeout + exception-surfacing). The barrier is passed INTO the worker so each test
+    keeps its own release point (claim-after-release vs load-then-race-the-send). Owns the
+    session lifecycle and asserts no worker raised; callers supply a one-line worker plus
+    the shared ``assert sorted(results) == [False, True]``.
+    """
+    import threading
+
+    from sqlalchemy.orm import Session
+
+    from src.core.database.database_session import get_engine
+
+    engine = get_engine()
+    barrier = threading.Barrier(2)
+    results: list[bool] = [False, False]
+    errors: list[BaseException] = []
+
+    def _run(index: int) -> None:
+        session = Session(bind=engine)
+        try:
+            results[index] = worker(session, barrier)
+        except BaseException as exc:  # noqa: BLE001 - surfaced via `errors` for the assertion below
+            errors.append(exc)
+        finally:
+            session.close()
+
+    threads = [threading.Thread(target=_run, args=(i,)) for i in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert not errors, f"worker thread(s) raised: {errors}"
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -298,8 +340,6 @@ class TestForceDoesNotDuplicateDeliveredFinal:
 
     @pytest.mark.asyncio
     async def test_manual_force_trigger_skips_when_final_already_delivered(self, integration_db):
-        from unittest.mock import AsyncMock, patch
-
         from src.core.database.repositories.delivery import DeliveryRepository
         from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
         from tests.harness import DeliveryPollEnv
@@ -323,9 +363,7 @@ class TestForceDoesNotDuplicateDeliveredFinal:
 
             # Manual trigger uses force=True; the final-ever gate must still fire.
             scheduler = DeliveryWebhookScheduler()
-            with patch.object(
-                scheduler.webhook_service, "send_notification", new_callable=AsyncMock, return_value=True
-            ) as mock_send:
+            with mock_send_notification(scheduler, delivered=True) as mock_send:
                 delivered = await scheduler.trigger_report_for_media_buy_by_id(buy.media_buy_id, "t1")
 
             assert delivered is False, "a manual force trigger must not re-send an already-delivered final"
@@ -390,11 +428,6 @@ class TestConcurrentFinalWebhookClaim:
         regardless of which thread happens to arrive first; the property under test is
         that EXACTLY ONE thread ever wins, never zero and never two.
         """
-        import threading
-
-        from sqlalchemy.orm import Session
-
-        from src.core.database.database_session import get_engine
         from src.core.database.repositories.media_buy import MediaBuyRepository
         from tests.harness import DeliveryPollEnv
 
@@ -405,30 +438,14 @@ class TestConcurrentFinalWebhookClaim:
 
             now = datetime.now(UTC)
             cutoff = now - timedelta(minutes=15)
-            engine = get_engine()
-            barrier = threading.Barrier(2)
-            results: list[bool] = [False, False]
-            errors: list[BaseException] = []
 
-            def worker(index: int) -> None:
-                session = Session(bind=engine)
-                try:
-                    barrier.wait(timeout=5)  # release both threads together
-                    won = MediaBuyRepository(session, "t1").try_claim_final_webhook(mb_id, now=now, stale_before=cutoff)
-                    session.commit()
-                    results[index] = won
-                except BaseException as exc:  # noqa: BLE001 - surfaced via `errors` for the assertion below
-                    errors.append(exc)
-                finally:
-                    session.close()
+            def worker(session: Any, barrier: Any) -> bool:
+                barrier.wait(timeout=5)  # release both threads together
+                won = MediaBuyRepository(session, "t1").try_claim_final_webhook(mb_id, now=now, stale_before=cutoff)
+                session.commit()
+                return won
 
-            threads = [threading.Thread(target=worker, args=(i,)) for i in range(2)]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join(timeout=10)
-
-            assert not errors, f"worker thread(s) raised: {errors}"
+            results = _race_two_workers(worker)
             assert sorted(results) == [False, True], (
                 f"exactly one of two genuinely concurrent threads must win the claim, got {results}"
             )
@@ -445,12 +462,7 @@ class TestConcurrentFinalWebhookClaim:
         webhook was sent exactly once and exactly one thread's call reports success.
         """
         import asyncio
-        import threading
-        from concurrent.futures import ThreadPoolExecutor
 
-        from sqlalchemy.orm import Session
-
-        from src.core.database.database_session import get_engine
         from src.core.database.repositories.media_buy import MediaBuyRepository
         from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
         from tests.harness import DeliveryPollEnv
@@ -463,23 +475,17 @@ class TestConcurrentFinalWebhookClaim:
             env.get_session().commit()  # ensure the buy is visible to other connections/threads
 
             scheduler = DeliveryWebhookScheduler()  # shared instance -> shared webhook_service
-            engine = get_engine()
-            barrier = threading.Barrier(2)
 
-            def worker() -> bool:
-                session = Session(bind=engine)
-                try:
-                    media_buy = MediaBuyRepository(session, "t1").get_by_id(mb_id)
-                    barrier.wait(timeout=5)  # release both threads together
-                    return asyncio.run(
-                        scheduler._send_report_for_media_buy(media_buy, reporting_webhook, session, force=True)
-                    )
-                finally:
-                    session.close()
+            def worker(session: Any, barrier: Any) -> bool:
+                # Load the row BEFORE the barrier so both threads race the SEND, not the fetch.
+                media_buy = MediaBuyRepository(session, "t1").get_by_id(mb_id)
+                barrier.wait(timeout=5)  # release both threads together
+                return asyncio.run(
+                    scheduler._send_report_for_media_buy(media_buy, reporting_webhook, session, force=True)
+                )
 
             with mock_webhook_post(scheduler) as mock_post:
-                with ThreadPoolExecutor(max_workers=2) as pool:
-                    results = [f.result(timeout=10) for f in [pool.submit(worker) for _ in range(2)]]
+                results = _race_two_workers(worker)
 
             assert mock_post.call_count == 1, (
                 f"two concurrent entrypoints racing the same buy must produce exactly one outbound "
@@ -531,8 +537,6 @@ class TestConcurrentFinalWebhookClaim:
         minutes: the claim is now released (token-guarded) on a failed POST, so
         ``final_webhook_claimed_at`` returns to NULL and an immediate re-claim succeeds.
         """
-        from unittest.mock import AsyncMock, patch
-
         from src.core.database.repositories.media_buy import MediaBuyRepository
         from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
         from tests.harness import DeliveryPollEnv
@@ -543,9 +547,7 @@ class TestConcurrentFinalWebhookClaim:
 
             scheduler = DeliveryWebhookScheduler()
             # The outbound send fails (returns False -> the scheduler raises).
-            with patch.object(
-                scheduler.webhook_service, "send_notification", new_callable=AsyncMock, return_value=False
-            ):
+            with mock_send_notification(scheduler, delivered=False):
                 with pytest.raises(RuntimeError, match="webhook send failed"):
                     await scheduler._send_report_for_media_buy(
                         buy, buy.raw_request["reporting_webhook"], env.get_session(), force=True
@@ -767,7 +769,14 @@ class TestWebhookNextExpectedAt:
             wire = await env.send_delivery_webhook(buy)
 
             assert wire["result"]["notification_type"] == "scheduled"
-            assert wire["result"]["next_expected_at"] is not None
+            # Assert the date-time SHAPE, not mere presence (matches the BDD sibling
+            # _assert_next_expected_presence): a date-only or empty-string regression
+            # would slip past `is not None` but reddens fromisoformat + the "T" check.
+            next_expected = wire["result"]["next_expected_at"]
+            assert isinstance(next_expected, str) and "T" in next_expected, (
+                f"next_expected_at must be an ISO-8601 date-time string, got {next_expected!r}"
+            )
+            datetime.fromisoformat(next_expected)  # raises if not a parseable timestamp
 
             response = env.call_impl(media_buy_ids=[buy.media_buy_id])
             assert response.next_expected_at is None
@@ -795,8 +804,6 @@ class TestFailedWebhookSendRaisesNotCountedAsSent:
     @pytest.mark.asyncio
     async def test_failed_send_raises_runtime_error(self, integration_db):
         """Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04"""
-        from unittest.mock import AsyncMock, patch
-
         from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
         from tests.harness import DeliveryPollEnv
 
@@ -807,9 +814,7 @@ class TestFailedWebhookSendRaisesNotCountedAsSent:
             # send_notification returns False (never raises) on permanent 4xx /
             # exhausted retries — the buyer never received the webhook, so the
             # scheduler must NOT log a "Sent"; it raises and the batch counts an error.
-            with patch.object(
-                scheduler.webhook_service, "send_notification", new_callable=AsyncMock, return_value=False
-            ):
+            with mock_send_notification(scheduler, delivered=False):
                 with pytest.raises(RuntimeError, match="webhook send failed"):
                     await scheduler._send_report_for_media_buy(
                         buy, buy.raw_request["reporting_webhook"], env.get_session(), force=True
@@ -834,8 +839,6 @@ class TestDedupSuppressesPriorFinalWebhook:
     @pytest.mark.asyncio
     async def test_prior_final_success_suppresses_next_non_forced_send(self, integration_db):
         """Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04"""
-        from unittest.mock import AsyncMock, patch
-
         from src.core.database.repositories.delivery import DeliveryRepository
         from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
         from tests.harness import DeliveryPollEnv
@@ -857,9 +860,7 @@ class TestDedupSuppressesPriorFinalWebhook:
             session.commit()
 
             scheduler = DeliveryWebhookScheduler()
-            with patch.object(
-                scheduler.webhook_service, "send_notification", new_callable=AsyncMock, return_value=True
-            ) as mock_send:
+            with mock_send_notification(scheduler, delivered=True) as mock_send:
                 delivered = await scheduler._send_report_for_media_buy(
                     buy, buy.raw_request["reporting_webhook"], session, force=False
                 )
@@ -943,8 +944,6 @@ class TestPausedBuyReceivesNoDeliveryWebhook:
     @pytest.mark.asyncio
     async def test_paused_buy_is_not_sent(self, integration_db):
         """Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04"""
-        from unittest.mock import AsyncMock, patch
-
         from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
@@ -967,9 +966,7 @@ class TestPausedBuyReceivesNoDeliveryWebhook:
             env.set_adapter_response(buy.media_buy_id, impressions=5000)
 
             scheduler = DeliveryWebhookScheduler()
-            with patch.object(
-                scheduler.webhook_service, "send_notification", new_callable=AsyncMock, return_value=True
-            ) as mock_send:
+            with mock_send_notification(scheduler, delivered=True) as mock_send:
                 await scheduler._send_reports()
 
             assert mock_send.await_count == 0, "a paused buy must not receive a delivery webhook"

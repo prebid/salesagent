@@ -1763,7 +1763,7 @@ def then_scheduler_next_expected(ctx: dict, next_expected: str) -> None:
     _assert_next_expected_presence(_scheduler_result(ctx), next_expected, context="scheduler wire result")
 
 
-@then("the response omits notification_type, sequence_number, and next_expected_at")
+@then("the response omits the webhook-only fields")
 def then_poll_omits_webhook_only_fields(ctx: dict) -> None:
     """Assert the synchronous poll's WIRE body carries none of the webhook-only fields.
 

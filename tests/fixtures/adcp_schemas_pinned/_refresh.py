@@ -9,6 +9,13 @@ upstream adcp repo ships constantly and `/schemas/latest` drifts; we deliberatel
 NOT track it. The commit is immutable on GitHub, so the schemas are vendored here
 (committed) — the alignment test reads them offline and never fetches `/schemas/latest`.
 
+Content note: this pin predates the `v3.1.1` release TAG, but its schema CONTENT is
+verified equal to the released `dist/schemas/3.1.1/...` (e.g. get-media-buy-delivery-
+response.json — field set + descriptions byte-identical), which is the spec version the
+repo targets (adcp==6.6.0 -> 3.1.1). So schema-grounded oracles reading these fixtures
+are grounded on current-3.1.1 content; the SHA is an intermediate label, not stale
+content. Re-pinning to the `v3.1.1` tag is a separate, reviewed refresh.
+
 Layout: schema `$id`/`$ref` namespace is `/schemas/<rest>`; each is written to
 `<this dir>/<rest>` (so `/schemas/core/account-ref.json` -> `core/account-ref.json`).
 
