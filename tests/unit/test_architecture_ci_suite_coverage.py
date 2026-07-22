@@ -158,12 +158,26 @@ class TestCISuiteCoverage:
 
     @pytest.mark.arch_guard
     def test_free_disk_action_requires_run_step_body(self):
-        """Tokens only in description with empty steps must not satisfy the reclaim contract."""
-        # Mutation-shaped fixture: description mentions reclaim tokens but steps are empty.
+        """Tokens only in description must not satisfy the reclaim contract.
+
+        Mutation-shaped fixture: description mentions reclaim tokens, and a
+        non-empty ``run`` step omits them — so the ≥1-step gate passes and the
+        reclaim-token asserts are what must fail (empty ``steps: []`` never
+        reaches those asserts).
+        """
         vacuous = {
             "name": "Free disk space",
             "description": "Reclaim /usr/share/dotnet and docker builder prune",
-            "runs": {"using": "composite", "steps": []},
+            "runs": {
+                "using": "composite",
+                "steps": [
+                    {
+                        "name": "noop",
+                        "run": "echo 'no reclaim tokens here'",
+                        "shell": "bash",
+                    }
+                ],
+            },
         }
         # Live helper must reject description-only contracts (MUT8 class).
         with pytest.raises(AssertionError):

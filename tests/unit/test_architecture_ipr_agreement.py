@@ -70,6 +70,9 @@ class TestIPRAgreementContract:
         assert _RETRY_SCRIPT in check_run and _RETRY_SCRIPT in sign_run, (
             f"both jobs must source {_RETRY_SCRIPT} (single gh_retry_to)"
         )
+        assert "ipr_fetch_sigs_and_commits" in check_run and "ipr_fetch_sigs_and_commits" in sign_run, (
+            "both jobs must call ipr_fetch_sigs_and_commits (shared sigs/commits fetch)"
+        )
 
         # CLA Assistant allowlist must reference the SSOT env, not a forked literal.
         sign_steps = jobs["ipr-sign"].get("steps") or []
@@ -100,6 +103,28 @@ class TestIPRAgreementContract:
                 assert not line.rstrip().endswith("|| true"), (
                     f"re-run API line must not soft-swallow failures: {line!r}"
                 )
+
+    @pytest.mark.arch_guard
+    def test_ipr_sign_checkouts_default_branch_not_pr_head(self):
+        """Path B must checkout the repository default branch (ADR-003).
+
+        A regression to PR-head checkout on the privileged ``ipr-sign`` job would
+        execute tip workflow/scripts with a write token — pin ``ref`` explicitly.
+        ``ipr-check`` tip checkout under ``pull_request`` remains allowed.
+        """
+        wf = _load_yaml(_IPR_WORKFLOW)
+        sign = (wf.get("jobs") or {}).get("ipr-sign") or {}
+        steps = sign.get("steps") or []
+        checkouts = [s for s in steps if isinstance(s, dict) and str(s.get("uses", "")).startswith("actions/checkout")]
+        assert checkouts, "ipr-sign must include an actions/checkout step"
+        refs = [str((s.get("with") or {}).get("ref", "")) for s in checkouts]
+        assert any("default_branch" in ref for ref in refs), (
+            f"ipr-sign checkout must set ref to github.event.repository.default_branch (got refs={refs!r})"
+        )
+        # No bare tip checkout (missing ref) on the privileged job.
+        assert all((s.get("with") or {}).get("ref") for s in checkouts), (
+            "ipr-sign checkout must not omit ref (would default to the triggering ref)"
+        )
 
     @pytest.mark.arch_guard
     def test_zizmor_does_not_relist_ipr_for_dangerous_triggers(self):

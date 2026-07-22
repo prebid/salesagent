@@ -26,7 +26,10 @@ def parse_allowlist_globs(raw: str | None) -> list[str]:
 def compile_allowlist(globs: Sequence[str]) -> list[re.Pattern[str]]:
     """Compile CLA-style globs (``*`` → ``.*``) as case-insensitive full-match regexes.
 
-    ``bot*`` matches ``bot-foo`` but not ``robot`` (anchor requires start-of-string).
+    Patterns are anchored with ``^…$`` so a non-star entry like ``bot`` matches only
+    ``bot`` (not ``bot-attacker``). ``re.match`` alone would also reject a leading
+    mismatch (``robot`` vs ``bot*``), but the trailing ``$`` is what blocks suffix
+    over-match on exact globs.
     """
     return [re.compile("^" + re.escape(g).replace(r"\*", ".*") + "$", re.I) for g in globs]
 
@@ -36,7 +39,12 @@ def is_allowed(login: str, allow_res: Sequence[re.Pattern[str]]) -> bool:
 
 
 def signed_names(sigs_doc: dict[str, Any]) -> set[str]:
-    """Lower-cased contributor names from the CLA Assistant signatures document."""
+    """Lower-cased contributor names from the CLA Assistant signatures document.
+
+    Assumes CLA Assistant writes the GitHub *login* into
+    ``signedContributors[].name`` (not display name). Matching is case-insensitive
+    against author logins collected from the PR commits API.
+    """
     return {(c.get("name") or "").lower() for c in sigs_doc.get("signedContributors") or [] if c.get("name")}
 
 
@@ -70,8 +78,8 @@ def verify_ipr(
     commits: list[dict[str, Any]],
     pr_author: str | None,
     allowlist_raw: str | None,
-) -> tuple[set[str], list[str]]:
-    """Return ``(authors, missing)``. Raises ``SystemExit`` with code 2 on bad input."""
+) -> tuple[set[str], list[str], set[str]]:
+    """Return ``(authors, missing, signed)``. Raises ``SystemExit`` with code 2 on bad input."""
     allow_globs = parse_allowlist_globs(allowlist_raw)
     if not allow_globs:
         print("IPR_BOT_ALLOWLIST is empty — refusing to verify", file=sys.stderr)
@@ -85,7 +93,7 @@ def verify_ipr(
     allow_res = compile_allowlist(allow_globs)
     signed = signed_names(sigs_doc)
     missing = missing_signers(authors, signed=signed, allow_res=allow_res)
-    return authors, missing
+    return authors, missing, signed
 
 
 def select_failed_workflow_run_ids(runs_payload: dict[str, Any], head_sha: str) -> list[str]:
@@ -166,7 +174,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     pr_author = args.pr_author or os.environ.get("PR_AUTHOR") or ""
     allowlist = args.allowlist or os.environ.get("IPR_BOT_ALLOWLIST") or ""
     try:
-        authors, missing = verify_ipr(
+        authors, missing, signed = verify_ipr(
             sigs_doc=sigs_doc,
             commits=commits,
             pr_author=pr_author,
@@ -175,7 +183,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     except SystemExit as exc:
         return int(exc.code) if isinstance(exc.code, int) else 1
 
-    signed = signed_names(sigs_doc)
     print(f"authors={sorted(authors)}")
     print(f"signed_count={len(signed)} missing={missing}")
     if missing:
