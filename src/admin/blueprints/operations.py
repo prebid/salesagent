@@ -11,6 +11,7 @@ from src.admin.services.media_buy_completion import (
     MEDIA_BUY_ALREADY_DECIDED_MESSAGE,
     FinalizeOutcome,
     claim_pending_creatives_hold,
+    creatives_ready_for_finalize,
     finalize_media_buy_rejection,
     finalize_pending_media_buy_approval,
 )
@@ -406,32 +407,12 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 from src.core.database.models import MEDIA_BUY_FINALIZING_STATUS, is_media_buy_approvable
 
                 if media_buy and is_media_buy_approvable(media_buy):
-                    # Check if all creatives are approved before moving to scheduled
-                    from src.core.database.models import Creative, CreativeAssignment
+                    # Shared tenant-scoped readiness gate (#1544): this route and the
+                    # workflow approve route decide finalize-vs-hold identically
+                    # (empty assignments → hold at pending_creatives).
+                    readiness = creatives_ready_for_finalize(db_session, tenant_id, media_buy_id=media_buy_id)
 
-                    stmt_assignments = select(CreativeAssignment).filter_by(
-                        tenant_id=tenant_id, media_buy_id=media_buy_id
-                    )
-                    assignments = db_session.scalars(stmt_assignments).all()
-
-                    all_creatives_approved = True
-                    if assignments:
-                        creative_ids = [a.creative_id for a in assignments]
-                        stmt_creatives = select(Creative).filter(
-                            Creative.tenant_id == tenant_id, Creative.creative_id.in_(creative_ids)
-                        )
-                        creatives = db_session.scalars(stmt_creatives).all()
-
-                        # Check if any creatives are not approved
-                        for creative in creatives:
-                            if creative.status != "approved":
-                                all_creatives_approved = False
-                                break
-                    else:
-                        # No creatives assigned yet
-                        all_creatives_approved = False
-
-                    if all_creatives_approved:
+                    if readiness.ready_for_finalize:
                         # Creatives ready → finalize in one atomic, single-winner seam
                         # (shared with the workflow approve route): CLAIM pending_approval
                         # under the row lock, stamp the approval instant + flight-derived
@@ -480,10 +461,10 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                                 url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
                             )
                         flash("Media buy approved and order created successfully", "success")
-                    # Creatives not yet approved → hold at pending_creatives (a
-                    # SELLER-CONFIRMED status so confirmed_at records THIS admin
-                    # decision) via the shared single-winner CLAIM. Using 'draft' here
-                    # would leave the buy unconfirmed. See #1544.
+                    # Creatives not yet approved (or none assigned yet) → hold at
+                    # pending_creatives (a SELLER-CONFIRMED status so confirmed_at
+                    # records THIS admin decision) via the shared single-winner CLAIM.
+                    # Using 'draft' here would leave the buy unconfirmed. See #1544.
                     elif claim_pending_creatives_hold(
                         db_session, tenant_id, media_buy_id=media_buy_id, approved_by=user_email
                     ):

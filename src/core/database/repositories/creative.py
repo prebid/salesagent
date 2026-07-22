@@ -36,6 +36,35 @@ class CreativeListResult(NamedTuple):
     total_count: int
 
 
+class CreativeReadiness(NamedTuple):
+    """Creative-approval readiness facts for one media buy (tenant-scoped).
+
+    Carries the raw facts; the two POLICIES over them live here as named
+    properties so the "what does ready mean?" decision has exactly one home:
+
+    - ``ready_for_finalize`` — the admin approve gate: a zero-assignment buy is
+      NOT ready (it holds at ``pending_creatives`` — AdCP media-buy-status.json:
+      "awaiting creative assets"; creatives legitimately arrive via
+      sync_creatives after approval).
+    - ``all_assigned_approved`` — the activation scheduler's policy: a
+      zero-assignment buy IS ready (some campaigns run without creatives
+      initially), only assigned-but-unapproved creatives block activation.
+    """
+
+    has_assignments: bool
+    unapproved_creative_ids: list[str]
+
+    @property
+    def ready_for_finalize(self) -> bool:
+        """Admin approve gate: finalize only when creatives are assigned AND all approved."""
+        return self.has_assignments and not self.unapproved_creative_ids
+
+    @property
+    def all_assigned_approved(self) -> bool:
+        """Activation policy: every ASSIGNED creative is approved (vacuously true when none)."""
+        return not self.unapproved_creative_ids
+
+
 class CreativeRepository:
     """Tenant-scoped data access for Creative.
 
@@ -376,6 +405,30 @@ class CreativeAssignmentRepository:
                 )
             ).all()
         )
+
+    def creative_readiness(self, media_buy_id: str) -> CreativeReadiness:
+        """Tenant-scoped creative-approval readiness for ``media_buy_id``.
+
+        ONE query home for the "are the assigned creatives approved?" gate that
+        the workflow approve route, the operations approve route, and the
+        activation scheduler previously each open-coded — with drift on tenant
+        scoping and on the empty-assignments case. Callers pick their policy via
+        the named properties on :class:`CreativeReadiness`.
+        """
+        assignments = self.get_by_media_buy(media_buy_id)
+        if not assignments:
+            return CreativeReadiness(has_assignments=False, unapproved_creative_ids=[])
+        creative_ids = list({a.creative_id for a in assignments})
+        creatives = self._session.scalars(
+            select(Creative).where(
+                Creative.tenant_id == self._tenant_id,
+                Creative.creative_id.in_(creative_ids),
+            )
+        ).all()
+        # "approved" is the ONLY creative-ready status (CreativeStatusEnum:
+        # processing/pending_review/approved/rejected — no "active").
+        unapproved = [c.creative_id for c in creatives if c.status != "approved"]
+        return CreativeReadiness(has_assignments=True, unapproved_creative_ids=unapproved)
 
     def get_by_package(self, package_id: str) -> list[CreativeAssignment]:
         """Get all assignments for a package within the tenant."""

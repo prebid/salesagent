@@ -15,11 +15,10 @@ import logging
 import os
 from datetime import UTC, datetime
 
-from sqlalchemy import select
-
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Creative, CreativeAssignment, MediaBuy
+from src.core.database.models import MediaBuy
 from src.core.database.repositories import MediaBuyRepository
+from src.core.database.repositories.creative import CreativeAssignmentRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 from src.core.logging_utils import sanitize_log_value
 from src.core.media_buy_flight import resolve_flight_window_utc
@@ -232,35 +231,25 @@ class MediaBuyStatusScheduler:
         return None
 
     def _are_creatives_approved(self, media_buy: MediaBuy, session) -> bool:
-        """Check if all creatives for a media buy are approved.
+        """Check if all ASSIGNED creatives for a media buy are approved.
 
         Returns:
-            True if no creatives assigned OR all creatives are approved.
+            True if no creatives assigned OR all assigned creatives are approved.
+
+        Shares the tenant-scoped readiness query with the admin approve gate
+        (``CreativeAssignmentRepository.creative_readiness``, #1544) but applies
+        the ACTIVATION policy (``all_assigned_approved``): a zero-assignment buy
+        can activate — some campaigns run without creatives initially. This is a
+        DELIBERATE divergence from the approve gate's ``ready_for_finalize``
+        (which HOLDS a zero-assignment buy at ``pending_creatives``): the
+        approve gate decides whether to create the ad-server order at all, while
+        this scheduler only flips an already-finalized buy to ``active`` when
+        its window opens.
         """
-        # Get creative assignments for this media buy
-        stmt = select(CreativeAssignment).filter_by(tenant_id=media_buy.tenant_id, media_buy_id=media_buy.media_buy_id)
-        assignments = session.scalars(stmt).all()
-
-        if not assignments:
-            # No creatives assigned - can activate (some campaigns run without creatives initially)
-            return True
-
-        # Get all creative IDs
-        creative_ids = list({a.creative_id for a in assignments})
-
-        # Check creative statuses
-        creative_stmt = select(Creative).where(
-            Creative.tenant_id == media_buy.tenant_id,
-            Creative.creative_id.in_(creative_ids),
+        readiness = CreativeAssignmentRepository(session, media_buy.tenant_id).creative_readiness(
+            media_buy.media_buy_id
         )
-        creatives = session.scalars(creative_stmt).all()
-
-        # All creatives must be approved
-        for creative in creatives:
-            if creative.status != "approved":
-                return False
-
-        return True
+        return readiness.all_assigned_approved
 
 
 # Global singleton instance

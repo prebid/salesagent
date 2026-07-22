@@ -27,6 +27,7 @@ from src.adapters.base import AdapterIdempotencyUncertain, AdapterPostMutationIn
 from src.admin.utils.helpers import echo_context
 from src.core.database.models import MEDIA_BUY_FINALIZING_STATUS
 from src.core.database.repositories import MediaBuyRepository
+from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeReadiness
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 from src.core.exceptions import (
@@ -943,6 +944,24 @@ def _flight_derived_status(media_buy: MediaBuy) -> str:
     Evaluated by the finalizer AFTER the row lock, so it reads the committed window.
     """
     return lifecycle_status_for_window(datetime.datetime.now(datetime.UTC), *resolve_flight_window_utc(media_buy))
+
+
+def creatives_ready_for_finalize(
+    session: Session,
+    tenant_id: str,
+    *,
+    media_buy_id: str,
+) -> CreativeReadiness:
+    """Tenant-scoped creative-readiness for the admin approve gate (#1544).
+
+    ONE decision home for finalize-vs-hold, shared by the workflow approve route
+    and the operations approve route (previously each open-coded the query, with
+    drift on tenant scoping and on the empty-assignments case). Delegates to
+    :meth:`CreativeAssignmentRepository.creative_readiness`; the gate policy is
+    :attr:`CreativeReadiness.ready_for_finalize` — a zero-assignment buy HOLDS at
+    ``pending_creatives`` ("awaiting creative assets"), it does not finalize.
+    """
+    return CreativeAssignmentRepository(session, tenant_id).creative_readiness(media_buy_id)
 
 
 def claim_pending_creatives_hold(

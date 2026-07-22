@@ -305,6 +305,132 @@ class TestAssignmentRepoGetByCreative:
         assert len(result) == 1
 
 
+class TestAssignmentRepoCreativeReadiness:
+    """creative_readiness — the shared finalize-vs-hold gate (#1544).
+
+    One tenant-scoped home for the readiness query previously open-coded (with
+    drift) in the workflow approve route, the operations approve route, and the
+    activation scheduler.
+    """
+
+    @staticmethod
+    def _buy_with_assignment(tenant, principal, *, creative_status: str, creative_id: str = "c1"):
+        creative = CreativeFactory(tenant=tenant, principal=principal, creative_id=creative_id, status=creative_status)
+        media_buy = MediaBuyFactory(tenant=tenant, principal=principal)
+        pkg = MediaPackageFactory(media_buy=media_buy)
+        CreativeAssignmentFactory(
+            tenant_id=tenant.tenant_id,
+            creative_id=creative.creative_id,
+            principal_id=principal.principal_id,
+            media_buy_id=media_buy.media_buy_id,
+            package_id=pkg.package_id,
+        )
+        return media_buy, pkg
+
+    def test_ready_when_all_assigned_creatives_approved(self, integration_db):
+        """All assigned creatives approved → ready_for_finalize."""
+        with _RepoEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            media_buy, _ = self._buy_with_assignment(tenant, principal, creative_status="approved")
+
+            session = env.get_session()
+            readiness = CreativeAssignmentRepository(session, "test_tenant").creative_readiness(media_buy.media_buy_id)
+
+        assert readiness.has_assignments is True
+        assert readiness.unapproved_creative_ids == []
+        assert readiness.ready_for_finalize is True
+        assert readiness.all_assigned_approved is True
+
+    def test_unapproved_assigned_creative_blocks_finalize(self, integration_db):
+        """An assigned-but-unapproved creative blocks BOTH policies."""
+        with _RepoEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            media_buy, _ = self._buy_with_assignment(tenant, principal, creative_status="pending")
+
+            session = env.get_session()
+            readiness = CreativeAssignmentRepository(session, "test_tenant").creative_readiness(media_buy.media_buy_id)
+
+        assert readiness.has_assignments is True
+        assert readiness.unapproved_creative_ids == ["c1"]
+        assert readiness.ready_for_finalize is False
+        assert readiness.all_assigned_approved is False
+
+    def test_zero_assignments_policy_split(self, integration_db):
+        """Zero assignments: the approve gate HOLDS, the activation policy is ready.
+
+        Pins the one-home policy split: ready_for_finalize is False (hold at
+        pending_creatives — "awaiting creative assets") while
+        all_assigned_approved is vacuously True (scheduler activation). #1544.
+        """
+        with _RepoEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            media_buy = MediaBuyFactory(tenant=tenant, principal=principal)
+
+            session = env.get_session()
+            readiness = CreativeAssignmentRepository(session, "test_tenant").creative_readiness(media_buy.media_buy_id)
+
+        assert readiness.has_assignments is False
+        assert readiness.unapproved_creative_ids == []
+        assert readiness.ready_for_finalize is False
+        assert readiness.all_assigned_approved is True
+
+    def test_cross_tenant_assignment_invisible(self, integration_db):
+        """Another tenant's assignment row against the SAME media_buy_id is ignored.
+
+        Dropping the tenant filter from the assignments query flips
+        has_assignments True and (with no in-tenant creatives) ready_for_finalize
+        True — this test is the red oracle for that mutation. #1544.
+        """
+        with _RepoEnv() as env:
+            tenant_a = TenantFactory(tenant_id="tenant_a")
+            principal_a = PrincipalFactory(tenant=tenant_a, principal_id="pa")
+            media_buy = MediaBuyFactory(tenant=tenant_a, principal=principal_a)
+            pkg = MediaPackageFactory(media_buy=media_buy)
+
+            tenant_b = TenantFactory(tenant_id="tenant_b")
+            principal_b = PrincipalFactory(tenant=tenant_b, principal_id="pb")
+            creative_b = CreativeFactory(tenant=tenant_b, principal=principal_b, creative_id="cb", status="approved")
+            CreativeAssignmentFactory(
+                tenant_id=tenant_b.tenant_id,
+                creative_id=creative_b.creative_id,
+                principal_id=principal_b.principal_id,
+                media_buy_id=media_buy.media_buy_id,
+                package_id=pkg.package_id,
+            )
+
+            session = env.get_session()
+            readiness = CreativeAssignmentRepository(session, "tenant_a").creative_readiness(media_buy.media_buy_id)
+
+        assert readiness.has_assignments is False
+        assert readiness.ready_for_finalize is False
+
+    def test_cross_tenant_creative_status_invisible(self, integration_db):
+        """Another tenant's same-id creative cannot block THIS tenant's readiness.
+
+        creative_id is only unique per (tenant, principal): tenant_b's PENDING
+        "c1" must not leak into tenant_a's status check. Dropping the tenant
+        filter from the creatives query flips ready_for_finalize False — this
+        test is the red oracle for that mutation. #1544.
+        """
+        with _RepoEnv() as env:
+            tenant_a = TenantFactory(tenant_id="tenant_a")
+            principal_a = PrincipalFactory(tenant=tenant_a, principal_id="pa")
+            media_buy, _ = self._buy_with_assignment(tenant_a, principal_a, creative_status="approved")
+
+            tenant_b = TenantFactory(tenant_id="tenant_b")
+            principal_b = PrincipalFactory(tenant=tenant_b, principal_id="pb")
+            CreativeFactory(tenant=tenant_b, principal=principal_b, creative_id="c1", status="pending")
+
+            session = env.get_session()
+            readiness = CreativeAssignmentRepository(session, "tenant_a").creative_readiness(media_buy.media_buy_id)
+
+        assert readiness.unapproved_creative_ids == []
+        assert readiness.ready_for_finalize is True
+
+
 class TestAssignmentRepoGetByPackage:
     """get_by_package — assignments for a package."""
 

@@ -11,6 +11,7 @@ from src.admin.services.media_buy_completion import (
     WORKFLOW_STEP_ALREADY_DECIDED_MESSAGE,
     FinalizeOutcome,
     claim_pending_creatives_hold,
+    creatives_ready_for_finalize,
     finalize_media_buy_rejection,
     finalize_pending_media_buy_approval,
 )
@@ -174,48 +175,47 @@ def _approval_in_progress_response():
 
 
 def _hold_for_unapproved_creatives(db, tenant_id: str, media_buy_id: str, user_email: str):
-    """Park the approved buy at ``pending_creatives`` while creatives are unapproved.
+    """Park the approved buy at ``pending_creatives`` until creatives are ready.
 
     Returns a ``(response, status)`` pair when the approve request is fully
-    handled here (unapproved creatives — hold claimed, or lost to a concurrent
-    decision), or ``None`` when every required creative is approved and the
-    caller should finalize.
+    handled here (creatives not ready — hold claimed, or lost to a concurrent
+    decision), or ``None`` when the buy is ready and the caller should finalize.
+
+    Readiness comes from the shared tenant-scoped gate
+    ``creatives_ready_for_finalize`` — the same decision the operations approve
+    route uses, so the two admin approve paths cannot drift. A ZERO-assignment
+    buy HOLDS: ``pending_creatives`` is "awaiting creative assets" (AdCP
+    media-buy-status.json), and creatives legitimately arrive via sync_creatives
+    after approval — finalizing a creative-less buy into the ad server was the
+    previous divergence between the two routes. #1544.
     """
-    from src.core.database.models import Creative as CreativeModel
-    from src.core.database.models import CreativeAssignment
-
-    stmt_assignments = select(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
-    assignments = db.scalars(stmt_assignments).all()
-    if not assignments:
+    readiness = creatives_ready_for_finalize(db, tenant_id, media_buy_id=media_buy_id)
+    if readiness.ready_for_finalize:
         return None
 
-    creative_ids = [a.creative_id for a in assignments]
-    stmt_creatives = select(CreativeModel).filter(CreativeModel.creative_id.in_(creative_ids))
-    creatives = db.scalars(stmt_creatives).all()
-    # "approved" is the ONLY creative-ready status. ``active`` is not a member of
-    # the creative status domain (CreativeStatus: processing/pending_review/
-    # approved/suspended/rejected/archived — no "active"; the DB is only ever set
-    # to those), so an "active" branch here was dead. Drop it so this route's
-    # readiness predicate matches the operations approve route (creative.status
-    # != "approved"), keeping the two approve paths in agreement. #1544.
-    unapproved_creatives = [c.creative_id for c in creatives if c.status != "approved"]
-    if not unapproved_creatives:
-        return None
-
-    logger.warning(
-        f"[APPROVAL] Cannot execute adapter creation yet - "
-        f"{len(unapproved_creatives)} creatives not approved: {unapproved_creatives}"
-    )
+    if readiness.has_assignments:
+        logger.warning(
+            "[APPROVAL] Cannot execute adapter creation yet - %s creatives not approved: %s",
+            len(readiness.unapproved_creative_ids),
+            sanitize_log_value(readiness.unapproved_creative_ids),
+        )
+        waiting_msg = (
+            f"Media buy approved! Waiting for {len(readiness.unapproved_creative_ids)} "
+            "creative(s) to be approved before creating in GAM."
+        )
+    else:
+        logger.warning(
+            "[APPROVAL] No creatives assigned yet for %s - holding at pending_creatives",
+            sanitize_log_value(media_buy_id),
+        )
+        waiting_msg = "Media buy approved! Waiting for creatives to be assigned and approved before creating in GAM."
     # Shared single-winner CLAIM on pending_approval → pending_creatives, so a
     # concurrent approve/reject that already decided the buy is not overwritten.
     # The flash is queued ONLY after the claim is won — a lost claim must not
     # tell the operator the buy was approved. #1544.
     if not claim_pending_creatives_hold(db, tenant_id, media_buy_id=media_buy_id, approved_by=user_email):
         return jsonify({"success": False, "error": MEDIA_BUY_ALREADY_DECIDED_MESSAGE}), 409
-    flash(
-        f"Media buy approved! Waiting for {len(unapproved_creatives)} creative(s) to be approved before creating in GAM.",
-        "info",
-    )
+    flash(waiting_msg, "info")
     return jsonify({"success": True}), 200
 
 

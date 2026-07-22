@@ -237,6 +237,42 @@ class TestWorkflowApproval:
         assert item.confirmed_at == stored.approved_at
         assert item.confirmed_at != item.created_at
 
+    def test_approve_with_zero_assignments_holds_at_pending_creatives(self, client, test_tenant, factory_session):
+        """Approving a buy with NO creative assignments HOLDS at pending_creatives.
+
+        Both admin approve routes decide finalize-vs-hold through the shared
+        tenant-scoped gate (``creatives_ready_for_finalize``): per AdCP
+        media-buy-status.json, ``pending_creatives`` is "awaiting creative
+        assets", and creatives legitimately arrive via sync_creatives after
+        approval. This route previously FINALIZED a creative-less buy into the
+        ad server while the operations route held — reverting the shared gate's
+        empty-assignments policy turns this test red. #1544.
+        """
+        from src.core.database.repositories import MediaBuyRepository
+
+        _auth_session(client, test_tenant)
+        mbid, context_id, step_id = _setup_mapped_media_buy_step(
+            factory_session, test_tenant, with_assignment=False
+        )
+
+        response = client.post(
+            f"/tenant/{test_tenant}/workflows/{context_id}/steps/{step_id}/approve",
+            content_type="application/json",
+            json={},
+        )
+        assert response.status_code == 200, response.data
+        assert response.get_json().get("success") is True
+
+        factory_session.expire_all()
+        stored = MediaBuyRepository(factory_session, test_tenant).get_by_id(mbid)
+        assert stored is not None
+        # HOLD, not finalize: the buy parks at pending_creatives with the approval
+        # stamped; a finalize would have driven the adapter and left the buy at a
+        # flight-derived status (scheduled/active) instead.
+        assert stored.status == "pending_creatives"
+        assert stored.approved_by == "test@example.com"
+        assert stored.approved_at is not None
+
 
 class TestWorkflowRejection:
     """Test workflow step rejection."""
@@ -295,9 +331,13 @@ def _setup_mapped_media_buy_step(
     buy_status="pending_approval",
     step_status="pending_approval",
     external_task_id=None,
+    with_assignment=True,
 ):
-    """Create a media buy + an approved creative assignment + a workflow step mapped to
-    the buy. Returns (media_buy_id, context_id, step_id)."""
+    """Create a media buy + a workflow step mapped to the buy (and, by default, an
+    approved creative assignment). Returns (media_buy_id, context_id, step_id).
+
+    ``with_assignment=False`` seeds a ZERO-assignment buy — the empty-readiness
+    case both approve routes must HOLD on (#1544)."""
     from src.core.database.models import Principal as P
     from src.core.database.models import Tenant as T
     from src.core.database.repositories import WorkflowRepository
@@ -306,8 +346,9 @@ def _setup_mapped_media_buy_step(
     tenant_obj = factory_session.get(T, tenant_id)
     principal_obj = factory_session.get(P, (tenant_id, "wf_test_principal"))
     buy = MediaBuyFactory(tenant=tenant_obj, principal=principal_obj, status=buy_status)
-    creative = CreativeFactory(tenant=tenant_obj, principal=principal_obj, status="approved")
-    CreativeAssignmentFactory(creative=creative, media_buy=buy)
+    if with_assignment:
+        creative = CreativeFactory(tenant=tenant_obj, principal=principal_obj, status="approved")
+        CreativeAssignmentFactory(creative=creative, media_buy=buy)
 
     context_id = f"ctx_{uuid.uuid4().hex[:12]}"
     step_id = f"step_{uuid.uuid4().hex[:12]}"
@@ -495,3 +536,23 @@ class TestOperationsDecisionOwnership:
         )
         assert r.status_code == 302
         assert _step_status(test_tenant, step_id) == "completed"
+
+    def test_operations_approve_with_zero_assignments_holds_at_pending_creatives(
+        self, client, test_tenant, factory_session
+    ):
+        """Parity pin with the workflow route: a zero-assignment buy HOLDS here too.
+
+        Both routes call the shared ``creatives_ready_for_finalize`` gate, so the
+        empty-assignments decision (hold at pending_creatives, never finalize a
+        creative-less buy into the ad server) cannot drift between them. #1544.
+        """
+        _auth_session(client, test_tenant)
+        mbid, _context_id, _step_id = _setup_mapped_media_buy_step(
+            factory_session, test_tenant, with_assignment=False
+        )
+        r = client.post(
+            f"/tenant/{test_tenant}/media-buy/{mbid}/approve",
+            data={"action": "approve"},
+        )
+        assert r.status_code == 302
+        assert _buy_status(test_tenant, mbid) == "pending_creatives"
