@@ -22,6 +22,7 @@ from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape, assert_no_raw_validation_leak
 from tests.helpers.adcp_factories import create_test_package_request_dict
+from tests.helpers.secret_scrub import SECRET_BEARING_MESSAGE, assert_no_secret_leak
 from tests.integration.conftest import seed_error_test_tenant
 from tests.utils.a2a_helpers import (
     create_a2a_message_with_skill,
@@ -933,7 +934,7 @@ class TestA2AErrorResponseStructure:
         # Internal AdCPAdapterError is scrubbed at the seam (its raise sites can interpolate a
         # secret) — re-raised as a wire-safe base AdCPError; recovery stays transient (canonical).
         async def mock_adapter_fail(params, token):
-            raise AdCPAdapterError("GAM timeout")
+            raise AdCPAdapterError(f"GAM timeout: {SECRET_BEARING_MESSAGE}")
 
         with patch.object(handler, "_handle_get_products_skill", mock_adapter_fail):
             with pytest.raises(AdCPError) as exc_info:
@@ -943,10 +944,12 @@ class TestA2AErrorResponseStructure:
             assert error.recovery == "transient", "AdCPAdapterError must have transient recovery"
             assert error.wire_error_code == "SERVICE_UNAVAILABLE"
             assert "GAM timeout" not in error.message
+            assert_no_secret_leak(error.message, context="seam-scrubbed adapter message")
             # Envelope built from the propagated exception preserves recovery.
             envelope = build_two_layer_error_envelope(error)
             assert envelope["adcp_error"]["recovery"] == "transient"
             assert envelope["errors"][0]["recovery"] == "transient"
+            assert_no_secret_leak(envelope, context="full adapter-failure envelope")
 
         # Test correctable recovery (AdCPValidationError)
         async def mock_validation_fail(params, token):
@@ -999,7 +1002,7 @@ class TestA2AErrorResponseStructure:
         from src.core.exceptions import AdCPError
 
         async def mock_valueerror(params, identity):
-            raise ValueError("missing field postgresql://svc:hunter2@db.internal/prod")
+            raise ValueError(f"missing field {SECRET_BEARING_MESSAGE}")
 
         with patch.object(handler, "_handle_get_products_skill", mock_valueerror):
             with pytest.raises(AdCPError) as exc_info:
@@ -1008,7 +1011,8 @@ class TestA2AErrorResponseStructure:
             error = exc_info.value
             assert error.wire_error_code == "VALIDATION_ERROR"
             assert error.recovery == "correctable"
-            assert "hunter2" not in error.message and "missing field" not in error.message
+            assert "missing field" not in error.message
+            assert_no_secret_leak(error.message, context="seam-scrubbed ValueError message")
             # Original ValueError is chained via __cause__ for traceability (server-side only).
             assert isinstance(error.__cause__, ValueError)
 
@@ -1023,7 +1027,7 @@ class TestA2AErrorResponseStructure:
         from src.core.exceptions import AdCPError
 
         async def mock_permerror(params, identity):
-            raise PermissionError("tenant scope mismatch TOKEN=sk-secret-abc123")
+            raise PermissionError(f"tenant scope mismatch {SECRET_BEARING_MESSAGE}")
 
         with patch.object(handler, "_handle_get_products_skill", mock_permerror):
             with pytest.raises(AdCPError) as exc_info:
@@ -1032,7 +1036,8 @@ class TestA2AErrorResponseStructure:
             error = exc_info.value
             assert error.wire_error_code == "AUTH_REQUIRED"
             assert error.recovery == "correctable"
-            assert "sk-secret-abc123" not in error.message and "tenant scope mismatch" not in error.message
+            assert "tenant scope mismatch" not in error.message
+            assert_no_secret_leak(error.message, context="seam-scrubbed PermissionError message")
             assert isinstance(error.__cause__, PermissionError)
 
     async def test_untyped_exception_falls_through_to_dispatcher(self, integration_db, handler):

@@ -376,12 +376,15 @@ class TestSafeAdcpErrorSuggestionMatchesRecovery:
         (the code and recovery would disagree); it emits transient + retry guidance."""
         from src.core.exceptions import AdCPError, safe_adcp_error
 
-        safe = safe_adcp_error(AdCPError.synthesize("secret", error_code="UNKNOWN_INTERNAL", recovery="correctable"))
+        safe = safe_adcp_error(
+            AdCPError.synthesize(SECRET_BEARING_MESSAGE, error_code="UNKNOWN_INTERNAL", recovery="correctable")
+        )
 
         assert safe.wire_error_code == "SERVICE_UNAVAILABLE"
         assert safe.recovery == "transient", "SERVICE_UNAVAILABLE's canonical recovery is transient, not terminal"
         assert "retry" in safe.suggestion.lower()
-        assert "secret" not in safe.message and "secret" not in safe.suggestion
+        assert_no_secret_leak(safe.message, context="message")
+        assert_no_secret_leak(safe.suggestion, context="suggestion")
 
     def test_internal_error_recovery_normalized_to_canonical_not_instance_override(self):
         """A raise site can tag an internal error with a recovery that contradicts its wire code
@@ -429,7 +432,7 @@ class TestSafeAdcpErrorSuggestionMatchesRecovery:
         from src.core.exceptions import safe_adcp_error
 
         # VALIDATION_ERROR (raw ValueError): about the submitted fields, not an internal error.
-        v = safe_adcp_error(ValueError("secret hunter2"))
+        v = safe_adcp_error(ValueError(SECRET_BEARING_MESSAGE))
         assert v.wire_error_code == "VALIDATION_ERROR"
         assert "internal error" not in v.message.lower()
         assert "validate" in v.message.lower()
@@ -437,20 +440,21 @@ class TestSafeAdcpErrorSuggestionMatchesRecovery:
         assert "field" in v.suggestion.lower()
 
         # AUTH_REQUIRED (raw PermissionError): about credentials/permissions, not field correction.
-        a = safe_adcp_error(PermissionError("secret token"))
+        a = safe_adcp_error(PermissionError(SECRET_BEARING_MESSAGE))
         assert a.wire_error_code == "AUTH_REQUIRED"
         assert "internal error" not in a.message.lower()
         assert any(w in a.message.lower() for w in ("authenticat", "authoriz", "credential"))
         assert any(w in a.suggestion.lower() for w in ("credential", "permission"))
 
         # SERVICE_UNAVAILABLE (untyped internal): the generic internal message + retry IS correct.
-        s = safe_adcp_error(RuntimeError("boom"))
+        s = safe_adcp_error(RuntimeError(SECRET_BEARING_MESSAGE))
         assert s.wire_error_code == "SERVICE_UNAVAILABLE"
         assert "internal error" in s.message.lower()
         assert "retry" in s.suggestion.lower()
 
         for e in (v, a, s):
-            assert "hunter2" not in e.message and "secret" not in e.message and "token" not in e.message
+            assert_no_secret_leak(e.message, context=f"{e.wire_error_code} message")
+            assert_no_secret_leak(e.suggestion, context=f"{e.wire_error_code} suggestion")
 
     def test_sanitized_category_registry_covers_all_correctable_builtin_targets(self):
         """Completeness guard reconciling ``_BUILTIN_NORMALIZATION`` with ``_SANITIZED_BY_WIRE_CODE``.
@@ -599,13 +603,14 @@ class TestA2AHandlerExplicitSkillReraises:
         handler = AdCPRequestHandler()
 
         async def mock_skill(params, token):
-            raise AdCPAdapterError("GAM down: postgresql://svc:hunter2@db/prod")
+            raise AdCPAdapterError(f"GAM down: {SECRET_BEARING_MESSAGE}")
 
         with patch.object(handler, "_handle_get_products_skill", mock_skill):
             with pytest.raises(AdCPError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
-            assert "hunter2" not in exc_info.value.message and "GAM down" not in exc_info.value.message
+            assert_no_secret_leak(exc_info.value.message, context="seam-scrubbed message")
+            assert "GAM down" not in exc_info.value.message
             assert exc_info.value.wire_error_code == "SERVICE_UNAVAILABLE"
             assert exc_info.value.recovery == "transient"
 
@@ -626,7 +631,7 @@ class TestA2AHandlerExplicitSkillReraises:
         from src.core.exceptions import AdCPError
 
         handler = AdCPRequestHandler()
-        secret = "postgresql://svc:hunter2@db.internal/prod"
+        secret = SECRET_BEARING_MESSAGE
 
         async def mock_skill(params, token):
             raise exc_factory(secret)
@@ -636,7 +641,7 @@ class TestA2AHandlerExplicitSkillReraises:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
             assert exc_info.value.wire_error_code == expected_code
-            assert "hunter2" not in exc_info.value.message
+            assert_no_secret_leak(exc_info.value.message, context="seam-scrubbed builtin message")
 
     @pytest.mark.asyncio
     async def test_server_error_still_passes_through(self):
@@ -694,7 +699,7 @@ class TestA2ADispatcherFailedSkillResult:
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
         result = AdCPRequestHandler._build_failed_skill_result(
-            "get_products", RuntimeError("postgresql://svc:hunter2@db.internal/prod unexpected boom")
+            "get_products", RuntimeError(f"{SECRET_BEARING_MESSAGE} unexpected boom")
         )
 
         assert result["success"] is False
@@ -703,9 +708,9 @@ class TestA2ADispatcherFailedSkillResult:
         assert env["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
         assert env["errors"][0]["code"] == "SERVICE_UNAVAILABLE"
         # The raw exception text is NEVER on the wire — only a generic internal message.
+        assert_no_secret_leak(env, context="full failed-skill envelope")
         message = env["errors"][0]["message"]
         assert "unexpected boom" not in message
-        assert "hunter2" not in message and "postgresql://" not in message
         assert "internal error" in message.lower()
 
     def test_untyped_exception_with_empty_message_still_sanitized(self):
