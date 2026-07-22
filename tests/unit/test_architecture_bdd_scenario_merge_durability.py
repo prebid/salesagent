@@ -17,16 +17,16 @@ Two invariants:
      register it" gap that (1) alone cannot see.
 """
 
-import pathlib
 import re
 import sys
 
 import yaml
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, repo_root
 
-FEATURES_DIR = pathlib.Path(__file__).parent.parent / "bdd" / "features"
-TRACEABILITY_PATH = pathlib.Path(__file__).parent.parent.parent / "docs" / "test-obligations" / "bdd-traceability.yaml"
+_ROOT = repo_root()
+FEATURES_DIR = _ROOT / "tests" / "bdd" / "features"
+TRACEABILITY_PATH = _ROOT / "docs" / "test-obligations" / "bdd-traceability.yaml"
 
 # (feature file, scenario id tag) pairs that are hand-maintained pending an
 # upstream adcp-req id. Add new hand-edited scenarios here when introduced.
@@ -38,7 +38,7 @@ HAND_MAINTAINED_SCENARIOS = [
 
 
 def _load_compiler():
-    scripts_dir = str(pathlib.Path(__file__).parent.parent.parent / "scripts")
+    scripts_dir = str(_ROOT / "scripts")
     if scripts_dir not in sys.path:
         sys.path.insert(0, scripts_dir)
     import compile_bdd
@@ -46,15 +46,28 @@ def _load_compiler():
     return compile_bdd
 
 
+def _is_adcp_req_id(ref: str) -> bool:
+    """True if ``ref`` is a bare adcp-req requirement id (``BR-*``/``SR-*``).
+
+    A row whose ``upstream_refs`` carry at least one such id RENDERS from adcp-req, so
+    ``compile_bdd.py --merge`` keeps it. Anything else — a spec artifact (``*.mdx``/URL),
+    an unmodeled ref shape (``docs/x.md#Anchor``, a bare path), OR an EMPTY list — has no
+    adcp-req render and is a LEGACY-DELETE risk. Keying on the ABSENCE of a requirement id
+    (rather than the PRESENCE of a recognized artifact form) is what makes the discovery
+    exhaustive: an empty or unmodeled ``upstream_refs`` can no longer slip past.
+    """
+    return bool(re.match(r"^\s*(BR|SR)-", str(ref)))
+
+
+def _row_has_adcp_req_source(refs) -> bool:
+    """True if any of a traceability row's ``upstream_refs`` is an adcp-req requirement id."""
+    return any(_is_adcp_req_id(ref) for ref in (refs or []))
+
+
 def _is_spec_artifact_ref(ref: str) -> bool:
     """True if ``ref`` points at an AdCP spec ARTIFACT (a file or URL) rather than
-    an adcp-req requirement id.
-
-    Hand-authored scenarios ground themselves in the spec — prose (``*.mdx``),
-    compliance storyboards (``*.yaml``/``*.yml``), or schemas (``*.json``), by
-    path or URL. adcp-req-sourced scenarios reference bare requirement ids
-    (``BR-*``, ``SR-*``). This is extension-agnostic across spec doc types so a
-    ``.yaml``/``.json``-grounded scenario is recognized, not just ``.mdx``.
+    an adcp-req requirement id. Retained for the discriminator self-test; the candidate
+    derivation now keys on ``_row_has_adcp_req_source`` so empty/unmodeled refs are caught.
     """
     ref = str(ref)
     if "://" in ref:
@@ -62,27 +75,42 @@ def _is_spec_artifact_ref(ref: str) -> bool:
     return bool(re.search(r"\.(mdx|ya?ml|json)(\b|#|$)", ref, re.IGNORECASE))
 
 
+def _is_merge_set_feature(feature_name: str) -> bool:
+    """True if the feature file is compiled/merged from adcp-req (so a source-less scenario
+    in it is a real LEGACY-DELETE risk), rather than a hand-authored feature the merger never
+    reaches. Hand-authored files carry a ``# Hand-authored feature`` header; the merge set is
+    everything else (the ``# DO NOT EDIT -- re-run: compile_bdd.py`` outputs)."""
+    path = FEATURES_DIR / feature_name
+    if not path.exists():
+        return False
+    return "Hand-authored feature" not in path.read_text()[:500]
+
+
 def _handmaintained_candidates_from_traceability():
     """Hand-maintained scenarios enumerated from the *independent* traceability
     inventory (``bdd-traceability.yaml``), keyed ``(feature file, @T- id tag)``.
 
-    A candidate is a scenario grounded in an AdCP spec ARTIFACT — its
-    ``upstream_refs`` point at a spec file/URL (``*.mdx`` prose, ``*.yaml``
-    storyboard, ``*.json`` schema) rather than an adcp-req requirement id
-    (``BR-*``/``SR-*``). Such a scenario has no adcp-req render, so
-    ``compile_bdd.py --merge`` classifies it ``LEGACY-DELETE`` and drops it unless
-    it carries a hand-edit marker. Deriving the inventory here — NOT from the
-    on-disk markers — is what lets the guard see a scenario missing BOTH a marker
-    and a registry entry (invisible to a marker-only scan), independent of which
-    spec-doc extension grounds it.
+    A candidate is a MERGE-SET scenario with no adcp-req requirement id in its
+    ``upstream_refs`` — a spec artifact (``*.mdx``/URL), an unmodeled ref, OR an EMPTY
+    list. Such a scenario has no adcp-req render, so ``compile_bdd.py --merge`` classifies
+    it ``LEGACY-DELETE`` and drops it unless it carries a hand-edit marker. Keying on the
+    ABSENCE of a requirement id (not the presence of a recognized artifact form) catches
+    empty/unmodeled refs; scoping to merge-set files excludes hand-authored features the
+    merger never touches. Deriving the inventory here — NOT from the on-disk markers — is
+    what lets the guard see a scenario missing BOTH a marker and a registry entry.
     """
     data = yaml.safe_load(TRACEABILITY_PATH.read_text()) or {}
     candidates = []
     for rows in (data.get("mappings") or {}).values():
         for row in rows:
-            refs = row.get("upstream_refs") or []
-            if any(_is_spec_artifact_ref(ref) for ref in refs):
-                candidates.append((row["adcp_feature"], f"@{row['adcp_scenario_id']}"))
+            # Source-less = no adcp-req requirement id (catches spec-artifact, unmodeled, AND
+            # empty refs), AND the file is in the merge set (a hand-authored feature the merger
+            # never touches is not at LEGACY-DELETE risk, so it is not a candidate).
+            if _row_has_adcp_req_source(row.get("upstream_refs")):
+                continue
+            if not _is_merge_set_feature(row["adcp_feature"]):
+                continue
+            candidates.append((row["adcp_feature"], f"@{row['adcp_scenario_id']}"))
     return candidates
 
 
@@ -205,6 +233,30 @@ def test_is_spec_artifact_ref_discriminates_source_from_requirement_id():
     # NEGATIVE — a bare adcp-req requirement id renders from adcp-req (not source-less); must NOT match.
     for ref in ("BR-UC-004-MAIN-01", "SR-RULE-055", "adcp-req-123", "UC-004"):
         assert _is_spec_artifact_ref(ref) is False, f"{ref!r} is a requirement id, not a spec artifact"
+
+
+def test_source_less_predicate_catches_empty_and_unmodeled_refs():
+    """The candidate predicate keys on ABSENCE of an adcp-req id, so an empty or unmodeled
+    ``upstream_refs`` (the reviewer's blind spot) is discovered, not only recognized spec-artifact
+    extensions. Known-bad/good self-test so a degraded predicate can't empty the candidate set."""
+    # adcp-req-sourced rows are NOT source-less (BR-*/SR- present anywhere in the list).
+    assert _row_has_adcp_req_source(["BR-UC-004-MAIN-01"]) is True
+    assert _row_has_adcp_req_source(["transport-errors.mdx#x", "SR-RULE-055"]) is True
+    # Source-less shapes the OLD spec-artifact predicate would have missed:
+    assert _row_has_adcp_req_source([]) is False  # empty — the exact miss this fix closes
+    assert _row_has_adcp_req_source(["docs/x.md#Anchor"]) is False  # unmodeled extension
+    assert _row_has_adcp_req_source(["building/operating/transport-errors"]) is False  # bare path
+    assert _row_has_adcp_req_source(["spec.txt"]) is False
+
+
+def test_merge_set_scoping_excludes_hand_authored_features():
+    """Source-less rows in a HAND-AUTHORED feature (the merger never reaches them) are not
+    LEGACY-DELETE candidates; source-less rows in a merge-set (# DO NOT EDIT) file are."""
+    # The one registered hand-maintained scenario lives in a merge-set file and must be in scope.
+    assert _is_merge_set_feature("BR-UC-002-create-media-buy.feature") is True
+    # Hand-authored features (their empty-ref rows must NOT become candidates).
+    assert _is_merge_set_feature("BR-ADMIN-ACCOUNTS.feature") is False
+    assert _is_merge_set_feature("BR-UC-002-account-access.feature") is False
 
 
 def test_source_less_scenarios_are_marked_and_registered():
