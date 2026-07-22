@@ -840,8 +840,8 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                     # Load product to get name, delivery_type, format_ids, pricing
                     stmt_product = (
                         select(ProductModel)
-                        .filter_by(tenant_id=tenant_id, product_id=product_id)
-                        .options(selectinload(ProductModel.pricing_options))
+.filter_by(tenant_id=tenant_id, product_id=product_id)
+.options(selectinload(ProductModel.pricing_options))
                     )
                     product = session.scalars(stmt_product).first()
 
@@ -865,7 +865,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         budget = None
 
                     # Get pricing option from product
-                    # adcp 2.14.0+ uses RootModel wrapper - access via .root
+                    # adcp 2.14.0+ uses RootModel wrapper - access via.root
                     pricing_option_inner = None
                     if product.pricing_options:
                         # Try to match pricing_model from package_config if present
@@ -2127,7 +2127,7 @@ async def _create_media_buy_impl(
         # Persist the transport's outer async task id (opaque here — set only by the
         # A2A boundary from the Task returned to the buyer) so the completion webhook
         # and tasks/get can correlate to the id the BUYER holds, not the internal
-        # step_id. Durable so a poll survives a server restart. See #1544 (B6).
+        # step_id. Durable so a poll survives a server restart.
         if external_task_id:
             workflow_metadata["external_task_id"] = external_task_id
 
@@ -2220,7 +2220,7 @@ async def _create_media_buy_impl(
             raise AdCPValidationError(error_msg)
 
         # Handle 'asap' start_time (AdCP v1.7.0)
-        # start_time is StartTiming (RootModel[datetime | 'asap']); unwrap via .root
+        # start_time is StartTiming (RootModel[datetime | 'asap']); unwrap via.root
         raw_start_time = req.start_time.root
         if raw_start_time == "asap":
             computed_start_time: datetime = now
@@ -2318,8 +2318,8 @@ async def _create_media_buy_impl(
             # Get products from database
             products_stmt = (
                 select(ProductModel)
-                .where(ProductModel.tenant_id == tenant["tenant_id"], ProductModel.product_id.in_(product_ids))
-                .options(selectinload(ProductModel.pricing_options))
+.where(ProductModel.tenant_id == tenant["tenant_id"], ProductModel.product_id.in_(product_ids))
+.options(selectinload(ProductModel.pricing_options))
             )
             products = session.scalars(products_stmt).all()
 
@@ -3443,7 +3443,7 @@ async def _create_media_buy_impl(
             cpm = 10.0  # Default
             if pkg_product.pricing_options and len(pkg_product.pricing_options) > 0:
                 first_option = pkg_product.pricing_options[0]
-                # adcp 2.14.0+ uses RootModel wrapper - access via .root
+                # adcp 2.14.0+ uses RootModel wrapper - access via.root
                 inner_option = getattr(first_option, "root", first_option)
                 rate = getattr(inner_option, "rate", None)
                 if rate:

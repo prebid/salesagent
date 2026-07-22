@@ -586,11 +586,15 @@ class TestA2AStubHandlers:
         payload = _build_jsonrpc(skill, {})
         response = client.post("/a2a", json=payload, headers=auth_headers)
         body = response.json()
-        if "result" in body:
-            data = _extract_artifact_data(body["result"])
-            assert data.get("adcp_error", {}).get("code") != "UNSUPPORTED_FEATURE", (
-                f"'{skill}' is classified implemented but routed to an unsupported handler: {data}"
-            )
+        # An implemented skill with empty params yields a result Task (the skill ran and
+        # returned VALIDATION_ERROR, never UNSUPPORTED_FEATURE). A JSON-RPC "error" body
+        # here would mean the skill never reached its handler — assert the shape rather
+        # than silently skipping, so a routing regression can't pass by changing the shape.
+        assert "result" in body, f"'{skill}' produced a JSON-RPC error, not a result Task: {body}"
+        data = _extract_artifact_data(body["result"])
+        assert data.get("adcp_error", {}).get("code") != "UNSUPPORTED_FEATURE", (
+            f"'{skill}' is classified implemented but routed to an unsupported handler: {data}"
+        )
 
 
 class TestA2ARegistryContract:

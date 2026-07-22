@@ -264,7 +264,7 @@ class ContextManager(DatabaseManager):
             step_id: The step ID
             status: New status
             response_data: Response/result data. Accepts Pydantic models (serialized
-                automatically) or plain dicts. Callers should NOT call .model_dump()
+                automatically) or plain dicts. Callers should NOT call.model_dump()
                 — pass the model directly.
             error_message: Error message if failed
             transaction_details: Actual API calls made
@@ -558,12 +558,12 @@ class ContextManager(DatabaseManager):
             # Query object mappings to find all related steps, scoped to tenant via Context join
             stmt = (
                 select(ObjectWorkflowMapping)
-                .join(WorkflowStep)
-                .where(
+.join(WorkflowStep)
+.where(
                     ObjectWorkflowMapping.object_type == object_type,
                     ObjectWorkflowMapping.object_id == object_id,
                 )
-                .order_by(ObjectWorkflowMapping.created_at)
+.order_by(ObjectWorkflowMapping.created_at)
             )
             if tenant_id:
                 stmt = stmt.join(DBContext).where(DBContext.tenant_id == tenant_id)
@@ -691,9 +691,9 @@ class ContextManager(DatabaseManager):
         try:
             stmt = (
                 select(Context)
-                .filter_by(tenant_id=tenant_id, principal_id=principal_id)
-                .order_by(Context.last_activity_at.desc())
-                .limit(limit)
+.filter_by(tenant_id=tenant_id, principal_id=principal_id)
+.order_by(Context.last_activity_at.desc())
+.limit(limit)
             )
             contexts = session.scalars(stmt).all()
 
@@ -858,7 +858,7 @@ class ContextManager(DatabaseManager):
             # outer transport ``task_*`` id on the step's request_data
             # (external_task_id) at create time; the buyer polls / receives the
             # webhook against THAT id, not the internal step_id. MCP/REST have no
-            # outer id, so they fall back to step_id (unchanged behavior). #1544 B6.
+            # outer id, so they fall back to step_id (unchanged behavior).
             correlation_task_id = resolve_webhook_task_id(step.request_data, step.step_id)
             try:
                 status_enum = GeneratedTaskStatus(new_status)

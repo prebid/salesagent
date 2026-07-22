@@ -418,7 +418,11 @@ class AdCPRequestHandler(RequestHandler):
                 testing_context=testing_context,
             )
         except AdCPAuthenticationError as e:
-            raise InvalidRequestError(message=str(e)) from e
+            # Carry the two-layer envelope in ``data`` so the buyer-facing AUTH_REQUIRED
+            # code reaches the A2A wire — matching the missing-token branch below (and
+            # REST's no-identity envelope), which the bare A2AError otherwise dropped.
+            _sanitized, envelope = _sanitized_envelope(e)
+            raise InvalidRequestError(message=str(e), data=envelope) from e
 
         if require_valid_token:
             if not identity.principal_id:
@@ -878,7 +882,7 @@ class AdCPRequestHandler(RequestHandler):
                         # Every failure result comes from _build_failed_skill_result,
                         # which always sets error_envelope. A failed result without it
                         # is a contract violation — fail loud rather than silently emit
-                        # the legacy flat ``{"error": ...}`` shape.
+                        # the legacy flat ``{"error":...}`` shape.
                         raise AdCPError(
                             f"Skill result for {res.get('skill', '?')!r} is marked failed but carries no error_envelope"
                         )
@@ -1208,7 +1212,7 @@ class AdCPRequestHandler(RequestHandler):
 
     # Terminal persisted workflow-step status → A2A TaskState, for the durable
     # tasks/get fallback. Non-terminal steps (in_progress, approved, …) surface as
-    # WORKING. #1544 B6.
+    # WORKING.
     _STEP_STATUS_TO_TASK_STATE = {
         "completed": TaskState.TASK_STATE_COMPLETED,
         "rejected": TaskState.TASK_STATE_REJECTED,
@@ -1246,8 +1250,7 @@ class AdCPRequestHandler(RequestHandler):
         returns the owned in-memory task only when IT is already terminal;
         otherwise the durable step is consulted and, if it reached a terminal
         status, wins (and reconciles the owned in-memory entry). The durable
-        fallback also serves polls after a restart, when the map is empty. See
-        #1544 (B6).
+        fallback also serves polls after a restart, when the map is empty.
         """
         task_id = params.id
         identity: ResolvedIdentity | None = None
@@ -1350,7 +1353,7 @@ class AdCPRequestHandler(RequestHandler):
     ) -> Task | None:
         """Handle 'tasks/cancel' method to cancel a task.
 
-        Mirrors ``on_get_task``'s durability (#1544 B6): the in-memory task is
+        Mirrors ``on_get_task``'s durability: the in-memory task is
         resolved first, then the persisted workflow step carrying the buyer's outer
         ``task_*`` id — so a cancel still lands after a restart or in a different
         process than the create. A task/step already in a terminal state cannot be
@@ -2025,7 +2028,7 @@ class AdCPRequestHandler(RequestHandler):
             # fallback only for direct handler callers.
             raw_wire_payload=raw_wire_payload if raw_wire_payload is not None else params,
             # Persist the outer A2A task id on the workflow step so the completion
-            # webhook / tasks/get correlate to the id the buyer holds. #1544 B6.
+            # webhook / tasks/get correlate to the id the buyer holds.
             external_task_id=a2a_task_id,
         )
 
