@@ -334,3 +334,67 @@ def test_no_webhooks_configured(webhook_service, mock_db_session):
 
     # Should return False but not error
     assert result is False
+
+
+def test_deliver_rejects_metadata_url_without_post(webhook_service, mock_db_session, monkeypatch):
+    """Outbound SSRF gate must refuse cloud-metadata URLs before httpx POST."""
+    monkeypatch.delenv("ADCP_TESTING", raising=False)
+    start_time = datetime.now(UTC)
+
+    mock_config = MagicMock()
+    mock_config.url = "http://169.254.169.254/latest/meta-data/"
+    mock_config.authentication_type = None
+    mock_config.authentication_token = None
+    mock_config.validation_token = None
+    mock_config.webhook_secret = None
+    mock_db_session.scalars.return_value.all.return_value = [mock_config]
+
+    with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
+        result = webhook_service.send_delivery_webhook(
+            media_buy_id="buy_ssrf",
+            tenant_id="tenant1",
+            principal_id="principal1",
+            reporting_period_start=start_time,
+            reporting_period_end=start_time,
+            impressions=1000,
+            spend=100.0,
+        )
+
+    assert result is False
+    mock_client.assert_not_called()
+
+
+def test_deliver_disables_httpx_redirects(webhook_service, mock_db_session):
+    """httpx Client must disable redirects to prevent open-redirect SSRF."""
+    start_time = datetime.now(UTC)
+
+    mock_config = MagicMock()
+    mock_config.url = "https://example.com/webhook"
+    mock_config.authentication_type = None
+    mock_config.authentication_token = None
+    mock_config.validation_token = None
+    mock_config.webhook_secret = None
+    mock_db_session.scalars.return_value.all.return_value = [mock_config]
+
+    with (
+        patch(
+            "src.core.webhook_validator.WebhookURLValidator.validate_outbound_webhook_url",
+            return_value=(True, ""),
+        ),
+        patch("src.services.webhook_delivery_service.httpx.Client") as mock_client,
+    ):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
+
+        webhook_service.send_delivery_webhook(
+            media_buy_id="buy_redir",
+            tenant_id="tenant1",
+            principal_id="principal1",
+            reporting_period_start=start_time,
+            reporting_period_end=start_time,
+            impressions=1000,
+            spend=100.0,
+        )
+
+    mock_client.assert_called_with(timeout=10.0, follow_redirects=False)

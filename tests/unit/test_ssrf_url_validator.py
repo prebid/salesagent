@@ -87,6 +87,16 @@ class TestCheckUrlSsrf:
         is_safe, error = check_url_ssrf("file:///etc/passwd")
         assert is_safe is False
 
+    def test_cgnat_100_64_rejected(self):
+        is_safe, error = check_url_ssrf("http://100.64.0.1/webhook")
+        assert is_safe is False
+        assert "100.64.0.0/10" in error or "private" in error.lower() or "blocked" in error.lower()
+
+    def test_multicast_224_rejected(self):
+        is_safe, error = check_url_ssrf("http://224.0.0.1/webhook")
+        assert is_safe is False
+        assert "224.0.0.0/4" in error or "private" in error.lower() or "blocked" in error.lower()
+
     def test_require_https_rejects_http(self):
         with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
             is_safe, error = check_url_ssrf("http://example.com/agent", require_https=True)

@@ -5,14 +5,30 @@ Server-Side Request Forgery (SSRF) attacks where malicious users could
 trick the server into making requests to internal services.
 """
 
+from __future__ import annotations
+
+import os
+from typing import Any
+
 from adcp.types import TaskType
 
+from src.core.config import is_production
+from src.core.exceptions import AdCPValidationError
 from src.core.security.url_validator import check_url_ssrf
 
 # Fallback used when an action label is not a member of the SDK's closed
 # TaskType enum. create_mcp_webhook_payload() restricts task_type to that
 # enum and would otherwise reject the payload as schema-invalid.
 WEBHOOK_TASK_TYPE_FALLBACK = "update_media_buy"
+
+WEBHOOK_SSRF_SUGGESTION = (
+    "Provide a public https webhook URL that does not target private, loopback, "
+    "link-local, CGNAT, multicast, or cloud-metadata hosts."
+)
+WEBHOOK_SSRF_SUGGESTION_DEV = (
+    "Provide a public http(s) webhook URL that does not target private, loopback, "
+    "link-local, CGNAT, multicast, or cloud-metadata hosts."
+)
 
 
 def validate_webhook_task_type(task_type: str, fallback: str = WEBHOOK_TASK_TYPE_FALLBACK) -> str:
@@ -43,6 +59,31 @@ def validate_webhook_task_type(task_type: str, fallback: str = WEBHOOK_TASK_TYPE
     return task_type
 
 
+def webhook_ssrf_suggestion() -> str:
+    """Buyer-facing suggestion for registration/outbound SSRF rejections."""
+    if is_production() and os.environ.get("ADCP_TESTING") != "true":
+        return WEBHOOK_SSRF_SUGGESTION
+    return WEBHOOK_SSRF_SUGGESTION_DEV
+
+
+def reject_unsafe_webhook_registration_url(
+    url: str,
+    *,
+    field: str,
+    context: Any = None,
+) -> None:
+    """Raise AdCPValidationError when ``url`` fails the registration SSRF gate."""
+    is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(str(url))
+    if not is_valid:
+        raise AdCPValidationError(
+            f"Invalid {field}: {error_msg}",
+            field=field,
+            suggestion=webhook_ssrf_suggestion(),
+            recovery="correctable",
+            context=context,
+        )
+
+
 class WebhookURLValidator:
     """Validates webhook URLs to prevent SSRF attacks."""
 
@@ -53,6 +94,11 @@ class WebhookURLValidator:
             if "localhost" in error.lower() or "127.0.0" in error or "loopback" in error.lower():
                 return True, ""
         return is_valid, error
+
+    @staticmethod
+    def _require_https() -> bool:
+        """Production requires HTTPS; ADCP_TESTING keeps HTTP for capture servers."""
+        return is_production() and os.environ.get("ADCP_TESTING") != "true"
 
     @classmethod
     def validate_webhook_url(cls, url: str) -> tuple[bool, str]:
@@ -65,7 +111,7 @@ class WebhookURLValidator:
         Returns:
             (is_valid, error_message) - is_valid is True if safe, error_message explains failures
         """
-        return check_url_ssrf(url)
+        return check_url_ssrf(url, require_https=cls._require_https())
 
     @classmethod
     def validate_webhook_url_registration(cls, url: str) -> tuple[bool, str]:
@@ -74,19 +120,20 @@ class WebhookURLValidator:
         Blocks known-bad hostnames and literal private IPs. Unresolvable
         public hostnames are allowed here; send-time re-checks with DNS
         (``validate_outbound_webhook_url``). When ``ADCP_TESTING=true``,
-        localhost/loopback are allowed for capture servers.
+        localhost/loopback are allowed for capture servers. Production
+        requires HTTPS.
         """
-        import os
-
         allow_localhost = os.environ.get("ADCP_TESTING") == "true"
-        is_valid, error = check_url_ssrf(url, resolve_dns=False)
+        is_valid, error = check_url_ssrf(
+            url,
+            resolve_dns=False,
+            require_https=cls._require_https(),
+        )
         return cls._maybe_allow_localhost(is_valid, error, allow_localhost=allow_localhost)
 
     @classmethod
     def validate_outbound_webhook_url(cls, url: str) -> tuple[bool, str]:
         """Send-time SSRF gate (full DNS), with localhost allowance under ADCP_TESTING."""
-        import os
-
         if os.environ.get("ADCP_TESTING") == "true":
             return cls.validate_for_testing(url, allow_localhost=True)
         return cls.validate_webhook_url(url)
@@ -106,5 +153,6 @@ class WebhookURLValidator:
         Returns:
             (is_valid, error_message)
         """
-        is_valid, error = check_url_ssrf(url)
+        # Testing path always allows HTTP (capture servers, local harnesses).
+        is_valid, error = check_url_ssrf(url, require_https=False)
         return cls._maybe_allow_localhost(is_valid, error, allow_localhost=allow_localhost)

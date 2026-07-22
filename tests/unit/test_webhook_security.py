@@ -132,6 +132,29 @@ class TestWebhookURLValidator:
         is_valid, error = WebhookURLValidator.validate_for_testing("http://192.168.1.1/webhook", allow_localhost=True)
         assert not is_valid
 
+    def test_production_requires_https(self, monkeypatch):
+        """Production registration/outbound must reject plain HTTP."""
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.delenv("ADCP_TESTING", raising=False)
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration("http://buyer.example.com/hook")
+        assert not is_valid
+        assert "https" in error.lower()
+
+    def test_production_accepts_https_registration(self, monkeypatch):
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.delenv("ADCP_TESTING", raising=False)
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://buyer.example.com/hook")
+        assert is_valid
+        assert error == ""
+
+    def test_blocks_cgnat_range(self):
+        is_valid, error = WebhookURLValidator.validate_webhook_url("http://100.64.1.1/webhook")
+        assert not is_valid
+
+    def test_blocks_multicast_range(self):
+        is_valid, error = WebhookURLValidator.validate_webhook_url("http://224.0.0.1/webhook")
+        assert not is_valid
+
 
 class TestWebhookAuthenticator:
     """Test HMAC-SHA256 webhook authentication."""

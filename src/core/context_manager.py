@@ -30,7 +30,7 @@ console = Console()
 
 
 def _log_webhook_send_outcome(config_url: str, sent: bool) -> None:
-    """Log webhook delivery result; never treat ``False`` as success (#1578)."""
+    """Log webhook delivery result; never treat ``False`` as success."""
     if sent:
         console.print(f"[green]✅ Webhook sent successfully for {config_url}[/green]")
     else:

@@ -92,6 +92,23 @@ def _sync_creatives_impl(
     identity = require_identity(identity, context=context)
     tenant = require_tenant(identity, context=context)
 
+    # Registration SSRF gate before any DB / workflow writes that stash the URL.
+    webhook_url = None
+    if push_notification_config:
+        if isinstance(push_notification_config, dict):
+            webhook_url = push_notification_config.get("url")
+        else:
+            webhook_url = str(push_notification_config.url) if push_notification_config.url else None
+        if webhook_url:
+            from src.core.webhook_validator import reject_unsafe_webhook_registration_url
+
+            reject_unsafe_webhook_registration_url(
+                str(webhook_url),
+                field="push_notification_config.url",
+                context=context,
+            )
+        logger.info(f"[sync_creatives] Push notification webhook URL: {webhook_url}")
+
     # Track actions per creative for AdCP-compliant response
 
     results: list[SyncCreativeResult] = []
@@ -107,16 +124,6 @@ def _sync_creatives_impl(
 
     # Track creatives requiring approval for workflow creation
     creatives_needing_approval = []
-
-    # Extract webhook URL from push_notification_config for AI review callbacks
-    webhook_url = None
-    if push_notification_config:
-        # Transitional: accept both PushNotificationConfig model and dict
-        if isinstance(push_notification_config, dict):
-            webhook_url = push_notification_config.get("url")
-        else:
-            webhook_url = str(push_notification_config.url) if push_notification_config.url else None
-        logger.info(f"[sync_creatives] Push notification webhook URL: {webhook_url}")
 
     # Get tenant creative approval settings
     # approval_mode: "auto-approve", "require-human", "ai-powered"

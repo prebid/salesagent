@@ -634,16 +634,13 @@ class TestProtocolWebhookWireFormat:
 
         # host='127.0.0.1': this class is unit-style (no Docker) — the service
         # runs in-process, so loopback is always the right callback host.
-        # SSRF validation (#1695) rejects loopback in production; allow only for
-        # this hermetic wire-format harness (payload shape is the contract under test).
+        # Real outbound validator allows localhost when ADCP_TESTING=true
+        # (do not patch the SSRF gate — that would hide regressions).
         with (
             run_webhook_capture_server(
                 WebhookPayloadCapture, WebhookPayloadCapture.received_webhooks, host="127.0.0.1"
             ) as info,
-            patch(
-                "src.services.protocol_webhook_service.WebhookURLValidator.validate_outbound_webhook_url",
-                return_value=(True, ""),
-            ),
+            patch.dict("os.environ", {"ADCP_TESTING": "true"}),
         ):
             config = PushNotificationConfig(
                 id="pnc-test",

@@ -2003,24 +2003,11 @@ def _resolve_idempotency_race_or_raise(
     )
 
 
-_WEBHOOK_SSRF_SUGGESTION = (
-    "Provide a public http(s) webhook URL that does not target private, loopback, link-local, or cloud-metadata hosts."
-)
-
-
 def _reject_unsafe_webhook_url(url: str, *, field: str, context: Any = None) -> None:
-    """Raise AdCPValidationError when ``url`` fails the registration SSRF gate (#1695)."""
-    from src.core.webhook_validator import WebhookURLValidator
+    """Raise AdCPValidationError when ``url`` fails the registration SSRF gate."""
+    from src.core.webhook_validator import reject_unsafe_webhook_registration_url
 
-    is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(str(url))
-    if not is_valid:
-        raise AdCPValidationError(
-            f"Invalid {field}: {error_msg}",
-            field=field,
-            suggestion=_WEBHOOK_SSRF_SUGGESTION,
-            recovery="correctable",
-            context=context,
-        )
+    reject_unsafe_webhook_registration_url(url, field=field, context=context)
 
 
 async def _create_media_buy_impl(
@@ -2069,8 +2056,8 @@ async def _create_media_buy_impl(
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     tenant = require_tenant(identity, context=req.context)
 
-    # SSRF gate at registration (#1695 / #1578) — after auth so unauthenticated
-    # callers get AUTH first. Must run before workflow metadata / DB writes.
+    # SSRF gate at registration — after auth so unauthenticated callers get AUTH
+    # first. Must run before workflow metadata / DB writes.
     # Use str(url): library ReportingWebhook.url is pydantic AnyUrl, not str.
     if req.reporting_webhook:
         rw_url = getattr(req.reporting_webhook, "url", None)
@@ -2163,12 +2150,24 @@ async def _create_media_buy_impl(
         # Skip for dry_run mode (no database writes). URL was SSRF-checked above;
         # persist via repository upsert (registration gate + defense in depth).
         if push_notification_config:
-            from src.core.database.repositories import PushNotificationConfigUoW
+            from urllib.parse import urlparse
 
-            logger.info(f"[MCP/A2A] Registering push notification config from request: {push_notification_config}")
+            from src.core.database.repositories import PushNotificationConfigUoW
 
             url = push_notification_config.get("url")
             authentication = push_notification_config.get("authentication", {})
+            # Log scheme+host only — never credentials / full auth blob.
+            parsed = urlparse(str(url)) if url else None
+            safe_url = (
+                f"{parsed.scheme}://{parsed.hostname}{parsed.path or ''}"
+                if parsed and parsed.scheme and parsed.hostname
+                else None
+            )
+            logger.info(
+                "[MCP/A2A] Registering push notification config id=%s url=%s",
+                push_notification_config.get("id"),
+                safe_url,
+            )
 
             if url:
                 schemes = authentication.get("schemes", []) if authentication else []

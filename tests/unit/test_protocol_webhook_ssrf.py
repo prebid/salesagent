@@ -1,10 +1,9 @@
-"""SSRF gate for protocol push / reporting webhook URLs (#1695 / #1578).
+"""SSRF gate for protocol push / reporting webhook URLs.
 
 Pins that ProtocolWebhookService refuses unsafe URLs before any outbound POST,
-mirroring application-level WebhookURLValidator usage in webhook_delivery.py.
-
-Also pins registration wiring: create_media_buy (ReportingWebhook AnyUrl + PNC),
-A2A message/send intake, and A2A set_push_notification_config helper.
+mirrors application-level WebhookURLValidator usage in webhook_delivery, and
+covers registration wiring: create_media_buy, sync_creatives, A2A message/send,
+and A2A set_push_notification_config handler.
 """
 
 from __future__ import annotations
@@ -12,6 +11,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 from a2a.types import (
     InvalidParamsError,
     Message,
@@ -22,6 +22,7 @@ from a2a.types import (
     TaskPushNotificationConfig,
 )
 from adcp.types import ReportingWebhook
+from fastmcp.exceptions import ToolError
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _require_safe_a2a_webhook_url
 from src.core.database.models import PushNotificationConfig
@@ -29,9 +30,13 @@ from src.core.exceptions import AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
+from src.core.tool_error_logging import with_error_logging
+from src.core.tools.creatives._sync import _sync_creatives_impl
 from src.core.tools.media_buy_create import _create_media_buy_impl, _reject_unsafe_webhook_url
+from src.core.webhook_validator import WEBHOOK_SSRF_SUGGESTION_DEV, reject_unsafe_webhook_registration_url
 from src.services.protocol_webhook_service import ProtocolWebhookService
 from tests.factories.principal import PrincipalFactory
+from tests.helpers import assert_envelope_shape
 
 _METADATA_URL = "http://169.254.169.254/latest/meta-data/"
 _AUTH_CREDS = "x" * 32
@@ -88,7 +93,7 @@ def _minimal_create_request(**overrides):
 
 @pytest.mark.asyncio
 async def test_send_notification_rejects_metadata_url_without_post() -> None:
-    """Cloud metadata URL must fail closed before requests.Session.post (#1695)."""
+    """Cloud metadata URL must fail closed before requests.Session.post."""
     service = ProtocolWebhookService()
     with patch.object(service._session, "post", autospec=True) as mock_post:
         sent = await service.send_notification(
@@ -150,7 +155,46 @@ async def test_send_notification_posts_when_url_is_public() -> None:
         json={"task_id": "t1", "status": "completed"},
         headers={"Content-Type": "application/json", "User-Agent": "AdCP-Sales-Agent/1.0"},
         timeout=10.0,
+        allow_redirects=False,
     )
+
+
+@pytest.mark.asyncio
+async def test_send_notification_does_not_follow_redirect_to_metadata() -> None:
+    """302 to link-local metadata must not be followed (open-redirect SSRF)."""
+    service = ProtocolWebhookService()
+    redirect = MagicMock()
+    redirect.status_code = 302
+    redirect.headers = {"Location": _METADATA_URL}
+    redirect.raise_for_status.side_effect = requests.HTTPError("302 redirect")
+
+    with (
+        patch(
+            "src.services.protocol_webhook_service.WebhookURLValidator.validate_outbound_webhook_url",
+            return_value=(True, ""),
+        ),
+        patch.object(service._session, "post", return_value=redirect) as mock_post,
+        patch(
+            "src.services.protocol_webhook_service.extract_webhook_result_data",
+            return_value=None,
+        ),
+        patch(
+            "src.services.protocol_webhook_service.get_audit_logger",
+            return_value=MagicMock(),
+        ),
+        patch("src.services.protocol_webhook_service.asyncio.sleep", return_value=None),
+    ):
+        sent = await service.send_notification(
+            _config("https://buyer.example.com/hooks/adcp"),
+            payload={"task_id": "t1", "status": "completed"},
+            metadata={"task_type": "create_media_buy", "tenant_id": "t1"},
+        )
+
+    assert sent is False
+    assert mock_post.call_count >= 1
+    for call in mock_post.call_args_list:
+        assert call.kwargs.get("allow_redirects") is False
+        assert call.args[0] == "https://buyer.example.com/hooks/adcp"
 
 
 def test_reject_unsafe_webhook_url_raises_validation_error() -> None:
@@ -161,6 +205,7 @@ def test_reject_unsafe_webhook_url_raises_validation_error() -> None:
         )
     assert exc_info.value.field == "reporting_webhook.url"
     assert "Invalid reporting_webhook.url" in exc_info.value.message
+    assert exc_info.value.suggestion == WEBHOOK_SSRF_SUGGESTION_DEV
 
 
 def test_reject_unsafe_webhook_url_allows_public() -> None:
@@ -169,11 +214,32 @@ def test_reject_unsafe_webhook_url_allows_public() -> None:
 
 
 def test_reject_unsafe_webhook_url_allows_unresolvable_public_hostname() -> None:
-    """Registration gate must not require DNS (BDD fixture hosts) (#1695)."""
+    """Registration gate must not require DNS (BDD fixture hosts)."""
     _reject_unsafe_webhook_url(
         "https://nonexistent-buyer-ssrf-fixture.invalid/hook",
         field="reporting_webhook.url",
     )
+
+
+def test_create_ssrf_rejection_wire_envelope() -> None:
+    """Transport MCP wrapper must emit VALIDATION_ERROR / correctable + suggestion."""
+
+    def failing_tool():
+        reject_unsafe_webhook_registration_url(_METADATA_URL, field="reporting_webhook.url")
+
+    wrapped = with_error_logging(failing_tool)
+    with pytest.raises(ToolError) as exc_info:
+        wrapped()
+
+    assert_envelope_shape(
+        exc_info.value,
+        "VALIDATION_ERROR",
+        check_mcp_tool_error=True,
+        recovery="correctable",
+        message_substr="reporting_webhook.url",
+    )
+    envelope = exc_info.value.envelope
+    assert envelope["errors"][0].get("suggestion") == WEBHOOK_SSRF_SUGGESTION_DEV
 
 
 def test_push_notification_config_repo_upsert_rejects_ssrf_url() -> None:
@@ -194,10 +260,7 @@ def test_push_notification_config_repo_upsert_rejects_ssrf_url() -> None:
 
 @pytest.mark.asyncio
 async def test_create_media_buy_rejects_reporting_webhook_anyurl() -> None:
-    """Registration gate must run for real ReportingWebhook.url (AnyUrl, not str).
-
-    Dual-review blocker: ``isinstance(url, str)`` skipped pydantic AnyUrl.
-    """
+    """Registration gate must run for real ReportingWebhook.url (AnyUrl, not str)."""
     req = _minimal_create_request(reporting_webhook=_reporting_webhook(_METADATA_URL))
     with pytest.raises(AdCPValidationError) as exc_info:
         await _create_media_buy_impl(req, identity=_identity())
@@ -224,6 +287,17 @@ async def test_create_media_buy_rejects_push_config_before_workflow() -> None:
     mock_ctx.create_context.assert_not_called()
 
 
+def test_sync_creatives_rejects_unsafe_push_config_url() -> None:
+    """sync_creatives must reject metadata URL at registration before DB work."""
+    with pytest.raises(AdCPValidationError) as exc_info:
+        _sync_creatives_impl(
+            creatives=[],
+            push_notification_config={"url": _METADATA_URL},
+            identity=_identity(),
+        )
+    assert exc_info.value.field == "push_notification_config.url"
+
+
 def test_require_safe_a2a_webhook_url_rejects_metadata() -> None:
     """Shared A2A registration helper used by set_push + message/send."""
     with pytest.raises(InvalidParamsError, match="Invalid webhook URL"):
@@ -232,7 +306,7 @@ def test_require_safe_a2a_webhook_url_rejects_metadata() -> None:
 
 @pytest.mark.asyncio
 async def test_a2a_message_send_rejects_unsafe_push_config_url() -> None:
-    """message/send must reject metadata URL before stash (#1578 sibling)."""
+    """message/send must reject metadata URL before stash."""
     handler = AdCPRequestHandler()
     text_part = Part()
     text_part.text = "list products"
@@ -247,3 +321,25 @@ async def test_a2a_message_send_rejects_unsafe_push_config_url() -> None:
         await handler.on_message_send(params, context=MagicMock())
 
     assert handler._task_push_configs == {}
+
+
+@pytest.mark.asyncio
+async def test_a2a_set_push_handler_rejects_metadata_url() -> None:
+    """Handler on_create_task_push_notification_config must reject before upsert."""
+    handler = AdCPRequestHandler()
+    identity = _identity()
+    tool_context = MagicMock()
+    tool_context.tenant_id = identity.tenant_id
+    tool_context.principal_id = identity.principal_id
+    params = TaskPushNotificationConfig(url=_METADATA_URL, task_id="task-1", id="pnc-1")
+
+    with (
+        patch.object(handler, "_get_auth_token", return_value="tok"),
+        patch.object(handler, "_resolve_a2a_identity", return_value=identity),
+        patch.object(handler, "_make_tool_context", return_value=tool_context),
+        patch("src.a2a_server.adcp_a2a_server.PushNotificationConfigUoW") as mock_uow,
+        pytest.raises(InvalidParamsError, match="Invalid webhook URL"),
+    ):
+        await handler.on_create_task_push_notification_config(params, context=MagicMock())
+
+    mock_uow.assert_not_called()

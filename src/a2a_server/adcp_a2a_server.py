@@ -118,7 +118,7 @@ logger = logging.getLogger(__name__)
 
 
 def _require_safe_a2a_webhook_url(url: str) -> None:
-    """Raise InvalidParamsError when ``url`` fails the registration SSRF gate (#1695)."""
+    """Raise InvalidParamsError when ``url`` fails the registration SSRF gate."""
     from src.core.webhook_validator import WebhookURLValidator
 
     is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(url)
@@ -589,7 +589,7 @@ class AdCPRequestHandler(RequestHandler):
         context_id = params.message.context_id or msg_id or f"ctx_{task_id}"
 
         # Extract push notification config from protocol layer (A2A SendMessageConfiguration).
-        # SSRF-reject unsafe URLs before stash / task creation (#1695 / #1578 sibling).
+        # SSRF-reject unsafe URLs before stash / task creation.
         push_notification_config: TaskPushNotificationConfig | None = None
         if params.HasField("configuration") and params.configuration.HasField("task_push_notification_config"):
             push_notification_config = params.configuration.task_push_notification_config

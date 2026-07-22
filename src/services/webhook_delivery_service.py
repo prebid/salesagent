@@ -469,6 +469,20 @@ class WebhookDeliveryService:
         if config.authentication_type == "bearer" and config.authentication_token:
             headers["Authorization"] = f"Bearer {config.authentication_token}"
 
+        # Send-time SSRF gate (registration may have skipped DNS). Fail closed
+        # before any outbound POST — load-bearing for GAM reporting webhooks.
+        from src.core.webhook_validator import WebhookURLValidator
+
+        is_valid, error_msg = WebhookURLValidator.validate_outbound_webhook_url(config.url)
+        if not is_valid:
+            logger.error(
+                "Application webhook URL failed SSRF validation (url=%s): %s",
+                config.url,
+                error_msg,
+            )
+            circuit_breaker.record_failure()
+            return False
+
         # Exponential backoff with jitter
         for attempt in range(max_retries):
             try:
@@ -479,8 +493,8 @@ class WebhookDeliveryService:
                     logger.debug(f"Retrying webhook delivery after {delay:.2f}s (attempt {attempt + 1}/{max_retries})")
                     time.sleep(delay)
 
-                # Send webhook
-                with httpx.Client(timeout=10.0) as client:
+                # Send webhook — never follow redirects (open-redirect SSRF bypass).
+                with httpx.Client(timeout=10.0, follow_redirects=False) as client:
                     response = client.post(
                         config.url,
                         json=payload,
