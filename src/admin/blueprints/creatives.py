@@ -535,7 +535,9 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             assignment_buy_ids = [a.media_buy_id for a in assignments]
 
             logger.info(
-                f"[CREATIVE APPROVAL] Creative {creative_id} approved, checking {len(assignments)} media buy assignments"
+                "[CREATIVE APPROVAL] Creative %s approved, checking %s media buy assignments",
+                sanitize_log_value(creative_id),
+                len(assignments),
             )
 
             # Snapshot buy statuses here to avoid a second UoW after commit
@@ -548,28 +550,32 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                     continue
 
                 assignment_buy_statuses[media_buy_id] = media_buy.status
-                logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} status: {media_buy.status}")
+                logger.info(
+                    "[CREATIVE APPROVAL] Media buy %s status: %s",
+                    sanitize_log_value(media_buy_id),
+                    sanitize_log_value(media_buy.status),
+                )
 
                 if media_buy.status in {"pending_creatives", "draft"}:
-                    # Get all creative assignments for this media buy
-                    all_assignments = uow.assignments.get_by_media_buy(media_buy_id)
-
-                    creative_ids = [a.creative_id for a in all_assignments]
-                    all_creatives = uow.creatives.admin_get_by_ids(creative_ids)
-
-                    unapproved_creatives = [
-                        c.creative_id for c in all_creatives if c.status not in ["approved", "active"]
-                    ]
+                    # Shared tenant-scoped readiness query (#1544) — same home as the
+                    # admin approve gates; this buy has >= 1 assignment (the creative
+                    # just approved), so ready_for_finalize == all assigned approved.
+                    readiness = uow.assignments.creative_readiness(media_buy_id)
 
                     logger.info(
-                        f"[CREATIVE APPROVAL] Media buy {media_buy_id} has {len(unapproved_creatives)} unapproved creatives remaining"
+                        "[CREATIVE APPROVAL] Media buy %s has %s unapproved creatives remaining",
+                        sanitize_log_value(media_buy_id),
+                        len(readiness.unapproved_creative_ids),
                     )
 
-                    if not unapproved_creatives:
+                    if readiness.ready_for_finalize:
                         media_buy_actions.append({"media_buy_id": media_buy_id})
                     else:
                         logger.info(
-                            f"[CREATIVE APPROVAL] Media buy {media_buy_id} still waiting for {len(unapproved_creatives)} creatives: {unapproved_creatives}"
+                            "[CREATIVE APPROVAL] Media buy %s still waiting for %s creatives: %s",
+                            sanitize_log_value(media_buy_id),
+                            len(readiness.unapproved_creative_ids),
+                            sanitize_log_value(readiness.unapproved_creative_ids),
                         )
 
             # UoW auto-commits here
@@ -636,15 +642,25 @@ def approve_creative(tenant_id, creative_id, **kwargs):
         ]
 
         for buy_id in buys_to_push:
-            logger.info(f"[CREATIVE APPROVAL] Retroactive push: creative {creative_id} → live buy {buy_id}")
+            logger.info(
+                "[CREATIVE APPROVAL] Retroactive push: creative %s → live buy %s",
+                sanitize_log_value(creative_id),
+                sanitize_log_value(buy_id),
+            )
             push_success, push_err = push_creative_to_existing_buy(
                 creative_id=creative_id,
                 media_buy_id=buy_id,
                 tenant_id=tenant_id,
             )
             if not push_success:
+                # push_err is adapter-returned text — sanitize like every other
+                # adapter value in this function (same convention as the finalize
+                # arm above). #1544.
                 logger.error(
-                    f"[CREATIVE APPROVAL] Retroactive push failed for creative {creative_id} → buy {buy_id}: {push_err}"
+                    "[CREATIVE APPROVAL] Retroactive push failed for creative %s → buy %s: %s",
+                    sanitize_log_value(creative_id),
+                    sanitize_log_value(buy_id),
+                    sanitize_log_value(push_err),
                 )
                 push_warnings.append(f"Creative push to buy {buy_id} failed — see server logs for details")
 
@@ -654,8 +670,11 @@ def approve_creative(tenant_id, creative_id, **kwargs):
         return jsonify(response_body)
 
     except Exception as e:
-        logger.error(f"Error approving creative: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        # Detail stays in the server log (sanitized, with traceback); the client
+        # gets a generic message — same information-exposure discipline as the
+        # admin approve routes. #1544.
+        logger.error("Error approving creative: %s", sanitize_log_value(e), exc_info=True)
+        return jsonify({"error": "Creative approval failed — see server logs for details"}), 500
 
 
 @creatives_bp.route("/review/<creative_id>/reject", methods=["POST"])
@@ -754,8 +773,10 @@ def reject_creative(tenant_id, creative_id, **kwargs):
         return jsonify({"success": True, "status": "rejected"})
 
     except Exception as e:
-        logger.error(f"Error rejecting creative: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        # Same discipline as approve_creative: detail in the sanitized server log,
+        # generic message to the client. #1544.
+        logger.error("Error rejecting creative: %s", sanitize_log_value(e), exc_info=True)
+        return jsonify({"error": "Creative rejection failed — see server logs for details"}), 500
 
 
 async def _ai_review_creative_async(
