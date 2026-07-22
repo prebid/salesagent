@@ -348,20 +348,18 @@ class TestCreateMediaBuyManualApproval:
         )
         assert result.status == "submitted"
 
-        media_buy_id = resolve_media_buy_id_from_task(result.response.task_id)
-        with get_db_session() as session:
-            from src.core.database.models import ObjectWorkflowMapping
+        # The submitted response's task_id IS the persisted workflow step id — read it back
+        # through the repository (no raw session), and assert the outer task id was forwarded.
+        # request_metadata is merged into request_data at the persistence boundary.
+        from src.core.database.repositories import WorkflowUoW
 
-            step = session.scalars(
-                select(WorkflowStep)
-                .join(ObjectWorkflowMapping, ObjectWorkflowMapping.step_id == WorkflowStep.step_id)
-                .where(ObjectWorkflowMapping.object_id == media_buy_id)
-            ).first()
+        with WorkflowUoW(mb_tenant_with_approval["tenant_id"]) as uow:
+            step = uow.workflows.get_by_step_id(result.response.task_id)
             assert step is not None, "manual-approval create must persist a workflow step"
-            # request_metadata is merged into request_data at the persistence boundary.
-            assert (step.request_data or {}).get("external_task_id") == outer_task_id, (
-                "the A2A outer task id must be forwarded into the persisted step's request_data"
-            )
+            forwarded = (step.request_data or {}).get("external_task_id")
+        assert forwarded == outer_task_id, (
+            "the A2A outer task id must be forwarded into the persisted step's request_data"
+        )
 
     @pytest.mark.asyncio
     async def test_execute_approved_calls_adapter(self, mb_tenant_with_approval, mb_principal, mb_products):
