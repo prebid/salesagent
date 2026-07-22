@@ -397,6 +397,10 @@ class WebhookDeliveryService:
                         logger.warning(f"⚠️ Circuit breaker OPEN for {config.url}, skipping webhook delivery")
                         continue
 
+                    # Send-time SSRF gate before enqueue/POST (registration may skip DNS).
+                    if self._reject_unsafe_outbound_url(config.url, circuit_breaker):
+                        continue
+
                     # Add to queue (bounded)
                     webhook_data = {
                         "config": config,
@@ -422,6 +426,21 @@ class WebhookDeliveryService:
         except Exception as e:
             logger.error(f"❌ Error in webhook delivery: {e}", exc_info=True)
             return False
+
+    def _reject_unsafe_outbound_url(self, url: str, circuit_breaker: CircuitBreaker) -> bool:
+        """Return True when outbound URL fails SSRF (caller must skip delivery)."""
+        from src.core.webhook_validator import WebhookURLValidator
+
+        is_valid, error_msg = WebhookURLValidator.validate_outbound_webhook_url(url)
+        if not is_valid:
+            logger.error(
+                "Application webhook URL failed SSRF validation (url=%s): %s",
+                url,
+                error_msg,
+            )
+            circuit_breaker.record_failure()
+            return True
+        return False
 
     def _deliver_with_backoff(
         self,
@@ -468,20 +487,6 @@ class WebhookDeliveryService:
         # Add authentication
         if config.authentication_type == "bearer" and config.authentication_token:
             headers["Authorization"] = f"Bearer {config.authentication_token}"
-
-        # Send-time SSRF gate (registration may have skipped DNS). Fail closed
-        # before any outbound POST — load-bearing for GAM reporting webhooks.
-        from src.core.webhook_validator import WebhookURLValidator
-
-        is_valid, error_msg = WebhookURLValidator.validate_outbound_webhook_url(config.url)
-        if not is_valid:
-            logger.error(
-                "Application webhook URL failed SSRF validation (url=%s): %s",
-                config.url,
-                error_msg,
-            )
-            circuit_breaker.record_failure()
-            return False
 
         # Exponential backoff with jitter
         for attempt in range(max_retries):
