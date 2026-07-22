@@ -251,9 +251,7 @@ class TestWorkflowApproval:
         from src.core.database.repositories import MediaBuyRepository
 
         _auth_session(client, test_tenant)
-        mbid, context_id, step_id = _setup_mapped_media_buy_step(
-            factory_session, test_tenant, with_assignment=False
-        )
+        mbid, context_id, step_id = _setup_mapped_media_buy_step(factory_session, test_tenant, with_assignment=False)
 
         response = client.post(
             f"/tenant/{test_tenant}/workflows/{context_id}/steps/{step_id}/approve",
@@ -547,9 +545,7 @@ class TestOperationsDecisionOwnership:
         creative-less buy into the ad server) cannot drift between them. #1544.
         """
         _auth_session(client, test_tenant)
-        mbid, _context_id, _step_id = _setup_mapped_media_buy_step(
-            factory_session, test_tenant, with_assignment=False
-        )
+        mbid, _context_id, _step_id = _setup_mapped_media_buy_step(factory_session, test_tenant, with_assignment=False)
         r = client.post(
             f"/tenant/{test_tenant}/media-buy/{mbid}/approve",
             data={"action": "approve"},

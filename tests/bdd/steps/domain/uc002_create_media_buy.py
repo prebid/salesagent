@@ -2366,11 +2366,14 @@ def then_dry_run_sandbox_labelled_conformant(ctx: dict) -> None:
     REQUIRED key; the model serializer re-injects it explicitly (see
     CreateMediaBuySuccess._serialize_model).
     """
+    from tests.bdd.steps._outcome_helpers import wire_integer
+
     resp = _require_success_response(ctx)
     assert _get_response_field(resp, "sandbox") is True, "dry-run must be labelled sandbox=true"
-    assert _get_response_field(resp, "revision") == 1, "dry-run must carry the initial revision 1"
-    assert _get_response_field(resp, "confirmed_at") is None, "dry-run confirmed_at must be null (nothing committed)"
     body = _serialized_success_body(ctx)
+    # revision is graded on the WIRE like the sibling exact-value steps — a
+    # serialization regression of the token must go red here too. #1544 round-4.
+    assert wire_integer(ctx, body, "revision") == 1, "dry-run must carry the initial revision 1 on the wire"
     assert "confirmed_at" in body, f"REQUIRED confirmed_at must be PRESENT on the wire, not omitted: {body!r}"
     assert body["confirmed_at"] is None, (
         f"dry-run confirmed_at must serialize as null (present-with-null), got {body['confirmed_at']!r}"

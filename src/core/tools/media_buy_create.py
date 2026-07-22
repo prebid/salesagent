@@ -1143,8 +1143,10 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             # Import adapter helper here (used for both creative upload and order approval)
             from src.core.helpers.adapter_helpers import get_adapter
 
-            # Get all creative assignments for this media buy
-            stmt_assignments = select(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
+            # Get all creative assignments for this media buy (tenant-scoped: a
+            # cross-tenant assignment row against this buy id must never feed the
+            # adapter upload — same discipline as the approve-gate queries).
+            stmt_assignments = select(CreativeAssignment).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)
             assignments = session.scalars(stmt_assignments).all()
 
             if assignments:
