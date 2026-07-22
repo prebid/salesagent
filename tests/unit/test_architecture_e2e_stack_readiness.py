@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import iter_git_tracked_files, repo_root
+from tests.unit._architecture_helpers import iter_call_expressions, iter_git_tracked_files, repo_root
 
 _HELPER_REL = "tests/e2e/stack_readiness.py"
 _CONFTEST_REL = "tests/e2e/conftest.py"
@@ -37,9 +37,7 @@ def _parse_tracked(repo: Path, rel: str) -> ast.Module:
 
 def _call_names(tree: ast.AST) -> set[str]:
     names: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
+    for node in iter_call_expressions(tree):
         func = node.func
         if isinstance(func, ast.Name):
             names.add(func.id)
@@ -76,40 +74,31 @@ def _http_poll_loop_in_function(func: ast.FunctionDef | ast.AsyncFunctionDef) ->
     """True if the function body still owns an HTTP health poll loop (dedupe breach)."""
     has_sleep = False
     has_health_get = False
-    for node in ast.walk(func):
-        if isinstance(node, ast.Call):
-            # time.sleep(...)
-            if isinstance(node.func, ast.Attribute) and node.func.attr == "sleep":
-                has_sleep = True
-            if isinstance(node.func, ast.Name) and node.func.id == "sleep":
-                has_sleep = True
-            # client.get(.../health) or requests.get(.../health)
-            if isinstance(node.func, ast.Attribute) and node.func.attr == "get":
-                for arg in node.args:
-                    if isinstance(arg, ast.JoinedStr):
-                        if any(
-                            isinstance(v, ast.Constant) and isinstance(v.value, str) and "/health" in v.value
-                            for v in arg.values
-                        ):
-                            has_health_get = True
-                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and "/health" in arg.value:
+    for node in iter_call_expressions(func):
+        # time.sleep(...) / sleep(...)
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "sleep":
+            has_sleep = True
+        if isinstance(node.func, ast.Name) and node.func.id == "sleep":
+            has_sleep = True
+        # client.get(.../health) or requests.get(.../health)
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "get":
+            for arg in node.args:
+                if isinstance(arg, ast.JoinedStr):
+                    if any(
+                        isinstance(v, ast.Constant) and isinstance(v.value, str) and "/health" in v.value
+                        for v in arg.values
+                    ):
                         has_health_get = True
-                    if isinstance(arg, ast.BinOp):  # url + "/health" style
-                        has_health_get = True
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and "/health" in arg.value:
+                    has_health_get = True
+                if isinstance(arg, ast.BinOp):  # url + "/health" style
+                    has_health_get = True
     return has_sleep and has_health_get
 
 
 def _wait_calls_in_docker_services(tree: ast.Module) -> list[ast.Call]:
     func = _function_def(tree, "docker_services_e2e")
-    return [
-        node
-        for node in ast.walk(func)
-        if isinstance(node, ast.Call)
-        and (
-            (isinstance(node.func, ast.Name) and node.func.id == "wait_for_e2e_stack")
-            or (isinstance(node.func, ast.Attribute) and node.func.attr == "wait_for_e2e_stack")
-        )
-    ]
+    return list(iter_call_expressions(func, name="wait_for_e2e_stack"))
 
 
 def _helper_references_log_dump_for_creative_agent(tree: ast.Module) -> bool:
