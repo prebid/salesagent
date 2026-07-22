@@ -1563,7 +1563,13 @@ def _build_update_request(
     ext: Any = None,
     idempotency_key: Annotated[
         str | None,
-        Field(description="Required request key; validated but inert while idempotency is unsupported"),
+        Field(
+            description=(
+                "Required request key. This seller advertises idempotency support; replay is "
+                "implemented on create_media_buy today, so a repeated key here is validated and "
+                "accepted but not yet deduplicated."
+            )
+        ),
     ] = None,
     revision: RawUnsupportedRevision = REVISION_OMITTED,
 ) -> UpdateMediaBuyRequest:
@@ -1573,8 +1579,8 @@ def _build_update_request(
     Used by MCP, A2A, and REST, making this the shared protocol boundary for
     required request fields that the internal request model keeps optional.
     """
-    # AdCP 3.1.1 requires idempotency_key on update-media-buy requests even
-    # when this seller advertises no replay/deduplication guarantee. Validate
+    # AdCP 3.1.1 requires idempotency_key on every mutating request, including
+    # the tools this seller does not yet deduplicate. Validate
     # requiredness and raw JSON type here, before Pydantic can coerce a numeric
     # A2A value into a string, so every transport returns VALIDATION_ERROR.
     validate_update_media_buy_protocol_fields(

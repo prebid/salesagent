@@ -535,7 +535,8 @@ async def get_capabilities(
       VALIDATION_ERROR (raised in ``get_adcp_capabilities_raw``'s validation
       boundary when the request model rejects the enum value).
     * ``idempotency_key`` — optional 3.1 read-envelope metadata. A supplied
-      value is shape-validated, then ignored while support is advertised false.
+      value is shape-validated, then ignored: read tasks have no side effect to
+      deduplicate, so the key is envelope metadata only.
     """
     if idempotency_key is not None:
         validate_standard_read_idempotency_key(

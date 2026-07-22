@@ -68,8 +68,9 @@ def _sync_creatives_impl(
         validation_mode: Validation strictness (strict or lenient)
         push_notification_config: Push notification config for status updates (AdCP spec, optional)
         context: Application level context per adcp spec
-        idempotency_key: Required on protocol requests; accepted without replay
-            guarantees while capabilities declare idempotency unsupported.
+        idempotency_key: Required on protocol requests. Capabilities advertise
+            idempotency support, but dedupe is implemented on create_media_buy
+            today, so a retry here is accepted and re-executed.
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
 
     Returns:

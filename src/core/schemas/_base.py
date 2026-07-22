@@ -2057,9 +2057,10 @@ def validate_idempotency_key_shape(key: str | None, *, allow_none: bool = True) 
 def require_idempotency_key(key: str | None) -> None:
     """Enforce the spec-required idempotency key at a transport boundary.
 
-    AdCP 3.1.1 requires the field on mutating task requests even when the seller
-    declares that it does not deduplicate retries. Requiredness and shape are
-    separate from the capability's replay guarantee.
+    AdCP 3.1.1 requires the field on every mutating task request. Requiredness
+    and shape are separate from the capability's replay guarantee: this seller
+    advertises idempotency support, and the tools that do not yet deduplicate
+    still MUST reject a missing key.
     """
     if key is None:
         from src.core.exceptions import missing_idempotency_key_error

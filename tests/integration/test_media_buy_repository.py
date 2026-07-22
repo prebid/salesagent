@@ -459,7 +459,7 @@ class TestIdempotencyKeyLookup:
             assert found.payload_hash == payload_hash
 
     def test_get_by_id_or_idempotency_key_threads_account_id(self, integration_db):
-        """account_id scopes the dormant legacy-key fallback.
+        """account_id scopes the live legacy-key fallback.
 
         The lookup falls back from media_buy_id to idempotency_key; the account
         must reach find_by_idempotency_key, or the fallback silently forces

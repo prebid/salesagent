@@ -151,8 +151,20 @@ reads, omission is accepted under the 3.1 grace and a valid supplied key is
 validated inert metadata.
 
 The `dist/compliance/3.1.1/universal/idempotency.yaml` replay / changed-payload
-conflict / fresh-key / concurrent-first-insert-wins phases now grade against
-this seller's live create behavior under the advertised `supported: true`.
+conflict / fresh-key phases now grade against this seller's live create
+behavior under the advertised `supported: true`.
+
+The concurrent-first-insert-wins phase grades what the BUYER observes — one
+`media_buy_id` across both responses — and that holds: the unique index makes
+the second insert lose and the loser never returns a second buy. It is NOT full
+rule-9 conformance. Rule 9 requires the canonical hash on an in-flight claim row
+written BEFORE the downstream invoke ("write-claim-before-invoke"), and this
+seller writes the hash on the committed `MediaBuy`, so the adapter call at
+`media_buy_create.py` runs before the duplicate is detected. A concurrent
+same-key retry can therefore book a second ad-server order whose orphan the
+code notes at the degraded-replay site. The claim row is the reservation
+subsystem, tracked separately; the gap is stated here rather than implied to be
+covered.
 
 ### Generated UC-002 status
 
@@ -194,8 +206,19 @@ runner grades this behavior.
 
 Decision for this PR: the seller does not yet implement the required atomic
 comparison. Every transport must preserve field presence and route any supplied
-`revision`—including explicit JSON `null`—to the shared fail-loud guard, which
-rejects the request without applying the update. Omission remains valid. This
+`revision` to the shared fail-loud guard, which rejects the request without
+applying the update.
+
+Omission remains valid, and explicit JSON `null` is treated AS omission — it
+proceeds rather than rejecting. Grounding for that: the pinned
+`dist/schemas/3.1.1/media-buy/update-media-buy-request.json` defines `revision`
+as `{"type": "integer", "minimum": 1}` and does not list it as required, with no
+`anyOf`-null member — so `null` is not a value the schema contemplates at all.
+Rejecting it would be a stricter-than-spec reading that penalizes a client
+serializing an unset optional field, while accepting it is safe precisely
+because no precondition is applied either way. (An earlier draft grounded this
+in the SDK's `int | None = None` model shape; the SDK is a cross-check, not the
+authority, and the schema is what settles it.) This
 is a safety posture that prevents an unprotected lost update; it is an explicit
 implementation gap, not a claim of full revision conformance.
 

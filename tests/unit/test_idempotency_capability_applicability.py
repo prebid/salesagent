@@ -21,9 +21,15 @@ LOCAL_OVERLAYS = PROJECT_ROOT / "tests" / "bdd" / "overlays" / "BR-UC-002-create
 
 LIVE_REPLAY_SCENARIO = "T-UC-002-v31-idempotency-replay"
 BOUNDARY_SCENARIO = "T-UC-002-v31-idempotency-pattern-invalid"
-# Upstream supported=true phases with no production implementation yet —
-# visible in the generated feature, not wired, not claimed as passing.
-REMAINING_UNIMPLEMENTED_SCENARIOS = frozenset(
+# Upstream supported=true phases visible in the generated feature but NOT wired
+# to the BDD harness. The name is about scenario wiring, not production: -expired
+# and -canonical-comparison DO ship (AdCPIdempotencyExpiredError and the RFC 8785
+# canonicalizer), and both are graded at the real wire in
+# tests/integration/test_idempotency_wire_matrix.py — so this is a wiring gap,
+# not a coverage floor. -in-flight and -error-conflict-details are the genuinely
+# unimplemented pair (production emits SERVICE_UNAVAILABLE with retry_after, and
+# a detail-free conflict).
+REMAINING_UNWIRED_SCENARIOS = frozenset(
     {
         "T-UC-002-v31-idempotency-in-flight",
         "T-UC-002-v31-idempotency-expired",
@@ -56,7 +62,7 @@ def test_generated_replay_scenario_is_live_and_boundary_fixture_durable():
     assert 'the response should include the previously created "media_buy_id"' in generated_text
     assert "no new ad platform order should have been created" in generated_text
 
-    assert all(f"@{scenario_id}" in generated_text for scenario_id in REMAINING_UNIMPLEMENTED_SCENARIOS), (
+    assert all(f"@{scenario_id}" in generated_text for scenario_id in REMAINING_UNWIRED_SCENARIOS), (
         "Keep the unimplemented upstream supported=true phases visible; they are not passing claims."
     )
 
