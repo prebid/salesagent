@@ -319,7 +319,7 @@ class AdCPRequestHandler(RequestHandler):
     def _mark_task_failed(self, task: Task) -> None:
         """Mark a task FAILED. No webhook — the caller returns this terminal Task
         synchronously in the response, and AdCP 3.1.1 a2a-guide.mdx
-        ("Webhook Trigger Rules for Terminal States") says a push notification is
+        ("Webhook Trigger Rules") says a push notification is
         NOT sent when the initial response is already terminal (the buyer already
         has the result). Webhooks fire only for genuinely async transitions
         (initial response ``working``/``submitted`` → later terminal); those must
@@ -1174,6 +1174,10 @@ class AdCPRequestHandler(RequestHandler):
             # raise a SANITIZED JSON-RPC InternalError whose client-facing envelope
             # carries NO raw exception text. Never build a failed-Task envelope from
             # ``str(exc)`` here — that is the leak fixed by this branch.
+            # NOTE the deliberate split: an untyped crash INSIDE a skill handler is a
+            # task-layer outcome (the dispatch loop wraps it via
+            # ``_build_failed_skill_result`` → sanitized failed Task), while a crash in
+            # THIS boundary — before/after dispatch — is transport-layer (JSON-RPC).
             err_tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
             err_principal_id = (identity.principal_id or "unknown") if identity else "unknown"
             record_boundary_error(
@@ -1843,7 +1847,7 @@ class AdCPRequestHandler(RequestHandler):
         try:
             # An unknown SKILL is an application-layer failure — the JSON-RPC method
             # (message/send) is valid; routing failed inside skill dispatch. Per AdCP
-            # 3.1.1 transport-errors.mdx "Layer Separation", it belongs in the
+            # transport-errors.mdx "Layer Separation" (present since 3.0.0), it belongs in the
             # task body as a failed Task with a two-layer envelope, NOT a JSON-RPC
             # MethodNotFoundError (reserved for unknown JSON-RPC methods). Raised
             # INSIDE this try so the boundary observability below records it exactly

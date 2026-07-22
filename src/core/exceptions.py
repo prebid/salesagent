@@ -1028,9 +1028,16 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
 
 # Canonical buyer-facing suggestions from error-code.json enumMetadata (AdCP 3.1.1):
 # each code carries its own default hint, so a VALIDATION_ERROR must not borrow
-# INVALID_REQUEST's text.
+# INVALID_REQUEST's text. Text is byte-identical to the pinned enum — graded by
+# the pinned-fixture oracle in test_error_boundary_translation. NOTE the deliberate
+# split from ``AUTH_REQUIRED_SUGGESTION`` above: that one is the TYPED auth error's
+# server-specific hint (names the x-adcp-auth token, graded by BDD); this one is the
+# spec enum's canonical text, used where no server-specific context exists (the scrub).
 INVALID_REQUEST_SUGGESTION = "check request parameters and fix"
 VALIDATION_ERROR_SUGGESTION = "review error details and fix field values"
+AUTH_REQUIRED_CANONICAL_SUGGESTION = (
+    "provide credentials when missing; do NOT auto-retry rejected credentials — escalate for rotation"
+)
 
 
 def first_validation_error_field(validation_error: ValidationError) -> str | None:
@@ -1154,13 +1161,14 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
 INTERNAL_WIRE_CODES: frozenset[str] = frozenset({"SERVICE_UNAVAILABLE", "CONFIGURATION_ERROR"})
 
 _SANITIZED_INTERNAL_MESSAGE = "An internal error occurred while processing the request."
-# error.json grades a non-empty TOP-LEVEL suggestion on every error; the scrub replaces the
-# raise site's suggestion (which, like the message, may interpolate internals) with static
-# guidance whose retry semantics MATCH the emitted ``recovery`` (#1417 top-level-suggestion
-# conformance). A single retry-later string is WRONG for a ``terminal`` internal error
-# (CONFIGURATION_ERROR — per 3.1.1 the buyer MUST NOT auto-retry; the seller operator must
-# resolve it): pairing ``recovery: terminal`` with "retry later" emits a self-contradictory
-# envelope. Pick the suggestion by recovery so the two never disagree.
+# We always emit a suggestion, though the spec does not require one (error.json requires only
+# ``code`` + ``message``); transport-errors.mdx §Security Considerations constrains its CONTENT
+# to generic correction guidance, which is what the scrub provides. The raise site's suggestion
+# (which, like the message, may interpolate internals) is replaced with static guidance whose
+# retry semantics MATCH the emitted ``recovery``. A single retry-later string is WRONG for a
+# ``terminal`` internal error (CONFIGURATION_ERROR — per 3.1.1 the buyer MUST NOT auto-retry;
+# the seller operator must resolve it): pairing ``recovery: terminal`` with "retry later" emits
+# a self-contradictory envelope. Pick the suggestion by recovery so the two never disagree.
 _SANITIZED_TRANSIENT_SUGGESTION = "Retry the request later; if the problem persists, contact the seller."
 _SANITIZED_TERMINAL_SUGGESTION = (
     "This request cannot be retried; the seller must resolve the issue before it can succeed. Contact the seller."
@@ -1187,30 +1195,35 @@ def _sanitized_suggestion_for(recovery: RecoveryHint) -> str:
 
 
 def _canonical_recovery_for(wire_code: str) -> RecoveryHint:
-    """The pinned canonical recovery for a wire code (SERVICE_UNAVAILABLE→transient,
-    CONFIGURATION_ERROR→terminal, …). Internal/infra errors emit the recovery their CODE mandates,
-    NOT a possibly-inconsistent instance override — a sanitized SERVICE_UNAVAILABLE tagged
-    ``terminal``/``correctable`` (or a CONFIGURATION_ERROR tagged ``transient``) is self-
-    contradictory on the wire. Unknown codes are coerced to SERVICE_UNAVAILABLE by the caller, so
-    they resolve to ``transient`` here too."""
+    """The recovery the SDK table (plus the pinned-spec supplement) assigns a wire code
+    (SERVICE_UNAVAILABLE→transient, CONFIGURATION_ERROR→terminal, …). NOT the pinned spec enum
+    for every code — the SDK table diverges from it for several codes; both codes this scrub can
+    emit agree across the two sources, which is what the callers rely on. Internal/infra errors
+    emit the recovery their CODE mandates, NOT a possibly-inconsistent instance override — a
+    sanitized SERVICE_UNAVAILABLE tagged ``terminal``/``correctable`` (or a CONFIGURATION_ERROR
+    tagged ``transient``) is self-contradictory on the wire. Unknown codes are coerced to
+    SERVICE_UNAVAILABLE by the caller, so they resolve to ``transient`` here too."""
     meta = WIRE_STANDARD_CODES.get(wire_code)
     return cast(RecoveryHint, meta["recovery"]) if meta else "transient"
 
 
 # Category-specific sanitized (message, suggestion) for the client-correctable codes a scrub can
 # emit, so the human text MATCHES the machine code — a VALIDATION_ERROR must not read "an internal
-# error occurred", and an AUTH_REQUIRED must say "authenticate", not "adjust the request". Codes
-# absent here (SERVICE_UNAVAILABLE, CONFIGURATION_ERROR) fall back to the generic internal message +
-# a recovery-matched suggestion, which is correct for the internal/infra bucket. All strings are
-# static and secret-free — ``str(exc)`` is never restored.
+# error occurred", and an AUTH_REQUIRED must say "authenticate", not "adjust the request". The
+# SUGGESTION leg is the code's canonical spec text (error-code.json enumMetadata, via the shared
+# spec-derived constants above) — hand-written retry advice here once contradicted the enum, which
+# says AUTH_REQUIRED must NOT advise auto-retry. Messages stay ours (the spec defines no canonical
+# message); all strings are static and secret-free — ``str(exc)`` is never restored. Codes absent
+# here (SERVICE_UNAVAILABLE, CONFIGURATION_ERROR) fall back to the generic internal message + a
+# recovery-matched suggestion, which is correct for the internal/infra bucket.
 _SANITIZED_BY_WIRE_CODE: dict[str, tuple[str, str]] = {
     "VALIDATION_ERROR": (
         "The request could not be validated; review the submitted fields and resubmit.",
-        "Review and correct the request fields, then resubmit.",
+        VALIDATION_ERROR_SUGGESTION,
     ),
     "AUTH_REQUIRED": (
         "Authentication or authorization failed; provide valid credentials or the required permissions.",
-        "Provide valid credentials or request the required permissions, then retry.",
+        AUTH_REQUIRED_CANONICAL_SUGGESTION,
     ),
 }
 

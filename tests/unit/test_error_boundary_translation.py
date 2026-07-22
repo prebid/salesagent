@@ -424,6 +424,30 @@ class TestSafeAdcpErrorSuggestionMatchesRecovery:
             "correctable must give correction guidance, not silence"
         )
 
+    def test_sanitized_suggestions_match_pinned_spec_enum(self):
+        """The category suggestion a scrub emits IS the code's canonical spec text.
+
+        Grounds ``_SANITIZED_BY_WIRE_CODE``'s suggestion legs (and the shared spec-derived
+        constants they source from) in the PINNED enum fixture — the independent authority —
+        so a hand-edited suggestion that drifts from ``error-code.json`` enumMetadata reddens
+        here. This is the oracle that caught the AUTH_REQUIRED suggestion advising retry while
+        the spec enum says "do NOT auto-retry rejected credentials".
+        """
+        from pathlib import Path
+
+        from src.core.exceptions import _SANITIZED_BY_WIRE_CODE, safe_adcp_error
+
+        fixture = Path(__file__).resolve().parents[1] / "fixtures" / "adcp_schemas_pinned" / "enums" / "error-code.json"
+        enum_meta = json.loads(fixture.read_text())["enumMetadata"]
+
+        for wire_code, (_message, suggestion) in _SANITIZED_BY_WIRE_CODE.items():
+            assert suggestion == enum_meta[wire_code]["suggestion"], (
+                f"{wire_code} sanitized suggestion drifted from the pinned spec enum"
+            )
+        # And on the emitted error itself, not just the table.
+        assert safe_adcp_error(ValueError("x")).suggestion == enum_meta["VALIDATION_ERROR"]["suggestion"]
+        assert safe_adcp_error(PermissionError("x")).suggestion == enum_meta["AUTH_REQUIRED"]["suggestion"]
+
     def test_scrubbed_message_and_suggestion_match_semantic_category(self):
         """A scrubbed error's MESSAGE and SUGGESTION match its wire code — the machine field and
         the human guidance must not contradict. A VALIDATION_ERROR must not read "internal error",

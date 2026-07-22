@@ -346,7 +346,7 @@ async def test_multi_skill_message_rejected_before_any_side_effect():
 async def test_immediate_completed_task_sends_no_webhook():
     """An immediately-completed task returns synchronously and sends no webhook.
 
-    a2a-guide.mdx "Webhook Trigger Rules for Terminal States": no push is sent
+    a2a-guide.mdx "Webhook Trigger Rules": no push is sent
     when the initial response is already terminal — the buyer has the result in
     the response. Only non-terminal (submitted) initial responses notify.
     """
