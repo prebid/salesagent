@@ -4,22 +4,22 @@
 # Captures each attempt privately and promotes only on success so failed
 # Unicorn/HTML stdout cannot concatenate into the destination.
 
-# Fetch signatures + PR commits into ``$1`` (tmp dir). Requires REPO/PR_NUMBER
-# as $2/$3 (or already-exported). Writes ``sigs.json`` and ``commits.json``.
+# Fetch signatures + PR commits into ``$1`` (tmp dir). Args: tmp, repository, pr number.
+# Writes ``sigs.json`` and ``commits.json``. Local names avoid SC2153 vs env REPO/PR_NUMBER.
 ipr_fetch_sigs_and_commits() {
   local tmp="${1:?tmp dir required}"
-  local repo="${2:?repo required}"
-  local pr_number="${3:?pr number required}"
+  local repository="${2:?repository required}"
+  local pull_number="${3:?pull number required}"
 
   echo "Fetching signatures from ipr-signatures branch..."
   gh_retry_to "${tmp}/sigs.b64" gh api \
-    "repos/${repo}/contents/signatures/ipr-signatures.json?ref=ipr-signatures" \
+    "repos/${repository}/contents/signatures/ipr-signatures.json?ref=ipr-signatures" \
     --jq .content
   tr -d '\n' < "${tmp}/sigs.b64" | base64 --decode > "${tmp}/sigs.json"
 
   echo "Fetching PR commit authors..."
   gh_retry_to "${tmp}/commits.json" gh api --paginate \
-    "repos/${repo}/pulls/${pr_number}/commits"
+    "repos/${repository}/pulls/${pull_number}/commits"
 }
 
 gh_retry_to() {
