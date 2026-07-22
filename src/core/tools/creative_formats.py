@@ -455,8 +455,11 @@ def _list_creative_formats_impl(
             ]
 
     # Sort formats by name for consistent ordering.
-    # (The Format model's `type`/FormatCategory field was removed from the AdCP spec in the
-    # adcp 3.10->3.12 migration, so sort-by-type is no longer applicable — name is the sort key.)
+    # (The media-buy ListCreativeFormatsRequest — pinned
+    # dist/schemas/3.1.1/media-buy/list-creative-formats-request.json — has no
+    # `type`/FormatCategory property: it is a creative-agent-role field by design
+    # (SDK adcp-client-python#971 role boundary), so sort-by-type is not
+    # applicable in this media-buy contract — name is the sort key.)
     formats.sort(key=lambda f: f.name or "")
 
     # Ensure backward compatibility: populate both assets and assets_required

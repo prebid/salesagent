@@ -95,10 +95,12 @@ def _call_impl(
 class TestSortOrderByName:
     """T-UC-005-inv10: Results sorted by name.
 
-    Behavioral contract at creative_formats.py:337. Refactoring during
-    migration could silently reorder results. The Format model's `type`/FormatCategory
-    field was removed from the AdCP spec in the adcp 3.10->3.12 migration, so sorting
-    is now by name only.
+    Behavioral contract of the `formats.sort(key=...name...)` step in
+    `_list_creative_formats_impl` (creative_formats.py). Refactoring could
+    silently reorder results. The media-buy ListCreativeFormatsRequest (pinned
+    dist/schemas/3.1.1/media-buy/list-creative-formats-request.json) has no
+    `type`/FormatCategory property — it is a creative-agent-role field (SDK
+    adcp-client-python#971 role boundary) — so sorting is by name only.
     """
 
     def test_sort_order_by_name(self):
