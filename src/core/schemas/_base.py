@@ -1140,8 +1140,9 @@ class Targeting(TargetingOverlay):
     - geo_countries, geo_regions, geo_metros, geo_postal_areas
     - frequency_cap, axe_include_segment, axe_exclude_segment
 
-    Adds exclusion extensions, internal dimensions, and a legacy normalizer
-    that converts flat DB fields to v3 structured format.
+    Re-declares the geo exclusion fields (see the note below), and adds internal
+    dimensions plus a legacy normalizer that converts flat DB fields to v3
+    structured format.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -1158,7 +1159,18 @@ class Targeting(TargetingOverlay):
     # Override frequency_cap to use our extended FrequencyCap with scope
     frequency_cap: FrequencyCap | None = None
 
-    # --- Geo exclusion extensions (not in library) ---
+    # --- Geo exclusions: deliberately unified with the include-side types ---
+    # adcp 6.6 DOES declare these on TargetingOverlay, but types the exclude side with
+    # distinct nominal classes (GeoCountriesExcludeItem/GeoRegionsExcludeItem/
+    # GeoMetrosExcludeItem) whose JSON constraints are byte-identical to the include-side
+    # GeoCountry/GeoRegion/GeoMetro. Salesagent keeps one type per dimension because
+    # include and exclude are merged into a single list by adapters
+    # (src/adapters/base.py::_validate_geo_systems) and normalize_legacy_geo pushes both
+    # through identical transforms (_LEGACY_GEO_FIELDS above). Inheriting is not viable:
+    # the parent rejects a GeoCountry in geo_countries_exclude ("Input should be a valid
+    # string"). geo_postal_areas_exclude already uses the parent's PostalArea element
+    # type and is re-declared only to keep the four exclusion fields symmetric (list, not
+    # Sequence) for the merge sites above.
     geo_countries_exclude: list[GeoCountry] | None = None  # type: ignore[assignment]
     geo_regions_exclude: list[GeoRegion] | None = None  # type: ignore[assignment]
     geo_metros_exclude: list[GeoMetro] | None = None  # type: ignore[assignment]

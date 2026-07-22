@@ -269,6 +269,34 @@ class TestSchemaMatchesLibrary:
             f"delete the stale local redeclaration and inherit the parent's typed field"
         )
 
+    @pytest.mark.parametrize("field_name", ["dry_run", "context", "ext"])
+    def test_sync_accounts_response_inherits_parent_typed_annotations(self, field_name):
+        """SyncAccountsResponse must inherit the adcp 6.6 parent's TYPED annotations.
+
+        Twin of the create_media_buy case above. account.py carried
+        'SDK 5.7 removed these from the parent — declare locally' redeclarations
+        that are stale under adcp 6.6: SyncAccountsResponse1 re-added dry_run,
+        context (ContextObject | None) and ext (ExtensionObject | None). Two of
+        the local redeclarations WEAKENED the parent's types (context was
+        ContextObject | dict[str, Any] | None; ext was a bare dict[str, Any] | None).
+
+        Note: dry_run was byte-identical to the parent, so it alone would not have
+        reddened here — it is covered by the redeclaration arch guard
+        (tests/unit/test_architecture_schema_inheritance.py), which now has no
+        allowlist entry for it.
+        """
+        from adcp.types.aliases import SyncAccountsSuccessResponse as LibrarySyncAccountsSuccess
+
+        from src.core.schemas import SyncAccountsResponse as LocalSyncAccountsResponse
+
+        parent_annotation = LibrarySyncAccountsSuccess.model_fields[field_name].annotation
+        local_annotation = LocalSyncAccountsResponse.model_fields[field_name].annotation
+        assert local_annotation == parent_annotation, (
+            f"SyncAccountsResponse.{field_name} drifts from the adcp parent: "
+            f"local={local_annotation!r} vs parent={parent_annotation!r} — "
+            f"delete the stale local redeclaration and inherit the parent's typed field"
+        )
+
 
 class TestAdCPContract:
     """Test that models and schemas align with AdCP protocol requirements."""

@@ -91,9 +91,24 @@ def _nearest_adcp_base(cls: type) -> type | None:
     """
     for base in inspect.getmro(cls)[1:]:
         module = getattr(base, "__module__", "") or ""
-        if module.startswith("adcp") and hasattr(base, "model_fields"):
+        # Exact package match, not a bare prefix: "adcpx"/"adcp_local" are not adcp.
+        if (module == "adcp" or module.startswith("adcp.")) and hasattr(base, "model_fields"):
             return base
     return None
+
+
+# Some Library* imports are used as TypeAliases or type hints, not subclassed.
+# These are legitimate and don't need a local subclass, and they have no library
+# parent to redeclare fields from.
+ALIAS_ONLY_TYPES: set[str] = {
+    "AdCPBaseModel",  # Used as base for SalesAgentBaseModel (different naming)
+    "BrandManifest",  # TypeAlias
+    "GetSignalsRequest",  # Direct alias
+    "PackageUpdate",  # Local PackageUpdate is a simplified model; AdCPPackageUpdate extends library
+    "Property",  # TypeAlias
+    "PromotedProducts",  # Imported but unused (cleanup candidate)
+    "ResponsePagination",  # Named differently in local code (Pagination)
+}
 
 
 # Cache for AST-based field detection (parsed once)
@@ -134,18 +149,6 @@ class TestSchemaInheritance:
         mapping = _get_library_type_mapping()
         local_classes = _get_local_schema_classes()
 
-        # Some Library* imports are used as TypeAliases or type hints, not subclassed.
-        # These are legitimate and don't need a local subclass.
-        ALIAS_ONLY_TYPES = {
-            "AdCPBaseModel",  # Used as base for SalesAgentBaseModel (different naming)
-            "BrandManifest",  # TypeAlias
-            "GetSignalsRequest",  # Direct alias
-            "PackageUpdate",  # Local PackageUpdate is a simplified model; AdCPPackageUpdate extends library
-            "Property",  # TypeAlias
-            "PromotedProducts",  # Imported but unused (cleanup candidate)
-            "ResponsePagination",  # Named differently in local code (Pagination)
-        }
-
         violations = []
         for local_name, lib_type in sorted(mapping.items()):
             if local_name in ALIAS_ONLY_TYPES:
@@ -176,16 +179,6 @@ class TestSchemaInheritance:
         drift when the library updates the field's type or validator.
         """
         local_classes = _get_local_schema_classes()
-
-        ALIAS_ONLY_TYPES = {
-            "AdCPBaseModel",
-            "BrandManifest",
-            "GetSignalsRequest",
-            "PackageUpdate",
-            "Property",
-            "PromotedProducts",
-            "ResponsePagination",
-        }
 
         # Known exceptions: fields intentionally overridden with tighter types,
         # custom validators, nested serialization (Critical Pattern #4), or
@@ -262,31 +255,50 @@ class TestSchemaInheritance:
             # success-arm fields required; the SDK base declares them optional, so
             # we redeclare required to match the spec.
             ("GetProductsResponse", "products"),
-        }
-
-        # Field redeclarations that the previous alias-only check never saw and
-        # that are not yet reconciled — a DECREASE-ONLY allowlist (#1618). Each is
-        # a subclass that copies a parent field instead of inheriting it; the
-        # content fix is tracked in #1620. Do NOT add entries — remove one only
-        # when its class is migrated to inherit the field.
-        REDECLARATION_FIXME_1618: set[tuple[str, str]] = {
-            # Surfaced by the MRO re-key; NOT yet reconciled. Some are intentional
-            # (e.g. CreateMediaBuySuccess redeclares the success-only status/
-            # confirmed_at/revision with spec-correct defaults, per its docstring)
-            # and belong in KNOWN_OVERRIDES; others may be real drift. #1620 triages
-            # each and shrinks this set — do NOT grow it.
+            # --- Surfaced by the MRO re-key (#1618), triaged against adcp 6.6 ---
+            # adcp 6.6 (spec 3.1.1) made status/confirmed_at/revision required on the
+            # create success envelope (CreateMediaBuyResponse1 declares all three
+            # required with no default). They are invariant for a synchronous committed
+            # success, so the subclass declares spec-correct defaults instead of
+            # threading identical literals through every constructor
+            # (src/core/schemas/_base.py, CreateMediaBuySuccess). Because the parent
+            # fields are required-with-no-default, these can never migrate to plain
+            # inheritance.
             ("CreateMediaBuySuccess", "confirmed_at"),
             ("CreateMediaBuySuccess", "revision"),
             ("CreateMediaBuySuccess", "status"),
-            ("UpdateMediaBuySuccess", "affected_packages"),
+            # Same rationale as the create twin: UpdateMediaBuyResponse1 declares
+            # status/revision required with no default; the subclass supplies the
+            # spec-correct defaults for a synchronous applied update.
             ("UpdateMediaBuySuccess", "revision"),
             ("UpdateMediaBuySuccess", "status"),
+            # Pattern #4: local list[AffectedPackage] carries changes_applied /
+            # buyer_package_ref (exclude=True, off the wire); the parent types it
+            # Sequence[Package].
+            ("UpdateMediaBuySuccess", "affected_packages"),
+            # Pattern #4 (mirrors ListAccountsResponse.accounts / ListCreativesResponse
+            # .creatives): local SyncResponseAccount adds action/status/errors/setup, and
+            # the field is redeclared required-with-no-default because pinned 3.1 types
+            # sync-accounts-response as oneOf(success requires `accounts` | error requires
+            # `errors`).
             ("SyncAccountsResponse", "accounts"),
-            ("SyncAccountsResponse", "context"),
-            ("SyncAccountsResponse", "dry_run"),
-            ("SyncAccountsResponse", "ext"),
+            # Pattern #4: local SyncCreativeResult adds assigned_to/assignment_errors/
+            # changes/warnings; required-no-default per pinned 3.1 SyncCreativesSuccess.
             ("SyncCreativesResponse", "creatives"),
+            # Local FrequencyCap extends the library type with `scope`
+            # (media_buy vs package level).
             ("Targeting", "frequency_cap"),
+            # adcp 6.6 types the geo exclusion side with DISTINCT nominal classes
+            # (GeoCountriesExcludeItem/GeoRegionsExcludeItem/GeoMetrosExcludeItem) whose
+            # JSON constraints are identical to the include-side GeoCountry/GeoRegion/
+            # GeoMetro. Salesagent deliberately unifies include and exclude to one type
+            # per dimension because adapters merge them into a single list
+            # (src/adapters/base.py::_validate_geo_systems) and normalize_legacy_geo
+            # pushes both through identical transforms. Inheriting is not viable — the
+            # parent rejects a GeoCountry in geo_countries_exclude ("Input should be a
+            # valid string"). geo_postal_areas_exclude already uses the parent's
+            # PostalArea element type and is redeclared only to keep the four exclusion
+            # fields symmetric (list, not Sequence) for those merge sites.
             ("Targeting", "geo_countries_exclude"),
             ("Targeting", "geo_metros_exclude"),
             ("Targeting", "geo_postal_areas_exclude"),
@@ -303,7 +315,7 @@ class TestSchemaInheritance:
                 continue
 
             lib_type = _nearest_adcp_base(local_cls)
-            if lib_type is None or not hasattr(lib_type, "model_fields"):
+            if lib_type is None:
                 continue
 
             # Fields declared DIRECTLY on the local class (not inherited). Can't
@@ -314,7 +326,7 @@ class TestSchemaInheritance:
 
             for field_name in local_own_annotations & lib_fields:
                 key = (local_name, field_name)
-                if key in KNOWN_OVERRIDES or key in REDECLARATION_FIXME_1618:
+                if key in KNOWN_OVERRIDES:
                     continue
                 violations.append(
                     f"{local_name}.{field_name} redefines field from {lib_type.__name__} — inherit instead of redeclare"
@@ -336,7 +348,10 @@ class TestSchemaInheritance:
         from adcp.types import Product as _PlainAliasedProduct  # deliberately NOT "LibraryProduct"
 
         class _SubclassUnderPlainAlias(_PlainAliasedProduct):
-            pass
+            # Deliberately SHADOWS a parent field so the ``own & lib_fields``
+            # intersection the guard runs on is non-empty — a base lookup that
+            # worked but produced an empty overlap would flag nothing.
+            product_id: str
 
         class _NoAdcpAncestor:
             pass
@@ -344,4 +359,13 @@ class TestSchemaInheritance:
         base = _nearest_adcp_base(_SubclassUnderPlainAlias)
         assert base is _PlainAliasedProduct, "MRO base must be found regardless of import alias"
         assert hasattr(base, "model_fields") and base.model_fields, "base must expose fields to compare against"
+
+        # The overlap is what test_no_field_redefinition_in_subclasses flags on.
+        own = set(_SubclassUnderPlainAlias.__annotations__)
+        assert own & set(base.model_fields) == {"product_id"}, (
+            "a redeclared parent field must show up in the own-fields/library-fields "
+            "overlap the guard flags on — if this is empty the guard silently passes "
+            "every non-Library-aliased subclass (the #1618 regression)"
+        )
+
         assert _nearest_adcp_base(_NoAdcpAncestor) is None, "a non-adcp class must not be treated as a subclass"
