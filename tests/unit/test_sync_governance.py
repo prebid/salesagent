@@ -8,7 +8,7 @@ accounts/tasks/sync_governance.mdx):
   governance_agents[].url echoed, credentials NEVER echoed.
 - Persistence: url-only, replace semantics (update_fields overwrites binding).
 - Authority MUST: unknown account -> failed ACCOUNT_NOT_FOUND; unowned account
-  -> failed UNAUTHORIZED. Partial failure stays the success variant.
+  -> failed SCOPE_INSUFFICIENT. Partial failure stays the success variant.
 - Auth required (operation-level) and empty-accounts validation.
 
 These are _impl-level tests, so they assert on the typed response (per
@@ -149,7 +149,7 @@ class TestSyncGovernanceAuthorityContract:
         repo.update_fields.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_unowned_account_fails_with_unauthorized(self):
+    async def test_unowned_account_fails_with_scope_insufficient(self):
         from src.core.tools.governance import _sync_governance_impl
 
         def _raise(ref, ident, r):
@@ -160,10 +160,11 @@ class TestSyncGovernanceAuthorityContract:
             resp = await _sync_governance_impl(_make_request(), _make_identity())
 
         assert resp.accounts[0].status == "failed"
-        # Spec names the per-account authority failure UNAUTHORIZED (the
-        # AdCPAuthorizationError default wire code is AUTH_REQUIRED — this asserts
-        # we set the spec code explicitly, not the wire default).
-        assert resp.accounts[0].errors[0].code == "UNAUTHORIZED"
+        # An existing account the agent has no authority over uses the standard
+        # SCOPE_INSUFFICIENT code (pinned error-code enum + graded BR-UC-030), not
+        # the AdCPAuthorizationError default wire code (AUTH_REQUIRED) — this
+        # asserts we set the spec/graded code explicitly, not the wire default.
+        assert resp.accounts[0].errors[0].code == "SCOPE_INSUFFICIENT"
         repo.update_fields.assert_not_called()
 
     @pytest.mark.asyncio

@@ -36,6 +36,7 @@ from src.core.database.models import Account as DBAccount
 from src.core.database.repositories.uow import AccountUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value
+from src.core.helpers.account_helpers import serialize_governance_agents
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas.account import (
     Account,
@@ -252,28 +253,6 @@ def _enum_to_str(val: Any) -> str | None:
     return enum_value(val)
 
 
-def _serialize_governance_agents(agents: Any) -> list[dict[str, Any]] | None:
-    """Convert GovernanceAgent models to JSON-serializable dicts for DB storage.
-
-    Both dict and model inputs are normalized through model_dump(mode="json")
-    to ensure consistent comparison (e.g., AnyUrl → str).
-    """
-    from adcp.types.generated_poc.core.account import GovernanceAgent  # TODO: no stable alias in adcp.types
-
-    if agents is None:
-        return None
-    result: list[dict[str, Any]] = []
-    for g in agents:
-        if isinstance(g, dict):
-            # Validate through model to normalize types (AnyUrl → str, etc.)
-            result.append(GovernanceAgent.model_validate(g).model_dump(mode="json"))
-        elif hasattr(g, "model_dump"):
-            result.append(g.model_dump(mode="json"))
-        else:
-            result.append(dict(g))
-    return result
-
-
 def _account_fields_changed(db_account: DBAccount, entry: Any) -> dict[str, Any]:
     """Compare incoming sync entry fields against existing DB account.
 
@@ -299,8 +278,8 @@ def _account_fields_changed(db_account: DBAccount, entry: Any) -> dict[str, Any]
     # Compare governance_agents (JSON field)
     # Both sides must be serialized to dicts for comparison — db_account.governance_agents
     # is hydrated to list[GovernanceAgent] by JSONType, while incoming is already serialized.
-    incoming_gov = _serialize_governance_agents(getattr(entry, "governance_agents", None))
-    db_gov = _serialize_governance_agents(db_account.governance_agents)
+    incoming_gov = serialize_governance_agents(getattr(entry, "governance_agents", None))
+    db_gov = serialize_governance_agents(db_account.governance_agents)
     if db_gov != incoming_gov:
         changes["governance_agents"] = incoming_gov
 
@@ -583,7 +562,7 @@ async def _sync_accounts_impl(
                 # Create new account
                 billing_val = _enum_to_str(entry.billing)
                 payment_terms_val = _enum_to_str(entry.payment_terms)
-                governance_agents_val = _serialize_governance_agents(getattr(entry, "governance_agents", None))
+                governance_agents_val = serialize_governance_agents(getattr(entry, "governance_agents", None))
 
                 account_id = _generate_account_id()
                 account_name = _generate_account_name(brand_domain, operator, brand_id)

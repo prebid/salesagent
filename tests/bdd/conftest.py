@@ -65,6 +65,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc005_format_id_roundtrip",
     "tests.bdd.steps.domain.uc005_format_id_third_party",
     "tests.bdd.steps.domain.uc011_accounts",
+    "tests.bdd.steps.domain.uc030_governance",
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_brand_shorthand",
@@ -3076,6 +3077,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-004"
     if any(t.startswith("T-UC-011") for t in marker_names):
         return "UC-011"
+    if any(t.startswith("T-UC-030") for t in marker_names):
+        return "UC-030"
     if any(t.startswith("T-UC-018") for t in marker_names):
         return "UC-018"
     if any(t.startswith("T-UC-019") for t in marker_names):
@@ -3438,6 +3441,46 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 yield
         else:
             pytest.xfail(f"UC-011 harness not yet wired for markers: {marker_names}")
+
+    elif uc == "UC-030":
+        marker_names = {m.name for m in request.node.iter_markers()}
+        # check_governance (governance enforcement) is a separate, deliberately
+        # UNDECLARED capability (this agent does not declare governance-aware-seller);
+        # every @check scenario grades that tool, not sync_governance.
+        if "check" in marker_names:
+            pytest.xfail(
+                "check_governance (governance enforcement) is an undeclared capability "
+                "(governance-aware-seller) — out of scope for the sync_governance PR (#1329)"
+            )
+        # Boundary-value abstract-"verdict" outlines are covered concretely by the
+        # T-UC-030-sync-* scenarios below; their generic verdict-step wiring is a follow-up.
+        if "bva" in marker_names:
+            pytest.xfail(
+                "BR-UC-030 @bva boundary outlines are covered concretely by the "
+                "T-UC-030-sync-* scenarios; abstract verdict-step wiring deferred (#1329)"
+            )
+        _UC030_XFAIL_TAGS: dict[str, str] = {
+            # POST-S4 "adcp_version echoed on every response" is not populated on sync-tool
+            # responses (systemic: sync_accounts has the same gap, UC-011 doesn't assert it).
+            # Success + url-echo + credential-non-echo are covered on the wire by
+            # T-UC-030-sync-partial (synced entry) + the integration tests.
+            "T-UC-030-sync-happy": "POST-S4 adcp_version not echoed on sync responses — spec-production gap (#1329)",
+            "T-UC-030-sync-idempotent-replay": "idempotency replay dedup not implemented — spec-production gap (#1329)",
+            "T-UC-030-sync-idempotency-conflict": "IDEMPOTENCY_CONFLICT (same key / different payload) not implemented — spec-production gap (#1329)",
+            "T-UC-030-sync-permission-denied": "per-operation granted-scope model (PERMISSION_DENIED) not implemented — spec-production gap (#1329)",
+            "T-UC-030-sync-replace": "replace-semantics pre-binding step wiring deferred (#1329 follow-up)",
+            "T-UC-030-sync-implicit-account": "natural-key implicit-account step wiring deferred (#1329 follow-up)",
+            "T-UC-030-sync-absent-account-untouched": "per-account replace-scope multi-account pre-binding step wiring deferred (#1329 follow-up)",
+            "T-UC-030-storyboard-binding-used-during-create-media-buy": "requires check_governance invocation during create_media_buy — undeclared capability (#1329)",
+        }
+        for tag, reason in _UC030_XFAIL_TAGS.items():
+            if tag in marker_names:
+                pytest.xfail(reason)
+        from tests.harness.governance_sync import GovernanceSyncEnv
+
+        with _db_scope_for(request, e2e_config), GovernanceSyncEnv(e2e_config=e2e_config) as env:
+            ctx["env"] = env
+            yield
 
     elif uc == "ADMIN":
         request.getfixturevalue("integration_db")

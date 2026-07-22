@@ -106,7 +106,7 @@ class TestSyncGovernanceAuthority:
         assert resp.accounts[0].errors[0].code == "ACCOUNT_NOT_FOUND"
 
     @pytest.mark.asyncio
-    async def test_existing_but_unowned_account_fails_unauthorized(self, integration_db):
+    async def test_existing_but_unowned_account_fails_scope_insufficient(self, integration_db):
         with GovernanceSyncEnv(tenant_id="gov_t4", principal_id="gov_agent4") as env:
             tenant, _principal = env.setup_default_data()
             # Account exists in the tenant but the agent has NO AgentAccountAccess grant.
@@ -115,7 +115,9 @@ class TestSyncGovernanceAuthority:
             resp = await env.call_impl_async(req=_request({"account_id": "acc_unowned"}))
 
         assert resp.accounts[0].status == "failed"
-        assert resp.accounts[0].errors[0].code == "UNAUTHORIZED"
+        # Existing-but-unowned → standard SCOPE_INSUFFICIENT (pinned error-code enum
+        # + graded BR-UC-030), not the non-standard UNAUTHORIZED the .mdx prose names.
+        assert resp.accounts[0].errors[0].code == "SCOPE_INSUFFICIENT"
         # No binding persisted on a failed account.
         assert _persisted_agents("gov_t4", "acc_unowned") in (None, [])
 

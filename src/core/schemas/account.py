@@ -12,7 +12,7 @@ SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
   Architectural; permanent.
 """
 
-from typing import Any
+from typing import Any, Literal
 
 from adcp.types import Account as LibraryAccountDomain
 from adcp.types import AccountReference as LibraryAccountReference
@@ -219,6 +219,11 @@ class SyncedGovernanceAgent(SalesAgentBaseModel):
     (sync-governance-response.json success ``governance_agents.items`` requires
     only ``url``). Modelling the echo with a url-only type makes that a
     structural guarantee, not a call-site discipline.
+
+    Deliberately a parallel, minimal SDK-decoupled type rather than reusing the
+    library ``GovernanceAgent`` (which also models the response as url-only): the
+    echo contract is a bare ``{url}`` and owning it keeps the response shape
+    independent of SDK codegen churn on the request-side agent type.
     """
 
     url: str
@@ -236,7 +241,10 @@ class SyncGovernanceResponseAccount(SalesAgentBaseModel):
     """
 
     account: LibraryAccountReference
-    status: str
+    # Two-member enum per the pinned sync-governance-response.json (status.enum
+    # ["synced","failed"]); a Literal makes the constraint structural rather than
+    # call-site discipline (mirrors the SyncedGovernanceAgent url-only rationale).
+    status: Literal["synced", "failed"]
     governance_agents: list[SyncedGovernanceAgent] | None = None
     errors: list[LibraryError] | None = None
 

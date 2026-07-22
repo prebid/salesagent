@@ -22,8 +22,11 @@ Spec grounding (pinned AdCP 3.1.1 / adcp 6.6.0):
   NEVER credentials; envelope ``status: completed`` for the synchronous path.
 - Normative MUST (sync_governance.mdx): "the seller MUST verify that the
   authenticated agent has authority over each referenced account before
-  persisting." Unowned/unknown accounts return per-account ``status: failed``
-  with ``ACCOUNT_NOT_FOUND`` / ``UNAUTHORIZED``.
+  persisting." Unknown/unresolvable accounts return per-account ``status: failed``
+  with ``ACCOUNT_NOT_FOUND``; an existing account the agent lacks authority over
+  returns ``SCOPE_INSUFFICIENT`` (standard code from the pinned error-code enum
+  that the graded BR-UC-030 storyboard checks; the .mdx prose's non-standard
+  ``UNAUTHORIZED`` is flagged upstream — see ``_sync_one_account``).
 
 Credentials are never persisted: the ``accounts.governance_agents`` column model
 (core/account.json GovernanceAgent) is url-only by construction, so the binding
@@ -37,8 +40,8 @@ precedent (accepts idempotency_key, no replay dedup yet).
 """
 
 import logging
-from typing import Any
 
+from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import ContextObject, Error
 from adcp.types.aliases import SyncGovernanceAccount as SyncGovernanceAccountInput
 from fastmcp.server.context import Context
@@ -46,6 +49,7 @@ from fastmcp.tools.tool import ToolResult
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
+from src.core.database.repositories.account import AccountRepository
 from src.core.database.repositories.uow import AccountUoW
 from src.core.exceptions import (
     AdCPAccountAmbiguousError,
@@ -54,7 +58,7 @@ from src.core.exceptions import (
     AdCPError,
     AdCPValidationError,
 )
-from src.core.helpers.account_helpers import resolve_account
+from src.core.helpers.account_helpers import resolve_account, serialize_governance_agents
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas.account import (
     SyncedGovernanceAgent,
@@ -64,18 +68,21 @@ from src.core.schemas.account import (
 )
 from src.core.tool_context import ToolContext
 from src.core.transport_helpers import resolve_identity_from_context
+from src.core.validation_helpers import adcp_validation_boundary
 
 logger = logging.getLogger(__name__)
 
 
-def _failed_account_result(account_ref: Any, code: str, exc: AdCPError) -> SyncGovernanceResponseAccount:
+def _failed_account_result(
+    account_ref: LibraryAccountReference, code: str, exc: AdCPError
+) -> SyncGovernanceResponseAccount:
     """Build a per-account ``failed`` result carrying a single per-account error.
 
     ``code`` is the spec-facing per-account error code (ACCOUNT_NOT_FOUND /
-    UNAUTHORIZED), set explicitly rather than read from the exception's wire
-    code — AdCPAuthorizationError translates to AUTH_REQUIRED on the wire, but
-    the sync_governance contract names the per-account authority failure
-    ``UNAUTHORIZED``.
+    SCOPE_INSUFFICIENT), set explicitly rather than read from the exception's wire
+    code — AdCPAuthorizationError translates to AUTH_REQUIRED on the wire, but the
+    per-account authority failure uses the standard ``SCOPE_INSUFFICIENT`` code
+    (see ``_sync_one_account`` for the spec grounding).
     """
     return SyncGovernanceResponseAccount(
         account=account_ref,
@@ -88,19 +95,31 @@ def _failed_account_result(account_ref: Any, code: str, exc: AdCPError) -> SyncG
     )
 
 
-def _sync_one_account(entry: Any, identity: ResolvedIdentity, repo: Any) -> SyncGovernanceResponseAccount:
+def _sync_one_account(
+    entry: SyncGovernanceAccountInput, identity: ResolvedIdentity, repo: AccountRepository
+) -> SyncGovernanceResponseAccount:
     """Sync a single account's governance binding (authority check → persist → echo).
 
     Per-account failures (unknown/unowned account) are returned as ``failed``
     results, NOT raised — the overall response stays the success variant with a
     mix of synced/failed entries (partial-failure model).
+
+    Per-account error codes are the standard AdCP vocabulary
+    (``enums/error-code.json``, pinned 3.1.1) that the graded BR-UC-030 storyboard
+    grades against: ``ACCOUNT_NOT_FOUND`` for an unknown/uniquely-unresolvable
+    account (matches the sync-governance-response.json partial-failure example),
+    ``SCOPE_INSUFFICIENT`` for an existing account the agent has no authority over.
+    NOTE: the sync_governance.mdx prose table names a non-standard ``UNAUTHORIZED``
+    here, which is absent from the pinned error-code enum and diverges from the
+    graded storyboard — flagged upstream for reconciliation; we emit the standard,
+    graded code.
     """
     try:
         account_id = resolve_account(entry.account, identity, repo)
     except AdCPAccountNotFoundError as e:
         return _failed_account_result(entry.account, "ACCOUNT_NOT_FOUND", e)
     except AdCPAuthorizationError as e:
-        return _failed_account_result(entry.account, "UNAUTHORIZED", e)
+        return _failed_account_result(entry.account, "SCOPE_INSUFFICIENT", e)
     except AdCPAccountAmbiguousError as e:
         # A natural key matching multiple accounts cannot be resolved to a single
         # binding target — surface as not-found (the account was not uniquely found).
@@ -110,16 +129,17 @@ def _sync_one_account(entry: Any, identity: ResolvedIdentity, repo: Any) -> Sync
         # failure carrying the resolver's own code rather than a silent success.
         return _failed_account_result(entry.account, e.error_code, e)
 
-    # Persist url-only, replace semantics. The DB column model is url-only by
-    # design (credentials are never stored); update_fields overwrites the prior
-    # binding, satisfying the spec's per-account replace semantics.
-    agent_urls = [{"url": str(agent.url)} for agent in entry.governance_agents]
+    # Project request agents to the url-only DB-column shape ONCE (credentials
+    # never persisted; serialize_governance_agents structurally strips them), then
+    # persist and echo from that single list so the two can never disagree.
+    # update_fields overwrites the prior binding (per-account replace semantics).
+    agent_urls = serialize_governance_agents(entry.governance_agents) or []
     repo.update_fields(account_id, governance_agents=agent_urls)
 
     return SyncGovernanceResponseAccount(
         account=entry.account,
         status="synced",
-        governance_agents=[SyncedGovernanceAgent(url=str(agent.url)) for agent in entry.governance_agents],
+        governance_agents=[SyncedGovernanceAgent(url=agent["url"]) for agent in agent_urls],
     )
 
 
@@ -169,7 +189,7 @@ async def _sync_governance_impl(
 
 
 async def sync_governance(
-    idempotency_key: str,
+    idempotency_key: str | None = None,
     accounts: list[SyncGovernanceAccountInput] | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
@@ -177,11 +197,16 @@ async def sync_governance(
     """Bind a governance agent per account (MCP tool).
 
     MCP wrapper that accepts individual parameters per AdCP spec and constructs a
-    SyncGovernanceRequest for the shared implementation. ``idempotency_key`` is a
-    required parameter — the spec mandates it and a missing key must be rejected.
+    SyncGovernanceRequest for the shared implementation. ``idempotency_key`` is
+    spec-required, but it is typed ``str | None`` here (not ``str``) so a missing
+    key surfaces as an AdCP validation error at model construction — the same wire
+    shape REST/A2A produce — rather than being rejected earlier by FastMCP's own
+    parameter-schema layer with a different, non-AdCP error shape. The schema's
+    required ``idempotency_key`` still rejects ``None`` (UC-030 grades that).
 
     Args:
-        idempotency_key: Client-generated at-most-once key (required).
+        idempotency_key: Client-generated at-most-once key (spec-required; a
+            missing key is rejected at request construction).
         accounts: Per-account governance agent bindings.
         context: Application-level context per AdCP spec (echoed back).
         ctx: FastMCP context for authentication.
@@ -189,11 +214,17 @@ async def sync_governance(
     Returns:
         ToolResult with human-readable text and structured data.
     """
-    req = SyncGovernanceRequest(
-        idempotency_key=idempotency_key,
-        accounts=accounts or [],
-        context=context,
-    )
+    # Wrap construction so a schema violation (missing/short idempotency_key,
+    # non-https url, short credentials, agent cardinality) surfaces as the AdCP
+    # VALIDATION_ERROR envelope — the same wire shape REST produces via its own
+    # boundary — instead of a raw pydantic error or FastMCP's parameter-schema
+    # rejection (UC-030 grades these on the wire).
+    with adcp_validation_boundary(context="sync_governance request"):
+        req = SyncGovernanceRequest(
+            idempotency_key=idempotency_key,
+            accounts=accounts or [],
+            context=context,
+        )
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = await _sync_governance_impl(req, identity)
     return ToolResult(content=str(response), structured_content=response)

@@ -61,6 +61,20 @@ class GovernanceSyncEnv(IntegrationEnv):
         """Call sync_governance via Client(mcp) — full pipeline dispatch."""
         return self._run_mcp_client("sync_governance", SyncGovernanceResponse, **kwargs)
 
+    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        """Build the POST body from flat kwargs (idempotency_key, accounts, context).
+
+        BDD steps dispatch raw kwargs (not a pre-built ``req``) so request
+        validation fires at the transport boundary and yields a real wire
+        envelope. A missing ``idempotency_key`` is intentionally omitted here so
+        the boundary rejects it (UC-030 grades that).
+        """
+        body: dict[str, Any] = {}
+        for field in ("idempotency_key", "accounts", "context"):
+            if kwargs.get(field) is not None:
+                body[field] = kwargs[field]
+        return body
+
     def parse_rest_response(self, data: dict[str, Any]) -> SyncGovernanceResponse:
         """Parse REST JSON into SyncGovernanceResponse."""
         return SyncGovernanceResponse(**data)
