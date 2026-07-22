@@ -260,7 +260,7 @@ class TestCompleteTaskTool:
         complete_task_fn = await self._get_complete_task_fn()
 
         mock_workflow_repo.get_by_step_id_or_raise.return_value = sample_pending_step
-        mock_workflow_repo.update_status.return_value = sample_pending_step
+        mock_workflow_repo.transition_if_nonterminal.return_value = sample_pending_step
 
         identity = self._make_identity(sample_tenant)
 
@@ -269,7 +269,7 @@ class TestCompleteTaskTool:
 
         assert result["status"] == "completed"
         assert result["task_id"] == "step_123"
-        mock_workflow_repo.update_status.assert_called_once_with(
+        mock_workflow_repo.transition_if_nonterminal.assert_called_once_with(
             "step_123",
             status="completed",
             completed_at=ANY,
@@ -281,7 +281,7 @@ class TestCompleteTaskTool:
     ):
         """[Round-14 B2] A lost transition must NOT be reported as success.
 
-        ``update_status`` is an atomic conditional transition that returns None when the
+        ``transition_if_nonterminal`` is an atomic conditional transition that returns None when the
         step was concurrently terminalized (e.g. a buyer cancel committed between the
         read and the write). complete_task must raise a conflict, not return a successful
         completion + audit. The MCP boundary translates the AdCPConflictError to ToolError.
@@ -291,7 +291,7 @@ class TestCompleteTaskTool:
         complete_task_fn = await self._get_complete_task_fn()
 
         mock_workflow_repo.get_by_step_id_or_raise.return_value = sample_pending_step
-        mock_workflow_repo.update_status.return_value = None  # transition refused (lost the race)
+        mock_workflow_repo.transition_if_nonterminal.return_value = None  # transition refused (lost the race)
 
         identity = self._make_identity(sample_tenant)
 

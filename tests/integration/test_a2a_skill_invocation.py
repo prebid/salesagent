@@ -546,7 +546,7 @@ class TestA2ASkillInvocation:
     ):
         """[Round-13 B4] The terminal-transition policy is two-sided: whichever of a buyer
         cancel (WorkflowRepository.cancel_if_cancellable) and an approval
-        (WorkflowRepository.update_status → transition_if_nonterminal) COMMITS FIRST wins,
+        (WorkflowRepository.transition_if_nonterminal) COMMITS FIRST wins,
         and the loser's conditional UPDATE refuses. Verified against REAL separate
         PostgreSQL sessions (each WorkflowUoW is its own session, committing on __exit__)
         in three interleavings, including a true TOCTOU overlap where the approval session
@@ -564,14 +564,14 @@ class TestA2ASkillInvocation:
         with WorkflowUoW(tenant_id) as u_cancel:
             assert u_cancel.workflows.cancel_if_cancellable(step1, completed_at=now) is True
         with WorkflowUoW(tenant_id) as u_approve:
-            refused = u_approve.workflows.update_status(step1, status="completed", completed_at=now)
+            refused = u_approve.workflows.transition_if_nonterminal(step1, status="completed", completed_at=now)
         assert refused is None, "approval must be refused once the step is terminally canceled"
         assert self._step_status(tenant_id, step1) == "canceled"
 
         # ── Ordering 2: approval commits first → cancel refused, stays completed ──
         step2 = self._persist_a2a_step(tenant_id, principal_id, "task_race_2", None, status="requires_approval")
         with WorkflowUoW(tenant_id) as u_approve2:
-            assert u_approve2.workflows.update_status(step2, status="completed", completed_at=now) is not None
+            assert u_approve2.workflows.transition_if_nonterminal(step2, status="completed", completed_at=now) is not None
         with WorkflowUoW(tenant_id) as u_cancel2:
             assert u_cancel2.workflows.cancel_if_cancellable(step2, completed_at=now) is False
         assert self._step_status(tenant_id, step2) == "completed"
@@ -587,7 +587,7 @@ class TestA2ASkillInvocation:
                 assert u_cancel3.workflows.cancel_if_cancellable(step3, completed_at=now) is True
             # Approval resumes and writes completed — the conditional UPDATE re-evaluates
             # against the committed canceled row (READ COMMITTED) and matches zero rows.
-            refused3 = u_approve3.workflows.update_status(step3, status="completed", completed_at=now)
+            refused3 = u_approve3.workflows.transition_if_nonterminal(step3, status="completed", completed_at=now)
         assert refused3 is None, "approval must refuse after a cancel committed, even from a stale read (TOCTOU)"
         assert self._step_status(tenant_id, step3) == "canceled"
 

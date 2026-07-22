@@ -222,20 +222,20 @@ async def complete_task(
 
         completed_time = datetime.now(UTC)
 
-        # update_status is an ATOMIC conditional transition (WHERE status NOT IN
-        # terminal): it returns None if the step was concurrently terminalized
-        # (e.g. a buyer cancel committed between the read above and this write). The
-        # pre-check is a non-atomic hint; this None check is the authoritative guard.
-        # A lost transition must NOT be reported as a successful completion.
+        # transition_if_nonterminal returns None if the step was concurrently
+        # terminalized (e.g. a buyer cancel committed between the read above and this
+        # write). The pre-check is a non-atomic hint; this None check is the
+        # authoritative guard. A lost transition must NOT be reported as a successful
+        # completion.
         if status == "completed":
-            updated = uow.workflows.update_status(
+            updated = uow.workflows.transition_if_nonterminal(
                 task_id,
                 status=status,
                 completed_at=completed_time,
                 response_data=response_data or {"manually_completed": True, "completed_by": principal_id},
             )
         else:
-            updated = uow.workflows.update_status(
+            updated = uow.workflows.transition_if_nonterminal(
                 task_id,
                 status=status,
                 completed_at=completed_time,

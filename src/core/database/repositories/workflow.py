@@ -474,29 +474,6 @@ class WorkflowRepository:
             error_message=error_message,
         )
 
-    def update_status(
-        self,
-        step_id: str,
-        *,
-        status: str,
-        completed_at: datetime | None = None,
-        response_data: dict[str, Any] | None = None,
-        error_message: str | None = None,
-    ) -> WorkflowStep | None:
-        """Terminal-immutable status update — see ``transition_if_nonterminal``.
-
-        Returns the updated step, or None if the step does not exist OR is already
-        terminal (the write is refused rather than overwriting a terminal decision).
-        Does NOT commit — the caller handles that.
-        """
-        return self.transition_if_nonterminal(
-            step_id,
-            status=status,
-            completed_at=completed_at,
-            response_data=response_data,
-            error_message=error_message,
-        )
-
     def claim_approval(self, step_id: str) -> WorkflowStep | None:
         """Atomically claim a step for approval: requires_approval/pending_approval → approved.
 
