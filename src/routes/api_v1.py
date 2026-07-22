@@ -70,10 +70,21 @@ class GetProductsBody(SalesAgentBaseModel):
     # dict BrandReference or string domain/URL shorthand (#1324)
     brand: dict[str, Any] | str | None = None
     filters: dict[str, Any] | None = None
-    # BuyingMode on the spec; declared so a spec-valid request is accepted for
-    # parity with MCP/A2A (extra="forbid" otherwise 400s it). Not acted on here —
-    # the internal GetProductsRequest widens buying_mode to str|None; kept loose
-    # so REST accepts every mode the other transports do.
+    # buying_mode is the sole entry in the required array of
+    # get-products-request at the pinned spec (3.1.1), so a spec-valid client
+    # always sends it and REST must not reject it — declared here because
+    # extra="forbid" 400s an undeclared field in dev/CI.
+    #
+    # Deliberately not justified as MCP/A2A parity: MCP does NOT accept this
+    # field in dev/CI. The registered get_products tool advertises
+    # additionalProperties: false over [brand, brief, context, filters,
+    # property_list], so it rejects buying_mode with VALIDATION_ERROR
+    # ("Unexpected keyword argument") and accepts it only under the
+    # production-gated unknown-field strip. A2A does return success, but it
+    # accepts any unknown field, so that is not evidence of support either.
+    #
+    # Typed str|None rather than the enum: the internal GetProductsRequest
+    # widens it the same way. No transport acts on the value yet.
     buying_mode: str | None = None
     adcp_version: str = "1.0.0"
 
