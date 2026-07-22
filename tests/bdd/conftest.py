@@ -2724,12 +2724,20 @@ _UC003_WIRED: set[str] = {
     "T-UC-003-revision-success-increments",
     # NOTE: T-UC-003-partition-revision / T-UC-003-boundary-revision are NOT wired.
     # Their schema-invalid rows (revision below minimum / wrong type) grade
-    # error "INVALID_REQUEST", but on the #1417 merge the update path was
-    # reconciled to the sanctioned adcp_validation_boundary, which emits
-    # VALIDATION_ERROR for a schema-invalid revision. The storyboard grade and the
-    # implementation diverge, so — matching #1417's handling of the same gap —
-    # these outlines stay xfailed until the storyboard is reconciled. The
-    # success/CONFLICT behavior they also cover is graded live by
+    # error "INVALID_REQUEST", but production emits VALIDATION_ERROR for a
+    # schema-invalid revision on ALL transports (A2A/REST via the sanctioned
+    # adcp_validation_boundary, MCP via the FastMCP TypeAdapter layer) — with one
+    # documented per-transport nuance: a wrong-TYPE revision on REST is rejected
+    # by FastAPI body parsing as INVALID_REQUEST before the shared boundary.
+    # The storyboard/production reconciliation (regenerate the outlines to grade
+    # VALIDATION_ERROR) is tracked in #1582; these generated outlines are not
+    # patched locally to match production (xpass-graduation anti-pattern), so
+    # they stay xfailed until reconciled. The emission itself is NOT ungraded:
+    # tests/integration/test_update_media_buy_revision_validation_wire.py pins
+    # the wire code per transport (below-min -> VALIDATION_ERROR x3; wrong-type
+    # -> VALIDATION_ERROR on A2A/MCP, INVALID_REQUEST on REST) with
+    # assert_envelope_shape, and reddens if the boundary emission reverts. The
+    # success/CONFLICT behavior the outlines also cover is graded live by
     # T-UC-003-revision-success-increments and T-UC-003-v31-error-conflict-version.
     # v3.1 CONFLICT details shape (error-details/conflict.json: resource_id /
     # expected_version / current_version) — #1544 round 7.
