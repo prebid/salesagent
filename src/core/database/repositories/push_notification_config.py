@@ -101,8 +101,11 @@ class PushNotificationConfigRepository:
             False if an existing row was updated (or reactivated).
 
         Raises:
-            ValueError: If ``url`` fails SSRF validation (same gate as protocol
-                send and application webhook delivery).
+            ValueError: If ``url`` fails the *registration* SSRF gate
+                (``validate_webhook_url_registration`` — no DNS; optional
+                localhost under ``ADCP_TESTING``). Outbound send uses the
+                stricter DNS-backed ``validate_outbound_webhook_url``;
+                application delivery uses ``validate_webhook_url``.
         """
         is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(url)
         if not is_valid:

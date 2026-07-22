@@ -117,6 +117,15 @@ from src.services.protocol_webhook_service import get_protocol_webhook_service
 logger = logging.getLogger(__name__)
 
 
+def _require_safe_a2a_webhook_url(url: str) -> None:
+    """Raise InvalidParamsError when ``url`` fails the registration SSRF gate (#1695)."""
+    from src.core.webhook_validator import WebhookURLValidator
+
+    is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(url)
+    if not is_valid:
+        raise InvalidParamsError(message=f"Invalid webhook URL: {error_msg}")
+
+
 def _dict_to_value(d: dict) -> struct_pb2.Value:
     """Convert a Python dict to a protobuf Value for use in Part.data."""
     val = struct_pb2.Value()
@@ -437,9 +446,14 @@ class AdCPRequestHandler(RequestHandler):
                 "task_type": skills[0] if skills else "unknown",
             }
 
-            await push_notification_service.send_notification(
+            sent = await push_notification_service.send_notification(
                 push_notification_config=push_notification_config, payload=payload, metadata=metadata
             )
+            if not sent:
+                logger.warning(
+                    "Protocol webhook not delivered for task %s (send_notification returned False)",
+                    task.id,
+                )
         except Exception as e:
             # Don't fail the task if webhook fails
             logger.warning("Failed to send protocol-level webhook for task %s: %s", task.id, e)
@@ -574,11 +588,13 @@ class AdCPRequestHandler(RequestHandler):
         msg_id = params.message.message_id or None
         context_id = params.message.context_id or msg_id or f"ctx_{task_id}"
 
-        # Extract push notification config from protocol layer (A2A SendMessageConfiguration)
+        # Extract push notification config from protocol layer (A2A SendMessageConfiguration).
+        # SSRF-reject unsafe URLs before stash / task creation (#1695 / #1578 sibling).
         push_notification_config: TaskPushNotificationConfig | None = None
         if params.HasField("configuration") and params.configuration.HasField("task_push_notification_config"):
             push_notification_config = params.configuration.task_push_notification_config
             if push_notification_config.url:
+                _require_safe_a2a_webhook_url(push_notification_config.url)
                 logger.info(
                     f"Protocol-level push notification config provided for task {task_id}: {push_notification_config.url}"
                 )
@@ -1204,11 +1220,7 @@ class AdCPRequestHandler(RequestHandler):
             if not url:
                 raise InvalidParamsError(message="Missing required parameter: url")
 
-            from src.core.webhook_validator import WebhookURLValidator
-
-            is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(url)
-            if not is_valid:
-                raise InvalidParamsError(message=f"Invalid webhook URL: {error_msg}")
+            _require_safe_a2a_webhook_url(url)
 
             auth_type = None
             auth_token_value = None

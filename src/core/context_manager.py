@@ -908,8 +908,14 @@ class ContextManager(DatabaseManager):
                                 # docstring), so this log-and-swallow can't hold
                                 # the strong ref past completion.
                                 try:
-                                    t.result()
-                                    console.print(f"[green]✅ Webhook sent successfully for {config_url}[/green]")
+                                    sent = t.result()
+                                    if sent:
+                                        console.print(f"[green]✅ Webhook sent successfully for {config_url}[/green]")
+                                    else:
+                                        console.print(
+                                            f"[red]❌ Webhook not delivered for {config_url} "
+                                            f"(send_notification returned False)[/red]"
+                                        )
                                 except Exception as e:
                                     console.print(f"[red]❌ Webhook failed for {config_url}: {str(e)}[/red]")
 
@@ -918,16 +924,23 @@ class ContextManager(DatabaseManager):
                             pin_task(task, on_done=_log_task_result)
                         except RuntimeError:
                             # No running loop; safe to run synchronously
-                            asyncio.run(
+                            sent = asyncio.run(
                                 service.send_notification(
                                     push_notification_config=push_notification_config,
                                     payload=payload,
                                     metadata=metadata,
                                 )
                             )
-                            console.print(
-                                f"[green]✅ Webhook sent successfully for {push_notification_config.url}[/green]"
-                            )
+                            if sent:
+                                console.print(
+                                    f"[green]✅ Webhook sent successfully for {push_notification_config.url}[/green]"
+                                )
+                            else:
+                                console.print(
+                                    f"[red]❌ Webhook not delivered for "
+                                    f"{push_notification_config.url} "
+                                    f"(send_notification returned False)[/red]"
+                                )
 
                     except requests.exceptions.Timeout:
                         console.print(f"[red]❌ Webhook timeout for {push_notification_config.url}[/red]")
