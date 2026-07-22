@@ -7,8 +7,10 @@ trick the server into making requests to internal services.
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
+from urllib.parse import urlparse
 
 from adcp.types import TaskType
 
@@ -29,6 +31,16 @@ WEBHOOK_SSRF_SUGGESTION_DEV = (
     "Provide a public http(s) webhook URL that does not target private, loopback, "
     "link-local, CGNAT, multicast, or cloud-metadata hosts."
 )
+
+
+def _adcp_testing() -> bool:
+    """True when ADCP_TESTING allows localhost/HTTP for capture servers."""
+    return os.environ.get("ADCP_TESTING") == "true"
+
+
+def _strict_mode() -> bool:
+    """Production SSRF policy: HTTPS required and no testing localhost bypass."""
+    return is_production() and not _adcp_testing()
 
 
 def validate_webhook_task_type(task_type: str, fallback: str = WEBHOOK_TASK_TYPE_FALLBACK) -> str:
@@ -61,9 +73,19 @@ def validate_webhook_task_type(task_type: str, fallback: str = WEBHOOK_TASK_TYPE
 
 def webhook_ssrf_suggestion() -> str:
     """Buyer-facing suggestion for registration/outbound SSRF rejections."""
-    if is_production() and os.environ.get("ADCP_TESTING") != "true":
+    if _strict_mode():
         return WEBHOOK_SSRF_SUGGESTION
     return WEBHOOK_SSRF_SUGGESTION_DEV
+
+
+def sanitize_webhook_url_for_log(url: str | None) -> str | None:
+    """Return ``scheme://host/path`` for logs — never credentials or query."""
+    if not url:
+        return None
+    parsed = urlparse(str(url))
+    if parsed.scheme and parsed.hostname:
+        return f"{parsed.scheme}://{parsed.hostname}{parsed.path or ''}"
+    return None
 
 
 def reject_unsafe_webhook_registration_url(
@@ -84,6 +106,30 @@ def reject_unsafe_webhook_registration_url(
         )
 
 
+def reject_unsafe_outbound_webhook_url(
+    url: str,
+    *,
+    log: logging.Logger,
+    kind: str,
+) -> tuple[bool, str]:
+    """Send-time SSRF gate with standardized error logging.
+
+    Returns ``(rejected, error_msg)``. On rejection, logs once with a shared
+    message shape so protocol and application delivery paths cannot drift.
+    Callers that maintain a circuit breaker should record failure locally.
+    """
+    is_valid, error_msg = WebhookURLValidator.validate_outbound_webhook_url(url)
+    if is_valid:
+        return False, ""
+    log.error(
+        "%s webhook URL failed SSRF validation (url=%s): %s",
+        kind,
+        sanitize_webhook_url_for_log(url) or url,
+        error_msg,
+    )
+    return True, error_msg
+
+
 class WebhookURLValidator:
     """Validates webhook URLs to prevent SSRF attacks."""
 
@@ -98,7 +144,7 @@ class WebhookURLValidator:
     @staticmethod
     def _require_https() -> bool:
         """Production requires HTTPS; ADCP_TESTING keeps HTTP for capture servers."""
-        return is_production() and os.environ.get("ADCP_TESTING") != "true"
+        return _strict_mode()
 
     @classmethod
     def validate_webhook_url(cls, url: str) -> tuple[bool, str]:
@@ -123,7 +169,7 @@ class WebhookURLValidator:
         localhost/loopback are allowed for capture servers. Production
         requires HTTPS.
         """
-        allow_localhost = os.environ.get("ADCP_TESTING") == "true"
+        allow_localhost = _adcp_testing()
         is_valid, error = check_url_ssrf(
             url,
             resolve_dns=False,
@@ -134,7 +180,7 @@ class WebhookURLValidator:
     @classmethod
     def validate_outbound_webhook_url(cls, url: str) -> tuple[bool, str]:
         """Send-time SSRF gate (full DNS), with localhost allowance under ADCP_TESTING."""
-        if os.environ.get("ADCP_TESTING") == "true":
+        if _adcp_testing():
             return cls.validate_for_testing(url, allow_localhost=True)
         return cls.validate_webhook_url(url)
 

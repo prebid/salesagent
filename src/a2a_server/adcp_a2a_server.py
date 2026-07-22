@@ -117,8 +117,14 @@ from src.services.protocol_webhook_service import get_protocol_webhook_service
 logger = logging.getLogger(__name__)
 
 
-def _require_safe_a2a_webhook_url(url: str) -> None:
-    """Raise InvalidParamsError when ``url`` fails the registration SSRF gate."""
+def _reject_unsafe_a2a_webhook_url(url: str) -> None:
+    """Raise InvalidParamsError when ``url`` fails the registration SSRF gate.
+
+    A2A push-config endpoints (message/send configuration, setTaskPushNotificationConfig)
+    translate SSRF failures to ``InvalidParamsError``. AdCP tool wrappers
+    (create_media_buy / sync_creatives) instead raise ``AdCPValidationError`` →
+    on-wire ``VALIDATION_ERROR`` / ``recovery=correctable`` + suggestion.
+    """
     from src.core.webhook_validator import WebhookURLValidator
 
     is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(url)
@@ -594,7 +600,7 @@ class AdCPRequestHandler(RequestHandler):
         if params.HasField("configuration") and params.configuration.HasField("task_push_notification_config"):
             push_notification_config = params.configuration.task_push_notification_config
             if push_notification_config.url:
-                _require_safe_a2a_webhook_url(push_notification_config.url)
+                _reject_unsafe_a2a_webhook_url(push_notification_config.url)
                 logger.info(
                     f"Protocol-level push notification config provided for task {task_id}: {push_notification_config.url}"
                 )
@@ -1220,7 +1226,7 @@ class AdCPRequestHandler(RequestHandler):
             if not url:
                 raise InvalidParamsError(message="Missing required parameter: url")
 
-            _require_safe_a2a_webhook_url(url)
+            _reject_unsafe_a2a_webhook_url(url)
 
             auth_type = None
             auth_token_value = None

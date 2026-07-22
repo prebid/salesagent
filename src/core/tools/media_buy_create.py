@@ -2003,13 +2003,6 @@ def _resolve_idempotency_race_or_raise(
     )
 
 
-def _reject_unsafe_webhook_url(url: str, *, field: str, context: Any = None) -> None:
-    """Raise AdCPValidationError when ``url`` fails the registration SSRF gate."""
-    from src.core.webhook_validator import reject_unsafe_webhook_registration_url
-
-    reject_unsafe_webhook_registration_url(url, field=field, context=context)
-
-
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
     push_notification_config: dict[str, Any] | None = None,
@@ -2059,14 +2052,18 @@ async def _create_media_buy_impl(
     # SSRF gate at registration — after auth so unauthenticated callers get AUTH
     # first. Must run before workflow metadata / DB writes.
     # Use str(url): library ReportingWebhook.url is pydantic AnyUrl, not str.
+    from src.core.webhook_validator import reject_unsafe_webhook_registration_url
+
     if req.reporting_webhook:
         rw_url = getattr(req.reporting_webhook, "url", None)
         if rw_url is not None and str(rw_url).strip():
-            _reject_unsafe_webhook_url(str(rw_url), field="reporting_webhook.url", context=req.context)
+            reject_unsafe_webhook_registration_url(str(rw_url), field="reporting_webhook.url", context=req.context)
     if push_notification_config:
         pnc_url = push_notification_config.get("url")
         if pnc_url is not None and str(pnc_url).strip():
-            _reject_unsafe_webhook_url(str(pnc_url), field="push_notification_config.url", context=req.context)
+            reject_unsafe_webhook_registration_url(
+                str(pnc_url), field="push_notification_config.url", context=req.context
+            )
 
     # Validate setup completion (only in production, skip for testing)
     if not testing_ctx.dry_run and not testing_ctx.test_session_id:
@@ -2150,23 +2147,16 @@ async def _create_media_buy_impl(
         # Skip for dry_run mode (no database writes). URL was SSRF-checked above;
         # persist via repository upsert (registration gate + defense in depth).
         if push_notification_config:
-            from urllib.parse import urlparse
-
             from src.core.database.repositories import PushNotificationConfigUoW
+            from src.core.webhook_validator import sanitize_webhook_url_for_log
 
             url = push_notification_config.get("url")
             authentication = push_notification_config.get("authentication", {})
-            # Log scheme+host only — never credentials / full auth blob.
-            parsed = urlparse(str(url)) if url else None
-            safe_url = (
-                f"{parsed.scheme}://{parsed.hostname}{parsed.path or ''}"
-                if parsed and parsed.scheme and parsed.hostname
-                else None
-            )
+            # Log scheme+host+path only — never credentials / full auth blob.
             logger.info(
                 "[MCP/A2A] Registering push notification config id=%s url=%s",
                 push_notification_config.get("id"),
-                safe_url,
+                sanitize_webhook_url_for_log(str(url) if url else None),
             )
 
             if url:

@@ -1469,6 +1469,14 @@ def when_push_config(ctx: dict, url: str) -> None:
     ctx["push_notification_url"] = url
 
 
+@given(parsers.parse('the request includes a push_notification_config with url "{url}"'))
+def given_push_notification_config_url(ctx: dict, url: str) -> None:
+    """Attach push_notification_config to the upcoming sync_creatives dispatch."""
+    push_config = {"url": url}
+    ctx["push_notification_config"] = push_config
+    ctx["push_notification_url"] = url
+
+
 @then("the system registers the webhook for async account status notifications")
 def then_webhook_registered(ctx: dict) -> None:
     """Assert the system acknowledged webhook registration for status notifications.

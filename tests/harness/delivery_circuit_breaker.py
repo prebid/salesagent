@@ -101,7 +101,8 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
         # random.uniform: return 0.0 for deterministic tests
         self.mock["random"].return_value = 0.0
 
-        # Allow fixture hostnames through send-time SSRF (DNS covered elsewhere).
+        # Default: allow fixture hostnames through send-time SSRF (DNS covered
+        # elsewhere). Scenarios that grade the reject branch call set_url_invalid().
         self.mock["ssrf"].return_value = (True, "")
 
         # httpx.Client: 200 OK by default

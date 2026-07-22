@@ -33,7 +33,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.lifecycle import register_shutdown
-from src.core.webhook_validator import WebhookURLValidator
+from src.core.webhook_validator import reject_unsafe_outbound_webhook_url
 
 logger = logging.getLogger(__name__)
 
@@ -164,13 +164,12 @@ class ProtocolWebhookService:
         # SSRF gate on the configured URL *before* docker localhost rewrite.
         # Under ADCP_TESTING, localhost/loopback is allowed for capture servers;
         # production uses the full DNS-backed check (HTTPS required).
-        is_valid, error_msg = WebhookURLValidator.validate_outbound_webhook_url(push_notification_config.url)
-        if not is_valid:
-            logger.error(
-                "Protocol webhook URL failed SSRF validation (url=%s): %s",
-                push_notification_config.url,
-                error_msg,
-            )
+        rejected, _error_msg = reject_unsafe_outbound_webhook_url(
+            push_notification_config.url,
+            log=logger,
+            kind="Protocol",
+        )
+        if rejected:
             return False
 
         url = _normalize_localhost_for_docker(push_notification_config.url)

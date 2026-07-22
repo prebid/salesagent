@@ -394,6 +394,15 @@ class CircuitBreakerMixin:
             mocks.append(r)
         self.mock["client"].return_value.__enter__.return_value.post.side_effect = mocks  # type: ignore[attr-defined]
 
+    def set_url_invalid(self, error_msg: str = "Invalid URL") -> None:
+        """Make send-time SSRF validation fail (skip delivery / record failure).
+
+        Default harness config passes the SSRF mock so fixture hostnames do not
+        NXDOMAIN-fail; scenarios that grade the outbound reject branch must call
+        this hook explicitly.
+        """
+        self.mock["ssrf"].return_value = (False, error_msg)  # type: ignore[attr-defined]
+
     def call_send(
         self,
         media_buy_id: str = "mb_001",

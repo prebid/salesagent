@@ -277,6 +277,8 @@ def when_sync_creative(ctx: dict) -> None:
         kwargs["validation_mode"] = ctx["validation_mode"]
     if "idempotency_key" in ctx:
         kwargs["idempotency_key"] = ctx["idempotency_key"]
+    if "push_notification_config" in ctx:
+        kwargs["push_notification_config"] = ctx["push_notification_config"]
     if ctx.get("has_auth") is False:
         dispatch_request(ctx, identity=ctx.get("identity"), **kwargs)
     else:

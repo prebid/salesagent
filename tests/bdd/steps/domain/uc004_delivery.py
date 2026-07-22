@@ -521,6 +521,18 @@ def given_webhook_returns_status(ctx: dict, status_code: int, reason: str) -> No
     env.set_http_status(status_code, reason)
 
 
+@given("the outbound webhook URL is blocked by SSRF validation")
+def given_outbound_webhook_ssrf_blocked(ctx: dict) -> None:
+    """Force send-time SSRF gate to reject the configured webhook URL.
+
+    Does not blanket-mock all UC-004 scenarios: only this Given opts into the
+    reject branch via CircuitBreakerEnv.set_url_invalid().
+    """
+    env = ctx["env"]
+    assert hasattr(env, "set_url_invalid"), f"Env {type(env).__name__} must expose set_url_invalid for SSRF grading"
+    env.set_url_invalid("Webhook URL resolves to blocked IP range 169.254.0.0/16")
+
+
 @given("the webhook endpoint is unreachable (connection timeout)")
 def given_webhook_unreachable(ctx: dict) -> None:
     """Configure webhook endpoint to timeout.
@@ -1744,6 +1756,30 @@ def then_webhook_marked_failed(ctx: dict) -> None:
         f"Expected webhook delivery to be marked as failed (success=False), "
         f"got success={success!r} from webhook_result={ctx.get('webhook_result')!r}"
     )
+
+
+@then("the webhook delivery should be skipped without an HTTP POST")
+def then_webhook_skipped_no_post(ctx: dict) -> None:
+    """Assert send-time SSRF skip: delivery failed and httpx POST was never called."""
+    env = ctx["env"]
+    success = _extract_webhook_success(ctx)
+    assert success is False, f"Expected SSRF-skipped delivery to return False, got success={success!r}"
+    post_mock = env.mock["post"]
+    assert post_mock.call_count == 0, f"Expected no HTTP POST after SSRF rejection, got {post_mock.call_count} call(s)"
+
+
+@then("the circuit breaker should record a failure")
+def then_circuit_breaker_recorded_failure(ctx: dict) -> None:
+    """Assert the send-time SSRF path called circuit_breaker.record_failure()."""
+    env = ctx["env"]
+    service = env.get_service()
+    tenant_prefix = f"{env._tenant_id}:"
+    failures = [cb.failure_count for key, cb in service._circuit_breakers.items() if key.startswith(tenant_prefix)]
+    assert failures, (
+        f"Expected a circuit breaker for tenant {env._tenant_id!r} after SSRF skip, "
+        f"found keys={list(service._circuit_breakers)}"
+    )
+    assert any(count >= 1 for count in failures), f"Expected failure_count >= 1 after SSRF rejection, got {failures}"
 
 
 @then(parsers.parse('the circuit breaker should be in "{state}" state'))
