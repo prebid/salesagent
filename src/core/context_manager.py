@@ -558,12 +558,12 @@ class ContextManager(DatabaseManager):
             # Query object mappings to find all related steps, scoped to tenant via Context join
             stmt = (
                 select(ObjectWorkflowMapping)
-.join(WorkflowStep)
-.where(
+                .join(WorkflowStep)
+                .where(
                     ObjectWorkflowMapping.object_type == object_type,
                     ObjectWorkflowMapping.object_id == object_id,
                 )
-.order_by(ObjectWorkflowMapping.created_at)
+                .order_by(ObjectWorkflowMapping.created_at)
             )
             if tenant_id:
                 stmt = stmt.join(DBContext).where(DBContext.tenant_id == tenant_id)
@@ -691,9 +691,9 @@ class ContextManager(DatabaseManager):
         try:
             stmt = (
                 select(Context)
-.filter_by(tenant_id=tenant_id, principal_id=principal_id)
-.order_by(Context.last_activity_at.desc())
-.limit(limit)
+                .filter_by(tenant_id=tenant_id, principal_id=principal_id)
+                .order_by(Context.last_activity_at.desc())
+                .limit(limit)
             )
             contexts = session.scalars(stmt).all()
 

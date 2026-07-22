@@ -24,7 +24,9 @@ def assert_no_secret_leak(blob: object, *, context: str = "") -> None:
     Refuses ``None``: an absent value must not satisfy the oracle vacuously — a caller
     asserting on a field that production stopped populating should fail loudly, not pass.
     """
-    assert blob is not None, f"assert_no_secret_leak given None{f' ({context})' if context else ''} — absent value cannot prove a scrub"
+    assert blob is not None, (
+        f"assert_no_secret_leak given None{f' ({context})' if context else ''} — absent value cannot prove a scrub"
+    )
     haystack = blob if isinstance(blob, str) else json.dumps(blob, default=str)
     where = f" ({context})" if context else ""
     for token in _SECRET_TOKENS:

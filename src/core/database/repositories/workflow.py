@@ -91,8 +91,8 @@ class WorkflowRepository:
         """Get a workflow step by its ID within the tenant."""
         return self._session.scalars(
             select(WorkflowStep)
-.join(DBContext)
-.where(
+            .join(DBContext)
+            .where(
                 WorkflowStep.step_id == step_id,
                 DBContext.tenant_id == self._tenant_id,
             )
@@ -117,9 +117,9 @@ class WorkflowRepository:
         """
         stmt = (
             select(WorkflowStep)
-.join(ObjectWorkflowMapping, WorkflowStep.step_id == ObjectWorkflowMapping.step_id)
-.join(DBContext, WorkflowStep.context_id == DBContext.context_id)
-.where(
+            .join(ObjectWorkflowMapping, WorkflowStep.step_id == ObjectWorkflowMapping.step_id)
+            .join(DBContext, WorkflowStep.context_id == DBContext.context_id)
+            .where(
                 DBContext.tenant_id == self._tenant_id,
                 ObjectWorkflowMapping.object_type == object_type,
                 ObjectWorkflowMapping.object_id == object_id,
@@ -150,8 +150,8 @@ class WorkflowRepository:
         """
         return self._session.scalars(
             select(WorkflowStep)
-.join(DBContext)
-.where(
+            .join(DBContext)
+            .where(
                 WorkflowStep.request_data["external_task_id"].as_string() == external_task_id,
                 DBContext.tenant_id == self._tenant_id,
                 DBContext.principal_id == principal_id,
@@ -193,8 +193,8 @@ class WorkflowRepository:
         """
         stmt = (
             select(WorkflowStep)
-.join(DBContext)
-.where(
+            .join(DBContext)
+            .where(
                 DBContext.tenant_id == self._tenant_id,
             )
         )
@@ -228,8 +228,8 @@ class WorkflowRepository:
         """
         stmt = (
             select(WorkflowStep)
-.join(DBContext)
-.where(
+            .join(DBContext)
+            .where(
                 DBContext.tenant_id == self._tenant_id,
             )
         )
@@ -258,14 +258,14 @@ class WorkflowRepository:
         """Get the most recent workflow mapping for a specific object within the tenant."""
         return self._session.scalars(
             select(ObjectWorkflowMapping)
-.join(WorkflowStep, ObjectWorkflowMapping.step_id == WorkflowStep.step_id)
-.join(DBContext, WorkflowStep.context_id == DBContext.context_id)
-.where(
+            .join(WorkflowStep, ObjectWorkflowMapping.step_id == WorkflowStep.step_id)
+            .join(DBContext, WorkflowStep.context_id == DBContext.context_id)
+            .where(
                 ObjectWorkflowMapping.object_type == object_type,
                 ObjectWorkflowMapping.object_id == object_id,
                 DBContext.tenant_id == self._tenant_id,
             )
-.order_by(ObjectWorkflowMapping.created_at.desc())
+            .order_by(ObjectWorkflowMapping.created_at.desc())
         ).first()
 
     def get_step_by_id(self, step_id: str) -> WorkflowStep | None:
@@ -281,9 +281,9 @@ class WorkflowRepository:
         return list(
             self._session.scalars(
                 select(ObjectWorkflowMapping)
-.join(WorkflowStep, ObjectWorkflowMapping.step_id == WorkflowStep.step_id)
-.join(DBContext, WorkflowStep.context_id == DBContext.context_id)
-.where(
+                .join(WorkflowStep, ObjectWorkflowMapping.step_id == WorkflowStep.step_id)
+                .join(DBContext, WorkflowStep.context_id == DBContext.context_id)
+                .where(
                     ObjectWorkflowMapping.step_id == step_id,
                     DBContext.tenant_id == self._tenant_id,
                 )
@@ -301,9 +301,9 @@ class WorkflowRepository:
         mappings = list(
             self._session.scalars(
                 select(ObjectWorkflowMapping)
-.join(WorkflowStep, ObjectWorkflowMapping.step_id == WorkflowStep.step_id)
-.join(DBContext, WorkflowStep.context_id == DBContext.context_id)
-.where(
+                .join(WorkflowStep, ObjectWorkflowMapping.step_id == WorkflowStep.step_id)
+                .join(DBContext, WorkflowStep.context_id == DBContext.context_id)
+                .where(
                     ObjectWorkflowMapping.step_id.in_(step_ids),
                     DBContext.tenant_id == self._tenant_id,
                 )
@@ -319,9 +319,9 @@ class WorkflowRepository:
         """Get all workflow steps for this tenant, newest first."""
         stmt = (
             select(WorkflowStep)
-.join(DBContext)
-.where(DBContext.tenant_id == self._tenant_id)
-.order_by(WorkflowStep.created_at.desc())
+            .join(DBContext)
+            .where(DBContext.tenant_id == self._tenant_id)
+            .order_by(WorkflowStep.created_at.desc())
         )
         if limit:
             stmt = stmt.limit(limit)
@@ -384,8 +384,8 @@ class WorkflowRepository:
         """
         return session.scalar(
             select(DBContext.tenant_id)
-.join(WorkflowStep, WorkflowStep.context_id == DBContext.context_id)
-.where(WorkflowStep.step_id == step_id)
+            .join(WorkflowStep, WorkflowStep.context_id == DBContext.context_id)
+            .where(WorkflowStep.step_id == step_id)
         )
 
     def _atomic_transition(
@@ -420,8 +420,8 @@ class WorkflowRepository:
 
         scoped_step_ids = (
             select(WorkflowStep.step_id)
-.join(DBContext)
-.where(
+            .join(DBContext)
+            .where(
                 WorkflowStep.step_id == step_id,
                 DBContext.tenant_id == self._tenant_id,
             )
@@ -433,13 +433,13 @@ class WorkflowRepository:
         updated = (
             self._session.execute(
                 update(WorkflowStep)
-.where(WorkflowStep.step_id.in_(scoped_step_ids), status_guard)
-.values(**values)
-.returning(WorkflowStep.step_id)
-.execution_options(synchronize_session="fetch")
+                .where(WorkflowStep.step_id.in_(scoped_step_ids), status_guard)
+                .values(**values)
+                .returning(WorkflowStep.step_id)
+                .execution_options(synchronize_session="fetch")
             )
-.scalars()
-.first()
+            .scalars()
+            .first()
         )
         if updated is None:
             return None

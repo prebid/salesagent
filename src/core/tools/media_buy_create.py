@@ -840,8 +840,8 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                     # Load product to get name, delivery_type, format_ids, pricing
                     stmt_product = (
                         select(ProductModel)
-.filter_by(tenant_id=tenant_id, product_id=product_id)
-.options(selectinload(ProductModel.pricing_options))
+                        .filter_by(tenant_id=tenant_id, product_id=product_id)
+                        .options(selectinload(ProductModel.pricing_options))
                     )
                     product = session.scalars(stmt_product).first()
 
@@ -2318,8 +2318,8 @@ async def _create_media_buy_impl(
             # Get products from database
             products_stmt = (
                 select(ProductModel)
-.where(ProductModel.tenant_id == tenant["tenant_id"], ProductModel.product_id.in_(product_ids))
-.options(selectinload(ProductModel.pricing_options))
+                .where(ProductModel.tenant_id == tenant["tenant_id"], ProductModel.product_id.in_(product_ids))
+                .options(selectinload(ProductModel.pricing_options))
             )
             products = session.scalars(products_stmt).all()
 

@@ -197,7 +197,7 @@ class TestA2ASkillInvocation:
         response_data: dict | None,
         status: str = "completed",
     ) -> str:
-        """Persist an a2a workflow step carrying an outer external_task_id (#1544 B6).
+        """Persist an a2a workflow step carrying an outer external_task_id.
 
         Mirrors what ``_create_media_buy_impl`` writes when the A2A boundary forwards the
         buyer's ``task_*`` id. ContextManager manages its own session, so no test-body DB
@@ -223,9 +223,11 @@ class TestA2ASkillInvocation:
     async def test_durable_get_task_rebuilds_completed_task_from_external_id(
         self, handler, sample_tenant, sample_principal, mock_identity
     ):
-        """#1544 B6: a tasks/get poll of the buyer's outer task_* id resolves to the persisted
-        workflow step (durably, cross-process) and rebuilds a terminal Task with the stored
-        result artifact — even though the task is not in this process's in-memory map."""
+        """The durable helper ``_durable_task_from_step`` resolves the buyer's outer task_* id to
+        the persisted workflow step (cross-process) and rebuilds a terminal Task with the
+        stored result artifact, even when the task is absent from this process's in-memory
+        map. The public ``on_get_task`` path is covered by
+        ``test_get_task_reconciles_stale_in_memory_with_terminal_step``."""
         external_task_id = "task_durable_corr_1"
         self._persist_a2a_step(
             sample_tenant["tenant_id"],
@@ -272,7 +274,7 @@ class TestA2ASkillInvocation:
     async def test_durable_cancel_marks_pending_step_canceled(
         self, handler, sample_tenant, sample_principal, mock_identity
     ):
-        """#1544 B6: tasks/cancel of the buyer's outer task_* id survives a restart — the
+        """The durable helper backing tasks/cancel resolves the buyer's outer task_* id — the
         persisted non-terminal workflow step is durably marked canceled (not just the
         in-memory map), and a subsequent durable tasks/get sees CANCELED."""
         external_task_id = "task_durable_cancel_1"
@@ -431,7 +433,7 @@ class TestA2ASkillInvocation:
     @pytest.mark.asyncio
     async def test_durable_get_is_principal_isolated(self, handler, sample_tenant, sample_principal):
         """[Round-12 B2] A DIFFERENT principal in the SAME tenant who learns a task id
-        must not read its stored response_data through the durable tasks/get path."""
+        must not read its stored response_data through the durable ``_durable_task_from_step`` helper."""
         external_task_id = "task_prin_iso_get"
         self._persist_a2a_step(
             sample_tenant["tenant_id"],
@@ -571,7 +573,9 @@ class TestA2ASkillInvocation:
         # ── Ordering 2: approval commits first → cancel refused, stays completed ──
         step2 = self._persist_a2a_step(tenant_id, principal_id, "task_race_2", None, status="requires_approval")
         with WorkflowUoW(tenant_id) as u_approve2:
-            assert u_approve2.workflows.transition_if_nonterminal(step2, status="completed", completed_at=now) is not None
+            assert (
+                u_approve2.workflows.transition_if_nonterminal(step2, status="completed", completed_at=now) is not None
+            )
         with WorkflowUoW(tenant_id) as u_cancel2:
             assert u_cancel2.workflows.cancel_if_cancellable(step2, completed_at=now) is False
         assert self._step_status(tenant_id, step2) == "completed"

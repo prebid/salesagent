@@ -90,7 +90,9 @@ class TestPolicyReviewAtomicity:
         """[Round-15 B1] positive control: a pending review approves to completed."""
         tenant_id = sample_tenant["tenant_id"]
         _auth(client, tenant_id)
-        step_id = _make_step(tenant_id, sample_principal["principal_id"], "requires_approval", step_type="policy_review")
+        step_id = _make_step(
+            tenant_id, sample_principal["principal_id"], "requires_approval", step_type="policy_review"
+        )
 
         resp = client.post(f"/tenant/{tenant_id}/policy/review/{step_id}", data={"action": "approve", "notes": "n"})
         assert resp.status_code in (200, 302)
@@ -103,7 +105,9 @@ class TestPolicyReviewAtomicity:
         for regular OAuth users — so any signed-in outsider could drive a cross-tenant
         approve/reject."""
         tenant_id = sample_tenant["tenant_id"]
-        step_id = _make_step(tenant_id, sample_principal["principal_id"], "requires_approval", step_type="policy_review")
+        step_id = _make_step(
+            tenant_id, sample_principal["principal_id"], "requires_approval", step_type="policy_review"
+        )
 
         with client.session_transaction() as sess:
             sess.clear()
@@ -133,7 +137,9 @@ class TestPolicyReviewAtomicity:
         bad request as a 409 conflict."""
         tenant_id = sample_tenant["tenant_id"]
         _auth(client, tenant_id)
-        step_id = _make_step(tenant_id, sample_principal["principal_id"], "requires_approval", step_type="policy_review")
+        step_id = _make_step(
+            tenant_id, sample_principal["principal_id"], "requires_approval", step_type="policy_review"
+        )
 
         resp = client.post(f"/tenant/{tenant_id}/policy/review/{step_id}", data={"action": "frobnicate", "notes": "n"})
         assert resp.status_code == 400

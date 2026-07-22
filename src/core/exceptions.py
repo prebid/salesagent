@@ -1129,15 +1129,17 @@ def _representative_builtin(exc_type: type[Exception]) -> Exception:
         class _Probe(BaseModel):
             x: int
 
+        probe_error: ValidationError | None = None
         try:
-            _Probe(x="not-an-int")  # type: ignore[arg-type]
+            _Probe(x="not-an-int")
         except ValidationError as ve:
-            return ve
-        raise AssertionError("probe model failed to raise ValidationError")
+            probe_error = ve
+        assert probe_error is not None, "probe model failed to raise ValidationError"
+        return probe_error
     return exc_type("probe")
 
 
-def _projector_key_violations(registry: tuple["_BuiltinNormalizer", ...]) -> list[str]:
+def _projector_key_violations(registry: tuple[_BuiltinNormalizer, ...]) -> list[str]:
     """Forbidden-key findings per registry projector, probed with a representative builtin.
 
     Pure detector shared by the import-time gate below and its known-bad self-test, so the
