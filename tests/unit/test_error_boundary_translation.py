@@ -537,29 +537,39 @@ class TestSafeAdcpErrorSuggestionMatchesRecovery:
         )
 
     def test_normalization_projector_cannot_override_semantic_identity(self):
-        """Known-bad: projector kwargs cannot override the registry's fixed class/code.
+        """Known-bad: a projector emitting semantic overrides is caught at import time.
 
         ``AdCPError`` constructors accept ``error_code``/``status_code``/``recovery`` overrides.
-        Without the production allowlist, a projector could declare ``AdCPValidationError`` to the
+        Without the allowlist gate, a projector could declare ``AdCPValidationError`` to the
         completeness guard but emit ``INVALID_REQUEST`` at runtime via ``error_code='NOT_FOUND'``.
+        Enforcement moved OUT of the hot exception path (a raise inside a boundary translator
+        shadows the original exception and fails open with no envelope) to a module-import gate;
+        this drives the gate's shared detector with known-bad registries so a degraded matcher
+        reddens here.
         """
-        from src.core.exceptions import AdCPValidationError, _build_normalized_error
+        from src.core.exceptions import (
+            AdCPValidationError,
+            _build_normalized_error,
+            _projector_key_violations,
+        )
 
-        with pytest.raises(TypeError, match="error_code"):
-            _build_normalized_error(
+        bad_error_code = ((ValueError, AdCPValidationError, lambda e: {"message": str(e), "error_code": "NOT_FOUND"}),)
+        findings = _projector_key_violations(bad_error_code)
+        assert findings and "error_code" in findings[0], findings
+
+        bad_context = (
+            (
+                ValueError,
                 AdCPValidationError,
-                {"message": "probe", "error_code": "NOT_FOUND"},
-            )
+                lambda e: {"message": str(e), "context": {"debug": "postgresql://svc:TOPSECRET@db/prod"}},
+            ),
+        )
+        findings = _projector_key_violations(bad_context)
+        assert findings and "context" in findings[0], findings
 
-        with pytest.raises(TypeError, match="context"):
-            _build_normalized_error(
-                AdCPValidationError,
-                {
-                    "message": "probe",
-                    "context": {"debug": "postgresql://svc:TOPSECRET@db/prod"},
-                },
-            )
-
+        # The shipped registry passes the gate (the module imported), and presentation-only
+        # kwargs construct the fixed semantic class.
+        assert _projector_key_violations(()) == []
         built = _build_normalized_error(
             AdCPValidationError,
             {"message": "bad field", "field": "packages[0].budget", "details": {"safe": True}},

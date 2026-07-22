@@ -159,20 +159,23 @@ DISCOVERY_SKILLS = frozenset(
 )
 
 
-def _safe_adcp_error(exc: Exception) -> AdCPError:
-    """A2A-boundary handle for the shared sanitization policy ``exceptions.safe_adcp_error``.
+def _sanitized_envelope(exc: Exception) -> tuple[AdCPError, dict[str, Any]]:
+    """THE A2A sanitize→envelope composition: ``(safe_adcp_error(exc), its two-layer envelope)``.
 
-    Both A2A error paths route through it: the top-level ``_internal_error_for`` (→ JSON-RPC
-    ``InternalError``) and the per-skill ``_build_error_envelope`` (→ failed-Task artifact).
-    Internal/infra errors — the SERVICE_UNAVAILABLE family AND terminal ``CONFIGURATION_ERROR``
-    (whose secret-decryption raise sites can interpolate a connection string) — are scrubbed to
-    a generic message with wire code/recovery preserved; client-correctable typed errors pass
-    through unchanged. The policy now lives in ``src/core/exceptions.py`` so the webhook push
-    path (``ContextManager.audit_workflow_step_failure``) shares one definition (MCP/REST
-    adoption tracked in #1587). Do NOT reintroduce a normalizer that trusts a typed message
-    verbatim.
+    Single home for the pipeline every A2A error surface uses — the top-level
+    ``_internal_error_for`` (→ JSON-RPC ``InternalError``), the per-skill
+    ``_build_error_envelope`` (→ failed-Task artifact), and the per-skill seam (which
+    re-raises the sanitized error and lets the dispatcher envelope it). Internal/infra
+    errors — the SERVICE_UNAVAILABLE family AND terminal ``CONFIGURATION_ERROR`` (whose
+    secret-decryption raise sites can interpolate a connection string) — are scrubbed to
+    a generic message with wire code/recovery preserved; client-correctable typed errors
+    pass through unchanged. The policy lives in ``src/core/exceptions.py`` so the webhook
+    push path (``ContextManager.audit_workflow_step_failure``) shares one definition
+    (MCP/REST adoption tracked in #1587). Do NOT reintroduce a normalizer that trusts a
+    typed message verbatim.
     """
-    return safe_adcp_error(exc)
+    sanitized = safe_adcp_error(exc)
+    return sanitized, build_two_layer_error_envelope(sanitized)
 
 
 def _internal_error_for(operation: str, exc: Exception) -> InternalError:
@@ -183,7 +186,7 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     upstream responses and MUST NOT reach the client. So:
 
     - A TYPED ``AdCPError`` passes through with its own wire code, but the message
-      placed on the JSON-RPC layer is the SANITIZED one from ``_safe_adcp_error`` —
+      placed on the JSON-RPC layer is the SANITIZED one from ``_sanitized_envelope`` —
       a typed internal-bucket error (``AdCPAdapterError`` et al.) can interpolate
       ``str(e)`` into its message, so the ORIGINAL ``exc.message`` must never be
       used here (it would leak through ``error.message`` even while ``error.data``
@@ -194,18 +197,19 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
 
     ``InternalError`` stays an ``A2AError`` so the SDK's ``JsonRpcDispatcher``
     serializes it as a structured JSON-RPC error (the four
-    ``on_*_task_push_notification_config`` methods, and the untyped-crash branch of
+    ``on_*_task_push_notification_config`` methods, the durable ``on_get_task`` /
+    ``on_cancel_task`` boundaries, and the untyped-crash branch of
     ``on_message_send``, all raise through here). The two-layer envelope rides in the
     error's ``data`` field (``error.data["adcp_error"]`` / ``error.data["errors"][0]``).
     """
-    adcp_error = _safe_adcp_error(exc)
+    adcp_error, envelope = _sanitized_envelope(exc)
     if isinstance(exc, AdCPError):
         # adcp_error.message, NOT exc.message: the sanitized message (identical for
         # client-correctable errors, scrubbed for the internal bucket).
         message = f"{operation} failed: {adcp_error.message}"
     else:
         message = f"Internal error during {operation}"
-    return InternalError(message=message, data=build_two_layer_error_envelope(adcp_error))
+    return InternalError(message=message, data=envelope)
 
 
 class AdCPRequestHandler(RequestHandler):
@@ -265,23 +269,23 @@ class AdCPRequestHandler(RequestHandler):
     def _build_error_envelope(exc: Exception) -> dict[str, Any]:
         """Build a spec-compliant two-layer envelope for any exception.
 
-        Single source of truth for "wrap-arbitrary-exception → wire envelope"
-        used by both the per-skill dispatcher (``_build_failed_skill_result``)
-        and the top-level ``on_message_send`` error handler. Sanitizes via
-        ``_safe_adcp_error`` — the SAME policy the top-level ``_internal_error_for``
-        uses — so a TYPED ``AdCPError`` keeps its controlled message + wire code,
-        while any UNTYPED exception becomes a generic ``AdCPError`` and its raw
-        ``str(exc)`` is NEVER placed on the wire. (It deliberately does NOT use
-        ``normalize_to_adcp_error``, which maps ``Exception → AdCPError(str(exc))``
-        and would leak credentials/SQL/hostnames through the per-skill failed-Task
-        artifact.) The wire output stays in ``WIRE_STANDARD_CODES`` (SDK
-        ``STANDARD_ERROR_CODES`` plus the pinned-spec supplement) and the envelope
-        shape stays a two-layer ``errors[]`` structure, never a flat
-        ``{"error": "..."}`` dict the storyboard runner would treat as
+        The failed-Task-artifact entry into the shared ``_sanitized_envelope``
+        composition (consumed by ``_failed_task_artifact`` and
+        ``_build_failed_skill_result``); the JSON-RPC entry is
+        ``_internal_error_for``. Same policy on both: a TYPED ``AdCPError`` keeps
+        its controlled message + wire code, while any UNTYPED exception becomes a
+        generic ``AdCPError`` and its raw ``str(exc)`` is NEVER placed on the wire.
+        (It deliberately does NOT use ``normalize_to_adcp_error``, which maps
+        ``Exception → AdCPError(str(exc))`` and would leak credentials/SQL/hostnames
+        through the per-skill failed-Task artifact.) The wire output stays in
+        ``WIRE_STANDARD_CODES`` (SDK ``STANDARD_ERROR_CODES`` plus the pinned-spec
+        supplement) and the envelope shape stays a two-layer ``errors[]`` structure,
+        never a flat ``{"error": "..."}`` dict the storyboard runner would treat as
         ``MCP_ERROR``.
         """
 
-        return build_two_layer_error_envelope(_safe_adcp_error(exc))
+        _sanitized, envelope = _sanitized_envelope(exc)
+        return envelope
 
     @staticmethod
     def _failed_task_artifact(exc: Exception) -> "Artifact":
@@ -332,10 +336,10 @@ class AdCPRequestHandler(RequestHandler):
 
         Single decoder for A2A DataPart → dict (protobuf ``Value`` → JSON), shared
         by completed-status detection and the webhook payload builder. Returns a
-        LIST, not a name-keyed dict, so repeated skills that emit identically-named
-        artifacts (e.g. two ``error_result``) are all preserved — none silently
-        overwrites another. A failed Task's error envelope, a sync_creatives
-        result, and every sibling result are kept."""
+        LIST, not a name-keyed dict, as a general safety property: identically-named
+        artifacts are all preserved — none silently overwrites another. (The explicit-
+        skill path emits one artifact per Task under the single-skill gate; the
+        general shape guards any other producer.)"""
         pairs: list[tuple[str, dict[str, Any]]] = []
         for artifact in task.artifacts:
             for part in artifact.parts:
@@ -348,8 +352,9 @@ class AdCPRequestHandler(RequestHandler):
         """Pack all artifact data into one dict for ``create_a2a_webhook_payload``.
 
         The library renders a single artifact from this dict, so we key by artifact
-        name but DE-COLLIDE duplicates (``error_result``, ``error_result#2``, …) —
-        preserving every artifact's data on the wire rather than overwriting."""
+        name but DE-COLLIDE duplicates (``name``, ``name#2``, …) as a general safety
+        property — preserving every artifact's data on the wire rather than
+        overwriting, whatever the producing path."""
         result_data: dict[str, Any] = {}
         for name, data in AdCPRequestHandler._task_artifacts_data(task):
             key, n = name, 2
@@ -499,7 +504,6 @@ class AdCPRequestHandler(RequestHandler):
         self,
         task: Task,
         status: str,
-        result: dict[str, Any] | None = None,
     ):
         """Send protocol-level push notification if configured.
 
@@ -509,11 +513,12 @@ class AdCPRequestHandler(RequestHandler):
 
         Uses create_a2a_webhook_payload from adcp library to automatically select correct type.
 
-        Failure payloads carry the Task's structured artifacts (the two-layer AdCP
-        envelope), never a flattened ``{"error": "..."}`` — for a ``failed`` final
-        state the library extracts from ``.artifacts``. Only meaningful for async
-        transitions: immediate terminal responses are returned synchronously and
-        do not notify (see ``_mark_task_failed``).
+        In-process callers notify only the non-terminal ``submitted`` transition
+        (immediate terminal responses are returned synchronously and do not notify —
+        see ``_mark_task_failed``; the later async terminal transition is notified by
+        the durable workflow path in ``ContextManager``). The payload's result data is
+        always read off the Task's own artifacts (``_webhook_result_data``), never a
+        caller-supplied dict — one source for what a subscriber sees.
         """
         try:
             # Check if task has push notification config stored
@@ -554,12 +559,10 @@ class AdCPRequestHandler(RequestHandler):
 
             # Build result data for the webhook payload. ``create_a2a_webhook_payload``
             # renders its artifact FROM this dict, so we pass the Task's own structured
-            # artifact data — EVERY artifact, de-colliding duplicate names (the two-layer
-            # AdCP envelope on a ``failed`` task, the full sync_creatives result, every
-            # sibling) — never a lossy ``{"error": "..."}``, a single stale DataPart, an
-            # empty dict, or a name-overwritten sibling. Callers may still pass an
-            # explicit ``result``; otherwise we read it off the task's artifacts.
-            result_data: dict[str, Any] = result if result is not None else self._webhook_result_data(task)
+            # artifact data — EVERY artifact, de-colliding duplicate names — never a
+            # lossy ``{"error": "..."}``, a single stale DataPart, an empty dict, or a
+            # name-overwritten sibling.
+            result_data: dict[str, Any] = self._webhook_result_data(task)
 
             # Use create_a2a_webhook_payload to get the correct payload type:
             # - Task for final states (completed, failed, canceled)
@@ -910,86 +913,70 @@ class AdCPRequestHandler(RequestHandler):
                         )
                     )
 
-                # Determine task status by precedence: failed > submitted > completed.
-                # Every result's artifact was built above and is preserved regardless
-                # of the chosen status, so a mixed batch never silently drops a result.
-                failed_skills = [res["skill"] for res in results if not res["success"]]
-                submitted_skills = [
-                    res["skill"]
-                    for res in results
-                    if res["success"] and isinstance(res["result"], dict) and res["result"].get("status") == "submitted"
-                ]
-                successful_skills = [res["skill"] for res in results if res["success"]]
+                # The single-skill gate above guarantees exactly one result; route its
+                # outcome: failed → submitted → completed.
+                outcome = results[0]
 
-                if failed_skills:
-                    # Any failure makes the batch terminal-failed; all artifacts (each
-                    # failed skill's two-layer envelope AND any sibling successes or
-                    # pending results) ride in the Task body. Immediate terminal
-                    # response returned synchronously → no webhook (a2a-guide.mdx
-                    # terminal-state rule). Remember the task under its owner (like the
-                    # submitted/successful branches) so the buyer can poll tasks/get on a
-                    # failed explicit skill — a failed Task is a Task-layer outcome, and
-                    # leaving it unremembered both diverges from the NL-failed path and
-                    # strands an ownerless entry in the in-memory maps.
+                if not outcome["success"]:
+                    # Terminal-failed: the failed skill's two-layer envelope rides in the
+                    # Task body. Immediate terminal response returned synchronously → no
+                    # webhook (a2a-guide.mdx terminal-state rule). Remember the task
+                    # under its owner (like the submitted/successful branches) so the
+                    # buyer can poll tasks/get on a failed explicit skill — a failed Task
+                    # is a Task-layer outcome, and leaving it unremembered both diverges
+                    # from the NL-failed path and strands an ownerless entry in the
+                    # in-memory maps.
                     self._mark_task_failed(task)
                     self._remember_task(task_id, task, identity)
                     return task
 
-                if submitted_skills:
-                    # A pending-approval skill is present with no outright failures →
-                    # non-terminal SUBMITTED. A single-skill async op keeps the "no
-                    # artifacts until approved" convention; a mixed batch preserves
-                    # every sibling result. Non-terminal initial response → notify.
+                if isinstance(outcome["result"], dict) and outcome["result"].get("status") == "submitted":
+                    # Pending approval → non-terminal SUBMITTED. An async op keeps the
+                    # "no artifacts until approved" convention. Non-terminal initial
+                    # response → notify.
                     task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_SUBMITTED))
-                    if len(results) == 1:
-                        del task.artifacts[:]
+                    del task.artifacts[:]
                     await self._send_protocol_webhook(task, status="submitted")
                     self._remember_task(task_id, task, identity)
                     return task
 
-                if successful_skills:
-                    # Log successful skill invocations with rich context
-                    try:
-                        tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
-                        principal_id = (identity.principal_id or "unknown") if identity else "unknown"
+                # Completed synchronously — log the successful invocation with rich context.
+                try:
+                    tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
+                    principal_id = (identity.principal_id or "unknown") if identity else "unknown"
 
-                        # Extract meaningful details from results
-                        log_details = {"skills": successful_skills, "count": len(successful_skills)}
+                    log_details = {"skills": [outcome["skill"]], "count": 1}
+                    result_data = outcome.get("result")
 
-                        # Add context from the first successful skill
-                        first_result = next((r for r in results if r["success"]), None)
-                        if first_result and "result" in first_result:
-                            result_data = first_result["result"]
+                    # Extract budget and package info for create_media_buy
+                    if "create_media_buy" in outcome["skill"]:
+                        if isinstance(result_data, dict):
+                            if "total_budget" in result_data:
+                                log_details["total_budget"] = result_data["total_budget"]
+                            if "packages" in result_data:
+                                log_details["package_count"] = len(result_data["packages"])
+                            if "media_buy_id" in result_data:
+                                log_details["media_buy_id"] = result_data["media_buy_id"]
 
-                            # Extract budget and package info for create_media_buy
-                            if "create_media_buy" in first_result["skill"]:
-                                if isinstance(result_data, dict):
-                                    if "total_budget" in result_data:
-                                        log_details["total_budget"] = result_data["total_budget"]
-                                    if "packages" in result_data:
-                                        log_details["package_count"] = len(result_data["packages"])
-                                    if "media_buy_id" in result_data:
-                                        log_details["media_buy_id"] = result_data["media_buy_id"]
+                    # Extract product count for get_products
+                    elif "get_products" in outcome["skill"]:
+                        if isinstance(result_data, dict) and "products" in result_data:
+                            log_details["product_count"] = len(result_data["products"])
 
-                            # Extract product count for get_products
-                            elif "get_products" in first_result["skill"]:
-                                if isinstance(result_data, dict) and "products" in result_data:
-                                    log_details["product_count"] = len(result_data["products"])
+                    # Extract creative count for sync_creatives
+                    elif "sync_creatives" in outcome["skill"]:
+                        if isinstance(result_data, dict) and "creatives" in result_data:
+                            log_details["creative_count"] = len(result_data["creatives"])
 
-                            # Extract creative count for sync_creatives
-                            elif "sync_creatives" in first_result["skill"]:
-                                if isinstance(result_data, dict) and "creatives" in result_data:
-                                    log_details["creative_count"] = len(result_data["creatives"])
-
-                        self._log_a2a_operation(
-                            "explicit_skill_invocation",
-                            tenant_id,
-                            principal_id,
-                            True,
-                            log_details,
-                        )
-                    except Exception as e:
-                        logger.warning("Could not log skill invocations: %s", e)
+                    self._log_a2a_operation(
+                        "explicit_skill_invocation",
+                        tenant_id,
+                        principal_id,
+                        True,
+                        log_details,
+                    )
+                except Exception as e:
+                    logger.warning("Could not log skill invocations: %s", e)
 
             # Natural language fallback (existing keyword-based routing)
             elif any(word in combined_text for word in ["product", "inventory", "available", "catalog"]):
@@ -1892,7 +1879,7 @@ class AdCPRequestHandler(RequestHandler):
                 principal_id=getattr(identity, "principal_id", None) or "anonymous",
             )
 
-            sanitized = _safe_adcp_error(e)
+            sanitized = safe_adcp_error(e)
             if sanitized is not e:
                 raise sanitized from e
             raise

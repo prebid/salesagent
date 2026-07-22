@@ -1122,15 +1122,51 @@ _BUILTIN_NORMALIZATION: tuple[_BuiltinNormalizer, ...] = (
 _NORMALIZATION_PROJECTOR_KEYS = frozenset({"message", "field", "suggestion", "retry_after", "details"})
 
 
+def _representative_builtin(exc_type: type[Exception]) -> Exception:
+    """A minimal live instance of a registry builtin, for probing its projector."""
+    if exc_type is ValidationError:
+
+        class _Probe(BaseModel):
+            x: int
+
+        try:
+            _Probe(x="not-an-int")  # type: ignore[arg-type]
+        except ValidationError as ve:
+            return ve
+        raise AssertionError("probe model failed to raise ValidationError")
+    return exc_type("probe")
+
+
+def _projector_key_violations(registry: tuple["_BuiltinNormalizer", ...]) -> list[str]:
+    """Forbidden-key findings per registry projector, probed with a representative builtin.
+
+    Pure detector shared by the import-time gate below and its known-bad self-test, so the
+    gate's matcher cannot silently degrade.
+    """
+    findings: list[str] = []
+    for exc_type, _adcp_class, projector in registry:
+        forbidden = set(projector(_representative_builtin(exc_type))) - _NORMALIZATION_PROJECTOR_KEYS
+        if forbidden:
+            findings.append(f"{exc_type.__name__}: forbidden projector keys {sorted(forbidden)}")
+    return findings
+
+
 def _build_normalized_error(adcp_class: type[AdCPError], projected_kwargs: dict[str, Any]) -> AdCPError:
-    """Instantiate the registry's fixed semantic class from presentation-only kwargs."""
-    forbidden = set(projected_kwargs) - _NORMALIZATION_PROJECTOR_KEYS
-    if forbidden:
-        raise TypeError(
-            "normalization projector may only supply presentation fields; "
-            f"semantic/unknown fields are forbidden: {sorted(forbidden)}"
-        )
+    """Instantiate the registry's fixed semantic class from presentation-only kwargs.
+
+    The presentation-only contract is enforced at MODULE IMPORT (the gate below probes every
+    registry projector), never mid-request: this function runs inside boundary exception
+    handlers at all three transports, where a raise would shadow the original exception and
+    fail open with no envelope.
+    """
     return adcp_class(**projected_kwargs)
+
+
+# Import-time gate: a projector emitting a semantic override (``error_code``/``recovery``/
+# ``context``/anything off the allowlist) fails the BUILD here, mirroring the
+# ``_NON_STANDARD_TARGETS`` precedent above — never a live request inside a boundary handler.
+_PROJECTOR_KEY_VIOLATIONS = _projector_key_violations(_BUILTIN_NORMALIZATION)
+assert not _PROJECTOR_KEY_VIOLATIONS, f"normalization projector contract violated: {_PROJECTOR_KEY_VIOLATIONS}"
 
 
 def normalize_to_adcp_error(exc: Exception) -> AdCPError:
