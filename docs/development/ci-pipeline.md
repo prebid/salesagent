@@ -107,6 +107,12 @@ path under `pytest --timeout=300` (setup timeouts / ENOSPC on cold runners).
 Local standalone runs (no pre-started stack) still clear or omit
 `ADCP_TESTING` so conftest owns build+up.
 
+**Shared readiness helper.** Both fixture branches (verify-only and standalone)
+call `tests.e2e.stack_readiness.wait_for_e2e_stack` with the ordered hard gate
+`postgres → creative-agent → adcp /health`. CI pre-start (#1667) and the
+Python helper (#1668) agree on that probe order; do not reintroduce inline
+`/health`-only poll loops in `conftest.py`.
+
 ## Reference Creative Agent
 
 The `creative` shard starts a reference creative agent from the upstream

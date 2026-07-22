@@ -1,14 +1,16 @@
+import os
 import shutil
 import subprocess
-import time
 from contextlib import contextmanager
+from urllib.parse import urlparse
 
-import httpx
 import psycopg2
 import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from sqlalchemy import select
+
+from tests.e2e.stack_readiness import wait_for_e2e_stack
 
 
 def make_mcp_client(
@@ -108,31 +110,37 @@ def set_live_adapter_behavior(live_server: dict, *, tenant_subdomain: str = "ci-
 
 
 def wait_for_server_readiness(mcp_url: str, timeout: int = 60):
-    """
-    Wait for the MCP server to become ready by checking its health endpoint.
+    """Wait for the E2E stack via the shared readiness helper.
+
+    Thin wrapper around :func:`tests.e2e.stack_readiness.wait_for_e2e_stack`.
+    Derives host/port from ``mcp_url`` and uses ``POSTGRES_PORT`` when set so
+    the full ordered hard gate (postgres → creative-agent → adcp ``/health``)
+    applies. When compose/postgres context is missing, fails loud rather than
+    silently skipping creative-agent.
 
     Args:
         mcp_url: Base URL of the MCP server (e.g., http://localhost:8080)
         timeout: Maximum time to wait in seconds (default: 60)
 
     Raises:
-        pytest.fail if server does not become ready within timeout
+        pytest.fail if the stack does not become ready within timeout
     """
-    print(f"Waiting for MCP server at {mcp_url}...")
-    for _ in range(timeout):
-        try:
-            # Synchronous wait logic using httpx for simplicity in sync/async contexts
-            # But since we are in a helper, we can use sync httpx.Client or requests
-            with httpx.Client() as client:
-                resp = client.get(f"{mcp_url}/health", timeout=1.0)
-                if resp.status_code == 200:
-                    print("✓ Server is ready")
-                    return
-        except Exception:
-            pass
-        time.sleep(1)
+    parsed = urlparse(mcp_url)
+    if not parsed.hostname or parsed.port is None:
+        pytest.fail(f"wait_for_server_readiness: cannot derive host/port from mcp_url={mcp_url!r}")
 
-    pytest.fail(f"Server at {mcp_url} did not become ready within {timeout} seconds")
+    postgres_raw = os.getenv("POSTGRES_PORT")
+    if not postgres_raw:
+        pytest.fail(
+            "wait_for_server_readiness requires POSTGRES_PORT so the shared helper "
+            "can run the full postgres → creative-agent → adcp_health hard gate"
+        )
+
+    wait_for_e2e_stack(
+        ports={"mcp": int(parsed.port), "postgres": int(postgres_raw)},
+        host=parsed.hostname,
+        timeout_s=float(timeout),
+    )
 
 
 def force_approve_media_buy_in_db(live_server: dict, media_buy_id: str):

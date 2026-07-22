@@ -24,6 +24,9 @@ _GETPID = os.getpid
 
 # Import contract validation - this automatically validates tool calls at test collection time
 from tests.e2e.conftest_contract_validation import pytest_collection_modifyitems  # noqa: F401
+from tests.e2e.stack_readiness import wait_for_e2e_stack
+
+_E2E_COMPOSE_FILES = ("docker-compose.e2e.yml", "docker-compose.e2e.ports.yml")
 
 
 def e2e_host() -> str:
@@ -161,28 +164,14 @@ def docker_services_e2e(request):
 
         print(f"✓ Using ports: Server={mcp_port} (MCP+A2A+Admin), Postgres={postgres_port}")
 
-        # Wait for server to be ready. /health is proxied to the upstream
-        # (not returned by nginx directly), so this confirms the app is serving.
-        # 60s budget covers: alembic migration run on a fresh schema (~5-15s
-        # in CI), MCP/A2A/REST router registration, and the first-call cold
-        # path through the import graph (typed creative-format registry +
-        # adcp library module load). Empirically 25-45s in CI; 60s leaves
-        # ~30% headroom. Drop only if the startup cold-path measurably
-        # shrinks — don't widen further without root-causing the slowness.
-        max_wait = 60
-        start_time = time.time()
-        for _ in range(max_wait // 2):
-            try:
-                response = requests.get(f"http://{e2e_host()}:{mcp_port}/health", timeout=2)
-                if response.status_code == 200:
-                    elapsed = int(time.time() - start_time)
-                    print(f"✓ Server is healthy ({elapsed}s)")
-                    break
-            except requests.RequestException:
-                pass
-            time.sleep(2)
-        else:
-            pytest.fail(f"Server not ready after {max_wait}s (port {mcp_port})")
+        # Shared ordered readiness (postgres → creative-agent → adcp /health).
+        # CI already compose --wait'd; 60s is a safety net, not a cold start budget.
+        wait_for_e2e_stack(
+            ports={"mcp": mcp_port, "postgres": postgres_port},
+            compose_files=_E2E_COMPOSE_FILES,
+            host=e2e_host(),
+            timeout_s=60,
+        )
 
     else:
         # Check if Docker is available
@@ -273,83 +262,13 @@ def docker_services_e2e(request):
         print("Step 2/2: Starting services...")
         subprocess.run(["docker-compose", *compose_files, "up", "-d"], check=True, env=env)
 
-        # Wait for unified server to be healthy (MCP + A2A + Admin all on same port)
-        max_wait = 120  # Increased from 60 to 120 seconds for CI
-        start_time = time.time()
-
-        server_ready = False
-
-        print(f"Waiting for server (max {max_wait}s)...")
-        print(f"  Health: http://{e2e_host()}:{mcp_port}/health")
-
-        while time.time() - start_time < max_wait:
-            elapsed = int(time.time() - start_time)
-
-            # Show progress every 5 seconds
-            if elapsed > 0 and elapsed % 5 == 0 and not server_ready:
-                print(f"  ⏱️  Still waiting... ({elapsed}s / {max_wait}s)")
-                # Show container status for debugging
-                try:
-                    ps_result = subprocess.run(
-                        ["docker-compose", "-f", "docker-compose.e2e.yml", "ps", "--format", "table"],
-                        capture_output=True,
-                        text=True,
-                        timeout=2,
-                    )
-                    if ps_result.returncode == 0 and ps_result.stdout:
-                        print(f"  Container status:\n{ps_result.stdout}")
-                except:
-                    pass
-
-            # Check server health. /health is proxied to upstream, so it
-            # confirms the FastAPI app is actually serving (not just nginx).
-            if not server_ready:
-                try:
-                    response = requests.get(f"http://{e2e_host()}:{mcp_port}/health", timeout=2)
-                    if response.status_code == 200:
-                        print(f"✓ Server is ready (after {elapsed}s)")
-                        server_ready = True
-                except requests.RequestException as e:
-                    if elapsed % 10 == 0:  # Log every 10 seconds
-                        print(f"  Server not ready yet ({elapsed}s): {type(e).__name__}")
-
-            if server_ready:
-                break
-
-            time.sleep(2)
-        else:
-            # Timeout - try to get container logs for debugging
-            print("\n❌ Health check timeout. Attempting to get container logs...")
-
-            # Get logs from all services
-            for service in ["proxy", "adcp-server", "postgres"]:
-                try:
-                    print(f"\n📋 {service} logs (last 100 lines):")
-                    result = subprocess.run(
-                        ["docker-compose", "-f", "docker-compose.e2e.yml", "logs", "--tail=100", service],
-                        capture_output=True,
-                        text=True,
-                        timeout=5,
-                    )
-                    if result.stdout:
-                        print(result.stdout)
-                    if result.stderr:
-                        print(f"STDERR: {result.stderr}")
-                except Exception as e:
-                    print(f"Could not get {service} logs: {e}")
-
-            # Show container status
-            try:
-                print("\n📊 Container status:")
-                ps_result = subprocess.run(
-                    ["docker-compose", "-f", "docker-compose.e2e.yml", "ps"], capture_output=True, text=True, timeout=2
-                )
-                print(ps_result.stdout)
-            except Exception as e:
-                print(f"Could not get container status: {e}")
-
-            if not server_ready:
-                pytest.fail(f"Server did not become healthy in time (waited {max_wait}s, port {mcp_port})")
+        # Same ordered readiness helper as verify-only (migrations + creative-agent start_period).
+        wait_for_e2e_stack(
+            ports={"mcp": mcp_port, "postgres": postgres_port},
+            compose_files=_E2E_COMPOSE_FILES,
+            host=e2e_host(),
+            timeout_s=120,
+        )
 
     # Initialize CI test data now that services are healthy
     print("📦 Initializing CI test data (products, principals, etc.)...")
