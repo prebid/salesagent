@@ -30,7 +30,7 @@ from tests.e2e.utils import (
     set_live_adapter_behavior,
     wait_for_server_readiness,
 )
-from tests.helpers.delivery_assertions import assert_next_expected_at_shape
+from tests.helpers.delivery_assertions import assert_next_expected_at_shape, assert_partial_data_pairing
 
 
 class DeliveryWebhookReceiver(WebhookCaptureHandler):
@@ -234,17 +234,7 @@ class TestDailyDeliveryWebhookFlow:
                 # Shared rule (shape, not mere presence) so the e2e wire grader cannot
                 # drift from the BDD/integration ones.
                 assert_next_expected_at_shape(result, present=True, context="scheduled webhook (real e2e wire)")
-                # partial_data is on the wire (hardcoded False today) — pin it so a future
-                # partial-data change can't silently put a spec-divergent shape on the webhook.
-                assert result.get("partial_data") is False, (
-                    f"Expected partial_data False on the scheduled webhook, got {result.get('partial_data')!r}"
-                )
-                # Schema pairs the two: unavailable_count is "only present ... when
-                # partial_data is true", so with partial_data False it must be absent.
-                assert "unavailable_count" not in result, (
-                    f"unavailable_count must be absent when partial_data is False, "
-                    f"got {result.get('unavailable_count')!r}"
-                )
+                assert_partial_data_pairing(result, context="scheduled webhook (real e2e wire)")
 
             # 6. Final webhook on completion — grade the `final` derivation on the REAL wire.
             # Drive the buy to terminal `completed` (what the status scheduler writes when a

@@ -188,7 +188,7 @@ class TestWebhookNotificationTypeFinal:
             wire = await env.send_delivery_webhook(buy)
 
             assert wire["result"]["notification_type"] == "final"
-            assert "next_expected_at" not in wire["result"]
+            assert_next_expected_at_shape(wire["result"], present=False, context="final webhook wire")
 
             # The poll for the same completed buy reports the status but no
             # webhook metadata (#1570).

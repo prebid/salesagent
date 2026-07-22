@@ -7,9 +7,15 @@ adcontextprotocol/adcp@04f59d2d5 (tag ``v3.1-04f59d2d5``).
 
 **This tree PREDATES the ``v3.1.1`` release the repo targets (adcp==6.6.0) and is
 NOT equivalent to it — a pass here is NOT a 3.1.1 conformance pass.** Verified
-2026-07-22 against the released schemas: 70 of the 244 vendored files differ from
-``dist/schemas/3.1.1/``, including ``enums/error-code.json`` (missing 15+ released
-codes) and every ``media-buy/*`` file. ``get-media-buy-delivery-response.json``
+2026-07-22 against the released schemas: 70 of the 244 vendored files differ in
+CONTENT from ``v3.1.1``, measured against ``static/schemas/source`` at that tag —
+the base ``_refresh.py`` actually vendors from. (Against ``dist/schemas/3.1.1/``
+all 244 additionally differ, because every ``dist`` file carries a
+``/schemas/3.1.1/`` version segment in ``$id``/``$ref`` that the source namespace
+lacks; normalizing that segment reproduces the same 70.) The 70 include
+``enums/error-code.json`` — 64 vendored codes vs 92 released, i.e. exactly 28
+missing, 0 extra — and every ``media-buy/*`` file (9 of 9).
+``get-media-buy-delivery-response.json``
 specifically lacks the ``media_buy_deliveries[]`` fields ``is_final`` /
 ``finalized_at`` / ``windows`` and the ``core/protocol-envelope.json`` ``allOf``
 member. What IS byte-identical to v3.1.1 — and all that schema-grounded oracles may

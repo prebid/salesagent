@@ -65,21 +65,32 @@ def _discover_integration_test_files() -> list[str]:
     factories, not inline session.add() / get_db_session() in test bodies.
 
     Also scans every module under tests/helpers/ AND every module under tests/e2e/
-    (not just test_*.py). Shared DB-seed helpers in both places are not named test_*.py
-    but must follow the same factory-only rule, so that new session.add() debt in helper
-    code is caught at the source rather than hidden behind a module the guard never
-    reads — tests/e2e/utils.py is exactly that module for the e2e suite. Both widenings
-    were zero-violation when added; the allowlist only ever ratchets down.
+    (not just test_*.py). Shared DB-seed helpers in both places are not named test_*.py,
+    so a module the guard never reads is a place session.add() / get_db_session() debt
+    can accumulate one import away from the tests that use it. Both widenings were
+    zero-violation when added; the allowlist only ever ratchets down.
+
+    Scope of what this actually enforces: the two AST matchers below detect literal
+    ``session.add(...)`` and ``get_db_session(...)``. They do NOT model raw-session
+    mutation through other handles (e.g. ``env.get_session()`` then assigning a column,
+    or ``create_engine`` + ``Session(...)``) — tests/e2e/utils.py::live_db_env does the
+    latter deliberately, because it must address the live server's DSN, which
+    get_db_session() cannot. So the e2e widening is preventative for the two modelled
+    forms, not a claim that every raw-session path in tests/e2e/ is covered.
+
+    Discovery is anchored on ROOT, not the cwd: a cwd-relative glob returns [] when
+    pytest runs from anywhere but the repo root, which would make the no-new-violation
+    ratchets pass vacuously (only the stale-entry companions would notice, and those
+    disappear once the allowlists reach empty).
     """
     roots = ("tests/integration*", "tests/admin", "tests/e2e")
-    test_files: list[str] = []
-    conftest_files: list[str] = []
+    found: list[str] = []
     for root in roots:
-        test_files.extend(glob.glob(f"{root}/**/test_*.py", recursive=True))
-        conftest_files.extend(glob.glob(f"{root}/conftest.py", recursive=True))
-    helper_files = glob.glob("tests/helpers/**/*.py", recursive=True)
-    e2e_module_files = glob.glob("tests/e2e/**/*.py", recursive=True)
-    return sorted(set(test_files + conftest_files + helper_files + e2e_module_files))
+        found.extend(glob.glob(str(ROOT / root / "**" / "test_*.py"), recursive=True))
+        found.extend(glob.glob(str(ROOT / root / "conftest.py"), recursive=True))
+    found.extend(glob.glob(str(ROOT / "tests" / "helpers" / "**" / "*.py"), recursive=True))
+    found.extend(glob.glob(str(ROOT / "tests" / "e2e" / "**" / "*.py"), recursive=True))
+    return sorted({str(Path(p).resolve().relative_to(ROOT)) for p in found})
 
 
 INTEGRATION_TEST_FILES = _discover_integration_test_files()

@@ -26,6 +26,28 @@ def assert_omits_webhook_only_fields(wire: dict, *, context: str = "synchronous 
         )
 
 
+def assert_partial_data_pairing(payload: dict, *, context: str) -> None:
+    """Assert the ``partial_data`` / ``unavailable_count`` pairing on a webhook body.
+
+    The polling-response schema scopes ``unavailable_count`` to "only present in webhook
+    deliveries when partial_data is true", so with ``partial_data`` false the field must
+    be absent. (The dedicated webhook-payload schema words the same rule without an
+    ``if/then`` and allows additional properties, so asserting the stricter polling
+    reading is safe — omitting is conformant under both.)
+
+    Production hardcodes ``partial_data = False`` today; this pins that pairing so a
+    future partial-data change cannot silently put a spec-divergent shape on the wire.
+    One home for the rule, shared by the integration and e2e wire graders.
+    """
+    assert payload.get("partial_data") is False, (
+        f"{context}: expected partial_data False, got {payload.get('partial_data')!r}"
+    )
+    assert "unavailable_count" not in payload, (
+        f"{context}: unavailable_count must be absent when partial_data is False, "
+        f"got {payload.get('unavailable_count')!r}"
+    )
+
+
 def assert_next_expected_at_shape(payload: dict, *, present: bool, context: str) -> None:
     """Assert ``next_expected_at`` presence + date-time shape (or strict absence).
 
@@ -57,4 +79,9 @@ def assert_next_expected_at_shape(payload: dict, *, present: bool, context: str)
     )
     # Normalize the RFC-3339 "Z" suffix so every caller's tolerance is identical
     # (this is exactly where the hand-rolled integration copy had already drifted).
-    datetime.fromisoformat(value.replace("Z", "+00:00"))
+    # Re-raise as AssertionError so the failure carries `context` — with four graders
+    # sharing this helper, that prefix is the only thing identifying which one failed.
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise AssertionError(f"{context}: next_expected_at is not a parseable date-time: {value!r}") from None

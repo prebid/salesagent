@@ -220,15 +220,20 @@ class TestCanonicalVocabularyPinnedToSdk:
         The scheduler passes SERVING_PERSISTED_STATUSES and COMPLETED_PERSISTED_STATUSES
         into get_reportable_for_delivery, so together they must reconstitute REPORTABLE
         exactly — a drift in either arm silently changes which buys get a final webhook.
-        Pinned as a literal too, because a purely derived assertion would be a tautology.
+
+        Only the LITERAL assertions below have teeth. Because the constant is defined as
+        ``REPORTABLE - SERVING``, the union/disjointness relations are true by
+        construction and cannot detect drift (verified: mutating SERVING keeps both green
+        in 4 of 4 cases), so they are deliberately not asserted here — claiming them as
+        enforcement would be exactly the tautology this docstring used to credit.
         """
         assert COMPLETED_PERSISTED_STATUSES == {"completed"}
-        assert SERVING_PERSISTED_STATUSES | COMPLETED_PERSISTED_STATUSES == REPORTABLE_PERSISTED_STATUSES
-        assert not (SERVING_PERSISTED_STATUSES & COMPLETED_PERSISTED_STATUSES), (
-            "the serving and completed arms must be disjoint or the batch double-selects"
+        # Independently derived from the map rather than from the constant's own
+        # definition, so this reddens if the map stops routing "completed" here.
+        assert (
+            COMPLETED_PERSISTED_STATUSES
+            == {k for k, v in PERSISTED_STATUS_TO_CANONICAL.items() if v == "completed"} - SERVING_PERSISTED_STATUSES
         )
-        # Persisted vocabulary, not canonical: these are PERSISTED_STATUS_TO_CANONICAL keys.
-        assert COMPLETED_PERSISTED_STATUSES <= set(PERSISTED_STATUS_TO_CANONICAL)
 
     def test_webhook_only_fields_grounded_on_the_pinned_sdk(self):
         """Ground WEBHOOK_ONLY_FIELDS on the PINNED SDK's schema, not a re-typed literal.
@@ -263,14 +268,25 @@ class TestCanonicalVocabularyPinnedToSdk:
         )
 
         # Structural complement to the description matcher: the spec ships a dedicated
-        # webhook payload type, and aggregated_totals is the polling-only field the
-        # webhook body must exclude. This holds even if every description is reworded.
-        polling_only = set(GetMediaBuyDeliveryResponse.model_fields) - set(MediaBuyDeliveryWebhookResult.model_fields)
-        assert "aggregated_totals" in polling_only, (
-            f"aggregated_totals must be absent from the webhook payload type — polling_only={sorted(polling_only)}"
+        # webhook payload type, and aggregated_totals is the field the webhook body must
+        # exclude. This holds even if every description is reworded — in particular it is
+        # what catches a NEGATED rewording ("never in webhook deliveries"), which the
+        # deliberately loose matcher above would otherwise pull into `derived`.
+        #
+        # Most members of this set are protocol-envelope fields (task_id, status, ...)
+        # that DO reach the buyer on the webhook POST via core/mcp-webhook-payload.json —
+        # they are absent from the payload-only result type, not "polling-only". Named
+        # accordingly so a failure message does not misstate the spec.
+        absent_from_webhook_result = set(GetMediaBuyDeliveryResponse.model_fields) - set(
+            MediaBuyDeliveryWebhookResult.model_fields
         )
-        assert not (WEBHOOK_ONLY_FIELDS & polling_only), (
-            f"a webhook-only field cannot also be polling-only — overlap={sorted(WEBHOOK_ONLY_FIELDS & polling_only)}"
+        assert "aggregated_totals" in absent_from_webhook_result, (
+            "aggregated_totals must be absent from the webhook payload type — "
+            f"absent_from_webhook_result={sorted(absent_from_webhook_result)}"
+        )
+        assert not (WEBHOOK_ONLY_FIELDS & absent_from_webhook_result), (
+            "a webhook-only field cannot be absent from the webhook payload type — "
+            f"overlap={sorted(WEBHOOK_ONLY_FIELDS & absent_from_webhook_result)}"
         )
 
 
@@ -423,3 +439,116 @@ class TestSimulationReachesTerminalStatus:
         for terminal in ("canceled", "rejected", "paused"):
             buy = _buy(terminal, start=date(2025, 1, 1), end=date(2025, 3, 31))
             assert resolve_canonical_status(buy, date(2025, 6, 1), simulate=True) == terminal
+
+
+class TestSchedulerPassesDerivedStatusVocabulary:
+    """The delivery batch must select rows using the PERSISTED vocabulary, derived.
+
+    `MediaBuy.status` stores a `PERSISTED_STATUS_TO_CANONICAL` KEY. `CANONICAL_COMPLETED`
+    is a VALUE (the wire status, pinned to the SDK enum); the two read "completed" today
+    only because the map has an identity row for it, so a canonical constant here would
+    silently select nothing the day a persisted key is renamed.
+
+    The constants themselves are pinned above, but that cannot see WHICH constant the
+    scheduler passes — reverting the call site to `[CANONICAL_COMPLETED]` is behaviourally
+    identical today and would otherwise ship green. This grades the call site.
+    """
+
+    def test_send_reports_selects_with_persisted_status_sets(self):
+        """Both arms must READ the derived persisted constants, not equal-valued literals.
+
+        Asserting the call's VALUES cannot discriminate: `sorted(COMPLETED_PERSISTED_
+        STATUSES)` and `[CANONICAL_COMPLETED]` are both `["completed"]` today, so a
+        value-equality assertion stays green on the wrong constant (verified by mutation).
+        Patching the module's constants to sentinels grades the reference itself — a call
+        site hardcoding the canonical value fails, because it would not pick these up.
+        """
+        import asyncio
+        from unittest.mock import MagicMock, patch
+
+        from src.services import delivery_webhook_scheduler as sched
+        from src.services.delivery_webhook_scheduler import (
+            FINAL_WEBHOOK_COMPLETED_HORIZON,
+            DeliveryWebhookScheduler,
+        )
+
+        session = MagicMock()
+        cm = MagicMock()
+        cm.__enter__ = MagicMock(return_value=session)
+        cm.__exit__ = MagicMock(return_value=False)
+
+        with (
+            patch.object(sched, "get_db_session", return_value=cm),
+            patch.object(sched, "SERVING_PERSISTED_STATUSES", frozenset({"SENTINEL_SERVING"})),
+            patch.object(sched, "COMPLETED_PERSISTED_STATUSES", frozenset({"SENTINEL_COMPLETED"})),
+            patch.object(sched.MediaBuyRepository, "get_reportable_for_delivery", return_value=[]) as select_rows,
+        ):
+            asyncio.run(DeliveryWebhookScheduler()._send_reports())
+
+        select_rows.assert_called_once_with(
+            session,
+            serving_statuses=["SENTINEL_SERVING"],
+            completed_statuses=["SENTINEL_COMPLETED"],
+            completed_horizon=FINAL_WEBHOOK_COMPLETED_HORIZON,
+        )
+
+
+class TestDeliveryErrorWarningCarriesThePayload:
+    """The `Couldn't get media_delivery` warning must surface the adapter errors.
+
+    GetMediaBuyDeliveryResponse.__str__ is a human-readable envelope summary, so
+    logging "%s" of the MODEL renders "No delivery data found for the specified
+    period." on the failure branch — a success-shaped sentence with the error payload
+    absent. That regression shipped green once because nothing asserted on this line;
+    the buy silently returns False and no webhook is sent, leaving an operator with no
+    signal for why. This grades the rendered record, so a revert to the model reddens.
+    """
+
+    def test_error_branch_logs_the_errors_not_the_envelope_summary(self):
+        import asyncio
+        from unittest.mock import MagicMock, patch
+
+        from src.core.schemas import AggregatedTotals, GetMediaBuyDeliveryResponse
+        from src.services import delivery_webhook_scheduler as sched
+
+        # An empty-delivery failure response: exactly the shape whose __str__ renders
+        # "No delivery data found for the specified period."
+        response = GetMediaBuyDeliveryResponse(
+            reporting_period={"start": "2026-07-21T00:00:00Z", "end": "2026-07-22T00:00:00Z"},
+            currency="USD",
+            aggregated_totals=AggregatedTotals(impressions=0, spend=0.0, media_buy_count=0),
+            media_buy_deliveries=[],
+            errors=[{"code": "ADAPTER_TIMEOUT", "message": "GAM report job timed out"}],
+        )
+        assert "No delivery data found" in str(response), "fixture must reproduce the misleading __str__"
+
+        rendered: list[str] = []
+
+        class _RecordingLogger:
+            def warning(self, msg, *args):
+                rendered.append(msg % args if args else msg)
+
+            def __getattr__(self, _name):  # info/debug/exception are no-ops here
+                return lambda *a, **k: None
+
+        media_buy = MagicMock(media_buy_id="mb_err", tenant_id="t1", principal_id="p1")
+
+        with (
+            patch.object(sched, "logger", _RecordingLogger()),
+            patch.object(sched, "_get_media_buy_delivery_impl", return_value=response),
+            patch.object(sched, "resolve_canonical_status", return_value="active"),
+        ):
+            delivered = asyncio.run(
+                sched.DeliveryWebhookScheduler()._deliver_report(
+                    MagicMock(), MagicMock(), media_buy, {"url": "https://example.com/w"}, is_final=False
+                )
+            )
+
+        assert delivered is False
+        assert rendered, "the error branch must emit a warning"
+        line = "\n".join(rendered)
+        assert "ADAPTER_TIMEOUT" in line, f"the adapter error code must reach the log; got {line!r}"
+        assert "mb_err" in line, f"the media_buy_id must reach the log; got {line!r}"
+        assert "No delivery data found" not in line, (
+            f"logged the envelope __str__ summary instead of the error payload: {line!r}"
+        )

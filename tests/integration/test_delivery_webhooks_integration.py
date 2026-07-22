@@ -26,6 +26,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools._media_buy_status import SERVING_PERSISTED_STATUSES
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+from tests.helpers.delivery_assertions import assert_next_expected_at_shape, assert_partial_data_pairing
 from tests.helpers.delivery_fixtures import DAILY_REPORTING_WEBHOOK
 
 
@@ -228,11 +229,10 @@ async def test_delivery_webhook_sends_for_fresh_data(integration_db):
         assert extracted_media_buy_id == media_buy_id
         assert result is not None
         assert result.get("notification_type") == "scheduled"
-        assert result.get("next_expected_at") is not None
-        assert result.get("partial_data") is False
-        # "only present in webhook deliveries when partial_data is true" (schema
-        # description) — with partial_data False the field must be absent.
-        assert "unavailable_count" not in result
+        # Shared rule (shape, not mere presence) — a date-only or empty-string
+        # regression slips past `is not None`.
+        assert_next_expected_at_shape(result, present=True, context="scheduled webhook wire")
+        assert_partial_data_pairing(result, context="scheduled webhook wire")
         assert result.get("reporting_period") is not None
         assert result.get("errors") is None
 
