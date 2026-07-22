@@ -56,6 +56,8 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
         "random": f"{MODULE}.random.uniform",
         "db": "src.core.database.database_session.get_db_session",
         "logger": f"{MODULE}.logger",
+        # Fixture hostnames are unresolvable; send-time SSRF DNS is unit-tested.
+        "ssrf": "src.core.webhook_validator.WebhookURLValidator.validate_outbound_webhook_url",
     }
 
     def __init__(self, **kwargs: Any) -> None:
@@ -66,6 +68,9 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
     def _configure_mocks(self) -> None:
         # random.uniform: return 0.0 for deterministic tests
         self.mock["random"].return_value = 0.0
+
+        # Allow fixture hostnames through send-time SSRF (DNS covered elsewhere).
+        self.mock["ssrf"].return_value = (True, "")
 
         # httpx.Client: 200 OK by default (from mixin)
         self.set_http_response(200)
