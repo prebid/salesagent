@@ -31,6 +31,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
 from bdd_audit_common import (  # noqa: E402
     extract_scenario_base,
     extract_transport,
+    extract_uc,
     outcomes_by_transport_for_base,
     transport_coverage,
 )
@@ -125,12 +126,6 @@ def parse_test_results(json_path: Path) -> list[TestEntry]:
             )
         )
     return entries
-
-
-def extract_uc(nodeid: str) -> str:
-    """Extract use case from nodeid (e.g., 'UC-004')."""
-    m = re.search(r"test_uc(\d+)", nodeid)
-    return f"UC-{m.group(1)}" if m else "GENERIC"
 
 
 def parse_inspector_reports() -> list[InspectorFlag]:
@@ -416,9 +411,7 @@ def generate_work_items(
     if inspector_flags:
         by_uc: dict[str, list[InspectorFlag]] = defaultdict(list)
         for flag in inspector_flags:
-            m = re.search(r"uc(\d+)", flag.source_file)
-            uc = f"UC-{m.group(1)}" if m else "GENERIC"
-            by_uc[uc].append(flag)
+            by_uc[extract_uc(flag.source_file)].append(flag)
 
         for uc, flags in by_uc.items():
             items.append(

@@ -42,6 +42,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
 from bdd_audit_common import (  # noqa: E402
     extract_scenario_base,
     extract_transport,
+    extract_uc,
     outcomes_by_transport_for_base,
     transport_coverage,
 )
@@ -289,14 +290,6 @@ def parse_test_results(json_path: Path) -> tuple[list[dict], list[dict], list[di
     xfailed = [t for t in all_tests if t["outcome"] == "xfailed"]
     xpassed = [t for t in all_tests if t["outcome"] == "xpassed"]
     return xfailed, xpassed, all_tests
-
-
-def extract_uc(nodeid: str) -> str:
-    """Extract use case from nodeid."""
-    for uc in ["uc001", "uc002", "uc003", "uc004", "uc005", "uc006", "uc011", "uc019", "uc026"]:
-        if uc in nodeid:
-            return uc.upper().replace("UC0", "UC-0").replace("UC1", "UC-1")
-    return "other"
 
 
 def extract_tags(test_entry: dict) -> set[str]:
