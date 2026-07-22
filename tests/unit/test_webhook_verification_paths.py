@@ -54,7 +54,8 @@ class TestTimestampFormat:
         """The removed legacy fallback: ISO is not a spec timestamp.
 
         Deletion oracle: restore the ``datetime.fromisoformat`` fallback in
-        ``_verify_timestamp`` and this goes green again.
+        ``_verify_timestamp`` and this reddens — the ISO timestamp is accepted,
+        no ``WebhookVerificationError`` is raised, and ``pytest.raises`` fails.
         """
         body = compact_webhook_body(PAYLOAD)
         iso = datetime.now(UTC).isoformat()

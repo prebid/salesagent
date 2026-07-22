@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.services.webhook_delivery_service import CircuitState, WebhookDeliveryService
+from tests.helpers.webhook_mocks import make_webhook_config, mock_httpx_post, serve_webhook_configs
 
 
 @pytest.fixture
@@ -96,19 +97,8 @@ def test_adcp_payload_structure(webhook_service, mock_db_session):
 
     # Mock httpx to capture the payload
     with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
-
-        # Mock webhook config
-        mock_config = MagicMock()
-        mock_config.url = "https://example.com/webhook"
-        mock_config.authentication_type = None
-        mock_config.validation_token = None
-        mock_config.webhook_secret = None  # No HMAC for this test
-
-        # Update mock to return config for SQLAlchemy 2.0
-        mock_db_session.scalars.return_value.all.return_value = [mock_config]
+        mock_httpx_post(mock_client)
+        serve_webhook_configs(mock_db_session, make_webhook_config())  # unsigned: no HMAC for this test
 
         # Send webhook
         webhook_service.send_delivery_webhook(
@@ -159,16 +149,8 @@ def test_final_notification_type(webhook_service, mock_db_session):
     start_time = datetime.now(UTC)
 
     with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
-
-        mock_config = MagicMock()
-        mock_config.url = "https://example.com/webhook"
-        mock_config.authentication_type = None
-        mock_config.validation_token = None
-        mock_config.webhook_secret = None
-        mock_db_session.scalars.return_value.all.return_value = [mock_config]
+        mock_httpx_post(mock_client)
+        serve_webhook_configs(mock_db_session, make_webhook_config())
 
         # Send final webhook
         webhook_service.send_delivery_webhook(
@@ -238,12 +220,7 @@ def test_failure_tracking(mock_sleep, webhook_service, mock_db_session):
             mock_response_fail,  # Second webhook attempt 3 fails (retry)
         ]
 
-        mock_config = MagicMock()
-        mock_config.url = "https://example.com/webhook"
-        mock_config.authentication_type = None
-        mock_config.validation_token = None
-        mock_config.webhook_secret = None
-        mock_db_session.scalars.return_value.all.return_value = [mock_config]
+        serve_webhook_configs(mock_db_session, make_webhook_config())
 
         # First webhook - success
         result1 = webhook_service.send_delivery_webhook(
@@ -287,18 +264,15 @@ def test_authentication_headers(webhook_service, mock_db_session):
     start_time = datetime.now(UTC)
 
     with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
-
-        # Test bearer auth
-        mock_config = MagicMock()
-        mock_config.url = "https://example.com/webhook"
-        mock_config.authentication_type = "bearer"
-        mock_config.authentication_token = "secret_token"
-        mock_config.validation_token = "validation_token"
-        mock_config.webhook_secret = None
-        mock_db_session.scalars.return_value.all.return_value = [mock_config]
+        mock_httpx_post(mock_client)
+        serve_webhook_configs(
+            mock_db_session,
+            make_webhook_config(
+                authentication_type="bearer",
+                authentication_token="secret_token",
+                validation_token="validation_token",
+            ),
+        )
 
         webhook_service.send_delivery_webhook(
             media_buy_id=media_buy_id,

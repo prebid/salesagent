@@ -21,6 +21,7 @@ from pytest_bdd import given, parsers, then, when
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
+from tests.helpers.webhook_hmac import assert_hmac_over_transmitted_bytes
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -1933,7 +1934,11 @@ def then_hmac_header(ctx: dict, header: str) -> None:
     headers = {k.lower(): v for k, v in _get_last_webhook_headers(ctx).items()}
     value = headers.get(header.lower())
     assert value is not None, f"Expected header {header!r} but got: {list(_get_last_webhook_headers(ctx))}"
-    # Value may be bare hex or prefixed with "sha256="
+    # The spec header format is ``sha256=<hex>``. ``removeprefix`` alone (the
+    # earlier version) silently no-ops on a bare-hex value, so this scenario
+    # accepted a signature the three helper-based suites reject — the BDD
+    # layer graded the same contract more loosely than the unit layer.
+    assert value.startswith("sha256="), f"spec signature header is sha256=-prefixed, got {value!r}"
     stripped = value.removeprefix("sha256=")
     # {64}, not {1,}: HMAC-SHA256 is a fixed-width 64-char hex digest, so a
     # truncated or malformed signature must not satisfy this step.
@@ -1963,19 +1968,17 @@ def then_hmac_computation(ctx: dict) -> None:
     the parsed payload (the old version of this step) only ever passed
     because sender and step shared the same wrong re-serialization (#1441).
     """
-    import hashlib
-    import hmac as hmac_lib
-
-    headers = {k.lower(): v for k, v in _get_last_webhook_headers(ctx).items()}
-    body_bytes = _get_last_webhook_body_bytes(ctx)
-    timestamp = headers.get("x-adcp-timestamp", "")
-    signature = headers.get("x-adcp-signature", "").removeprefix("sha256=")
-    assert signature, "Expected HMAC signature header to be present and non-empty"
     signing_secret: str = ctx.get("webhook_secret", "")
     assert signing_secret, "Test setup must store webhook_secret in ctx['webhook_secret']"
-    message = timestamp.encode("utf-8") + b"." + body_bytes
-    expected = hmac_lib.new(signing_secret.encode(), message, hashlib.sha256).hexdigest()
-    assert signature == expected, f"HMAC signature mismatch: got {signature!r}, expected {expected!r}"
+    # Graded by the same helper the unit and integration suites use, so the BDD
+    # layer cannot drift looser than they are. Transport is mocked here, so the
+    # receiver cross-check has nothing real to read.
+    assert_hmac_over_transmitted_bytes(
+        signing_secret,
+        _get_last_webhook_body_bytes(ctx),
+        _get_last_webhook_headers(ctx),
+        cross_check_receivers=False,
+    )
 
 
 @then(parsers.parse('the request should include header "{header}" with the bearer token'))

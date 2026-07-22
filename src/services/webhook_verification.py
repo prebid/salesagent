@@ -55,10 +55,10 @@ class WebhookVerifier:
                 it re-serializes compactly (the sender's canonical form) and
                 will reject any payload whose wire bytes differ, which is
                 exactly why raw-body verification is the contract.
-            signature: HMAC signature from the X-ADCP-Signature header
+            signature: HMAC signature from the X-AdCP-Signature header
                 (``sha256=`` prefix accepted)
-            timestamp: Timestamp from the X-ADCP-Timestamp header — unix
-                seconds per spec (ISO-8601 accepted for back-compat)
+            timestamp: Timestamp from the X-AdCP-Timestamp header — unix
+                seconds per spec; a non-numeric timestamp is rejected
 
         Returns:
             True if webhook is valid

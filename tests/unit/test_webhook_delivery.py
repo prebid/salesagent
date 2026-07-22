@@ -5,6 +5,7 @@ from unittest.mock import Mock, call, patch
 import requests
 
 from src.core.webhook_delivery import WebhookDelivery, deliver_webhook_with_retry
+from tests.helpers.webhook_hmac import assert_hmac_over_transmitted_bytes
 
 
 @patch("src.core.webhook_delivery.time.sleep")
@@ -289,20 +290,14 @@ class TestWebhookDelivery:
             # Byte-equality oracle: the HMAC in the header must verify over
             # the LITERAL bytes handed to the transport — the exact property
             # the old sign-one-thing-send-another path violated (#1441).
-            import hashlib
-            import hmac as hmac_mod
-
             call_args = mock_post.call_args
             headers = call_args.kwargs["headers"]
             sent_bytes = call_args.kwargs["data"]
 
             assert isinstance(sent_bytes, bytes)
-            signature = headers["X-AdCP-Signature"]
-            timestamp = headers["X-AdCP-Timestamp"]
-            expected = hmac_mod.new(
-                b"test-secret-key", timestamp.encode() + b"." + sent_bytes, hashlib.sha256
-            ).hexdigest()
-            assert signature == f"sha256={expected}"
+            # Graded by the shared helper: it also pins the sha256= prefix and the
+            # unix-seconds timestamp, which this site previously skipped.
+            assert_hmac_over_transmitted_bytes("test-secret-key", sent_bytes, headers, cross_check_receivers=False)
             assert success is True
 
     def test_invalid_webhook_url_validation(self, mock_sleep):

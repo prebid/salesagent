@@ -52,6 +52,8 @@ from src.core.tools.media_buy_delivery import (
 )
 from src.services.webhook_delivery_service import CircuitBreaker, CircuitState, WebhookDeliveryService
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
+from tests.helpers.webhook_hmac import assert_hmac_over_transmitted_bytes
+from tests.helpers.webhook_mocks import make_webhook_config, mock_httpx_post, serve_webhook_configs
 
 # ---------------------------------------------------------------------------
 # Fixtures (shared across all test classes)
@@ -1824,9 +1826,6 @@ class TestDeliveryWebhookHappyPath:
         HMAC over the LITERAL bytes handed to httpx.
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
         """
-        import hashlib
-        import hmac as hmac_mod
-
         service = WebhookDeliveryService()
         secret = "a" * 32  # 32-char minimum secret
         now = datetime.now(UTC)
@@ -1835,19 +1834,10 @@ class TestDeliveryWebhookHappyPath:
             patch("src.services.webhook_delivery_service.httpx.Client") as mock_client,
             patch("src.core.database.database_session.get_db_session") as mock_get_db,
         ):
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_client.return_value.__enter__.return_value.post.return_value = mock_response
-
-            mock_config = MagicMock()
-            mock_config.url = "https://example.com/webhook"
-            mock_config.authentication_type = None
-            mock_config.validation_token = None
-            mock_config.webhook_secret = secret
-
-            mock_session = MagicMock()
-            mock_session.scalars.return_value.all.return_value = [mock_config]
-            mock_get_db.return_value.__enter__.return_value = mock_session
+            post_mock = mock_httpx_post(mock_client)
+            mock_get_db.return_value.__enter__.return_value = serve_webhook_configs(
+                MagicMock(), make_webhook_config(webhook_secret=secret)
+            )
 
             service.send_delivery_webhook(
                 media_buy_id="mb_wh07",
@@ -1860,21 +1850,15 @@ class TestDeliveryWebhookHappyPath:
                 is_final=False,
             )
 
-            post_mock = mock_client.return_value.__enter__.return_value.post
             assert post_mock.called
             sent_headers = {k.lower(): v for k, v in post_mock.call_args.kwargs["headers"].items()}
             sent_bytes = post_mock.call_args.kwargs["content"]
 
-        signature = sent_headers["x-adcp-signature"].removeprefix("sha256=")
-        timestamp = sent_headers["x-adcp-timestamp"]
-        assert timestamp.isdigit()  # spec: unix seconds, not ISO
-        assert len(signature) == 64  # SHA-256 hex
-
-        # Byte-equality oracle: the HMAC verifies over the exact transmitted bytes
-        expected = hmac_mod.new(
-            secret.encode("utf-8"), timestamp.encode() + b"." + sent_bytes, hashlib.sha256
-        ).hexdigest()
-        assert signature == expected
+        # Byte-equality oracle, graded by the shared helper so every HMAC
+        # assertion in the suite checks the same things (sha256= prefix, unix
+        # seconds, 64-char digest, digest over the literal transmitted bytes).
+        # Transport is mocked here, so no receiver cross-check.
+        assert_hmac_over_transmitted_bytes(secret, sent_bytes, sent_headers, cross_check_receivers=False)
 
     def test_webhook_excludes_aggregated_totals(self):
         """UC-004-WH-09: webhook does NOT include aggregated_totals.

@@ -2,7 +2,6 @@
 
 import hashlib
 import hmac
-import json
 import time
 
 import pytest
@@ -10,6 +9,7 @@ from adcp import sign_legacy_webhook
 from adcp.types import TaskType
 
 from src.core.webhook_authenticator import WebhookAuthenticator
+from src.core.webhook_body import compact_webhook_body
 from src.core.webhook_validator import (
     WEBHOOK_TASK_TYPE_FALLBACK,
     WebhookURLValidator,
@@ -185,7 +185,7 @@ class TestWebhookAuthenticator:
         secret = "test_secret"
 
         # Create signature
-        payload_str = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        payload_str = compact_webhook_body(payload).decode("utf-8")
         timestamp = str(int(time.time()))
         signed_payload = f"{timestamp}.{payload_str}"
         signature = (
@@ -199,7 +199,7 @@ class TestWebhookAuthenticator:
     def test_verify_signature_invalid_secret(self):
         """Should reject signature with wrong secret."""
         payload = {"event": "test"}
-        payload_str = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        payload_str = compact_webhook_body(payload).decode("utf-8")
         timestamp = str(int(time.time()))
 
         # Sign with one secret
@@ -213,7 +213,7 @@ class TestWebhookAuthenticator:
     def test_verify_signature_replay_protection(self):
         """Should reject old timestamps (replay attack prevention)."""
         payload = {"event": "test"}
-        payload_str = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        payload_str = compact_webhook_body(payload).decode("utf-8")
         secret = "test_secret"
 
         # Create signature with old timestamp (10 minutes ago)
@@ -230,7 +230,7 @@ class TestWebhookAuthenticator:
     def test_verify_signature_custom_tolerance(self):
         """Should accept old timestamps if tolerance allows."""
         payload = {"event": "test"}
-        payload_str = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        payload_str = compact_webhook_body(payload).decode("utf-8")
         secret = "test_secret"
 
         # Create signature with timestamp 10 minutes ago
@@ -265,7 +265,7 @@ class TestWebhookAuthenticator:
     def test_signature_without_sha256_prefix(self):
         """Should handle signatures without sha256= prefix."""
         payload = {"event": "test"}
-        payload_str = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        payload_str = compact_webhook_body(payload).decode("utf-8")
         secret = "test_secret"
         timestamp = str(int(time.time()))
 
