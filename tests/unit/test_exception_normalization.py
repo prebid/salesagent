@@ -122,3 +122,44 @@ def test_a2a_internal_error_message_is_sanitized_not_raw():
     # internal-only and normalizes to a wire-standard code).
     assert err.data["adcp_error"]["code"] == to_wire_error_code("INTERNAL_ERROR")
     assert "secret_table" not in err.data["errors"][0]["message"]
+
+
+@pytest.mark.asyncio
+async def test_a2a_push_config_endpoint_does_not_leak_raw_exception_to_the_wire():
+    """End-to-end through a real A2A entry point: the wire error carries no raw detail.
+
+    The sibling test above pins ``_internal_error_for`` directly; this one drives an
+    actual JSON-RPC method (``on_get_task_push_notification_config``) so the
+    sanitized message is proven to reach the wire through the production path,
+    not just through the helper in isolation.
+
+    The failure is injected at identity resolution, before any database work, so
+    this stays a unit test. That is also the realistic shape: an untyped
+    SQLAlchemy/OS error escaping early is exactly what put SQL text on the wire.
+    """
+    from unittest.mock import MagicMock
+
+    from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+    handler = AdCPRequestHandler()
+    handler._get_auth_token = MagicMock(return_value="a-token")
+    handler._resolve_a2a_identity = MagicMock(
+        side_effect=RuntimeError("SELECT token FROM secret_table -- /var/secrets/db.key")
+    )
+
+    params = MagicMock()
+    params.task_id = "task-1"
+    params.get = lambda _k: "cfg-1"
+
+    with pytest.raises(Exception) as exc_info:  # noqa: B017 - shape asserted below
+        await handler.on_get_task_push_notification_config(params, MagicMock())
+
+    raised = exc_info.value
+    wire_message = getattr(raised, "message", None) or str(raised)
+    # Pin that we went through _internal_error_for (not some unrelated failure),
+    # so the leak assertions below are grading the sink we care about.
+    assert wire_message.startswith("get push notification config failed: "), (
+        f"expected the canonical A2A internal-error shape, got {wire_message!r}"
+    )
+    assert "secret_table" not in wire_message, f"raw SQL reached the wire: {wire_message!r}"
+    assert "/var/secrets/db.key" not in wire_message, f"raw path reached the wire: {wire_message!r}"
