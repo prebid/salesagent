@@ -48,6 +48,45 @@ def _shell_has_flag(script: str, flag: str) -> bool:
     return False
 
 
+def _shell_flag_value(script: str, flag: str) -> str | None:
+    """Return the argv token immediately after ``flag`` on a non-comment line."""
+    for line in script.splitlines():
+        tokens = line.split("#", 1)[0].split()
+        for i, token in enumerate(tokens):
+            if token == flag and i + 1 < len(tokens):
+                return tokens[i + 1]
+    return None
+
+
+def _shell_has_non_comment_substr(script: str, *needles: str) -> bool:
+    """True if every needle appears on some non-comment code line (not only comments)."""
+    code = "\n".join(line.split("#", 1)[0] for line in script.splitlines())
+    return all(n in code for n in needles)
+
+
+def _parse_compose_duration_seconds(value: object) -> float:
+    """Parse compose duration strings like ``60s`` / ``1m`` / ints into seconds."""
+    if value is None:
+        raise AssertionError("duration value is missing")
+    if isinstance(value, (int, float)):
+        seconds = float(value)
+    else:
+        text = str(value).strip().lower()
+        if text.endswith("ms"):
+            seconds = float(text[:-2]) / 1000.0
+        elif text.endswith("s"):
+            seconds = float(text[:-1])
+        elif text.endswith("m"):
+            seconds = float(text[:-1]) * 60.0
+        elif text.endswith("h"):
+            seconds = float(text[:-1]) * 3600.0
+        else:
+            seconds = float(text)
+    if seconds <= 0:
+        raise AssertionError(f"duration must be positive (got {value!r})")
+    return seconds
+
+
 def _find_free_disk_step(steps: list) -> tuple[int, dict]:
     """Locate the shared _free-disk composite step (name may be present for CI UI)."""
     for i, step in enumerate(steps):
@@ -58,12 +97,18 @@ def _find_free_disk_step(steps: list) -> tuple[int, dict]:
 
 
 def _assert_free_disk_action_reclaims_runner() -> None:
-    """Contract lives in the composite — not duplicated inline run blocks."""
+    """Contract lives in a composite *run* step body — not description-only tokens."""
     assert _FREE_DISK_ACTION.is_file(), f"missing {_FREE_DISK_ACTION}"
-    text = _FREE_DISK_ACTION.read_text(encoding="utf-8")
-    assert text.strip(), f"{_FREE_DISK_ACTION} must not be empty (vacuous pass)."
-    assert "/usr/share/dotnet" in text, "_free-disk must remove /usr/share/dotnet."
-    assert "docker builder prune" in text, "_free-disk must prune the Docker builder cache."
+    data = yaml.safe_load(_FREE_DISK_ACTION.read_text(encoding="utf-8"))
+    assert isinstance(data, dict), f"{_FREE_DISK_ACTION} must be a YAML mapping."
+    runs = data.get("runs") or {}
+    steps = runs.get("steps") if isinstance(runs, dict) else None
+    assert isinstance(steps, list) and steps, f"{_FREE_DISK_ACTION} must declare ≥1 composite step."
+    run_bodies = [str(step.get("run", "")) for step in steps if isinstance(step, dict)]
+    assert run_bodies, f"{_FREE_DISK_ACTION} must include a step with a run body."
+    combined = "\n".join(run_bodies)
+    assert "/usr/share/dotnet" in combined, "_free-disk run step must remove /usr/share/dotnet."
+    assert "docker builder prune" in combined, "_free-disk run step must prune the Docker builder cache."
 
 
 def _load_e2e_compose() -> dict:
@@ -89,6 +134,35 @@ class TestCISuiteCoverage:
         comment_only = "# --wait gates postgres\nup -d --wait-timeout 600"
         assert not _shell_has_flag(comment_only, "--wait")
         assert _shell_has_flag(comment_only, "--wait-timeout")
+        # Adjacent argv after --wait-timeout — comment token "600" must not satisfy.
+        assert _shell_flag_value("up -d --wait-timeout 600", "--wait-timeout") == "600"
+        assert _shell_flag_value("# budget 600\nup -d --wait-timeout 120", "--wait-timeout") == "120"
+        assert _shell_flag_value("# --wait-timeout 600\nup -d --wait-timeout 120", "--wait-timeout") == "120"
+        # curl /health must be on a non-comment line.
+        assert _shell_has_non_comment_substr("curl -sf http://127.0.0.1:8080/health", "curl -sf", "/health")
+        assert not _shell_has_non_comment_substr("# curl -sf /health\necho ok", "curl -sf", "/health")
+
+    @pytest.mark.arch_guard
+    def test_free_disk_action_requires_run_step_body(self):
+        """Tokens only in description with empty steps must not satisfy the reclaim contract."""
+        # Mutation-shaped fixture: description mentions reclaim tokens but steps are empty.
+        vacuous = {
+            "name": "Free disk space",
+            "description": "Reclaim /usr/share/dotnet and docker builder prune",
+            "runs": {"using": "composite", "steps": []},
+        }
+        text = yaml.safe_dump(vacuous)
+        data = yaml.safe_load(text)
+        runs = data.get("runs") or {}
+        steps = runs.get("steps") if isinstance(runs, dict) else None
+        assert steps == []
+        # Live helper must reject description-only contracts (MUT8 class).
+        run_bodies = [str(step.get("run", "")) for step in (steps or []) if isinstance(step, dict)]
+        combined = "\n".join(run_bodies)
+        assert "/usr/share/dotnet" not in combined
+        assert "docker builder prune" not in combined
+        # Production composite still passes the real assert.
+        _assert_free_disk_action_reclaims_runner()
 
     @pytest.mark.arch_guard
     def test_bdd_job_exists(self):
@@ -316,16 +390,31 @@ class TestCISuiteCoverage:
         prestart_run = str(prestart.get("run", ""))
         prestart_env = prestart.get("env") or {}
         assert "creative-agent-stack.sh build" in prestart_run, "Pre-start must build the pinned creative-agent image."
+        assert "docker-compose.e2e.ports.yml" in prestart_run, (
+            "Pre-start must overlay docker-compose.e2e.ports.yml (host curl/pytest ports)."
+        )
+        assert prestart_env.get("ADCP_SALES_PORT"), "Pre-start must set ADCP_SALES_PORT for host health curl."
+        assert "CREATIVE_AGENT_GHCR_IMAGE" in prestart_env, (
+            "Pre-start must set CREATIVE_AGENT_GHCR_IMAGE (CI owns the only cold-build path)."
+        )
+        assert "ghcr.io" in str(prestart_env.get("CREATIVE_AGENT_GHCR_IMAGE", "")), (
+            "CREATIVE_AGENT_GHCR_IMAGE must point at ghcr.io for pin-keyed pull preference."
+        )
         # Token match — substring "up -d --wait" falsely matches "--wait-timeout" alone.
         assert _shell_has_flag(prestart_run, "--wait"), (
             "Pre-start must use compose up --wait as its own flag (healthcheck gate)."
         )
         assert _shell_has_flag(prestart_run, "--wait-timeout"), "Pre-start must budget --wait-timeout for migrations."
-        assert "600" in prestart_run.split(), "Pre-start --wait-timeout must be 600."
-        assert "curl -sf" in prestart_run and "/health" in prestart_run, (
-            "Pre-start must curl /health after up --wait (post-up readiness check)."
+        assert _shell_flag_value(prestart_run, "--wait-timeout") == "600", (
+            "Pre-start --wait-timeout must be 600 (adjacent argv; comment tokens do not count)."
+        )
+        assert _shell_has_non_comment_substr(prestart_run, "curl -sf", "/health"), (
+            "Pre-start must curl /health after up --wait on a non-comment line."
         )
         assert _is_adcp_testing_true(prestart_env.get("ADCP_TESTING")), "Pre-start must set ADCP_TESTING=true."
+        assert int(job.get("timeout-minutes") or 0) >= 40, (
+            f"e2e-tests timeout-minutes must be >= 40 to cover --wait-timeout 600 (got {job.get('timeout-minutes')!r})."
+        )
 
         pytest_steps = [
             s for s in steps if "pytest" in str(s.get("uses", "")).lower() or "tests/e2e" in str(s.get("with", {}))
@@ -340,6 +429,11 @@ class TestCISuiteCoverage:
         assert _is_adcp_testing_true(pytest_env["ADCP_TESTING"]), (
             f"e2e-tests pytest must keep ADCP_TESTING=true (got {pytest_env['ADCP_TESTING']!r}); "
             "empty/false forces fixture cold-build under pytest-timeout."
+        )
+        # GHCR preference belongs on pre-start build, not verify-only pytest.
+        assert "CREATIVE_AGENT_GHCR_IMAGE" not in pytest_env, (
+            "CREATIVE_AGENT_GHCR_IMAGE must not sit only on verify-only pytest "
+            "(move/keep it on the pre-start build step)."
         )
         extra = str(pytest_steps[0].get("with", {}).get("extra_args", ""))
         assert "--timeout=300" in extra, "e2e-tests must keep per-test --timeout=300 on test bodies."
@@ -361,19 +455,30 @@ class TestCISuiteCoverage:
     def test_e2e_compose_proxy_waits_for_adcp_healthy(self):
         """Proxy must not race adcp start_period under ``compose up --wait`` (#1669).
 
-        Regression: proxy healthcheck (~50s, no start_period) could fail with 502
-        while adcp was still inside its 60s start_period; ``up --wait`` flaked.
+        Regression: proxy healthcheck (no start_period) could fail with 502
+        while adcp was still inside its start_period; ``up --wait`` flaked.
         """
         services = _load_e2e_compose()["services"]
         assert "adcp-server" in services and "proxy" in services, (
             "docker-compose.e2e.yml must declare adcp-server and proxy."
         )
+        assert "creative-agent" in services, "docker-compose.e2e.yml must declare creative-agent."
         adcp_hc = services["adcp-server"].get("healthcheck") or {}
         proxy = services["proxy"]
         proxy_deps = proxy.get("depends_on") or {}
         proxy_hc = proxy.get("healthcheck") or {}
+        creative_hc = services["creative-agent"].get("healthcheck") or {}
 
-        assert adcp_hc.get("start_period"), "adcp-server healthcheck must declare start_period."
+        # Positive concrete durations — truthy "0s" must not pass.
+        assert _parse_compose_duration_seconds(adcp_hc.get("start_period")) >= 60, (
+            f"adcp-server start_period must be >= 60s (got {adcp_hc.get('start_period')!r})."
+        )
+        assert _parse_compose_duration_seconds(adcp_hc.get("interval")) == 5, (
+            f"adcp-server interval must be 5s (got {adcp_hc.get('interval')!r})."
+        )
+        assert int(str(adcp_hc.get("retries", 0))) >= 36, (
+            f"adcp-server retries must be >= 36 (got {adcp_hc.get('retries')!r})."
+        )
         # Mapping form with condition — list form ``- adcp-server`` is the race.
         assert isinstance(proxy_deps, dict), (
             f"proxy depends_on must be a mapping with condition: service_healthy (got {type(proxy_deps).__name__})."
@@ -382,11 +487,20 @@ class TestCISuiteCoverage:
         assert isinstance(adcp_dep, dict) and adcp_dep.get("condition") == "service_healthy", (
             f"proxy must depends_on adcp-server with condition: service_healthy (got {adcp_dep!r})."
         )
-        assert proxy_hc.get("start_period"), (
-            "proxy healthcheck must declare start_period (nginx warm-up after adcp is up)."
+        assert _parse_compose_duration_seconds(proxy_hc.get("start_period")) >= 15, (
+            f"proxy start_period must be >= 15s (got {proxy_hc.get('start_period')!r})."
+        )
+        assert _parse_compose_duration_seconds(proxy_hc.get("interval")) == 5, (
+            f"proxy interval must be 5s (got {proxy_hc.get('interval')!r})."
         )
         assert int(str(proxy_hc.get("retries", 0))) >= 12, (
             f"proxy healthcheck retries must be >= 12 (got {proxy_hc.get('retries')!r})."
+        )
+        # compose --wait only waits services that declare healthchecks (creative-agent hard gate).
+        creative_test = creative_hc.get("test")
+        assert creative_test, "creative-agent healthcheck.test must be non-empty (compose --wait hard gate)."
+        assert _parse_compose_duration_seconds(creative_hc.get("start_period")) > 0, (
+            f"creative-agent start_period must be positive (got {creative_hc.get('start_period')!r})."
         )
 
     @pytest.mark.arch_guard
