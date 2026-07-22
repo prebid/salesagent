@@ -656,7 +656,7 @@ class TestTargetingOverlayRoundTrip:
         assert err.code == "SERVICE_UNAVAILABLE"
         assert "TARGETING_REHYDRATION_FAILED" in err.message
         assert err.field is not None and "targeting_overlay" in err.field
-        # BR-RULE-294 / #1646: buyer-facing suggestion references package_config
+        # BR-RULE-294 / UC-019: buyer-facing suggestion references package_config
         # so UC-019 BDD suggestion assertions match production.
         assert err.suggestion is not None
         assert "package_config" in err.suggestion
