@@ -825,6 +825,41 @@ class TestA2ADispatcherFailedSkillResult:
         assert_no_secret_leak(serialized)
         assert wire_dict["error"]["data"]["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("method_name", ["on_get_task", "on_cancel_task"])
+    async def test_durable_task_handlers_scrub_secret_on_full_wire(self, method_name):
+        """A DB failure inside tasks/get or tasks/cancel must surface as a sanitized
+        JSON-RPC InternalError, never the raw exception text. These two handlers gained
+        durable DB access without the boundary arm their siblings have — an untyped
+        escape reached the SDK dispatcher, which echoes ``str(exc)`` verbatim on the
+        wire. Serializes through the SDK's own ``build_error_response`` (the dispatcher's
+        path) and asserts the full wire via the shared leak oracle."""
+        from types import SimpleNamespace
+
+        from a2a.server.request_handlers.response_helpers import build_error_response
+        from a2a.types import GetTaskRequest, InternalError
+
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        handler = AdCPRequestHandler()
+        handler._get_auth_token = lambda context: "tok"  # noqa: ARG005
+        handler._resolve_a2a_identity = lambda *a, **k: SimpleNamespace(tenant_id="t", principal_id="p")
+
+        def _boom_db():
+            raise RuntimeError(SECRET_BEARING_MESSAGE)
+
+        # No owned in-memory task, so both handlers fall through to the durable
+        # (DB-touching) path, which is where the untyped failure fires.
+        with patch("src.core.database.database_session.get_db_session", _boom_db):
+            with pytest.raises(InternalError) as exc_info:
+                await getattr(handler, method_name)(GetTaskRequest(id="task_x"), context=None)
+
+        err = exc_info.value
+        wire_dict = build_error_response("req-1", err)
+        serialized = json.dumps(wire_dict if isinstance(wire_dict, dict) else wire_dict.model_dump(), default=str)
+        assert_no_secret_leak(serialized, context=f"{method_name} JSON-RPC wire")
+        assert wire_dict["error"]["data"]["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
+
     def test_internal_error_for_preserves_correctable_message(self):
         """[Round-12 B1] The JSON-RPC message keeps the controlled text of a
         client-correctable typed error — the fix must not over-sanitize."""

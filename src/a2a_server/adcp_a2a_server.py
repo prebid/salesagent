@@ -1259,19 +1259,35 @@ class AdCPRequestHandler(RequestHandler):
         #1544 (B6).
         """
         task_id = params.id
-        identity = self._durable_lookup_identity(context)
-        owned = self._authorized_in_memory_task(task_id, identity)
-        if owned is not None and owned.status.state in self._TERMINAL_TASK_STATES:
-            return owned
-        durable = self._durable_task_from_step(task_id, identity)
-        if durable is not None and durable.status.state in self._TERMINAL_TASK_STATES:
-            if owned is not None:
-                # Reconcile only our OWN entry — never write a map key we don't own.
-                self._remember_task(task_id, durable, identity)
-            return durable
-        # No terminal durable outcome: the richer owned in-memory task (metadata,
-        # artifacts) beats the durable WORKING skeleton.
-        return owned if owned is not None else durable
+        identity: ResolvedIdentity | None = None
+        try:
+            identity = self._durable_lookup_identity(context)
+            owned = self._authorized_in_memory_task(task_id, identity)
+            if owned is not None and owned.status.state in self._TERMINAL_TASK_STATES:
+                return owned
+            durable = self._durable_task_from_step(task_id, identity)
+            if durable is not None and durable.status.state in self._TERMINAL_TASK_STATES:
+                if owned is not None:
+                    # Reconcile only our OWN entry — never write a map key we don't own.
+                    self._remember_task(task_id, durable, identity)
+                return durable
+            # No terminal durable outcome: the richer owned in-memory task (metadata,
+            # artifacts) beats the durable WORKING skeleton.
+            return owned if owned is not None else durable
+        except A2AError:
+            raise
+        except Exception as e:
+            # The durable lookup touches the DB; an untyped failure here must not
+            # escape to the SDK dispatcher, which would echo str(exc) verbatim on
+            # the JSON-RPC wire. Mirror every sibling handler's boundary arm.
+            record_boundary_error(
+                "a2a",
+                "get_task",
+                e,
+                tenant_id=getattr(identity, "tenant_id", None),
+                principal_id=getattr(identity, "principal_id", None) or "anonymous",
+            )
+            raise _internal_error_for("get task", e) from e
 
     def _durable_lookup_identity(self, context: ServerCallContext | None) -> ResolvedIdentity | None:
         """Resolve the caller's identity for a durable (cross-process) task lookup.
@@ -1367,16 +1383,31 @@ class AdCPRequestHandler(RequestHandler):
             Task object with canceled status, or None if not found (or not owned).
         """
         task_id = params.id
-        identity = self._durable_lookup_identity(context)
-        owned = self._authorized_in_memory_task(task_id, identity)
-        if owned is not None and owned.status.state in self._TERMINAL_TASK_STATES:
-            raise TaskNotCancelableError(message=f"Task cannot be canceled - current state: {owned.status.state}")
-        durable = self._durable_cancel_step(task_id, identity)
-        if owned is not None:
-            owned.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_CANCELED))
-            self._remember_task(task_id, owned, identity)
-            return owned
-        return durable
+        identity: ResolvedIdentity | None = None
+        try:
+            identity = self._durable_lookup_identity(context)
+            owned = self._authorized_in_memory_task(task_id, identity)
+            if owned is not None and owned.status.state in self._TERMINAL_TASK_STATES:
+                raise TaskNotCancelableError(message=f"Task cannot be canceled - current state: {owned.status.state}")
+            durable = self._durable_cancel_step(task_id, identity)
+            if owned is not None:
+                owned.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_CANCELED))
+                self._remember_task(task_id, owned, identity)
+                return owned
+            return durable
+        except A2AError:
+            raise
+        except Exception as e:
+            # The durable cancel touches the DB; an untyped failure must not escape
+            # to the SDK dispatcher (which echoes str(exc) on the JSON-RPC wire).
+            record_boundary_error(
+                "a2a",
+                "cancel_task",
+                e,
+                tenant_id=getattr(identity, "tenant_id", None),
+                principal_id=getattr(identity, "principal_id", None) or "anonymous",
+            )
+            raise _internal_error_for("cancel task", e) from e
 
     def _durable_cancel_step(self, task_id: str, identity: ResolvedIdentity | None) -> Task | None:
         """Durably cancel the workflow step carrying this outer task id.
