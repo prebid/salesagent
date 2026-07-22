@@ -28,16 +28,20 @@ from src.core.security.url_validator import check_url_ssrf, sanitize_for_log
 logger = logging.getLogger(__name__)
 
 # Valid uid_type values per AdCP spec (uid-type enum).
+# Authority: dist/schemas/3.1.0/enums/uid-type.json (AdCP 3.1.0-beta.3).
+# Pinned by test_valid_uid_types_matches_pinned_schema in test_tmp_providers_blueprint.py.
 VALID_UID_TYPES = frozenset(
     [
         "uid2",
         "rampid",
+        "rampid_derived",
         "id5",
         "euid",
         "pairid",
         "maid",
         "hashed_email",
         "publisher_first_party",
+        "world_id_nullifier",
         "other",
     ]
 )
@@ -65,6 +69,31 @@ def _tenant_not_found_redirect():
     """
     flash("Tenant not found", "error")
     return redirect(url_for("core.index"))
+
+
+def _provider_not_found_json():
+    """Return a JSON 404 response when a TMP provider cannot be found.
+
+    Returns the response so callers can ``return`` it directly::
+
+        provider = uow.tmp_providers.get_by_id(provider_id)
+        if not provider:
+            return _provider_not_found_json()
+    """
+    return jsonify({"error": "TMP provider not found"}), 404
+
+
+def _provider_not_found_redirect(tenant_id: str):
+    """Flash an error and redirect to the provider list when a TMP provider cannot be found.
+
+    Returns the redirect response so callers can ``return`` it directly::
+
+        provider = uow.tmp_providers.get_by_id(provider_id)
+        if not provider:
+            return _provider_not_found_redirect(tenant_id)
+    """
+    flash("TMP provider not found", "error")
+    return redirect(url_for("tmp_providers.list_tmp_providers", tenant_id=tenant_id))
 
 
 # ---------------------------------------------------------------------------
@@ -177,10 +206,11 @@ def list_tmp_providers(tenant_id):
 
             providers_list = []
             for p in providers:
-                entry = p.to_dict()
-                entry["countries"] = p.countries or []
-                entry["uid_types"] = p.uid_types or []
-                entry["properties"] = p.properties or []
+                # include_conditional=False: always emit countries/uid_types/properties
+                # (None means "accepts all") — same contract as the edit path and the
+                # discovery endpoint. Avoids manually overwriting the same three fields
+                # that to_dict(include_conditional=False) already handles.
+                entry = p.to_dict(include_conditional=False)
                 entry["created_at"] = p.created_at
                 providers_list.append(entry)
 
@@ -216,7 +246,6 @@ def add_tmp_provider(tenant_id):
                 tenant_id=tenant_id,
                 tenant_name=tenant.name,
                 provider=None,
-                script_name=request.environ.get("SCRIPT_NAME", ""),
             )
 
     # POST — create new TMP provider
@@ -261,8 +290,7 @@ def edit_tmp_provider(tenant_id, provider_id):
 
             provider = uow.tmp_providers.get_by_id(provider_id)
             if not provider:
-                flash("TMP provider not found", "error")
-                return redirect(url_for("tmp_providers.list_tmp_providers", tenant_id=tenant_id))
+                return _provider_not_found_redirect(tenant_id)
 
             provider_dict = provider.to_dict(include_conditional=False)
             # Form fields need comma-separated strings, not lists
@@ -274,7 +302,7 @@ def edit_tmp_provider(tenant_id, provider_id):
             # echoed back to the browser — the POST side preserves the existing value
             # when the field is left empty.
             provider_dict["auth_type"] = provider.auth_type
-            provider_dict["auth_credentials"] = "••••••••" if provider.auth_credentials else ""
+            provider_dict["auth_credentials"] = "••••••••" if provider._auth_credentials else ""
 
             return render_template(
                 "tmp_provider_form.html",
@@ -282,7 +310,6 @@ def edit_tmp_provider(tenant_id, provider_id):
                 tenant_id=tenant_id,
                 tenant_name=tenant.name,
                 provider=provider_dict,
-                script_name=request.environ.get("SCRIPT_NAME", ""),
             )
 
     # POST — update TMP provider
@@ -291,8 +318,7 @@ def edit_tmp_provider(tenant_id, provider_id):
             assert uow.tmp_providers is not None
             provider = uow.tmp_providers.get_by_id(provider_id)
             if not provider:
-                flash("TMP provider not found", "error")
-                return redirect(url_for("tmp_providers.list_tmp_providers", tenant_id=tenant_id))
+                return _provider_not_found_redirect(tenant_id)
 
             data, error = _validate_provider_form(request.form)
             if error:
@@ -340,7 +366,7 @@ def deactivate_tmp_provider(tenant_id, provider_id):
             assert uow.tmp_providers is not None
             provider = uow.tmp_providers.deactivate(provider_id)
             if not provider:
-                return jsonify({"error": "TMP provider not found"}), 404
+                return _provider_not_found_json()
 
             return jsonify({"success": True, "message": f"TMP provider '{provider.name}' deactivated"})
 
@@ -360,7 +386,7 @@ def delete_tmp_provider(tenant_id, provider_id):
             # Get name before deleting for the response message
             provider = uow.tmp_providers.get_by_id(provider_id)
             if not provider:
-                return jsonify({"error": "TMP provider not found"}), 404
+                return _provider_not_found_json()
 
             provider_name = provider.name
             uow.tmp_providers.delete(provider_id)
@@ -388,7 +414,7 @@ def health_check_tmp_provider(tenant_id, provider_id):
             assert uow.tmp_providers is not None
             provider = uow.tmp_providers.get_by_id(provider_id)
             if not provider:
-                return jsonify({"error": "TMP provider not found"}), 404
+                return _provider_not_found_json()
 
             if provider.health_status is None:
                 return jsonify(

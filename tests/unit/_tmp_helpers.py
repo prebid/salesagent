@@ -5,9 +5,8 @@ UoW mock factories across the four TMP test files (CLAUDE.md DRY invariant).
 
 Usage::
 
-    from tests.unit._tmp_helpers import _make_tenant_uow, _make_tmp_uow, _make_provider, make_super_admin_client
+    from tests.unit._tmp_helpers import _make_tmp_uow, _make_provider, make_super_admin_client
 
-    mock_tenant_uow_cls = _make_tenant_uow(tenant)
     mock_tmp_uow_cls = _make_tmp_uow(providers, tenant=tenant)
     client = make_super_admin_client()
 """
@@ -73,26 +72,6 @@ def _make_provider(
     p.priority = priority
     p.status = status
     return p
-
-
-def _make_tenant_uow(tenant: MagicMock | None) -> MagicMock:
-    """Return a mock TenantConfigUoW context manager.
-
-    The yielded UoW has ``.tenant_config.get_tenant()`` returning *tenant*.
-    Pass ``None`` to simulate an unknown tenant (404 path).
-
-    Used by admin blueprint tests (Flask CRUD) which open a standalone
-    TenantConfigUoW. The FastAPI discovery route uses the combined
-    TMPProviderUoW (see ``_make_tmp_uow`` below) since it collapses the
-    tenant-existence check and the provider read into a single transaction.
-    """
-    mock_uow = MagicMock()
-    mock_uow.tenant_config = MagicMock()
-    mock_uow.tenant_config.get_tenant.return_value = tenant
-    mock_uow_cls = MagicMock()
-    mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-    mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
-    return mock_uow_cls
 
 
 def _make_tmp_uow(providers: list[TMPProvider], tenant: MagicMock | None = _UNSET) -> MagicMock:  # type: ignore[assignment]

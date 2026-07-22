@@ -1,9 +1,9 @@
 """Unit tests for TMP Provider package sync service.
 
 Covers:
-- _build_package_payload: field mapping from MediaPackage to TMP Provider format
+- _build_package_payload: spec-compliant AvailablePackage payload (seller_agent object)
 - sync_packages_for_media_buy: fan-out logic, error isolation, logging
-- _resolve_seller_agent_url: env override, tenant virtual_host, fallback
+- _resolve_seller_agent_url: env override, tenant virtual_host, None fallback
 - _post_packages_sync: auth header selection (bearer only), SSRF guard, 5xx raises
 
 beads: salesagent-tmp-sync
@@ -11,6 +11,7 @@ beads: salesagent-tmp-sync
 
 from __future__ import annotations
 
+from unittest import mock
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -31,114 +32,110 @@ from src.services.tmp_provider_sync import (
 
 
 class TestBuildPackagePayload:
-    """_build_package_payload maps MediaPackage DB rows to TMP Provider sync format."""
+    """_build_package_payload emits a spec-compliant AvailablePackage payload.
 
-    def test_maps_all_fields_from_package_config(self):
-        """All expected fields are extracted from package_config."""
+    Authority: dist/schemas/3.1.0/tmp/available-package.json (AdCP 3.1.0-beta.3).
+    The schema has ``additionalProperties: false`` and requires exactly:
+    ``package_id``, ``media_buy_id``, ``seller_agent``.
+    Optional allowed fields: ``format_ids``, ``catalogs``.
+    """
+
+    def test_emits_required_fields(self):
+        """Payload contains the three required fields: package_id, media_buy_id, seller_agent."""
         pkg = MagicMock()
         pkg.package_id = "pkg-001"
-        pkg.package_config = {
-            "product_id": "prod-42",
-            "brand": "Acme Corp",
-            "keywords": ["shoes", "running"],
-            "topics": ["sports"],
-            "content_policies": ["brand_safe"],
-            "summary": "Running shoes campaign",
-            "creative_manifest": {"format": "banner"},
-            "price": {"amount": 5.0, "currency": "USD"},
-            "macros": {"CLICK_URL": "https://example.com"},
-            "is_active": True,
-            "expires_at": "2026-12-31T23:59:59Z",
-        }
+        pkg.package_config = {}
 
-        result = _build_package_payload("mb-100", pkg, "http://agent.example.com/mcp")
+        result = _build_package_payload("mb-100", pkg, "https://agent.example.com/mcp")
 
         assert result["package_id"] == "pkg-001"
         assert result["media_buy_id"] == "mb-100"
-        assert result["offering_id"] == "prod-42"
-        assert result["brand"] == "Acme Corp"
-        assert result["keywords"] == ["shoes", "running"]
-        assert result["topics"] == ["sports"]
-        assert result["content_policies"] == ["brand_safe"]
-        assert result["summary"] == "Running shoes campaign"
-        assert result["creative_manifest"] == {"format": "banner"}
-        assert result["price"] == {"amount": 5.0, "currency": "USD"}
-        assert result["macros"] == {"CLICK_URL": "https://example.com"}
-        assert result["si_agent_endpoint"] == "http://agent.example.com/mcp"
-        assert result["is_active"] is True
-        assert result["expires_at"] == "2026-12-31T23:59:59Z"
+        assert result["seller_agent"] == {"agent_url": "https://agent.example.com/mcp"}
 
-    def test_uses_offering_id_fallback(self):
-        """Falls back to offering_id when product_id is absent."""
+    def test_seller_agent_is_structured_object(self):
+        """seller_agent is a dict with agent_url, not a flat string.
+
+        Per dist/schemas/3.1.0/core/seller-agent-ref.json, seller_agent MUST be
+        an object with agent_url — not the legacy flat si_agent_endpoint string.
+        """
         pkg = MagicMock()
         pkg.package_id = "pkg-002"
-        pkg.package_config = {"offering_id": "offer-99"}
-
-        result = _build_package_payload("mb-200", pkg, "http://agent/mcp")
-
-        assert result["offering_id"] == "offer-99"
-
-    def test_defaults_for_missing_config_fields(self):
-        """Missing config fields get sensible defaults (empty lists, None, etc.)."""
-        pkg = MagicMock()
-        pkg.package_id = "pkg-003"
         pkg.package_config = {}
 
-        result = _build_package_payload("mb-300", pkg, "http://agent/mcp")
+        result = _build_package_payload("mb-200", pkg, "https://agent.example.com/mcp")
 
-        assert result["offering_id"] == ""
-        assert result["brand"] is None
-        assert result["keywords"] == []
-        assert result["topics"] == []
-        assert result["content_policies"] == []
-        assert result["summary"] == ""
-        assert result["creative_manifest"] is None
-        assert result["price"] is None
-        assert result["macros"] == {}
-        assert result["is_active"] is True
-        assert result["expires_at"] is None
+        assert isinstance(result["seller_agent"], dict)
+        assert "agent_url" in result["seller_agent"]
+        assert result["seller_agent"]["agent_url"] == "https://agent.example.com/mcp"
+
+    def test_no_additional_properties(self):
+        """Payload contains only schema-allowed keys (additionalProperties: false).
+
+        The schema allows: package_id, media_buy_id, seller_agent, format_ids, catalogs.
+        Keys like offering_id, brand, keywords, si_agent_endpoint etc. are forbidden.
+        """
+        pkg = MagicMock()
+        pkg.package_id = "pkg-003"
+        pkg.package_config = {
+            "product_id": "prod-42",
+            "brand": "Acme Corp",
+            "keywords": ["shoes"],
+        }
+
+        result = _build_package_payload("mb-300", pkg, "https://agent.example.com/mcp")
+
+        allowed_keys = {"package_id", "media_buy_id", "seller_agent", "format_ids", "catalogs"}
+        extra_keys = set(result.keys()) - allowed_keys
+        assert not extra_keys, f"Payload contains schema-forbidden keys: {extra_keys}"
 
     def test_handles_none_package_config(self):
-        """package_config=None doesn't crash — treated as empty dict."""
+        """package_config=None doesn't crash."""
         pkg = MagicMock()
         pkg.package_id = "pkg-004"
         pkg.package_config = None
 
-        result = _build_package_payload("mb-400", pkg, "http://agent/mcp")
+        result = _build_package_payload("mb-400", pkg, "https://agent.example.com/mcp")
 
         assert result["package_id"] == "pkg-004"
         assert result["media_buy_id"] == "mb-400"
-        assert result["keywords"] == []
+        assert result["seller_agent"] == {"agent_url": "https://agent.example.com/mcp"}
 
-    def test_required_policies_fallback_for_content_policies(self):
-        """Falls back to required_policies when content_policies is absent."""
-        pkg = MagicMock()
-        pkg.package_id = "pkg-005"
-        pkg.package_config = {"required_policies": ["no_alcohol"]}
 
-        result = _build_package_payload("mb-500", pkg, "http://agent/mcp")
+# ---------------------------------------------------------------------------
+# sync_packages_for_media_buy — no valid seller_agent URL
+# ---------------------------------------------------------------------------
 
-        assert result["content_policies"] == ["no_alcohol"]
 
-    def test_bid_price_fallback_for_price(self):
-        """Falls back to bid_price when price is absent."""
-        pkg = MagicMock()
-        pkg.package_id = "pkg-006"
-        pkg.package_config = {"bid_price": {"amount": 3.5}}
+class TestSyncSkipsWhenNoSellerAgentUrl:
+    """sync_packages_for_media_buy skips sync when _resolve_seller_agent_url returns None.
 
-        result = _build_package_payload("mb-600", pkg, "http://agent/mcp")
+    Per dist/schemas/3.1.0/core/seller-agent-ref.json, agent_url MUST use
+    https://. When no valid https URL is available (no ADCP_AGENT_URL, no
+    public virtual_host), the function must skip rather than emit a
+    spec-invalid binding.
+    """
 
-        assert result["price"] == {"amount": 3.5}
+    @patch("src.services.tmp_provider_sync._post_packages_sync")
+    @patch("src.services.tmp_provider_sync._resolve_seller_agent_url", return_value=None)
+    def test_skips_sync_when_seller_agent_url_is_none(self, mock_resolve, mock_post):
+        """No HTTP calls when _resolve_seller_agent_url returns None."""
+        sync_packages_for_media_buy("tenant-1", "mb-1")
 
-    def test_name_fallback_for_summary(self):
-        """Falls back to name when summary is absent."""
-        pkg = MagicMock()
-        pkg.package_id = "pkg-007"
-        pkg.package_config = {"name": "Campaign Alpha"}
+        mock_post.assert_not_called()
 
-        result = _build_package_payload("mb-700", pkg, "http://agent/mcp")
+    @patch("src.services.tmp_provider_sync._post_packages_sync")
+    @patch("src.services.tmp_provider_sync._resolve_seller_agent_url", return_value=None)
+    def test_logs_warning_when_seller_agent_url_is_none(self, mock_resolve, mock_post):
+        """A warning is logged when sync is skipped due to missing seller_agent URL."""
+        import logging
 
-        assert result["summary"] == "Campaign Alpha"
+        with patch.object(logging.getLogger("src.services.tmp_provider_sync"), "warning") as mock_warn:
+            sync_packages_for_media_buy("tenant-1", "mb-1")
+
+        assert mock_warn.called
+        # The warning message must mention the media_buy_id and tenant
+        warning_args = " ".join(str(a) for a in mock_warn.call_args[0])
+        assert "mb-1" in warning_args or "tenant-1" in warning_args
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +297,7 @@ class TestProviderMaterializedBeforeSessionCloses:
 
         mock_post.assert_called_once_with(
             "http://provider-a:3000",
-            [_build_package_payload("mb-1", pkg, "http://agent/mcp")],
+            mock.ANY,  # payload correctness pinned by TestBuildPackagePayload
             "secret",
         )
 
@@ -479,8 +476,13 @@ class TestResolveSellAgentUrl:
         assert result == "https://tenant.salesagent.example.com/mcp"
 
     @patch("src.services.tmp_provider_sync.TenantConfigUoW")
-    def test_falls_back_to_default(self, mock_uow_cls):
-        """Falls back to default URL when tenant has no virtual_host or subdomain."""
+    def test_returns_none_when_no_valid_https_url(self, mock_uow_cls):
+        """Returns None when tenant has no public virtual_host and ADCP_AGENT_URL is unset.
+
+        The spec requires agent_url to use https://. A local-only deployment
+        cannot produce a valid https URL, so None is returned and the caller
+        skips the sync rather than emitting a spec-invalid binding.
+        """
         tenant = MagicMock()
         tenant.virtual_host = None
         tenant.subdomain = None
@@ -496,7 +498,7 @@ class TestResolveSellAgentUrl:
             os.environ.pop("ADCP_AGENT_URL", None)
             result = _resolve_seller_agent_url("test-tenant")
 
-        assert result == "http://salesagent:8000/mcp"
+        assert result is None
 
     @patch("src.services.tmp_provider_sync.TenantConfigUoW")
     def test_uses_https_for_public_virtual_host(self, mock_uow_cls):
@@ -519,8 +521,13 @@ class TestResolveSellAgentUrl:
         assert result == "https://tenant.salesagent.example.com/mcp"
 
     @patch("src.services.tmp_provider_sync.TenantConfigUoW")
-    def test_uses_http_for_localhost_virtual_host(self, mock_uow_cls):
-        """A localhost virtual_host resolves to http:// (dev convenience)."""
+    def test_returns_none_for_localhost_virtual_host(self, mock_uow_cls):
+        """A localhost virtual_host returns None — cannot produce a valid https URL.
+
+        Per dist/schemas/3.1.0/core/seller-agent-ref.json, agent_url MUST use
+        https://. Local dev hosts cannot satisfy this requirement, so None is
+        returned and the caller skips the sync.
+        """
         tenant = MagicMock()
         tenant.virtual_host = "tenant.sales-agent.localhost:8001"
         tenant.subdomain = None
@@ -536,7 +543,7 @@ class TestResolveSellAgentUrl:
             os.environ.pop("ADCP_AGENT_URL", None)
             result = _resolve_seller_agent_url("test-tenant")
 
-        assert result == "http://tenant.sales-agent.localhost:8001/mcp"
+        assert result is None
 
     @patch("src.services.tmp_provider_sync.TenantConfigUoW")
     def test_does_not_misclassify_public_host_containing_localhost_substring(self, mock_uow_cls):
@@ -715,6 +722,6 @@ class TestPostPackagesSyncAuth:
 
         mock_post.assert_called_once_with(
             "http://provider:3000",
-            [_build_package_payload("mb-1", pkg, "http://agent/mcp")],
+            mock.ANY,  # payload correctness pinned by TestBuildPackagePayload
             "provider-secret",
         )

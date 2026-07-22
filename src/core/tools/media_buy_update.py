@@ -1422,7 +1422,7 @@ async def update_media_buy(
 
     from src.services.tmp_provider_sync import fire_tmp_sync
 
-    fire_tmp_sync(response, identity.tenant_id if identity else None)
+    fire_tmp_sync(response, identity)
     return ToolResult(content=str(response), structured_content=response)
 
 
@@ -1503,5 +1503,5 @@ def update_media_buy_raw(
 
     from src.services.tmp_provider_sync import fire_tmp_sync
 
-    fire_tmp_sync(result, identity.tenant_id if identity else None)
+    fire_tmp_sync(result, identity)
     return result

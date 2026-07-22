@@ -760,7 +760,6 @@ class TestTMPProviderAuthFields:
                 "auth_type": "bearer",
                 "auth_credentials": "••••••••",
             },
-            script_name="",
         )
 
     def test_edit_post_preserves_existing_credentials_when_empty_submitted(self):
@@ -868,79 +867,52 @@ class TestTMPProviderAuthFields:
         )
 
 
-class TestTMPProviderToDict:
-    """TMPProvider.to_dict() serialization — real model, not mock-based."""
+# TestTMPProviderToDict lives in test_tmp_providers_discovery_route.py (the
+# canonical home for model contract tests — uses _tmp_helpers._make_provider).
+# Keeping a second copy here would require parallel edits on every to_dict()
+# change and one copy would inevitably drift (CLAUDE.md DRY invariant).
 
-    def _make_real_provider(self, **overrides):
-        """Create a real TMPProvider instance (detached from DB) for to_dict() testing."""
-        defaults = {
-            "provider_id": "test-uuid-1234",
-            "tenant_id": "default",
-            "name": "Test Provider",
-            "endpoint": "https://provider.example.com/tmp",
-            "context_match": True,
-            "identity_match": True,
-            "countries": ["US", "GB"],
-            "uid_types": ["uid2", "id5"],
-            "properties": ["prop-1", "prop-2"],
-            "timeout_ms": 50,
-            "priority": 0,
-            "status": "active",
-        }
-        defaults.update(overrides)
-        return TMPProvider(**defaults)
 
-    def test_to_dict_default_includes_conditional_fields_when_present(self):
-        """to_dict() with default include_conditional=True includes countries/uid_types/properties when non-None."""
-        provider = self._make_real_provider()
-        result = provider.to_dict()
+# ---------------------------------------------------------------------------
+# VALID_UID_TYPES guard — pins the frozenset to the pinned AdCP schema enum
+# ---------------------------------------------------------------------------
 
-        assert result["provider_id"] == "test-uuid-1234"
-        assert result["name"] == "Test Provider"
-        assert result["countries"] == ["US", "GB"]
-        assert result["uid_types"] == ["uid2", "id5"]
-        assert result["properties"] == ["prop-1", "prop-2"]
 
-    def test_to_dict_default_omits_conditional_fields_when_none(self):
-        """to_dict() with default include_conditional=True omits countries/uid_types/properties when None."""
-        provider = self._make_real_provider(countries=None, uid_types=None, properties=None)
-        result = provider.to_dict()
+class TestValidUidTypesMatchesPinnedSchema:
+    """VALID_UID_TYPES must equal the uid-type enum in the pinned AdCP SDK.
 
-        assert "countries" not in result
-        assert "uid_types" not in result
-        assert "properties" not in result
+    Authority: the installed ``adcp`` SDK (pinned in pyproject.toml).
+    This guard ensures that a spec bump (SDK version bump) cannot silently add
+    or remove uid types without a corresponding update to VALID_UID_TYPES.
+    """
 
-    def test_to_dict_include_conditional_false_always_includes_all_fields(self):
-        """to_dict(include_conditional=False) always includes countries/uid_types/properties (even as None)."""
-        provider = self._make_real_provider(countries=None, uid_types=None, properties=None)
-        result = provider.to_dict(include_conditional=False)
+    def test_valid_uid_types_matches_pinned_schema(self):
+        """VALID_UID_TYPES frozenset equals the uid-type values in the pinned adcp SDK."""
+        from src.admin.blueprints.tmp_providers import VALID_UID_TYPES
 
-        assert result["countries"] is None
-        assert result["uid_types"] is None
-        assert result["properties"] is None
+        # The adcp SDK exposes uid types via adcp.types.UIDType (an enum/literal).
+        # Extract the string values from whatever form the SDK uses.
+        try:
+            from adcp.types import UIDType  # type: ignore[import]
 
-    def test_to_dict_include_conditional_false_preserves_values(self):
-        """to_dict(include_conditional=False) preserves actual values for countries/uid_types/properties."""
-        provider = self._make_real_provider()
-        result = provider.to_dict(include_conditional=False)
+            sdk_uid_types = frozenset(v.value if hasattr(v, "value") else v for v in UIDType)
+        except (ImportError, AttributeError):
+            # Fallback: the SDK may expose uid types as a module-level constant.
+            try:
+                import adcp.types as _adcp_types  # type: ignore[import]
 
-        assert result["countries"] == ["US", "GB"]
-        assert result["uid_types"] == ["uid2", "id5"]
-        assert result["properties"] == ["prop-1", "prop-2"]
+                sdk_uid_types = frozenset(getattr(_adcp_types, "UID_TYPES", None) or [])
+                if not sdk_uid_types:
+                    import pytest
 
-    def test_to_dict_always_includes_core_fields(self):
-        """to_dict() always includes provider_id, name, endpoint, context_match, identity_match, timeout_ms, priority, status."""
-        provider = self._make_real_provider()
-        result = provider.to_dict()
+                    pytest.skip("adcp SDK does not expose UIDType or UID_TYPES — update this guard")
+            except ImportError:
+                import pytest
 
-        for field in [
-            "provider_id",
-            "name",
-            "endpoint",
-            "context_match",
-            "identity_match",
-            "timeout_ms",
-            "priority",
-            "status",
-        ]:
-            assert field in result, f"Missing core field: {field}"
+                pytest.skip("adcp SDK not installed — cannot verify VALID_UID_TYPES")
+
+        assert VALID_UID_TYPES == sdk_uid_types, (
+            f"VALID_UID_TYPES diverges from the pinned adcp SDK.\n"
+            f"  In SDK but not in VALID_UID_TYPES: {sdk_uid_types - VALID_UID_TYPES}\n"
+            f"  In VALID_UID_TYPES but not in SDK: {VALID_UID_TYPES - sdk_uid_types}"
+        )

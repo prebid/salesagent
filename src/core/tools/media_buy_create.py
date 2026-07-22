@@ -4375,7 +4375,7 @@ async def create_media_buy(
 
     from src.services.tmp_provider_sync import fire_tmp_sync
 
-    fire_tmp_sync(result, identity.tenant_id if identity else None)
+    fire_tmp_sync(result, identity)
     return ToolResult(content=str(result), structured_content=result)
 
 
@@ -4469,7 +4469,7 @@ async def create_media_buy_raw(
 
     from src.services.tmp_provider_sync import fire_tmp_sync
 
-    fire_tmp_sync(result, identity.tenant_id if identity else None)
+    fire_tmp_sync(result, identity)
     return result
 
 

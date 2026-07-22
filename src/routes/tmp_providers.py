@@ -122,7 +122,7 @@ async def tmp_providers_discovery(tenant_id: str, _: None = Depends(require_api_
     """Return the active TMP provider set for a tenant.
 
     Polled by the TMP Router every 30 s.  Requires API key authentication
-    via ``TMP_DISCOVERY_API_KEYS`` (open when env var is unset).
+    via ``TMP_DISCOVERY_API_KEYS`` (fail-closed: returns 500 when unset).
 
     Lifecycle filtering:
       active   → included

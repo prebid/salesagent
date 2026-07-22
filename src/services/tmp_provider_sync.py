@@ -11,10 +11,8 @@ Each synced AvailablePackage includes a seller_agent reference so the TMP
 Provider can attribute offers back to the originating seller agent.
 
 Design principles (AdCP Pattern compliance):
-- Triggered from **every transport** (REST, MCP, A2A) via ``fire_tmp_sync()``,
-  which spawns a daemon thread so the caller is never blocked.  REST callers
-  may also use FastAPI BackgroundTasks — both paths converge on
-  ``sync_packages_for_media_buy``.
+- Triggered from **every transport** (MCP, A2A, REST) via ``fire_tmp_sync()``,
+  which spawns a daemon thread so the caller is never blocked.
 - Never called from _impl functions (which must remain transport-agnostic).
 - Reads packages and provider endpoints via **repositories** (UoW pattern) —
   no raw get_db_session() / select() calls.
@@ -32,13 +30,16 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from src.core.database.models import MediaPackage
 from src.core.database.repositories.uow import MediaBuyUoW, TenantConfigUoW, TMPProviderUoW
-from src.services._provider_http import bearer_headers, provider_url
+from src.services._provider_http import bearer_headers, provider_client_kwargs, provider_url
+
+if TYPE_CHECKING:
+    from src.core.resolved_identity import ResolvedIdentity
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ logger = logging.getLogger(__name__)
 _SYNC_TIMEOUT_S = 5.0
 
 
-def fire_tmp_sync(response: Any, tenant_id: str | None) -> None:
+def fire_tmp_sync(response: Any, identity: ResolvedIdentity | None) -> None:
     """Spawn a daemon thread to sync TMP packages after a successful media buy operation.
 
     Transport-agnostic entry point shared by MCP, A2A, and REST transports.
@@ -60,9 +61,15 @@ def fire_tmp_sync(response: Any, tenant_id: str | None) -> None:
     its ``.response`` field — ``media_buy_id`` lives there, not on the wrapper.
     Uses ``getattr`` with an inner-response fallback to handle both shapes.
 
+    ``identity`` is a ``ResolvedIdentity`` — ``tenant_id`` is extracted here so
+    callers don't need to repeat ``identity.tenant_id if identity else None`` at
+    every call site (four transport wrappers).
+
     No-ops silently when ``media_buy_id`` or ``tenant_id`` is absent (e.g. on
     error responses that carry no ID).
     """
+    tenant_id = identity.tenant_id if identity is not None else None
+
     media_buy_id = getattr(response, "media_buy_id", None)
     if media_buy_id is None:
         inner = getattr(response, "response", None)
@@ -80,50 +87,59 @@ def fire_tmp_sync(response: Any, tenant_id: str | None) -> None:
     t.start()
 
 
-def _resolve_seller_agent_url(tenant_id: str) -> str:
+def _resolve_seller_agent_url(tenant_id: str) -> str | None:
     """Resolve the seller agent URL for the AvailablePackage.seller_agent field.
 
-    Per the AdCP TMP spec, seller_agent.agent_url MUST match one of
-    authorized_agents[].url in the publisher's adagents.json.
+    Per ``dist/schemas/3.1.0/core/seller-agent-ref.json``, ``agent_url`` MUST
+    use the ``https://`` scheme.  Returns ``None`` when no valid https URL can
+    be resolved so the caller can skip the sync rather than emit a
+    spec-invalid binding.
 
     Resolution order:
       1. ADCP_AGENT_URL env var (explicit override for non-standard deployments)
       2. Tenant virtual_host (the public domain, e.g. "tenant.salesagent.example.com")
-      3. Tenant subdomain fallback (e.g. "si-host.sales-agent.localhost:8001")
+         — local hosts (localhost / *.localhost / 127.0.0.1) are skipped because
+         they cannot produce a valid https URL.
+      3. Returns None — caller logs and skips sync.
 
-    Returns the URL with /mcp suffix (the standard MCP endpoint).
+    IMPORTANT: this opens its own UoW/session. Callers MUST NOT invoke this
+    function from inside another open UoW block (e.g. MediaBuyUoW) — nesting
+    two UoWs means the inner UoW's __exit__ closes/removes the scoped session
+    the outer block is still using (get_db_session() is a scoped session).
+    sync_packages_for_media_buy() resolves the seller_agent URL before
+    opening the MediaBuyUoW block for exactly this reason.
     """
     override = os.environ.get("ADCP_AGENT_URL")
     if override:
         return override.rstrip("/")
 
-    # Load tenant to resolve virtual_host / subdomain.
+    # Load tenant to resolve virtual_host.
     # Uses TenantConfigUoW for architecture compliance (no raw get_db_session).
-    #
-    # IMPORTANT: this opens its own UoW/session. Callers MUST NOT invoke this
-    # function from inside another open UoW block (e.g. MediaBuyUoW) — nesting
-    # two UoWs means the inner UoW's __exit__ closes/removes the scoped session
-    # the outer block is still using (get_db_session() is a scoped session).
-    # sync_packages_for_media_buy() resolves the seller_agent URL before
-    # opening the MediaBuyUoW block for exactly this reason.
     try:
         with TenantConfigUoW(tenant_id) as uow:
             assert uow.tenant_config is not None
             tenant = uow.tenant_config.get_tenant()
             if tenant and tenant.virtual_host:
                 host = tenant.virtual_host
-                scheme = "http" if _is_local_host(host) else "https"
-                return f"{scheme}://{host}/mcp"
-            if tenant and tenant.subdomain:
-                return f"http://{tenant.subdomain}.sales-agent.localhost:8001/mcp"
+                if not _is_local_host(host):
+                    return f"https://{host}/mcp"
     except Exception:
         logger.warning(
-            "[TMP sync] Failed to load tenant %s for seller_agent URL — using fallback",
+            "[TMP sync] Failed to load tenant %s for seller_agent URL",
             tenant_id,
             exc_info=True,
         )
 
-    return "http://salesagent:8000/mcp"
+    # No valid https URL available — the spec requires https for agent_url.
+    # Log an error and return None so the caller skips the sync rather than
+    # emitting a spec-invalid binding that providers will reject.
+    logger.error(
+        "[TMP sync] Cannot resolve a valid https seller_agent URL for tenant=%s "
+        "(ADCP_AGENT_URL not set and no public virtual_host configured). "
+        "Set ADCP_AGENT_URL to the public https MCP endpoint to enable TMP sync.",
+        tenant_id,
+    )
+    return None
 
 
 def _is_local_host(host: str) -> bool:
@@ -146,36 +162,24 @@ def _build_package_payload(
 ) -> dict[str, Any]:
     """Build the POST /packages/sync payload from a MediaPackage DB row.
 
-    The TMP Provider expects the shape defined in handlers_packages.go:
-      package_id, media_buy_id, offering_id, brand, keywords, topics,
-      content_policies, summary, creative_manifest, price, macros,
-      si_agent_endpoint, is_active, expires_at.
+    Conforms to ``dist/schemas/3.1.0/tmp/available-package.json``
+    (AdCP 3.1.0-beta.3), which has ``additionalProperties: false`` and
+    requires exactly: ``package_id``, ``media_buy_id``, ``seller_agent``.
+    Optional fields allowed by the schema: ``format_ids``, ``catalogs``.
 
-    Per the AdCP TMP spec (AvailablePackage), seller_agent is required.
-    The Go TMP Provider stores this as si_agent_endpoint.
+    ``seller_agent`` is a structured object per
+    ``dist/schemas/3.1.0/core/seller-agent-ref.json``:
+      ``{"agent_url": "<https://...>"}``
 
-    All fields except package_id and media_buy_id are sourced from
-    package_config (the full AdCP package JSON stored at creation time).
+    ``agent_url`` MUST use the ``https://`` scheme per the spec.  Callers
+    must ensure ``seller_agent_url`` is a valid https URL before calling
+    this function (see ``_resolve_seller_agent_url``).
     """
-    cfg: dict[str, Any] = pkg_row.package_config or {}
     return {
         "package_id": pkg_row.package_id,
         "media_buy_id": media_buy_id,
-        # AdCP product_id maps to offering_id in TMP Provider schema
-        "offering_id": cfg.get("product_id") or cfg.get("offering_id") or "",
-        "brand": cfg.get("brand"),
-        "keywords": cfg.get("keywords") or [],
-        "topics": cfg.get("topics") or [],
-        "content_policies": cfg.get("content_policies") or cfg.get("required_policies") or [],
-        "summary": cfg.get("summary") or cfg.get("name") or "",
-        "creative_manifest": cfg.get("creative_manifest"),
-        # Explicit None check: `or` would treat a valid price of 0 as absent.
-        "price": cfg.get("price") if cfg.get("price") is not None else cfg.get("bid_price"),
-        "macros": cfg.get("macros") or {},
-        # seller_agent.agent_url → stored as si_agent_endpoint in TMP Provider
-        "si_agent_endpoint": seller_agent_url,
-        "is_active": cfg.get("is_active", True),
-        "expires_at": cfg.get("expires_at"),
+        # seller_agent is required by the schema; agent_url MUST be https.
+        "seller_agent": {"agent_url": seller_agent_url},
     }
 
 
@@ -197,7 +201,7 @@ def _post_packages_sync(endpoint: str, payloads: list[dict[str, Any]], auth_cred
     """
     url = provider_url(endpoint, "/packages/sync")
     headers = bearer_headers(auth_credentials)
-    with httpx.Client(timeout=_SYNC_TIMEOUT_S, follow_redirects=False) as client:
+    with httpx.Client(**provider_client_kwargs(timeout=_SYNC_TIMEOUT_S)) as client:
         resp = client.post(url, json=payloads, headers=headers)
         resp.raise_for_status()
     logger.info(
@@ -212,8 +216,9 @@ def _post_packages_sync(endpoint: str, payloads: list[dict[str, Any]], auth_cred
 def sync_packages_for_media_buy(tenant_id: str, media_buy_id: str) -> None:
     """Background task: push all packages for a media buy to active TMP providers.
 
-    Called by the route layer (api_v1.py) via FastAPI BackgroundTasks after a
-    successful create_media_buy or update_media_buy response has been sent.
+    Called from the four transport entry points (MCP create/update wrappers and
+    A2A+REST ``_raw`` wrappers) via ``fire_tmp_sync()``, which spawns a daemon
+    thread so the caller is never blocked.
 
     Steps:
       1. Resolve seller_agent URL from tenant config (its own UoW, opened and
@@ -234,7 +239,18 @@ def sync_packages_for_media_buy(tenant_id: str, media_buy_id: str) -> None:
     # needs — the subsequent row access and outer commit then run against a
     # removed session. Resolving it here, before MediaBuyUoW opens, avoids the
     # nesting entirely.
+    #
+    # Returns None when no valid https URL is available (spec requires https for
+    # seller_agent.agent_url). Skip sync rather than emit a spec-invalid binding.
     seller_agent_url = _resolve_seller_agent_url(tenant_id)
+    if seller_agent_url is None:
+        logger.warning(
+            "[TMP sync] Skipping sync for media_buy=%s tenant=%s — no valid https seller_agent URL. "
+            "Set ADCP_AGENT_URL to enable TMP sync.",
+            media_buy_id,
+            tenant_id,
+        )
+        return
 
     # --- Step 2: load packages and build payloads (inside session scope) ---
     # Payloads are built while the session is still open so that ORM attribute

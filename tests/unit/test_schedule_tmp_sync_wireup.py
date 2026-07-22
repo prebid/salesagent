@@ -9,6 +9,10 @@ The guard ``if not media_buy_id or not tenant_id`` inside ``fire_tmp_sync``
 is a silent no-op on either falsy value — these tests pin the call shape so
 that guard cannot silently regress.
 
+``fire_tmp_sync`` now accepts a ``ResolvedIdentity`` (not a bare ``tenant_id``
+string) — the tenant_id extraction is centralised inside the function.  The
+internals tests below pass a mock identity to exercise that extraction path.
+
 beads: salesagent-tmp-sync
 """
 
@@ -181,6 +185,9 @@ class TestFireTmpSyncInternals:
     The function must handle two response shapes:
     - ``CreateMediaBuyResult`` wrapper: media_buy_id is on ``.response.media_buy_id``
     - ``UpdateMediaBuySuccess | UpdateMediaBuyError``: media_buy_id is directly on the object
+
+    ``fire_tmp_sync`` accepts a ``ResolvedIdentity`` (not a bare tenant_id string).
+    The identity mock's ``.tenant_id`` attribute is used for thread args.
     """
 
     def test_spawns_thread_for_direct_media_buy_id(self):
@@ -189,11 +196,12 @@ class TestFireTmpSyncInternals:
 
         resp = MagicMock()
         resp.media_buy_id = "mb-direct-001"
+        identity = _make_identity("tenant-1")
 
         with patch("src.services.tmp_provider_sync.threading.Thread") as mock_thread_cls:
             mock_thread = MagicMock()
             mock_thread_cls.return_value = mock_thread
-            fire_tmp_sync(resp, "tenant-1")
+            fire_tmp_sync(resp, identity)
 
         mock_thread_cls.assert_called_once_with(
             target=ANY,
@@ -219,10 +227,12 @@ class TestFireTmpSyncInternals:
 
             response = inner
 
+        identity = _make_identity("tenant-1")
+
         with patch("src.services.tmp_provider_sync.threading.Thread") as mock_thread_cls:
             mock_thread = MagicMock()
             mock_thread_cls.return_value = mock_thread
-            fire_tmp_sync(_WrapperWithNoMediaBuyId(), "tenant-1")
+            fire_tmp_sync(_WrapperWithNoMediaBuyId(), identity)
 
         mock_thread_cls.assert_called_once_with(
             target=ANY,
@@ -239,13 +249,15 @@ class TestFireTmpSyncInternals:
         class _NoIdResponse:
             """Response with no media_buy_id anywhere."""
 
+        identity = _make_identity("tenant-1")
+
         with patch("src.services.tmp_provider_sync.threading.Thread") as mock_thread_cls:
-            fire_tmp_sync(_NoIdResponse(), "tenant-1")
+            fire_tmp_sync(_NoIdResponse(), identity)
 
         mock_thread_cls.assert_not_called()
 
-    def test_no_thread_when_tenant_id_absent(self):
-        """No thread spawned when tenant_id is None."""
+    def test_no_thread_when_identity_absent(self):
+        """No thread spawned when identity is None (tenant_id cannot be resolved)."""
         from src.services.tmp_provider_sync import fire_tmp_sync
 
         resp = MagicMock()
@@ -256,17 +268,32 @@ class TestFireTmpSyncInternals:
 
         mock_thread_cls.assert_not_called()
 
+    def test_no_thread_when_tenant_id_is_none_on_identity(self):
+        """No thread spawned when identity.tenant_id is None."""
+        from src.services.tmp_provider_sync import fire_tmp_sync
+
+        resp = MagicMock()
+        resp.media_buy_id = "mb-001"
+        identity = MagicMock()
+        identity.tenant_id = None
+
+        with patch("src.services.tmp_provider_sync.threading.Thread") as mock_thread_cls:
+            fire_tmp_sync(resp, identity)
+
+        mock_thread_cls.assert_not_called()
+
     def test_thread_targets_sync_packages_for_media_buy(self):
         """Thread is created with sync_packages_for_media_buy as target and correct args."""
         from src.services.tmp_provider_sync import fire_tmp_sync, sync_packages_for_media_buy
 
         resp = MagicMock()
         resp.media_buy_id = "mb-xyz"
+        identity = _make_identity("tenant-99")
 
         with patch("src.services.tmp_provider_sync.threading.Thread") as mock_thread_cls:
             mock_thread = MagicMock()
             mock_thread_cls.return_value = mock_thread
-            fire_tmp_sync(resp, "tenant-99")
+            fire_tmp_sync(resp, identity)
 
         mock_thread_cls.assert_called_once_with(
             target=sync_packages_for_media_buy,

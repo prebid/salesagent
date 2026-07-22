@@ -471,7 +471,7 @@ async def a2a_messageid_compatibility_middleware(request: Request, call_next):
 app.include_router(api_v1_router)
 app.include_router(health_router)
 app.include_router(health_debug_router)
-# TMP Router discovery endpoint — internal network only, no auth.
+# TMP Router discovery endpoint — fail-closed API-key gated (TMP_DISCOVERY_API_KEYS).
 # GET /tenant/{tenant_id}/tmp-providers/discovery
 app.include_router(tmp_providers_router)
 

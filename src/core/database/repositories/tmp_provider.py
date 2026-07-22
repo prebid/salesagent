@@ -96,20 +96,6 @@ class TMPProviderRepository:
     # Write methods (flush, never commit)
     # ------------------------------------------------------------------
 
-    def create(self, provider: TMPProvider) -> TMPProvider:
-        """Add a new provider to the session.
-
-        Raises ValueError if the provider's tenant_id doesn't match.
-        """
-        if provider.tenant_id != self._tenant_id:
-            raise ValueError(
-                f"Tenant mismatch: repository is scoped to '{self._tenant_id}' "
-                f"but provider has tenant_id='{provider.tenant_id}'"
-            )
-        self._session.add(provider)
-        self._session.flush()
-        return provider
-
     def create_from_fields(self, **kwargs: object) -> TMPProvider:
         """Build and persist a new TMPProvider from validated field values.
 

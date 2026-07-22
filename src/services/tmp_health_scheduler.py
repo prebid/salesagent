@@ -36,7 +36,7 @@ import httpx
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.tmp_provider import TMPProviderRepository
 from src.core.database.repositories.uow import TMPProviderUoW
-from src.services._provider_http import provider_url
+from src.services._provider_http import provider_client_kwargs, provider_url
 from src.services._scheduler_base import IntervalScheduler, _parse_interval_env
 
 logger = logging.getLogger(__name__)
@@ -66,8 +66,7 @@ async def _check_provider_health(endpoint: str) -> str:
     health_url = provider_url(endpoint, "/health")
     try:
         async with httpx.AsyncClient(
-            timeout=HEALTH_CHECK_TIMEOUT_SECONDS,
-            follow_redirects=False,
+            **provider_client_kwargs(timeout=HEALTH_CHECK_TIMEOUT_SECONDS),
         ) as client:
             resp = await client.get(health_url)
         return "healthy" if resp.status_code == 200 else "unhealthy"

@@ -103,6 +103,16 @@ _SCHEDULER_REGISTRY = [
 ]
 
 
+# Explicit verb forms for _run_scheduler_fn log messages.
+# Using string templates like "%sing" / "%sed" produces "Stoping"/"stoped" for
+# verb="stop" — anyone grepping deploy logs for "Stopping"/"stopped" misses all
+# three schedulers. Pass the full forms instead.
+_SCHEDULER_VERB_FORMS: dict[str, tuple[str, str]] = {
+    "start": ("Starting", "started"),
+    "stop": ("Stopping", "stopped"),
+}
+
+
 async def _run_scheduler_fn(verb: str, name: str, module_path: str, fn_name: str) -> None:
     """Import and call a scheduler lifecycle function, logging success/failure.
 
@@ -110,18 +120,19 @@ async def _run_scheduler_fn(verb: str, name: str, module_path: str, fn_name: str
     pair — they differed only in the verb string used in log messages.
 
     Args:
-        verb:        Human-readable verb for log messages (e.g. ``"start"``).
+        verb:        Lifecycle verb — one of ``"start"`` or ``"stop"``.
         name:        Scheduler name (e.g. ``"TMP health"``).
         module_path: Dotted import path of the scheduler module.
         fn_name:     Name of the function to call on the module.
     """
     import importlib
 
-    logger.info("%sing %s scheduler...", verb.capitalize(), name)
+    present, past = _SCHEDULER_VERB_FORMS.get(verb, (verb.capitalize() + "ing", verb + "ed"))
+    logger.info("%s %s scheduler...", present, name)
     try:
         mod = importlib.import_module(module_path)
         await getattr(mod, fn_name)()
-        logger.info("✅ %s scheduler %sed", name, verb)
+        logger.info("✅ %s scheduler %s", name, past)
     except Exception as e:
         logger.error("Failed to %s %s scheduler: %s", verb, name, e, exc_info=True)
 
