@@ -90,7 +90,7 @@ markers was 14 duplicate file assignments across shards 1–4.
 | infra | `(transport or auth or … or agent) and not creative and not product and not media_buy and not delivery` |
 | other | negation of all 15 markers above |
 
-Each shard runs against a GitHub Actions service container (Postgres 15).
+Each shard runs against a GitHub Actions service container (Postgres 17).
 
 **Admin UI** and **BDD** jobs also require the Postgres service container plus
 `_postgres` (wait + migrate) — admin blueprint tests use the `integration_db` fixture.
