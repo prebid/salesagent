@@ -1556,18 +1556,38 @@ class TestUpdateMediaBuySchemaCompliance:
         # A schema-valid revision (>= 1) — as int OR integer-valued float —
         # names an unimplemented field: UNSUPPORTED_FEATURE (the pinned enum's
         # "a requested feature or field is not supported by this seller").
+        # Each branch pins the WIRE code, not just the class: swapping either
+        # raise to a parent class keeps isinstance true while the emitted code
+        # flips through ERROR_CODE_MAPPING, and the buyer sees the difference.
         for valid in (5, 7.0):
-            with pytest.raises(AdCPCapabilityNotSupportedError):
+            with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
                 _build_update_request(
                     media_buy_id="mb_1", paused=True, idempotency_key=_UPDATE_IDEMPOTENCY_KEY, revision=valid
                 )
+            assert exc_info.value.error_code == "UNSUPPORTED_FEATURE", (
+                f"revision={valid!r} is schema-valid but unimplemented, so the wire code must be "
+                f"UNSUPPORTED_FEATURE; got {exc_info.value.error_code!r}"
+            )
+            assert exc_info.value.field == "revision", (
+                "both revision branches must name the same offending field — a buyer reading "
+                "errors[0].field cannot get 'revision' for a malformed value and null for a "
+                f"valid-but-unsupported one; got field={exc_info.value.field!r}"
+            )
         # Schema-invalid spellings (below minimum:1, non-integer, string) stay
         # INVALID_REQUEST — matching BR-UC-003's below_min / wrong_type rows.
         for invalid in (0, -3, 7.5, "5"):
-            with pytest.raises(AdCPInvalidRequestError):
+            with pytest.raises(AdCPInvalidRequestError) as exc_info:
                 _build_update_request(
                     media_buy_id="mb_1", paused=True, idempotency_key=_UPDATE_IDEMPOTENCY_KEY, revision=invalid
                 )
+            assert exc_info.value.error_code == "INVALID_REQUEST", (
+                f"revision={invalid!r} is schema-invalid, so the wire code must be INVALID_REQUEST; "
+                f"got {exc_info.value.error_code!r}"
+            )
+            assert exc_info.value.field == "revision", (
+                f"revision={invalid!r} must name the offending field so the buyer can fix it; "
+                f"got field={exc_info.value.field!r}"
+            )
 
         # Explicit JSON null equals omission — proceeds, does not reject.
         req_null = _build_update_request(

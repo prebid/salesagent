@@ -170,6 +170,7 @@ class TransportResult:
         recovery: str | None = None,
         require_suggestion: bool = False,
         message_substr: str | None = None,
+        field: str | None = None,
     ) -> None:
         """Assert this result carries the AdCP two-layer wire error ``code``.
 
@@ -201,3 +202,10 @@ class TransportResult:
         if require_suggestion:
             suggestion = extract_wire_suggestion(envelope)
             assert suggestion, f"Expected a non-empty suggestion in the {code} wire envelope: {envelope}"
+        if field is not None:
+            # Delegates to the one home for the two-layer field pin — step
+            # modules that hand-rolled it had already drifted (one copy checked
+            # only errors[0], so a top-layer regression was invisible there).
+            from tests.helpers import assert_envelope_field
+
+            assert_envelope_field(envelope, field)

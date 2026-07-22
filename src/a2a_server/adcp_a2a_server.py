@@ -191,6 +191,37 @@ DISCOVERY_SKILLS = frozenset(
 _RAW_WIRE_PAYLOAD_SKILLS = frozenset({"create_media_buy"})
 
 
+def _json_safe_wire_params(parameters: dict) -> dict | None:
+    """The DataPart params reduced to their JSON form — the hash input.
+
+    A real A2A request arrives as a protobuf ``Struct``, so its params decode
+    to JSON primitives and this is a no-op. In-process callers can hand the
+    handler already-typed sub-objects (a ``FormatId`` inside a creative, say),
+    and RFC 8785 canonicalization raises on those — which would turn a
+    perfectly valid create into a boundary error. Normalizing each model to
+    ``model_dump(mode="json")`` yields exactly the JSON the same request would
+    have carried on the wire, so the in-process and over-the-wire hashes agree
+    instead of one of them crashing.
+    """
+
+    def to_json_form(value: Any) -> Any:
+        if isinstance(value, BaseModel):
+            return value.model_dump(mode="json")
+        raise TypeError(f"unhashable wire value of type {type(value).__name__}")
+
+    try:
+        return json.loads(json.dumps(parameters, default=to_json_form))
+    except (TypeError, ValueError):
+        # Not reducible to JSON, so it cannot be what a buyer sent on the wire.
+        # Fall back to model hashing rather than failing the request; the
+        # cross-transport wire matrix pins that real wire payloads take the
+        # branch above.
+        logger.debug("A2A params are not JSON-reducible; idempotency falls back to model hashing", exc_info=True)
+        # None, never {} — an empty dict would hash every non-reducible request
+        # to the SAME value, colliding unrelated buyers under one key.
+        return None
+
+
 def _internal_error_for(
     operation: str,
     exc: Exception,
@@ -1667,7 +1698,7 @@ class AdCPRequestHandler(RequestHandler):
         # table change flip an honest retry into a conflict mid-TTL. Without
         # this, create_media_buy falls back to model-dump hashing and A2A
         # computes a DIFFERENT equivalence key than MCP/REST for one request.
-        raw_wire_payload = dict(parameters)
+        raw_wire_payload = _json_safe_wire_params(parameters)
 
         # Version-negotiation parity with the MCP RequestCompatMiddleware:
         # reject an unsupported AdCP pin after the authentication guard and

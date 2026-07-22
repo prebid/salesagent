@@ -49,6 +49,21 @@ def assert_no_raw_validation_leak(message: str) -> None:
     assert "errors.pydantic.dev" not in message, f"Pydantic documentation URL leaked into message: {message!r}"
 
 
+def assert_envelope_field(envelope: dict, field: str) -> None:
+    """Assert BOTH envelope layers name ``field`` as the offending field.
+
+    The buyer's remediation pointer lives in two places — ``adcp_error.field``
+    and ``errors[0].field`` — and a boundary can drop one while keeping the
+    other. Three step modules hand-rolled this check and one of the copies
+    omitted the top layer, so a top-layer regression was invisible wherever
+    that copy was used. One home, so the copies cannot drift again.
+    """
+    errors_field = (envelope.get("errors") or [{}])[0].get("field")
+    assert errors_field == field, f"errors[0].field={errors_field!r}, expected {field!r}"
+    adcp_field = (envelope.get("adcp_error") or {}).get("field")
+    assert adcp_field == field, f"adcp_error.field={adcp_field!r}, expected {field!r}"
+
+
 def assert_envelope_shape(
     target: Any,
     code: str,

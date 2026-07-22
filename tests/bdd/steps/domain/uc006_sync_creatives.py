@@ -482,12 +482,16 @@ def then_wire_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
     """
     result = ctx.get("result")
     assert result is not None, "Expected the transport dispatcher result"
-    result.assert_wire_error(error_code, require_suggestion=True, message_substr="idempotency_key")
-
-    envelope = result.wire_error_envelope
-    assert isinstance(envelope, dict), "No canonical wire error envelope captured"
-    field = envelope["errors"][0].get("field")
-    assert field == "idempotency_key", f"errors[0].field={field!r}, expected 'idempotency_key'"
+    # `field=` pins BOTH envelope layers. This step used to hand-roll the check
+    # and pinned only errors[0], so a boundary dropping adcp_error.field stayed
+    # green here while the UC-002 copy caught it — the drift between the
+    # hand-rolled copies was the hole, so the assertion now has one home.
+    result.assert_wire_error(
+        error_code,
+        require_suggestion=True,
+        message_substr="idempotency_key",
+        field="idempotency_key",
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════

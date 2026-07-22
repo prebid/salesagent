@@ -137,9 +137,24 @@ class TestMissingIdempotencyKeyParity:
                 idempotency_key=OMIT_IDEMPOTENCY_KEY,
             )
 
+        from tests.helpers import assert_envelope_shape
+
         assert result.is_error, f"{transport.value}: missing idempotency_key unexpectedly succeeded"
         envelope = result.wire_error_envelope
         assert envelope is not None, f"{transport.value}: missing-key rejection must carry the wire envelope"
+
+        # Lead with the shared helper: it pins `recovery` (a REQUIRED kwarg, so
+        # the buyer's retry semantics cannot drift silently) AND the two-layer
+        # invariant that adcp_error.code == errors[0].code. Asserting only on
+        # errors[0] left a boundary free to emit a mismatched top-layer code,
+        # or to flip recovery to terminal, with this matrix still green.
+        assert_envelope_shape(
+            envelope,
+            "VALIDATION_ERROR",
+            recovery="correctable",
+            message_substr="idempotency_key",
+        )
+
         error = envelope["errors"][0]
         assert error.get("message") == self.CANONICAL_MESSAGE, (
             f"{transport.value}: message diverged: {error.get('message')!r}"

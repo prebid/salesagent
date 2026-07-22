@@ -209,6 +209,12 @@ def validate_update_media_buy_protocol_fields(
     if _revision_as_positive_int(revision) is not None:
         raise AdCPCapabilityNotSupportedError(
             "This seller does not support optimistic-concurrency control via `revision`; the update was not applied.",
+            # Same offending field as the INVALID_REQUEST branch below, so
+            # errors[0].field points at `revision` either way. Omitting it here
+            # gave the buyer a remediation pointer for a malformed value but a
+            # null one for a valid-but-unsupported value — same field, same
+            # request, two different answers.
+            field="revision",
             suggestion=(
                 "Retry the update without a `revision` field, or re-read the media buy's current state before updating."
             ),

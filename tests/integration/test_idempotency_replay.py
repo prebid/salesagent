@@ -123,7 +123,6 @@ class TestImplReplaysCachedSuccess:
         matters is it is neither a replay, a conflict, nor a raw ValidationError).
         """
         from pydantic import BaseModel
-        from pydantic import ValidationError as PydanticValidationError
 
         from src.core.exceptions import AdCPError
         from src.core.idempotency_canonical import canonical_request_hash
@@ -152,8 +151,23 @@ class TestImplReplaysCachedSuccess:
         with pytest.raises(AdCPError) as exc_info:
             await _create_media_buy_impl(req=_make_request(idem_key), identity=_identity(tenant_id, principal_id))
 
-        assert not isinstance(exc_info.value, PydanticValidationError)
-        assert exc_info.value.error_code != "IDEMPOTENCY_CONFLICT"
+        # A MISS means the probe RE-EXECUTED, so the request must fail the way a
+        # fresh un-cached call fails: on the downstream setup this bare request
+        # never satisfies. Pinning that specific code is what distinguishes a
+        # miss from the fail-closed post-race path, which raises
+        # SERVICE_UNAVAILABLE for this same input shape.
+        #
+        # The previous pair of assertions could not fail. `pytest.raises(AdCPError)`
+        # already excludes PydanticValidationError (it is not in AdCPError's MRO),
+        # and SERVICE_UNAVAILABLE satisfies "!= IDEMPOTENCY_CONFLICT" — so
+        # inverting production from `return None` (miss) to a fail-closed raise
+        # left this test, and all 42 in the replay/wire-matrix/race trio, green.
+        assert exc_info.value.error_code == "BUDGET_TOO_LOW", (
+            "a drifted cache row must be treated as a MISS and re-execute — the bare request then "
+            "fails downstream in budget validation, which is the proof it ran. Got "
+            f"{exc_info.value.error_code!r}: the probe took a different branch "
+            "(SERVICE_UNAVAILABLE would mean it fail-closed instead of re-executing)"
+        )
 
     def test_unrelated_key_does_not_replay(self, integration_db):
         """A different idempotency_key on the same principal executes fresh — and caches itself."""

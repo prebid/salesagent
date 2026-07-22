@@ -1897,11 +1897,29 @@ def then_response_includes_previously_created(ctx: dict, field: str) -> None:
 
 @then(parsers.parse('the error should reference the missing "{field}" field'))
 def then_error_references_missing_field(ctx: dict, field: str) -> None:
-    """Assert the validation error names the missing required field.
+    """Assert the wire envelope names the missing required field.
 
-    The error message (or Pydantic field locations) must mention ``field`` so
-    the buyer knows which required field was omitted.
+    Wire-first, matching its three siblings (uc003 / uc006 / uc011) and the
+    neighbour below. It previously read the RECONSTRUCTED ``ctx["error"]`` and
+    substring-matched the message, which cannot distinguish the buyer's
+    remediation pointer from an incidental mention: the canonical missing-key
+    message contains "idempotency_key" regardless of what ``field`` the
+    envelope carries, so injecting a wrong ``field`` into the shared factory
+    reddened the three siblings and left this one green.
     """
+    result = ctx.get("result")
+    if result is not None and result.wire_error_envelope is not None:
+        result.assert_wire_error(
+            "VALIDATION_ERROR",
+            recovery="correctable",
+            message_substr=field,
+            field=field,
+        )
+        return
+
+    # No wire was captured (IMPL altitude, or a rejection raised before any
+    # transport). Fall back to the reconstructed error rather than failing the
+    # scenario, but keep the pin as tight as the layer allows.
     error = ctx.get("error")
     assert error is not None, f"No error in ctx — expected a validation error naming the missing '{field}' field"
 
@@ -1914,8 +1932,10 @@ def then_error_references_missing_field(ctx: dict, field: str) -> None:
         )
         return
 
-    message = _get_error_message_for_step(error)
-    assert field in message, f"Validation error does not reference the missing '{field}' field. Message: {message!r}"
+    assert getattr(error, "field", None) == field, (
+        f"the rejection must name '{field}' as the offending field so the buyer can fix it; "
+        f"got field={getattr(error, 'field', None)!r}"
+    )
 
 
 @then(parsers.parse('the error should reference idempotency_key constraint "{violation}"'))
@@ -1928,17 +1948,12 @@ def then_error_references_idempotency_key_constraint(ctx: dict, violation: str) 
         recovery="correctable",
         require_suggestion=True,
         message_substr="idempotency_key",
+        field="idempotency_key",
     )
 
     envelope = result.wire_error_envelope
     assert isinstance(envelope, dict), "No canonical wire error envelope captured"
     error = envelope["errors"][0]
-    assert error.get("field") == "idempotency_key", (
-        f"errors[0].field={error.get('field')!r}, expected 'idempotency_key'"
-    )
-    assert envelope["adcp_error"].get("field") == "idempotency_key", (
-        f"adcp_error.field={envelope['adcp_error'].get('field')!r}, expected 'idempotency_key'"
-    )
 
     expected_signals = {
         "minLength 16 violated": "at least 16 characters",

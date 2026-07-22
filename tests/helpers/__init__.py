@@ -77,6 +77,7 @@ from tests.helpers.adcp_factories import (
     create_test_property_dict,
 )
 from tests.helpers.envelope_assertions import (
+    assert_envelope_field,
     assert_envelope_shape,
     assert_no_raw_validation_leak,
     error_envelope_for_raw_a2a_env,
@@ -92,6 +93,7 @@ __all__ = [
     # Auth helpers
     "assert_resolve_auth_dep_passes_token",
     # Envelope assertions
+    "assert_envelope_field",
     "assert_envelope_shape",
     "assert_no_raw_validation_leak",
     "error_envelope_for_raw_a2a_env",
