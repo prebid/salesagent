@@ -1043,7 +1043,7 @@ class AdCPRequestHandler(RequestHandler):
 
         What a client sees TODAY is still ``-32603``, not the spec's ``-32001``:
         this app builds its A2A routes with ``enable_v0_3_compat=True``
-        (``src/app.py:302``), so requests dispatch through
+        (``src/app.py:306``), so requests dispatch through
         ``a2a.compat.v0_3.jsonrpc_adapter``, whose ``handle_request`` ends in a
         bare ``except Exception -> CoreInternalError`` with no ``A2AError -> code``
         mapping — the mapping the SDK's own main dispatcher performs. Returning
@@ -1052,9 +1052,15 @@ class AdCPRequestHandler(RequestHandler):
         will surface ``-32001`` the moment that gap closes; the xfail'd
         live-server test pins the current reality.
 
-        The requested id rides both the message and structured ``data`` so clients
-        can read it programmatically. Shared by ``on_get_task`` and
-        ``on_cancel_task`` so both surface the same error.
+        The requested id is put on both the message and structured ``data``.
+        Only the message reaches a client today: the same compat adapter that
+        flattens the code to ``-32603`` rebuilds the error as
+        ``CoreInternalError(message=str(e))``, which drops ``data`` — driving
+        the real route returns ``data: null``. Populating it is still correct
+        and becomes readable when #1670 closes, the same as the code.
+
+        Shared by ``on_get_task`` and ``on_cancel_task`` so both surface the
+        same error.
         """
         task = self.tasks.get(task_id)
         if task is None:
