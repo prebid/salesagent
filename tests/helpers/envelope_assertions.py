@@ -25,6 +25,62 @@ def assert_no_raw_validation_leak(message: str) -> None:
     assert "errors.pydantic.dev" not in message, f"Pydantic documentation URL leaked into message: {message!r}"
 
 
+def assert_no_tenant_disclosure(target: Any, tenant_id: str) -> None:
+    """Assert an auth rejection discloses *tenant_id* nowhere the buyer can see it.
+
+    The tenant is resolved from request headers BEFORE the token is validated, so
+    echoing it back to a caller whose token was rejected hands an unauthenticated
+    party an internal identifier (the tenant UUID in a host-routed deploy). This
+    is the single assertion for that contract — four tests grade it (unit,
+    integration x2, the A2A wire pin), and a fourth hand-rolled ``json.dumps``
+    check is exactly how they would drift apart.
+
+    Args:
+        target: What the buyer receives. Accepts either a two-layer envelope
+            ``dict`` (the wire body) or an ``Exception`` (an in-process guard
+            that has no wire; the envelope is built from it here so the
+            assertion covers the same surface either way).
+        tenant_id: The internal tenant identifier that must not appear. Use a
+            UUID: a slug can collide with unrelated envelope text and make the
+            check pass or fail for the wrong reason.
+
+    Checks BOTH the rendered message and the FULL serialized envelope — a
+    message-only check passes while the id sits in ``details``/``context``.
+    """
+    import json
+
+    if isinstance(target, BaseException):
+        from src.core.exceptions import build_two_layer_error_envelope
+
+        rendered = str(target)
+        envelope = build_two_layer_error_envelope(target)
+    else:
+        envelope = target.envelope if hasattr(target, "envelope") else target
+        assert isinstance(envelope, dict), f"envelope target must resolve to dict, got {type(envelope).__name__}"
+        rendered = str((envelope.get("errors") or [{}])[0].get("message", ""))
+
+    assert tenant_id not in rendered, f"auth error message disclosed the tenant id {tenant_id!r}: {rendered!r}"
+
+    serialized = json.dumps(envelope, default=str)
+    if tenant_id in serialized:
+        leaking = [key for key, value in _flatten_envelope(envelope) if tenant_id in json.dumps(value, default=str)]
+        raise AssertionError(
+            f"tenant id {tenant_id!r} leaked into the error envelope (field(s): {leaking or ['<unknown>']}): {envelope}"
+        )
+
+
+def _flatten_envelope(envelope: dict, prefix: str = "") -> list[tuple[str, Any]]:
+    """Yield (dotted-path, value) leaf pairs so a leak names its own field."""
+    pairs: list[tuple[str, Any]] = []
+    for key, value in envelope.items():
+        path = f"{prefix}{key}"
+        if isinstance(value, dict):
+            pairs.extend(_flatten_envelope(value, prefix=f"{path}."))
+        else:
+            pairs.append((path, value))
+    return pairs
+
+
 def assert_envelope_shape(
     target: Any,
     code: str,

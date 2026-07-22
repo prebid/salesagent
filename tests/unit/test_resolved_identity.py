@@ -164,7 +164,15 @@ class TestResolveIdentity:
         the (unauthenticated) caller — the tenant is resolved from headers before
         the token is validated, so leaking it discloses an internal identifier
         (the tenant UUID in a host-routed deploy). The tenant is still captured
-        server-side (the compensating control), so add the WARNING assertion too."""
+        server-side (the compensating control), so add the WARNING assertion too.
+
+        FAST GUARD, not the wire pin. This mocks the tenant/principal lookups and
+        grades the raised exception in-process; non-disclosure is a contract about
+        what the BUYER receives, and that is pinned on the real A2A wire by
+        test_auth_suggestion_parity.py::TestInvalidTokenA2ANoDisclosure (which
+        asserts through ``assert_wire_error(..., require_real_wire=True)`` so a
+        rebuilt envelope cannot stand in for the wire). This test stays because it
+        is the only one that can assert the compensating log line cheaply."""
         import logging
 
         from src.core.exceptions import INVALID_TOKEN_MESSAGE, AdCPAuthenticationError

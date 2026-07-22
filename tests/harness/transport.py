@@ -123,6 +123,15 @@ class TransportResult:
             verify the envelope-builder contract, NOT the wire shape — a
             regression in the production boundary translator would not be
             caught here. Use REST/MCP/A2A for wire-shape regressions.
+        wire_error_envelope_synthesized: ``True`` when the A2A dispatcher could
+            not find real wire bytes and REBUILT ``wire_error_envelope`` from the
+            reconstructed exception. That happens for an ``A2AError`` raised with
+            no ``data``: the buyer receives a bare protocol error carrying no
+            AdCP envelope, yet ``wire_error_envelope`` is populated anyway, so a
+            wire assertion can pass against an envelope nobody was ever sent.
+            Always ``False`` on REST/MCP (they read real bytes) and on success.
+            Pass ``require_real_wire=True`` to ``assert_wire_error`` to refuse
+            the rebuilt envelope.
     """
 
     payload: BaseModel | None = None
@@ -132,6 +141,7 @@ class TransportResult:
     wire_response: dict[str, Any] | None = None
     wire_error_envelope: dict[str, Any] | None = None
     synthesized_error_envelope: dict[str, Any] | None = None
+    wire_error_envelope_synthesized: bool = False
 
     @property
     def is_success(self) -> bool:
@@ -148,6 +158,7 @@ class TransportResult:
         recovery: str | None = None,
         require_suggestion: bool = False,
         message_substr: str | None = None,
+        require_real_wire: bool = False,
     ) -> None:
         """Assert this result carries the AdCP two-layer wire error ``code``.
 
@@ -158,6 +169,16 @@ class TransportResult:
         non-vacuous without per-scenario duplication. This is the single
         harness-provided way to verify an error on the wire — step definitions
         must not hand-roll envelope parsing.
+
+        Args:
+            require_real_wire: Refuse an envelope the A2A dispatcher REBUILT from
+                the reconstructed exception (see
+                ``wire_error_envelope_synthesized``). Use it when the point of
+                the test is what the buyer actually receives — a security or
+                disclosure contract — rather than the envelope shape alone.
+                Without it, an ``A2AError`` raised with no ``data`` still
+                produces a passing wire assertion even though the buyer got a
+                bare protocol error with no AdCP envelope.
         """
         from tests.helpers import assert_envelope_shape
 
@@ -174,6 +195,11 @@ class TransportResult:
             f"Expected a wire rejection with {code}, but no wire_error_envelope was captured "
             f"(is_error={self.is_error}, payload={self.payload!r}). The operation either "
             "succeeded or errored before reaching a transport."
+        )
+        assert not (require_real_wire and self.wire_error_envelope_synthesized), (
+            f"Expected {code} on the REAL wire, but the envelope was rebuilt from the reconstructed "
+            f"exception: the transport raised with no envelope attached, so the buyer received a bare "
+            f"protocol error carrying no AdCP envelope at all. Rebuilt envelope: {envelope}"
         )
         assert_envelope_shape(envelope, code, recovery=expected_recovery, message_substr=message_substr)
         if require_suggestion:

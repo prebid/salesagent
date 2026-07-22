@@ -283,6 +283,41 @@ def then_error_code(ctx: dict, code: str) -> None:
     assert actual == code, f"Expected error code '{code}', got '{actual}'"
 
 
+@then(parsers.parse('the rejection reaches the buyer as a real "{code}" wire envelope'))
+def then_real_wire_rejection(ctx: dict, code: str) -> None:
+    """Assert *code* on the REAL wire, refusing a rebuilt envelope.
+
+    Stricter than ``the result should be error "<CODE>"``: it passes
+    ``require_real_wire=True``, so an A2A rejection raised with no envelope
+    attached fails here instead of quietly grading an envelope the harness
+    rebuilt from the reconstructed exception. Use it when the point of the
+    scenario is what the buyer actually receives — a disclosure or security
+    contract — rather than the error taxonomy.
+    """
+    result = ctx.get("result")
+    assert result is not None, "No TransportResult in ctx — the scenario did not dispatch through a wire transport"
+    assert result.is_error, f"Expected a {code} rejection, got a success response: {result.payload!r}"
+    result.assert_wire_error(code, require_suggestion=True, require_real_wire=True)
+
+
+@then("the error discloses no tenant id")
+def then_error_discloses_no_tenant(ctx: dict) -> None:
+    """Assert the tenant id the Given step recorded appears nowhere in the envelope.
+
+    Routed through the shared ``assert_no_tenant_disclosure`` so this scenario and
+    the three Python tests that grade the same contract cannot drift apart.
+    """
+    from tests.helpers import assert_no_tenant_disclosure
+
+    tenant_id = ctx.get("undisclosed_tenant_id")
+    assert tenant_id, "No ctx['undisclosed_tenant_id'] — the Given step must record the tenant under test"
+    result = ctx.get("result")
+    assert result is not None and result.wire_error_envelope is not None, (
+        "No wire error envelope to inspect; non-disclosure must be graded on the wire"
+    )
+    assert_no_tenant_disclosure(result.wire_error_envelope, tenant_id)
+
+
 # ── Error message content (generic) ───────────────────────────────────
 
 

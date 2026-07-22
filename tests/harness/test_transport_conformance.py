@@ -47,3 +47,41 @@ class TestExtractWireSuggestionStrict:
             }
         }
         assert extract_wire_suggestion(envelope) is None
+
+
+class TestAssertWireErrorRequiresRealWire:
+    """``require_real_wire`` refuses an envelope the A2A dispatcher rebuilt.
+
+    The A2A dispatcher falls back to ``build_two_layer_error_envelope`` when the
+    transport raised with no envelope attached, and that rebuild lands on
+    ``wire_error_envelope`` looking exactly like real wire bytes. Tests whose
+    point is what the buyer RECEIVES must be able to refuse it, so the flag has
+    to actually bite — otherwise it is decoration.
+    """
+
+    ENVELOPE = {
+        "adcp_error": {"code": "AUTH_REQUIRED", "message": "x", "recovery": "correctable"},
+        "errors": [{"code": "AUTH_REQUIRED", "message": "x", "recovery": "correctable"}],
+    }
+
+    def _result(self, *, synthesized: bool):
+        from tests.harness.transport import TransportResult
+
+        return TransportResult(
+            error=RuntimeError("rejected"),
+            wire_error_envelope=self.ENVELOPE,
+            wire_error_envelope_synthesized=synthesized,
+        )
+
+    def test_real_wire_envelope_passes(self):
+        self._result(synthesized=False).assert_wire_error("AUTH_REQUIRED", require_real_wire=True)
+
+    def test_rebuilt_envelope_is_rejected(self):
+        import pytest
+
+        with pytest.raises(AssertionError, match="rebuilt from the reconstructed"):
+            self._result(synthesized=True).assert_wire_error("AUTH_REQUIRED", require_real_wire=True)
+
+    def test_rebuilt_envelope_still_passes_without_the_flag(self):
+        """Default stays permissive: existing A2A error tests are unaffected."""
+        self._result(synthesized=True).assert_wire_error("AUTH_REQUIRED")

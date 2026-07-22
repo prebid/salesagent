@@ -32,3 +32,33 @@ Feature: BR-UC-002 Account access scoping
     And the Buyer Agent's token resolves no principal
     When the Buyer Agent sends the create_media_buy request
     Then the result should be error "AUTH_REQUIRED"
+
+  # A present-but-invalid token is rejected with a GENERIC message: the tenant id
+  # is resolved from the request headers BEFORE the token is validated, so echoing
+  # it back hands an unauthenticated caller an internal identifier (the tenant
+  # UUID in a host-routed deploy). Non-disclosure is a contract about what the
+  # BUYER receives, so it is graded on the real wire envelope here, not on an
+  # envelope rebuilt in-process from a caught exception.
+  #
+  # A2A-only, and deliberately not dressed up as three-transport coverage. Each
+  # claim below was checked against the harness, not assumed:
+  #   - REST: the in-process harness overrides `_require_auth_dep` with the
+  #     injected identity (tests/harness/_base.py::_configure_rest_auth_override),
+  #     so the invalid-token raise site is never reached — the request proceeds
+  #     as authenticated. A REST variant would grade nothing.
+  #   - MCP: the rejection DOES happen, but it reaches the buyer as a bare
+  #     `ToolError` with no two-layer envelope at all (wire_error_envelope is
+  #     None), because MCPAuthMiddleware raises outside the tool boundary that
+  #     builds the envelope. There is nothing to assert non-disclosure ON. That
+  #     missing MCP auth envelope is a real production gap and is filed as a
+  #     follow-up; it is NOT covered here.
+  # A2A is the one transport whose full auth chain runs in-process
+  # (_get_auth_token -> _resolve_a2a_identity -> resolve_identity), so the
+  # scenario is tagged @a2a and dispatches explicitly.
+  @T-UC-002-invalid-token-no-disclosure @account @error @a2a
+  Scenario: An invalid token is rejected without disclosing the tenant id
+    Given a valid create_media_buy request with account natural key brand "leak-brand.com" operator "leak-agency.com"
+    And the Buyer Agent presents an invalid authentication token
+    When the Buyer Agent sends the create_media_buy request via A2A
+    Then the rejection reaches the buyer as a real "AUTH_REQUIRED" wire envelope
+    And the error discloses no tenant id

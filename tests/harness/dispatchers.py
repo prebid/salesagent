@@ -70,6 +70,27 @@ def _wire_envelope_from_exception(exc: Exception) -> dict[str, Any] | None:
     return _envelope_from_adcp_error(exc)
 
 
+def _a2a_wire_envelope_was_synthesized(exc: Exception) -> bool:
+    """True when ``_wire_envelope_from_exception`` had to FALL BACK for *exc*.
+
+    The A2A boundary has two rejection shapes. A failed Task carries the
+    envelope in its artifact DataPart, and a JSON-RPC ``A2AError`` carries it in
+    ``data`` — both are real wire bytes and both get stashed on the reconstructed
+    exception as ``_wire_error_envelope``. But an ``A2AError`` raised with NO
+    ``data`` reaches the buyer as a bare protocol error with no AdCP envelope at
+    all, and the fallback above quietly rebuilds one from the reconstructed
+    exception. That rebuild is indistinguishable from the real thing on
+    ``wire_error_envelope``, so a test can assert a wire contract the buyer never
+    actually receives — a synthesized envelope masquerading as the wire.
+
+    Surfacing the distinction lets a test opt into proving its envelope is real
+    (``assert_wire_error(..., require_real_wire=True)``). The fallback itself is
+    left in place: existing A2A error tests depend on it, and narrowing it is a
+    separate change.
+    """
+    return not isinstance(getattr(exc, "_wire_error_envelope", None), dict)
+
+
 def _envelope_from_mcp_error(exc: Exception) -> dict[str, Any] | None:
     """Extract the wire envelope from an MCP ToolError's JSON string."""
     from fastmcp.exceptions import ToolError
@@ -127,6 +148,7 @@ class A2ADispatcher:
             return TransportResult(
                 error=exc,
                 wire_error_envelope=_wire_envelope_from_exception(exc),
+                wire_error_envelope_synthesized=_a2a_wire_envelope_was_synthesized(exc),
             )
         # Real A2A wire: the artifact DataPart dict stashed by _run_a2a_handler
         # (declared on BaseTestEnv, reset per call_via — read directly so a

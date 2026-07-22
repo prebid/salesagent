@@ -261,6 +261,34 @@ def given_unauthenticated_principal(ctx: dict) -> None:
     )
 
 
+@given("the Buyer Agent presents an invalid authentication token")
+def given_invalid_auth_token(ctx: dict) -> None:
+    """Dispatch with a token that resolves to no principal — a PRESENT but invalid token.
+
+    Distinct from ``the Buyer Agent's token resolves no principal`` (which forces
+    an already-resolved identity with ``principal_id=None``) and from the no-auth
+    steps (which send no token at all). Carrying a real-looking token is what
+    routes the request down the production invalid-token branch: ``resolve_identity``
+    detects the tenant from the headers FIRST, then fails to resolve the token, and
+    rejects. The tenant it had already detected is the identifier that must not
+    come back to the caller.
+
+    ``undisclosed_tenant_id`` is what the Then step asserts is absent. It is read
+    off the harness rather than written as a literal so it tracks the env's real
+    per-run tenant id and cannot silently stop matching.
+    """
+    from tests.factories.principal import PrincipalFactory
+
+    env = ctx["env"]
+    ctx["undisclosed_tenant_id"] = env._tenant_id
+    ctx["dispatch_identity"] = PrincipalFactory.make_identity(
+        principal_id=env._principal_id,
+        tenant_id=env._tenant_id,
+        auth_token="not-a-real-token",
+        protocol="a2a",
+    )
+
+
 @given(parsers.parse('the account "{account_id}" exists and is active'))
 def given_account_exists_active(ctx: dict, account_id: str) -> None:
     """Create an active account with agent access."""
@@ -756,6 +784,24 @@ def when_send_create_media_buy(ctx: dict) -> None:
         _dispatch_raw_create(ctx)
     else:
         _dispatch_full_create(ctx)
+
+
+@when("the Buyer Agent sends the create_media_buy request via A2A")
+def when_send_create_media_buy_via_a2a(ctx: dict) -> None:
+    """Same dispatch as the parametrized step, pinned to the A2A transport.
+
+    Transport-specific scenarios (@a2a) are NOT multiplied by
+    ``pytest_generate_tests``, so ``ctx["transport"]`` arrives unset and the
+    explicit When step names the wire — the ``when_request.py`` precedent for
+    "... via A2A" steps. The scenario is a2a-only for the reason spelled out in
+    the feature file: it is the one transport whose real auth chain runs
+    in-process, so it is the only one where an invalid token produces a wire
+    envelope to grade.
+    """
+    from tests.harness.transport import Transport
+
+    ctx["transport"] = Transport.A2A
+    when_send_create_media_buy(ctx)
 
 
 def _dispatch_full_create(ctx: dict) -> None:

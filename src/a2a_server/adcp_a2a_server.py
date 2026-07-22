@@ -281,7 +281,14 @@ class AdCPRequestHandler(RequestHandler):
                 testing_context=testing_context,
             )
         except AdCPAuthenticationError as e:
-            raise InvalidRequestError(message=str(e)) from e
+            # Stay a JSON-RPC InvalidRequestError (protocol-level rejection), but
+            # carry the two-layer envelope in ``data`` so the buyer-facing
+            # AUTH_REQUIRED code + suggestion reach the A2A wire — the same shape
+            # the missing-token gate in on_message_send already emits. Without
+            # ``data`` the invalid-token rejection reaches the wire as a bare
+            # A2AError with no envelope, so nothing downstream (buyer or test)
+            # can read the wire error contract for this path.
+            raise InvalidRequestError(message=str(e), data=build_two_layer_error_envelope(e)) from e
 
         if require_valid_token:
             if not identity.principal_id:
