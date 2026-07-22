@@ -28,6 +28,15 @@ logger = logging.getLogger(__name__)
 
 console = Console()
 
+
+def _log_webhook_send_outcome(config_url: str, sent: bool) -> None:
+    """Log webhook delivery result; never treat ``False`` as success (#1578)."""
+    if sent:
+        console.print(f"[green]✅ Webhook sent successfully for {config_url}[/green]")
+    else:
+        console.print(f"[red]❌ Webhook not delivered for {config_url} (send_notification returned False)[/red]")
+
+
 # Fire-and-forget webhook tasks are pinned against asyncio's weak-ref GC via
 # the shared src.core.async_utils.pin_task helper (single source of truth;
 # see its docstring). (Leak triage #6 from the production OOM-cycle
@@ -908,14 +917,7 @@ class ContextManager(DatabaseManager):
                                 # docstring), so this log-and-swallow can't hold
                                 # the strong ref past completion.
                                 try:
-                                    sent = t.result()
-                                    if sent:
-                                        console.print(f"[green]✅ Webhook sent successfully for {config_url}[/green]")
-                                    else:
-                                        console.print(
-                                            f"[red]❌ Webhook not delivered for {config_url} "
-                                            f"(send_notification returned False)[/red]"
-                                        )
+                                    _log_webhook_send_outcome(config_url, t.result())
                                 except Exception as e:
                                     console.print(f"[red]❌ Webhook failed for {config_url}: {str(e)}[/red]")
 
@@ -931,16 +933,7 @@ class ContextManager(DatabaseManager):
                                     metadata=metadata,
                                 )
                             )
-                            if sent:
-                                console.print(
-                                    f"[green]✅ Webhook sent successfully for {push_notification_config.url}[/green]"
-                                )
-                            else:
-                                console.print(
-                                    f"[red]❌ Webhook not delivered for "
-                                    f"{push_notification_config.url} "
-                                    f"(send_notification returned False)[/red]"
-                                )
+                            _log_webhook_send_outcome(push_notification_config.url, sent)
 
                     except requests.exceptions.Timeout:
                         console.print(f"[red]❌ Webhook timeout for {push_notification_config.url}[/red]")
