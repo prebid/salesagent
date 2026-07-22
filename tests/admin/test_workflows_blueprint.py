@@ -553,3 +553,36 @@ class TestOperationsDecisionOwnership:
         )
         assert r.status_code == 302
         assert _buy_status(test_tenant, mbid) == "pending_creatives"
+
+
+class TestAdapterFailedBodyGeneric:
+    """The ADAPTER_FAILED approve response carries a generic error body.
+
+    Red oracle for the information-exposure discipline: reverting the route to
+    ``jsonify({"error": error_msg})`` puts the adapter's raw failure detail
+    (which may embed internal state) into the response and turns this red.
+    """
+
+    def test_workflow_approve_adapter_failed_body_is_generic(self, client, test_tenant, factory_session):
+        from unittest.mock import patch
+
+        from src.admin.services.media_buy_completion import FinalizeOutcome
+
+        secret = "SECRET_ADAPTER_DETAIL_abc123"
+        _auth_session(client, test_tenant)
+        mbid, context_id, step_id = _setup_mapped_media_buy_step(factory_session, test_tenant)
+
+        with patch(
+            "src.admin.blueprints.workflows.finalize_pending_media_buy_approval",
+            return_value=(FinalizeOutcome.ADAPTER_FAILED, secret),
+        ):
+            response = client.post(
+                f"/tenant/{test_tenant}/workflows/{context_id}/steps/{step_id}/approve",
+                content_type="application/json",
+                json={},
+            )
+
+        assert response.status_code == 500
+        body = response.get_json()
+        assert body["error"] == "Media buy creation failed — see server logs for details"
+        assert secret not in response.get_data(as_text=True)

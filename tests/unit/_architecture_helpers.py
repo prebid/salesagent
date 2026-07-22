@@ -217,10 +217,22 @@ def extract_select_calls(
         ``has_tenant_filter`` is True when "tenant_id" appears in the source
         lines from the select() call through the next ten lines (the full
         statement can span multiple lines).
+
+    Import aliases are resolved: ``from models import CreativeAssignment as
+    DBAssignment`` + ``select(DBAssignment)`` reports model
+    ``CreativeAssignment`` — otherwise a file's own alias convention would
+    silently evade every predicate keyed on the real model name.
     """
     source_text = source_path.read_text()
     tree = ast.parse(source_text)
     lines = source_text.splitlines()
+
+    alias_map: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for import_alias in node.names:
+                if import_alias.asname:
+                    alias_map[import_alias.asname] = import_alias.name
 
     target_nodes: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
     for node in ast.walk(tree):
@@ -238,6 +250,8 @@ def extract_select_calls(
     for func_node in target_nodes:
         for call in iter_call_expressions(func_node):
             model_name = select_call_model_name(call)
+            if model_name:
+                model_name = alias_map.get(model_name, model_name)
             if not model_name or (model_predicate is not None and not model_predicate(model_name)):
                 continue
             stmt_text = "\n".join(lines[call.lineno - 1 : call.lineno + 10])

@@ -1129,7 +1129,7 @@ class TestCreateMediaBuyStatusDetermination:
         attach creatives via sync_creatives". (The shorter paraphrase "awaiting
         creative assets" is from create-media-buy-response.json's
         media_buy_status description, not the enum file.)
-        https://github.com/adcontextprotocol/adcp/blob/main/schemas/enums/media-buy-status.json
+        https://github.com/adcontextprotocol/adcp/blob/main/dist/schemas/3.1.1/enums/media-buy-status.json
         Covers: UC-002-MAIN-21
         """
         from src.core.tools.media_buy_create import _determine_media_buy_status

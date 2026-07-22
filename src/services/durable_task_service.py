@@ -35,15 +35,19 @@ class DurableTaskOutcome(NamedTuple):
     response_data: dict[str, Any] | None
 
 
-def resolve_durable_task_outcome(tenant_id: str, task_id: str) -> DurableTaskOutcome | None:
+def resolve_durable_task_outcome(
+    tenant_id: str, task_id: str, principal_id: str | None = None
+) -> DurableTaskOutcome | None:
     """Resolve the persisted outcome for ``task_id`` within ``tenant_id``.
 
     Returns ``None`` when no workflow step stored this transport task id (the
     id is unknown, or belongs to another tenant — the tenant-scoped repository
-    lookup cannot see it).
+    lookup cannot see it). Pass the polling buyer's ``principal_id`` so a
+    same-tenant sibling buyer cannot read another principal's buy outcome on
+    task-id knowledge alone.
     """
     with get_db_session() as session:
-        step = WorkflowRepository(session, tenant_id).get_by_external_task_id(task_id)
+        step = WorkflowRepository(session, tenant_id).get_by_external_task_id(task_id, principal_id=principal_id)
         if step is None:
             return None
         return DurableTaskOutcome(

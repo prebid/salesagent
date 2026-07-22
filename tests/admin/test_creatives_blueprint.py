@@ -458,3 +458,54 @@ class TestCreativeRejection:
         assert response.status_code == 400
         data = response.get_json()
         assert "rejection_reason" in data.get("error", "").lower() or "required" in data.get("error", "").lower()
+
+
+class TestErrorBodiesGeneric:
+    """The 500 handlers return a generic body; exception detail stays in the log.
+
+    Red oracles for the information-exposure discipline: reverting any handler
+    to ``jsonify({"error": str(e)})`` leaks the marker below into the response
+    and turns the matching test red.
+    """
+
+    _SECRET = "SECRET_DETAIL_xyz789"
+
+    def _assert_generic_500(self, response, expected_message: str) -> None:
+        assert response.status_code == 500
+        body = response.get_json()
+        assert body["error"] == expected_message
+        assert self._SECRET not in response.get_data(as_text=True)
+
+    def test_approve_creative_500_body_is_generic(self, client, test_tenant):
+        _auth_session(client, test_tenant)
+        creative_id = _create_creative(test_tenant, status="pending")
+
+        with patch("src.admin.blueprints.creatives.AdminCreativeUoW", side_effect=RuntimeError(self._SECRET)):
+            response = client.post(
+                f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
+                content_type="application/json",
+                json={},
+            )
+        self._assert_generic_500(response, "Creative approval failed — see server logs for details")
+
+    def test_reject_creative_500_body_is_generic(self, client, test_tenant):
+        _auth_session(client, test_tenant)
+        creative_id = _create_creative(test_tenant, status="pending")
+
+        with patch("src.admin.blueprints.creatives.AdminCreativeUoW", side_effect=RuntimeError(self._SECRET)):
+            response = client.post(
+                f"/tenant/{test_tenant}/creatives/review/{creative_id}/reject",
+                content_type="application/json",
+                json={"rejection_reason": "test"},
+            )
+        self._assert_generic_500(response, "Creative rejection failed — see server logs for details")
+
+    def test_analyze_500_body_is_generic(self, client, test_tenant):
+        _auth_session(client, test_tenant)
+
+        with patch("src.admin.blueprints.creatives.parse_creative_spec", side_effect=RuntimeError(self._SECRET)):
+            response = client.post(
+                f"/tenant/{test_tenant}/creatives/analyze",
+                data={"url": "https://example.com/creative.jpg"},
+            )
+        self._assert_generic_500(response, "Creative format analysis failed — see server logs for details")

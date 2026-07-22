@@ -362,8 +362,10 @@ def analyze(tenant_id, **kwargs):
         return jsonify(result)
 
     except Exception as e:
-        logger.error(f"Error analyzing creative format: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        # Same discipline as approve/reject_creative: detail in the sanitized
+        # server log, generic message to the client.
+        logger.error("Error analyzing creative format: %s", sanitize_log_value(e), exc_info=True)
+        return jsonify({"error": "Creative format analysis failed — see server logs for details"}), 500
 
 
 def _create_human_review_record(

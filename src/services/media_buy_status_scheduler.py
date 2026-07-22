@@ -245,6 +245,13 @@ class MediaBuyStatusScheduler:
         approve gate decides whether to create the ad-server order at all, while
         this scheduler only flips an already-finalized buy to ``active`` when
         its window opens.
+
+        Spec tension (deliberate, ungraded): specification.mdx@v3.1.1 line 141
+        says sellers MUST transition ``pending_start`` -> ``active`` when the
+        flight date arrives, while this check holds a buy with
+        assigned-but-unapproved creatives past that date — serving unapproved
+        creatives would be worse than a late start. Tracked with the
+        status-reconciliation follow-ups.
         """
         readiness = CreativeAssignmentRepository(session, media_buy.tenant_id).creative_readiness(
             media_buy.media_buy_id

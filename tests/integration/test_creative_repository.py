@@ -381,8 +381,8 @@ class TestAssignmentRepoCreativeReadiness:
         """Another tenant's assignment row against the SAME media_buy_id is ignored.
 
         Dropping the tenant filter from the assignments query flips
-        has_assignments True and (with no in-tenant creatives) ready_for_finalize
-        True — this test is the red oracle for that mutation. #1544.
+        has_assignments True — this test reddens on that (the fail-closed status
+        lookup keeps ready_for_finalize False either way). #1544.
         """
         with _RepoEnv() as env:
             tenant_a = TenantFactory(tenant_id="tenant_a")
@@ -408,27 +408,30 @@ class TestAssignmentRepoCreativeReadiness:
         assert readiness.ready_for_finalize is False
 
     def test_cross_tenant_creative_status_invisible(self, integration_db):
-        """Another tenant's same-id creative cannot block THIS tenant's readiness.
+        """Another tenant's same-id creative cannot SATISFY this tenant's readiness.
 
-        creative_id is only unique per (tenant, principal): tenant_b's PENDING
-        "c1" must not leak into tenant_a's status check. Dropping the tenant
-        filter from the creatives query flips ready_for_finalize False — this
-        test is the red oracle for that mutation. #1544.
+        creative_id is only unique per (tenant, principal). Seeded in the
+        observable direction: tenant_a's assigned creative is PENDING, while
+        tenant_b holds an APPROVED "c1" under the SAME principal_id "pa" — so
+        dropping the tenant filter from the creatives query lets the foreign
+        approved row satisfy the gate and flips ready_for_finalize True. This
+        test is the red oracle for that mutation (the principal filter alone
+        cannot catch it: the foreign row shares the principal id). #1544.
         """
         with _RepoEnv() as env:
             tenant_a = TenantFactory(tenant_id="tenant_a")
             principal_a = PrincipalFactory(tenant=tenant_a, principal_id="pa")
-            media_buy, _ = self._buy_with_assignment(tenant_a, principal_a, creative_status="approved")
+            media_buy, _ = self._buy_with_assignment(tenant_a, principal_a, creative_status="pending")
 
             tenant_b = TenantFactory(tenant_id="tenant_b")
-            principal_b = PrincipalFactory(tenant=tenant_b, principal_id="pb")
-            CreativeFactory(tenant=tenant_b, principal=principal_b, creative_id="c1", status="pending")
+            principal_b = PrincipalFactory(tenant=tenant_b, principal_id="pa")
+            CreativeFactory(tenant=tenant_b, principal=principal_b, creative_id="c1", status="approved")
 
             session = env.get_session()
             readiness = CreativeAssignmentRepository(session, "tenant_a").creative_readiness(media_buy.media_buy_id)
 
-        assert readiness.unapproved_creative_ids == []
-        assert readiness.ready_for_finalize is True
+        assert readiness.unapproved_creative_ids == ["c1"]
+        assert readiness.ready_for_finalize is False
 
     def test_cross_principal_creative_status_invisible(self, integration_db):
         """A same-tenant, other-principal creative with a colliding id cannot satisfy readiness.

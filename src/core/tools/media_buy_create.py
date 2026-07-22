@@ -1150,7 +1150,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             assignments = CreativeAssignmentRepository(session, tenant_id).get_by_media_buy(media_buy_id)
 
             if assignments:
-                logger.info(f"[APPROVAL] Found {len(assignments)} creative assignments, uploading to adapter")
+                logger.info("[APPROVAL] Found %s creative assignments, uploading to adapter", len(assignments))
 
                 # Group packages by creative (REVERSED - key by creative_id, value is list of package assignments)
                 # This ensures each creative is uploaded ONCE with ALL its package assignments

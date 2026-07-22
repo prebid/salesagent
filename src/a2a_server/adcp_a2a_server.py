@@ -1109,7 +1109,7 @@ class AdCPRequestHandler(RequestHandler):
         if identity is None or not identity.tenant_id:
             return None
 
-        outcome = resolve_durable_task_outcome(identity.tenant_id, task_id)
+        outcome = resolve_durable_task_outcome(identity.tenant_id, task_id, principal_id=identity.principal_id)
         if outcome is None:
             return None
         state = self._STEP_STATUS_TO_TASK_STATE.get(outcome.step_status, TaskState.TASK_STATE_WORKING)

@@ -2937,18 +2937,23 @@ def then_confirmed_at_at_read_equals(ctx: dict, read_index: int, timestamp: str)
 
 @then(parsers.parse('the media buy "{label}" revision should be greater than its revision at creation'))
 def then_revision_greater_than_at_creation(ctx: dict, label: str) -> None:
-    buy = _labeled_buy_from_response(ctx, ctx.get("response"), label)
+    """The serialized WIRE revision advanced past its at-creation value (approval bumped it)."""
+    from tests.bdd.steps._outcome_helpers import wire_integer
+
+    revision = wire_integer(ctx, _wire_buy(ctx, label), "revision")
     at_creation = ctx["revision_at_creation"]
-    assert buy.revision > at_creation, (
-        f"revision did not advance at approval: read {buy.revision}, at creation {at_creation}"
-    )
+    assert revision > at_creation, f"revision did not advance at approval: read {revision}, at creation {at_creation}"
 
 
 @then(parsers.parse('the media buy "{label}" confirmed_at should equal the approval instant'))
 def then_confirmed_at_is_approval_instant(ctx: dict, label: str) -> None:
-    buy = _labeled_buy_from_response(ctx, ctx.get("response"), label)
-    assert buy.confirmed_at is not None, f"media buy {label!r} is missing confirmed_at after approval"
-    actual = _parse_iso_utc(buy.confirmed_at)
+    """The serialized WIRE confirmed_at is the seller's approval instant."""
+    buy = _wire_buy(ctx, label)
+    confirmed_at = buy.get("confirmed_at")
+    assert isinstance(confirmed_at, str), (
+        f"confirmed_at must be an ISO string on the wire after approval, got {confirmed_at!r}"
+    )
+    actual = _parse_iso_utc(confirmed_at)
     expected = _parse_iso_utc(ctx["approval_instant"])
     assert actual == expected, (
         f"confirmed_at must be the approval instant: expected {expected.isoformat()}, got {actual.isoformat()}"
@@ -2957,10 +2962,14 @@ def then_confirmed_at_is_approval_instant(ctx: dict, label: str) -> None:
 
 @then(parsers.parse('the media buy "{label}" confirmed_at should not equal its created_at'))
 def then_confirmed_at_differs_from_created_at(ctx: dict, label: str) -> None:
-    buy = _labeled_buy_from_response(ctx, ctx.get("response"), label)
-    assert buy.confirmed_at is not None, f"media buy {label!r} is missing confirmed_at"
-    confirmed = _parse_iso_utc(buy.confirmed_at)
-    created = _parse_iso_utc(buy.created_at)
+    """The serialized WIRE confirmed_at is not merely the buyer's request time."""
+    buy = _wire_buy(ctx, label)
+    confirmed_at = buy.get("confirmed_at")
+    created_at = buy.get("created_at")
+    assert isinstance(confirmed_at, str), f"media buy {label!r} is missing confirmed_at on the wire"
+    assert isinstance(created_at, str), f"media buy {label!r} is missing created_at on the wire"
+    confirmed = _parse_iso_utc(confirmed_at)
+    created = _parse_iso_utc(created_at)
     assert confirmed != created, (
         f"confirmed_at equals created_at ({confirmed.isoformat()}) — reports the buyer's request time, "
         "not the seller's approval instant"

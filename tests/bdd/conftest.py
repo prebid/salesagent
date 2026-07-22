@@ -2726,7 +2726,9 @@ _UC003_WIRED: set[str] = {
     # Their schema-invalid rows (revision below minimum / wrong type) grade
     # error "INVALID_REQUEST", but production emits VALIDATION_ERROR for a
     # schema-invalid revision on ALL transports (A2A/REST via the sanctioned
-    # adcp_validation_boundary, MCP via the FastMCP TypeAdapter layer) — with one
+    # adcp_validation_boundary; MCP via the FastMCP TypeAdapter layer for
+    # wrong-TYPE values, while below-minimum ints pass the TypeAdapter and
+    # reach the shared boundary) — with one
     # documented per-transport nuance: a wrong-TYPE revision on REST is rejected
     # by FastAPI body parsing as INVALID_REQUEST before the shared boundary
     # (the cross-transport classification policy is tracked in #1604).

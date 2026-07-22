@@ -152,10 +152,18 @@ def media_buy_detail(tenant_id, media_buy_id):
                     }
                 )
 
-            # Get creative assignments for this media buy
+            # Get creative assignments for this media buy. The join matches the
+            # FULL composite creative key: creative_id alone is only unique per
+            # (tenant, principal), so a bare creative_id join could render a
+            # colliding row from another tenant/principal into this page.
             stmt = (
                 select(CreativeAssignment, Creative)
-                .join(Creative, CreativeAssignment.creative_id == Creative.creative_id)
+                .join(
+                    Creative,
+                    (CreativeAssignment.creative_id == Creative.creative_id)
+                    & (CreativeAssignment.tenant_id == Creative.tenant_id)
+                    & (CreativeAssignment.principal_id == Creative.principal_id),
+                )
                 .filter(CreativeAssignment.media_buy_id == media_buy_id)
                 .filter(CreativeAssignment.tenant_id == tenant_id)
                 .order_by(CreativeAssignment.package_id, CreativeAssignment.created_at)
@@ -469,7 +477,10 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         db_session, tenant_id, media_buy_id=media_buy_id, approved_by=user_email
                     ):
                         flash(
-                            "Media buy approved; waiting for creative approval before creating the order.",
+                            "Media buy approved; waiting for creative approval before creating the order."
+                            if readiness.has_assignments
+                            else "Media buy approved; waiting for creatives to be assigned and approved "
+                            "before creating the order.",
                             "info",
                         )
                     else:
