@@ -43,7 +43,9 @@ async def test_send_notification_rejects_metadata_url_without_post() -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_notification_rejects_localhost_without_post() -> None:
+async def test_send_notification_rejects_localhost_without_post(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Production send path must reject localhost (ADCP_TESTING off)."""
+    monkeypatch.delenv("ADCP_TESTING", raising=False)
     service = ProtocolWebhookService()
     with patch.object(service._session, "post", autospec=True) as mock_post:
         sent = await service.send_notification(
@@ -65,7 +67,7 @@ async def test_send_notification_posts_when_url_is_public() -> None:
 
     with (
         patch(
-            "src.services.protocol_webhook_service.WebhookURLValidator.validate_webhook_url",
+            "src.services.protocol_webhook_service.WebhookURLValidator.validate_outbound_webhook_url",
             return_value=(True, ""),
         ),
         patch.object(service._session, "post", return_value=response) as mock_post,
@@ -104,12 +106,16 @@ def test_reject_unsafe_webhook_url_raises_validation_error() -> None:
 
 
 def test_reject_unsafe_webhook_url_allows_public() -> None:
-    # example.com resolves publicly in CI; if DNS flakes, pin the validator.
-    with patch(
-        "src.core.webhook_validator.WebhookURLValidator.validate_webhook_url",
-        return_value=(True, ""),
-    ):
-        _reject_unsafe_webhook_url("https://buyer.example.com/hook", field="push_notification_config.url")
+    # Registration skips DNS — fixture hostnames must not NXDOMAIN-fail.
+    _reject_unsafe_webhook_url("https://buyer.example.com/hook", field="push_notification_config.url")
+
+
+def test_reject_unsafe_webhook_url_allows_unresolvable_public_hostname() -> None:
+    """Registration gate must not require DNS (BDD fixture hosts) (#1695)."""
+    _reject_unsafe_webhook_url(
+        "https://nonexistent-buyer-ssrf-fixture.invalid/hook",
+        field="reporting_webhook.url",
+    )
 
 
 def test_push_notification_config_repo_upsert_rejects_ssrf_url() -> None:

@@ -104,7 +104,7 @@ class PushNotificationConfigRepository:
             ValueError: If ``url`` fails SSRF validation (same gate as protocol
                 send and application webhook delivery).
         """
-        is_valid, error_msg = WebhookURLValidator.validate_webhook_url(url)
+        is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(url)
         if not is_valid:
             raise ValueError(f"Invalid webhook URL: {error_msg}")
 

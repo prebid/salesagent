@@ -1206,7 +1206,7 @@ class AdCPRequestHandler(RequestHandler):
 
             from src.core.webhook_validator import WebhookURLValidator
 
-            is_valid, error_msg = WebhookURLValidator.validate_webhook_url(url)
+            is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(url)
             if not is_valid:
                 raise InvalidParamsError(message=f"Invalid webhook URL: {error_msg}")
 

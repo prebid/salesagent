@@ -35,7 +35,12 @@ BLOCKED_HOSTNAMES = {
 }
 
 
-def check_url_ssrf(url: str, *, require_https: bool = False) -> tuple[bool, str]:
+def check_url_ssrf(
+    url: str,
+    *,
+    require_https: bool = False,
+    resolve_dns: bool = True,
+) -> tuple[bool, str]:
     """Check a URL for SSRF safety.
 
     Validates that the URL does not target private/internal networks
@@ -45,6 +50,11 @@ def check_url_ssrf(url: str, *, require_https: bool = False) -> tuple[bool, str]
         url: The URL to validate.
         require_https: If True, reject non-HTTPS schemes. If False,
             allow both HTTP and HTTPS.
+        resolve_dns: If True (default), resolve the hostname and reject
+            private/link-local results. If False, only apply scheme,
+            blocked-hostname, and literal-IP checks — used at webhook
+            *registration* so fixture hostnames (e.g. ``buyer.example.com``)
+            are not rejected for NXDOMAIN; send-time still uses DNS.
 
     Returns:
         (is_safe, error_message) -- is_safe is True if the URL is safe,
@@ -65,6 +75,23 @@ def check_url_ssrf(url: str, *, require_https: bool = False) -> tuple[bool, str]
 
         if hostname.lower() in BLOCKED_HOSTNAMES:
             return False, f"URL hostname '{hostname}' is blocked (internal/private)"
+
+        # Literal IP in the hostname — check private ranges without DNS.
+        try:
+            literal_ip = ipaddress.ip_address(hostname)
+        except ValueError:
+            literal_ip = None
+
+        if literal_ip is not None:
+            for network in BLOCKED_NETWORKS:
+                if literal_ip in network:
+                    return False, f"URL resolves to blocked IP range {network} (private/internal network)"
+            if literal_ip.is_loopback or literal_ip.is_link_local or literal_ip.is_private:
+                return False, f"URL resolves to private/internal IP address: {literal_ip}"
+            return True, ""
+
+        if not resolve_dns:
+            return True, ""
 
         try:
             ip_str = socket.gethostbyname(hostname)

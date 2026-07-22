@@ -161,20 +161,19 @@ class ProtocolWebhookService:
             )
             return False
 
-        url = _normalize_localhost_for_docker(push_notification_config.url)
-
-        # SSRF gate — same WebhookURLValidator as application-level delivery
-        # (src/core/webhook_delivery.py). Reject before any outbound POST so a
-        # buyer-supplied push/reporting URL cannot target internal/metadata hosts
-        # (#1695 / #1578). Explicit failure (return False), not a quiet skip.
-        is_valid, error_msg = WebhookURLValidator.validate_webhook_url(url)
+        # SSRF gate on the configured URL *before* docker localhost rewrite
+        # (#1695 / #1578). Under ADCP_TESTING, localhost/loopback is allowed for
+        # capture servers; production uses the full DNS-backed check.
+        is_valid, error_msg = WebhookURLValidator.validate_outbound_webhook_url(push_notification_config.url)
         if not is_valid:
             logger.error(
                 "Protocol webhook URL failed SSRF validation (url=%s): %s",
-                url,
+                push_notification_config.url,
                 error_msg,
             )
             return False
+
+        url = _normalize_localhost_for_docker(push_notification_config.url)
 
         # Prepare headers
         headers = {"Content-Type": "application/json", "User-Agent": "AdCP-Sales-Agent/1.0"}

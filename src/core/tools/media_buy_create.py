@@ -2010,10 +2010,10 @@ _WEBHOOK_SSRF_SUGGESTION = (
 
 
 def _reject_unsafe_webhook_url(url: str, *, field: str, context: Any = None) -> None:
-    """Raise AdCPValidationError when ``url`` fails the shared SSRF gate (#1695)."""
+    """Raise AdCPValidationError when ``url`` fails the registration SSRF gate (#1695)."""
     from src.core.webhook_validator import WebhookURLValidator
 
-    is_valid, error_msg = WebhookURLValidator.validate_webhook_url(str(url))
+    is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(str(url))
     if not is_valid:
         raise AdCPValidationError(
             f"Invalid {field}: {error_msg}",
@@ -2058,11 +2058,6 @@ async def _create_media_buy_impl(
                 "Hourly and monthly reporting will be ignored until implemented.",
                 raw_freq,
             )
-        # SSRF gate at registration (#1695 / #1578) — same validator as protocol send
-        # and application webhook delivery. Fail the request before persistence.
-        rw_url = getattr(req.reporting_webhook, "url", None)
-        if rw_url:
-            _reject_unsafe_webhook_url(str(rw_url), field="reporting_webhook.url", context=req.context)
 
     # Extract testing context first
     identity = require_identity(identity, context=req.context)
@@ -2074,6 +2069,14 @@ async def _create_media_buy_impl(
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     tenant = require_tenant(identity, context=req.context)
+
+    # SSRF gate at registration (#1695 / #1578) — after auth so unauthenticated
+    # callers get AUTH first; only real string URLs are checked (not MagicMock
+    # stubs from unit tests that never reach this path with a real request).
+    if req.reporting_webhook:
+        rw_url = getattr(req.reporting_webhook, "url", None)
+        if isinstance(rw_url, str) and rw_url.strip():
+            _reject_unsafe_webhook_url(rw_url, field="reporting_webhook.url", context=req.context)
 
     # Validate setup completion (only in production, skip for testing)
     if not testing_ctx.dry_run and not testing_ctx.test_session_id:

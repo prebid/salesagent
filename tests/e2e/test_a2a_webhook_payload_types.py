@@ -641,7 +641,7 @@ class TestProtocolWebhookWireFormat:
                 WebhookPayloadCapture, WebhookPayloadCapture.received_webhooks, host="127.0.0.1"
             ) as info,
             patch(
-                "src.services.protocol_webhook_service.WebhookURLValidator.validate_webhook_url",
+                "src.services.protocol_webhook_service.WebhookURLValidator.validate_outbound_webhook_url",
                 return_value=(True, ""),
             ),
         ):

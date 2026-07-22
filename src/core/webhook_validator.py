@@ -46,6 +46,14 @@ def validate_webhook_task_type(task_type: str, fallback: str = WEBHOOK_TASK_TYPE
 class WebhookURLValidator:
     """Validates webhook URLs to prevent SSRF attacks."""
 
+    @staticmethod
+    def _maybe_allow_localhost(is_valid: bool, error: str, *, allow_localhost: bool) -> tuple[bool, str]:
+        """Override localhost/loopback SSRF failures when testing allows them."""
+        if not is_valid and allow_localhost:
+            if "localhost" in error.lower() or "127.0.0" in error or "loopback" in error.lower():
+                return True, ""
+        return is_valid, error
+
     @classmethod
     def validate_webhook_url(cls, url: str) -> tuple[bool, str]:
         """
@@ -58,6 +66,30 @@ class WebhookURLValidator:
             (is_valid, error_message) - is_valid is True if safe, error_message explains failures
         """
         return check_url_ssrf(url)
+
+    @classmethod
+    def validate_webhook_url_registration(cls, url: str) -> tuple[bool, str]:
+        """Registration-time SSRF gate (no DNS required).
+
+        Blocks known-bad hostnames and literal private IPs. Unresolvable
+        public hostnames are allowed here; send-time re-checks with DNS
+        (``validate_outbound_webhook_url``). When ``ADCP_TESTING=true``,
+        localhost/loopback are allowed for capture servers.
+        """
+        import os
+
+        allow_localhost = os.environ.get("ADCP_TESTING") == "true"
+        is_valid, error = check_url_ssrf(url, resolve_dns=False)
+        return cls._maybe_allow_localhost(is_valid, error, allow_localhost=allow_localhost)
+
+    @classmethod
+    def validate_outbound_webhook_url(cls, url: str) -> tuple[bool, str]:
+        """Send-time SSRF gate (full DNS), with localhost allowance under ADCP_TESTING."""
+        import os
+
+        if os.environ.get("ADCP_TESTING") == "true":
+            return cls.validate_for_testing(url, allow_localhost=True)
+        return cls.validate_webhook_url(url)
 
     @classmethod
     def validate_for_testing(cls, url: str, allow_localhost: bool = False) -> tuple[bool, str]:
@@ -75,10 +107,4 @@ class WebhookURLValidator:
             (is_valid, error_message)
         """
         is_valid, error = check_url_ssrf(url)
-
-        # If validation failed but it's a localhost error and we allow it
-        if not is_valid and allow_localhost:
-            if "localhost" in error.lower() or "127.0.0" in error or "loopback" in error.lower():
-                return True, ""
-
-        return is_valid, error
+        return cls._maybe_allow_localhost(is_valid, error, allow_localhost=allow_localhost)
