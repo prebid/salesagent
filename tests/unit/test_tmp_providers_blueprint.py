@@ -17,7 +17,7 @@ import os
 from unittest.mock import MagicMock, patch
 
 from src.core.database.models import TMPProvider
-from tests.unit._tmp_helpers import make_super_admin_client
+from tests.unit._tmp_helpers import _make_blueprint_uow, make_super_admin_client
 
 
 def _make_tmp_provider_client():
@@ -25,21 +25,15 @@ def _make_tmp_provider_client():
     return make_super_admin_client()
 
 
-def _mock_uow_with_tenant(mock_uow, tenant_id="default"):
-    """Wire mock UoW so handlers can resolve tenant via tenant_config.get_tenant()."""
-    mock_tenant = MagicMock()
-    mock_tenant.tenant_id = tenant_id
-    mock_tenant.name = "Default Tenant"
-    mock_uow.tenant_config = MagicMock()
-    mock_uow.tenant_config.get_tenant.return_value = mock_tenant
-    mock_uow.tmp_providers = MagicMock()
-    return mock_tenant
-
-
 def _make_mock_provider(
     provider_id="test-uuid-1234", name="Test Provider", endpoint="https://provider.example.com/tmp", status="active"
 ):
-    """Create a mock TMPProvider object aligned with provider-registration.json schema."""
+    """Create a mock TMPProvider object aligned with provider-registration.json schema.
+
+    Returns a MagicMock (not a real TMPProvider) — used for tests that only need
+    attribute access on the provider object (deactivate, delete, health, edit POST).
+    Tests that exercise to_dict() use a real TMPProvider via _tmp_helpers._make_provider.
+    """
     provider = MagicMock()
     provider.provider_id = provider_id
     provider.name = name
@@ -67,11 +61,8 @@ class TestTMPProviderAddSSRF:
         """
         client = _make_tmp_provider_client()
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            _mock_uow_with_tenant(mock_uow)
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                 response = client.post(
                     "/tenant/default/tmp-providers/add",
@@ -94,11 +85,8 @@ class TestTMPProviderAddSSRF:
         """POST /tmp-providers/add with a safe public URL must proceed past SSRF check."""
         client = _make_tmp_provider_client()
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            _mock_uow_with_tenant(mock_uow)
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
                 with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                     response = client.post(
@@ -150,12 +138,9 @@ class TestTMPProviderEditSSRF:
 
         existing_provider = _make_mock_provider()
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            mock_uow.tmp_providers = MagicMock()
-            mock_uow.tmp_providers.get_by_id.return_value = existing_provider
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        mock_uow.tmp_providers.get_by_id.return_value = existing_provider
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                 response = client.post(
                     "/tenant/default/tmp-providers/test-uuid-1234/edit",
@@ -188,12 +173,9 @@ class TestTMPProviderEditSSRF:
 
         existing_provider = _make_mock_provider()
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            mock_uow.tmp_providers = MagicMock()
-            mock_uow.tmp_providers.get_by_id.return_value = existing_provider
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        mock_uow.tmp_providers.get_by_id.return_value = existing_provider
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
                 with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                     response = client.post(
@@ -236,11 +218,8 @@ class TestTMPProviderInputValidation:
         """POST /tmp-providers/add without endpoint must redirect with error."""
         client = _make_tmp_provider_client()
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            _mock_uow_with_tenant(mock_uow)
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                 response = client.post(
                     "/tenant/default/tmp-providers/add",
@@ -260,11 +239,8 @@ class TestTMPProviderInputValidation:
         """POST /tmp-providers/add without name must redirect with error."""
         client = _make_tmp_provider_client()
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            _mock_uow_with_tenant(mock_uow)
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
                 with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                     response = client.post(
@@ -285,11 +261,8 @@ class TestTMPProviderInputValidation:
         """POST /tmp-providers/add with non-numeric timeout_ms must redirect with error."""
         client = _make_tmp_provider_client()
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            _mock_uow_with_tenant(mock_uow)
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                 response = client.post(
                     "/tenant/default/tmp-providers/add",
@@ -309,11 +282,8 @@ class TestTMPProviderInputValidation:
         """POST /tmp-providers/add with invalid status must redirect with error."""
         client = _make_tmp_provider_client()
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            _mock_uow_with_tenant(mock_uow)
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
                 with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                     response = client.post(
@@ -335,11 +305,8 @@ class TestTMPProviderInputValidation:
         """POST /tmp-providers/add with explicit status passes it to create_from_fields."""
         client = _make_tmp_provider_client()
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            _mock_uow_with_tenant(mock_uow)
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
                 with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                     response = client.post(
@@ -381,11 +348,8 @@ class TestTMPProviderIdentityMatchValidation:
         """POST /tmp-providers/add with identity_match=on but no countries must redirect with error."""
         client = _make_tmp_provider_client()
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            _mock_uow_with_tenant(mock_uow)
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
                 with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                     response = client.post(
@@ -410,11 +374,8 @@ class TestTMPProviderIdentityMatchValidation:
         """POST /tmp-providers/add with identity_match=on but no uid_types must redirect with error."""
         client = _make_tmp_provider_client()
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            _mock_uow_with_tenant(mock_uow)
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
                 with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                     response = client.post(
@@ -439,11 +400,8 @@ class TestTMPProviderIdentityMatchValidation:
         """POST /tmp-providers/add with invalid uid_type value must redirect with error."""
         client = _make_tmp_provider_client()
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            _mock_uow_with_tenant(mock_uow)
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
                 with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                     response = client.post(
@@ -474,12 +432,9 @@ class TestTMPProviderDeactivate:
 
         existing_provider = _make_mock_provider()
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            mock_uow.tmp_providers = MagicMock()
-            mock_uow.tmp_providers.deactivate.return_value = existing_provider
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        mock_uow.tmp_providers.deactivate.return_value = existing_provider
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                 response = client.post(
                     "/tenant/default/tmp-providers/test-uuid-1234/deactivate",
@@ -494,12 +449,9 @@ class TestTMPProviderDeactivate:
         """POST /tmp-providers/<id>/deactivate returns 404 when provider not found."""
         client = _make_tmp_provider_client()
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            mock_uow.tmp_providers = MagicMock()
-            mock_uow.tmp_providers.deactivate.return_value = None
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        mock_uow.tmp_providers.deactivate.return_value = None
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                 response = client.post(
                     "/tenant/default/tmp-providers/nonexistent-uuid/deactivate",
@@ -519,13 +471,10 @@ class TestTMPProviderDelete:
 
         existing_provider = _make_mock_provider()
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            mock_uow.tmp_providers = MagicMock()
-            mock_uow.tmp_providers.get_by_id.return_value = existing_provider
-            mock_uow.tmp_providers.delete.return_value = True
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        mock_uow.tmp_providers.get_by_id.return_value = existing_provider
+        mock_uow.tmp_providers.delete.return_value = True
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                 response = client.delete(
                     "/tenant/default/tmp-providers/test-uuid-1234/delete",
@@ -540,12 +489,9 @@ class TestTMPProviderDelete:
         """DELETE /tmp-providers/<id>/delete returns 404 when provider not found."""
         client = _make_tmp_provider_client()
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            mock_uow.tmp_providers = MagicMock()
-            mock_uow.tmp_providers.get_by_id.return_value = None
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        mock_uow.tmp_providers.get_by_id.return_value = None
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                 response = client.delete(
                     "/tenant/default/tmp-providers/nonexistent-uuid/delete",
@@ -567,12 +513,9 @@ class TestTMPProviderHealthCheck:
         existing_provider.health_status = "healthy"
         existing_provider.last_health_checked_at = datetime(2026, 5, 25, 12, 0, 0, tzinfo=UTC)
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            mock_uow.tmp_providers = MagicMock()
-            mock_uow.tmp_providers.get_by_id.return_value = existing_provider
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        mock_uow.tmp_providers.get_by_id.return_value = existing_provider
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                 response = client.get(
                     "/tenant/default/tmp-providers/test-uuid-1234/health",
@@ -594,12 +537,9 @@ class TestTMPProviderHealthCheck:
         existing_provider.health_status = "unhealthy"
         existing_provider.last_health_checked_at = datetime(2026, 5, 25, 12, 0, 0, tzinfo=UTC)
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            mock_uow.tmp_providers = MagicMock()
-            mock_uow.tmp_providers.get_by_id.return_value = existing_provider
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        mock_uow.tmp_providers.get_by_id.return_value = existing_provider
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                 response = client.get(
                     "/tenant/default/tmp-providers/test-uuid-1234/health",
@@ -618,12 +558,9 @@ class TestTMPProviderHealthCheck:
         existing_provider.health_status = None
         existing_provider.last_health_checked_at = None
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            mock_uow.tmp_providers = MagicMock()
-            mock_uow.tmp_providers.get_by_id.return_value = existing_provider
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        mock_uow.tmp_providers.get_by_id.return_value = existing_provider
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                 response = client.get(
                     "/tenant/default/tmp-providers/test-uuid-1234/health",
@@ -646,11 +583,8 @@ class TestTMPProviderAuthFields:
         """
         client = _make_tmp_provider_client()
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            _mock_uow_with_tenant(mock_uow)
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
                 with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                     response = client.post(
@@ -717,18 +651,10 @@ class TestTMPProviderAuthFields:
         with patch.dict(os.environ, {"ENCRYPTION_KEY": _key}):
             existing_provider.auth_credentials = "stored-token"
 
-            mock_tenant = MagicMock()
-            mock_tenant.tenant_id = "default"
-            mock_tenant.name = "Default Tenant"
-
-            with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-                mock_uow = MagicMock()
-                mock_uow.tenant_config = MagicMock()
-                mock_uow.tenant_config.get_tenant.return_value = mock_tenant
-                mock_uow.tmp_providers = MagicMock()
-                mock_uow.tmp_providers.get_by_id.return_value = existing_provider
-                mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-                mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+            mock_uow_cls, mock_uow = _make_blueprint_uow()
+            mock_tenant = mock_uow.tenant_config.get_tenant.return_value
+            mock_uow.tmp_providers.get_by_id.return_value = existing_provider
+            with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
                 with patch("src.admin.blueprints.tmp_providers.render_template") as mock_render:
                     mock_render.return_value = "<html/>"
                     with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
@@ -770,12 +696,9 @@ class TestTMPProviderAuthFields:
         existing_provider.auth_type = "bearer"
         existing_provider.auth_credentials = "existing-secret"
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            mock_uow.tmp_providers = MagicMock()
-            mock_uow.tmp_providers.get_by_id.return_value = existing_provider
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        mock_uow.tmp_providers.get_by_id.return_value = existing_provider
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
                 with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                     response = client.post(
@@ -822,12 +745,9 @@ class TestTMPProviderAuthFields:
         existing_provider.auth_type = "bearer"
         existing_provider.auth_credentials = "old-secret"
 
-        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW") as mock_uow_cls:
-            mock_uow = MagicMock()
-            mock_uow.tmp_providers = MagicMock()
-            mock_uow.tmp_providers.get_by_id.return_value = existing_provider
-            mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-            mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls, mock_uow = _make_blueprint_uow()
+        mock_uow.tmp_providers.get_by_id.return_value = existing_provider
+        with patch("src.admin.blueprints.tmp_providers.TMPProviderUoW", mock_uow_cls):
             with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
                 with patch.dict(os.environ, {"ADCP_AUTH_TEST_MODE": "true"}):
                     response = client.post(
@@ -881,38 +801,26 @@ class TestTMPProviderAuthFields:
 class TestValidUidTypesMatchesPinnedSchema:
     """VALID_UID_TYPES must equal the uid-type enum in the pinned AdCP SDK.
 
-    Authority: the installed ``adcp`` SDK (pinned in pyproject.toml).
-    This guard ensures that a spec bump (SDK version bump) cannot silently add
-    or remove uid types without a corresponding update to VALID_UID_TYPES.
+    Authority: ``adcp.types.generated_poc.enums.uid_type.UidType`` (adcp==5.7.0,
+    pinned in pyproject.toml).  No ``pytest.skip`` fallback — if the import
+    fails the guard must fail loudly so the drift is caught immediately.
     """
 
     def test_valid_uid_types_matches_pinned_schema(self):
-        """VALID_UID_TYPES frozenset equals the uid-type values in the pinned adcp SDK."""
+        """VALID_UID_TYPES frozenset equals UidType enum values in the pinned adcp SDK.
+
+        Authority: adcp.types.generated_poc.enums.uid_type.UidType (adcp==5.7.0).
+        Schema path in SDK: adcp/types/generated_poc/enums/uid_type.py.
+        """
+        from adcp.types.generated_poc.enums.uid_type import UidType  # type: ignore[import]
+
         from src.admin.blueprints.tmp_providers import VALID_UID_TYPES
 
-        # The adcp SDK exposes uid types via adcp.types.UIDType (an enum/literal).
-        # Extract the string values from whatever form the SDK uses.
-        try:
-            from adcp.types import UIDType  # type: ignore[import]
-
-            sdk_uid_types = frozenset(v.value if hasattr(v, "value") else v for v in UIDType)
-        except (ImportError, AttributeError):
-            # Fallback: the SDK may expose uid types as a module-level constant.
-            try:
-                import adcp.types as _adcp_types  # type: ignore[import]
-
-                sdk_uid_types = frozenset(getattr(_adcp_types, "UID_TYPES", None) or [])
-                if not sdk_uid_types:
-                    import pytest
-
-                    pytest.skip("adcp SDK does not expose UIDType or UID_TYPES — update this guard")
-            except ImportError:
-                import pytest
-
-                pytest.skip("adcp SDK not installed — cannot verify VALID_UID_TYPES")
+        sdk_uid_types = frozenset(v.value for v in UidType)
 
         assert VALID_UID_TYPES == sdk_uid_types, (
-            f"VALID_UID_TYPES diverges from the pinned adcp SDK.\n"
+            f"VALID_UID_TYPES diverges from the pinned adcp SDK (adcp==5.7.0).\n"
             f"  In SDK but not in VALID_UID_TYPES: {sdk_uid_types - VALID_UID_TYPES}\n"
-            f"  In VALID_UID_TYPES but not in SDK: {VALID_UID_TYPES - sdk_uid_types}"
+            f"  In VALID_UID_TYPES but not in SDK: {VALID_UID_TYPES - sdk_uid_types}\n"
+            f"  Update VALID_UID_TYPES in src/admin/blueprints/tmp_providers.py to match."
         )

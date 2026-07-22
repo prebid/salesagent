@@ -25,6 +25,7 @@ from src.services.tmp_provider_sync import (
     _resolve_seller_agent_url,
     sync_packages_for_media_buy,
 )
+from tests.unit._tmp_helpers import _make_sync_uow, _make_tenant_config_uow
 
 # ---------------------------------------------------------------------------
 # _build_package_payload tests
@@ -154,26 +155,27 @@ class TestSellerAgentUrlResolvedBeforeMediaBuyUoW:
 
     @patch("src.services.tmp_provider_sync._post_packages_sync")
     @patch("src.services.tmp_provider_sync._resolve_seller_agent_url", return_value="http://agent/mcp")
-    @patch("src.services.tmp_provider_sync.TMPProviderUoW")
-    @patch("src.services.tmp_provider_sync.MediaBuyUoW")
-    def test_resolve_seller_agent_url_called_before_media_buy_uow_opens(
-        self, mock_mb_uow_cls, mock_tp_uow_cls, mock_resolve, mock_post
-    ):
+    def test_resolve_seller_agent_url_called_before_media_buy_uow_opens(self, mock_resolve, mock_post):
         """_resolve_seller_agent_url() is called before MediaBuyUoW.__enter__()."""
         call_order: list[str] = []
 
         mock_resolve.side_effect = lambda *_a, **_kw: (
             call_order.append("resolve_seller_agent_url") or "http://agent/mcp"
         )
-        mock_mb_uow_cls.return_value.__enter__ = MagicMock(
+
+        mock_mb_cls, _mock_mb_uow, mock_tp_cls, _mock_tp_uow = _make_sync_uow(packages=[])
+        mock_mb_cls.return_value.__enter__ = MagicMock(
             side_effect=lambda: (
                 call_order.append("media_buy_uow_entered")
                 or MagicMock(media_buys=MagicMock(get_packages=MagicMock(return_value=[])))
             )
         )
-        mock_mb_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
 
-        sync_packages_for_media_buy("tenant-1", "mb-1")
+        with (
+            patch("src.services.tmp_provider_sync.MediaBuyUoW", mock_mb_cls),
+            patch("src.services.tmp_provider_sync.TMPProviderUoW", mock_tp_cls),
+        ):
+            sync_packages_for_media_buy("tenant-1", "mb-1")
 
         assert call_order == ["resolve_seller_agent_url", "media_buy_uow_entered"]
 
@@ -183,9 +185,7 @@ class TestSyncSessionClosedBeforeHTTP:
 
     @patch("src.services.tmp_provider_sync._post_packages_sync")
     @patch("src.services.tmp_provider_sync._resolve_seller_agent_url", return_value="http://agent/mcp")
-    @patch("src.services.tmp_provider_sync.TMPProviderUoW")
-    @patch("src.services.tmp_provider_sync.MediaBuyUoW")
-    def test_session_closed_before_http_calls(self, mock_mb_uow_cls, mock_tp_uow_cls, mock_resolve, mock_post):
+    def test_session_closed_before_http_calls(self, mock_resolve, mock_post):
         """The TMPProviderUoW session is closed before _post_packages_sync is called."""
         call_order: list[str] = []
 
@@ -193,28 +193,24 @@ class TestSyncSessionClosedBeforeHTTP:
         pkg.package_id = "pkg-1"
         pkg.package_config = {"product_id": "prod-1"}
 
-        # Track when the media buy UoW exits (session closed)
-        mb_uow_ctx = MagicMock()
-        mb_uow_ctx.media_buys = MagicMock()
-        mb_uow_ctx.media_buys.get_packages.return_value = [pkg]
-        mock_mb_uow_cls.return_value.__enter__ = MagicMock(return_value=mb_uow_ctx)
-        mock_mb_uow_cls.return_value.__exit__ = MagicMock(side_effect=lambda *_: call_order.append("mb_session_closed"))
-
-        # Track when the TMP provider UoW exits (session closed)
         provider = MagicMock()
         provider.name = "Provider A"
         provider.endpoint = "http://provider-a:3000"
         provider.auth_credentials = None
-        tp_uow_ctx = MagicMock()
-        tp_uow_ctx.tmp_providers = MagicMock()
-        tp_uow_ctx.tmp_providers.list_syncable.return_value = [provider]
-        mock_tp_uow_cls.return_value.__enter__ = MagicMock(return_value=tp_uow_ctx)
-        mock_tp_uow_cls.return_value.__exit__ = MagicMock(side_effect=lambda *_: call_order.append("tp_session_closed"))
+
+        mock_mb_cls, mock_mb_uow, mock_tp_cls, mock_tp_uow = _make_sync_uow(packages=[pkg], providers=[provider])
+        # Override __exit__ to track session-close order
+        mock_mb_cls.return_value.__exit__ = MagicMock(side_effect=lambda *_: call_order.append("mb_session_closed"))
+        mock_tp_cls.return_value.__exit__ = MagicMock(side_effect=lambda *_: call_order.append("tp_session_closed"))
 
         # Track when HTTP call happens
         mock_post.side_effect = lambda *_: call_order.append("http_called")
 
-        sync_packages_for_media_buy("tenant-1", "mb-1")
+        with (
+            patch("src.services.tmp_provider_sync.MediaBuyUoW", mock_mb_cls),
+            patch("src.services.tmp_provider_sync.TMPProviderUoW", mock_tp_cls),
+        ):
+            sync_packages_for_media_buy("tenant-1", "mb-1")
 
         # Both sessions must be closed before the HTTP fan-out
         assert "tp_session_closed" in call_order
@@ -265,35 +261,30 @@ class TestProviderMaterializedBeforeSessionCloses:
 
     @patch("src.services.tmp_provider_sync._post_packages_sync")
     @patch("src.services.tmp_provider_sync._resolve_seller_agent_url", return_value="http://agent/mcp")
-    @patch("src.services.tmp_provider_sync.TMPProviderUoW")
-    @patch("src.services.tmp_provider_sync.MediaBuyUoW")
-    def test_provider_attributes_read_before_uow_exits(self, mock_mb_uow_cls, mock_tp_uow_cls, mock_resolve, mock_post):
+    def test_provider_attributes_read_before_uow_exits(self, mock_resolve, mock_post):
         """Provider fields are captured inside the `with` block, not after."""
         pkg = MagicMock()
         pkg.package_id = "pkg-1"
         pkg.package_config = {"product_id": "prod-1"}
-        mock_mb_uow = MagicMock()
-        mock_mb_uow.media_buys.get_packages.return_value = [pkg]
-        mock_mb_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_mb_uow)
-        mock_mb_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
 
         closed_flag = [False]
         provider = self._DetachAfterCloseProvider("Provider A", "http://provider-a:3000", "secret", closed_flag)
 
-        tp_uow_ctx = MagicMock()
-        tp_uow_ctx.tmp_providers = MagicMock()
-        tp_uow_ctx.tmp_providers.list_syncable.return_value = [provider]
-        mock_tp_uow_cls.return_value.__enter__ = MagicMock(return_value=tp_uow_ctx)
+        mock_mb_cls, _mock_mb_uow, mock_tp_cls, mock_tp_uow = _make_sync_uow(packages=[pkg], providers=[provider])
 
         def _mark_closed(*_args):
             closed_flag[0] = True
             return False
 
-        mock_tp_uow_cls.return_value.__exit__ = MagicMock(side_effect=_mark_closed)
+        mock_tp_cls.return_value.__exit__ = MagicMock(side_effect=_mark_closed)
 
-        # Would raise DetachedInstanceError if provider.endpoint/.auth_credentials
-        # were read after the TMPProviderUoW block closed.
-        sync_packages_for_media_buy("tenant-1", "mb-1")
+        with (
+            patch("src.services.tmp_provider_sync.MediaBuyUoW", mock_mb_cls),
+            patch("src.services.tmp_provider_sync.TMPProviderUoW", mock_tp_cls),
+        ):
+            # Would raise DetachedInstanceError if provider.endpoint/.auth_credentials
+            # were read after the TMPProviderUoW block closed.
+            sync_packages_for_media_buy("tenant-1", "mb-1")
 
         mock_post.assert_called_once_with(
             "http://provider-a:3000",
@@ -312,20 +303,12 @@ class TestSyncPackagesFanOut:
 
     @patch("src.services.tmp_provider_sync._post_packages_sync")
     @patch("src.services.tmp_provider_sync._resolve_seller_agent_url", return_value="http://agent/mcp")
-    @patch("src.services.tmp_provider_sync.TMPProviderUoW")
-    @patch("src.services.tmp_provider_sync.MediaBuyUoW")
-    def test_fans_out_to_all_providers(self, mock_mb_uow_cls, mock_tp_uow_cls, mock_resolve, mock_post):
+    def test_fans_out_to_all_providers(self, mock_resolve, mock_post):
         """Packages are POSTed to every syncable provider."""
-        # Setup media buy UoW
         pkg = MagicMock()
         pkg.package_id = "pkg-1"
         pkg.package_config = {"product_id": "prod-1", "name": "Test"}
-        mock_mb_uow = MagicMock()
-        mock_mb_uow.media_buys.get_packages.return_value = [pkg]
-        mock_mb_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_mb_uow)
-        mock_mb_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
 
-        # Setup TMP provider UoW — providers have no auth_credentials
         provider1 = MagicMock()
         provider1.name = "Provider A"
         provider1.endpoint = "http://provider-a:3000"
@@ -334,12 +317,13 @@ class TestSyncPackagesFanOut:
         provider2.name = "Provider B"
         provider2.endpoint = "http://provider-b:3000"
         provider2.auth_credentials = None
-        mock_tp_uow = MagicMock()
-        mock_tp_uow.tmp_providers.list_syncable.return_value = [provider1, provider2]
-        mock_tp_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_tp_uow)
-        mock_tp_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
 
-        sync_packages_for_media_buy("tenant-1", "mb-1")
+        mock_mb_cls, _mb_uow, mock_tp_cls, _tp_uow = _make_sync_uow(packages=[pkg], providers=[provider1, provider2])
+        with (
+            patch("src.services.tmp_provider_sync.MediaBuyUoW", mock_mb_cls),
+            patch("src.services.tmp_provider_sync.TMPProviderUoW", mock_tp_cls),
+        ):
+            sync_packages_for_media_buy("tenant-1", "mb-1")
 
         # Assert call count and that each provider endpoint + auth were used.
         # We deliberately do NOT assert the payload contents here — that would
@@ -354,57 +338,41 @@ class TestSyncPackagesFanOut:
 
     @patch("src.services.tmp_provider_sync._post_packages_sync")
     @patch("src.services.tmp_provider_sync._resolve_seller_agent_url", return_value="http://agent/mcp")
-    @patch("src.services.tmp_provider_sync.TMPProviderUoW")
-    @patch("src.services.tmp_provider_sync.MediaBuyUoW")
-    def test_skips_when_no_packages(self, mock_mb_uow_cls, mock_tp_uow_cls, mock_resolve, mock_post):
+    def test_skips_when_no_packages(self, mock_resolve, mock_post):
         """No HTTP calls when media buy has no packages."""
-        mock_mb_uow = MagicMock()
-        mock_mb_uow.media_buys.get_packages.return_value = []
-        mock_mb_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_mb_uow)
-        mock_mb_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
-
-        sync_packages_for_media_buy("tenant-1", "mb-1")
+        mock_mb_cls, _mb_uow, mock_tp_cls, _tp_uow = _make_sync_uow(packages=[])
+        with (
+            patch("src.services.tmp_provider_sync.MediaBuyUoW", mock_mb_cls),
+            patch("src.services.tmp_provider_sync.TMPProviderUoW", mock_tp_cls),
+        ):
+            sync_packages_for_media_buy("tenant-1", "mb-1")
 
         mock_post.assert_not_called()
 
     @patch("src.services.tmp_provider_sync._post_packages_sync")
     @patch("src.services.tmp_provider_sync._resolve_seller_agent_url", return_value="http://agent/mcp")
-    @patch("src.services.tmp_provider_sync.TMPProviderUoW")
-    @patch("src.services.tmp_provider_sync.MediaBuyUoW")
-    def test_skips_when_no_providers(self, mock_mb_uow_cls, mock_tp_uow_cls, mock_resolve, mock_post):
+    def test_skips_when_no_providers(self, mock_resolve, mock_post):
         """No HTTP calls when tenant has no syncable providers."""
         pkg = MagicMock()
         pkg.package_id = "pkg-1"
         pkg.package_config = {}
-        mock_mb_uow = MagicMock()
-        mock_mb_uow.media_buys.get_packages.return_value = [pkg]
-        mock_mb_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_mb_uow)
-        mock_mb_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
 
-        mock_tp_uow = MagicMock()
-        mock_tp_uow.tmp_providers.list_syncable.return_value = []
-        mock_tp_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_tp_uow)
-        mock_tp_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
-
-        sync_packages_for_media_buy("tenant-1", "mb-1")
+        mock_mb_cls, _mb_uow, mock_tp_cls, _tp_uow = _make_sync_uow(packages=[pkg], providers=[])
+        with (
+            patch("src.services.tmp_provider_sync.MediaBuyUoW", mock_mb_cls),
+            patch("src.services.tmp_provider_sync.TMPProviderUoW", mock_tp_cls),
+        ):
+            sync_packages_for_media_buy("tenant-1", "mb-1")
 
         mock_post.assert_not_called()
 
     @patch("src.services.tmp_provider_sync._post_packages_sync")
     @patch("src.services.tmp_provider_sync._resolve_seller_agent_url", return_value="http://agent/mcp")
-    @patch("src.services.tmp_provider_sync.TMPProviderUoW")
-    @patch("src.services.tmp_provider_sync.MediaBuyUoW")
-    def test_one_provider_failure_does_not_block_others(
-        self, mock_mb_uow_cls, mock_tp_uow_cls, mock_resolve, mock_post
-    ):
+    def test_one_provider_failure_does_not_block_others(self, mock_resolve, mock_post):
         """If one provider fails, the others still get called."""
         pkg = MagicMock()
         pkg.package_id = "pkg-1"
         pkg.package_config = {}
-        mock_mb_uow = MagicMock()
-        mock_mb_uow.media_buys.get_packages.return_value = [pkg]
-        mock_mb_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_mb_uow)
-        mock_mb_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
 
         provider1 = MagicMock()
         provider1.name = "Failing Provider"
@@ -412,29 +380,32 @@ class TestSyncPackagesFanOut:
         provider2 = MagicMock()
         provider2.name = "Working Provider"
         provider2.endpoint = "http://ok:3000"
-        mock_tp_uow = MagicMock()
-        mock_tp_uow.tmp_providers.list_syncable.return_value = [provider1, provider2]
-        mock_tp_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_tp_uow)
-        mock_tp_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
 
+        mock_mb_cls, _mb_uow, mock_tp_cls, _tp_uow = _make_sync_uow(packages=[pkg], providers=[provider1, provider2])
         # First call raises, second succeeds
         mock_post.side_effect = [httpx.ConnectError("refused"), None]
 
-        # Should not raise — errors are logged and swallowed
-        sync_packages_for_media_buy("tenant-1", "mb-1")
+        with (
+            patch("src.services.tmp_provider_sync.MediaBuyUoW", mock_mb_cls),
+            patch("src.services.tmp_provider_sync.TMPProviderUoW", mock_tp_cls),
+        ):
+            # Should not raise — errors are logged and swallowed
+            sync_packages_for_media_buy("tenant-1", "mb-1")
 
         assert mock_post.call_count == 2
 
     @patch("src.services.tmp_provider_sync._post_packages_sync")
     @patch("src.services.tmp_provider_sync._resolve_seller_agent_url", return_value="http://agent/mcp")
-    @patch("src.services.tmp_provider_sync.TMPProviderUoW")
-    @patch("src.services.tmp_provider_sync.MediaBuyUoW")
-    def test_package_load_failure_returns_early(self, mock_mb_uow_cls, mock_tp_uow_cls, mock_resolve, mock_post):
+    def test_package_load_failure_returns_early(self, mock_resolve, mock_post):
         """If loading packages fails, no HTTP calls are made."""
-        mock_mb_uow_cls.return_value.__enter__ = MagicMock(side_effect=RuntimeError("DB connection failed"))
-        mock_mb_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_mb_cls, _mb_uow, mock_tp_cls, _tp_uow = _make_sync_uow()
+        mock_mb_cls.return_value.__enter__ = MagicMock(side_effect=RuntimeError("DB connection failed"))
 
-        sync_packages_for_media_buy("tenant-1", "mb-1")
+        with (
+            patch("src.services.tmp_provider_sync.MediaBuyUoW", mock_mb_cls),
+            patch("src.services.tmp_provider_sync.TMPProviderUoW", mock_tp_cls),
+        ):
+            sync_packages_for_media_buy("tenant-1", "mb-1")
 
         mock_post.assert_not_called()
 
@@ -454,118 +425,97 @@ class TestResolveSellAgentUrl:
 
         assert result == "https://custom.agent.com/mcp"
 
-    @patch("src.services.tmp_provider_sync.TenantConfigUoW")
-    def test_uses_tenant_virtual_host(self, mock_uow_cls):
+    def test_uses_tenant_virtual_host(self):
         """Uses tenant.virtual_host when ADCP_AGENT_URL is not set."""
+        import os
+
         tenant = MagicMock()
         tenant.virtual_host = "tenant.salesagent.example.com"
         tenant.subdomain = "tenant"
-        mock_uow = MagicMock()
-        mock_uow.tenant_config = MagicMock()
-        mock_uow.tenant_config.get_tenant.return_value = tenant
-        mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-        mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls = _make_tenant_config_uow(tenant)
 
-        with patch.dict("os.environ", {}, clear=False):
-            # Ensure ADCP_AGENT_URL is not set
-            import os
-
-            os.environ.pop("ADCP_AGENT_URL", None)
-            result = _resolve_seller_agent_url("test-tenant")
+        with patch("src.services.tmp_provider_sync.TenantConfigUoW", mock_uow_cls):
+            with patch.dict("os.environ", {}, clear=False):
+                os.environ.pop("ADCP_AGENT_URL", None)
+                result = _resolve_seller_agent_url("test-tenant")
 
         assert result == "https://tenant.salesagent.example.com/mcp"
 
-    @patch("src.services.tmp_provider_sync.TenantConfigUoW")
-    def test_returns_none_when_no_valid_https_url(self, mock_uow_cls):
+    def test_returns_none_when_no_valid_https_url(self):
         """Returns None when tenant has no public virtual_host and ADCP_AGENT_URL is unset.
 
         The spec requires agent_url to use https://. A local-only deployment
         cannot produce a valid https URL, so None is returned and the caller
         skips the sync rather than emitting a spec-invalid binding.
         """
+        import os
+
         tenant = MagicMock()
         tenant.virtual_host = None
         tenant.subdomain = None
-        mock_uow = MagicMock()
-        mock_uow.tenant_config = MagicMock()
-        mock_uow.tenant_config.get_tenant.return_value = tenant
-        mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-        mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls = _make_tenant_config_uow(tenant)
 
-        with patch.dict("os.environ", {}, clear=False):
-            import os
-
-            os.environ.pop("ADCP_AGENT_URL", None)
-            result = _resolve_seller_agent_url("test-tenant")
+        with patch("src.services.tmp_provider_sync.TenantConfigUoW", mock_uow_cls):
+            with patch.dict("os.environ", {}, clear=False):
+                os.environ.pop("ADCP_AGENT_URL", None)
+                result = _resolve_seller_agent_url("test-tenant")
 
         assert result is None
 
-    @patch("src.services.tmp_provider_sync.TenantConfigUoW")
-    def test_uses_https_for_public_virtual_host(self, mock_uow_cls):
+    def test_uses_https_for_public_virtual_host(self):
         """A public (non-local) virtual_host resolves to https://."""
+        import os
+
         tenant = MagicMock()
         tenant.virtual_host = "tenant.salesagent.example.com"
         tenant.subdomain = None
-        mock_uow = MagicMock()
-        mock_uow.tenant_config = MagicMock()
-        mock_uow.tenant_config.get_tenant.return_value = tenant
-        mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-        mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls = _make_tenant_config_uow(tenant)
 
-        with patch.dict("os.environ", {}, clear=False):
-            import os
-
-            os.environ.pop("ADCP_AGENT_URL", None)
-            result = _resolve_seller_agent_url("test-tenant")
+        with patch("src.services.tmp_provider_sync.TenantConfigUoW", mock_uow_cls):
+            with patch.dict("os.environ", {}, clear=False):
+                os.environ.pop("ADCP_AGENT_URL", None)
+                result = _resolve_seller_agent_url("test-tenant")
 
         assert result == "https://tenant.salesagent.example.com/mcp"
 
-    @patch("src.services.tmp_provider_sync.TenantConfigUoW")
-    def test_returns_none_for_localhost_virtual_host(self, mock_uow_cls):
+    def test_returns_none_for_localhost_virtual_host(self):
         """A localhost virtual_host returns None — cannot produce a valid https URL.
 
         Per dist/schemas/3.1.0/core/seller-agent-ref.json, agent_url MUST use
         https://. Local dev hosts cannot satisfy this requirement, so None is
         returned and the caller skips the sync.
         """
+        import os
+
         tenant = MagicMock()
         tenant.virtual_host = "tenant.sales-agent.localhost:8001"
         tenant.subdomain = None
-        mock_uow = MagicMock()
-        mock_uow.tenant_config = MagicMock()
-        mock_uow.tenant_config.get_tenant.return_value = tenant
-        mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-        mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls = _make_tenant_config_uow(tenant)
 
-        with patch.dict("os.environ", {}, clear=False):
-            import os
-
-            os.environ.pop("ADCP_AGENT_URL", None)
-            result = _resolve_seller_agent_url("test-tenant")
+        with patch("src.services.tmp_provider_sync.TenantConfigUoW", mock_uow_cls):
+            with patch.dict("os.environ", {}, clear=False):
+                os.environ.pop("ADCP_AGENT_URL", None)
+                result = _resolve_seller_agent_url("test-tenant")
 
         assert result is None
 
-    @patch("src.services.tmp_provider_sync.TenantConfigUoW")
-    def test_does_not_misclassify_public_host_containing_localhost_substring(self, mock_uow_cls):
+    def test_does_not_misclassify_public_host_containing_localhost_substring(self):
         """A public host that merely CONTAINS 'localhost' as a substring must get https.
 
         Regression test for the substring-check bug: "localhost" not in host
         would incorrectly treat "my-localhost-mirror.example.com" as local.
         """
+        import os
+
         tenant = MagicMock()
         tenant.virtual_host = "my-localhost-mirror.example.com"
         tenant.subdomain = None
-        mock_uow = MagicMock()
-        mock_uow.tenant_config = MagicMock()
-        mock_uow.tenant_config.get_tenant.return_value = tenant
-        mock_uow_cls.return_value.__enter__ = MagicMock(return_value=mock_uow)
-        mock_uow_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_uow_cls = _make_tenant_config_uow(tenant)
 
-        with patch.dict("os.environ", {}, clear=False):
-            import os
-
-            os.environ.pop("ADCP_AGENT_URL", None)
-            result = _resolve_seller_agent_url("test-tenant")
+        with patch("src.services.tmp_provider_sync.TenantConfigUoW", mock_uow_cls):
+            with patch.dict("os.environ", {}, clear=False):
+                os.environ.pop("ADCP_AGENT_URL", None)
+                result = _resolve_seller_agent_url("test-tenant")
 
         assert result == "https://my-localhost-mirror.example.com/mcp"
 
@@ -697,27 +647,19 @@ class TestPostPackagesSyncAuth:
         pkg = MagicMock()
         pkg.package_id = "pkg-1"
         pkg.package_config = {"product_id": "prod-1"}
-        mock_mb_uow = MagicMock()
-        mock_mb_uow.media_buys.get_packages.return_value = [pkg]
 
         provider = MagicMock()
         provider.name = "Credentialed Provider"
         provider.endpoint = "http://provider:3000"
         provider.auth_credentials = "provider-secret"
-        mock_tp_uow = MagicMock()
-        mock_tp_uow.tmp_providers.list_syncable.return_value = [provider]
 
+        mock_mb_cls, _mb_uow, mock_tp_cls, _tp_uow = _make_sync_uow(packages=[pkg], providers=[provider])
         with (
             patch("src.services.tmp_provider_sync._post_packages_sync") as mock_post,
             patch("src.services.tmp_provider_sync._resolve_seller_agent_url", return_value="http://agent/mcp"),
-            patch("src.services.tmp_provider_sync.MediaBuyUoW") as mock_mb_cls,
-            patch("src.services.tmp_provider_sync.TMPProviderUoW") as mock_tp_cls,
+            patch("src.services.tmp_provider_sync.MediaBuyUoW", mock_mb_cls),
+            patch("src.services.tmp_provider_sync.TMPProviderUoW", mock_tp_cls),
         ):
-            mock_mb_cls.return_value.__enter__ = MagicMock(return_value=mock_mb_uow)
-            mock_mb_cls.return_value.__exit__ = MagicMock(return_value=False)
-            mock_tp_cls.return_value.__enter__ = MagicMock(return_value=mock_tp_uow)
-            mock_tp_cls.return_value.__exit__ = MagicMock(return_value=False)
-
             sync_packages_for_media_buy("tenant-1", "mb-1")
 
         mock_post.assert_called_once_with(

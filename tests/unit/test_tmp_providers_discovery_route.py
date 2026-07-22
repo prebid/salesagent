@@ -377,6 +377,34 @@ class TestDiscoveryApiKeyAuth:
 
         assert response.status_code == 200
 
+    def test_returns_401_for_non_ascii_key(self):
+        """A header value with non-ASCII bytes returns 401, not 500.
+
+        Starlette decodes header bytes as latin-1, so any byte > 0x7F yields a
+        non-ASCII str.  secrets.compare_digest raises TypeError for non-ASCII
+        strings — the endpoint must catch this and return a clean 401 instead
+        of a 500 that mislabels an auth failure as a server error.
+
+        The httpx2 test client rejects non-ASCII header values before they
+        reach the server, so we call require_api_key() directly with a mock
+        Request that carries the non-ASCII header — this exercises the exact
+        production code path that Starlette would trigger in production.
+        """
+        import asyncio
+
+        import pytest
+
+        from src.core.exceptions import AdCPAuthRequiredError
+        from src.routes.tmp_providers import require_api_key
+
+        # Starlette decodes header bytes as latin-1; byte 0xFF → '\xff' in str
+        mock_request = MagicMock()
+        mock_request.headers.get = lambda key, default="": "caf\xff" if key == "x-adcp-auth" else default
+
+        with patch.dict("os.environ", {"TMP_DISCOVERY_API_KEYS": "valid-key"}):
+            with pytest.raises(AdCPAuthRequiredError):
+                asyncio.run(require_api_key(mock_request))
+
 
 # ---------------------------------------------------------------------------
 # uow.tenant_config is None guard (replaces the old assert)

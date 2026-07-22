@@ -108,7 +108,20 @@ async def require_api_key(request: Request) -> None:
         or _parse_bearer_token(request.headers.get("authorization", ""))
         or ""
     )
-    if not any(secrets.compare_digest(api_key, k) for k in allowed):
+    # Compare on bytes: Starlette decodes header bytes as latin-1, so any byte
+    # > 0x7F yields a non-ASCII str.  secrets.compare_digest raises TypeError
+    # for non-ASCII strings — encode both sides to bytes so a malformed header
+    # returns a clean 401 instead of a 500.
+    try:
+        api_key_bytes = api_key.encode("utf-8", "surrogatepass")
+        if not any(secrets.compare_digest(api_key_bytes, k.encode("utf-8", "surrogatepass")) for k in allowed):
+            raise AdCPAuthRequiredError(
+                "Authentication required.",
+                details={
+                    "suggestion": "Provide a valid API key via x-adcp-auth, X-API-Key, or Authorization: Bearer <key>."
+                },
+            )
+    except (UnicodeEncodeError, TypeError):
         raise AdCPAuthRequiredError(
             "Authentication required.",
             details={

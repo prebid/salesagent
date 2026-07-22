@@ -28,8 +28,9 @@ from src.core.security.url_validator import check_url_ssrf, sanitize_for_log
 logger = logging.getLogger(__name__)
 
 # Valid uid_type values per AdCP spec (uid-type enum).
-# Authority: dist/schemas/3.1.0/enums/uid-type.json (AdCP 3.1.0-beta.3).
-# Pinned by test_valid_uid_types_matches_pinned_schema in test_tmp_providers_blueprint.py.
+# Authority: adcp.types.generated_poc.enums.uid_type.UidType (pinned SDK, adcp==5.7.0).
+# Pinned by TestValidUidTypesMatchesPinnedSchema in test_tmp_providers_blueprint.py —
+# that guard asserts this frozenset equals the SDK enum so a version bump can't drift silently.
 VALID_UID_TYPES = frozenset(
     [
         "uid2",
@@ -41,7 +42,6 @@ VALID_UID_TYPES = frozenset(
         "maid",
         "hashed_email",
         "publisher_first_party",
-        "world_id_nullifier",
         "other",
     ]
 )
@@ -56,6 +56,42 @@ tmp_providers_bp = Blueprint("tmp_providers", __name__)
 # ---------------------------------------------------------------------------
 # Guard helpers (DRY: used by multiple route handlers)
 # ---------------------------------------------------------------------------
+
+
+def _log_and_500(action: str, exc: Exception):
+    """Log *exc* at ERROR level and return a JSON 500 response.
+
+    Collapses the copy-pasted ``except Exception as e: logger.error(...)``
+    blocks in JSON-returning route handlers into one call site.  The *action*
+    string appears in the log message and the JSON error body so operators can
+    identify which handler failed.
+
+    Usage::
+
+        except Exception as e:
+            return _log_and_500("deactivating TMP provider", e)
+    """
+    logger.error("Error %s: %s", action, exc, exc_info=True)
+    return jsonify({"error": f"Error {action}"}), 500
+
+
+def _log_flash_and_redirect(action: str, exc: Exception, redirect_response):
+    """Log *exc* at ERROR level, flash an error message, and return *redirect_response*.
+
+    Collapses the copy-pasted ``except Exception as e: logger.error(...); flash(...);
+    return redirect(...)`` blocks in flash-based route handlers into one call site.
+
+    Usage::
+
+        except Exception as e:
+            return _log_flash_and_redirect(
+                "loading TMP providers", e,
+                redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id)),
+            )
+    """
+    logger.error("Error %s: %s", action, exc, exc_info=True)
+    flash(f"Error {action}", "error")
+    return redirect_response
 
 
 def _tenant_not_found_redirect():
@@ -223,9 +259,11 @@ def list_tmp_providers(tenant_id):
             )
 
     except Exception as e:
-        logger.error("Error loading TMP providers: %s", e, exc_info=True)
-        flash("Error loading TMP providers", "error")
-        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
+        return _log_flash_and_redirect(
+            "loading TMP providers",
+            e,
+            redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id)),
+        )
 
 
 @tmp_providers_bp.route("/add", methods=["GET", "POST"])
@@ -270,9 +308,11 @@ def add_tmp_provider(tenant_id):
             return redirect(url_for("tmp_providers.list_tmp_providers", tenant_id=tenant_id))
 
     except Exception as e:
-        logger.error("Error adding TMP provider: %s", e, exc_info=True)
-        flash("Error adding TMP provider", "error")
-        return redirect(url_for("tmp_providers.add_tmp_provider", tenant_id=tenant_id))
+        return _log_flash_and_redirect(
+            "adding TMP provider",
+            e,
+            redirect(url_for("tmp_providers.add_tmp_provider", tenant_id=tenant_id)),
+        )
 
 
 @tmp_providers_bp.route("/<provider_id>/edit", methods=["GET", "POST"])
@@ -351,9 +391,11 @@ def edit_tmp_provider(tenant_id, provider_id):
             return redirect(url_for("tmp_providers.list_tmp_providers", tenant_id=tenant_id))
 
     except Exception as e:
-        logger.error("Error updating TMP provider: %s", e, exc_info=True)
-        flash("Error updating TMP provider", "error")
-        return redirect(url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id))
+        return _log_flash_and_redirect(
+            "updating TMP provider",
+            e,
+            redirect(url_for("tmp_providers.edit_tmp_provider", tenant_id=tenant_id, provider_id=provider_id)),
+        )
 
 
 @tmp_providers_bp.route("/<provider_id>/deactivate", methods=["POST"])
@@ -371,8 +413,7 @@ def deactivate_tmp_provider(tenant_id, provider_id):
             return jsonify({"success": True, "message": f"TMP provider '{provider.name}' deactivated"})
 
     except Exception as e:
-        logger.error("Error deactivating TMP provider: %s", e, exc_info=True)
-        return jsonify({"error": "Error deactivating TMP provider"}), 500
+        return _log_and_500("deactivating TMP provider", e)
 
 
 @tmp_providers_bp.route("/<provider_id>/delete", methods=["DELETE"])
@@ -394,8 +435,7 @@ def delete_tmp_provider(tenant_id, provider_id):
             return jsonify({"success": True, "message": f"TMP provider '{provider_name}' deleted successfully"})
 
     except Exception as e:
-        logger.error("Error deleting TMP provider: %s", e, exc_info=True)
-        return jsonify({"error": "Error deleting TMP provider"}), 500
+        return _log_and_500("deleting TMP provider", e)
 
 
 @tmp_providers_bp.route("/<provider_id>/health", methods=["GET"])
@@ -438,5 +478,4 @@ def health_check_tmp_provider(tenant_id, provider_id):
             )
 
     except Exception as e:
-        logger.error("Error checking TMP provider health: %s", e, exc_info=True)
-        return jsonify({"error": "Error checking provider health"}), 500
+        return _log_and_500("checking TMP provider health", e)

@@ -43,10 +43,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Timeout for each POST /packages/sync call (seconds).
-# Kept short — TMP Provider is an internal service on the same network.
-_SYNC_TIMEOUT_S = 5.0
-
 
 def fire_tmp_sync(response: Any, identity: ResolvedIdentity | None) -> None:
     """Spawn a daemon thread to sync TMP packages after a successful media buy operation.
@@ -201,7 +197,7 @@ def _post_packages_sync(endpoint: str, payloads: list[dict[str, Any]], auth_cred
     """
     url = provider_url(endpoint, "/packages/sync")
     headers = bearer_headers(auth_credentials)
-    with httpx.Client(**provider_client_kwargs(timeout=_SYNC_TIMEOUT_S)) as client:
+    with httpx.Client(**provider_client_kwargs()) as client:
         resp = client.post(url, json=payloads, headers=headers)
         resp.raise_for_status()
     logger.info(

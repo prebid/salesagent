@@ -49,8 +49,15 @@ def _make_db_context(session: MagicMock) -> MagicMock:
     return ctx
 
 
-def _make_provider(provider_id: str, tenant_id: str, endpoint: str) -> MagicMock:
-    """Return a lightweight mock TMPProvider with the three fields tick() reads."""
+def _make_mock_provider(provider_id: str, tenant_id: str, endpoint: str) -> MagicMock:
+    """Return a lightweight mock TMPProvider with the three fields tick() reads.
+
+    Named ``_make_mock_provider`` (not ``_make_provider``) to distinguish it from
+    ``tests.unit._tmp_helpers._make_provider``, which returns a real ``TMPProvider``
+    ORM instance.  The health scheduler only needs the three fields that ``tick()``
+    reads (provider_id, tenant_id, endpoint) — a MagicMock is sufficient and avoids
+    the DetachedInstanceError risk that real ORM instances carry outside a session.
+    """
     p = MagicMock()
     p.provider_id = provider_id
     p.tenant_id = tenant_id
@@ -170,8 +177,8 @@ class TestCheckAllProviders:
     @pytest.mark.asyncio
     async def test_updates_health_status_for_each_provider(self):
         """Each provider gets its health_status updated via UoW with correct values."""
-        provider_a = _make_provider("uuid-a", "tenant-1", "https://a.example.com")
-        provider_b = _make_provider("uuid-b", "tenant-2", "https://b.example.com")
+        provider_a = _make_mock_provider("uuid-a", "tenant-1", "https://a.example.com")
+        provider_b = _make_mock_provider("uuid-b", "tenant-2", "https://b.example.com")
 
         mock_session_read = MagicMock()
         mock_repo = MagicMock()
@@ -214,7 +221,7 @@ class TestCheckAllProviders:
     @pytest.mark.asyncio
     async def test_healthy_status_written_on_200(self):
         """A provider returning 200 gets health_status='healthy' written."""
-        provider = _make_provider("uuid-healthy", "tenant-1", "https://healthy.example.com")
+        provider = _make_mock_provider("uuid-healthy", "tenant-1", "https://healthy.example.com")
 
         mock_session_read = MagicMock()
         mock_repo = MagicMock()
@@ -269,7 +276,7 @@ class TestCheckAllProviders:
     @pytest.mark.asyncio
     async def test_session_closed_before_probes(self):
         """DB session from the read phase is closed before HTTP probes run."""
-        provider = _make_provider("uuid-x", "tenant-1", "https://x.example.com")
+        provider = _make_mock_provider("uuid-x", "tenant-1", "https://x.example.com")
 
         call_order: list[str] = []
 
@@ -308,8 +315,8 @@ class TestCheckAllProviders:
     @pytest.mark.asyncio
     async def test_bad_endpoint_does_not_cancel_other_probes(self):
         """return_exceptions=True: one probe raising does not cancel the rest."""
-        provider_a = _make_provider("uuid-a", "tenant-1", "https://bad.invalid")
-        provider_b = _make_provider("uuid-b", "tenant-1", "https://good.example.com")
+        provider_a = _make_mock_provider("uuid-a", "tenant-1", "https://bad.invalid")
+        provider_b = _make_mock_provider("uuid-b", "tenant-1", "https://good.example.com")
 
         mock_session_read = MagicMock()
         mock_repo = MagicMock()
@@ -346,9 +353,9 @@ class TestCheckAllProviders:
     @pytest.mark.asyncio
     async def test_providers_grouped_by_tenant_one_uow_per_tenant(self):
         """Providers from different tenants each get their own UoW (one commit per tenant)."""
-        provider_a = _make_provider("uuid-a", "tenant-1", "https://a.example.com")
-        provider_b = _make_provider("uuid-b", "tenant-2", "https://b.example.com")
-        provider_c = _make_provider("uuid-c", "tenant-1", "https://c.example.com")
+        provider_a = _make_mock_provider("uuid-a", "tenant-1", "https://a.example.com")
+        provider_b = _make_mock_provider("uuid-b", "tenant-2", "https://b.example.com")
+        provider_c = _make_mock_provider("uuid-c", "tenant-1", "https://c.example.com")
 
         mock_session_read = MagicMock()
         mock_repo = MagicMock()
