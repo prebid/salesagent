@@ -34,15 +34,14 @@ WIRE_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST]
 
 def _create_kwargs(product, *, idempotency_key, po_number="WIRE-1"):
     """One fixed payload; callers copy it per call so the canonical hash is stable."""
-    now = datetime.now(UTC)
-    return {
-        "brand": {"domain": "wire-matrix.example.com"},
-        "packages": [{"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
-        "start_time": (now + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "end_time": (now + timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "po_number": po_number,
-        "idempotency_key": idempotency_key,
-    }
+    from tests.helpers import create_media_buy_kwargs
+
+    return create_media_buy_kwargs(
+        product,
+        idempotency_key=idempotency_key,
+        brand_domain="wire-matrix.example.com",
+        po_number=po_number,
+    )
 
 
 @pytest.mark.parametrize("transport", WIRE_TRANSPORTS, ids=lambda t: t.value)

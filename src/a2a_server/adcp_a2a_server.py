@@ -843,7 +843,7 @@ class AdCPRequestHandler(RequestHandler):
                     # carries it; the v0.3 adapter has been observed dropping it on
                     # E2E — reconciliation tracked upstream). The callback is never
                     # stored, so no
-                    # webhook can be driven (#1512). Boundary parity (P26): the
+                    # webhook can be driven (#1512). Boundary parity: the
                     # per-skill AdCPError path records to the audit/activity sinks
                     # via record_boundary_error_for_identity, and MCP/REST record
                     # buyer validation errors uniformly — so this rejection does too

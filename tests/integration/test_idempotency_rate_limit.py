@@ -187,15 +187,14 @@ class TestInsertCeilingThroughEntrypoint:
 
     @staticmethod
     def _create_kwargs(product, idem_key, *, po_number="RL-1"):
-        now = datetime.now(UTC)
-        return {
-            "brand": {"domain": "ratelimit-test.example.com"},
-            "packages": [{"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
-            "start_time": (now + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "end_time": (now + timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "po_number": po_number,
-            "idempotency_key": idem_key,
-        }
+        from tests.helpers import create_media_buy_kwargs
+
+        return create_media_buy_kwargs(
+            product,
+            idempotency_key=idem_key,
+            brand_domain="ratelimit-test.example.com",
+            po_number=po_number,
+        )
 
     def test_fresh_key_over_ceiling_rejects_rate_limited_on_wire(self, integration_db, monkeypatch):
         """A fresh key in a full scope rejects with RATE_LIMITED + retry_after on the real wire."""

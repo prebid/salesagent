@@ -124,3 +124,32 @@ def seed_media_buy(
             status=status,
         )
         env.get_session()
+
+
+def create_media_buy_kwargs(
+    product,
+    *,
+    idempotency_key: str,
+    brand_domain: str = "idempotency-test.example.com",
+    po_number: str = "IDEM-1",
+) -> dict:
+    """One fixed create_media_buy payload for idempotency tests.
+
+    Callers copy the result per call so the canonical hash stays stable across
+    a retry. Four structurally identical builders had been copied across the
+    wire-matrix, rate-limit, and race modules (one of them twice, once inline),
+    varying only in ``brand_domain`` and ``po_number`` — sub-threshold for the
+    clone detector, so nothing would have caught the day one copy drifted a
+    field and quietly stopped exercising what its siblings did.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    return {
+        "brand": {"domain": brand_domain},
+        "packages": [{"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
+        "start_time": (now + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "end_time": (now + timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "po_number": po_number,
+        "idempotency_key": idempotency_key,
+    }

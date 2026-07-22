@@ -10,13 +10,13 @@ wire contract (the prerelease-advertised-as-stable bug this constant exists to
 prevent). See docs/adcp-spec-version.md for the bump procedure.
 
 Spec grounding (v3.1.1):
-    - ``static/schemas/source/core/version-envelope.json`` — buyers pin either
+    - ``dist/schemas/3.1.1/core/version-envelope.json`` — buyers pin either
       ``adcp_version`` (release-precision string, e.g. ``"4.0"``) or the
       deprecated ``adcp_major_version`` (int). The seller "validates against
       its supported_versions and returns VERSION_UNSUPPORTED on cross-major
       mismatch, or downshifts to the highest supported release within the same
       major".
-    - ``static/schemas/source/error-details/version-unsupported.json`` — the
+    - ``dist/schemas/3.1.1/error-details/version-unsupported.json`` — the
       VERSION_UNSUPPORTED details payload REQUIRES ``supported_versions[]``
       (minItems 1), echoes the buyer's pin (version envelope via allOf), and
       may carry the deprecated ``supported_majors[]`` plus the advisory

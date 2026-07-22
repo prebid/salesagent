@@ -469,16 +469,16 @@ def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
     assert suggestion, f"Expected non-empty suggestion on {error_code} error, got {suggestion!r} ({error!r})"
 
 
-@then(parsers.parse("the wire error should be {error_code} with suggestion"))
-def then_wire_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
+@then(parsers.parse('the wire error should be {error_code} naming "{field}" with suggestion'))
+def then_wire_error_code_with_suggestion(ctx: dict, error_code: str, field: str) -> None:
     """Grade the actual transport envelope, not a reconstructed exception.
 
-    Every current consumer is an idempotency-key rejection scenario (uc003
-    update + uc006 / uc011 sync required-key rows), so this step also pins
-    ``errors[0].field`` and a message signal — without them, ANY validation
-    rejection (e.g. an empty accounts array, or an update's mutated fields
-    firing first) would satisfy a code+suggestion-only check and the scenario
-    would pass for the wrong reason.
+    The offending field is named IN THE GHERKIN rather than hardcoded here:
+    without pinning a field and a message signal, ANY validation rejection
+    (an empty accounts array, or an update's mutated fields firing first) would
+    satisfy a code+suggestion-only check and the scenario would pass for the
+    wrong reason. Every consumer today is an idempotency-key row, but the step
+    text no longer advertises a general contract it does not implement.
     """
     result = ctx.get("result")
     assert result is not None, "Expected the transport dispatcher result"
@@ -489,8 +489,8 @@ def then_wire_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
     result.assert_wire_error(
         error_code,
         require_suggestion=True,
-        message_substr="idempotency_key",
-        field="idempotency_key",
+        message_substr=field,
+        field=field,
     )
 
 

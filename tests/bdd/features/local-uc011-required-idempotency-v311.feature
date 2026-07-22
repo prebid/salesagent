@@ -19,4 +19,4 @@ Feature: UC-011 AdCP 3.1.1 required sync idempotency key
     Given the Buyer is authenticated with a valid principal_id
     When the Buyer Agent sends sync_accounts without the required idempotency_key
     Then the operation should fail
-    And the wire error should be VALIDATION_ERROR with suggestion
+    And the wire error should be VALIDATION_ERROR naming "idempotency_key" with suggestion

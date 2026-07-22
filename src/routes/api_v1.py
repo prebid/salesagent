@@ -250,6 +250,12 @@ def _omitted_read_idempotency_key_default() -> Any:
     return None
 
 
+# The release an UNPINNED buyer is served. A client that sends no pin at all
+# predates version negotiation, so it gets the v2-compatible response shape;
+# this is a response-compat fallback, never an advertised or servable pin.
+LEGACY_UNPINNED_VERSION = "1.0.0"
+
+
 class _VersionedBody(SalesAgentBaseModel):
     """Shared AdCP version-negotiation pins accepted on every REST body.
 
@@ -259,7 +265,14 @@ class _VersionedBody(SalesAgentBaseModel):
     ``_validate_version_pins`` before Pydantic parsing (#1546).
     """
 
-    adcp_version: str = "1.0.0"
+    # None, not "1.0.0". This default is PUBLISHED in the OpenAPI schema, and
+    # "1.0.0" is not a value this seller serves — it fails the pinned
+    # version-envelope pattern and is absent from ADVERTISED_ADCP_VERSIONS, so a
+    # generated REST client that echoes the documented default sends an
+    # unservable pin and gets VERSION_UNSUPPORTED. Absent means absent; the
+    # legacy-shape fallback for a genuinely unpinned client lives at the one
+    # place that needs it (LEGACY_UNPINNED_VERSION below).
+    adcp_version: str | None = None
     adcp_major_version: int | None = None
     # Omission alone receives the pinned 3.1 read grace. SkipValidation keeps
     # an explicit null or wrong JSON type intact until the route-level shared
@@ -473,7 +486,7 @@ async def get_products(
     # the same VERSION_UNSUPPORTED validation the sibling routes' bare
     # dependencies=[...] form does; route handlers must not take a raw Request
     # (structural guard), so the value is threaded via the dependency return.
-    served_version = negotiated_version or body.adcp_version
+    served_version = negotiated_version or body.adcp_version or LEGACY_UNPINNED_VERSION
     # Pass the MODEL, not a pre-dumped dict: apply_version_compat short-circuits
     # on a dict (the legacy pass-through) and would never derive the v2-compat
     # pricing fields (is_fixed / rate / price_guidance.floor) from the

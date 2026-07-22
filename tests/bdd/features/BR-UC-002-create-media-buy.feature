@@ -1,6 +1,17 @@
 # Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 # Local scenario overlays applied: tests/bdd/overlays/BR-UC-002-create-media-buy.feature
+#
+# LOCAL DIVERGENCE pending an upstream sync: the body of
+# @T-UC-002-v31-idempotency-replay was authored here, not regenerated from
+# adcp-req at the SHA above (no adcp-req checkout was reachable). It is the
+# upstream scenario restored after a descope removed it, so the next
+# `compile_bdd.py --merge` against real upstream will overwrite it -- verify the
+# step texts still bind afterwards rather than assuming green, since unbound
+# steps auto-xfail rather than fail. The overlay-compiler guard covers a
+# different risk (an overlay reconciling the scenario away again), NOT fidelity
+# to upstream: its fixture is a synthetic source that already contains the
+# expected text.
 
 @analysis-2026-03-09 @schema-v3.1
 Feature: BR-UC-002 Create Media Buy

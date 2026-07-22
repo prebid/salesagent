@@ -20,4 +20,4 @@ Feature: UC-003 AdCP 3.1.1 required update idempotency key
       | paused       | true        |
     And the update request explicitly omits idempotency_key from the wire
     When the Buyer Agent sends the update_media_buy request
-    Then the wire error should be VALIDATION_ERROR with suggestion
+    Then the wire error should be VALIDATION_ERROR naming "idempotency_key" with suggestion

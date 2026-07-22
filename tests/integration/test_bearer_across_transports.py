@@ -84,8 +84,14 @@ def _is_auth_rejection(body: dict) -> bool:
 
     Keys on the buyer-facing wire CODE in the two-layer envelope
     (``error.data``), not the free-form ``message`` substring: a message check
-    would stay green if the boundary regressed the AUTH code or (per #1546 D1)
-    swapped the JSON-RPC error class, exactly the divergences this guards.
+    would stay green if the boundary regressed the AUTH code.
+
+    It does NOT observe the JSON-RPC error CLASS — an earlier version of this
+    docstring claimed it did, but the body only reads ``error.data``, so a
+    boundary swapping InvalidRequestError for InternalError while keeping the
+    same envelope passes here. That symmetry is graded by
+    ``test_a2a_auth_optional.py::test_invalid_token_error_echoes_unambiguous_application_context``,
+    which reddens under exactly that mutation.
     """
     error = body.get("error")
     if not error:

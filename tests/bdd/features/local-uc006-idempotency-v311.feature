@@ -33,8 +33,8 @@ Feature: UC-006 AdCP 3.1.1 idempotency key validation
 
     Examples: Invalid keys
       | partition      | key_value          | expected                                             |
-      | absent         |                    | the wire error should be VALIDATION_ERROR with suggestion |
-      | empty_string   | ""                 | the wire error should be VALIDATION_ERROR with suggestion |
-      | too_short      | "1234567890abcde"  | the wire error should be VALIDATION_ERROR with suggestion |
-      | too_long       | "a]x256"           | the wire error should be VALIDATION_ERROR with suggestion |
-      | invalid_char   | "1234567890abcde/" | the wire error should be VALIDATION_ERROR with suggestion |
+      | absent         |                    | the wire error should be VALIDATION_ERROR naming "idempotency_key" with suggestion |
+      | empty_string   | ""                 | the wire error should be VALIDATION_ERROR naming "idempotency_key" with suggestion |
+      | too_short      | "1234567890abcde"  | the wire error should be VALIDATION_ERROR naming "idempotency_key" with suggestion |
+      | too_long       | "a]x256"           | the wire error should be VALIDATION_ERROR naming "idempotency_key" with suggestion |
+      | invalid_char   | "1234567890abcde/" | the wire error should be VALIDATION_ERROR naming "idempotency_key" with suggestion |
