@@ -29,6 +29,7 @@ from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.utils.a2a_helpers import (
     assert_delivery_forwarded_account,
+    assert_failed_task_envelope,
     create_a2a_message_with_skill,
     create_a2a_text_message,
 )
@@ -1095,12 +1096,7 @@ class TestA2ASkillInvocation:
 
             # Rejected up front → terminal failed Task with UNSUPPORTED_FEATURE, and no
             # skill ran (a real get_products would have produced a product_catalog).
-            from tests.utils.a2a_helpers import extract_data_from_artifact
-
-            assert isinstance(result, Task)
-            assert result.status.state == TaskState.TASK_STATE_FAILED
-            envelope = extract_data_from_artifact(result.artifacts[0])
-            assert envelope["adcp_error"]["code"] == "UNSUPPORTED_FEATURE", envelope
+            envelope = assert_failed_task_envelope(result, code="UNSUPPORTED_FEATURE", artifact_name="processing_error")
             assert "multiple skills" in envelope["errors"][0]["message"].lower()
 
     # TODO: Add test_missing_authentication once we understand how A2A server handles auth errors
@@ -1585,8 +1581,6 @@ class TestA2ASkillInvocation:
     @pytest.mark.asyncio
     async def test_approve_creative_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):
         """Test approve_creative skill returns a failed Task with UNSUPPORTED_FEATURE (not JSON-RPC)."""
-        from tests.utils.a2a_helpers import extract_data_from_artifact
-
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
@@ -1601,17 +1595,11 @@ class TestA2ASkillInvocation:
             result = await handler.on_message_send(params, context=ctx)
 
             # Application-layer failure → failed Task with UNSUPPORTED_FEATURE, not JSON-RPC.
-            assert isinstance(result, Task)
-            assert result.status.state == TaskState.TASK_STATE_FAILED
-            envelope = extract_data_from_artifact(result.artifacts[0])
-            assert envelope["adcp_error"]["code"] == "UNSUPPORTED_FEATURE"
-            assert envelope["adcp_error"]["recovery"] == "correctable"
+            assert_failed_task_envelope(result, code="UNSUPPORTED_FEATURE", recovery="correctable")
 
     @pytest.mark.asyncio
     async def test_get_media_buy_status_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):
         """Test get_media_buy_status skill returns a failed Task with UNSUPPORTED_FEATURE (not JSON-RPC)."""
-        from tests.utils.a2a_helpers import extract_data_from_artifact
-
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
@@ -1626,17 +1614,11 @@ class TestA2ASkillInvocation:
             result = await handler.on_message_send(params, context=ctx)
 
             # Application-layer failure → failed Task with UNSUPPORTED_FEATURE, not JSON-RPC.
-            assert isinstance(result, Task)
-            assert result.status.state == TaskState.TASK_STATE_FAILED
-            envelope = extract_data_from_artifact(result.artifacts[0])
-            assert envelope["adcp_error"]["code"] == "UNSUPPORTED_FEATURE"
-            assert envelope["adcp_error"]["recovery"] == "correctable"
+            assert_failed_task_envelope(result, code="UNSUPPORTED_FEATURE", recovery="correctable")
 
     @pytest.mark.asyncio
     async def test_optimize_media_buy_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):
         """Test optimize_media_buy skill returns a failed Task with UNSUPPORTED_FEATURE (not JSON-RPC)."""
-        from tests.utils.a2a_helpers import extract_data_from_artifact
-
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
@@ -1651,11 +1633,7 @@ class TestA2ASkillInvocation:
             result = await handler.on_message_send(params, context=ctx)
 
             # Application-layer failure → failed Task with UNSUPPORTED_FEATURE, not JSON-RPC.
-            assert isinstance(result, Task)
-            assert result.status.state == TaskState.TASK_STATE_FAILED
-            envelope = extract_data_from_artifact(result.artifacts[0])
-            assert envelope["adcp_error"]["code"] == "UNSUPPORTED_FEATURE"
-            assert envelope["adcp_error"]["recovery"] == "correctable"
+            assert_failed_task_envelope(result, code="UNSUPPORTED_FEATURE", recovery="correctable")
 
 
 if __name__ == "__main__":

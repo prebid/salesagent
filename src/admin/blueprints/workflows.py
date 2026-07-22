@@ -4,7 +4,7 @@ import json
 import logging
 from datetime import UTC, datetime
 
-from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, Response, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import select
 
 from src.admin.utils import require_tenant_access
@@ -149,7 +149,9 @@ def review_workflow_step(tenant_id, workflow_id, step_id):
         )
 
 
-def _refused_decision_response(workflow_repo, step_id, awaiting_desc):
+def _refused_decision_response(
+    workflow_repo: WorkflowRepository, step_id: str, awaiting_desc: str
+) -> tuple[Response, int]:
     """Map a refused approval/rejection compare-and-set to the right HTTP error.
 
     ``claim_approval`` / ``reject_if_approvable`` return None for EITHER a step that does not

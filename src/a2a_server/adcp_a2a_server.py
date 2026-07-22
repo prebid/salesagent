@@ -13,7 +13,7 @@ from contextlib import contextmanager
 
 # Import core functions for direct calls (raw functions without FastMCP decorators)
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from a2a.server.context import ServerCallContext
 from a2a.server.events.event_queue import Event
@@ -116,6 +116,12 @@ from src.core.validation_helpers import (
 )
 from src.core.version import get_version
 from src.services.protocol_webhook_service import get_protocol_webhook_service
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+    from src.core.database.models import WorkflowStep
+    from src.core.database.repositories.workflow import WorkflowRepository
 
 logger = logging.getLogger(__name__)
 
@@ -1287,7 +1293,7 @@ class AdCPRequestHandler(RequestHandler):
     @contextmanager
     def _owned_durable_step(
         self, task_id: str, identity: ResolvedIdentity | None
-    ) -> Iterator[tuple[Any, Any, Any] | None]:
+    ) -> Iterator[tuple["Session", "WorkflowRepository", "WorkflowStep"] | None]:
         """Shared preamble for durable (cross-process) task ops carrying an outer ``task_*`` id.
 
         Identity guard → tenant-scoped session + ``WorkflowRepository`` → the principal-owned step
@@ -1400,7 +1406,7 @@ class AdCPRequestHandler(RequestHandler):
                 session.rollback()
                 fresh = repo.get_by_step_id(step.step_id)
                 current = fresh.status if fresh is not None else "unknown"
-                raise TaskNotCancelableError(message=f"Task cannot be canceled - current step status: {current}")
+                raise TaskNotCancelableError(message=f"Task cannot be canceled - current state: {current}")
             session.commit()
             return Task(
                 id=task_id,
@@ -1851,7 +1857,7 @@ class AdCPRequestHandler(RequestHandler):
                 principal_id=getattr(identity, "principal_id", None) or "anonymous",
             )
 
-            sanitized = safe_adcp_error(e)
+            sanitized = _safe_adcp_error(e)
             if sanitized is not e:
                 raise sanitized from e
             raise

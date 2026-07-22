@@ -10,7 +10,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 from unittest.mock import ANY
 
-from a2a.types import Artifact, Message, Part, Role, SendMessageRequest, Task
+from a2a.types import Artifact, Message, Part, Role, SendMessageRequest, Task, TaskState
 from google.protobuf import json_format, struct_pb2
 
 if TYPE_CHECKING:
@@ -81,6 +81,34 @@ def extract_processing_error_envelope(task: Task) -> dict[str, Any]:
         f"error artifact must carry a human-readable TextPart (A2A error binding), got {len(text_parts)}"
     )
     return extract_data_from_artifact(artifact)
+
+
+def assert_failed_task_envelope(
+    task: Task, *, code: str, recovery: str | None = None, artifact_name: str = "error_result"
+) -> dict[str, Any]:
+    """Assert a synchronously-returned failed A2A Task carries the two-layer AdCP envelope with the
+    given wire ``code`` (and ``recovery`` when given).
+
+    The single place the failed-Task wire contract lives — pins the FAILED state, the artifact
+    name, and a single authoritative DataPart, then reads the envelope's ``adcp_error``. Unlike the
+    bare ``extract_data_from_artifact`` it replaces, it pins the artifact NAME, which differs by
+    path: a per-skill failure emits ``error_result`` (the default), while a top-level rejection
+    (e.g. the multi-skill guard) emits ``processing_error`` — pass ``artifact_name`` for the latter.
+    Returns the decoded envelope for any test-specific follow-up assertions.
+    """
+    assert isinstance(task, Task), f"expected a failed Task, got {type(task).__name__}"
+    assert task.status.state == TaskState.TASK_STATE_FAILED, f"expected FAILED task, got {task.status.state!r}"
+    assert task.artifacts, "failed Task must carry the error envelope artifact"
+    artifact = task.artifacts[0]
+    assert artifact.name == artifact_name, f"expected {artifact_name!r} artifact, got {artifact.name!r}"
+    data_parts = [p for p in artifact.parts if p.HasField("data")]
+    assert len(data_parts) == 1, f"error artifact must carry exactly one authoritative DataPart, got {len(data_parts)}"
+    envelope = extract_data_from_artifact(artifact)
+    adcp_error = envelope["adcp_error"]
+    assert adcp_error["code"] == code, f"expected wire code {code!r}, got {adcp_error!r}"
+    if recovery is not None:
+        assert adcp_error["recovery"] == recovery, f"expected recovery {recovery!r}, got {adcp_error!r}"
+    return envelope
 
 
 def make_test_a2a_identity() -> "ResolvedIdentity":

@@ -339,15 +339,15 @@ class TestSafeAdcpErrorSuggestionMatchesRecovery:
         from src.core.exceptions import AdCPConfigurationError, safe_adcp_error
 
         # A raise site that interpolates a secret into a CONFIGURATION_ERROR (recovery=terminal).
-        safe = safe_adcp_error(AdCPConfigurationError("decrypt failed: postgresql://svc:hunter2@db.internal/prod"))
+        safe = safe_adcp_error(AdCPConfigurationError(f"decrypt failed: {SECRET_BEARING_MESSAGE}"))
 
         assert safe.recovery == "terminal", "CONFIGURATION_ERROR recovery must be preserved as terminal"
         assert "retry" not in safe.suggestion.lower(), (
             f"a terminal error must not advise the buyer to retry, got: {safe.suggestion!r}"
         )
-        # The secret is still scrubbed from BOTH message and suggestion.
-        assert "hunter2" not in safe.suggestion
-        assert "hunter2" not in safe.message
+        # The secret is still scrubbed from BOTH message and suggestion (shared leak oracle).
+        assert_no_secret_leak(safe.suggestion, context="suggestion")
+        assert_no_secret_leak(safe.message, context="message")
 
     def test_transient_service_unavailable_suggestion_advises_retry(self):
         from src.core.exceptions import AdCPServiceUnavailableError, safe_adcp_error
@@ -363,12 +363,12 @@ class TestSafeAdcpErrorSuggestionMatchesRecovery:
         """An untyped crash sanitizes to a transient base error, so retry guidance is correct."""
         from src.core.exceptions import safe_adcp_error
 
-        safe = safe_adcp_error(RuntimeError("kaboom postgresql://svc:hunter2@db.internal/prod"))
+        safe = safe_adcp_error(RuntimeError(f"kaboom {SECRET_BEARING_MESSAGE}"))
 
         assert safe.recovery == "transient"
         assert "retry" in safe.suggestion.lower()
-        assert "hunter2" not in safe.suggestion
-        assert "hunter2" not in safe.message
+        assert_no_secret_leak(safe.suggestion, context="suggestion")
+        assert_no_secret_leak(safe.message, context="message")
 
     def test_unknown_internal_code_coerces_to_transient_service_unavailable(self):
         """An internal code the wire doesn't model coerces to SERVICE_UNAVAILABLE — whose canonical
@@ -390,12 +390,13 @@ class TestSafeAdcpErrorSuggestionMatchesRecovery:
         the buyer never sees SERVICE_UNAVAILABLE + correctable + a 'retry later' suggestion."""
         from src.core.exceptions import AdCPAdapterError, safe_adcp_error
 
-        safe = safe_adcp_error(AdCPAdapterError("db pool: postgresql://svc:hunter2@h/db", recovery="correctable"))
+        safe = safe_adcp_error(AdCPAdapterError(f"db pool: {SECRET_BEARING_MESSAGE}", recovery="correctable"))
 
         assert safe.wire_error_code == "SERVICE_UNAVAILABLE"
         assert safe.recovery == "transient", "recovery must be normalized to the code's canonical value"
         assert "retry" in safe.suggestion.lower()
-        assert "hunter2" not in safe.message and "hunter2" not in safe.suggestion
+        assert_no_secret_leak(safe.message, context="message")
+        assert_no_secret_leak(safe.suggestion, context="suggestion")
 
     def test_suggestion_table_covers_all_recovery_hints(self):
         """The suggestion table must be exhaustive over RecoveryHint — a new recovery value added

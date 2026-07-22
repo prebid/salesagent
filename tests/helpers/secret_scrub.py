@@ -10,10 +10,11 @@ from __future__ import annotations
 import json
 
 # A message shaped like the worst realistic leak: a connection string with credentials,
-# an internal host, and inline SQL — everything a scrubbed error must never echo to the buyer.
-SECRET_BEARING_MESSAGE = "postgresql://svc:hunter2@db.internal/prod SELECT * FROM principals"
+# a bearer token, an internal host, and inline SQL — everything a scrubbed error must never
+# echo to the buyer.
+SECRET_BEARING_MESSAGE = "postgresql://svc:hunter2@db.internal/prod TOKEN=abc123 SELECT * FROM principals"
 
-_SECRET_TOKENS = ("hunter2", "postgresql://", "db.internal", "SELECT", "principals")
+_SECRET_TOKENS = ("hunter2", "postgresql://", "db.internal", "TOKEN=abc123", "SELECT", "principals")
 
 
 def assert_no_secret_leak(blob: object, *, context: str = "") -> None:

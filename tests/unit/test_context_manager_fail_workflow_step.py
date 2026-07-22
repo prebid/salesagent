@@ -15,7 +15,6 @@ Validates the two contracts the helper exists to enforce:
    failure.
 """
 
-import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -28,6 +27,7 @@ from src.core.exceptions import (
     build_two_layer_error_envelope,
     safe_adcp_error,
 )
+from tests.helpers.secret_scrub import SECRET_BEARING_MESSAGE, assert_no_secret_leak
 
 
 def _new_ctx_manager_with_mocked_update() -> tuple[ContextManager, MagicMock]:
@@ -171,20 +171,19 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
         calls: list[dict] = []
         cm = ContextManager.__new__(ContextManager)
         cm.update_workflow_step = lambda step_id, **kw: calls.append({"step_id": step_id, **kw})  # type: ignore[method-assign]
-        secret = "postgresql://svc:hunter2@db.internal/prod TOKEN=abc123 SELECT * FROM principals"
+        secret = SECRET_BEARING_MESSAGE
 
         cm.audit_workflow_step_failure("step_abc", exc_factory(secret))
 
         assert len(calls) == 1, "audit must persist exactly one failed-step update"
         payload = calls[0]
         # The message is category-appropriate, NOT the generic "internal error" (which would
-        # contradict a client-correctable code), and secret-free.
+        # contradict a client-correctable code), and secret-free. The shared oracle IS the
+        # definition of a leak (incl. the bearer-token shape) — assert both webhook sinks.
         assert msg_keyword in payload["error_message"].lower()
         assert "internal error" not in payload["error_message"].lower()
-        serialized = json.dumps(payload["response_data"])
-        for leak in ("hunter2", "postgresql://", "db.internal", "TOKEN=abc123", "SELECT", "principals"):
-            assert leak not in serialized, f"secret fragment {leak!r} leaked into webhook response_data"
-            assert leak not in payload["error_message"], f"secret fragment {leak!r} leaked into error_message"
+        assert_no_secret_leak(payload["response_data"], context="webhook response_data")
+        assert_no_secret_leak(payload["error_message"], context="error_message")
         # Webhook↔sync semantic parity: the persisted code equals the synchronous boundary's code.
         persisted_code = payload["response_data"]["adcp_error"]["code"]
         assert persisted_code == expected_code
