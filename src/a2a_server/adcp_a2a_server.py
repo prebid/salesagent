@@ -456,7 +456,7 @@ class AdCPRequestHandler(RequestHandler):
                 tenant_id=tenant_id,
             )
         except Exception as e:
-            logger.warning("Failed to log A2A operation: %s", e)
+            logger.warning("Failed to log A2A operation: %s", scrub_control_chars(str(e)))
 
     def _validate_push_callback(self, push_notification_config: Any, identity: ResolvedIdentity | None) -> None:
         """Guard a client-supplied push callback before it is persisted (#1512 SSRF).
@@ -526,7 +526,10 @@ class AdCPRequestHandler(RequestHandler):
                 async with validated_callback_url_scope(push_notification_config=callback_config):
                     require_valid_callback_config_urls(push_notification_config=callback_config)
             except AdCPValidationError as exc:
-                logger.error("Push notification URL failed SSRF re-validation at delivery, skipping: %s", exc)
+                logger.error(
+                    "Push notification URL failed SSRF re-validation at delivery, skipping: %s",
+                    scrub_control_chars(str(exc)),
+                )
                 return
 
             auth = webhook_config.authentication if webhook_config.HasField("authentication") else None
@@ -579,7 +582,9 @@ class AdCPRequestHandler(RequestHandler):
             )
         except Exception as e:
             # Don't fail the task if webhook fails
-            logger.warning("Failed to send protocol-level webhook for task %s: %s", task.id, e)
+            logger.warning(
+                "Failed to send protocol-level webhook for task %s: %s", task.id, scrub_control_chars(str(e))
+            )
 
     def _reconstruct_response_object(self, skill_name: str, data: dict) -> Any:
         """Reconstruct a response object from skill result data to call __str__().
@@ -656,7 +661,7 @@ class AdCPRequestHandler(RequestHandler):
             if response_class:
                 return response_class(**data)
         except Exception as e:
-            logger.debug("Could not reconstruct response object for %s: %s", skill_name, e)
+            logger.debug("Could not reconstruct response object for %s: %s", skill_name, scrub_control_chars(str(e)))
         return None
 
     async def on_message_send(
@@ -677,7 +682,10 @@ class AdCPRequestHandler(RequestHandler):
         Returns:
             Task object or Message response
         """
-        logger.info("Handling message/send request: %s", params)
+        logger.info(
+            "Handling message/send request: keys=%s",
+            sorted(params.keys()) if isinstance(params, dict) else type(params).__name__,
+        )
 
         # Parse message for both text and structured data parts
         message = params.message
@@ -850,7 +858,11 @@ class AdCPRequestHandler(RequestHandler):
                 for invocation in skill_invocations:
                     skill_name = invocation["skill"]
                     parameters = invocation["parameters"]
-                    logger.info("Processing explicit skill: %s with parameters: %s", skill_name, parameters)
+                    logger.info(
+                        "Processing explicit skill: %s with parameter keys: %s",
+                        skill_name,
+                        sorted(parameters.keys()) if isinstance(parameters, dict) else type(parameters).__name__,
+                    )
 
                     try:
                         result = await self._handle_explicit_skill(
@@ -1020,7 +1032,7 @@ class AdCPRequestHandler(RequestHandler):
                             log_details,
                         )
                     except Exception as e:
-                        logger.warning("Could not log skill invocations: %s", e)
+                        logger.warning("Could not log skill invocations: %s", scrub_control_chars(str(e)))
 
             # Natural language fallback (existing keyword-based routing)
             elif any(word in combined_text for word in ["product", "inventory", "available", "catalog"]):

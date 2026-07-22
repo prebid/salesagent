@@ -22,6 +22,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.models import WebhookDeliveryLog
 from src.core.database.repositories import MediaBuyRepository
+from src.core.logging_config import scrub_control_chars
 from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.core.utils import utc_flight_start
@@ -81,7 +82,7 @@ class DeliveryWebhookScheduler:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Error in delivery webhook scheduler: {e}", exc_info=True)
+                logger.error(f"Error in delivery webhook scheduler: {scrub_control_chars(str(e))}", exc_info=True)
             finally:
                 # Wait before next batch
                 await asyncio.sleep(SLEEP_INTERVAL_SECONDS)
@@ -112,13 +113,17 @@ class DeliveryWebhookScheduler:
                         reports_sent += 1
 
                     except Exception as e:
-                        logger.error(f"Error sending report for media buy {media_buy.media_buy_id}: {e}", exc_info=True)
+                        logger.error(
+                            f"Error sending report for media buy {media_buy.media_buy_id}: "
+                            f"{scrub_control_chars(str(e))}",
+                            exc_info=True,
+                        )
                         errors += 1
 
                 logger.info(f"Daily delivery report batch complete: {reports_sent} sent, {errors} errors")
 
         except Exception as e:
-            logger.error(f"Error in daily delivery report batch: {e}", exc_info=True)
+            logger.error(f"Error in daily delivery report batch: {scrub_control_chars(str(e))}", exc_info=True)
 
     async def trigger_report_for_media_buy_by_id(self, media_buy_id: str, tenant_id: str) -> bool:
         """Manually trigger a delivery report for a single media buy by ID.
@@ -152,7 +157,10 @@ class DeliveryWebhookScheduler:
                 await self._send_report_for_media_buy(media_buy, reporting_webhook, session, force=True)
                 return True
         except Exception as e:
-            logger.error(f"Error manually triggering report for {media_buy_id}: {e}", exc_info=True)
+            logger.error(
+                f"Error manually triggering report for {media_buy_id}: {scrub_control_chars(str(e))}",
+                exc_info=True,
+            )
             return False
 
     async def _send_report_for_media_buy(
@@ -256,7 +264,10 @@ class DeliveryWebhookScheduler:
                 max_seq = session.scalar(stmt)
                 sequence_number = (max_seq or 0) + 1
             except Exception as e:
-                logger.warning(f"Could not get sequence number for media buy {media_buy.media_buy_id}: {e}")
+                logger.warning(
+                    f"Could not get sequence number for media buy {media_buy.media_buy_id}: "
+                    f"{scrub_control_chars(str(e))}"
+                )
 
             # Calculate next_expected_at for daily frequency: start of next day (UTC)
             next_day = datetime.now(UTC).date() + timedelta(days=1)
@@ -345,7 +356,10 @@ class DeliveryWebhookScheduler:
             logger.info(f"Sent delivery report webhook for media buy {media_buy.media_buy_id}")
 
         except Exception as e:
-            logger.error(f"Error sending delivery report for media buy {media_buy.media_buy_id}: {e}", exc_info=True)
+            logger.error(
+                f"Error sending delivery report for media buy {media_buy.media_buy_id}: {scrub_control_chars(str(e))}",
+                exc_info=True,
+            )
             raise
 
 

@@ -105,8 +105,12 @@ class ProtocolWebhookService:
         """
         if not push_notification_config or not push_notification_config.url:
             # TODO: @yusuf - Double check logging actually works for Task, TaskStatusUpdateEvent and McpWebhookPayload types
+            # Log the payload's TYPE, not its content: the payload carries
+            # buyer-controlled strings, and this seam runs in plain-text log
+            # mode on self-hosted deploys.
             logger.debug(
-                f"No webhook URL configured in the push notification. Here's payload: {payload}, skipping notification"
+                "No webhook URL configured in the push notification; skipping notification (payload type: %s)",
+                type(payload).__name__,
             )
             return False
 

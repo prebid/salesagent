@@ -520,7 +520,11 @@ class WebhookDeliveryService:
                 allow_nan=False,
             ).encode("utf-8")
         except (TypeError, ValueError) as exc:
-            logger.error("Webhook payload is not valid JSON for %s: %s", scrub_control_chars(config.url), exc)
+            logger.error(
+                "Webhook payload is not valid JSON for %s: %s",
+                scrub_control_chars(config.url),
+                scrub_control_chars(str(exc)),
+            )
             circuit_breaker.record_failure()
             return False
         headers = self._build_delivery_headers(config, payload_bytes, timestamp)
