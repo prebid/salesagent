@@ -20,11 +20,16 @@ from __future__ import annotations
 import argparse
 import ast
 import json
-import re
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from bdd_audit_common import extract_transport, extract_uc  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -71,11 +76,7 @@ def parse_test_results(path: Path) -> list[TestOutcome]:
     outcomes = []
     for t in data["tests"]:
         nodeid = t["nodeid"]
-        # Extract transport
-        transport = None
-        m = re.search(r"\[(impl|a2a|mcp|rest)", nodeid)
-        if m:
-            transport = m.group(1)
+        transport = extract_transport(nodeid)
 
         # Extract error
         error = ""
@@ -163,12 +164,6 @@ def find_tests_using_step(
     return matching
 
 
-def extract_uc(path: str) -> str:
-    """Extract UC from file path."""
-    m = re.search(r"uc(\d+)", path)
-    return f"UC-{m.group(1)}" if m else "GENERIC"
-
-
 def generate_report(
     flags: list[InspectorFlag],
     outcomes: list[TestOutcome],
@@ -201,9 +196,7 @@ def generate_report(
     # Group test outcomes by UC
     outcomes_by_uc: dict[str, list[TestOutcome]] = defaultdict(list)
     for o in outcomes:
-        m = re.search(r"test_uc(\d+)", o.nodeid)
-        uc = f"UC-{m.group(1)}" if m else "GENERIC"
-        outcomes_by_uc[uc].append(o)
+        outcomes_by_uc[extract_uc(o.nodeid)].append(o)
 
     # Cross-reference: for each UC, show flags vs test health
     lines.append("## Cross-Reference by Use Case")

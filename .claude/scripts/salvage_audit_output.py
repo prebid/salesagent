@@ -93,6 +93,25 @@ def _load_existing_keys(store_path: Path) -> set[str]:
     return existing_keys
 
 
+def _append_if_new(
+    f,
+    kind: str,
+    r: dict,
+    step_lookup: dict,
+    existing_keys: set[str],
+    record: dict,
+) -> bool:
+    """Write ``record`` once per kind-scoped key. Returns True if written."""
+    step_info = step_lookup.get(r["func_name"], _placeholder_step(r["func_name"]))
+    key = _store_key(kind, step_info, r["func_name"])
+    if key in existing_keys:
+        return False
+    payload = {**record, "kind": kind, "step": step_info}
+    f.write(json.dumps(payload) + "\n")
+    existing_keys.add(key)
+    return True
+
+
 def write_to_store(parsed: dict, store_path: Path, step_index_path: Path | None) -> None:
     """Write parsed results to the JSONL store.
 
@@ -114,38 +133,35 @@ def write_to_store(parsed: dict, store_path: Path, step_index_path: Path | None)
 
     store_path.parent.mkdir(parents=True, exist_ok=True)
     with open(store_path, "a") as f:
-        # Write Pass 1 results
         for r in parsed["pass1"]:
-            step_info = step_lookup.get(r["func_name"], _placeholder_step(r["func_name"]))
-            key = _store_key("triage", step_info, r["func_name"])
-            if key not in existing_keys:
-                record = {
-                    "kind": "triage",
-                    "step": step_info,
+            if _append_if_new(
+                f,
+                "triage",
+                r,
+                step_lookup,
+                existing_keys,
+                {
                     "verdict": r["verdict"],
                     "reason": "salvaged from raw output (original reason lost)",
                     "source": "pass1",
-                }
-                f.write(json.dumps(record) + "\n")
-                existing_keys.add(key)
+                },
+            ):
                 new_triage += 1
 
-        # Write Pass 2 results
         for r in parsed["pass2"]:
-            step_info = step_lookup.get(r["func_name"], _placeholder_step(r["func_name"]))
-            key = _store_key("deep", step_info, r["func_name"])
-            # Only write deep trace if not already present
-            if key not in existing_keys:
-                record = {
-                    "kind": "deep",
-                    "step": step_info,
+            if _append_if_new(
+                f,
+                "deep",
+                r,
+                step_lookup,
+                existing_keys,
+                {
                     "claims": "salvaged — see full report for details",
                     "actually_tests": "salvaged — see full report for details",
                     "recommendation": "salvaged — see full report for details",
                     "severity": r["severity"],
-                }
-                f.write(json.dumps(record) + "\n")
-                existing_keys.add(key)
+                },
+            ):
                 new_deep += 1
 
     print(f"Salvaged to {store_path}:")

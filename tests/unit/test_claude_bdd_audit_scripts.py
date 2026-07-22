@@ -67,6 +67,16 @@ class TestTransportHelpers:
             nodeid = f"tests/bdd/test_uc004.py::test_s[{t}]"
             assert bdd_audit_common.extract_transport(nodeid) == t
 
+    def test_extract_uc_from_nodeid_and_path(self, bdd_audit_common) -> None:
+        assert bdd_audit_common.extract_uc("tests/bdd/test_uc004.py::test_s[a2a]") == "UC-004"
+        assert bdd_audit_common.extract_uc("tests/bdd/steps/uc019/then_steps.py") == "UC-019"
+        assert bdd_audit_common.extract_uc("no-uc-here.py") == "GENERIC"
+
+    def test_cross_reference_sees_e2e_rest(self) -> None:
+        """cross_reference_audit must use shared extract_transport (not old regex)."""
+        xref = _load("cross_reference_audit")
+        assert xref.extract_transport("tests/bdd/test_uc004.py::test_s[e2e_rest]") == "e2e_rest"
+
 
 class TestClassifyXpass:
     """Pin GRADUATE vs PARTIAL_XPASS on transports *present for the base*."""
@@ -136,6 +146,18 @@ class TestClassifyXpassedAudit:
         assert len(graduate) == 1
         assert partial == {}
 
+    def test_strict_subset_is_partial(self, audit_xfails) -> None:
+        """Mirror test_strict_subset_is_partial_xpass — pin the partial branch."""
+        base = "tests/bdd/test_uc004.py::test_s"
+        all_tests = [
+            {"nodeid": f"{base}[a2a]", "outcome": "xpassed"},
+            {"nodeid": f"{base}[mcp]", "outcome": "xfailed"},
+            {"nodeid": f"{base}[rest]", "outcome": "xfailed"},
+        ]
+        graduate, partial = audit_xfails.classify_xpassed(all_tests)
+        assert graduate == set()
+        assert partial == {base: {"a2a"}}
+
 
 class TestSalvageDedupe:
     """Pin kind-scoped deep-trace dedup (#1665 review)."""
@@ -172,8 +194,8 @@ class TestSalvageDedupe:
 class TestPrematureXfailCrashMatch:
     """PREMATURE_XFAIL matches setup/call crash path+lineno → enclosing step."""
 
-    def test_crash_inside_premature_step_classifies(self, audit_xfails, tmp_path: Path) -> None:
-        source = textwrap.dedent(
+    def _premature_source(self) -> str:
+        return textwrap.dedent(
             """
             from pytest_bdd import then
             import pytest
@@ -184,6 +206,16 @@ class TestPrematureXfailCrashMatch:
                 pytest.xfail("not ready")
             """
         )
+
+    def _xfail_lineno(self, source: str) -> int:
+        return next(
+            n.lineno
+            for n in ast.walk(ast.parse(source))
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "xfail"
+        )
+
+    def test_crash_inside_premature_step_classifies(self, audit_xfails, tmp_path: Path) -> None:
+        source = self._premature_source()
         steps_file = tmp_path / "steps.py"
         steps_file.write_text(source)
         premature = audit_xfails.find_premature_xfails(tmp_path)
@@ -191,19 +223,16 @@ class TestPrematureXfailCrashMatch:
         step = premature[0]
         assert step.name == "then_premature"
 
-        # Point crash at the pytest.xfail() line inside the step body.
-        xfail_lineno = next(
-            n.lineno
-            for n in ast.walk(ast.parse(source))
-            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "xfail"
-        )
+        # Real pytest.xfail() inside a step body is under call.crash (setup passed).
+        xfail_lineno = self._xfail_lineno(source)
         entry = audit_xfails.classify_xfail(
             {
                 "nodeid": "t::s[a2a]",
                 "wasxfail": "",
                 "keywords": [],
-                "setup": {
-                    "outcome": "failed",
+                "setup": {"outcome": "passed"},
+                "call": {
+                    "outcome": "skipped",
                     "crash": {
                         "path": str(steps_file.resolve()),
                         "lineno": xfail_lineno,
@@ -220,17 +249,38 @@ class TestPrematureXfailCrashMatch:
         assert entry.category == "PREMATURE_XFAIL"
         assert "then_premature" in entry.reason
 
-    def test_crash_in_conftest_is_not_premature(self, audit_xfails, tmp_path: Path) -> None:
-        source = textwrap.dedent(
-            """
-            from pytest_bdd import then
-            import pytest
-
-            @then("x")
-            def then_premature():
-                pytest.xfail("not ready")
-            """
+    def test_crash_just_past_end_lineno_is_not_premature(self, audit_xfails, tmp_path: Path) -> None:
+        """Boundary pin: crash at end_lineno+1 must not enclose the step."""
+        source = self._premature_source()
+        steps_file = tmp_path / "steps.py"
+        steps_file.write_text(source)
+        premature = audit_xfails.find_premature_xfails(tmp_path)
+        assert len(premature) == 1
+        step = premature[0]
+        entry = audit_xfails.classify_xfail(
+            {
+                "nodeid": "t::s[a2a]",
+                "wasxfail": "UC harness not wired",
+                "keywords": [],
+                "setup": {"outcome": "passed"},
+                "call": {
+                    "outcome": "skipped",
+                    "crash": {
+                        "path": str(steps_file.resolve()),
+                        "lineno": step.end_lineno + 1,
+                        "message": "_pytest.outcomes.XFailed: not ready",
+                    },
+                },
+            },
+            {},
+            premature,
+            set(),
+            {},
         )
+        assert entry.category != "PREMATURE_XFAIL"
+
+    def test_crash_in_conftest_is_not_premature(self, audit_xfails, tmp_path: Path) -> None:
+        source = self._premature_source()
         (tmp_path / "steps.py").write_text(source)
         premature = audit_xfails.find_premature_xfails(tmp_path)
         entry = audit_xfails.classify_xfail(

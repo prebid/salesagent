@@ -1,12 +1,18 @@
 """Shared helpers for BDD audit meta-tooling scripts.
 
-Used by ``bdd_full_audit.py`` and ``audit_xfails.py`` so transport / scenario
-parsing and graduation bucketing cannot drift apart.
+Used by ``bdd_full_audit.py``, ``audit_xfails.py``, and
+``cross_reference_audit.py`` so transport / scenario / UC parsing and
+graduation bucketing cannot drift apart.
 
 Transport vocabulary mirrors ``tests/bdd/conftest.py`` parametrize ids after
 #1417: ``a2a`` / ``mcp`` / ``rest``, plus ``e2e_rest`` when in-network is
 enabled. Legacy ``impl`` remains recognized for historical bdd.json files but
 is never required for graduation.
+
+Report-bucket vocabulary (intentional split, same underlying coverage grade):
+``bdd_full_audit`` labels partial xpass as ``PARTIAL_XPASS`` / full as
+``GRADUATE``; ``audit_xfails`` keeps ``PARTIAL_PASS`` / ``STALE``. Do not
+unify the report tokens without a deliberate cross-script rename.
 """
 
 from __future__ import annotations
@@ -37,6 +43,16 @@ def extract_transport(nodeid: str) -> str | None:
 def extract_scenario_base(nodeid: str) -> str:
     """Strip the trailing parametrize bracket suffix to get the scenario base."""
     return re.sub(r"\[.*\]$", "", nodeid)
+
+
+def extract_uc(text: str) -> str:
+    """Extract use case id from a nodeid or path (e.g. ``UC-004``).
+
+    Matches ``test_ucNNN`` / ``ucNNN`` (case-insensitive). Returns ``GENERIC``
+    when no use-case token is present.
+    """
+    m = re.search(r"(?:test_)?uc(\d+)", text, re.IGNORECASE)
+    return f"UC-{m.group(1)}" if m else "GENERIC"
 
 
 def transport_coverage(
