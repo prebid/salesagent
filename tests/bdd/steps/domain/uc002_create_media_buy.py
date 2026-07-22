@@ -21,7 +21,6 @@ from pytest_bdd import given, parsers, then, when
 from tests.bdd.steps._harness_db import db_session as _db_session
 from tests.bdd.steps._outcome_helpers import (
     _get_response_field,
-    assert_valid_actions_array,
     parse_iso_8601,
 )
 from tests.bdd.steps._outcome_helpers import (
@@ -2242,8 +2241,18 @@ def then_response_revision_is_1(ctx: dict) -> None:
 
 @then(parsers.parse('the response should include a "valid_actions" array'))
 def then_response_valid_actions_array(ctx: dict) -> None:
-    """The sync success arm carries valid_actions so the buyer can plan the next call."""
-    assert_valid_actions_array(ctx)
+    """The sync success arm carries a POPULATED valid_actions array on the wire.
+
+    The only scenario binding this step is the auto-approved sync success (an
+    active buy), for which an empty valid_actions would be a real regression —
+    so non-emptiness is asserted, and the read is the serialized wire (an
+    exclude-empty serialization drop would be invisible on the reconstructed
+    payload). The BR-UC-019 terminal-status scenarios that legitimately expect
+    an EMPTY array bind different step text. #1544 round-4.
+    """
+    actions = _serialized_success_body(ctx).get("valid_actions")
+    assert isinstance(actions, list), f"Expected a valid_actions array on the wire, got {actions!r}"
+    assert actions, "valid_actions must be non-empty for an active (sync-success) buy"
 
 
 @then("every value in valid_actions should be a member of the media-buy-valid-action enum")
@@ -2258,12 +2267,13 @@ def then_valid_actions_are_enum_members(ctx: dict) -> None:
     """
     from adcp.types.generated_poc.enums.media_buy_valid_action import MediaBuyValidAction
 
-    resp = _require_success_response(ctx)
-    actions = _get_response_field(resp, "valid_actions")
-    assert isinstance(actions, list), f"Expected a valid_actions array, got {actions!r}"
+    actions = _serialized_success_body(ctx).get("valid_actions")
+    assert isinstance(actions, list), f"Expected a valid_actions array on the wire, got {actions!r}"
+    # The binding scenario is the active sync-success buy: an empty array would
+    # make this membership check pass vacuously — require content. #1544 round-4.
+    assert actions, "valid_actions must be non-empty for an active (sync-success) buy"
     allowed = {member.value for member in MediaBuyValidAction}
-    values = [getattr(action, "value", action) for action in actions]
-    outside = [value for value in values if value not in allowed]
+    outside = [value for value in actions if value not in allowed]
     assert not outside, f"valid_actions contains values outside the enum: {outside} (allowed: {sorted(allowed)})"
 
 

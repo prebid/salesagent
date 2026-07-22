@@ -438,7 +438,7 @@ def _update_media_buy_impl(
             # translation live in the repository — the lock policy is a data-access
             # concern, kept out of this transport-agnostic _impl. #1544.
             _current_mb = uow.media_buys.get_by_id(
-                media_buy_id_to_use, for_update=True, populate_existing=True, lock_timeout="5s", context=req.context
+                media_buy_id_to_use, for_update=True, populate_existing=True, lock_timeout_seconds=5, context=req.context
             )
             _current_status = _current_mb.status if _current_mb else ""
             # Precedence: the revision-conflict gate runs BEFORE the terminal-state

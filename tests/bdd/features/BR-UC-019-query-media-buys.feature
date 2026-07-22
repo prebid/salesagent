@@ -792,9 +792,10 @@ Feature: BR-UC-019 Query Media Buys
     # BR-RULE-291 / spec MUST: revision increments on every state change — seller approval included
     # POST-S6 / INT-006: confirmed_at is the seller's confirmation instant (approval moment on the
     # deferred path), NOT the buyer's create-request time (created_at)
-    # @source repo=adcp ref=v3.1.0 path=docs/media-buy/specification.mdx (revision MUST
+    # @source repo=adcp ref=v3.1.1 path=docs/media-buy/specification.mdx (revision MUST
     #         increment on every state change; confirmed_at stamped at IO-signing per the
-    #         sales-guaranteed conformance storyboard)
+    #         sales-guaranteed conformance storyboard; content identical at v3.1.0/v3.1.1 —
+    #         ref tracks the repo's pinned spec version)
     # NOTE: hand-authored obligation (neighbors are generated from adcp-req with
     #       ref=v3.1-<sha>). Reconcile upstream into adcp-req so this is generated
     #       and its @source aligns automatically — tracked in #1565.

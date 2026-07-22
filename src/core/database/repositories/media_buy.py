@@ -87,7 +87,7 @@ class MediaBuyRepository:
         *,
         for_update: bool = False,
         populate_existing: bool = False,
-        lock_timeout: str | None = None,
+        lock_timeout_seconds: int | None = None,
         context: ContextObject | dict[str, Any] | None = None,
     ) -> MediaBuy | None:
         """Get a media buy by its ID within the tenant.
@@ -98,7 +98,7 @@ class MediaBuyRepository:
         the locked row to refresh an instance already present in the identity
         map; this is required for authoritative revision/status checks.
 
-        ``lock_timeout`` (e.g. ``"5s"``) arms a transaction-scoped ``SET LOCAL
+        ``lock_timeout_seconds`` (e.g. ``5``) arms a transaction-scoped ``SET LOCAL
         lock_timeout`` before the locked read, so a second request contending for
         the SAME row's lock fails fast (PostgreSQL SQLSTATE ``55P03``) instead of
         blocking to the global ``statement_timeout``. That EXPECTED contention is
@@ -121,7 +121,7 @@ class MediaBuyRepository:
             stmt = stmt.with_for_update()
         if populate_existing:
             stmt = stmt.execution_options(populate_existing=True)
-        if lock_timeout is None:
+        if lock_timeout_seconds is None:
             return self._session.scalars(stmt).first()
 
         from sqlalchemy import text
@@ -130,9 +130,9 @@ class MediaBuyRepository:
         from src.core.database.database_session import LOCK_NOT_AVAILABLE
 
         try:
-            # lock_timeout is a config setting (not a bindable value); callers pass
-            # a server-controlled literal, never user input.
-            self._session.execute(text(f"SET LOCAL lock_timeout = '{lock_timeout}'"))
+            # SET can't bind parameters; the int() coercion makes the
+            # never-user-input invariant structural rather than a comment.
+            self._session.execute(text(f"SET LOCAL lock_timeout = '{int(lock_timeout_seconds)}s'"))
             return self._session.scalars(stmt).first()
         except OperationalError as exc:
             if getattr(getattr(exc, "orig", None), "pgcode", None) != LOCK_NOT_AVAILABLE:

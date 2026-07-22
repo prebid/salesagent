@@ -11,6 +11,7 @@ import os
 from datetime import UTC, datetime
 from typing import Any
 
+from src.core.config import is_production as config_is_production
 from src.core.logging_utils import sanitize_log_value
 
 
@@ -101,10 +102,14 @@ class SingleLineFormatter(logging.Formatter):
 def setup_structured_logging() -> None:
     """Setup structured JSON logging for production environments.
 
-    In production (Fly.io), configures all loggers to output single-line JSON.
+    In production, configures all loggers to output single-line JSON.
     This prevents multiline log messages from appearing as separate log entries.
     """
-    is_production = bool(os.environ.get("FLY_APP_NAME") or os.environ.get("PRODUCTION"))
+    # config.is_production() is the canonical ENVIRONMENT/PRODUCTION union; the
+    # log path deliberately ADDS the deploy-platform signal (FLY_APP_NAME) so a
+    # platform deploy gets JSON logs even if neither env-var convention is set.
+    # Union only ever widens production detection — never weakens it.
+    is_production = bool(os.environ.get("FLY_APP_NAME")) or config_is_production()
 
     if is_production:
         # Configure root logger with JSON formatter
@@ -245,5 +250,11 @@ def log_safe(value: object) -> str:
     (``\n`` renders as ``\\n``) where the historical implementation stripped
     them; ids stay correlatable, only the rendered log text changes. No
     truncation: callers pass whole pre-formatted messages, not single values.
+
+    CANONICAL IDIOM for new code: ``logger.x("... %s", sanitize_log_value(v))``
+    — sanitize each interpolated VALUE and keep the static message text
+    unescaped. ``log_safe(f"...")`` is the legacy whole-message form (same
+    escape table, so equally injection-safe) kept for its existing call sites;
+    prefer the ``%s`` form when writing or touching log lines.
     """
     return sanitize_log_value(value, max_length=None)

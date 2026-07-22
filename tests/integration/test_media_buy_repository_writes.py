@@ -540,7 +540,7 @@ class TestRevisionBumpsOnStatusTransition:
             reset_health_state()
 
     def test_get_by_id_lock_timeout_translates_contention_to_transient_conflict(self, tenant_a, principal_a):
-        """Production-path lock coverage: get_by_id(lock_timeout=...) (used by
+        """Production-path lock coverage: get_by_id(lock_timeout_seconds=...) (used by
         _update_media_buy_impl) must arm its OWN lock_timeout and translate the
         expected 55P03 contention into a transient AdCPConflictError — NOT rely on
         a caller-installed timeout. A prior version put the SET LOCAL + SQLSTATE
@@ -571,7 +571,7 @@ class TestRevisionBumpsOnStatusTransition:
                 with MediaBuyUoW(tenant_a) as waiter:
                     assert waiter.media_buys is not None
                     waiter.media_buys.get_by_id(
-                        "mb_lock_prod_path", for_update=True, populate_existing=True, lock_timeout="5s"
+                        "mb_lock_prod_path", for_update=True, populate_existing=True, lock_timeout_seconds=5
                     )
             # Pin the WIRE code, not just the class: a parent-class re-raise would keep
             # isinstance green while flipping the buyer-facing code (P38).

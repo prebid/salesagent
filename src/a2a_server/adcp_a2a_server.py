@@ -113,6 +113,7 @@ from src.core.validation_helpers import (
     adcp_validation_boundary,
 )
 from src.core.version import get_version
+from src.services.durable_task_service import resolve_durable_task_outcome
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -1085,6 +1086,11 @@ class AdCPRequestHandler(RequestHandler):
         A cross-process/restart-surviving lookup needs a tenant scope, so identity is
         resolved from the poll's own auth (the buyer who created the task
         authenticated). Without a resolvable tenant the task cannot be safely served.
+
+        This handler owns only the transport concerns — identity resolution and
+        A2A Task/Artifact framing; the DB read (session + tenant-scoped step
+        lookup + error/result classification) lives in the transport-neutral
+        ``resolve_durable_task_outcome`` service. #1544.
         """
         try:
             auth_token = self._get_auth_token(context)
@@ -1103,29 +1109,24 @@ class AdCPRequestHandler(RequestHandler):
         if identity is None or not identity.tenant_id:
             return None
 
-        from src.core.database.database_session import get_db_session
-        from src.core.database.repositories.workflow import WorkflowRepository
-
-        with get_db_session() as session:
-            step = WorkflowRepository(session, identity.tenant_id).get_by_external_task_id(task_id)
-            if step is None:
-                return None
-            state = self._STEP_STATUS_TO_TASK_STATE.get(step.status, TaskState.TASK_STATE_WORKING)
-            task = Task(id=task_id, context_id=step.context_id, status=TaskStatus(state=state))
-            if step.response_data:
-                # A failed step stores a two-layer error envelope. A completed step
-                # stores CreateMediaBuySuccess; a rejected one stores
-                # CreateMediaBuyError — the artifact name media_buy_result covers
-                # both, TaskState signals the outcome. #1544.
-                is_error = step.status == "failed"
-                task.artifacts.append(
-                    Artifact(
-                        artifact_id=f"{task_id}_{'error' if is_error else 'result'}",
-                        name="media_buy_error" if is_error else "media_buy_result",
-                        parts=[Part(data=_dict_to_value(step.response_data))],
-                    )
+        outcome = resolve_durable_task_outcome(identity.tenant_id, task_id)
+        if outcome is None:
+            return None
+        state = self._STEP_STATUS_TO_TASK_STATE.get(outcome.step_status, TaskState.TASK_STATE_WORKING)
+        task = Task(id=task_id, context_id=outcome.context_id, status=TaskStatus(state=state))
+        if outcome.response_data:
+            # A failed step stores a two-layer error envelope. A completed step
+            # stores CreateMediaBuySuccess; a rejected one stores
+            # CreateMediaBuyError — the artifact name media_buy_result covers
+            # both, TaskState signals the outcome. #1544.
+            task.artifacts.append(
+                Artifact(
+                    artifact_id=f"{task_id}_{'error' if outcome.is_error else 'result'}",
+                    name="media_buy_error" if outcome.is_error else "media_buy_result",
+                    parts=[Part(data=_dict_to_value(outcome.response_data))],
                 )
-            return task
+            )
+        return task
 
     async def on_cancel_task(
         self,
