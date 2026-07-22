@@ -336,6 +336,7 @@ async def test_multi_skill_message_rejected_before_any_side_effect():
     assert result.status.state == TaskState.TASK_STATE_FAILED
     envelope = extract_processing_error_envelope(result)
     assert envelope["adcp_error"]["code"] == "UNSUPPORTED_FEATURE", envelope
+    assert envelope["adcp_error"]["recovery"] == "correctable", envelope
     assert "multiple skills" in envelope["errors"][0]["message"].lower()
     handler._handle_explicit_skill.assert_not_awaited()  # zero side effects
     handler._send_protocol_webhook.assert_not_awaited()

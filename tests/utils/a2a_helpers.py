@@ -60,20 +60,19 @@ def extract_data_from_artifact(artifact: Artifact) -> dict[str, Any]:
     return {}
 
 
-def extract_processing_error_envelope(task: Task) -> dict[str, Any]:
-    """Read the two-layer AdCP envelope from a failed Task's processing_error artifact.
+def _read_failed_task_artifact(task: Task, artifact_name: str) -> dict[str, Any]:
+    """THE single strict reader of a failed Task's error artifact.
 
-    ``on_message_send``'s outer error handler attaches the envelope built by
-    ``AdCPRequestHandler._build_error_envelope`` to the failed Task as a
-    ``processing_error`` artifact. Per the A2A error binding, that artifact carries
-    a human-readable TextPart PLUS the authoritative structured DataPart (the
-    two-layer envelope). Asserts that shape (exactly one DataPart and one TextPart),
-    then delegates the decode to ``extract_data_from_artifact`` (which selects the
-    DataPart).
+    Pins the artifact NAME, exactly one authoritative DataPart, AND exactly one
+    human-readable TextPart (the A2A error binding: a FAILED artifact carries the
+    error message as its TextPart, never a DataPart alone), then decodes the
+    DataPart. Both public entries (``extract_processing_error_envelope`` and
+    ``assert_failed_task_envelope``) route through here so the shape contract has
+    exactly one home.
     """
     assert task.artifacts, "failed Task must carry the error envelope artifact"
     artifact = task.artifacts[0]
-    assert artifact.name == "processing_error", f"expected processing_error artifact, got {artifact.name!r}"
+    assert artifact.name == artifact_name, f"expected {artifact_name!r} artifact, got {artifact.name!r}"
     data_parts = [p for p in artifact.parts if p.HasField("data")]
     text_parts = [p for p in artifact.parts if p.HasField("text")]
     assert len(data_parts) == 1, f"error artifact must carry exactly one authoritative DataPart, got {len(data_parts)}"
@@ -83,31 +82,36 @@ def extract_processing_error_envelope(task: Task) -> dict[str, Any]:
     return extract_data_from_artifact(artifact)
 
 
+def extract_processing_error_envelope(task: Task) -> dict[str, Any]:
+    """Read the two-layer AdCP envelope from a failed Task's ``processing_error`` artifact.
+
+    ``on_message_send``'s outer error handler attaches the envelope built by
+    ``AdCPRequestHandler._build_error_envelope`` to the failed Task as a
+    ``processing_error`` artifact. Thin wrapper over the shared strict reader.
+    """
+    return _read_failed_task_artifact(task, "processing_error")
+
+
 def assert_failed_task_envelope(
-    task: Task, *, code: str, recovery: str | None = None, artifact_name: str = "error_result"
+    task: Task, *, code: str, recovery: str, artifact_name: str = "error_result"
 ) -> dict[str, Any]:
     """Assert a synchronously-returned failed A2A Task carries the two-layer AdCP envelope with the
-    given wire ``code`` (and ``recovery`` when given).
+    given wire ``code`` and ``recovery``.
 
-    The single place the failed-Task wire contract lives — pins the FAILED state, the artifact
-    name, and a single authoritative DataPart, then reads the envelope's ``adcp_error``. Unlike the
-    bare ``extract_data_from_artifact`` it replaces, it pins the artifact NAME, which differs by
-    path: a per-skill failure emits ``error_result`` (the default), while a top-level rejection
-    (e.g. the multi-skill guard) emits ``processing_error`` — pass ``artifact_name`` for the latter.
+    Pins the FAILED state then routes through the shared strict reader (artifact name, single
+    DataPart, single TextPart). ``recovery`` is REQUIRED, mirroring ``assert_envelope_shape``:
+    silent drift between a typed exception's recovery and the wire is exactly the regression
+    this helper exists to catch. The artifact NAME differs by path: a per-skill failure emits
+    ``error_result`` (the default), while a top-level rejection (e.g. the multi-skill guard)
+    emits ``processing_error`` — pass ``artifact_name`` for the latter.
     Returns the decoded envelope for any test-specific follow-up assertions.
     """
     assert isinstance(task, Task), f"expected a failed Task, got {type(task).__name__}"
     assert task.status.state == TaskState.TASK_STATE_FAILED, f"expected FAILED task, got {task.status.state!r}"
-    assert task.artifacts, "failed Task must carry the error envelope artifact"
-    artifact = task.artifacts[0]
-    assert artifact.name == artifact_name, f"expected {artifact_name!r} artifact, got {artifact.name!r}"
-    data_parts = [p for p in artifact.parts if p.HasField("data")]
-    assert len(data_parts) == 1, f"error artifact must carry exactly one authoritative DataPart, got {len(data_parts)}"
-    envelope = extract_data_from_artifact(artifact)
+    envelope = _read_failed_task_artifact(task, artifact_name)
     adcp_error = envelope["adcp_error"]
     assert adcp_error["code"] == code, f"expected wire code {code!r}, got {adcp_error!r}"
-    if recovery is not None:
-        assert adcp_error["recovery"] == recovery, f"expected recovery {recovery!r}, got {adcp_error!r}"
+    assert adcp_error["recovery"] == recovery, f"expected recovery {recovery!r}, got {adcp_error!r}"
     return envelope
 
 

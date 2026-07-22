@@ -1096,7 +1096,9 @@ class TestA2ASkillInvocation:
 
             # Rejected up front → terminal failed Task with UNSUPPORTED_FEATURE, and no
             # skill ran (a real get_products would have produced a product_catalog).
-            envelope = assert_failed_task_envelope(result, code="UNSUPPORTED_FEATURE", artifact_name="processing_error")
+            envelope = assert_failed_task_envelope(
+                result, code="UNSUPPORTED_FEATURE", recovery="correctable", artifact_name="processing_error"
+            )
             assert "multiple skills" in envelope["errors"][0]["message"].lower()
 
     # TODO: Add test_missing_authentication once we understand how A2A server handles auth errors
