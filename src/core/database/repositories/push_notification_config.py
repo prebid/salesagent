@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import PushNotificationConfig
+from src.core.webhook_validator import WebhookURLValidator
 
 
 class PushNotificationConfigRepository:
@@ -98,7 +99,15 @@ class PushNotificationConfigRepository:
         Returns:
             (config, created): ``created`` is True if a new row was inserted,
             False if an existing row was updated (or reactivated).
+
+        Raises:
+            ValueError: If ``url`` fails SSRF validation (same gate as protocol
+                send and application webhook delivery).
         """
+        is_valid, error_msg = WebhookURLValidator.validate_webhook_url(url)
+        if not is_valid:
+            raise ValueError(f"Invalid webhook URL: {error_msg}")
+
         existing = self.get_by_id(config_id, principal_id, active_only=False)
         now = datetime.now(UTC)
 

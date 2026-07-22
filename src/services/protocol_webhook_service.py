@@ -33,6 +33,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.lifecycle import register_shutdown
+from src.core.webhook_validator import WebhookURLValidator
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +162,19 @@ class ProtocolWebhookService:
             return False
 
         url = _normalize_localhost_for_docker(push_notification_config.url)
+
+        # SSRF gate — same WebhookURLValidator as application-level delivery
+        # (src/core/webhook_delivery.py). Reject before any outbound POST so a
+        # buyer-supplied push/reporting URL cannot target internal/metadata hosts
+        # (#1695 / #1578). Explicit failure (return False), not a quiet skip.
+        is_valid, error_msg = WebhookURLValidator.validate_webhook_url(url)
+        if not is_valid:
+            logger.error(
+                "Protocol webhook URL failed SSRF validation (url=%s): %s",
+                url,
+                error_msg,
+            )
+            return False
 
         # Prepare headers
         headers = {"Content-Type": "application/json", "User-Agent": "AdCP-Sales-Agent/1.0"}

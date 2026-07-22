@@ -627,15 +627,24 @@ class TestProtocolWebhookWireFormat:
     def _send_and_capture(self, payload) -> dict[str, Any]:
         """Send `payload` via the real service and return the classified capture."""
         import asyncio
+        from unittest.mock import patch
 
         from src.core.database.models import PushNotificationConfig
         from src.services.protocol_webhook_service import ProtocolWebhookService
 
         # host='127.0.0.1': this class is unit-style (no Docker) — the service
         # runs in-process, so loopback is always the right callback host.
-        with run_webhook_capture_server(
-            WebhookPayloadCapture, WebhookPayloadCapture.received_webhooks, host="127.0.0.1"
-        ) as info:
+        # SSRF validation (#1695) rejects loopback in production; allow only for
+        # this hermetic wire-format harness (payload shape is the contract under test).
+        with (
+            run_webhook_capture_server(
+                WebhookPayloadCapture, WebhookPayloadCapture.received_webhooks, host="127.0.0.1"
+            ) as info,
+            patch(
+                "src.services.protocol_webhook_service.WebhookURLValidator.validate_webhook_url",
+                return_value=(True, ""),
+            ),
+        ):
             config = PushNotificationConfig(
                 id="pnc-test",
                 tenant_id="t-test",
