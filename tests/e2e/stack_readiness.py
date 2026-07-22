@@ -36,12 +36,16 @@ _LOG_DUMP_SERVICES: Final[tuple[str, ...]] = (
     "proxy",
 )
 
-_DEFAULT_COMPOSE_FILES: Final[tuple[str, ...]] = (
+# Public SSOT — imported by ``tests.e2e.conftest`` (fixture + wrapper must share).
+DEFAULT_E2E_COMPOSE_FILES: Final[tuple[str, ...]] = (
     "docker-compose.e2e.yml",
     "docker-compose.e2e.ports.yml",
 )
 
 _CREATIVE_AGENT_IN_NETWORK_HEALTH: Final = "http://creative-agent:8080/api/creative-agent/health"
+
+# Last compose ``ps --format json`` diagnostic (host-path creative-agent gating).
+_last_compose_ps_error: str | None = None
 
 
 def _e2e_host_default() -> str:
@@ -54,10 +58,35 @@ def _in_network(host: str) -> bool:
 
 
 def _compose_argv(compose_files: Sequence[str]) -> list[str]:
-    binary = "docker-compose" if shutil.which("docker-compose") else "docker"
-    argv = [binary]
-    if binary == "docker":
-        argv.append("compose")
+    """Build compose argv, preferring the Compose V2 plugin when available.
+
+    Host-path creative-agent gating needs ``ps --format json``. Prefer
+    ``docker compose`` (plugin) over a legacy ``docker-compose`` V1 binary that
+    may lack JSON ``ps`` and make health always look unknown.
+    """
+    argv: list[str]
+    if shutil.which("docker"):
+        try:
+            version = subprocess.run(
+                ["docker", "compose", "version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            version = None
+        if version is not None and version.returncode == 0:
+            argv = ["docker", "compose"]
+        elif shutil.which("docker-compose"):
+            argv = ["docker-compose"]
+        else:
+            argv = ["docker", "compose"]
+    elif shutil.which("docker-compose"):
+        argv = ["docker-compose"]
+    else:
+        argv = ["docker", "compose"]
+
     for path in compose_files:
         argv.extend(["-f", path])
     return argv
@@ -109,7 +138,9 @@ def _dump_e2e_compose_logs(compose_files: Sequence[str]) -> None:
 
 def _compose_service_health(service: str, compose_files: Sequence[str]) -> str | None:
     """Return compose Health string (e.g. healthy) or None if unknown/unavailable."""
+    global _last_compose_ps_error
     if not _compose_available():
+        _last_compose_ps_error = "docker/compose unavailable for host-path health inspect"
         return None
     try:
         result = subprocess.run(
@@ -119,9 +150,19 @@ def _compose_service_health(service: str, compose_files: Sequence[str]) -> str |
             timeout=5,
             check=False,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        _last_compose_ps_error = (
+            f"compose ps --format json for {service!r} raised {type(exc).__name__}: {exc}; "
+            "Compose V2 JSON ps is required for host-path creative-agent gating"
+        )
         return None
     if result.returncode != 0 or not result.stdout.strip():
+        _last_compose_ps_error = (
+            f"compose ps --format json for {service!r} failed "
+            f"(rc={result.returncode}, stdout_empty={not bool(result.stdout.strip())}); "
+            "Compose V2 JSON ps is required for host-path creative-agent gating. "
+            f"stderr={result.stderr.strip()!r}"
+        )
         return None
 
     # Compose v2 may emit one JSON object, an array, or NDJSON lines.
@@ -146,7 +187,13 @@ def _compose_service_health(service: str, compose_files: Sequence[str]) -> str |
                 records.append(obj)
 
     if not records:
+        _last_compose_ps_error = (
+            f"compose ps --format json for {service!r} produced no parseable records; "
+            "Compose V2 JSON ps is required for host-path creative-agent gating. "
+            f"raw_stdout={payload[:200]!r}"
+        )
         return None
+    _last_compose_ps_error = None
     health = records[0].get("Health") or records[0].get("health")
     if isinstance(health, str) and health.strip():
         return health.strip().lower()
@@ -239,7 +286,7 @@ def wait_for_e2e_stack(
     poll. Parallel "any healthy" semantics are intentionally forbidden so
     creative-agent cannot be skipped when adcp ``/health`` is already up.
     """
-    files = tuple(compose_files) if compose_files is not None else _DEFAULT_COMPOSE_FILES
+    files = tuple(compose_files) if compose_files is not None else DEFAULT_E2E_COMPOSE_FILES
     resolved_host = host if host is not None else _e2e_host_default()
     probe_names = tuple(required)
     if not probe_names:
@@ -273,7 +320,11 @@ def wait_for_e2e_stack(
 
     failed = last_failed or probe_names[0]
     _dump_e2e_compose_logs(files)
+    compose_hint = ""
+    if failed == "creative-agent" and _last_compose_ps_error and not _in_network(resolved_host):
+        compose_hint = f"; compose_ps_diag={_last_compose_ps_error}"
     pytest.fail(
         f"E2E stack not ready after {timeout_s}s — failed probe: {failed} "
-        f"(required order: {list(probe_names)}; host={resolved_host}; ports={dict(ports)})"
+        f"(required order: {list(probe_names)}; host={resolved_host}; ports={dict(ports)}"
+        f"{compose_hint})"
     )

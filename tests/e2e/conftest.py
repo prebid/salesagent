@@ -24,9 +24,7 @@ _GETPID = os.getpid
 
 # Import contract validation - this automatically validates tool calls at test collection time
 from tests.e2e.conftest_contract_validation import pytest_collection_modifyitems  # noqa: F401
-from tests.e2e.stack_readiness import wait_for_e2e_stack
-
-_E2E_COMPOSE_FILES = ("docker-compose.e2e.yml", "docker-compose.e2e.ports.yml")
+from tests.e2e.stack_readiness import DEFAULT_E2E_COMPOSE_FILES, wait_for_e2e_stack
 
 
 def e2e_host() -> str:
@@ -162,13 +160,18 @@ def docker_services_e2e(request):
         admin_port = mcp_port  # Admin is on same port as MCP (unified FastAPI process)
         postgres_port = int(os.getenv("POSTGRES_PORT", "5435"))
 
+        # Export resolved ports so later wrappers (e.g. wait_for_server_readiness)
+        # see the same values the fixture used — same contract as standalone.
+        os.environ["ADCP_SALES_PORT"] = str(mcp_port)
+        os.environ["POSTGRES_PORT"] = str(postgres_port)
+
         print(f"✓ Using ports: Server={mcp_port} (MCP+A2A+Admin), Postgres={postgres_port}")
 
         # Shared ordered readiness (postgres → creative-agent → adcp /health).
         # CI already compose --wait'd; 60s is a safety net, not a cold start budget.
         wait_for_e2e_stack(
             ports={"mcp": mcp_port, "postgres": postgres_port},
-            compose_files=_E2E_COMPOSE_FILES,
+            compose_files=DEFAULT_E2E_COMPOSE_FILES,
             host=e2e_host(),
             timeout_s=60,
         )
@@ -249,9 +252,9 @@ def docker_services_e2e(request):
             raise subprocess.CalledProcessError(agent_build.returncode, "creative-agent-stack.sh build")
 
         print("Step 1/2: Building Docker images...")
-        compose_files = ["-f", "docker-compose.e2e.yml", "-f", "docker-compose.e2e.ports.yml"]
+        compose_cli = [arg for path in DEFAULT_E2E_COMPOSE_FILES for arg in ("-f", path)]
         build_result = subprocess.run(
-            ["docker-compose", *compose_files, "build", "--progress=plain"],
+            ["docker-compose", *compose_cli, "build", "--progress=plain"],
             env=env,
             capture_output=False,  # Show build output
         )
@@ -260,12 +263,12 @@ def docker_services_e2e(request):
             raise subprocess.CalledProcessError(build_result.returncode, "docker-compose build")
 
         print("Step 2/2: Starting services...")
-        subprocess.run(["docker-compose", *compose_files, "up", "-d"], check=True, env=env)
+        subprocess.run(["docker-compose", *compose_cli, "up", "-d"], check=True, env=env)
 
         # Same ordered readiness helper as verify-only (migrations + creative-agent start_period).
         wait_for_e2e_stack(
             ports={"mcp": mcp_port, "postgres": postgres_port},
-            compose_files=_E2E_COMPOSE_FILES,
+            compose_files=DEFAULT_E2E_COMPOSE_FILES,
             host=e2e_host(),
             timeout_s=120,
         )

@@ -10,7 +10,7 @@ from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from sqlalchemy import select
 
-from tests.e2e.stack_readiness import wait_for_e2e_stack
+from tests.e2e.stack_readiness import DEFAULT_E2E_COMPOSE_FILES, wait_for_e2e_stack
 
 
 def make_mcp_client(
@@ -138,6 +138,7 @@ def wait_for_server_readiness(mcp_url: str, timeout: int = 60):
 
     wait_for_e2e_stack(
         ports={"mcp": int(parsed.port), "postgres": int(postgres_raw)},
+        compose_files=DEFAULT_E2E_COMPOSE_FILES,
         host=parsed.hostname,
         timeout_s=float(timeout),
     )
