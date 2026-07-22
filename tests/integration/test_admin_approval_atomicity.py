@@ -42,7 +42,14 @@ def _auth(client, tenant_id):
         sess["test_tenant_id"] = tenant_id
 
 
-def _make_step(tenant_id: str, principal_id: str, status: str, *, media_buy_id: str | None = None) -> str:
+def _make_step(
+    tenant_id: str,
+    principal_id: str,
+    status: str,
+    *,
+    media_buy_id: str | None = None,
+    step_type: str = "approval",
+) -> str:
     """Create a Context + WorkflowStep (optionally mapped to a media_buy) via ContextManager
     (no raw session.add — factory/persistence-layer pattern). Returns the step id."""
     cm = ContextManager()
@@ -50,7 +57,7 @@ def _make_step(tenant_id: str, principal_id: str, status: str, *, media_buy_id: 
     mappings = [{"object_type": "media_buy", "object_id": media_buy_id, "action": "approve"}] if media_buy_id else None
     step = cm.create_workflow_step(
         context_id=ctx.context_id,
-        step_type="approval",
+        step_type=step_type,
         owner="publisher",
         status=status,
         tool_name="create_media_buy",
@@ -73,7 +80,7 @@ class TestPolicyReviewAtomicity:
         overwritten to completed."""
         tenant_id = sample_tenant["tenant_id"]
         _auth(client, tenant_id)
-        step_id = _make_step(tenant_id, sample_principal["principal_id"], "canceled")
+        step_id = _make_step(tenant_id, sample_principal["principal_id"], "canceled", step_type="policy_review")
 
         resp = client.post(f"/tenant/{tenant_id}/policy/review/{step_id}", data={"action": "approve", "notes": "n"})
         assert resp.status_code == 409
@@ -83,11 +90,41 @@ class TestPolicyReviewAtomicity:
         """[Round-15 B1] positive control: a pending review approves to completed."""
         tenant_id = sample_tenant["tenant_id"]
         _auth(client, tenant_id)
-        step_id = _make_step(tenant_id, sample_principal["principal_id"], "requires_approval")
+        step_id = _make_step(tenant_id, sample_principal["principal_id"], "requires_approval", step_type="policy_review")
 
         resp = client.post(f"/tenant/{tenant_id}/policy/review/{step_id}", data={"action": "approve", "notes": "n"})
         assert resp.status_code in (200, 302)
         assert _status(tenant_id, step_id) == "completed"
+
+    def test_review_refused_for_authenticated_outsider(self, client, sample_tenant, sample_principal):
+        """A session authenticated to the app but with NO User record in the tenant must not
+        be able to review the tenant's steps. Regression guard: the route previously used the
+        bare authentication decorator (no tenant lookup), and its inline role gate never fired
+        for regular OAuth users — so any signed-in outsider could drive a cross-tenant
+        approve/reject."""
+        tenant_id = sample_tenant["tenant_id"]
+        step_id = _make_step(tenant_id, sample_principal["principal_id"], "requires_approval", step_type="policy_review")
+
+        with client.session_transaction() as sess:
+            sess.clear()
+            sess["user"] = "outsider@evil.example"
+
+        resp = client.post(f"/tenant/{tenant_id}/policy/review/{step_id}", data={"action": "approve", "notes": "n"})
+        assert resp.status_code == 403, f"outsider must be refused, got {resp.status_code}"
+        assert _status(tenant_id, step_id) == "requires_approval", "outsider must not transition the step"
+
+    def test_review_refuses_non_policy_step(self, client, sample_tenant, sample_principal):
+        """The policy review route must action POLICY steps only: an arbitrary step id (e.g. a
+        media-buy approval awaiting decision) is 404, not driven terminal with a fabricated
+        {"approved": true} artifact — which would strand the media buy unapprovable while the
+        buyer's durable read showed completed."""
+        tenant_id = sample_tenant["tenant_id"]
+        _auth(client, tenant_id)
+        step_id = _make_step(tenant_id, sample_principal["principal_id"], "requires_approval")
+
+        resp = client.post(f"/tenant/{tenant_id}/policy/review/{step_id}", data={"action": "approve", "notes": "n"})
+        assert resp.status_code == 404, f"non-policy step must be 404, got {resp.status_code}"
+        assert _status(tenant_id, step_id) == "requires_approval", "non-policy step must be left untouched"
 
     def test_review_unknown_action_is_bad_request_not_conflict(self, client, sample_tenant, sample_principal):
         """An unknown/missing action is a client error (400 Bad Request), distinct from the 409
@@ -96,7 +133,7 @@ class TestPolicyReviewAtomicity:
         bad request as a 409 conflict."""
         tenant_id = sample_tenant["tenant_id"]
         _auth(client, tenant_id)
-        step_id = _make_step(tenant_id, sample_principal["principal_id"], "requires_approval")
+        step_id = _make_step(tenant_id, sample_principal["principal_id"], "requires_approval", step_type="policy_review")
 
         resp = client.post(f"/tenant/{tenant_id}/policy/review/{step_id}", data={"action": "frobnicate", "notes": "n"})
         assert resp.status_code == 400
@@ -134,6 +171,38 @@ class TestOperationsApproveAtomicity:
         mock_execute.assert_not_called()
         assert _status(tenant_id, step_id) == "requires_approval", "refused claim must not overwrite the step"
         assert resp.status_code in (302, 303)
+
+    def test_media_buy_unknown_action_is_flagged_not_silent(self, client, factory_session):
+        """An action that is neither approve nor reject must not silently no-op (indistinguishable
+        from success to the operator). The route flashes an error and does not transition the step
+        or run the adapter. Regression guard: the route previously fell through both branches to a
+        bare redirect, while the sibling policy route already returned an explicit error."""
+        from tests.factories import MediaBuyFactory
+
+        suffix = uuid.uuid4().hex[:8]
+        media_buy = MediaBuyFactory(
+            tenant__tenant_id=f"t_{suffix}",
+            tenant__subdomain=f"sub-{suffix}",
+            principal__principal_id=f"p_{suffix}",
+            principal__access_token=f"tok_{suffix}",
+            media_buy_id=f"mb_{suffix}",
+            status="pending_approval",
+        )
+        tenant_id = media_buy.tenant_id
+        media_buy_id = media_buy.media_buy_id
+        _auth(client, tenant_id)
+        step_id = _make_step(tenant_id, media_buy.principal_id, "requires_approval", media_buy_id=media_buy_id)
+
+        with patch("src.core.tools.media_buy_create.execute_approved_media_buy") as mock_execute:
+            resp = client.post(
+                f"/tenant/{tenant_id}/media-buy/{media_buy_id}/approve",
+                data={"action": "frobnicate", "workflow_step_id": step_id},
+                follow_redirects=True,
+            )
+
+        mock_execute.assert_not_called()
+        assert _status(tenant_id, step_id) == "requires_approval", "unknown action must not transition the step"
+        assert "unknown action" in resp.get_data(as_text=True).lower()
 
     def test_media_buy_detail_approves_legacy_approval_status_step(self, client, sample_tenant, sample_principal):
         """[Round-21] The media-buy detail approve route finds and approves a legacy ``approval``

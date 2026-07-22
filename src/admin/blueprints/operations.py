@@ -665,6 +665,11 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
 
                 flash("Media buy rejected", "info")
 
+            else:
+                # Neither approve nor reject (unknown/missing action) — a no-op would be
+                # indistinguishable from success to the operator. Flash and redirect.
+                flash(f"Unknown action: {action!r}", "error")
+
             return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
     except Exception as e:

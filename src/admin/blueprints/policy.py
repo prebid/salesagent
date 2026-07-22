@@ -6,7 +6,7 @@ import logging
 from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import select
 
-from src.admin.utils import get_tenant_config_from_db, require_auth
+from src.admin.utils import get_tenant_config_from_db, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.audit_logger import AuditLogger
 from src.core.database.database_session import get_db_session
@@ -19,14 +19,11 @@ policy_bp = Blueprint("policy", __name__)
 
 
 @policy_bp.route("/", methods=["GET"])
-@require_auth()
+@require_tenant_access()
 def index(tenant_id):
     """View and manage policy settings for the tenant."""
-    # Check access
+    # Tenant membership is enforced by require_tenant_access; viewers stay read-blocked.
     if session.get("role") == "viewer":
-        return "Access denied", 403
-
-    if session.get("role") == "tenant_admin" and session.get("tenant_id") != tenant_id:
         return "Access denied", 403
 
     with get_db_session() as db_session:
@@ -138,15 +135,12 @@ def index(tenant_id):
 
 
 @policy_bp.route("/update", methods=["POST"])
-@require_auth()
+@require_tenant_access()
 @log_admin_action("update_policy")
 def update(tenant_id):
     """Update policy settings for the tenant."""
-    # Check access - only admins can update policy
+    # Tenant membership is enforced by require_tenant_access; role gate stays for test-mode.
     if session.get("role") not in ["super_admin", "tenant_admin"]:
-        return "Access denied", 403
-
-    if session.get("role") == "tenant_admin" and session.get("tenant_id") != tenant_id:
         return "Access denied", 403
 
     try:
@@ -208,22 +202,19 @@ def update(tenant_id):
 
 
 @policy_bp.route("/rules", methods=["GET", "POST"])
-@require_auth()
+@require_tenant_access()
 def rules(tenant_id):
     """Redirect old policy rules URL to new comprehensive policy settings page."""
     return redirect(url_for("policy.index", tenant_id=tenant_id))
 
 
 @policy_bp.route("/review/<task_id>", methods=["GET", "POST"])
-@require_auth()
+@require_tenant_access()
 @log_admin_action("review_policy_task")
 def review_task(tenant_id, task_id):
     """Review and approve/reject a policy review task."""
-    # Check access
+    # Tenant membership is enforced by require_tenant_access; viewers stay read-blocked.
     if session.get("role") == "viewer":
-        return "Access denied", 403
-
-    if session.get("role") == "tenant_admin" and session.get("tenant_id") != tenant_id:
         return "Access denied", 403
 
     with get_db_session() as db_session:
@@ -237,7 +228,14 @@ def review_task(tenant_id, task_id):
                 stmt = (
                     select(WorkflowStep)
                     .join(Context, WorkflowStep.context_id == Context.context_id)
-                    .filter(Context.tenant_id == tenant_id, WorkflowStep.step_id == task_id)
+                    .filter(
+                        Context.tenant_id == tenant_id,
+                        WorkflowStep.step_id == task_id,
+                        # This route reviews POLICY steps only — without this filter an
+                        # arbitrary step id (e.g. a media-buy approval) could be driven
+                        # terminal here with a fabricated {"approved": true} artifact.
+                        WorkflowStep.step_type == "policy_review",
+                    )
                 )
                 step = db_session.scalars(stmt).first()
 
@@ -290,7 +288,11 @@ def review_task(tenant_id, task_id):
             stmt = (
                 select(WorkflowStep)
                 .join(Context, WorkflowStep.context_id == Context.context_id)
-                .filter(Context.tenant_id == tenant_id, WorkflowStep.step_id == task_id)
+                .filter(
+                    Context.tenant_id == tenant_id,
+                    WorkflowStep.step_id == task_id,
+                    WorkflowStep.step_type == "policy_review",
+                )
             )
             step = db_session.scalars(stmt).first()
 

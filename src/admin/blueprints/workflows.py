@@ -169,7 +169,15 @@ def _refused_decision_response(
 @require_tenant_access()
 @log_admin_action("approve_workflow_step")
 def approve_workflow_step(tenant_id, workflow_id, step_id):
-    """Approve a workflow step."""
+    """Approve a workflow step.
+
+    ``workflow_id`` is a cosmetic path segment only: WorkflowStep has no workflow_id
+    column and the value is never populated (an unwired stub — see the TODO at
+    mcp_context_wrapper). The step is a tenant-scoped primary key, so authorization is
+    complete at (tenant, step_id); there is nothing to scope against the URL's workflow.
+    Wiring a real workflow grouping (and validating the step against it) is separate work.
+    """
+    del workflow_id  # cosmetic; see docstring
     try:
         with get_db_session() as db:
             # Get and update the workflow step via repository (tenant-scoped)
@@ -282,7 +290,12 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
 @require_tenant_access()
 @log_admin_action("reject_workflow_step")
 def reject_workflow_step(tenant_id, workflow_id, step_id):
-    """Reject a workflow step with a reason."""
+    """Reject a workflow step with a reason.
+
+    ``workflow_id`` is a cosmetic path segment only (see ``approve_workflow_step``): no
+    backing column, never populated; authorization is complete at (tenant, step_id).
+    """
+    del workflow_id  # cosmetic; see approve_workflow_step
     try:
         data = request.get_json() or {}
         reason = data.get("reason", "No reason provided")
