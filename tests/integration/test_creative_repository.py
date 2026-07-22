@@ -430,6 +430,29 @@ class TestAssignmentRepoCreativeReadiness:
         assert readiness.unapproved_creative_ids == []
         assert readiness.ready_for_finalize is True
 
+    def test_cross_principal_creative_status_invisible(self, integration_db):
+        """A same-tenant, other-principal creative with a colliding id cannot satisfy readiness.
+
+        The creatives PK is composite (creative_id, tenant_id, principal_id): the
+        status lookup matches the assignment's OWN principal, so principal-b's
+        APPROVED "c1" must not stand in for principal-a's PENDING "c1". Dropping
+        the principal filter (tenant-only matching) could flip this ready — this
+        test is the red oracle for that mutation. #1544.
+        """
+        with _RepoEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal_a = PrincipalFactory(tenant=tenant, principal_id="pa")
+            media_buy, _ = self._buy_with_assignment(tenant, principal_a, creative_status="pending")
+
+            principal_b = PrincipalFactory(tenant=tenant, principal_id="pb")
+            CreativeFactory(tenant=tenant, principal=principal_b, creative_id="c1", status="approved")
+
+            session = env.get_session()
+            readiness = CreativeAssignmentRepository(session, "test_tenant").creative_readiness(media_buy.media_buy_id)
+
+        assert readiness.unapproved_creative_ids == ["c1"]
+        assert readiness.ready_for_finalize is False
+
 
 class TestAssignmentRepoGetByPackage:
     """get_by_package — assignments for a package."""

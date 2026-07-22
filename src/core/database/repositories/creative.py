@@ -414,20 +414,34 @@ class CreativeAssignmentRepository:
         activation scheduler previously each open-coded — with drift on tenant
         scoping and on the empty-assignments case. Callers pick their policy via
         the named properties on :class:`CreativeReadiness`.
+
+        The status lookup matches the FULL composite creative key
+        ``(creative_id, tenant_id, principal_id)`` taken from each assignment —
+        a tenant-only match could resolve a colliding ``creative_id`` to ANOTHER
+        principal's row and judge readiness off its status. Only an assignment
+        whose OWN creative row is approved satisfies the gate (the composite FK
+        guarantees every assignment has such a row; a lookup miss — only
+        possible if that constraint ever relaxes — fails closed as unapproved).
         """
         assignments = self.get_by_media_buy(media_buy_id)
         if not assignments:
             return CreativeReadiness(has_assignments=False, unapproved_creative_ids=[])
-        creative_ids = list({a.creative_id for a in assignments})
-        creatives = self._session.scalars(
-            select(Creative).where(
-                Creative.tenant_id == self._tenant_id,
-                Creative.creative_id.in_(creative_ids),
-            )
-        ).all()
-        # "approved" is the ONLY creative-ready status (CreativeStatusEnum:
-        # processing/pending_review/approved/rejected — no "active").
-        unapproved = [c.creative_id for c in creatives if c.status != "approved"]
+        ids_by_principal: dict[str, set[str]] = {}
+        for assignment in assignments:
+            ids_by_principal.setdefault(assignment.principal_id, set()).add(assignment.creative_id)
+        approved: set[tuple[str, str]] = set()
+        for principal_id, creative_ids in ids_by_principal.items():
+            rows = self._session.scalars(
+                select(Creative).where(
+                    Creative.tenant_id == self._tenant_id,
+                    Creative.principal_id == principal_id,
+                    Creative.creative_id.in_(sorted(creative_ids)),
+                )
+            ).all()
+            # "approved" is the ONLY creative-ready status (CreativeStatusEnum:
+            # processing/pending_review/approved/rejected — no "active").
+            approved.update((principal_id, c.creative_id) for c in rows if c.status == "approved")
+        unapproved = sorted({a.creative_id for a in assignments if (a.principal_id, a.creative_id) not in approved})
         return CreativeReadiness(has_assignments=True, unapproved_creative_ids=unapproved)
 
     def get_by_package(self, package_id: str) -> list[CreativeAssignment]:
