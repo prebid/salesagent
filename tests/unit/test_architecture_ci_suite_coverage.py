@@ -34,6 +34,20 @@ def _is_adcp_testing_true(value: object) -> bool:
     return value is True or str(value).lower() == "true"
 
 
+def _shell_has_flag(script: str, flag: str) -> bool:
+    """True if ``flag`` appears as its own argv token on a non-comment code line.
+
+    Substring checks like ``\"up -d --wait\" in run`` are vacuous against
+    ``up -d --wait-timeout 600`` — ``--wait`` is a prefix of ``--wait-timeout``.
+    Shell comments (``# --wait gates ...``) must not count as the flag either.
+    """
+    for line in script.splitlines():
+        code = line.split("#", 1)[0]
+        if flag in code.split():
+            return True
+    return False
+
+
 def _find_free_disk_step(steps: list) -> tuple[int, dict]:
     """Locate the shared _free-disk composite step (name may be present for CI UI)."""
     for i, step in enumerate(steps):
@@ -61,6 +75,20 @@ def _load_e2e_compose() -> dict:
 
 class TestCISuiteCoverage:
     """BDD and E2E suites must run in CI and gate the test summary."""
+
+    @pytest.mark.arch_guard
+    def test_shell_has_flag_rejects_wait_timeout_prefix(self):
+        """``--wait`` must not match as a prefix of ``--wait-timeout`` (vacuous guard class)."""
+        wait_timeout_only = "docker compose up -d --wait-timeout 600"
+        assert not _shell_has_flag(wait_timeout_only, "--wait")
+        assert _shell_has_flag(wait_timeout_only, "--wait-timeout")
+        both = "docker compose up -d --wait --wait-timeout 600"
+        assert _shell_has_flag(both, "--wait")
+        assert _shell_has_flag(both, "--wait-timeout")
+        # Comments must not satisfy the flag contract (CI pre-start run has `# --wait gates…`).
+        comment_only = "# --wait gates postgres\nup -d --wait-timeout 600"
+        assert not _shell_has_flag(comment_only, "--wait")
+        assert _shell_has_flag(comment_only, "--wait-timeout")
 
     @pytest.mark.arch_guard
     def test_bdd_job_exists(self):
@@ -288,8 +316,12 @@ class TestCISuiteCoverage:
         prestart_run = str(prestart.get("run", ""))
         prestart_env = prestart.get("env") or {}
         assert "creative-agent-stack.sh build" in prestart_run, "Pre-start must build the pinned creative-agent image."
-        assert "up -d --wait" in prestart_run, "Pre-start must use compose up --wait (healthcheck gate)."
-        assert "--wait-timeout 600" in prestart_run, "Pre-start must budget --wait-timeout 600 for migrations."
+        # Token match — substring "up -d --wait" falsely matches "--wait-timeout" alone.
+        assert _shell_has_flag(prestart_run, "--wait"), (
+            "Pre-start must use compose up --wait as its own flag (healthcheck gate)."
+        )
+        assert _shell_has_flag(prestart_run, "--wait-timeout"), "Pre-start must budget --wait-timeout for migrations."
+        assert "600" in prestart_run.split(), "Pre-start --wait-timeout must be 600."
         assert "curl -sf" in prestart_run and "/health" in prestart_run, (
             "Pre-start must curl /health after up --wait (post-up readiness check)."
         )
@@ -311,6 +343,9 @@ class TestCISuiteCoverage:
         )
         extra = str(pytest_steps[0].get("with", {}).get("extra_args", ""))
         assert "--timeout=300" in extra, "e2e-tests must keep per-test --timeout=300 on test bodies."
+        assert "timeout_func_only=true" in extra, (
+            "e2e-tests must keep timeout_func_only=true (300s applies to bodies, not fixtures)."
+        )
 
         pre_idx = step_names.index("Build and start E2E stack")
         pytest_idx = next(
