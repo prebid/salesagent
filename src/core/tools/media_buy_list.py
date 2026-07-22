@@ -251,6 +251,14 @@ def _get_media_buys_impl(
                                 f"targeting_overlay=None for this package."
                             ),
                             field=f"media_buys[].packages[{pkg_id}].targeting_overlay",
+                            # Buyer hint for BR-RULE-294 / UC-019: seller-side
+                            # package_config corruption — buyer cannot fix the
+                            # row; contact seller to repair persisted targeting.
+                            suggestion=(
+                                "Persisted package_config targeting could not be "
+                                "rehydrated; targeting_overlay is null for this "
+                                "package until the seller repairs the stored data."
+                            ),
                         )
                     )
                     targeting_overlay = None
