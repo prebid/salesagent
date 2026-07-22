@@ -71,20 +71,25 @@ def _placeholder_step(func_name: str) -> dict:
     }
 
 
-def _load_existing_keys(store_path: Path) -> set[str]:
-    """Load kind-scoped keys already present in the JSONL store."""
-    existing_keys: set[str] = set()
-    if not store_path.exists():
-        return existing_keys
-    for line in store_path.read_text().splitlines():
+def iter_jsonl_records(path: Path):
+    """Yield parsed JSON objects from a JSONL file (skip blanks / bad lines)."""
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
         if not line.strip():
             continue
         try:
-            obj = json.loads(line)
-            step = obj.get("step", {})
-            existing_keys.add(_store_key(str(obj.get("kind")), step))
+            yield json.loads(line)
         except json.JSONDecodeError:
             continue
+
+
+def _load_existing_keys(store_path: Path) -> set[str]:
+    """Load kind-scoped keys already present in the JSONL store."""
+    existing_keys: set[str] = set()
+    for obj in iter_jsonl_records(store_path):
+        step = obj.get("step", {})
+        existing_keys.add(_store_key(str(obj.get("kind")), step))
     return existing_keys
 
 
@@ -99,16 +104,10 @@ def write_to_store(parsed: dict, store_path: Path, step_index_path: Path | None)
     # We need the step index to get file/line info.
     # If not available, write with func_name only (partial records).
     step_lookup = {}
-    if step_index_path and step_index_path.exists():
-        for line in step_index_path.read_text().splitlines():
-            if not line.strip():
-                continue
-            try:
-                obj = json.loads(line)
-                step = obj.get("step", {})
-                step_lookup[step.get("function_name")] = step
-            except json.JSONDecodeError:
-                continue
+    if step_index_path is not None:
+        for obj in iter_jsonl_records(step_index_path):
+            step = obj.get("step", {})
+            step_lookup[step.get("function_name")] = step
 
     new_triage = 0
     new_deep = 0

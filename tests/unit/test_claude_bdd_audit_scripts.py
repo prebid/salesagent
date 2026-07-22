@@ -6,6 +6,7 @@ right bar: each correctness fix in the PR must fail the suite if reverted.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import sys
@@ -21,12 +22,21 @@ def _load(name: str):
     path = SCRIPTS / f"{name}.py"
     if not path.exists():
         pytest.fail(f"missing script: {path}")
+    # Shared helpers live beside the scripts; ensure import resolves under importlib.
+    scripts_dir = str(SCRIPTS)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.fixture(scope="module")
+def bdd_audit_common():
+    return _load("bdd_audit_common")
 
 
 @pytest.fixture(scope="module")
@@ -44,53 +54,87 @@ def audit_xfails():
     return _load("audit_xfails")
 
 
+class TestTransportHelpers:
+    """Shared extract_* must agree and recognize e2e_rest (#1665 review)."""
+
+    def test_e2e_rest_not_truncated_to_rest(self, bdd_audit_common) -> None:
+        nodeid = "tests/bdd/test_uc004.py::test_s[e2e_rest]"
+        assert bdd_audit_common.extract_transport(nodeid) == "e2e_rest"
+        assert bdd_audit_common.extract_scenario_base(nodeid) == "tests/bdd/test_uc004.py::test_s"
+
+    def test_wire_transports(self, bdd_audit_common) -> None:
+        for t in ("a2a", "mcp", "rest"):
+            nodeid = f"tests/bdd/test_uc004.py::test_s[{t}]"
+            assert bdd_audit_common.extract_transport(nodeid) == t
+
+
 class TestClassifyXpass:
-    """Pin GRADUATE vs PARTIAL_XPASS bucketing (#1665 review)."""
+    """Pin GRADUATE vs PARTIAL_XPASS on transports *present for the base*."""
 
     def _entry(self, bdd_full_audit, nodeid: str, outcome: str = "xpassed"):
         return bdd_full_audit.TestEntry(nodeid=nodeid, outcome=outcome)
 
-    def test_all_four_transports_graduate(self, bdd_full_audit) -> None:
+    def test_all_present_wire_transports_graduate(self, bdd_full_audit) -> None:
+        """Real post-#1417 three-transport UC → GRADUATE (no impl required)."""
         all_entries = [
-            self._entry(bdd_full_audit, f"tests/bdd/test_uc004.py::test_s[{t}]") for t in ("impl", "a2a", "mcp", "rest")
+            self._entry(bdd_full_audit, f"tests/bdd/test_uc004.py::test_s[{t}]") for t in ("a2a", "mcp", "rest")
         ]
         bucket, cat, detail = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
         assert bucket == "FIX_NOW"
         assert cat == "GRADUATE"
         assert "All transports pass" in detail
 
+    def test_two_transport_uc_graduates_without_rest(self, bdd_full_audit) -> None:
+        """UC-019 style (a2a+mcp only) must not demand rest."""
+        all_entries = [self._entry(bdd_full_audit, f"tests/bdd/test_uc019.py::test_s[{t}]") for t in ("a2a", "mcp")]
+        _, cat, _ = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
+        assert cat == "GRADUATE"
+
     def test_strict_subset_is_partial_xpass(self, bdd_full_audit) -> None:
         all_entries = [
-            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[impl]"),
-            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[a2a]"),
+            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[a2a]", "xpassed"),
+            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[mcp]", "xfailed"),
+            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[rest]", "xfailed"),
         ]
         bucket, cat, detail = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
         assert bucket == "FIX_NOW"
         assert cat == "PARTIAL_XPASS"
         assert "missing" in detail
+        assert "mcp" in detail
 
     def test_generate_work_items_splits_graduate_and_partial(self, bdd_full_audit) -> None:
         graduate = [
-            self._entry(bdd_full_audit, f"tests/bdd/test_uc004.py::test_full[{t}]")
-            for t in ("impl", "a2a", "mcp", "rest")
+            self._entry(bdd_full_audit, f"tests/bdd/test_uc004.py::test_full[{t}]") for t in ("a2a", "mcp", "rest")
         ]
         partial = [
-            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_part[impl]"),
-            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_part[mcp]"),
+            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_part[a2a]", "xpassed"),
+            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_part[mcp]", "xfailed"),
         ]
-        xpassed = graduate + partial
+        all_entries = graduate + partial
         items = bdd_full_audit.generate_work_items(
             failed=[],
             xfailed=[],
-            xpassed=xpassed,
+            xpassed=[e for e in all_entries if e.outcome == "xpassed"],
             inspector_flags=[],
             tag_reasons={},
             strict_tags=set(),
-            all_entries=xpassed,
+            all_entries=all_entries,
         )
         cats = {i.category for i in items}
         assert cats == {"GRADUATE", "PARTIAL_XPASS"}
         assert len(items) == 2
+
+
+class TestClassifyXpassedAudit:
+    """audit_xfails.classify_xpassed uses the same present-transport rule."""
+
+    def test_three_transport_xpass_is_stale_not_partial(self, audit_xfails) -> None:
+        all_tests = [
+            {"nodeid": f"tests/bdd/test_uc004.py::test_s[{t}]", "outcome": "xpassed"} for t in ("a2a", "mcp", "rest")
+        ]
+        graduate, partial = audit_xfails.classify_xpassed(all_tests)
+        assert len(graduate) == 1
+        assert partial == {}
 
 
 class TestSalvageDedupe:
@@ -125,38 +169,90 @@ class TestSalvageDedupe:
         assert all(r["step"]["line_number"] == 0 for r in records)
 
 
-class TestPrematureXfailMatch:
-    """Pin identifier-boundary matching for PREMATURE_XFAIL."""
+class TestPrematureXfailCrashMatch:
+    """PREMATURE_XFAIL matches setup/call crash path+lineno → enclosing step."""
 
-    def test_substring_name_does_not_false_positive(self, audit_xfails) -> None:
-        entry = audit_xfails.classify_xfail(
-            {
-                "nodeid": "t::s[impl]",
-                "wasxfail": "check_xy blew up",
-                "keywords": [],
-                "call": {"longrepr": "in check_xy"},
-            },
-            {},
-            {"check_x"},
-            set(),
-            {},
+    def test_crash_inside_premature_step_classifies(self, audit_xfails, tmp_path: Path) -> None:
+        source = textwrap.dedent(
+            """
+            from pytest_bdd import then
+            import pytest
+
+            @then("x")
+            def then_premature():
+                \"\"\"doc\"\"\"
+                pytest.xfail("not ready")
+            """
         )
-        assert entry.category != "PREMATURE_XFAIL"
+        steps_file = tmp_path / "steps.py"
+        steps_file.write_text(source)
+        premature = audit_xfails.find_premature_xfails(tmp_path)
+        assert len(premature) == 1
+        step = premature[0]
+        assert step.name == "then_premature"
 
-    def test_identifier_boundary_matches(self, audit_xfails) -> None:
+        # Point crash at the pytest.xfail() line inside the step body.
+        xfail_lineno = next(
+            n.lineno
+            for n in ast.walk(ast.parse(source))
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "xfail"
+        )
         entry = audit_xfails.classify_xfail(
             {
-                "nodeid": "t::s[impl]",
-                "wasxfail": "then_premature not ready",
+                "nodeid": "t::s[a2a]",
+                "wasxfail": "",
                 "keywords": [],
-                "call": {"longrepr": "File steps.py, in then_premature\n  pytest.xfail"},
+                "setup": {
+                    "outcome": "failed",
+                    "crash": {
+                        "path": str(steps_file.resolve()),
+                        "lineno": xfail_lineno,
+                        "message": "_pytest.outcomes.XFailed: not ready",
+                    },
+                    "longrepr": "E   _pytest.outcomes.XFailed: not ready",
+                },
             },
             {},
-            {"then_premature"},
+            premature,
             set(),
             {},
         )
         assert entry.category == "PREMATURE_XFAIL"
+        assert "then_premature" in entry.reason
+
+    def test_crash_in_conftest_is_not_premature(self, audit_xfails, tmp_path: Path) -> None:
+        source = textwrap.dedent(
+            """
+            from pytest_bdd import then
+            import pytest
+
+            @then("x")
+            def then_premature():
+                pytest.xfail("not ready")
+            """
+        )
+        (tmp_path / "steps.py").write_text(source)
+        premature = audit_xfails.find_premature_xfails(tmp_path)
+        entry = audit_xfails.classify_xfail(
+            {
+                "nodeid": "t::s[a2a]",
+                "wasxfail": "UC harness not wired",
+                "keywords": [],
+                "setup": {
+                    "outcome": "failed",
+                    "crash": {
+                        "path": "/repo/tests/bdd/conftest.py",
+                        "lineno": 2561,
+                        "message": "_pytest.outcomes.XFailed: UC harness not wired",
+                    },
+                },
+            },
+            {},
+            premature,
+            set(),
+            {},
+        )
+        assert entry.category != "PREMATURE_XFAIL"
 
     def test_find_premature_skips_only_string_docstrings(self, audit_xfails, tmp_path: Path) -> None:
         source = textwrap.dedent(
@@ -177,10 +273,11 @@ class TestPrematureXfailMatch:
         )
         (tmp_path / "steps.py").write_text(source)
         premature = audit_xfails.find_premature_xfails(tmp_path)
-        assert "then_premature" in premature
+        names = {p.name for p in premature}
+        assert "then_premature" in names
         # Leading non-string Constant must NOT be skipped as a docstring, so
         # the first meaningful stmt is `0` → not premature.
-        assert "then_with_int_expr" not in premature
+        assert "then_with_int_expr" not in names
 
 
 class TestReportIteratesFixNowDict:
@@ -193,7 +290,7 @@ class TestReportIteratesFixNowDict:
             category="PARTIAL_XPASS",
             uc="UC-004",
             test_count=2,
-            details="Passes: ['a2a'], missing: ['impl', 'mcp', 'rest']",
+            details="Passes: ['a2a'], missing: ['mcp', 'rest']",
         )
         report = bdd_full_audit.generate_report(
             [item],
