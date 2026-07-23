@@ -57,10 +57,15 @@ def audit_xfails():
 class TestTransportHelpers:
     """Shared extract_* must agree and recognize e2e_rest (#1665 review)."""
 
-    def test_e2e_rest_not_truncated_to_rest(self, bdd_audit_common) -> None:
+    def test_e2e_rest_recognizes_e2e_rest(self, bdd_audit_common) -> None:
         nodeid = "tests/bdd/test_uc004.py::test_s[e2e_rest]"
         assert bdd_audit_common.extract_transport(nodeid) == "e2e_rest"
         assert bdd_audit_common.extract_scenario_base(nodeid) == "tests/bdd/test_uc004.py::test_s"
+
+    def test_extract_longrepr_e_line(self, bdd_audit_common) -> None:
+        longrepr = "E   AssertionError: boom\n    other"
+        assert bdd_audit_common.extract_longrepr_e_line(longrepr) == "AssertionError: boom"
+        assert bdd_audit_common.extract_longrepr_e_line("no error") == ""
 
     def test_wire_transports(self, bdd_audit_common) -> None:
         for t in ("a2a", "mcp", "rest"):
@@ -163,9 +168,10 @@ class TestClassifyXpassedAudit:
         all_tests = [
             {"nodeid": f"tests/bdd/test_uc004.py::test_s[{t}]", "outcome": "xpassed"} for t in ("a2a", "mcp", "rest")
         ]
-        graduate, partial = audit_xfails.classify_xpassed(all_tests)
+        graduate, partial_passing, partial_missing = audit_xfails.classify_xpassed(all_tests)
         assert len(graduate) == 1
-        assert partial == {}
+        assert partial_passing == {}
+        assert partial_missing == {}
 
     def test_strict_subset_is_partial(self, audit_xfails) -> None:
         """Mirror test_strict_subset_is_partial_xpass — pin the partial branch."""
@@ -175,9 +181,10 @@ class TestClassifyXpassedAudit:
             {"nodeid": f"{base}[mcp]", "outcome": "xfailed"},
             {"nodeid": f"{base}[rest]", "outcome": "xfailed"},
         ]
-        graduate, partial = audit_xfails.classify_xpassed(all_tests)
+        graduate, partial_passing, partial_missing = audit_xfails.classify_xpassed(all_tests)
         assert graduate == set()
-        assert partial == {base: {"a2a"}}
+        assert partial_passing == {base: {"a2a"}}
+        assert partial_missing == {base: {"mcp", "rest"}}
 
     def test_mixed_outline_examples_same_transport_do_not_graduate(self, audit_xfails) -> None:
         """Last-wins would graduate; worst-outcome must keep graduate empty."""
@@ -186,9 +193,10 @@ class TestClassifyXpassedAudit:
             {"nodeid": f"{base}[e2e_rest-ex1]", "outcome": "xpassed"},
             {"nodeid": f"{base}[e2e_rest-ex2]", "outcome": "xfailed"},
         ]
-        graduate, partial = audit_xfails.classify_xpassed(all_tests)
+        graduate, partial_passing, partial_missing = audit_xfails.classify_xpassed(all_tests)
         assert graduate == set()
-        assert partial == {}  # no passing transport after worst-outcome aggregate
+        assert partial_passing == {}  # no passing transport after worst-outcome aggregate
+        assert partial_missing == {}
 
 
 class TestSalvageDedupe:
@@ -221,6 +229,24 @@ class TestSalvageDedupe:
         assert kinds == ["deep", "triage"]
         assert all(r["step"]["function_name"] == "then_a" for r in records)
         assert all(r["step"]["line_number"] == 0 for r in records)
+
+    def test_intra_call_duplicate_entries_write_once(self, salvage_audit, tmp_path: Path) -> None:
+        """_append_if_new must dedupe identical entries within a single write call."""
+        store = tmp_path / "store.jsonl"
+        parsed = {
+            "pass1": [
+                {"index": 1, "func_name": "then_a", "verdict": "FLAG"},
+                {"index": 2, "func_name": "then_a", "verdict": "FLAG"},
+            ],
+            "pass2": [],
+            "pass1_total": 2,
+            "pass2_total": 0,
+            "pass2_crashed_at": None,
+        }
+        salvage_audit.write_to_store(parsed, store, None)
+        records = [json.loads(line) for line in store.read_text().splitlines() if line.strip()]
+        triage = [r for r in records if r["kind"] == "triage"]
+        assert len(triage) == 1
 
 
 class TestPrematureXfailCrashMatch:
@@ -275,8 +301,6 @@ class TestPrematureXfailCrashMatch:
             },
             {},
             premature,
-            set(),
-            {},
         )
         assert entry.category == "PREMATURE_XFAIL"
         assert "then_premature" in entry.reason
@@ -289,27 +313,25 @@ class TestPrematureXfailCrashMatch:
         premature = audit_xfails.find_premature_xfails(tmp_path)
         assert len(premature) == 1
         step = premature[0]
-        entry = audit_xfails.classify_xfail(
-            {
-                "nodeid": "t::s[a2a]",
-                "wasxfail": "UC harness not wired",
-                "keywords": [],
-                "setup": {"outcome": "passed"},
-                "call": {
-                    "outcome": "skipped",
-                    "crash": {
-                        "path": str(steps_file.resolve()),
-                        "lineno": step.end_lineno + 1,
-                        "message": "_pytest.outcomes.XFailed: not ready",
-                    },
+        test = {
+            "nodeid": "t::s[a2a]",
+            "wasxfail": "UC harness not wired",
+            "keywords": [],
+            "setup": {"outcome": "passed"},
+            "call": {
+                "outcome": "skipped",
+                "crash": {
+                    "path": str(steps_file.resolve()),
+                    "lineno": step.end_lineno + 1,
+                    "message": "_pytest.outcomes.XFailed: not ready",
                 },
             },
-            {},
-            premature,
-            set(),
-            {},
-        )
+        }
+        entry = audit_xfails.classify_xfail(test, {}, premature)
         assert entry.category != "PREMATURE_XFAIL"
+        warnings = audit_xfails.crash_line_drift_warnings(test, premature)
+        assert len(warnings) == 1
+        assert "line-drift/stale-json?" in warnings[0]
 
     def test_crash_in_different_file_in_range_is_not_premature(self, audit_xfails, tmp_path: Path) -> None:
         """Path-equality must reject: in-range lineno in a *different* file.
@@ -344,8 +366,6 @@ class TestPrematureXfailCrashMatch:
             },
             {},
             premature,
-            set(),
-            {},
         )
         assert entry.category != "PREMATURE_XFAIL"
 
