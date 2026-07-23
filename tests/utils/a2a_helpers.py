@@ -118,6 +118,26 @@ def assert_failed_task_envelope(
     return envelope
 
 
+def assert_failed_task_no_secret_leak(task: Task, *, artifact_name: str = "error_result") -> None:
+    """Assert NO secret fragment leaks on ANY client-facing carrier of a failed Task.
+
+    One home for "which bytes of a failed Task are the buyer-facing surface": the structured
+    DataPart envelope AND every human-readable TextPart. If a failed artifact ever grows a third
+    client-visible carrier (a new part type, a status message, metadata), it is added here once
+    and every scrub test tightens in lockstep — rather than each test hand-rolling the surface
+    definition and silently under-covering the new carrier when one copy is missed.
+    """
+    from tests.helpers.secret_scrub import assert_no_secret_leak
+
+    assert task.artifacts, "failed Task must carry the error artifact"
+    artifact = task.artifacts[0]
+    assert artifact.name == artifact_name, f"expected {artifact_name!r} artifact, got {artifact.name!r}"
+    envelope = extract_data_from_artifact(artifact)
+    text_parts = [p.text for p in artifact.parts if p.HasField("text")]
+    client_facing = json.dumps(envelope) + " " + " ".join(text_parts)
+    assert_no_secret_leak(client_facing, context=f"failed Task {artifact_name!r} artifact")
+
+
 def make_test_a2a_identity() -> "ResolvedIdentity":
     """Standard factory-built ResolvedIdentity for A2A handler unit tests.
 

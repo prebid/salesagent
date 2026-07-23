@@ -47,6 +47,7 @@ from tests.helpers import assert_envelope_shape
 from tests.helpers.secret_scrub import SECRET_BEARING_MESSAGE, assert_no_secret_leak
 from tests.utils.a2a_helpers import (
     assert_failed_task_envelope,
+    assert_failed_task_no_secret_leak,
     create_a2a_message_with_skill,
     extract_processing_error_envelope,
     make_nl_send_message_request,
@@ -139,10 +140,8 @@ async def test_explicit_skill_untyped_crash_scrubs_secret_from_failed_task():
     # The shared strict oracle pins the whole wire contract at once: FAILED state, artifact name,
     # exactly one DataPart + one TextPart, and BOTH envelope layers agreeing on code + recovery.
     envelope = assert_failed_task_envelope(result, code="SERVICE_UNAVAILABLE", recovery="transient")
-    # Scan the ENTIRE failed artifact: the structured DataPart envelope AND every TextPart.
-    text_parts = [p.text for p in result.artifacts[0].parts if p.HasField("text")]
-    client_facing = json.dumps(envelope) + " " + " ".join(text_parts)
-    assert_no_secret_leak(client_facing)
+    # No secret on ANY client-facing carrier of the failed Task (the surface definition lives once).
+    assert_failed_task_no_secret_leak(result)
     # Sanitized to a generic internal error, not a str(exc)-derived message.
     assert "internal error" in envelope["errors"][0]["message"].lower()
 
@@ -224,9 +223,7 @@ async def test_explicit_skill_raw_builtin_scrubs_secret_but_keeps_semantic_code(
     # SEMANTIC code preserved (matches the synchronous boundary) and both envelope layers agree;
     # a raw built-in normalizes to a CLIENT-CORRECTABLE code, never a transient/terminal one.
     envelope = assert_failed_task_envelope(result, code=expected_code, recovery="correctable")
-    text_parts = [p.text for p in result.artifacts[0].parts if p.HasField("text")]
-    client_facing = json.dumps(envelope) + " " + " ".join(text_parts)
-    assert_no_secret_leak(client_facing)
+    assert_failed_task_no_secret_leak(result)
     # Message scrubbed AND category-appropriate — a VALIDATION_ERROR / AUTH_REQUIRED must not
     # read "internal error".
     message = envelope["errors"][0]["message"].lower()
