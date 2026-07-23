@@ -14,7 +14,7 @@ import logging
 from datetime import UTC, datetime
 from typing import TypedDict
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
@@ -121,11 +121,18 @@ class MediaBuyReadinessService:
             creative_ids = list({a.creative_id for a in assignments})
             creatives_total = len(creative_ids)
 
-            # Get creative statuses
+            # Get creative statuses. Match the FULL composite creative key
+            # (tenant_id, principal_id, creative_id) taken from each assignment —
+            # a creative_id is buyer-assignable and unique only per principal, so
+            # a tenant-only IN could pull in a colliding creative_id owned by
+            # ANOTHER principal and count its status. Same derivation as
+            # CreativeAssignmentRepository.creative_readiness. #1544.
             creatives: list[Creative] = []
-            if creative_ids:
-                creatives_stmt = select(Creative).filter(
-                    Creative.tenant_id == tenant_id, Creative.creative_id.in_(creative_ids)
+            creative_keys = {(a.principal_id, a.creative_id) for a in assignments}
+            if creative_keys:
+                creatives_stmt = select(Creative).where(
+                    Creative.tenant_id == tenant_id,
+                    tuple_(Creative.principal_id, Creative.creative_id).in_(sorted(creative_keys)),
                 )
                 creatives = list(session.scalars(creatives_stmt).all())
 

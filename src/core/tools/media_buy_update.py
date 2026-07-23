@@ -56,6 +56,7 @@ from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
+from src.adapters.constants import MEDIA_BUY_UPDATE_IDLE_TX_TIMEOUT
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
     require_identity,
@@ -433,15 +434,19 @@ def _update_media_buy_impl(
             # boundary-revision; no conformance storyboard step — ungraded.)
             # Acquire the authoritative row lock before any workflow or adapter
             # side effect. The lock is held by this UoW until commit, so two
-            # same-token requests cannot both reach the adapter. The timeout-aware
-            # locking (lock_timeout) and the SQLSTATE 55P03 → transient-CONFLICT
-            # translation live in the repository — the lock policy is a data-access
-            # concern, kept out of this transport-agnostic _impl. #1544.
+            # same-token requests cannot both reach the adapter. lock_timeout
+            # bounds the WAITER; idle_in_transaction_session_timeout bounds the
+            # HOLDER — a hung adapter (SOAP/GAM, or one that forgot its client
+            # timeout) sits idle-in-transaction holding this lock, and the bound
+            # releases it instead of pinning the row indefinitely. Both live in
+            # the repository — the lock policy is a data-access concern, kept out
+            # of this transport-agnostic _impl. #1544.
             _current_mb = uow.media_buys.get_by_id(
                 media_buy_id_to_use,
                 for_update=True,
                 populate_existing=True,
                 lock_timeout_seconds=5,
+                idle_in_transaction_timeout_seconds=MEDIA_BUY_UPDATE_IDLE_TX_TIMEOUT,
                 context=req.context,
             )
             _current_status = _current_mb.status if _current_mb else ""

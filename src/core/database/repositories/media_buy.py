@@ -88,6 +88,7 @@ class MediaBuyRepository:
         for_update: bool = False,
         populate_existing: bool = False,
         lock_timeout_seconds: int | None = None,
+        idle_in_transaction_timeout_seconds: int | None = None,
         context: ContextObject | dict[str, Any] | None = None,
     ) -> MediaBuy | None:
         """Get a media buy by its ID within the tenant.
@@ -107,11 +108,19 @@ class MediaBuyRepository:
         DB circuit breaker. Keeping the timeout + SQLSTATE handling here (not in
         the ``_impl``) keeps transport-agnostic business logic free of raw ``SET
         LOCAL`` / driver error codes — the lock policy is a data-access concern.
-        ``SET LOCAL`` scopes the timeout to the caller's transaction; it bounds
-        only the WAITER, not the lock HOLDER (an in-flight adapter call keeps the
-        lock until commit — bounding the holder needs bounded/idempotent adapter
-        execution, tracked separately). ``context`` is echoed into the CONFLICT
-        envelope. #1544.
+
+        ``lock_timeout`` bounds only the WAITER. ``idle_in_transaction_timeout_seconds``
+        bounds the HOLDER: it arms a transaction-scoped ``SET LOCAL
+        idle_in_transaction_session_timeout`` so Postgres terminates THIS session
+        if it sits idle inside the transaction past the bound — which is exactly
+        what a hung adapter does (the connection is idle-in-transaction for the
+        whole outbound call while it holds the row lock). The bound must exceed
+        the max legitimate adapter holder-idle time so it only fires on a genuine
+        hang (see ``MEDIA_BUY_UPDATE_IDLE_TX_TIMEOUT``); the client-side
+        ``ADAPTER_HTTP_TIMEOUT`` remains the first line for ``requests`` adapters,
+        while this covers SOAP/GAM and any adapter that forgets its client
+        timeout. Both are ``SET LOCAL``, scoped to the caller's transaction.
+        ``context`` is echoed into the CONFLICT envelope. #1544.
         """
         stmt = select(MediaBuy).where(
             MediaBuy.tenant_id == self._tenant_id,
@@ -121,7 +130,7 @@ class MediaBuyRepository:
             stmt = stmt.with_for_update()
         if populate_existing:
             stmt = stmt.execution_options(populate_existing=True)
-        if lock_timeout_seconds is None:
+        if lock_timeout_seconds is None and idle_in_transaction_timeout_seconds is None:
             return self._session.scalars(stmt).first()
 
         from sqlalchemy import text
@@ -132,7 +141,14 @@ class MediaBuyRepository:
         try:
             # SET can't bind parameters; the int() coercion makes the
             # never-user-input invariant structural rather than a comment.
-            self._session.execute(text(f"SET LOCAL lock_timeout = '{int(lock_timeout_seconds)}s'"))
+            if idle_in_transaction_timeout_seconds is not None:
+                self._session.execute(
+                    text(
+                        f"SET LOCAL idle_in_transaction_session_timeout = '{int(idle_in_transaction_timeout_seconds)}s'"
+                    )
+                )
+            if lock_timeout_seconds is not None:
+                self._session.execute(text(f"SET LOCAL lock_timeout = '{int(lock_timeout_seconds)}s'"))
             return self._session.scalars(stmt).first()
         except OperationalError as exc:
             if getattr(getattr(exc, "orig", None), "pgcode", None) != LOCK_NOT_AVAILABLE:

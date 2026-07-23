@@ -29,27 +29,52 @@ _REQUESTS_METHODS = {"post", "get", "put", "delete", "patch", "request", "head",
 ALLOWLIST: set[tuple[str, int]] = set()
 
 
+def _requests_module_names(tree: ast.AST) -> set[str]:
+    """Names the ``requests`` module is bound to in this file.
+
+    Always includes ``"requests"``; also resolves aliased imports
+    (``import requests as r`` -> ``r``) so a call through the alias is not a
+    silent escape from the timeout matcher.
+    """
+    names = {"requests"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "requests" and alias.asname:
+                    names.add(alias.asname)
+    return names
+
+
+def _is_none_literal(value: ast.expr) -> bool:
+    """True for a literal ``None`` (``timeout=None`` is as unbounded as no timeout)."""
+    return isinstance(value, ast.Constant) and value.value is None
+
+
 def _unbounded_requests_calls(tree: ast.AST) -> list[int]:
     """Line numbers of unbounded ``requests`` usage.
 
-    Flags ``requests.<method>(...)`` calls that omit a ``timeout`` kwarg, and any
+    Flags ``requests.<method>(...)`` calls that omit a ``timeout`` kwarg OR pass
+    ``timeout=None`` (which blocks forever exactly like omitting it), and any
     ``requests.Session(...)`` construction (calls through a session variable
     evade the per-call matcher, so a Session is an escape hatch — see module
-    docstring).
+    docstring). Recognizes aliased ``requests`` imports.
     """
+    module_names = _requests_module_names(tree)
     hits: list[int] = []
     for node in ast.walk(tree):
         if not (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
             and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "requests"
+            and node.func.value.id in module_names
         ):
             continue
         if node.func.attr == "Session":
             hits.append(node.lineno)
-        elif node.func.attr in _REQUESTS_METHODS and not any(kw.arg == "timeout" for kw in node.keywords):
-            hits.append(node.lineno)
+        elif node.func.attr in _REQUESTS_METHODS:
+            timeout_kw = next((kw for kw in node.keywords if kw.arg == "timeout"), None)
+            if timeout_kw is None or _is_none_literal(timeout_kw.value):
+                hits.append(node.lineno)
     return hits
 
 
@@ -93,6 +118,17 @@ def test_guard_detects_session_construction():
     """Known-bad: ``requests.Session()`` is flagged — the per-call matcher cannot
     see calls through the session variable, so construction itself is the seam."""
     assert _snippet_hits("import requests\n\n\ndef f():\n    s = requests.Session()\n    return s\n") == [5]
+
+
+def test_guard_detects_timeout_none():
+    """Known-bad: ``timeout=None`` blocks forever, so it is flagged like an omission."""
+    assert _snippet_hits("import requests\n\n\ndef f(url):\n    return requests.post(url, timeout=None)\n") == [5]
+
+
+def test_guard_detects_aliased_requests_call():
+    """Known-bad: an aliased ``import requests as r`` call without a timeout is flagged —
+    the module-name anchor must follow the alias, not just the literal ``requests``."""
+    assert _snippet_hits("import requests as r\n\n\ndef f(url):\n    return r.get(url)\n") == [5]
 
 
 def test_guard_accepts_bounded_requests_call():

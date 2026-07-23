@@ -84,3 +84,24 @@ class TestUpdateRevisionValidationWire:
         assert result.is_error, "expected a body-parse rejection for a non-integer revision"
         assert result.wire_error_envelope is not None, "wire envelope not captured"
         assert_envelope_shape(result.wire_error_envelope, "INVALID_REQUEST", recovery="correctable")
+
+    @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS, ids=lambda t: t.value)
+    def test_stale_revision_conflict_recovery_is_transient_on_the_wire(self, env_with_media_buy, transport):
+        """A schema-VALID but STALE revision emits CONFLICT/transient on the wire.
+
+        The optimistic-concurrency ``recovery`` classification is buyer-facing —
+        it tells the buyer to re-read and retry. It was pinned nowhere on the wire:
+        the ``media_buy_revision_conflict`` factory sets ``recovery="transient"``,
+        but the only CONFLICT grades were reconstructed-exception ``error_code``
+        asserts at the ``_impl`` layer, so flipping the factory to ``correctable``
+        stayed green everywhere. This pins the wire ``recovery`` per transport;
+        a factory regression now reddens here. #1544.
+        """
+        env, media_buy = env_with_media_buy
+        # A fresh buy is at revision 1; 999 is a valid int that mismatches, so it
+        # passes schema validation and reaches the revision-conflict gate.
+        result = env.call_via(transport, media_buy_id=media_buy.media_buy_id, paused=True, revision=999)
+
+        assert result.is_error, "expected a CONFLICT for a stale revision"
+        assert result.wire_error_envelope is not None, "wire envelope not captured"
+        assert_envelope_shape(result.wire_error_envelope, "CONFLICT", recovery="transient")

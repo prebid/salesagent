@@ -194,12 +194,24 @@ def _media_buy_typed_locals(tree: ast.AST) -> set[str]:
     return names
 
 
+def _flatten_attr_targets(target: ast.expr) -> list[ast.Attribute]:
+    """Attribute targets reachable from an assignment target, descending into
+    tuple/list unpacking (``mb.status, other.status = ...`` binds two attribute
+    targets inside a ``Tuple`` — a plain ``isinstance(t, ast.Attribute)`` misses
+    them, a silent bypass of the seam)."""
+    if isinstance(target, ast.Attribute):
+        return [target]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return [attr for elt in target.elts for attr in _flatten_attr_targets(elt)]
+    return []
+
+
 def _attribute_write_targets(node: ast.AST) -> list[ast.Attribute]:
     """Attribute targets assigned by an Assign / AnnAssign / AugAssign node."""
     if isinstance(node, ast.Assign):
-        return [t for t in node.targets if isinstance(t, ast.Attribute)]
+        return [attr for t in node.targets for attr in _flatten_attr_targets(t)]
     if isinstance(node, (ast.AnnAssign, ast.AugAssign)):
-        return [node.target] if isinstance(node.target, ast.Attribute) else []
+        return _flatten_attr_targets(node.target)
     return []
 
 
@@ -432,6 +444,16 @@ def test_guard_detects_approved_by_and_non_name_targets():
     assert ("media_buys", "approved_at") in _detector_hits(
         "def f(media_buys, i, ts):\n    media_buys[i].approved_at = ts\n"
     )
+
+
+def test_guard_detects_status_write_in_tuple_unpack():
+    """A status write on the left of a tuple unpack is caught — the attribute
+    target lives inside a ``Tuple``, which a top-level isinstance check misses.
+    Both refs use recognized MediaBuy names so the tuple-descent, not the
+    name heuristic, is what's under test."""
+    hits = _detector_hits("def f(mb, buy, a, b):\n    mb.status, buy.approved_at = a, b\n")
+    assert ("mb", "status") in hits
+    assert ("buy", "approved_at") in hits
 
 
 def test_guard_detects_write_through_inferred_binding_not_on_the_name_list():

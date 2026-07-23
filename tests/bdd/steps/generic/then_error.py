@@ -32,6 +32,24 @@ def _wire_code(ctx: dict) -> str | None:
     return (envelope.get("adcp_error") or {}).get("code")
 
 
+def _wire_recovery(ctx: dict) -> str | None:
+    """Return the buyer-facing ``recovery`` hint from the captured wire envelope.
+
+    Mirrors ``_wire_code``: when the scenario dispatched through a wire transport
+    (REST/A2A/MCP), the ``recovery`` classification is the buyer-facing contract
+    and must be read from the real envelope, not the lossy reconstructed
+    ``ctx['error']`` (which can carry a recovery that never reached the wire).
+    Reads the ``adcp_error`` layer, the same authoritative location ``_wire_code``
+    uses. Returns ``None`` on IMPL / no-wire scenarios so callers fall back to the
+    reconstructed exception (#1544).
+    """
+    result = ctx.get("result")
+    envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
+    if not envelope:
+        return None
+    return (envelope.get("adcp_error") or {}).get("recovery")
+
+
 def _wire_suggestion(ctx: dict) -> str | None:
     """Return the buyer-facing ``suggestion`` from the captured wire envelope.
 
@@ -494,7 +512,19 @@ def then_error_format_id_structure(ctx: dict) -> None:
 
 @then(parsers.parse('the error recovery should be "{recovery}"'))
 def then_error_recovery(ctx: dict, recovery: str) -> None:
-    """Assert the error recovery hint matches."""
+    """Assert the error recovery hint matches — wire-first, reconstructed fallback.
+
+    When the scenario dispatched through a wire transport, assert on the real
+    wire envelope's ``recovery`` (the buyer-facing contract — the value that
+    actually reached the buyer); otherwise fall back to the reconstructed
+    ``ctx['error']`` for IMPL/no-wire scenarios. Pinning the wire value is what
+    makes a factory ``recovery`` regression (e.g. ``transient`` → ``correctable``
+    on a since-terminal CONFLICT) go red. #1544.
+    """
+    actual = _wire_recovery(ctx)
+    if actual is not None:
+        assert actual == recovery, f"Expected recovery '{recovery}', got '{actual}' (wire)"
+        return
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     from src.core.exceptions import AdCPError

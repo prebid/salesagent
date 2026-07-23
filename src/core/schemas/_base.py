@@ -2840,8 +2840,9 @@ class GetMediaBuysMediaBuy(SalesAgentBaseModel):
 class GetMediaBuysRequest(SalesAgentBaseModel):
     """Request to retrieve media buys.
 
-    Matches the adcp 3.6.0 GetMediaBuysRequest spec.
-    Defined locally because adcp 3.6.0 is not yet required.
+    Mirrors the pinned get-media-buys request shape (spec 3.1.1 / adcp 6.6.0),
+    defined locally as a SalesAgentBaseModel so it carries the repo's strict
+    (extra=forbid in dev/CI) validation and serialization behavior.
     """
 
     media_buy_ids: list[str] | None = Field(default=None, description="Specific media buy IDs to retrieve")
@@ -2854,7 +2855,9 @@ class GetMediaBuysRequest(SalesAgentBaseModel):
 class GetMediaBuysResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
     """Response from get_media_buys.
 
-    Matches the adcp 3.6.0 GetMediaBuysResponse spec.
+    Mirrors the pinned get-media-buys response shape (spec 3.1.1 / adcp 6.6.0);
+    see :class:`GetMediaBuysMediaBuy` for the per-buy ``revision`` / ``confirmed_at``
+    3.1.1 fields.
     """
 
     media_buys: list[GetMediaBuysMediaBuy] = Field(..., description="List of matching media buys")

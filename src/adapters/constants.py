@@ -13,6 +13,17 @@ ADAPTER_HTTP_CONNECT_TIMEOUT = 30  # seconds to establish the connection
 ADAPTER_HTTP_READ_TIMEOUT = 60  # seconds to receive the response to a write op
 ADAPTER_HTTP_TIMEOUT = (ADAPTER_HTTP_CONNECT_TIMEOUT, ADAPTER_HTTP_READ_TIMEOUT)
 
+# DB-side HOLDER bound for the update_media_buy row lock. The client timeout above
+# only bounds ``requests``-based adapters; a SOAP/GAM client (or any adapter that
+# forgets the timeout) can still hang and hold the FOR UPDATE lock indefinitely,
+# leaving its DB connection idle-in-transaction. A transaction-scoped
+# ``idle_in_transaction_session_timeout`` is the backstop: Postgres terminates a
+# session that sits idle inside a transaction past this bound, releasing the lock
+# regardless of adapter type. It MUST exceed the max legitimate holder-idle time
+# (the full ADAPTER_HTTP_TIMEOUT budget, ~90s) so it never kills a legitimately
+# slow-but-progressing adapter call — it fires only on a genuine hang. #1544.
+MEDIA_BUY_UPDATE_IDLE_TX_TIMEOUT = 2 * (ADAPTER_HTTP_CONNECT_TIMEOUT + ADAPTER_HTTP_READ_TIMEOUT)  # 180s
+
 # Standardized update_media_buy actions
 UPDATE_ACTIONS = {
     "pause_media_buy": "Pause the entire media buy (campaign/order)",

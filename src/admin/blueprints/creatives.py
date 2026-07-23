@@ -110,13 +110,17 @@ async def _call_webhook_for_creative_status(
             mapping = uow.workflows.get_latest_mapping_for_object("creative", creative_id)
 
             if not mapping:
-                logger.debug(f"No workflow mapping found for creative {creative_id}; skipping webhook notification")
+                logger.debug(
+                    "No workflow mapping found for creative %s; skipping webhook notification",
+                    sanitize_log_value(creative_id),
+                )
                 return False
 
             step = uow.workflows.get_step_by_id(mapping.step_id)
             if not step or not step.request_data:
                 logger.debug(
-                    f"Workflow step missing or has no request_data for creative {creative_id}; skipping webhook notification"
+                    "Workflow step missing or has no request_data for creative %s; skipping webhook notification",
+                    sanitize_log_value(creative_id),
                 )
                 return False
 
@@ -124,7 +128,7 @@ async def _call_webhook_for_creative_status(
             all_mappings = [m for m in uow.workflows.get_mappings_for_step(step.step_id) if m.object_type == "creative"]
 
             if not all_mappings:
-                logger.debug(f"No creative mappings found for workflow step {step.step_id}")
+                logger.debug("No creative mappings found for workflow step %s", sanitize_log_value(step.step_id))
                 return False
 
             # Get creative statuses for all creatives in this task
@@ -136,13 +140,20 @@ async def _call_webhook_for_creative_status(
 
             if pending_count > 0:
                 logger.info(
-                    f"Creative {creative_id} reviewed, but {pending_count}/{len(all_creatives)} "
-                    f"creatives still pending in task {step.step_id}; not firing webhook yet"
+                    "Creative %s reviewed, but %d/%d creatives still pending in task %s; not firing webhook yet",
+                    sanitize_log_value(creative_id),
+                    pending_count,
+                    len(all_creatives),
+                    sanitize_log_value(step.step_id),
                 )
                 return False
 
             # ALL creatives have been reviewed! Build complete result for webhook
-            logger.info(f"All {len(all_creatives)} creatives in task {step.step_id} have been reviewed; firing webhook")
+            logger.info(
+                "All %d creatives in task %s have been reviewed; firing webhook",
+                len(all_creatives),
+                sanitize_log_value(step.step_id),
+            )
 
             # Build SyncCreativesResponse with all creative results
 
@@ -169,7 +180,7 @@ async def _call_webhook_for_creative_status(
             cfg_dict = step.request_data.get("push_notification_config") or {}
             url = cfg_dict.get("url")
             if not url:
-                logger.error(f"No push notification URL present for creative {creative_id}")
+                logger.error("No push notification URL present for creative %s", sanitize_log_value(creative_id))
                 return False
 
             authentication = cfg_dict.get("authentication") or {}
@@ -227,7 +238,12 @@ async def _call_webhook_for_creative_status(
         return sent
 
     except Exception as e:
-        logger.error(f"Error sending protocol webhook for creative {creative_id}: {e}", exc_info=True)
+        logger.error(
+            "Error sending protocol webhook for creative %s: %s",
+            sanitize_log_value(creative_id),
+            sanitize_log_value(e),
+            exc_info=True,
+        )
         return False
 
 
