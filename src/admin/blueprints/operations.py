@@ -12,7 +12,7 @@ from adcp.types import Package
 from flask import Blueprint, request
 from sqlalchemy import select
 
-from src.admin.utils import echo_context, require_auth, require_tenant_access
+from src.admin.utils import echo_context, require_auth, require_tenant_access, session_user_email
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.workflow import WorkflowRepository
@@ -352,10 +352,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
             }
 
             # Get user info for audit
-            from flask import session as flask_session
-
-            user_info = flask_session.get("user", {})
-            user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
+            user_email = session_user_email(default="system")
 
             approve_repo = MediaBuyRepository(db_session, tenant_id)
             media_buy = approve_repo.get_by_id(media_buy_id)

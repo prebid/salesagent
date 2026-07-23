@@ -4,16 +4,16 @@ import json
 import logging
 from datetime import UTC, datetime
 
-from flask import Blueprint, Response, flash, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, Response, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import select
 
-from src.admin.utils import require_tenant_access
+from src.admin.utils import require_tenant_access, session_user_email
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.repositories import MediaBuyRepository
-from src.core.database.repositories.workflow import WorkflowRepository
+from src.core.database.repositories.workflow import APPROVABLE_STEP_STATUSES, WorkflowRepository
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +36,10 @@ def list_workflows(tenant_id, **kwargs):
         workflow_repo = WorkflowRepository(db, tenant_id)
         all_steps = workflow_repo.get_all_steps()
 
-        # Separate pending approval steps for summary
-        pending_steps = [s for s in all_steps if s.status == "pending_approval"]
+        # Separate pending approval steps for summary. Uses the canonical approvable set, not an
+        # inline literal: a subset literal here undercounts (it would drop ``requires_approval``
+        # and the legacy ``approval`` alias) and drifts the moment the set changes.
+        pending_steps = [s for s in all_steps if s.status in APPROVABLE_STEP_STATUSES]
 
         # Get media buys for context
         media_buy_repo = MediaBuyRepository(db, tenant_id)
@@ -183,8 +185,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
             # Get and update the workflow step via repository (tenant-scoped)
             workflow_repo = WorkflowRepository(db, tenant_id)
 
-            user_info = session.get("user", {})
-            user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
+            user_email = session_user_email(default="system")
 
             # Atomic compare-and-set: requires_approval/pending_approval → approved. Because
             # ``approved`` is non-terminal, a broad terminal-guard would let a second concurrent
@@ -304,8 +305,7 @@ def reject_workflow_step(tenant_id, workflow_id, step_id):
             # Get and update the workflow step via repository (tenant-scoped)
             workflow_repo = WorkflowRepository(db, tenant_id)
 
-            user_info = session.get("user", {})
-            user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
+            user_email = session_user_email(default="system")
 
             # Atomic compare-and-set with the SAME source-state guard as approve: a step that
             # has already been approved (execution underway) cannot be rejected — that would

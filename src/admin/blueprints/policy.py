@@ -6,7 +6,7 @@ import logging
 from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import select
 
-from src.admin.utils import get_tenant_config_from_db, require_tenant_access
+from src.admin.utils import get_tenant_config_from_db, require_tenant_access, session_user_email
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.audit_logger import AuditLogger
 from src.core.database.database_session import get_db_session
@@ -267,7 +267,7 @@ def review_task(tenant_id, task_id):
 
                 # Log the action (AuditLogger requires adapter_name; the method is
                 # log_operation, not a nonexistent .log — the prior call 500'd the route).
-                reviewer = str(session.get("user") or "admin")
+                reviewer = session_user_email(default="admin")
                 AuditLogger(adapter_name="AdminUI", tenant_id=tenant_id).log_operation(
                     operation="policy_review",
                     principal_name=reviewer,
