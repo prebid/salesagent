@@ -884,7 +884,7 @@ class AdCPRequestHandler(RequestHandler):
                         # Every failure result comes from _build_failed_skill_result,
                         # which always sets error_envelope. A failed result without it
                         # is a contract violation — fail loud rather than silently emit
-                        # the legacy flat ``{"error":...}`` shape.
+                        # the legacy flat ``{"error": ...}`` shape.
                         raise AdCPError(
                             f"Skill result for {res.get('skill', '?')!r} is marked failed but carries no error_envelope"
                         )

@@ -7,7 +7,6 @@ Validates that:
 - ValueError and PermissionError are caught at boundaries
 - extract_error_info handles AdCPError instances
 
-beads: salesagent-pyeu, salesagent-d50c
 """
 
 import json
@@ -59,7 +58,7 @@ class TestExtractErrorInfoAdCPError:
     def test_adcp_not_found_extracts_code_and_message(self):
         """AdCPNotFoundError → ('NOT_FOUND', 'resource missing', 'correctable').
 
-        Recovery follows the wire code INVALID_REQUEST=correctable (salesagent-nr2q).
+        Recovery follows the wire code INVALID_REQUEST=correctable.
         """
         from src.core.tool_error_logging import extract_error_info
 
@@ -113,7 +112,7 @@ class TestExtractErrorInfoAdCPError:
     def test_adcp_base_error_extracts_code_and_message(self):
         """AdCPError base → ('INTERNAL_ERROR', 'something broke', 'transient').
 
-        Recovery follows the wire code SERVICE_UNAVAILABLE=transient (salesagent-nr2q).
+        Recovery follows the wire code SERVICE_UNAVAILABLE=transient.
         """
         from src.core.tool_error_logging import extract_error_info
 
@@ -1002,7 +1001,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
         """AdCPNotFoundError raised in _impl → REST returns 404 with correctable recovery.
 
         Recovery matches the pinned enumMetadata of the WIRE code:
-        INVALID_REQUEST=correctable (salesagent-nr2q).
+        INVALID_REQUEST=correctable.
         """
         from starlette.testclient import TestClient
 
@@ -1288,7 +1287,7 @@ class TestToDictRecoveryField:
         )
 
         cases = [
-            # Recovery follows the wire code (salesagent-nr2q): base
+            # Recovery follows the wire code: base
             # AdCPError→SERVICE_UNAVAILABLE=transient,
             # AdCPNotFoundError→INVALID_REQUEST=correctable.
             (AdCPError("internal"), "transient"),
@@ -1312,7 +1311,7 @@ class TestToDictRecoveryField:
         """Custom recovery= kwarg overrides class default in to_dict() output."""
         from src.core.exceptions import AdCPNotFoundError
 
-        # Default is "correctable" (wire INVALID_REQUEST, salesagent-nr2q)
+        # Default is "correctable" (wire INVALID_REQUEST)
         default_exc = AdCPNotFoundError("gone")
         assert default_exc.to_dict()["recovery"] == "correctable"
 
@@ -1449,7 +1448,7 @@ class TestRecoveryRoundtrip:
         # and INVALID_REQUEST respectively). Other subclasses already use STANDARD codes.
         cases = [
             # Recovery matches the pinned classification of the WIRE code
-            # (salesagent-nr2q): SERVICE_UNAVAILABLE=transient, INVALID_REQUEST=correctable.
+            #: SERVICE_UNAVAILABLE=transient, INVALID_REQUEST=correctable.
             (AdCPError, "internal", "SERVICE_UNAVAILABLE", "transient"),
             (AdCPValidationError, "bad", "VALIDATION_ERROR", "correctable"),
             (AdCPNotFoundError, "missing", "INVALID_REQUEST", "correctable"),
@@ -1510,7 +1509,7 @@ class TestRecoveryRoundtrip:
             AdCPValidationError,
         )
 
-        # Recovery matches the pinned classification of the WIRE code (salesagent-nr2q). The
+        # Recovery matches the pinned classification of the WIRE code. The
         # SERVICE_UNAVAILABLE trio is the internal bucket — scrubbed at the seam; the rest are
         # client-correctable and re-raise verbatim.
         cases = [
@@ -1565,7 +1564,7 @@ class TestRecoveryRoundtrip:
         # tests above. HTTP status_code is preserved (it comes from the exception
         # class directly, not from the wire code translation).
         cases = [
-            # Recovery matches the pinned classification of the WIRE code (salesagent-nr2q).
+            # Recovery matches the pinned classification of the WIRE code.
             (AdCPError, "internal", 500, "SERVICE_UNAVAILABLE", "transient"),
             (AdCPValidationError, "bad", 400, "VALIDATION_ERROR", "correctable"),
             (AdCPNotFoundError, "missing", 404, "INVALID_REQUEST", "correctable"),

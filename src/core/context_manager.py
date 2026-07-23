@@ -264,7 +264,7 @@ class ContextManager(DatabaseManager):
             step_id: The step ID
             status: New status
             response_data: Response/result data. Accepts Pydantic models (serialized
-                automatically) or plain dicts. Callers should NOT call.model_dump()
+                automatically) or plain dicts. Callers should NOT call .model_dump()
                 — pass the model directly.
             error_message: Error message if failed
             transaction_details: Actual API calls made
@@ -850,7 +850,7 @@ class ContextManager(DatabaseManager):
             # Build webhook payload based on protocol type.
             # task_type_str is the ORIGINAL action label — it keys the
             # delivery-webhook guards + audit log and must NOT be rewritten
-            # by the SDK fallback (salesagent-yi3s). wire_task_type is the
+            # by the SDK fallback. wire_task_type is the
             # validated COPY passed to the SDK payload builder.
             task_type_str = step.tool_name or mapping.action or "unknown"
             protocol = (step.request_data or {}).get("protocol", "mcp")  # Default to MCP
