@@ -31,7 +31,7 @@ class TestCheckUrlSsrf:
     def test_localhost_rejected(self):
         is_safe, error = check_url_ssrf("http://localhost:9999")
         assert is_safe is False
-        assert "blocked" in error.lower() or "private" in error.lower() or "loopback" in error.lower()
+        assert "blocked" in error.lower()
 
     def test_loopback_ip_rejected(self):
         with patch("src.core.security.url_validator.socket.gethostbyname", return_value="127.0.0.1"):
@@ -42,7 +42,7 @@ class TestCheckUrlSsrf:
         with patch("src.core.security.url_validator.socket.gethostbyname", return_value="10.0.0.1"):
             is_safe, error = check_url_ssrf("http://internal-host.example.com")
         assert is_safe is False
-        assert "10.0.0.0/8" in error or "private" in error.lower()
+        assert "10.0.0.0/8" in error
 
     def test_private_rfc1918_192168_rejected(self):
         with patch("src.core.security.url_validator.socket.gethostbyname", return_value="192.168.1.1"):
@@ -101,6 +101,12 @@ class TestCheckUrlSsrf:
         is_safe, error = check_url_ssrf("http://[ff02::1]/")
         assert is_safe is False
         assert "ff00::/8" in error
+
+    def test_nat64_well_known_prefix_rejected(self):
+        # NAT64-embedded link-local metadata (169.254.169.254) via 64:ff9b::/96
+        is_safe, error = check_url_ssrf("http://[64:ff9b::a9fe:a9fe]/")
+        assert is_safe is False
+        assert "64:ff9b::/96" in error
 
     def test_require_https_rejects_http(self):
         with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):

@@ -117,6 +117,26 @@ from src.services.protocol_webhook_service import get_protocol_webhook_service
 logger = logging.getLogger(__name__)
 
 
+def _invalid_params_from_ssrf_error(exc: Exception) -> InvalidParamsError:
+    """Wrap an SSRF rejection as A2A InvalidParamsError with AdCP ``data`` envelope."""
+    from src.core.exceptions import AdCPValidationError
+    from src.core.webhook_validator import webhook_ssrf_suggestion
+
+    if isinstance(exc, AdCPValidationError):
+        adcp_err = exc
+    else:
+        adcp_err = AdCPValidationError(
+            str(exc),
+            field="push_notification_config.url",
+            suggestion=webhook_ssrf_suggestion(),
+            recovery="correctable",
+        )
+    return InvalidParamsError(
+        message=adcp_err.message,
+        data=build_two_layer_error_envelope(adcp_err),
+    )
+
+
 def _reject_unsafe_a2a_webhook_url(url: str) -> None:
     """Raise InvalidParamsError when ``url`` fails the registration SSRF gate.
 
@@ -124,24 +144,17 @@ def _reject_unsafe_a2a_webhook_url(url: str) -> None:
     translate SSRF failures to ``InvalidParamsError`` (-32602) while attaching the
     two-layer AdCP envelope in ``data`` (``VALIDATION_ERROR`` / ``recovery=correctable``
     + suggestion) — same pattern as the auth rejection on ``on_message_send``.
-    AdCP tool wrappers (create_media_buy / sync_creatives) raise ``AdCPValidationError``
-    directly for the same gate.
+    Delegates to ``reject_unsafe_webhook_registration_url`` so recovery/suggestion/field
+    cannot drift from the tool-path gate. AdCP tool wrappers raise ``AdCPValidationError``
+    directly for the same helper.
     """
     from src.core.exceptions import AdCPValidationError
-    from src.core.webhook_validator import WebhookURLValidator, webhook_ssrf_suggestion
+    from src.core.webhook_validator import reject_unsafe_webhook_registration_url
 
-    is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(url)
-    if not is_valid:
-        adcp_err = AdCPValidationError(
-            f"Invalid webhook URL: {error_msg}",
-            field="push_notification_config.url",
-            suggestion=webhook_ssrf_suggestion(),
-            recovery="correctable",
-        )
-        raise InvalidParamsError(
-            message=f"Invalid webhook URL: {error_msg}",
-            data=build_two_layer_error_envelope(adcp_err),
-        )
+    try:
+        reject_unsafe_webhook_registration_url(url, field="push_notification_config.url")
+    except AdCPValidationError as e:
+        raise _invalid_params_from_ssrf_error(e) from e
 
 
 def _dict_to_value(d: dict) -> struct_pb2.Value:
@@ -613,12 +626,15 @@ class AdCPRequestHandler(RequestHandler):
             push_notification_config = params.configuration.task_push_notification_config
             if push_notification_config.url:
                 _reject_unsafe_a2a_webhook_url(push_notification_config.url)
-                from src.core.webhook_validator import sanitize_webhook_url_for_log
+                from src.core.webhook_validator import (
+                    UNPARSEABLE_WEBHOOK_URL_FOR_LOG,
+                    sanitize_webhook_url_for_log,
+                )
 
                 logger.info(
                     "Protocol-level push notification config provided for task %s: %s",
                     task_id,
-                    sanitize_webhook_url_for_log(push_notification_config.url),
+                    sanitize_webhook_url_for_log(push_notification_config.url) or UNPARSEABLE_WEBHOOK_URL_FOR_LOG,
                 )
 
         # Prepare task metadata (JSON-serializable only — protobuf Struct)
@@ -1263,8 +1279,9 @@ class AdCPRequestHandler(RequestHandler):
                         session_id=None,
                     )
             except ValueError as e:
-                # Repository SSRF gate (defense in depth alongside the check above)
-                raise InvalidParamsError(message=str(e)) from e
+                # Repository SSRF gate (defense in depth) — same enveloped path as
+                # _reject_unsafe_a2a_webhook_url above.
+                raise _invalid_params_from_ssrf_error(e) from e
 
             logger.info(
                 f"Push notification config {'created' if created else 'updated'}: {config_id} for tenant {tool_context.tenant_id}"

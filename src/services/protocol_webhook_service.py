@@ -33,7 +33,11 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.lifecycle import register_shutdown
-from src.core.webhook_validator import reject_unsafe_outbound_webhook_url
+from src.core.webhook_validator import (
+    UNPARSEABLE_WEBHOOK_URL_FOR_LOG,
+    reject_unsafe_outbound_webhook_url,
+    sanitize_webhook_url_for_log,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -302,7 +306,14 @@ class ProtocolWebhookService:
 
         for attempt in range(max_attempts):
             try:
-                logger.info(f"Sending webhook for task {task_id} to {url} (attempt {attempt + 1}/{max_attempts})")
+                safe_url = sanitize_webhook_url_for_log(url) or UNPARSEABLE_WEBHOOK_URL_FOR_LOG
+                logger.info(
+                    "Sending webhook for task %s to %s (attempt %s/%s)",
+                    task_id,
+                    safe_url,
+                    attempt + 1,
+                    max_attempts,
+                )
 
                 def _post() -> requests.Response:
                     # Never follow redirects: a 302 to metadata/private IPs would

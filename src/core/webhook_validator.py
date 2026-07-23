@@ -32,6 +32,10 @@ WEBHOOK_SSRF_SUGGESTION_DEV = (
     "link-local, CGNAT, multicast, or cloud-metadata hosts."
 )
 
+# Log fallback when sanitize_webhook_url_for_log cannot parse scheme/host —
+# never fall back to the raw buyer URL (credentials / query).
+UNPARSEABLE_WEBHOOK_URL_FOR_LOG = "<unparseable-url>"
+
 
 def _adcp_testing() -> bool:
     """True when ADCP_TESTING allows localhost/HTTP for capture servers."""
@@ -124,7 +128,7 @@ def reject_unsafe_outbound_webhook_url(
     log.error(
         "%s webhook URL failed SSRF validation (url=%s): %s",
         kind,
-        sanitize_webhook_url_for_log(url) or url,
+        sanitize_webhook_url_for_log(url) or UNPARSEABLE_WEBHOOK_URL_FOR_LOG,
         error_msg,
     )
     return True, error_msg

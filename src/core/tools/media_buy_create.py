@@ -2148,7 +2148,10 @@ async def _create_media_buy_impl(
         # persist via repository upsert (registration gate + defense in depth).
         if push_notification_config:
             from src.core.database.repositories import PushNotificationConfigUoW
-            from src.core.webhook_validator import sanitize_webhook_url_for_log
+            from src.core.webhook_validator import (
+                UNPARSEABLE_WEBHOOK_URL_FOR_LOG,
+                sanitize_webhook_url_for_log,
+            )
 
             url = push_notification_config.get("url")
             authentication = push_notification_config.get("authentication", {})
@@ -2156,7 +2159,7 @@ async def _create_media_buy_impl(
             logger.info(
                 "[MCP/A2A] Registering push notification config id=%s url=%s",
                 push_notification_config.get("id"),
-                sanitize_webhook_url_for_log(str(url) if url else None),
+                sanitize_webhook_url_for_log(str(url) if url else None) or UNPARSEABLE_WEBHOOK_URL_FOR_LOG,
             )
 
             # Match the pre-gate: whitespace-only URL must not reach upsert.
