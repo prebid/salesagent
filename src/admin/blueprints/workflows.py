@@ -389,7 +389,9 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
             return jsonify({"success": True}), 200
 
     except Exception as e:
-        logger.error(f"Error approving workflow step {step_id}: {e}", exc_info=True)
+        logger.error(
+            "Error approving workflow step %s: %s", sanitize_log_value(step_id), sanitize_log_value(e), exc_info=True
+        )
         return jsonify({"error": "Internal server error"}), 500
 
 
@@ -456,5 +458,7 @@ def reject_workflow_step(tenant_id, workflow_id, step_id):
             return jsonify({"success": True}), 200
 
     except Exception as e:
-        logger.error(f"Error rejecting workflow step {step_id}: {e}", exc_info=True)
+        logger.error(
+            "Error rejecting workflow step %s: %s", sanitize_log_value(step_id), sanitize_log_value(e), exc_info=True
+        )
         return jsonify({"error": "Internal server error"}), 500

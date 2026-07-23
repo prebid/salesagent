@@ -5,7 +5,8 @@ The A2A boundary persists its outer ``task_*`` id on the create step's
 path against a real DB:
 
   * ``WorkflowRepository.get_by_external_task_id`` resolves the buyer's id → step,
-    tenant-scoped (a different tenant cannot resolve it).
+    tenant-scoped (a different tenant cannot resolve it) AND principal-scoped (a
+    same-tenant sibling buyer cannot resolve it either).
   * ``AdCPRequestHandler.on_get_task`` rebuilds a terminal ``Task`` (with the stored
     ``response_data`` artifact) from that step when the id is NOT in the in-memory map
     — i.e. after the out-of-band approval / a restart.
@@ -24,6 +25,9 @@ from tests.factories import PrincipalFactory
 from tests.integration.conftest import make_create_media_buy_step
 
 _EXTERNAL_TASK_ID = "task_buyer_abc123"
+# A second buyer in the SAME tenant. ``contexts.principal_id`` carries no FK, so the
+# sibling needs no Principal row — only a distinct id the scope filter must reject.
+_SIBLING_PRINCIPAL_ID = "sibling_principal"
 
 
 def _make_step(
@@ -66,7 +70,9 @@ class TestA2ATaskCorrelation:
 
         with WorkflowUoW(tenant_id) as uow:
             assert uow.workflows is not None
-            step = uow.workflows.get_by_external_task_id(_EXTERNAL_TASK_ID)
+            step = uow.workflows.get_by_external_task_id(
+                _EXTERNAL_TASK_ID, principal_id=sample_principal["principal_id"]
+            )
             assert step is not None
             assert step.step_id == step_id
             assert step.status == "completed"
@@ -80,7 +86,61 @@ class TestA2ATaskCorrelation:
 
         with WorkflowUoW("other_tenant") as uow:
             assert uow.workflows is not None
-            assert uow.workflows.get_by_external_task_id(_EXTERNAL_TASK_ID) is None
+            assert (
+                uow.workflows.get_by_external_task_id(_EXTERNAL_TASK_ID, principal_id=sample_principal["principal_id"])
+                is None
+            )
+
+    def test_get_by_external_task_id_is_principal_scoped(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """A SAME-TENANT sibling buyer cannot resolve another principal's task id.
+
+        The red oracle for the principal scope: dropping the
+        ``DBContext.principal_id`` filter in ``get_by_external_task_id`` makes the
+        sibling's lookup resolve the owner's step, and this assertion fails. The
+        owner's own lookup is asserted alongside it so the filter cannot be
+        "passed" by rejecting everyone. #1544 B6.
+        """
+        tenant_id = sample_tenant["tenant_id"]
+        step_id = _make_completed_step(context_manager, tenant_id, sample_principal["principal_id"])
+
+        with WorkflowUoW(tenant_id) as uow:
+            assert uow.workflows is not None
+            assert uow.workflows.get_by_external_task_id(_EXTERNAL_TASK_ID, principal_id=_SIBLING_PRINCIPAL_ID) is None
+            owner_step = uow.workflows.get_by_external_task_id(
+                _EXTERNAL_TASK_ID, principal_id=sample_principal["principal_id"]
+            )
+            assert owner_step is not None
+            assert owner_step.step_id == step_id
+
+    def test_on_get_task_does_not_serve_a_sibling_principals_outcome(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """The same scope, end-to-end through the durable poll.
+
+        A sibling buyer in the owner's tenant polls the owner's task id with no
+        in-memory task: the durable rebuild must find nothing, so ``on_get_task``
+        returns ``None`` rather than the owner's terminal result artifact.
+        """
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        tenant_id = sample_tenant["tenant_id"]
+        _make_completed_step(context_manager, tenant_id, sample_principal["principal_id"])
+
+        handler = AdCPRequestHandler.__new__(AdCPRequestHandler)
+        handler.tasks = {}  # in-memory miss → the poll must go through the scoped durable read
+        sibling = PrincipalFactory.make_identity(
+            principal_id=_SIBLING_PRINCIPAL_ID, tenant_id=tenant_id, protocol="a2a"
+        )
+
+        with (
+            patch.object(handler, "_get_auth_token", return_value="tok"),
+            patch.object(handler, "_resolve_a2a_identity", return_value=sibling),
+        ):
+            task = asyncio.run(handler.on_get_task(GetTaskRequest(id=_EXTERNAL_TASK_ID), context=None))
+
+        assert task is None
 
     def test_on_get_task_rebuilds_terminal_task_from_step(
         self, integration_db, sample_tenant, sample_principal, context_manager

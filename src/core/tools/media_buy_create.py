@@ -128,6 +128,7 @@ from src.core.helpers.creative_helpers import (
     process_and_upload_package_creatives,
 )
 from src.core.logging_config import log_safe
+from src.core.logging_utils import sanitize_log_value
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_brand_reference, to_context_object, to_reporting_webhook
 from src.core.schemas import (
@@ -2255,7 +2256,14 @@ async def _create_media_buy_impl(
             # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object (hoisting would bind the unpatched one at module load).
             from src.core.database.repositories import MediaBuyUoW
 
-            logger.info(f"[MCP/A2A] Registering push notification config from request: {push_notification_config}")
+            # Log the routing fields only — the config dict carries
+            # authentication.credentials (the buyer's webhook secret), which must
+            # never reach the logs.
+            logger.info(
+                "[MCP/A2A] Registering push notification config from request: id=%s url=%s",
+                sanitize_log_value(push_notification_config.get("id")),
+                sanitize_log_value(push_notification_config.get("url")),
+            )
 
             # Extract config details
             url = push_notification_config.get("url")

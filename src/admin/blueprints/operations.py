@@ -496,11 +496,16 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         "info",
                     )
                 else:
-                    # Already-decided (terminal) replay or buy gone — idempotent success,
-                    # but no claim was won: discard the pre-claim "Approved by" comment
-                    # rather than committing an approval comment nobody acted on. #1544.
+                    # Already-decided (terminal) replay or buy gone — no claim was won:
+                    # discard the pre-claim "Approved by" comment rather than committing
+                    # an approval comment nobody acted on. A replay of an already-approved
+                    # buy is an idempotent success; a VANISHED buy is not, so it must not
+                    # be reported as one. #1544.
                     db_session.rollback()
-                    flash("Media buy approved successfully", "success")
+                    if media_buy is None:
+                        flash("Media buy no longer exists — nothing was approved", "warning")
+                    else:
+                        flash("Media buy approved successfully", "success")
 
             elif action == "reject":
                 reason_text = reason or "Rejected by administrator"

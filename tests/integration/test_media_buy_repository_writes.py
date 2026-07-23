@@ -9,8 +9,9 @@ beads: salesagent-dyb6
 """
 
 import threading
+import time
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import cast
 
@@ -1066,6 +1067,67 @@ class TestConcurrentRevisionBump:
             final_rev = uow.media_buys.get_by_id("mb_ast_concurrent").revision
         # Two transitions from revision 1 → 3. A Python read-modify-write loses one → 2.
         assert final_rev == 3, f"lost update on the unlocked seam: expected 3, got {final_rev}"
+
+    def test_computed_transition_lock_blocks_stale_completed_over_extended_window(self, tenant_a, principal_a):
+        """The row lock on ``apply_computed_status_transition`` is load-bearing.
+
+        The race its docstring names, executed: the scheduler reads a window that
+        has already ended and is about to decide ``completed``, while a concurrent
+        transaction extends ``end_date`` into the future (leaving the buy
+        ``active``) and commits. Because ``compute_target`` is evaluated only
+        AFTER the ``FOR UPDATE`` refresh, the scheduler blocks on the extender's
+        write lock, re-reads the EXTENDED window, and declines to complete a buy
+        that is still live.
+
+        Red oracle: dropping ``with_for_update=True`` from the refresh makes the
+        scheduler read the stale (still-past) committed ``end_date`` under READ
+        COMMITTED instead of waiting, so it writes ``completed`` over a live
+        ``active`` buy and this assertion fails. #1544.
+        """
+        past = date.today() - timedelta(days=2)
+        future = date.today() + timedelta(days=30)
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_lock_race", status="active", end_date=past))
+
+        def extend_window(barrier: threading.Barrier) -> None:
+            """Take the row write-lock, extend the window, then commit after a beat."""
+            with MediaBuyUoW(tenant_a) as uow:
+                # FOR UPDATE takes the row lock at the SELECT and holds it until
+                # this UoW commits on clean exit.
+                mb = uow.media_buys.get_by_id("mb_lock_race", for_update=True)
+                assert mb is not None
+                mb.end_date = future
+                barrier.wait()
+                # Hold the lock long enough that the scheduler thread is provably
+                # inside the contended refresh before this transaction commits.
+                time.sleep(0.5)
+                # UoW commit happens on clean exit.
+
+        def complete_if_window_ended(barrier: threading.Barrier) -> None:
+            """The scheduler arm: decide the target only from the locked re-read."""
+            with MediaBuyUoW(tenant_a) as uow:
+                # Unlocked load — the stale identity-mapped row the real sweep holds.
+                mb = uow.media_buys.get_by_id("mb_lock_race")
+                assert mb is not None
+                assert mb.end_date == past, "precondition: the scheduler starts from the ENDED window"
+                barrier.wait()
+                MediaBuyRepository.apply_computed_status_transition(
+                    mb,
+                    lambda locked: "completed" if locked.end_date < date.today() else None,
+                )
+
+        _run_concurrently([extend_window, complete_if_window_ended], thread_name_prefix="computed-transition-lock")
+
+        with MediaBuyUoW(tenant_a) as uow:
+            final = uow.media_buys.get_by_id("mb_lock_race")
+            assert final is not None
+            final_status, final_end = final.status, final.end_date
+        assert final_end == future, "precondition: the extender's window write committed"
+        assert final_status == "active", (
+            f"stale 'completed' overwrote a live buy whose window was extended — got {final_status!r}; "
+            "the FOR UPDATE refresh is what makes compute_target see the committed window"
+        )
 
 
 # ---------------------------------------------------------------------------

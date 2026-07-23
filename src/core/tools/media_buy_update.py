@@ -453,9 +453,12 @@ def _update_media_buy_impl(
             #   * Project decision — the spec does NOT specify precedence when a buy
             #     is BOTH stale-revision AND terminal. We run the CONFLICT check
             #     first so the buyer gets the refetch-and-retry recovery CONFLICT
-            #     signals (a GONE buyer stops; a CONFLICT buyer re-reads, sees the
-            #     terminal state, and stops for the right reason) rather than masking
-            #     the stale write as INVALID_STATE. #1544.
+            #     signals: CONFLICT carries ``recovery="transient"`` plus the
+            #     expected/current revisions, which feeds the re-read-and-retry loop
+            #     the buyer already implements — it then sees the terminal state and
+            #     stops for the right reason. Running the terminal gate first would
+            #     mask the stale write as INVALID_STATE and drop the version detail.
+            #     #1544.
             if req.revision is not None and _current_mb is not None:
                 _persisted_revision = _current_mb.revision
                 if req.revision != _persisted_revision:

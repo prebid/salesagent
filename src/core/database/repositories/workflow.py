@@ -60,7 +60,7 @@ class WorkflowRepository:
             )
         ).first()
 
-    def get_by_external_task_id(self, external_task_id: str, principal_id: str | None = None) -> WorkflowStep | None:
+    def get_by_external_task_id(self, external_task_id: str, *, principal_id: str | None) -> WorkflowStep | None:
         """Get the workflow step carrying a given transport outer task id (tenant-scoped).
 
         The A2A boundary persists its outer ``task_*`` id (the id returned to the
@@ -73,6 +73,11 @@ class WorkflowRepository:
         polling buyer's ``principal_id`` to ALSO scope by principal — a
         same-tenant sibling buyer must not read another principal's buy outcome
         on task-id knowledge alone. #1544 B6.
+
+        ``principal_id`` is keyword-only with NO default: a caller wanting the
+        tenant-wide read has to pass ``None`` explicitly, so the principal scope
+        cannot be lost by forgetting an argument. Pinned by
+        ``test_get_by_external_task_id_is_principal_scoped``.
         """
         stmt = (
             select(WorkflowStep)

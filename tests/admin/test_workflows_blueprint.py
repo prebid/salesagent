@@ -84,13 +84,26 @@ def _auth_session(client, tenant_id):
         sess["test_tenant_id"] = tenant_id
 
 
-def _create_context_and_step(tenant_id: str, status: str = "pending_approval") -> tuple[str, str]:
-    """Create a Context + WorkflowStep and return (context_id, step_id)."""
+def _add_context_and_step(
+    session,
+    tenant_id: str,
+    *,
+    status: str = "pending_approval",
+    request_data: dict | None = None,
+    response_data: dict | None = None,
+) -> tuple[str, str]:
+    """Build a Context + WorkflowStep on ``session`` and return (context_id, step_id).
+
+    The ONE construction site for this pair in this module: both the plain helper
+    (which owns its own session) and the mapped-media-buy helper (which writes on
+    the factory session) route through it, so the two cannot drift apart. Does not
+    commit — the caller owns the transaction.
+    """
     context_id = f"ctx_{uuid.uuid4().hex[:12]}"
     step_id = f"step_{uuid.uuid4().hex[:12]}"
     now = datetime.now(UTC)
-    with get_db_session() as session:
-        context = Context(
+    session.add(
+        Context(
             context_id=context_id,
             tenant_id=tenant_id,
             principal_id="wf_test_principal",
@@ -98,18 +111,27 @@ def _create_context_and_step(tenant_id: str, status: str = "pending_approval") -
             created_at=now,
             last_activity_at=now,
         )
-        session.add(context)
-        step = WorkflowStep(
+    )
+    session.add(
+        WorkflowStep(
             step_id=step_id,
             context_id=context_id,
             step_type="approval",
             tool_name="create_media_buy",
             status=status,
             owner="principal",
-            request_data={},
+            request_data=request_data or {},
+            response_data=response_data,
             created_at=now,
         )
-        session.add(step)
+    )
+    return context_id, step_id
+
+
+def _create_context_and_step(tenant_id: str, status: str = "pending_approval") -> tuple[str, str]:
+    """Create a Context + WorkflowStep and return (context_id, step_id)."""
+    with get_db_session() as session:
+        context_id, step_id = _add_context_and_step(session, tenant_id, status=status)
         session.commit()
     return context_id, step_id
 
@@ -349,32 +371,13 @@ def _setup_mapped_media_buy_step(
         creative = CreativeFactory(tenant=tenant_obj, principal=principal_obj, status="approved")
         CreativeAssignmentFactory(creative=creative, media_buy=buy)
 
-    context_id = f"ctx_{uuid.uuid4().hex[:12]}"
-    step_id = f"step_{uuid.uuid4().hex[:12]}"
-    now = datetime.now(UTC)
     is_terminal = step_status in ("completed", "rejected", "failed")
-    factory_session.add(
-        Context(
-            context_id=context_id,
-            tenant_id=tenant_id,
-            principal_id="wf_test_principal",
-            conversation_history=[],
-            created_at=now,
-            last_activity_at=now,
-        )
-    )
-    factory_session.add(
-        WorkflowStep(
-            step_id=step_id,
-            context_id=context_id,
-            step_type="approval",
-            tool_name="create_media_buy",
-            status=step_status,
-            owner="principal",
-            request_data={"external_task_id": external_task_id} if external_task_id else {},
-            response_data={"media_buy_id": buy.media_buy_id, "revision": 2} if is_terminal else None,
-            created_at=now,
-        )
+    context_id, step_id = _add_context_and_step(
+        factory_session,
+        tenant_id,
+        status=step_status,
+        request_data={"external_task_id": external_task_id} if external_task_id else {},
+        response_data={"media_buy_id": buy.media_buy_id, "revision": 2} if is_terminal else None,
     )
     WorkflowRepository(factory_session, tenant_id).add_mapping(
         step_id=step_id, object_type="media_buy", object_id=buy.media_buy_id, action="create"

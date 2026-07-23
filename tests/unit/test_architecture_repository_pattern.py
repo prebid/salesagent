@@ -498,7 +498,9 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/admin/test_product_creation_integration.py", "test_list_products_json_parsing"),
     # tests/admin/test_workflows_blueprint.py
     ("tests/admin/test_workflows_blueprint.py", "test_tenant"),
-    ("tests/admin/test_workflows_blueprint.py", "_create_context_and_step"),
+    # The module's single Context+WorkflowStep construction site (both helpers
+    # route through it); no Context/WorkflowStep factories exist yet.
+    ("tests/admin/test_workflows_blueprint.py", "_add_context_and_step"),
     # ── tests/e2e/ — pre-existing violations from e2e lifecycle test ──
     # FIXME(salesagent-e2e-admin-factories): migrate e2e seed helpers to factories.
     ("tests/e2e/test_gam_lifecycle.py", "_seed_lifecycle_test_data"),
@@ -535,13 +537,21 @@ def _is_get_db_session_call(func: ast.expr) -> bool:
     return isinstance(func, ast.Attribute) and func.attr == "get_db_session"
 
 
+# Session-like variable names the raw-``.add()`` scan recognizes. A name that is
+# NOT listed here is an escape hatch: the same raw write becomes invisible to the
+# guard just by renaming the variable, so this set is widened whenever a new
+# session-carrying name enters the test tree (``factory_session`` did exactly
+# that — it reached the tree unseen before being added here).
+_SESSION_VAR_NAMES = ("session", "db_session", "mock_session", "factory_session", "s")
+
+
 def _is_session_add_call(func: ast.expr) -> bool:
     """Match ``session.add(...)`` on a session-like variable."""
     return (
         isinstance(func, ast.Attribute)
         and func.attr == "add"
         and isinstance(func.value, ast.Name)
-        and func.value.id in ("session", "db_session", "mock_session", "s")
+        and func.value.id in _SESSION_VAR_NAMES
     )
 
 

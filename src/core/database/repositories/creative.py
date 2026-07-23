@@ -156,11 +156,16 @@ class CreativeRepository:
         # Filter out creatives without valid assets (legacy data)
         stmt = stmt.where(Creative.data["assets"].isnot(None))
 
-        # Apply media_buy_ids filter via join
+        # Apply media_buy_ids filter via join. Creatives are keyed by
+        # (tenant_id, principal_id, creative_id) — joining on creative_id alone
+        # lets another tenant's/principal's assignment row satisfy the filter,
+        # so the join carries the full composite key. #1544.
         if media_buy_ids:
             stmt = stmt.join(
                 CreativeAssignment,
-                Creative.creative_id == CreativeAssignment.creative_id,
+                (Creative.creative_id == CreativeAssignment.creative_id)
+                & (Creative.tenant_id == CreativeAssignment.tenant_id)
+                & (Creative.principal_id == CreativeAssignment.principal_id),
             ).where(CreativeAssignment.media_buy_id.in_(media_buy_ids))
 
         if status:
