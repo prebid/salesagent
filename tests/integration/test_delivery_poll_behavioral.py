@@ -79,6 +79,62 @@ def _serving_webhook_buy(
     return buy
 
 
+def _seed_delivery_log(
+    env: Any,
+    buy: Any,
+    *,
+    log_id: str,
+    status: str,
+    notification_type: str | None = None,
+    sequence_number: int | None = None,
+) -> Any:
+    """Seed one delivery-log row for *buy* (tenant t1 / principal p1) and commit it.
+
+    The seed SHAPE lives here once — the webhook-url source, ``task_type``, and the
+    tenant/principal pair — so a column rename or a newly required field is a single
+    edit instead of a parallel one at every dedup/sequence test. Callers pass only
+    what distinguishes their row. Returns the repository so a caller can keep
+    querying it (e.g. ``get_max_sequence_number``).
+    """
+    from src.core.database.repositories.delivery import DeliveryRepository
+
+    optional: dict[str, Any] = {}
+    if notification_type is not None:
+        optional["notification_type"] = notification_type
+    if sequence_number is not None:
+        optional["sequence_number"] = sequence_number
+
+    session = env.get_session()
+    repo = DeliveryRepository(session, "t1")
+    repo.create_log(
+        log_id=log_id,
+        principal_id="p1",
+        media_buy_id=buy.media_buy_id,
+        webhook_url=DAILY_REPORTING_WEBHOOK["url"],
+        task_type="media_buy_delivery",
+        status=status,
+        **optional,
+    )
+    session.commit()
+    return repo
+
+
+async def _drive_failed_send(scheduler: Any, env: Any, buy: Any) -> None:
+    """Drive one forced send whose outbound delivery fails, asserting the scheduler raises.
+
+    ``send_notification`` returns False (never raises) on a permanent 4xx / exhausted
+    retries — the buyer never received the webhook, so the scheduler must NOT log a
+    "Sent"; it raises and the batch counts an error. The raise-message contract and the
+    ``_send_report_for_media_buy`` call shape live here once, so a signature or message
+    change is a single edit; callers keep only their own post-assertions.
+    """
+    with mock_send_notification(scheduler, delivered=False):
+        with pytest.raises(RuntimeError, match="webhook send failed"):
+            await scheduler._send_report_for_media_buy(
+                buy, buy.raw_request["reporting_webhook"], env.get_session(), force=True
+            )
+
+
 def _race_two_workers(worker: Any) -> list[bool]:
     """Run ``worker(session, barrier)`` on two OS threads released together, return both bools.
 
@@ -347,7 +403,6 @@ class TestForceDoesNotDuplicateDeliveredFinal:
 
     @pytest.mark.asyncio
     async def test_manual_force_trigger_skips_when_final_already_delivered(self, integration_db):
-        from src.core.database.repositories.delivery import DeliveryRepository
         from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
         from tests.harness import DeliveryPollEnv
 
@@ -356,17 +411,7 @@ class TestForceDoesNotDuplicateDeliveredFinal:
             buy = _serving_webhook_buy(env, flight="completed")
 
             # A final was already SUCCESSFULLY delivered for this buy.
-            session = env.get_session()
-            DeliveryRepository(session, "t1").create_log(
-                log_id="prior-final-success",
-                principal_id="p1",
-                media_buy_id=buy.media_buy_id,
-                webhook_url=DAILY_REPORTING_WEBHOOK["url"],
-                task_type="media_buy_delivery",
-                status="success",
-                notification_type="final",
-            )
-            session.commit()
+            _seed_delivery_log(env, buy, log_id="prior-final-success", status="success", notification_type="final")
 
             # Manual trigger uses force=True; the final-ever gate must still fire.
             scheduler = DeliveryWebhookScheduler()
@@ -553,12 +598,7 @@ class TestConcurrentFinalWebhookClaim:
             mb_id = buy.media_buy_id
 
             scheduler = DeliveryWebhookScheduler()
-            # The outbound send fails (returns False -> the scheduler raises).
-            with mock_send_notification(scheduler, delivered=False):
-                with pytest.raises(RuntimeError, match="webhook send failed"):
-                    await scheduler._send_report_for_media_buy(
-                        buy, buy.raw_request["reporting_webhook"], env.get_session(), force=True
-                    )
+            await _drive_failed_send(scheduler, env, buy)
 
             # The claim was released: the row is NULL again and immediately re-claimable.
             session = env.get_session()
@@ -722,25 +762,13 @@ class TestWebhookSequenceNumber:
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-05
         """
-        from src.core.database.repositories.delivery import DeliveryRepository
         from tests.harness import DeliveryPollEnv
 
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             buy = _serving_webhook_buy(env)
 
             # A prior attempt that failed after consuming what would be seq 1.
-            session = env.get_session()
-            repo = DeliveryRepository(session, "t1")
-            repo.create_log(
-                log_id="failed-attempt-1",
-                principal_id="p1",
-                media_buy_id=buy.media_buy_id,
-                webhook_url=DAILY_REPORTING_WEBHOOK["url"],
-                task_type="media_buy_delivery",
-                status="failed",
-                sequence_number=1,
-            )
-            session.commit()
+            repo = _seed_delivery_log(env, buy, log_id="failed-attempt-1", status="failed", sequence_number=1)
 
             # The failed row is invisible to the counter...
             assert repo.get_max_sequence_number(buy.media_buy_id, task_type="media_buy_delivery") == 0
@@ -814,14 +842,7 @@ class TestFailedWebhookSendRaisesNotCountedAsSent:
             buy = _serving_webhook_buy(env)
 
             scheduler = DeliveryWebhookScheduler()
-            # send_notification returns False (never raises) on permanent 4xx /
-            # exhausted retries — the buyer never received the webhook, so the
-            # scheduler must NOT log a "Sent"; it raises and the batch counts an error.
-            with mock_send_notification(scheduler, delivered=False):
-                with pytest.raises(RuntimeError, match="webhook send failed"):
-                    await scheduler._send_report_for_media_buy(
-                        buy, buy.raw_request["reporting_webhook"], env.get_session(), force=True
-                    )
+            await _drive_failed_send(scheduler, env, buy)
 
 
 @pytest.mark.requires_db
@@ -842,7 +863,6 @@ class TestDedupSuppressesPriorFinalWebhook:
     @pytest.mark.asyncio
     async def test_prior_final_success_suppresses_next_non_forced_send(self, integration_db):
         """Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04"""
-        from src.core.database.repositories.delivery import DeliveryRepository
         from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
         from tests.harness import DeliveryPollEnv
 
@@ -850,17 +870,8 @@ class TestDedupSuppressesPriorFinalWebhook:
             buy = _serving_webhook_buy(env)
 
             # A "final" webhook was already delivered inside the 24h window.
+            _seed_delivery_log(env, buy, log_id="prior-final-success", status="success", notification_type="final")
             session = env.get_session()
-            DeliveryRepository(session, "t1").create_log(
-                log_id="prior-final-success",
-                principal_id="p1",
-                media_buy_id=buy.media_buy_id,
-                webhook_url=DAILY_REPORTING_WEBHOOK["url"],
-                task_type="media_buy_delivery",
-                status="success",
-                notification_type="final",
-            )
-            session.commit()
 
             scheduler = DeliveryWebhookScheduler()
             with mock_send_notification(scheduler, delivered=True) as mock_send:

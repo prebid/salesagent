@@ -11,7 +11,7 @@ from __future__ import annotations
 from src.core.tools._media_buy_status import WEBHOOK_ONLY_FIELDS
 
 
-def assert_omits_webhook_only_fields(wire: dict, *, context: str = "synchronous poll") -> None:
+def assert_omits_webhook_only_fields(payload: dict, *, context: str) -> None:
     """Assert a serialized delivery body omits ALL webhook-only fields (#1570).
 
     The fields in WEBHOOK_ONLY_FIELDS (notification_type / sequence_number /
@@ -19,10 +19,15 @@ def assert_omits_webhook_only_fields(wire: dict, *, context: str = "synchronous 
     webhook deliveries"; the polling response must carry none.
     Works on any serialized dict — a real transport `wire_response` or a
     `model_dump(mode="json")` of the response.
+
+    ``context`` is REQUIRED, matching the sibling helpers in this module: with four
+    graders (BDD, integration, e2e, unit) sharing them, the context prefix is the only
+    thing identifying WHICH grader failed, so a default would silently mislabel a
+    webhook or e2e failure.
     """
     for field in sorted(WEBHOOK_ONLY_FIELDS):
-        assert field not in wire, (
-            f"{context} must omit webhook-only {field!r}, got {wire.get(field)!r} (keys={list(wire.keys())})"
+        assert field not in payload, (
+            f"{context} must omit webhook-only {field!r}, got {payload.get(field)!r} (keys={list(payload.keys())})"
         )
 
 
