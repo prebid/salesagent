@@ -1165,7 +1165,7 @@ class Targeting(TargetingOverlay):
     # GeoMetrosExcludeItem) whose JSON constraints are byte-identical to the include-side
     # GeoCountry/GeoRegion/GeoMetro. Salesagent keeps one type per dimension because
     # include and exclude are merged into a single list by adapters
-    # (src/adapters/base.py::_validate_geo_systems) and normalize_legacy_geo pushes both
+    # (src/adapters/base.py::validate_geo_systems) and normalize_legacy_geo pushes both
     # through identical transforms (_LEGACY_GEO_FIELDS above). Inheriting is not viable:
     # the parent rejects a GeoCountry in geo_countries_exclude ("Input should be a valid
     # string"). geo_postal_areas_exclude already uses the parent's PostalArea element

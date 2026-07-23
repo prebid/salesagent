@@ -288,17 +288,12 @@ class TestSchemaInheritance:
             # Local FrequencyCap extends the library type with `scope`
             # (media_buy vs package level).
             ("Targeting", "frequency_cap"),
-            # adcp 6.6 types the geo exclusion side with DISTINCT nominal classes
-            # (GeoCountriesExcludeItem/GeoRegionsExcludeItem/GeoMetrosExcludeItem) whose
-            # JSON constraints are identical to the include-side GeoCountry/GeoRegion/
-            # GeoMetro. Salesagent deliberately unifies include and exclude to one type
-            # per dimension because adapters merge them into a single list
-            # (src/adapters/base.py::_validate_geo_systems) and normalize_legacy_geo
-            # pushes both through identical transforms. Inheriting is not viable — the
-            # parent rejects a GeoCountry in geo_countries_exclude ("Input should be a
-            # valid string"). geo_postal_areas_exclude already uses the parent's
-            # PostalArea element type and is redeclared only to keep the four exclusion
-            # fields symmetric (list, not Sequence) for those merge sites.
+            # The geo_*_exclude fields are deliberately redeclared to unify the include
+            # and exclude element types. See the Targeting.geo_*_exclude field
+            # declarations in src/core/schemas/_base.py for the full rationale (adcp 6.6
+            # types the exclude side with distinct nominal classes; adapters merge
+            # include+exclude into one list via src/adapters/base.py::validate_geo_systems).
+            # Kept as a pointer, not a restatement, so the argument lives in exactly one place.
             ("Targeting", "geo_countries_exclude"),
             ("Targeting", "geo_metros_exclude"),
             ("Targeting", "geo_postal_areas_exclude"),
