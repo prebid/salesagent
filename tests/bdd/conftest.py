@@ -2753,6 +2753,31 @@ _UC003_WIRED: set[str] = {
     "T-UC-003-revision-and-idempotency-independent",
 }
 
+# Xfail reason for the UC-003 revision outlines that are deliberately NOT wired.
+# Without an entry a scenario falls back to the generic "harness not yet wired"
+# message, which misreports a deliberate spec-production reconciliation gap as a
+# wiring TODO. Both outlines carry the same two schema-invalid row kinds
+# (below-minimum and wrong-type), so they share one reason. The full rationale
+# lives in the _UC003_WIRED NOTE above; this string surfaces the cause in the
+# reason pytest actually prints.
+_UC003_REVISION_RECONCILIATION_XFAIL = (
+    "Spec-production gap, not a wiring TODO: these outlines grade a schema-invalid "
+    "revision (below-minimum and wrong-type rows) as INVALID_REQUEST, but production "
+    "emits VALIDATION_ERROR via the sanctioned adcp_validation_boundary on A2A/MCP "
+    "and for below-minimum ints on REST; only a wrong-TYPE revision on REST is "
+    "INVALID_REQUEST, because FastAPI body parsing rejects it before the shared "
+    "boundary. That per-transport classification policy is tracked in #1604 and the "
+    "storyboard reconciliation in #1694. The outlines are NOT patched locally to "
+    "match production (xpass-graduation anti-pattern); the emission itself is "
+    "wire-graded per transport by "
+    "tests/integration/test_update_media_buy_revision_validation_wire.py."
+)
+
+_UC003_UNWIRED_REASONS: dict[str, str] = {
+    "T-UC-003-partition-revision": _UC003_REVISION_RECONCILIATION_XFAIL,
+    "T-UC-003-boundary-revision": _UC003_REVISION_RECONCILIATION_XFAIL,
+}
+
 # UC-019 scenarios wired to MediaBuyLifecycleEnv (create/update/get composite;
 # queries run through every transport). The rest stay blanket-xfailed in
 # _harness_env until their steps are wired.
@@ -3335,7 +3360,12 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["existing_media_buy"] = existing_media_buy
                 yield
         else:
-            pytest.xfail("UC-003 harness not yet wired for these scenarios")
+            pytest.xfail(
+                next(
+                    (_UC003_UNWIRED_REASONS[tag] for tag in sorted(marker_names & _UC003_UNWIRED_REASONS.keys())),
+                    "UC-003 harness not yet wired for these scenarios",
+                )
+            )
 
     elif uc == "UC-019":
         marker_names = {m.name for m in request.node.iter_markers()}
