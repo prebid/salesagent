@@ -71,8 +71,9 @@ class PushNotificationConfigRepository:
 
         Used by the delivery webhook scheduler to reuse a registered push config
         (its auth settings) for a buy whose ``reporting_webhook.url`` matches;
-        returns None when the principal has no active config for that URL (the
-        scheduler then builds a detached temporary config instead).
+        returns None when the principal has no active config for that URL — the
+        caller then uses the sibling ``build_detached`` to obtain a transient
+        carrier for the same auth policy.
         """
         return self._session.scalars(
             select(PushNotificationConfig).where(
@@ -96,12 +97,15 @@ class PushNotificationConfigRepository:
 
         The counterpart to ``get_active_by_principal_and_url``: when that returns
         None, callers still need a config object to carry the auth policy into the
-        webhook sender. Keeping the construction here means both arms of that
-        decision come from the data-access layer, so the ORM model is never built
-        from raw kwargs in service code.
+        webhook sender. Keeping the construction here means both arms of *that*
+        decision come from the data-access layer, so the delivery-webhook path no
+        longer builds the ORM model from raw kwargs in service code. This is scoped
+        to that path: other transient-carrier sites elsewhere in the codebase still
+        construct the model directly and are tracked separately.
 
         The returned instance is deliberately NOT added to the session — it is a
-        transient carrier, not a row, and must not be persisted.
+        transient carrier, not a row, and must not be persisted. That is pinned by
+        the transient assertion in the repository unit test, not by this docstring.
         """
         return PushNotificationConfig(
             id=config_id,
@@ -110,6 +114,10 @@ class PushNotificationConfigRepository:
             url=url,
             authentication_type=authentication_type,
             authentication_token=authentication_token,
+            # Parity with the lookup arm, which can only return rows matching
+            # is_active=True — so both arms hand the sender a config with the same
+            # flag. No consumer on the webhook path reads it (send_notification uses
+            # url + authentication_type/_token only); it is never persisted.
             is_active=True,
         )
 

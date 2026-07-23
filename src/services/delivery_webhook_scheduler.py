@@ -442,8 +442,17 @@ class DeliveryWebhookScheduler:
         # Set webhook-specific metadata directly on the response model (#1570).
         # These fields are webhook-only ("only present in webhook deliveries" —
         # get-media-buy-delivery-response.json @ v3.1-04f59d2d5), so the polling
-        # impl never sets them; this webhook path is the single place they are
-        # attached to the wire.
+        # impl never sets them. On the polling-response path this is the only
+        # place they are attached to the wire — NOT a repo-wide sole emitter:
+        # webhook_delivery_service.send_delivery_webhook (GAM reporting, delivery
+        # simulator) attaches its own notification_type / sequence_number /
+        # next_expected_at from an in-memory counter. That emitter IS graded by the
+        # shared next_expected_at oracle, but not by the omission or pairing ones —
+        # reconciliation tracked in #1624.
+        #
+        # The body emitted here is governed by media-buy-delivery-webhook-result.json
+        # (@ v3.1-04f59d2d5), which lists notification_type in `required` — the
+        # constraint the zero-deliveries note below reasons about.
         #
         # notification_type: derived from the reported statuses — "final" when
         # every buy will never produce more data ("one final notification when
@@ -470,7 +479,11 @@ class DeliveryWebhookScheduler:
         # explicit empty-deliveries no-send guard rather than emitting that body.
 
         delivery_response.sequence_number = sequence_number
-        delivery_response.partial_data = False  # TODO: Check for reporting_delayed status
+        # TODO: Check for reporting_delayed status. Co-edit site: the shared
+        # assert_partial_data_pairing oracle (tests/helpers/delivery_assertions.py)
+        # pins partial_data False deliberately, so implementing real partial-data
+        # reporting must update that helper and its callers in the same change.
+        delivery_response.partial_data = False
         # unavailable_count is "only present in webhook deliveries when partial_data
         # is true" (schema description) — leave None (excluded from the wire) until
         # partial_data reporting is implemented; setting 0 alongside partial_data

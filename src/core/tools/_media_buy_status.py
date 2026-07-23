@@ -212,10 +212,11 @@ COMPLETED_PERSISTED_STATUSES: frozenset[str] = REPORTABLE_PERSISTED_STATUSES - S
 # is the only place they are attached to the wire (#1570). NOT a repo-wide sole
 # emitter: webhook_delivery_service.send_delivery_webhook (GAM reporting,
 # delivery simulator) attaches its own notification_type / sequence_number /
-# next_expected_at from an in-memory counter rather than the WebhookDeliveryLog,
-# and is not covered by the omission/pairing oracles — reconciliation tracked in
-# #1624. Membership is pinned in test_media_buy_status_consistency.py so a
-# partial copy cannot drift silently.
+# next_expected_at from an in-memory counter rather than the WebhookDeliveryLog.
+# That emitter IS graded by the shared next_expected_at oracle, but not by the
+# omission or pairing ones — reconciliation tracked in #1624. Membership is
+# pinned in test_media_buy_status_consistency.py so a partial copy cannot drift
+# silently.
 WEBHOOK_ONLY_FIELDS: frozenset[str] = frozenset(
     {"notification_type", "sequence_number", "next_expected_at", "partial_data", "unavailable_count"}
 )
