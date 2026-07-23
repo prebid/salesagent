@@ -2137,13 +2137,22 @@ async def _create_media_buy_impl(
 
             # Redacted: the config's authentication block carries the buyer's webhook
             # credential — logging it raw leaks a replayable secret (#1617). The
-            # redactor takes a typed model, not this wire dict (the dict is a
-            # transport-boundary artifact: the two callers at model_dump(mode="json")
-            # serialize an already-validated PushNotificationConfig so SQLAlchemy can
-            # store it). Normalize back to the model here — a lossless round-trip.
+            # redactor takes a typed model, so reconstruct one from this wire dict.
+            # model_validate can RAISE — the A2A/MCP wire path delivers configs that
+            # never passed strict SDK validation (e.g. a sub-32-char credential the
+            # buyer's own endpoint accepts) — and a redaction for a LOG line must
+            # never break media-buy creation. Reconstruct defensively; if it can't be
+            # built, log the empty view rather than crash. The secret is withheld
+            # either way.
+            try:
+                _pnc_for_log: PushNotificationConfig | None = PushNotificationConfig.model_validate(
+                    push_notification_config
+                )
+            except ValidationError:
+                _pnc_for_log = None
             logger.info(
                 "[MCP/A2A] Registering push notification config from request: %s",
-                redact_push_notification_config(PushNotificationConfig.model_validate(push_notification_config)),
+                redact_push_notification_config(_pnc_for_log),
             )
 
             # Extract config details
