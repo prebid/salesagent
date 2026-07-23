@@ -29,10 +29,13 @@ fi
 OUTPUT_DIR="${1:-.claude/reports/inspect-parallel-$(date +%d%m%y_%H%M)}"
 mkdir -p "$OUTPUT_DIR"
 
-# Create patched inspector with timeout=600 and --then-only=False
+# Patch timeout=120 → 600 for long parallel slices. Do not try to flip
+# --then-only here: its argparse block is multiline, so a single-line sed
+# never matched. Parallel runs keep Then-only (inspector default=True) and
+# use --pass1-only below; Given/When would need --no-then-only or a
+# multiline-aware patch.
 PATCHED="/tmp/inspect_bdd_parallel.py"
-sed -E 's/timeout=[0-9]+/timeout=600/;s/"--then-only", action="store_true", default=True/"--then-only", action="store_true", default=False/' \
-    "$INSPECTOR" > "$PATCHED"
+sed -E 's/timeout=[0-9]+/timeout=600/' "$INSPECTOR" > "$PATCHED"
 
 echo "=== Parallel BDD Step Inspection ==="
 echo "Inspector: $INSPECTOR"

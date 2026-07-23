@@ -57,7 +57,11 @@ STEPS_DIR = PROJECT_ROOT / "tests" / "bdd" / "steps"
 # FIX_NOW: test infrastructure we control
 FIX_NOW = {
     "STALE_STRICT_XFAIL": "Test passes but strict xfail tag rejects it — remove tag",
-    "GRADUATE": "All transports pass — remove xfail tag",
+    "GRADUATE": "All present transports pass — remove xfail tag",
+    "GRADUATE_CONFIRM": (
+        "All present transports pass, but the set is single-transport or "
+        "e2e_rest-only — confirm before removing xfail (e2e is environment-dependent)"
+    ),
     "PARTIAL_XPASS": "Passes some transports — investigate remaining gaps before graduating",
     "FIXTURE_GAP": "Strengthened assertion exposes missing test fixture data — fix factory",
     "STEP_BUG": "Step implementation has a bug — fix step code",
@@ -292,14 +296,24 @@ def classify_xpass(entry: TestEntry, all_entries: list[TestEntry]) -> tuple[str,
     """Classify an xpassed test. Returns (bucket, category, detail).
 
     FIX_NOW either way: GRADUATE when every transport *present for this base*
-    passed (remove the stale xfail tag); PARTIAL_XPASS when only a subset of
-    the present transports passed (investigate remaining gaps).
+    passed (remove the stale xfail tag); GRADUATE_CONFIRM when that present
+    set is a single transport or e2e_rest-only (needs human confirmation —
+    e2e_rest xfails are non-strict because e2e is environment-dependent);
+    PARTIAL_XPASS when only a subset of the present transports passed.
     """
     base = extract_scenario_base(entry.nodeid)
     outcomes = outcomes_by_transport_for_base(base, ((e.nodeid, e.outcome) for e in all_entries))
     graduates, passing, missing = transport_coverage(outcomes)
     if graduates:
-        return "FIX_NOW", "GRADUATE", f"All transports pass: {sorted(passing)}"
+        n = len(passing)
+        # Single-transport or e2e_rest-only: do not auto-graduate.
+        if n == 1 or passing == {"e2e_rest"}:
+            return (
+                "FIX_NOW",
+                "GRADUATE_CONFIRM",
+                f"All {n} present transports pass (needs confirmation): {sorted(passing)}",
+            )
+        return "FIX_NOW", "GRADUATE", f"All {n} present transports pass: {sorted(passing)}"
     return "FIX_NOW", "PARTIAL_XPASS", f"Passes: {sorted(passing)}, missing: {sorted(missing)}"
 
 
@@ -373,10 +387,18 @@ def generate_work_items(
 
     for (cat, detail), entries in grad_groups.items():
         uc = extract_uc(entries[0].nodeid) if entries else "MIXED"
-        all_pass = cat == "GRADUATE"
+        if cat in ("GRADUATE", "GRADUATE_CONFIRM"):
+            base = extract_scenario_base(entries[0].nodeid)
+            present_n = len(outcomes_by_transport_for_base(base, ((e.nodeid, e.outcome) for e in all_entries)))
+            if cat == "GRADUATE_CONFIRM":
+                title = f"Graduate needs confirmation (all {present_n} present): {uc}"
+            else:
+                title = f"Graduate (all {present_n} present): {uc}"
+        else:
+            title = f"Partial xpass (gaps remain): {uc}"
         items.append(
             WorkItem(
-                title=f"{'Graduate' if all_pass else 'Partial xpass'} ({'all transports' if all_pass else 'gaps remain'}): {uc}",
+                title=title,
                 bucket="FIX_NOW",
                 category=cat,
                 uc=uc,
