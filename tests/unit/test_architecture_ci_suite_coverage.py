@@ -421,9 +421,14 @@ class TestCISuiteCoverage:
         prestart = next(s for s in steps if s.get("name") == "Build and start E2E stack")
         prestart_run = str(prestart.get("run", ""))
         prestart_env = prestart.get("env") or {}
+        job_env = job.get("env") or {}
         assert "creative-agent-stack.sh build" in prestart_run, "Pre-start must build the pinned creative-agent image."
-        assert "docker-compose.e2e.ports.yml" in prestart_run, (
-            "Pre-start must overlay docker-compose.e2e.ports.yml (host curl/pytest ports)."
+        # Overlay may be literal -f flags in the run script OR job-level COMPOSE_FILE
+        # (docker compose native multi-file, colon-separated).
+        compose_file = str(job_env.get("COMPOSE_FILE", "") or prestart_env.get("COMPOSE_FILE", ""))
+        assert "docker-compose.e2e.ports.yml" in prestart_run or "docker-compose.e2e.ports.yml" in compose_file, (
+            "Pre-start must overlay docker-compose.e2e.ports.yml via run -f flags or "
+            "job/step COMPOSE_FILE (host curl/pytest ports)."
         )
         assert prestart_env.get("ADCP_SALES_PORT"), "Pre-start must set ADCP_SALES_PORT for host health curl."
         assert "CREATIVE_AGENT_GHCR_IMAGE" in prestart_env, (

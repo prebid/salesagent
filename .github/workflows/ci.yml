@@ -262,6 +262,13 @@ jobs:
       packages: read # pull adcp-creative-agent from ghcr.io (publish runs on main via publish-creative-agent.yml)
     # 40m: pre-start compose --wait + migrations + pytest bodies; 25m too tight.
     timeout-minutes: 40
+    env:
+      # Native compose multi-file (colon-separated). Overlay sites inherit this;
+      # cascading single-file downs keep an explicit -f (intentional scopes).
+      COMPOSE_FILE: docker-compose.e2e.yml:docker-compose.e2e.ports.yml
+      POSTGRES_PORT: 5435
+      DOCKER_BUILDKIT: 1
+      COMPOSE_DOCKER_CLI_BUILD: 1
     steps:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
@@ -288,7 +295,7 @@ jobs:
       - name: Clean up lingering containers
         run: |
           docker ps -q | xargs -r docker kill || true
-          docker compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml down -v 2>/dev/null || true
+          docker compose down -v 2>/dev/null || true
           docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
           docker compose down -v 2>/dev/null || true
           docker container prune -f 2>/dev/null || true
@@ -297,24 +304,22 @@ jobs:
       - name: Build and start E2E stack
         env:
           ADCP_SALES_PORT: 8080
-          POSTGRES_PORT: 5435
           ADCP_TESTING: "true"
           DELIVERY_WEBHOOK_INTERVAL: "5"
-          DOCKER_BUILDKIT: 1
-          COMPOSE_DOCKER_CLI_BUILD: 1
           # Prefer pin-keyed GHCR pull in creative-agent-stack.sh build (CI owns
           # the only cold-build path under ADCP_TESTING=true verify-only pytest).
           CREATIVE_AGENT_GHCR_IMAGE: ghcr.io/${{ github.repository }}/adcp-creative-agent
         run: |
           set -eux
           ./scripts/creative-agent-stack.sh build
-          docker compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml build
+          # COMPOSE_FILE (job env) overlays e2e + e2e.ports for host curl/pytest.
+          docker compose build
           # --wait gates postgres, creative-agent, adcp-server, proxy healthchecks
           # (creative-agent hard gate for all E2E). Budget covers migrations.
-          docker compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml \
+          docker compose \
             up -d --wait --wait-timeout 600
           curl -sf "http://127.0.0.1:${ADCP_SALES_PORT}/health"
-          docker compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml ps
+          docker compose ps
       # No coverage: the server under test runs inside Docker, so host-side
       # coverage would measure the client harness, not src/.
       # --timeout=300 + timeout_func_only=true: bodies only. CI pre-start above
@@ -331,13 +336,10 @@ jobs:
           DATABASE_URL: ""
           ADCP_TESTING: "true"
           ADCP_SALES_PORT: 8080
-          POSTGRES_PORT: 5435
-          DOCKER_BUILDKIT: 1
-          COMPOSE_DOCKER_CLI_BUILD: 1
       - name: Cleanup Docker services
         if: always()
         run: |
-          docker compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml down -v 2>/dev/null || true
+          docker compose down -v 2>/dev/null || true
           docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
 
   bdd-in-network:

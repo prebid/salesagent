@@ -45,7 +45,7 @@ def signed_names(sigs_doc: dict[str, Any]) -> set[str]:
     ``signedContributors[].name`` (not display name). Matching is case-insensitive
     against author logins collected from the PR commits API.
     """
-    return {(c.get("name") or "").lower() for c in sigs_doc.get("signedContributors") or [] if c.get("name")}
+    return {c["name"].lower() for c in sigs_doc.get("signedContributors") or [] if c.get("name")}
 
 
 def collect_authors(commits: Sequence[dict[str, Any]], pr_author: str | None) -> set[str]:
@@ -111,7 +111,7 @@ def select_failed_workflow_run_ids(runs_payload: dict[str, Any], head_sha: str) 
 
 def format_run_ids_lines(ids: Sequence[str]) -> str:
     """Newline-joined run ids for ``mapfile``; empty input yields empty string (no blank line)."""
-    return "\n".join(ids) if ids else ""
+    return "\n".join(ids)
 
 
 def _load_json(path: Path) -> Any:

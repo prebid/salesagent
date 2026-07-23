@@ -25,8 +25,9 @@ from tests.unit._architecture_helpers import repo_root
 _IPR_WORKFLOW = repo_root() / ".github" / "workflows" / "ipr-agreement.yml"
 
 # Canonical bot logins that must match the workflow IPR_BOT_ALLOWLIST globs.
+# Real [bot] accounts only — bare "bot" is not a GitHub login and would pin the
+# broad bot* glob against a future tighten (prefix/exact covered elsewhere).
 _CANONICAL_BOT_LOGINS = (
-    "bot",
     "dependabot[bot]",
     "renovate[bot]",
     "github-actions[bot]",
