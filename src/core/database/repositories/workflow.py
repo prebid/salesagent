@@ -98,6 +98,20 @@ class WorkflowRepository:
             )
         ).first()
 
+    def get_policy_review_step(self, step_id: str) -> WorkflowStep | None:
+        """A tenant-scoped ``policy_review`` step by id, or None.
+
+        The ``step_type`` guard is load-bearing, not cosmetic: the policy review route drives a
+        step terminal, so without it an arbitrary step id (e.g. a media-buy approval) could be
+        finalized here with a fabricated ``{"approved": true}`` artifact. Keeping both the
+        tenant-scoping join and the type predicate in the repository means the POST and GET legs
+        — and any future caller — share one definition instead of re-inlining the query.
+        """
+        step = self.get_by_step_id(step_id)
+        if step is None or step.step_type != "policy_review":
+            return None
+        return step
+
     def get_approvable_step_for_object(
         self, object_type: str, object_id: str, *, step_id: str | None = None
     ) -> WorkflowStep | None:

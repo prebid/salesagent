@@ -174,7 +174,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/operations.py", "media_buy_detail"),
     ("src/admin/blueprints/operations.py", "reporting"),
     ("src/admin/blueprints/policy.py", "index"),
-    ("src/admin/blueprints/policy.py", "review_task"),
     ("src/admin/blueprints/policy.py", "update"),
     ("src/admin/blueprints/principals.py", "create_principal"),
     ("src/admin/blueprints/principals.py", "delete_principal"),

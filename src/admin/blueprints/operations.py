@@ -306,6 +306,19 @@ def _media_buy_webhook_metadata(step_data: dict, tenant_id: str, media_buy_id: s
     }
 
 
+def _refused_media_buy_redirect(tenant_id: str, media_buy_id: str, message: str):
+    """Flash ``message`` and redirect back to the media-buy detail page.
+
+    The approve and reject routes both refuse an atomic claim/reject the same way — flash an
+    error, then redirect to the detail page — differing only in wording. One home so the
+    redirect target can't drift between the two branches.
+    """
+    from flask import flash, redirect, url_for
+
+    flash(message, "error")
+    return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
+
+
 @operations_bp.route("/media-buy/<media_buy_id>/approve", methods=["POST"])
 @require_tenant_access()
 def approve_media_buy(tenant_id, media_buy_id, **kwargs):
@@ -376,9 +389,10 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 # approved, canceled, or otherwise not awaiting approval) returns None → refuse
                 # and DO NOT run the irreversible adapter creation.
                 if WorkflowRepository(db_session, tenant_id).claim_approval(step.step_id) is None:
-                    flash("This step is no longer awaiting approval (already approved or finalized).", "error")
-                    return redirect(
-                        url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
+                    return _refused_media_buy_redirect(
+                        tenant_id,
+                        media_buy_id,
+                        "This step is no longer awaiting approval (already approved or finalized).",
                     )
                 step.updated_at = datetime.now(UTC)
 
@@ -567,9 +581,10 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     )
                     is None
                 ):
-                    flash("This step is no longer awaiting a decision (already approved or finalized).", "error")
-                    return redirect(
-                        url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
+                    return _refused_media_buy_redirect(
+                        tenant_id,
+                        media_buy_id,
+                        "This step is no longer awaiting a decision (already approved or finalized).",
                     )
                 step.updated_at = datetime.now(UTC)
 

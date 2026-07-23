@@ -10,7 +10,7 @@ from src.admin.utils import get_tenant_config_from_db, require_tenant_access, se
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.audit_logger import AuditLogger
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AuditLog, Context, Tenant, WorkflowStep
+from src.core.database.models import AuditLog, Tenant, WorkflowStep
 
 logger = logging.getLogger(__name__)
 
@@ -224,20 +224,13 @@ def review_task(tenant_id, task_id):
             notes = request.form.get("notes", "")
 
             try:
-                # Get the workflow step (tenant-scoped via Context join)
-                stmt = (
-                    select(WorkflowStep)
-                    .join(Context, WorkflowStep.context_id == Context.context_id)
-                    .filter(
-                        Context.tenant_id == tenant_id,
-                        WorkflowStep.step_id == task_id,
-                        # This route reviews POLICY steps only — without this filter an
-                        # arbitrary step id (e.g. a media-buy approval) could be driven
-                        # terminal here with a fabricated {"approved": true} artifact.
-                        WorkflowStep.step_type == "policy_review",
-                    )
-                )
-                step = db_session.scalars(stmt).first()
+                # Read AND mutate through the same repository: the tenant-scoping join and the
+                # policy_review type guard live in one place (get_policy_review_step) for both the
+                # POST and GET legs, so the mutation route can't drift from a hand-rolled read.
+                from src.core.database.repositories.workflow import WorkflowRepository
+
+                repo = WorkflowRepository(db_session, tenant_id)
+                step = repo.get_policy_review_step(task_id)
 
                 if not step:
                     return "Task not found", 404
@@ -245,9 +238,6 @@ def review_task(tenant_id, task_id):
                 # Atomic terminal-safe transition via the shared conditional-UPDATE
                 # primitive — a concurrent cancel/terminal decision makes it return
                 # None → the review is refused (409) rather than overwriting.
-                from src.core.database.repositories.workflow import WorkflowRepository
-
-                repo = WorkflowRepository(db_session, tenant_id)
                 if action == "approve":
                     transitioned = repo.transition_if_nonterminal(
                         task_id, status="completed", response_data={"approved": True, "notes": notes}
@@ -285,16 +275,9 @@ def review_task(tenant_id, task_id):
 
         # GET request - show review form
         try:
-            stmt = (
-                select(WorkflowStep)
-                .join(Context, WorkflowStep.context_id == Context.context_id)
-                .filter(
-                    Context.tenant_id == tenant_id,
-                    WorkflowStep.step_id == task_id,
-                    WorkflowStep.step_type == "policy_review",
-                )
-            )
-            step = db_session.scalars(stmt).first()
+            from src.core.database.repositories.workflow import WorkflowRepository
+
+            step = WorkflowRepository(db_session, tenant_id).get_policy_review_step(task_id)
 
             if not step:
                 return "Task not found", 404
