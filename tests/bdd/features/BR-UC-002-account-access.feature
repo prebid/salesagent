@@ -37,40 +37,24 @@ Feature: BR-UC-002 Account access scoping
   # is resolved from the request headers BEFORE the token is validated, so echoing
   # it back hands an unauthenticated caller an internal identifier (the tenant
   # UUID in a host-routed deploy). Non-disclosure is a contract about what the
-  # BUYER receives, so it is graded on the real wire envelope here, not on an
-  # envelope rebuilt in-process from a caught exception.
+  # BUYER receives, so it is graded on the real wire, not on an envelope rebuilt
+  # in-process from a caught exception.
   #
-  # Graded on A2A and MCP, not REST. Each claim below was checked against the
-  # harness, not assumed:
-  #   - A2A carries the full auth chain in-process
-  #     (_get_auth_token -> _resolve_a2a_identity -> resolve_identity) and returns
-  #     a real two-layer wire envelope, so the A2A scenario grades the ENVELOPE.
-  #   - MCP rejects the invalid token too, but as a bare `ToolError` with no
-  #     two-layer envelope (wire_error_envelope is None), because the rejection is
-  #     raised outside the tool boundary that builds the envelope. There is no
-  #     envelope to grade, but the ToolError MESSAGE is what the buyer receives, so
-  #     the MCP scenario grades the MESSAGE — a deliberately weaker pin for the
-  #     same non-disclosure contract. That MCP auth rejection reaching the buyer
-  #     without a structured envelope is a separate production gap, tracked in
-  #     issue #1704.
-  #   - REST: the in-process harness overrides `_require_auth_dep` with the
-  #     injected identity (tests/harness/_base.py::_configure_rest_auth_override),
-  #     so the invalid-token raise site is never reached — the request proceeds as
-  #     authenticated. A REST variant would grade nothing, so there is none.
-  @T-UC-002-invalid-token-no-disclosure @account @error @a2a
+  # ONE transport-agnostic scenario, swept across a2a/mcp/rest (+e2e_rest) by
+  # pytest_generate_tests. Each transport reaches the same production
+  # reject_invalid_token raise; what it can carry back differs, and the single
+  # Then step grades accordingly:
+  #   - a2a / rest return a real two-layer envelope -> the Then asserts AUTH_REQUIRED
+  #     on the real wire (require_real_wire) plus non-disclosure on the envelope.
+  #     (REST authenticates in-process by dependency override, which would skip the
+  #     raise; the harness routes the bad token through the REAL dep as headers so
+  #     REST reaches it — see _dispatch_full_create / _run_rest_request.)
+  #   - mcp raises a bare ToolError with no two-layer envelope -> the Then asserts
+  #     the message equals INVALID_TOKEN_MESSAGE plus non-disclosure on the message.
+  #     That missing MCP auth envelope is a separate production gap, tracked in #1704.
+  @T-UC-002-invalid-token-no-disclosure @account @error
   Scenario: An invalid token is rejected without disclosing the tenant id
     Given a valid create_media_buy request with account natural key brand "leak-brand.com" operator "leak-agency.com"
     And the Buyer Agent presents an invalid authentication token
-    When the Buyer Agent sends the create_media_buy request via A2A
-    Then the rejection reaches the buyer as a real "AUTH_REQUIRED" wire envelope
-    And the error discloses no tenant id
-
-  # MCP grades the same non-disclosure contract on the ToolError message, since
-  # MCP rejects without a two-layer envelope (see the note above). Weaker than the
-  # A2A envelope pin, but it covers the transport A2A does not.
-  @T-UC-002-invalid-token-no-disclosure-mcp @account @error @mcp
-  Scenario: An invalid token is rejected over MCP without disclosing the tenant id
-    Given a valid create_media_buy request with account natural key brand "leak-brand.com" operator "leak-agency.com"
-    And the Buyer Agent presents an invalid authentication token
-    When the Buyer Agent sends the create_media_buy request via MCP
-    Then the error message discloses no tenant id
+    When the Buyer Agent sends the create_media_buy request
+    Then the invalid token is rejected without disclosing the tenant id

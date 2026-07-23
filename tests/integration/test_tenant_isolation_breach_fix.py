@@ -121,7 +121,6 @@ def test_cross_tenant_token_rejected(integration_db):
     from src.core.config_loader import current_tenant
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Principal, Tenant
-    from src.core.exceptions import build_two_layer_error_envelope
 
     # Clear tenant context
     current_tenant.set(None)
@@ -172,9 +171,10 @@ def test_cross_tenant_token_rejected(integration_db):
         # one nor the token's own) may ride back to the caller. Graded on the WHOLE
         # envelope, not just the message: a serializer that re-added the id under
         # details/context would sail past a message-only check.
-        envelope = build_two_layer_error_envelope(exc_info.value)
-        assert_no_tenant_disclosure(envelope, TEST_AGENT_TENANT_ID)
-        assert_no_tenant_disclosure(envelope, WONDERSTRUCK_TENANT_ID)
+        # Pass the exception straight in — the helper builds the envelope — so this
+        # matches the other three grading sites and drops the extra import.
+        assert_no_tenant_disclosure(exc_info.value, TEST_AGENT_TENANT_ID)
+        assert_no_tenant_disclosure(exc_info.value, WONDERSTRUCK_TENANT_ID)
         # Positive pin: the rejection still happened, with the shared wording.
         assert INVALID_TOKEN_MESSAGE in str(exc_info.value)
 

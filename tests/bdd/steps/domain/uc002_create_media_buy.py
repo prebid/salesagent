@@ -280,26 +280,31 @@ def given_invalid_auth_token(ctx: dict) -> None:
     rejects. The tenant it had already detected is the identifier that must not
     come back to the caller.
 
-    ``undisclosed_tenant_id`` is what the Then step asserts is absent. It is read
-    off the harness rather than written as a literal so it tracks the env's real
-    per-run tenant id and cannot silently stop matching.
+    Transport-agnostic: the paired When is transport-blind, so this runs across
+    a2a/mcp/rest under ``pytest_generate_tests``. A2A and MCP run the real auth
+    chain against the injected identity's bad token; REST authenticates by
+    dependency override, so its bad token is routed through the real REST dep as
+    headers instead (``invalid_auth_token`` is picked up in ``_dispatch_full_create``).
+
+    ``undisclosed_tenant_id`` is a fixed UUID, not the env slug: in a host-routed
+    deploy the tenant id IS a UUID, and that is the internal identifier the
+    redaction withholds. Grading the slug would be a weaker check for the same
+    contract. resolve_identity detects this value as the tenant (from the injected
+    identity on a2a/mcp, from the x-adcp-tenant header on rest), so the
+    pre-redaction message echoes exactly it — confirmed by the deletion oracle on
+    reject_invalid_token. No DB tenant row is needed: the invalid token fails at
+    token resolution, before principal lookup.
     """
     from tests.factories.principal import PrincipalFactory
 
     env = ctx["env"]
-    # Grade a UUID, the shape a host-routed deploy actually carries — the harness
-    # slug ``env._tenant_id`` is a weaker stand-in (a UUID is the internal id the
-    # redaction protects). The dispatched identity carries it, so resolve_identity
-    # detects it as the tenant and the pre-redaction message echoes THIS value;
-    # confirmed by the deletion oracle on reject_invalid_token. It needs no DB
-    # tenant row: the invalid token fails at token resolution, before principal
-    # lookup.
     ctx["undisclosed_tenant_id"] = HOST_ROUTED_TENANT_UUID
+    ctx["invalid_auth_token"] = "not-a-real-token"  # the REST leg sends this as a header
     ctx["dispatch_identity"] = PrincipalFactory.make_identity(
         principal_id=env._principal_id,
         tenant_id=HOST_ROUTED_TENANT_UUID,
         auth_token="not-a-real-token",
-        protocol="a2a",
+        # protocol is cosmetic here — dispatch is chosen by ctx["transport"].
     )
 
 
@@ -800,39 +805,6 @@ def when_send_create_media_buy(ctx: dict) -> None:
         _dispatch_full_create(ctx)
 
 
-@when("the Buyer Agent sends the create_media_buy request via A2A")
-def when_send_create_media_buy_via_a2a(ctx: dict) -> None:
-    """Same dispatch as the parametrized step, pinned to the A2A transport.
-
-    Transport-specific scenarios (@a2a) are NOT multiplied by
-    ``pytest_generate_tests``, so ``ctx["transport"]`` arrives unset and the
-    explicit When step names the wire — the ``when_request.py`` precedent for
-    "... via A2A" steps. The scenario is a2a-only for the reason spelled out in
-    the feature file: it is the one transport whose real auth chain runs
-    in-process, so it is the only one where an invalid token produces a wire
-    envelope to grade.
-    """
-    from tests.harness.transport import Transport
-
-    ctx["transport"] = Transport.A2A
-    when_send_create_media_buy(ctx)
-
-
-@when("the Buyer Agent sends the create_media_buy request via MCP")
-def when_send_create_media_buy_via_mcp(ctx: dict) -> None:
-    """MCP counterpart of the A2A step, for the invalid-token no-disclosure pair.
-
-    @mcp scenarios are not multiplied by ``pytest_generate_tests`` either, so the
-    wire is named explicitly. MCP rejects an invalid token without building a
-    two-layer envelope (the ToolError is raised outside the tool boundary), so the
-    paired Then step grades the ToolError message rather than a wire envelope.
-    """
-    from tests.harness.transport import Transport
-
-    ctx["transport"] = Transport.MCP
-    when_send_create_media_buy(ctx)
-
-
 def _dispatch_full_create(ctx: dict) -> None:
     """Build a typed CreateMediaBuyRequest from ctx['request_kwargs'] and dispatch."""
     from pydantic import ValidationError
@@ -847,12 +819,22 @@ def _dispatch_full_create(ctx: dict) -> None:
         ctx["error"] = e
         return
 
+    # Invalid-token scenario, REST leg only: A2A/MCP run the real auth chain
+    # against the injected identity's bad token, but in-process REST injects the
+    # identity by dependency override and would skip the raise. Route the bad
+    # token through the real REST dep as headers instead (harness _run_rest_request).
+    from tests.harness.transport import Transport
+
+    extra: dict = {}
+    if ctx.get("invalid_auth_token") and ctx.get("transport") == Transport.REST:
+        extra["_invalid_auth"] = {"token": ctx["invalid_auth_token"], "tenant": ctx["undisclosed_tenant_id"]}
+
     # No-auth scenarios (#1417) stash an unauthenticated identity so the
     # transport-boundary account-resolution guard is exercised on the wire.
     if "dispatch_identity" in ctx:
-        dispatch_request(ctx, req=req, identity=ctx["dispatch_identity"])
+        dispatch_request(ctx, req=req, identity=ctx["dispatch_identity"], **extra)
     else:
-        dispatch_request(ctx, req=req)
+        dispatch_request(ctx, req=req, **extra)
 
 
 def _dispatch_raw_create(ctx: dict) -> None:

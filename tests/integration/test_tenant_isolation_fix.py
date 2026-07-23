@@ -47,7 +47,6 @@ def test_tenant_isolation_with_subdomain_and_cross_tenant_token(integration_db):
     from src.core.exceptions import (
         INVALID_TOKEN_MESSAGE,
         AdCPAuthenticationError,
-        build_two_layer_error_envelope,
     )
 
     # Create two tenants
@@ -108,9 +107,10 @@ def test_tenant_isolation_with_subdomain_and_cross_tenant_token(integration_db):
         # message, so an id re-added under details/context cannot slip through.
         # (The sibling breach-fix test already checked both; this one checked only
         # the detected tenant.)
-        envelope = build_two_layer_error_envelope(exc_info.value)
-        assert_no_tenant_disclosure(envelope, WONDERSTRUCK_TENANT_ID)
-        assert_no_tenant_disclosure(envelope, TEST_AGENT_TENANT_ID)
+        # Pass the exception straight in — the helper builds the envelope — so this
+        # matches the other three grading sites and drops the extra import.
+        assert_no_tenant_disclosure(exc_info.value, WONDERSTRUCK_TENANT_ID)
+        assert_no_tenant_disclosure(exc_info.value, TEST_AGENT_TENANT_ID)
         # Positive pin: the rejection still happened, with the shared wording.
         assert INVALID_TOKEN_MESSAGE in str(exc_info.value)
 

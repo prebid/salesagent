@@ -300,45 +300,46 @@ def then_real_wire_rejection(ctx: dict, code: str) -> None:
     result.assert_wire_error(code, require_suggestion=True, require_real_wire=True)
 
 
-@then("the error discloses no tenant id")
-def then_error_discloses_no_tenant(ctx: dict) -> None:
-    """Assert the tenant id the Given step recorded appears nowhere in the envelope.
+@then("the invalid token is rejected without disclosing the tenant id")
+def then_invalid_token_rejected_no_disclosure(ctx: dict) -> None:
+    """One transport-agnostic grade of the invalid-token non-disclosure contract.
 
-    Routed through the shared ``assert_no_tenant_disclosure`` so this scenario and
-    the three Python tests that grade the same contract cannot drift apart.
+    Runs across a2a/mcp/rest (+e2e_rest) under ``pytest_generate_tests``. Two halves,
+    both required, so the scenario reddens when the request STOPS reaching the raise,
+    not only when the id leaks:
+
+    1. Positive AUTH-rejection pin — the request actually reached the redacted
+       ``reject_invalid_token`` raise, per what the transport can carry:
+         - a2a / rest build a real two-layer envelope -> assert ``AUTH_REQUIRED`` on
+           the REAL wire (``require_real_wire=True``), refusing a rebuilt envelope;
+         - mcp raises a bare ``ToolError`` with no envelope (#1704) -> assert the
+           message equals ``INVALID_TOKEN_MESSAGE``.
+    2. Non-disclosure — the host-routed tenant UUID appears nowhere the buyer sees,
+       graded through the one shared ``assert_no_tenant_disclosure`` (envelope where
+       one exists, else the ToolError message).
     """
+    from src.core.exceptions import INVALID_TOKEN_MESSAGE
     from tests.helpers import assert_no_tenant_disclosure
 
     tenant_id = ctx.get("undisclosed_tenant_id")
     assert tenant_id, "No ctx['undisclosed_tenant_id'] — the Given step must record the tenant under test"
     result = ctx.get("result")
-    assert result is not None and result.wire_error_envelope is not None, (
-        "No wire error envelope to inspect; non-disclosure must be graded on the wire"
-    )
-    assert_no_tenant_disclosure(result.wire_error_envelope, tenant_id)
+    assert result is not None, "No TransportResult in ctx — the scenario did not dispatch through a wire transport"
+    assert result.is_error, f"Expected an invalid-token rejection, got success: {result.payload!r}"
 
-
-@then("the error message discloses no tenant id")
-def then_error_message_discloses_no_tenant(ctx: dict) -> None:
-    """MCP counterpart of ``the error discloses no tenant id``, graded on the message.
-
-    MCP rejects an invalid token as a bare ``ToolError`` with no two-layer
-    envelope (``wire_error_envelope`` is ``None``) because the rejection is raised
-    outside the tool boundary that builds the envelope. There is no envelope to
-    inspect, but the ToolError MESSAGE is exactly what the buyer receives, so it is
-    the leak surface. This is deliberately weaker than the A2A pin above — message
-    only, no envelope — and routes through the same ``assert_no_tenant_disclosure``
-    (which accepts an exception) so the two transports grade one contract.
-    """
-    from tests.helpers import assert_no_tenant_disclosure
-
-    tenant_id = ctx.get("undisclosed_tenant_id")
-    assert tenant_id, "No ctx['undisclosed_tenant_id'] — the Given step must record the tenant under test"
-    result = ctx.get("result")
-    assert result is not None and result.error is not None, (
-        "No error captured; MCP must reject the invalid token as a ToolError to grade its message"
-    )
-    assert_no_tenant_disclosure(result.error, tenant_id)
+    if result.wire_error_envelope is not None:
+        # a2a / rest: positive AUTH pin on the real wire, then non-disclosure on the envelope.
+        result.assert_wire_error("AUTH_REQUIRED", require_suggestion=True, require_real_wire=True)
+        assert_no_tenant_disclosure(result.wire_error_envelope, tenant_id)
+    else:
+        # mcp: no envelope to grade (#1704). Pin that the error IS the auth rejection
+        # (not some earlier failure that happens to omit the id), then non-disclosure
+        # on the message.
+        assert result.error is not None, "MCP must reject the invalid token as a ToolError to grade its message"
+        assert INVALID_TOKEN_MESSAGE in str(result.error), (
+            f"MCP error is not the invalid-token rejection: {str(result.error)!r}"
+        )
+        assert_no_tenant_disclosure(result.error, tenant_id)
 
 
 # ── Error message content (generic) ───────────────────────────────────

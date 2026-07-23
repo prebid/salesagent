@@ -31,7 +31,7 @@ def reject_invalid_token(tenant_id: str | None) -> NoReturn:
     # sites for the same reason (auth_utils is imported from the database layer).
     from src.core.exceptions import INVALID_TOKEN_MESSAGE, AdCPAuthenticationError
 
-    logger.warning("Invalid token presented for tenant %r", tenant_id or "any")
+    logger.warning("[AUTH] Invalid token presented for tenant %r", tenant_id or "any")
     raise AdCPAuthenticationError(INVALID_TOKEN_MESSAGE)
 
 

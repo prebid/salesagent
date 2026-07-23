@@ -290,6 +290,11 @@ class AdCPRequestHandler(RequestHandler):
             # can read the wire error contract for this path.
             raise InvalidRequestError(message=str(e), data=build_two_layer_error_envelope(e)) from e
 
+        # Both raises below are defensively unreachable on this path: they fire only
+        # under require_valid_token AFTER resolve_identity has already rejected an
+        # invalid token (which raises first). They are intentionally left bare (no
+        # data= envelope) rather than routed through build_two_layer_error_envelope
+        # like the reachable catch above — dead defensive code, not a wire contract.
         if require_valid_token:
             if not identity.principal_id:
                 raise InvalidRequestError(message=INVALID_TOKEN_MESSAGE)
