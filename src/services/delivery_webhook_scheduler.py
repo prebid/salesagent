@@ -21,7 +21,6 @@ from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy
-from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.repositories import MediaBuyRepository
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
@@ -496,24 +495,22 @@ class DeliveryWebhookScheduler:
 
         # Reuse the principal's registered push config for this URL, if any
         # (tenant-scoped repository lookup — no raw ORM select in the scheduler).
-        push_notification_config = PushNotificationConfigRepository(
-            session, media_buy.tenant_id
-        ).get_active_by_principal_and_url(media_buy.principal_id, webhook_url)
+        push_config_repo = PushNotificationConfigRepository(session, media_buy.tenant_id)
+        push_notification_config = push_config_repo.get_active_by_principal_and_url(media_buy.principal_id, webhook_url)
 
         # Extract webhook config data before session closes
         if push_notification_config:
             # Detach from session and extract data
             session.expunge(push_notification_config)
         else:
-            # Create a detached temporary config (not attached to session)
-            push_notification_config = DBPushNotificationConfig(
-                id=f"temp_{media_buy.media_buy_id}",
-                tenant_id=media_buy.tenant_id,
-                principal_id=media_buy.principal_id,
-                url=webhook_url,
+            # No registered config for this URL: the repository builds the detached
+            # carrier so both arms stay in the data-access layer (never persisted).
+            push_notification_config = push_config_repo.build_detached(
+                media_buy.principal_id,
+                webhook_url,
+                config_id=f"temp_{media_buy.media_buy_id}",
                 authentication_type=auth_type,
                 authentication_token=auth_token,
-                is_active=True,
             )
 
         # Wire vs internal task_type distinction:

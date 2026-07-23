@@ -83,6 +83,36 @@ class PushNotificationConfigRepository:
             )
         ).first()
 
+    def build_detached(
+        self,
+        principal_id: str,
+        url: str,
+        *,
+        config_id: str,
+        authentication_type: str | None = None,
+        authentication_token: str | None = None,
+    ) -> PushNotificationConfig:
+        """Build an unpersisted config for a URL the principal has not registered.
+
+        The counterpart to ``get_active_by_principal_and_url``: when that returns
+        None, callers still need a config object to carry the auth policy into the
+        webhook sender. Keeping the construction here means both arms of that
+        decision come from the data-access layer, so the ORM model is never built
+        from raw kwargs in service code.
+
+        The returned instance is deliberately NOT added to the session — it is a
+        transient carrier, not a row, and must not be persisted.
+        """
+        return PushNotificationConfig(
+            id=config_id,
+            tenant_id=self._tenant_id,
+            principal_id=principal_id,
+            url=url,
+            authentication_type=authentication_type,
+            authentication_token=authentication_token,
+            is_active=True,
+        )
+
     def list_active_by_principal(self, principal_id: str) -> list[PushNotificationConfig]:
         """Return all active configs for a principal within this tenant."""
         return list(
