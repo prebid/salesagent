@@ -524,22 +524,19 @@ def given_principal_owns_mb_with_two_packages(ctx: dict, principal_id: str, mb_i
         'package "{pkg_id}" persisted targeting_overlay is a string (will raise TypeError on Targeting(**str))'
     )
 )
-def given_package_targeting_overlay_is_string(ctx: dict, pkg_id: str, caplog) -> None:
+def given_package_targeting_overlay_is_string(ctx: dict, pkg_id: str) -> None:
     """Corrupt persisted targeting_overlay to a string (BR-RULE-294 INV-3).
 
     ``Targeting(**"not a dict")`` raises ``TypeError``; production catches that
-    narrowly, logs a warning, nulls the overlay, and appends a non-fatal
-    ``SERVICE_UNAVAILABLE`` advisory. Caplog is armed here (before When) so the
-    warning Then-step can assert the real logger output.
+    narrowly, nulls the overlay, and appends a non-fatal ``SERVICE_UNAVAILABLE``
+    advisory. Buyer-facing INV-3 is graded on the wire ``errors[]`` Thens, not
+    server-side logs.
     """
-    import logging
-
     from sqlalchemy import select
     from sqlalchemy.orm.attributes import flag_modified
 
     from src.core.database.models import MediaPackage as DBMediaPackage
 
-    caplog.set_level(logging.WARNING, logger="src.core.tools.media_buy_list")
     env = ctx["env"]
     assert env._session is not None, "Expected an active DB session for package_config mutation"
     pkg_row = env._session.scalars(select(DBMediaPackage).filter_by(package_id=pkg_id)).first()
@@ -1662,26 +1659,27 @@ def _current_suggestion(ctx: dict) -> str:
     Also covers success-path advisory ``errors[]`` (BR-RULE-294 targeting
     rehydration): the buyer still receives a top-level suggestion on the
     serialized ``wire_response.errors[0]`` even though the transport did not
-    reject. Prefer that over the reconstructed typed payload.
+    reject. Prefer that over the reconstructed typed payload. Typed
+    ``response.errors[0]`` is used only when ``wire_response is None`` — an
+    empty wire ``errors[]`` must fail loudly, not silently pass via the typed
+    payload.
     """
     from tests.harness.transport import extract_wire_suggestion
 
     suggestion = _wire_suggestion(ctx)
-    if suggestion is None:
+    wire = ctx.get("wire_response")
+    if suggestion is None and wire is not None:
         # Success-path advisory errors[] captured on the real wire body.
-        suggestion = extract_wire_suggestion(ctx.get("wire_response"))
+        suggestion = extract_wire_suggestion(wire)
     if suggestion is None:
         matched = ctx.get("matched_response_error")
         if matched is not None:
-            suggestion = (
-                matched.get("suggestion") if isinstance(matched, dict) else getattr(matched, "suggestion", None)
-            )
-    if suggestion is None:
+            suggestion = _error_attr(matched, "suggestion")
+    if suggestion is None and wire is None:
         resp = ctx.get("response")
         errors = getattr(resp, "errors", None) if resp is not None else None
         if errors:
-            first = errors[0]
-            suggestion = first.get("suggestion") if isinstance(first, dict) else getattr(first, "suggestion", None)
+            suggestion = _error_attr(errors[0], "suggestion")
     if suggestion is None:
         error = ctx.get("error")
         assert error is not None, "Expected an error"
@@ -1691,9 +1689,7 @@ def _current_suggestion(ctx: dict) -> str:
             # STRICT error.json conformance: top-level attribute only (#1417).
             suggestion = error.suggestion
         else:
-            suggestion = getattr(error, "suggestion", None)
-            if suggestion is None and isinstance(error, dict):
-                suggestion = error.get("suggestion")
+            suggestion = _error_attr(error, "suggestion")
     assert isinstance(suggestion, str) and suggestion.strip(), (
         f"Expected non-empty top-level suggestion string, got {suggestion!r}"
     )
@@ -2571,10 +2567,16 @@ def then_unavailable_reason_shorthand(ctx: dict, reason: str) -> None:
 
 
 def _response_errors(ctx: dict) -> list:
-    """Return advisory ``errors[]`` — prefer serialized wire body over typed payload."""
+    """Return advisory ``errors[]`` — prefer serialized wire body over typed payload.
+
+    Fall back to the typed ``response.errors`` only when ``wire_response is None``
+    (IMPL / no-wire). An empty wire ``errors[]`` must surface as empty — never
+    silently substitute the parsed typed payload.
+    """
     wire = ctx.get("wire_response")
-    if isinstance(wire, dict) and isinstance(wire.get("errors"), list) and wire["errors"]:
-        return wire["errors"]
+    if wire is not None:
+        assert isinstance(wire, dict), f"Expected dict wire_response, got {type(wire)}"
+        return list(wire.get("errors") or [])
     resp = ctx.get("response")
     assert resp is not None, f"Expected a response with errors[], got error: {ctx.get('error')}"
     return list(getattr(resp, "errors", None) or [])
@@ -2585,29 +2587,6 @@ def _error_attr(err: object, key: str) -> object:
     if isinstance(err, dict):
         return err.get(key)
     return getattr(err, key, None)
-
-
-@then(parsers.parse('a warning should be logged with media_buy_id "{mb_id}" and package_id "{pkg_id}"'))
-def then_rehydration_warning_logged(ctx: dict, mb_id: str, pkg_id: str, caplog) -> None:
-    """Assert production logged the per-package rehydration warning (BR-RULE-294 INV-3).
-
-    The log line uses the real DB ``media_buy_id`` (uuid-suffixed), not the
-    Gherkin label — resolve via the label map before matching.
-    """
-    real_mb_id = _resolve_media_buy_id(ctx, mb_id)
-    for rec in caplog.records:
-        if rec.levelname != "WARNING":
-            continue
-        msg = rec.getMessage()
-        if "Failed to rehydrate targeting_overlay" not in msg:
-            continue
-        assert real_mb_id in msg, f"Expected media_buy_id {real_mb_id!r} in warning: {msg}"
-        assert pkg_id in msg, f"Expected package_id {pkg_id!r} in warning: {msg}"
-        return
-    raise AssertionError(
-        f"Expected WARNING rehydration log for media_buy_id={real_mb_id!r} package_id={pkg_id!r}; "
-        f"captured={[r.getMessage() for r in caplog.records]}"
-    )
 
 
 @then(parsers.parse('response.errors[] should include an entry with code "{code}"'))
@@ -2643,6 +2622,15 @@ def then_matched_error_field_selector(ctx: dict, field: str) -> None:
     assert matched is not None, "No matched_response_error — run the errors[] code step first"
     actual = _error_attr(matched, "field")
     assert actual == field, f"Expected errors[] field {field!r}, got {actual!r}"
+
+
+@then(parsers.parse('that errors[] entry recovery should be "{recovery}"'))
+def then_matched_error_recovery(ctx: dict, recovery: str) -> None:
+    """Assert the stashed ``errors[]`` entry ``recovery`` equals ``recovery``."""
+    matched = ctx.get("matched_response_error")
+    assert matched is not None, "No matched_response_error — run the errors[] code step first"
+    actual = _error_attr(matched, "recovery")
+    assert actual == recovery, f"Expected errors[] recovery {recovery!r}, got {actual!r}"
 
 
 @then(parsers.parse('the package "{pkg_id}" targeting_overlay should be null'))

@@ -663,8 +663,7 @@ class TestTargetingOverlayRoundTrip:
         assert "seller" in suggestion_lower
         assert "repair" in suggestion_lower
         assert "package_config" not in suggestion_lower
-        recovery = err.recovery.value if hasattr(err.recovery, "value") else err.recovery
-        assert recovery == "transient"
+        assert err.recovery == "transient"
 
 
 class TestGetMediaBuysResponseStructure:

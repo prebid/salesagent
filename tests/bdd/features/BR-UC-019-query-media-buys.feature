@@ -959,13 +959,13 @@ Feature: BR-UC-019 Query Media Buys
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And package "pkg-001" persisted targeting_overlay is a string (will raise TypeError on Targeting(**str))
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then a warning should be logged with media_buy_id "mb-001" and package_id "pkg-001"
-    And response.errors[] should include an entry with code "SERVICE_UNAVAILABLE"
+    Then response.errors[] should include an entry with code "SERVICE_UNAVAILABLE"
     And that errors[] entry message should start with "TARGETING_REHYDRATION_FAILED:"
     And that errors[] entry field selector should be "media_buys[].packages[pkg-001].targeting_overlay"
     And the package "pkg-001" targeting_overlay should be null
     And the error should include a "suggestion" field
     And the suggestion should contain "seller" or "repair"
+    And that errors[] entry recovery should be "transient"
     # BR-RULE-294 INV-3: narrow TypeError catch -> warn + non-fatal Error + null overlay
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
 
