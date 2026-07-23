@@ -75,6 +75,16 @@ def _locate_failed_task_artifact(task: Task, artifact_name: str) -> Artifact:
     return artifact
 
 
+def _artifact_texts(artifact: Artifact) -> list[str]:
+    """The human-readable TextPart strings of ``artifact``.
+
+    One definition of "which parts are the readable text", shared by the strict reader (which
+    counts them) and the leak oracle (which scans them) — the same reason the locator above is
+    shared. If A2A ever changes how text is carried, this is the single edit.
+    """
+    return [p.text for p in artifact.parts if p.HasField("text")]
+
+
 def _read_failed_task_artifact(task: Task, artifact_name: str) -> dict[str, Any]:
     """THE single strict reader of a failed Task's error artifact.
 
@@ -87,7 +97,7 @@ def _read_failed_task_artifact(task: Task, artifact_name: str) -> dict[str, Any]
     """
     artifact = _locate_failed_task_artifact(task, artifact_name)
     data_parts = [p for p in artifact.parts if p.HasField("data")]
-    text_parts = [p for p in artifact.parts if p.HasField("text")]
+    text_parts = _artifact_texts(artifact)
     assert len(data_parts) == 1, f"error artifact must carry exactly one authoritative DataPart, got {len(data_parts)}"
     assert len(text_parts) == 1, (
         f"error artifact must carry a human-readable TextPart (A2A error binding), got {len(text_parts)}"
@@ -142,7 +152,7 @@ def assert_failed_task_no_secret_leak(task: Task, *, artifact_name: str = "error
 
     artifact = _locate_failed_task_artifact(task, artifact_name)
     envelope = extract_data_from_artifact(artifact)
-    text_parts = [p.text for p in artifact.parts if p.HasField("text")]
+    text_parts = _artifact_texts(artifact)
     client_facing = json.dumps(envelope) + " " + " ".join(text_parts)
     assert_no_secret_leak(client_facing, context=f"failed Task {artifact_name!r} artifact")
 

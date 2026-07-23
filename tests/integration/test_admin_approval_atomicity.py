@@ -74,6 +74,29 @@ def _status(tenant_id: str, step_id: str) -> str:
         return step.status if step else "missing"
 
 
+def _authed_media_buy_awaiting_approval(client, step_status: str = "requires_approval"):
+    """A uniquely-suffixed tenant/principal/media-buy plus an authed session and an approval step.
+
+    Returns ``(tenant_id, media_buy_id, step_id)``. The uuid suffix keeps the rows collision-free
+    under xdist. Extracted because the identical block appeared verbatim in the route-level tests
+    below — the clone checker cannot see an intra-file duplicate, so it has to be caught by hand.
+    """
+    from tests.factories import MediaBuyFactory
+
+    suffix = uuid.uuid4().hex[:8]
+    media_buy = MediaBuyFactory(
+        tenant__tenant_id=f"t_{suffix}",
+        tenant__subdomain=f"sub-{suffix}",
+        principal__principal_id=f"p_{suffix}",
+        principal__access_token=f"tok_{suffix}",
+        media_buy_id=f"mb_{suffix}",
+        status="pending_approval",
+    )
+    _auth(client, media_buy.tenant_id)
+    step_id = _make_step(media_buy.tenant_id, media_buy.principal_id, step_status, media_buy_id=media_buy.media_buy_id)
+    return media_buy.tenant_id, media_buy.media_buy_id, step_id
+
+
 class TestPolicyReviewAtomicity:
     def test_review_approve_of_canceled_step_is_conflict(self, client, sample_tenant, sample_principal):
         """[Round-15 B1] policy review of an already-canceled step is refused (409), not
@@ -183,21 +206,7 @@ class TestOperationsApproveAtomicity:
         from success to the operator). The route flashes an error and does not transition the step
         or run the adapter. Regression guard: the route previously fell through both branches to a
         bare redirect, while the sibling policy route already returned an explicit error."""
-        from tests.factories import MediaBuyFactory
-
-        suffix = uuid.uuid4().hex[:8]
-        media_buy = MediaBuyFactory(
-            tenant__tenant_id=f"t_{suffix}",
-            tenant__subdomain=f"sub-{suffix}",
-            principal__principal_id=f"p_{suffix}",
-            principal__access_token=f"tok_{suffix}",
-            media_buy_id=f"mb_{suffix}",
-            status="pending_approval",
-        )
-        tenant_id = media_buy.tenant_id
-        media_buy_id = media_buy.media_buy_id
-        _auth(client, tenant_id)
-        step_id = _make_step(tenant_id, media_buy.principal_id, "requires_approval", media_buy_id=media_buy_id)
+        tenant_id, media_buy_id, step_id = _authed_media_buy_awaiting_approval(client)
 
         with patch("src.core.tools.media_buy_create.execute_approved_media_buy") as mock_execute:
             resp = client.post(
@@ -219,21 +228,7 @@ class TestOperationsApproveAtomicity:
         This test drives a genuine approve to completion through the SAME target and asserts it WAS
         called, so the negative assertions are anchored to a target proven to intercept.
         """
-        from tests.factories import MediaBuyFactory
-
-        suffix = uuid.uuid4().hex[:8]
-        media_buy = MediaBuyFactory(
-            tenant__tenant_id=f"t_{suffix}",
-            tenant__subdomain=f"sub-{suffix}",
-            principal__principal_id=f"p_{suffix}",
-            principal__access_token=f"tok_{suffix}",
-            media_buy_id=f"mb_{suffix}",
-            status="pending_approval",
-        )
-        tenant_id = media_buy.tenant_id
-        media_buy_id = media_buy.media_buy_id
-        _auth(client, tenant_id)
-        step_id = _make_step(tenant_id, media_buy.principal_id, "requires_approval", media_buy_id=media_buy_id)
+        tenant_id, media_buy_id, step_id = _authed_media_buy_awaiting_approval(client)
 
         with patch(
             "src.core.tools.media_buy_create.execute_approved_media_buy", return_value=(True, None)
