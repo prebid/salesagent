@@ -1746,14 +1746,21 @@ def then_scheduler_next_expected(ctx: dict, next_expected: str) -> None:
     _assert_next_expected_presence(_scheduler_result(ctx), next_expected, context="scheduler wire result")
 
 
-@then("the scheduler webhook payload should pair partial_data with unavailable_count")
-def then_scheduler_partial_data_pairing(ctx: dict) -> None:
+@then("the scheduler webhook payload should omit unavailable_count while partial_data is false")
+def then_scheduler_omits_unavailable_count(ctx: dict) -> None:
     """Assert the partial_data/unavailable_count pairing on the real scheduler wire.
 
     Same rule as the integration and e2e graders via the shared
     ``assert_partial_data_pairing`` helper; this step reads the real scheduler
     wire ``result``. Runs on both Examples rows, so the pairing is graded on the
     final path as well as the scheduled one.
+
+    The sentence deliberately names only the branch that is graded. The schema
+    (media-buy-delivery-webhook-result.json @ 3.1.1) makes `unavailable_count`
+    conditional on `partial_data` being true and permits `partial_data: true`,
+    but production hardcodes it false, so the helper pins that. Wording the step
+    as the general pairing rule would mis-attribute the failure the day real
+    partial-data reporting ships.
     """
     assert_partial_data_pairing(_scheduler_result(ctx), context="scheduler wire result")
 
