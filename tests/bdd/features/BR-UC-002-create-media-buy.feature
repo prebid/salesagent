@@ -438,10 +438,12 @@ Feature: BR-UC-002 Create Media Buy
     And the error code should be "VALIDATION_ERROR"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
-    # Registration SSRF gate (AdCP 3.1): VALIDATION_ERROR / recovery=correctable + suggestion
-    # on MCP/REST/A2A tool transports. A2A-native push-config endpoints
-    # (message/send configuration, setTaskPushNotificationConfig) map the same
-    # gate to InvalidParamsError instead — covered by unit pins, not this scenario.
+    # Repo-local SSRF policy (ungraded extension): reuses AdCP 3.1.1
+    # VALIDATION_ERROR / recovery=correctable enum values + suggestion on
+    # MCP/REST/A2A tool transports. Schema is silent on SSRF. A2A-native
+    # push-config endpoints (message/send configuration,
+    # setTaskPushNotificationConfig) map the same gate to InvalidParamsError
+    # instead — covered by unit pins, not this scenario.
     # @source repo=adcp ref=v3.1.1 path=adcp/_schemas/3.1/manifest.json (error recovery enum)
 
   @T-UC-002-ext-o @extension @ext-o @error @post-f1 @post-f2 @post-f3

@@ -26,6 +26,8 @@ from typing import Any
 import httpx
 from adcp import get_adcp_spec_version
 
+from src.core.webhook_validator import reject_unsafe_outbound_webhook_url
+
 logger = logging.getLogger(__name__)
 
 
@@ -429,8 +431,6 @@ class WebhookDeliveryService:
 
     def _reject_unsafe_outbound_url(self, url: str, circuit_breaker: CircuitBreaker) -> bool:
         """Return True when outbound URL fails SSRF (caller must skip delivery)."""
-        from src.core.webhook_validator import reject_unsafe_outbound_webhook_url
-
         rejected, _error_msg = reject_unsafe_outbound_webhook_url(url, log=logger, kind="Application")
         if rejected:
             circuit_breaker.record_failure()

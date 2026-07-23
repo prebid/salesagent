@@ -99,7 +99,7 @@ def _sync_creatives_impl(
             webhook_url = push_notification_config.get("url")
         else:
             webhook_url = str(push_notification_config.url) if push_notification_config.url else None
-        if webhook_url:
+        if webhook_url is not None and str(webhook_url).strip():
             from src.core.webhook_validator import (
                 reject_unsafe_webhook_registration_url,
                 sanitize_webhook_url_for_log,

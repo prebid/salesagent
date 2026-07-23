@@ -150,10 +150,12 @@ class TestWebhookURLValidator:
     def test_blocks_cgnat_range(self):
         is_valid, error = WebhookURLValidator.validate_webhook_url("http://100.64.1.1/webhook")
         assert not is_valid
+        assert "100.64.0.0/10" in error
 
     def test_blocks_multicast_range(self):
         is_valid, error = WebhookURLValidator.validate_webhook_url("http://224.0.0.1/webhook")
         assert not is_valid
+        assert "224.0.0.0/4" in error
 
 
 class TestWebhookAuthenticator:

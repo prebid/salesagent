@@ -2177,7 +2177,9 @@ async def _create_media_buy_impl(
                         session_id=None,
                     )
                     logger.info(
-                        f"[MCP/A2A] Push notification config {'created' if created else 'updated'}: {config_id}"
+                        "[MCP/A2A] Push notification config %s: %s",
+                        "created" if created else "updated",
+                        config_id,
                     )
 
     try:

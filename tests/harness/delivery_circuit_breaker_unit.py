@@ -32,7 +32,7 @@ from unittest.mock import MagicMock
 
 from src.services.webhook_delivery_service import WebhookDeliveryService
 from tests.harness._base import BaseTestEnv
-from tests.harness._mixins import CircuitBreakerMixin
+from tests.harness._mixins import OUTBOUND_SSRF_VALIDATE_TARGET, CircuitBreakerMixin
 
 
 class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
@@ -57,7 +57,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
         "db": "src.core.database.database_session.get_db_session",
         "logger": f"{MODULE}.logger",
         # Fixture hostnames are unresolvable; send-time SSRF DNS is unit-tested.
-        "ssrf": "src.core.webhook_validator.WebhookURLValidator.validate_outbound_webhook_url",
+        "ssrf": OUTBOUND_SSRF_VALIDATE_TARGET,
     }
 
     def __init__(self, **kwargs: Any) -> None:
@@ -71,7 +71,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
 
         # Default: allow fixture hostnames through send-time SSRF (DNS covered
         # elsewhere). Scenarios that grade the reject branch call set_url_invalid().
-        self.mock["ssrf"].return_value = (True, "")
+        self.set_url_valid()
 
         # httpx.Client: 200 OK by default (from mixin)
         self.set_http_response(200)

@@ -3255,8 +3255,6 @@ def given_reporting_webhook_url(ctx: dict, url: str) -> None:
     Used by registration SSRF scenarios: credentials satisfy MinLen=32 so the
     request reaches the SSRF gate rather than failing Pydantic auth validation.
     """
-    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
-
     kwargs = _ensure_request_defaults(ctx)
     kwargs["reporting_webhook"] = {
         "url": url,
