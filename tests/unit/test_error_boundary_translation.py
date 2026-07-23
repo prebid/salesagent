@@ -724,7 +724,7 @@ class TestA2ADispatcherFailedSkillResult:
     def test_untyped_exception_wrapped_in_sanitized_adcp_error(self):
         """Bare ``Exception`` is wrapped in a SANITIZED synthetic AdCPError.
 
-        Per the A2A boundary security policy (``_safe_adcp_error``), an untyped
+        Per the A2A boundary security policy (``safe_adcp_error``), an untyped
         exception must NOT expose its raw ``str(exc)`` — which may carry credentials,
         connection strings, SQL, or hostnames. The message is replaced with a generic
         internal error, and the wire code is the safe ``SERVICE_UNAVAILABLE``
@@ -768,7 +768,7 @@ class TestA2ADispatcherFailedSkillResult:
 
         Reachable handlers build e.g. ``AdCPAdapterError(f"...: {e}")`` where ``e`` carries a
         DB connection string. Because it is already an ``AdCPError`` a naive sanitizer would
-        trust it; ``_safe_adcp_error`` instead replaces the message for the
+        trust it; ``safe_adcp_error`` instead replaces the message for the
         ``wire_error_code == "SERVICE_UNAVAILABLE"`` bucket while keeping the wire code and the
         buyer-facing retry semantics (``recovery``).
         """

@@ -1288,9 +1288,14 @@ def _scrubbed_error(
 
 
 def safe_adcp_error(exc: Exception) -> AdCPError:
-    """Return a wire-safe ``AdCPError`` — THE single sanitization policy for every buyer-facing
-    boundary (A2A failed-Task / JSON-RPC ``InternalError``, and the webhook push path via
-    ``ContextManager.audit_workflow_step_failure``; MCP/REST adoption tracked in #1587).
+    """Return a wire-safe ``AdCPError`` — THE sanitization policy for the boundaries that have
+    ADOPTED it: the A2A failed-Task / JSON-RPC ``InternalError`` paths, and the webhook push path
+    via ``ContextManager.audit_workflow_step_failure``.
+
+    Adoption is NOT universal, so this is not a claim that every buyer-facing emission is
+    scrubbed: the MCP/REST boundaries and the approval-service webhook still build their own
+    messages and depend on source-site scrubbing (tracked in #1587). Route any NEW buyer-facing
+    error surface through here instead of adding a second policy.
 
     Two ORTHOGONAL decisions, deliberately kept separate — conflating them is what leaked secrets
     (a raw ``ValueError`` pre-normalized to a *trusted* ``AdCPValidationError`` whose raw message

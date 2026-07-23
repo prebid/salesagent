@@ -865,7 +865,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         budget = None
 
                     # Get pricing option from product
-                    # adcp 2.14.0+ uses RootModel wrapper - access via.root
+                    # adcp 2.14.0+ uses RootModel wrapper - access via .root
                     pricing_option_inner = None
                     if product.pricing_options:
                         # Try to match pricing_model from package_config if present
@@ -2220,7 +2220,7 @@ async def _create_media_buy_impl(
             raise AdCPValidationError(error_msg)
 
         # Handle 'asap' start_time (AdCP v1.7.0)
-        # start_time is StartTiming (RootModel[datetime | 'asap']); unwrap via.root
+        # start_time is StartTiming (RootModel[datetime | 'asap']); unwrap via .root
         raw_start_time = req.start_time.root
         if raw_start_time == "asap":
             computed_start_time: datetime = now
@@ -3443,7 +3443,7 @@ async def _create_media_buy_impl(
             cpm = 10.0  # Default
             if pkg_product.pricing_options and len(pkg_product.pricing_options) > 0:
                 first_option = pkg_product.pricing_options[0]
-                # adcp 2.14.0+ uses RootModel wrapper - access via.root
+                # adcp 2.14.0+ uses RootModel wrapper - access via .root
                 inner_option = getattr(first_option, "root", first_option)
                 rate = getattr(inner_option, "rate", None)
                 if rate:

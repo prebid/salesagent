@@ -483,7 +483,7 @@ class TestCreateMediaBuyAdapterAtomicity:
 
             # The client-facing message is sanitized — the raw adapter exception text
             # ("Simulated adapter failure") is logged server-side only, not interpolated
-            # into the AdCPAdapterError message (#1547 round-10 leak fix). The original
+            # into the AdCPAdapterError message. The original
             # RuntimeError is still chained via __cause__ for server-side traceability.
             with pytest.raises(AdCPAdapterError, match="Failed to create media buy") as exc_info:
                 await _create_media_buy_impl(req=req, identity=mb_identity)
