@@ -11,7 +11,7 @@ Two very different consumers need the same strings:
 
 Before this module the reader hand-copied the writer's literals, so rewording a
 reason in conftest silently moved scenarios into the "documented gap (fine)"
-bucket — the exact false-green #1603 exists to kill. Both sides now import from
+bucket — the exact false-green this check exists to kill. Both sides now import from
 here, and ``tests/unit/test_check_dormant_scenarios.py`` pins the classifier
 against these builders, so a reworded reason breaks a test instead of quietly
 under-reporting.
@@ -30,6 +30,13 @@ STEP_DEFINITION_NOT_FOUND = "Step definition not found"
 
 #: A harness/dispatcher raised ``NotImplementedError`` (e.g. the E2E_MCP /
 #: E2E_A2A placeholder dispatchers). Dormant.
+#:
+#: Caveat, latent today: this keys on the exception type, so a
+#: ``NotImplementedError`` raised by *production* code under test — not a
+#: harness placeholder — would also bucket its scenario dormant. That
+#: over-reports in the safe direction (it names a scenario as not-really-run
+#: rather than hiding one), and no production path raises it into this hook
+#: today, so it is a note rather than a guard.
 NOT_IMPLEMENTED = "Not implemented"
 
 #: A mock-setup intent the live e2e stack has no surface for, declared at the

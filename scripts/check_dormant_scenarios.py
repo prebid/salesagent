@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Informational check: which BDD scenarios touched by your change never run?
 
-The failure mode this surfaces (#1603): a branch edits step modules, feature
-files, or the BDD conftest, CI stays green, and nothing anywhere says that the
-scenarios involved are auto-xfailed — dormant steps look like coverage. This
-is the local, informational companion to ``run_all_tests.sh`` suggested in
-#1603: it never fails your build (unless you opt into ``--strict``), it just
-tells you what is NOT running before you claim coverage.
+The failure mode this surfaces: a branch edits step modules, feature files, or
+the BDD conftest, CI stays green, and nothing anywhere says that the scenarios
+involved are auto-xfailed — dormant steps look like coverage. This is the
+local, informational companion to ``run_all_tests.sh``: it never fails your
+build (unless you opt into ``--strict``), it just tells you what is NOT running
+before you claim coverage.
 
 How it works
 ------------
@@ -61,7 +61,7 @@ if str(REPO_ROOT) not in sys.path:
 # is the point: a reworded conftest reason must not silently reclassify dormant
 # scenarios as documented gaps. The module is a leaf — no pytest import — so
 # this stays a cheap script.
-from tests.bdd.xfail_taxonomy import DORMANT_REASON_MARKERS, scenario_name
+from tests.bdd.xfail_taxonomy import is_dormant_reason, scenario_name
 
 _XFAIL_PREFIX = re.compile(r"^XFAIL\s+")
 _XFAIL_REASON_SEP = re.compile(r"^\s+-\s+")
@@ -163,6 +163,15 @@ def run_without_db(modules: list[Path]) -> subprocess.CompletedProcess[str]:
     """
     env = {k: v for k, v in os.environ.items() if k != "DATABASE_URL"}
     env["PYTHONUTF8"] = "1"
+    # Force pytest's summary uncolored. This parser matches ``^XFAIL\s+`` at the
+    # start of a line; with PY_COLORS=1 or FORCE_COLOR=1 in the environment
+    # (common in CI images) pytest prepends an ANSI SGR to the summary lines,
+    # ``^XFAIL`` then matches nothing, and the run reports a false all-clear —
+    # the exact silent-pass this check exists to prevent. Belt and suspenders:
+    # --color=no on the command, and PY_COLORS=0 with FORCE_COLOR dropped from
+    # the env pytest inherits, since either alone can be overridden.
+    env["PY_COLORS"] = "0"
+    env.pop("FORCE_COLOR", None)
     cmd = [
         sys.executable,
         "-m",
@@ -175,6 +184,7 @@ def run_without_db(modules: list[Path]) -> subprocess.CompletedProcess[str]:
         "no:cacheprovider",
         "-rxX",
         "--no-header",
+        "--color=no",
     ]
     return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, env=env, check=False)
 
@@ -235,8 +245,10 @@ def classify(pytest_output: str) -> tuple[dict[str, set[str]], dict[str, set[str
         # Collapse parametrization (shared with scripts/enumerate_bdd_issues.py)
         scenario = scenario_name(nodeid)
         reason_key = reason.split(". ")[0][:120] if reason else "(no reason recorded)"
-        lowered = reason.lower()
-        bucket = dormant if any(k in lowered for k in DORMANT_REASON_MARKERS) else documented
+        # One predicate for "is this reason dormant", shared with the taxonomy
+        # module so the marker set cannot drift between the classifier and the
+        # conftest that emits the reasons.
+        bucket = dormant if is_dormant_reason(reason) else documented
         bucket[reason_key].add(scenario)
     return dormant, documented
 

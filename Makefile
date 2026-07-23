@@ -1,6 +1,6 @@
 .PHONY: setup quality quality-ci quality-full pre-pr lint-fix lint typecheck test-fast test-full
 .PHONY: test-stack-up test-stack-down test-all test-cov test-entity
-.PHONY: test-int test-bdd test-e2e creative-formats-refresh
+.PHONY: test-int test-bdd test-e2e creative-formats-refresh check-dormant
 
 setup:
 	uv run python scripts/setup-dev.py
@@ -56,7 +56,7 @@ test-fast:
 test-full:
 	./run_all_tests.sh ci
 
-# Informational (#1603): list BDD scenarios your change touches that never run.
+# Informational: list BDD scenarios your change touches that never run.
 check-dormant:
 	uv run python scripts/check_dormant_scenarios.py
 

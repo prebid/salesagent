@@ -1,4 +1,4 @@
-"""Unit tests for scripts/check_dormant_scenarios.py (#1603).
+"""Unit tests for scripts/check_dormant_scenarios.py.
 
 The script's subprocess layer (git diff, pytest run) is environment-bound;
 these tests pin the pure logic: xfail-line classification (dormant wiring
@@ -72,7 +72,7 @@ class TestClassify:
         today, so every scenario parametrized onto those transports is dormant —
         it executes nowhere. Before the shared taxonomy the checker had no
         marker for that prefix and filed them under "documented spec-production
-        gaps (fine)", the exact false-green #1603 targets.
+        gaps (fine)", the exact false-green this check targets.
         """
         dormant, documented = cds.classify(SAMPLE_OUTPUT)
         assert "test_e2e_dispatch" in _names(dormant)
@@ -174,24 +174,87 @@ class TestClassify:
         assert "test_replay" not in every
 
 
+class TestRunWithoutDbForcesNoColor:
+    """A colorized pytest summary silently defeats the ``^XFAIL`` parser.
+
+    ``split_xfail_line`` matches at the start of a line. With ``PY_COLORS=1`` or
+    ``FORCE_COLOR=1`` in the environment (common in CI images) pytest prepends an
+    ANSI SGR to each summary line, ``^XFAIL`` matches nothing, and the check
+    reports a false all-clear — the exact silent pass this tool exists to
+    prevent. ``run_without_db`` must force color off on the command AND scrub the
+    inheriting env, since either alone can be overridden.
+
+    Deletion oracle: drop ``--color=no`` and the first test reddens; drop the
+    ``PY_COLORS``/``FORCE_COLOR`` env scrub and the second reddens.
+    """
+
+    def _capture(self, monkeypatch):
+        captured: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["env"] = kwargs.get("env", {})
+
+            class _R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            return _R()
+
+        monkeypatch.setattr(cds.subprocess, "run", fake_run)
+        monkeypatch.setenv("FORCE_COLOR", "1")
+        monkeypatch.setenv("PY_COLORS", "1")
+        cds.run_without_db([cds.REPO_ROOT / "tests" / "bdd" / "test_uc018_list_creatives.py"])
+        return captured
+
+    def test_color_disabled_on_the_command(self, monkeypatch):
+        assert "--color=no" in self._capture(monkeypatch)["cmd"]
+
+    def test_color_env_vars_scrubbed(self, monkeypatch):
+        env = self._capture(monkeypatch)["env"]
+        assert env.get("PY_COLORS") == "0"
+        assert "FORCE_COLOR" not in env
+
+
 class TestConftestUsesSharedTaxonomy:
     """conftest must BUILD its xfail reasons from the taxonomy, not re-type them.
 
     A hand-typed reason in conftest is invisible to the classifier's markers,
     which is how ``Not implemented: ...`` scenarios ended up in the "documented
-    spec-production gaps (fine)" bucket. Scanning string *literals* via AST (not
-    the raw text) so explanatory comments quoting a reason stay legal.
+    spec-production gaps (fine)" bucket. The scan is scoped to the xfail-reason
+    positions — the string arguments of ``pytest.xfail(...)`` calls and the
+    values assigned to ``report.wasxfail`` — so a docstring or an explanatory
+    comment that quotes a reason stays legal; only an actual emitted reason
+    counts. An f-string like ``f"... {NOT_YET_WIRED} ..."`` is built, not
+    retyped, so its literal fragments never contain a marker and it passes.
     """
 
     @staticmethod
-    def _string_literals(path: Path) -> list[str]:
+    def _emitted_reason_strings(path: Path) -> list[str]:
         import ast
 
-        return [
-            node.value
-            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
-            if isinstance(node, ast.Constant) and isinstance(node.value, str)
-        ]
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        out: list[str] = []
+        for node in ast.walk(tree):
+            # pytest.xfail("...") / xfail("...") positional reason
+            if isinstance(node, ast.Call):
+                func = node.func
+                if (
+                    isinstance(func, ast.Attribute)
+                    and func.attr == "xfail"
+                    or isinstance(func, ast.Name)
+                    and func.id == "xfail"
+                ):
+                    for arg in node.args:
+                        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                            out.append(arg.value)
+            # report.wasxfail = "..."
+            elif isinstance(node, ast.Assign):
+                targets_wasxfail = any(isinstance(t, ast.Attribute) and t.attr == "wasxfail" for t in node.targets)
+                if targets_wasxfail and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                    out.append(node.value.value)
+        return out
 
     @pytest.mark.parametrize(
         "fragment",
@@ -205,7 +268,7 @@ class TestConftestUsesSharedTaxonomy:
     )
     def test_no_dormant_reason_is_retyped_in_conftest(self, fragment):
         conftest = Path(__file__).resolve().parents[1] / "bdd" / "conftest.py"
-        offenders = [s for s in self._string_literals(conftest) if fragment.lower() in s.lower()]
+        offenders = [s for s in self._emitted_reason_strings(conftest) if fragment.lower() in s.lower()]
         assert offenders == [], (
             f"tests/bdd/conftest.py re-types the xfail reason fragment {fragment!r} instead of "
             f"building it from tests/bdd/xfail_taxonomy. The dormant-scenario checker classifies "
