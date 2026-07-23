@@ -21,6 +21,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from a2a.server.request_handlers.response_helpers import build_error_response
 from a2a.types import (
     Artifact,
     CancelTaskRequest,
@@ -39,10 +40,12 @@ from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _dict_to_value
 from src.core.exceptions import (
     AUTH_REQUIRED_CANONICAL_SUGGESTION,
     VALIDATION_ERROR_SUGGESTION,
+    AdCPAuthenticationError,
     AdCPCapabilityNotSupportedError,
     AdCPValidationError,
 )
 from tests.a2a_helpers import make_a2a_context
+from tests.factories import PrincipalFactory
 from tests.helpers import assert_envelope_shape
 from tests.helpers.secret_scrub import SECRET_BEARING_MESSAGE, assert_no_secret_leak
 from tests.utils.a2a_helpers import (
@@ -562,6 +565,11 @@ def _auth_guarded_methods():
     """Every A2A method whose auth failure a buyer can branch on, with minimal params.
 
     Built as a function (not a module constant) so the request objects are fresh per test.
+
+    Includes ``on_message_send`` — it is the method the helper docstring names first, and
+    omitting it while claiming coverage is exactly the gap this list exists to close. Its
+    params carry a NON-discovery skill so the request actually requires auth (a discovery
+    skill is public and would resolve anonymously instead of rejecting).
     """
     from a2a.types import (
         DeleteTaskPushNotificationConfigRequest,
@@ -570,6 +578,10 @@ def _auth_guarded_methods():
     )
 
     return [
+        (
+            "on_message_send",
+            SendMessageRequest(message=create_a2a_message_with_skill("create_media_buy", {"buyer_ref": "b1"})),
+        ),
         ("on_get_task", GetTaskRequest(id="task_envelope")),
         ("on_cancel_task", CancelTaskRequest(id="task_envelope")),
         (
@@ -605,4 +617,81 @@ async def test_every_auth_guarded_method_carries_the_auth_required_envelope(hand
 
     err = exc_info.value
     assert err.data is not None, f"{handler_method} auth failure dropped the AdCP envelope from error.data"
-    assert_envelope_shape(err.data, "AUTH_REQUIRED", recovery="correctable")
+    # Assert on the SERIALIZED JSON-RPC body the buyer actually receives, not the raised exception
+    # object: ``build_error_response`` is the SDK dispatcher's own serializer, so a payload that
+    # failed to survive it would never reach a buyer regardless of what the object held.
+    body = build_error_response("req-auth", err)
+    assert_envelope_shape(body["error"]["data"], "AUTH_REQUIRED", recovery="correctable")
+
+
+# The parametrization above drives only the MISSING-TOKEN arm. The remaining auth arms each
+# need their own trigger, and without these a revert of any one of them to a bare
+# InvalidRequestError reddens nothing.
+
+
+@pytest.mark.asyncio
+async def test_auth_resolution_failure_arm_carries_the_envelope():
+    """The `resolve_identity` raised-AdCPAuthenticationError arm (a presented-but-rejected token)."""
+    handler = AdCPRequestHandler()
+    handler._get_auth_token = MagicMock(return_value="a-rejected-token")
+
+    with patch(
+        "src.core.resolved_identity.resolve_identity",
+        side_effect=AdCPAuthenticationError("Token rejected by the credential store."),
+    ):
+        with pytest.raises(InvalidRequestError) as exc_info:
+            await handler.on_get_task(GetTaskRequest(id="task_envelope"), context=None)
+
+    assert_envelope_shape(exc_info.value.data, "AUTH_REQUIRED", recovery="correctable")
+
+
+@pytest.mark.asyncio
+async def test_principal_less_identity_arm_carries_the_envelope():
+    """A token that resolves but yields no principal — the invalid/expired arm."""
+    handler = AdCPRequestHandler()
+    handler._get_auth_token = MagicMock(return_value="a-stale-token")
+    principal_less = PrincipalFactory.make_identity(
+        principal_id=None, tenant_id="test-tenant", tenant={"tenant_id": "test-tenant"}, protocol="a2a"
+    )
+
+    with patch("src.core.resolved_identity.resolve_identity", return_value=principal_less):
+        with pytest.raises(InvalidRequestError) as exc_info:
+            await handler.on_get_task(GetTaskRequest(id="task_envelope"), context=None)
+
+    assert_envelope_shape(exc_info.value.data, "AUTH_REQUIRED", recovery="correctable")
+
+
+@pytest.mark.asyncio
+async def test_explicit_skill_identity_guard_carries_the_envelope():
+    """The standalone `_handle_explicit_skill` guard — a non-discovery skill with no identity.
+
+    Not reachable through the missing-token parametrization: it fires after dispatch, on the
+    identity object rather than the token.
+    """
+    handler = AdCPRequestHandler()
+
+    with pytest.raises(InvalidRequestError) as exc_info:
+        await handler._handle_explicit_skill("create_media_buy", {"buyer_ref": "b1"}, None)
+
+    assert_envelope_shape(exc_info.value.data, "AUTH_REQUIRED", recovery="correctable")
+
+
+@pytest.mark.asyncio
+async def test_tenantless_authenticated_principal_is_a_terminal_config_error_not_auth_required():
+    """Valid credentials + no resolvable tenant is a SELLER-side failure, not a buyer auth problem.
+
+    Emitting AUTH_REQUIRED here would tell a buyer to fix credentials that are already correct.
+    The pinned 3.1.1 enum classifies CONFIGURATION_ERROR as terminal, and it is an internal wire
+    code — so the message is scrubbed, which is what keeps the principal id off the wire.
+    """
+    handler = AdCPRequestHandler()
+    handler._get_auth_token = MagicMock(return_value="a-valid-token")
+    tenantless = PrincipalFactory.make_identity(principal_id="p-orphan", tenant_id=None, tenant=None, protocol="a2a")
+
+    with patch("src.core.resolved_identity.resolve_identity", return_value=tenantless):
+        with pytest.raises(InvalidRequestError) as exc_info:
+            await handler.on_get_task(GetTaskRequest(id="task_envelope"), context=None)
+
+    err = exc_info.value
+    assert_envelope_shape(err.data, "CONFIGURATION_ERROR", recovery="terminal")
+    assert "p-orphan" not in json.dumps(err.data, default=str), "principal id leaked to the wire"

@@ -55,16 +55,16 @@ from google.protobuf import json_format, struct_pb2
 from pydantic import BaseModel
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import AUTH_REQUIRED_SUGGESTION
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.repositories import PushNotificationConfigUoW
-from src.core.database.repositories.workflow import TERMINAL_STEP_STATUSES
+from src.core.database.repositories.workflow import TERMINAL_STEP_STATUSES, WorkflowRepository
 from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthRequiredError,
     AdCPCapabilityNotSupportedError,
+    AdCPConfigurationError,
     AdCPError,
     AdCPValidationError,
     build_two_layer_error_envelope,
@@ -121,7 +121,6 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from src.core.database.models import WorkflowStep
-    from src.core.database.repositories.workflow import WorkflowRepository
 
 logger = logging.getLogger(__name__)
 
@@ -178,23 +177,39 @@ def _sanitized_envelope(exc: Exception) -> tuple[AdCPError, dict[str, Any]]:
     return sanitized, build_two_layer_error_envelope(sanitized)
 
 
-def _auth_required_error(message: str, *, cause: Exception | None = None) -> InvalidRequestError:
-    """A2A JSON-RPC auth rejection that ALSO carries the two-layer AUTH_REQUIRED envelope in ``data``.
+def _enveloped_invalid_request(exc: AdCPError) -> InvalidRequestError:
+    """JSON-RPC ``InvalidRequestError`` carrying ``exc``'s sanitized two-layer envelope in ``data``.
 
-    THE single source for every A2A auth-failure raise — missing/invalid token in
-    ``_resolve_a2a_identity``, and the standalone skill-invocation identity check. Routing them
-    all here means a buyer branching on ``error.data.adcp_error.code == "AUTH_REQUIRED"`` gets it
-    from EVERY method (message/send, tasks/get, tasks/cancel, the push-notification-config arms),
-    not just message/send — "stays on the JSON-RPC wire" and "carries the envelope in data" are
-    orthogonal, and this closes the gap between them.
+    Spec (AdCP 3.1.1 ``building/operating/transport-errors.mdx``): JSON-RPC ``error.data`` is a
+    sanctioned transport-envelope location, and ``error.data.adcp_error`` is a MUST-check in the
+    client detection order — so a protocol-level rejection can stay a JSON-RPC error AND still let
+    a buyer branch on the AdCP code. "Stays on the JSON-RPC wire" and "carries the envelope in
+    ``data``" are orthogonal; every A2A rejection here does both.
 
-    The wire ``message`` is the SANITIZED envelope message, never ``str(cause)``: a typed
-    ``AdCPAuthenticationError`` message is controlled, but sourcing it from the envelope keeps one
-    definition and stays leak-safe if a future caller ever passes an untyped cause.
+    Both wire layers carry the SAME sanitized message — the JSON-RPC ``message`` is taken from the
+    envelope — so ``error.message`` and ``error.data.adcp_error.message`` can never disagree.
     """
-    exc = cause if isinstance(cause, AdCPError) else AdCPAuthenticationError(message)
     sanitized, envelope = _sanitized_envelope(exc)
     return InvalidRequestError(message=sanitized.message, data=envelope)
+
+
+def _auth_required_error(auth_error: AdCPAuthenticationError) -> InvalidRequestError:
+    """THE single source for every A2A auth rejection — AUTH_REQUIRED envelope in ``data``.
+
+    Covers all six auth raises: the missing-token, resolution-failure, and invalid-principal arms
+    of ``_resolve_a2a_identity`` (inherited by tasks/get, tasks/cancel and the four
+    push-notification-config methods), the ``message/send`` pre-dispatch check, and the standalone
+    ``_handle_explicit_skill`` identity guard. Before this, only ``message/send`` carried the
+    envelope, so a buyer branching on ``error.data.adcp_error.code == "AUTH_REQUIRED"`` got it
+    there and nowhere else.
+
+    Takes the TYPED error rather than a message + optional cause: the wire code, recovery, and the
+    graded ``suggestion`` then all come from the class defaults (one definition, never re-specified
+    per raise site), no argument can be silently discarded, and a non-auth ``AdCPError`` cannot be
+    adopted by a function documented as the AUTH_REQUIRED source — that would emit a different wire
+    code from here. Non-auth rejections use ``_enveloped_invalid_request`` directly.
+    """
+    return _enveloped_invalid_request(auth_error)
 
 
 def _internal_error_for(operation: str, exc: Exception) -> InternalError:
@@ -425,7 +440,7 @@ class AdCPRequestHandler(RequestHandler):
         headers = auth_ctx.headers if auth_ctx else {}
 
         if require_valid_token and not auth_token:
-            raise _auth_required_error("Missing authentication token")
+            raise _auth_required_error(AdCPAuthRequiredError("Missing authentication token"))
 
         # Extract testing context from A2A request headers (same as MCP does)
         testing_context = AdCPTestContext.from_headers(headers)
@@ -441,15 +456,25 @@ class AdCPRequestHandler(RequestHandler):
         except AdCPAuthenticationError as e:
             # One source for the enveloped auth error (sanitized message, AUTH_REQUIRED in
             # ``data``) so every A2A method surfaces it identically — not just message/send.
-            raise _auth_required_error(str(e), cause=e) from e
+            raise _auth_required_error(e) from e
 
         if require_valid_token:
             if not identity.principal_id:
-                raise _auth_required_error("Authentication token is invalid or expired.")
+                raise _auth_required_error(AdCPAuthenticationError("Authentication token is invalid or expired."))
 
             if not identity.tenant:
-                raise InvalidRequestError(
-                    message=f"Unable to determine tenant from authentication. Principal: {identity.principal_id}"
+                # The credentials were VALID — the principal authenticated and only the tenant
+                # lookup failed. That is a seller-side configuration failure, not a buyer auth
+                # problem, so it must NOT emit AUTH_REQUIRED (which tells the buyer to fix its
+                # credentials). CONFIGURATION_ERROR is terminal per the pinned 3.1.1 enum, and
+                # being an internal wire code its message is scrubbed at the boundary — which is
+                # also what keeps the principal id off the wire, so it is logged here instead.
+                logger.error(
+                    "[A2A AUTH] authenticated principal has no resolvable tenant: principal=%s",
+                    identity.principal_id,
+                )
+                raise _enveloped_invalid_request(
+                    AdCPConfigurationError("Unable to determine tenant for the authenticated principal.")
                 )
 
             tenant_id = identity.tenant_id or identity.tenant.get("tenant_id", "unknown")
@@ -464,6 +489,18 @@ class AdCPRequestHandler(RequestHandler):
             set_current_tenant(identity.tenant)
 
         return identity
+
+    def _authenticated_tool_context(self, context: ServerCallContext | None, tool_name: str) -> ToolContext:
+        """Auth preamble shared by the four push-notification-config methods.
+
+        ``token → identity → ToolContext`` was byte-identical in all four. No missing-token
+        pre-check: ``_resolve_a2a_identity`` (``require_valid_token=True`` by default) already
+        raises the single enveloped auth error for exactly that condition, so each of these
+        methods inherits the AUTH_REQUIRED envelope from one source.
+        """
+        auth_token = self._get_auth_token(context)
+        identity = self._resolve_a2a_identity(auth_token, context=context)
+        return self._make_tool_context(identity, tool_name)
 
     def _make_tool_context(
         self, identity: ResolvedIdentity, tool_name: str, context_id: str | None = None
@@ -788,21 +825,14 @@ class AdCPRequestHandler(RequestHandler):
                 if non_discovery_skills:
                     requires_auth = True
 
-            # Require authentication for non-public skills. Stay a JSON-RPC
-            # InvalidRequestError (protocol-level rejection, top-level error), but
-            # carry the two-layer envelope in ``data`` so the buyer-facing
-            # AUTH_REQUIRED code + AUTH_REQUIRED_SUGGESTION reach the A2A wire —
-            # matching REST's no-identity envelope (auth_context.py), which the
-            # bare A2AError previously dropped. (#1417)
+            # Require authentication for non-public skills. Stays a JSON-RPC
+            # InvalidRequestError (protocol-level rejection) while carrying the two-layer
+            # envelope in ``data`` — via the same _auth_required_error source every other
+            # A2A auth raise uses, so the code/recovery/suggestion and both layers' message
+            # cannot drift between message/send and the rest. (#1417)
             if requires_auth and not auth_token:
-                raise InvalidRequestError(
-                    message="Missing authentication token - Bearer token required in Authorization header",
-                    data=build_two_layer_error_envelope(
-                        AdCPAuthRequiredError(
-                            "Authentication required - Bearer token required in Authorization header",
-                            suggestion=AUTH_REQUIRED_SUGGESTION,
-                        )
-                    ),
+                raise _auth_required_error(
+                    AdCPAuthRequiredError("Authentication required - Bearer token required in Authorization header")
                 )
 
             # ── Transport boundary: resolve identity ONCE ──
@@ -1334,8 +1364,9 @@ class AdCPRequestHandler(RequestHandler):
             yield None
             return
 
+        # get_db_session stays function-local: tests patch it at its SOURCE module
+        # (tests/conftest.py), which only takes effect when it is resolved per call.
         from src.core.database.database_session import get_db_session
-        from src.core.database.repositories.workflow import WorkflowRepository
 
         with get_db_session() as session:
             repo = WorkflowRepository(session, identity.tenant_id)
@@ -1514,11 +1545,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         tool_context = None
         try:
-            auth_token = self._get_auth_token(context)
-            # No missing-token pre-check here: _resolve_a2a_identity (require_valid_token=True
-            # by default) raises the single enveloped auth error for exactly this condition.
-            identity = self._resolve_a2a_identity(auth_token, context=context)
-            tool_context = self._make_tool_context(identity, "get_push_notification_config")
+            tool_context = self._authenticated_tool_context(context, "get_push_notification_config")
 
             config_id = params.get("id") if isinstance(params, dict) else getattr(params, "id", None)
             if not config_id:
@@ -1577,11 +1604,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         tool_context = None
         try:
-            auth_token = self._get_auth_token(context)
-            # No missing-token pre-check here: _resolve_a2a_identity (require_valid_token=True
-            # by default) raises the single enveloped auth error for exactly this condition.
-            identity = self._resolve_a2a_identity(auth_token, context=context)
-            tool_context = self._make_tool_context(identity, "set_push_notification_config")
+            tool_context = self._authenticated_tool_context(context, "set_push_notification_config")
 
             # In a2a-sdk 1.0, TaskPushNotificationConfig is a flat protobuf message
             # with fields: tenant, id, task_id, url, token, authentication
@@ -1651,11 +1674,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         tool_context = None
         try:
-            auth_token = self._get_auth_token(context)
-            # No missing-token pre-check here: _resolve_a2a_identity (require_valid_token=True
-            # by default) raises the single enveloped auth error for exactly this condition.
-            identity = self._resolve_a2a_identity(auth_token, context=context)
-            tool_context = self._make_tool_context(identity, "list_push_notification_configs")
+            tool_context = self._authenticated_tool_context(context, "list_push_notification_configs")
 
             with PushNotificationConfigUoW(tool_context.tenant_id) as uow:
                 assert uow.push_notification_configs is not None
@@ -1709,11 +1728,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         tool_context = None
         try:
-            auth_token = self._get_auth_token(context)
-            # No missing-token pre-check here: _resolve_a2a_identity (require_valid_token=True
-            # by default) raises the single enveloped auth error for exactly this condition.
-            identity = self._resolve_a2a_identity(auth_token, context=context)
-            tool_context = self._make_tool_context(identity, "delete_push_notification_config")
+            tool_context = self._authenticated_tool_context(context, "delete_push_notification_config")
 
             config_id = params.id
             if not config_id:
@@ -1877,7 +1892,7 @@ class AdCPRequestHandler(RequestHandler):
 
         # Validate identity for non-discovery skills
         if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
-            raise _auth_required_error("Authentication required for skill invocation")
+            raise _auth_required_error(AdCPAuthRequiredError("Authentication required for skill invocation"))
 
         skill_handlers = self._skill_handler_map()
 
