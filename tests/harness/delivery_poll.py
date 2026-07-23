@@ -33,12 +33,13 @@ from src.core.schemas import AdapterGetMediaBuyDeliveryResponse, GetMediaBuyDeli
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import DeliveryPollMixin
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # annotations only — keeps the harness import graph unchanged at runtime
+    from src.core.database.models import MediaBuy
     from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
 
 
 @contextmanager
-def mock_webhook_post(scheduler: Any):
+def mock_webhook_post(scheduler: DeliveryWebhookScheduler) -> Iterator[MagicMock]:
     """Stub a scheduler's outbound webhook POST with a 200 success response.
 
     Single source of truth for the mocked-POST shape every delivery-webhook
@@ -133,7 +134,7 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
         """Parse REST JSON into GetMediaBuyDeliveryResponse."""
         return GetMediaBuyDeliveryResponse(**data)
 
-    async def send_delivery_webhook(self, buy: Any) -> dict[str, Any]:
+    async def send_delivery_webhook(self, buy: MediaBuy) -> dict[str, Any]:
         """Force one delivery-webhook scheduler send for ``buy``; return the wire payload.
 
         Drives the REAL scheduler path (``_send_report_for_media_buy`` with

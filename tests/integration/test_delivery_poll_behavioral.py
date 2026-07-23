@@ -44,6 +44,17 @@ from tests.helpers.delivery_assertions import (
 )
 from tests.helpers.delivery_fixtures import DAILY_REPORTING_WEBHOOK, flight_window
 
+if TYPE_CHECKING:  # annotations only — the helpers below keep their lazy runtime imports
+    import threading
+    from collections.abc import Callable
+
+    from sqlalchemy.orm import Session
+
+    from src.core.database.models import MediaBuy
+    from src.core.database.repositories.delivery import DeliveryRepository
+    from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+    from tests.harness.delivery_poll import DeliveryPollEnv
+
 # ---------------------------------------------------------------------------
 # Webhook-path coverage for UC-004-ALT-WEBHOOK-PUSH-REPORTING
 #
@@ -516,7 +527,7 @@ class TestConcurrentFinalWebhookClaim:
             now = datetime.now(UTC)
             cutoff = now - timedelta(minutes=15)
 
-            def worker(session: Any, barrier: Any) -> bool:
+            def worker(session: Session, barrier: threading.Barrier) -> bool:
                 barrier.wait(timeout=5)  # release both threads together
                 won = MediaBuyRepository(session, "t1").try_claim_final_webhook(mb_id, now=now, stale_before=cutoff)
                 session.commit()
@@ -553,7 +564,7 @@ class TestConcurrentFinalWebhookClaim:
 
             scheduler = DeliveryWebhookScheduler()  # shared instance -> shared webhook_service
 
-            def worker(session: Any, barrier: Any) -> bool:
+            def worker(session: Session, barrier: threading.Barrier) -> bool:
                 # Load the row BEFORE the barrier so both threads race the SEND, not the fetch.
                 media_buy = MediaBuyRepository(session, "t1").get_by_id(mb_id)
                 barrier.wait(timeout=5)  # release both threads together
