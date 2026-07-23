@@ -171,9 +171,9 @@ Feature: BR-UC-006 Sync Creative Assets
     # Repo-local SSRF policy (ungraded extension): reuses AdCP 3.1.1
     # VALIDATION_ERROR / recovery=correctable enum values + suggestion on
     # MCP/REST/A2A tool transports. Schema is silent on SSRF. A2A-native
-    # push-config endpoints map the same gate to InvalidParamsError —
-    # covered by unit pins, not this scenario.
-    # @source repo=adcp ref=v3.1.1 path=adcp/_schemas/3.1/manifest.json (error recovery enum)
+    # push-config endpoints map the same gate to InvalidParamsError with the
+    # AdCP VALIDATION_ERROR envelope in data= — unit-pinned, not this scenario.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json (error recovery enum)
     # POST-F1, POST-F2, POST-F3
     # --- ext-b: TENANT_NOT_FOUND ---
 

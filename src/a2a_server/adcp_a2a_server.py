@@ -121,15 +121,27 @@ def _reject_unsafe_a2a_webhook_url(url: str) -> None:
     """Raise InvalidParamsError when ``url`` fails the registration SSRF gate.
 
     A2A push-config endpoints (message/send configuration, setTaskPushNotificationConfig)
-    translate SSRF failures to ``InvalidParamsError``. AdCP tool wrappers
-    (create_media_buy / sync_creatives) instead raise ``AdCPValidationError`` →
-    on-wire ``VALIDATION_ERROR`` / ``recovery=correctable`` + suggestion.
+    translate SSRF failures to ``InvalidParamsError`` (-32602) while attaching the
+    two-layer AdCP envelope in ``data`` (``VALIDATION_ERROR`` / ``recovery=correctable``
+    + suggestion) — same pattern as the auth rejection on ``on_message_send``.
+    AdCP tool wrappers (create_media_buy / sync_creatives) raise ``AdCPValidationError``
+    directly for the same gate.
     """
-    from src.core.webhook_validator import WebhookURLValidator
+    from src.core.exceptions import AdCPValidationError
+    from src.core.webhook_validator import WebhookURLValidator, webhook_ssrf_suggestion
 
     is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(url)
     if not is_valid:
-        raise InvalidParamsError(message=f"Invalid webhook URL: {error_msg}")
+        adcp_err = AdCPValidationError(
+            f"Invalid webhook URL: {error_msg}",
+            field="push_notification_config.url",
+            suggestion=webhook_ssrf_suggestion(),
+            recovery="correctable",
+        )
+        raise InvalidParamsError(
+            message=f"Invalid webhook URL: {error_msg}",
+            data=build_two_layer_error_envelope(adcp_err),
+        )
 
 
 def _dict_to_value(d: dict) -> struct_pb2.Value:
@@ -601,8 +613,12 @@ class AdCPRequestHandler(RequestHandler):
             push_notification_config = params.configuration.task_push_notification_config
             if push_notification_config.url:
                 _reject_unsafe_a2a_webhook_url(push_notification_config.url)
+                from src.core.webhook_validator import sanitize_webhook_url_for_log
+
                 logger.info(
-                    f"Protocol-level push notification config provided for task {task_id}: {push_notification_config.url}"
+                    "Protocol-level push notification config provided for task %s: %s",
+                    task_id,
+                    sanitize_webhook_url_for_log(push_notification_config.url),
                 )
 
         # Prepare task metadata (JSON-serializable only — protobuf Struct)

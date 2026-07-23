@@ -157,6 +157,11 @@ class TestWebhookURLValidator:
         assert not is_valid
         assert "224.0.0.0/4" in error
 
+    def test_blocks_ipv6_multicast_range(self):
+        is_valid, error = WebhookURLValidator.validate_webhook_url("http://[ff02::1]/")
+        assert not is_valid
+        assert "ff00::/8" in error
+
 
 class TestWebhookAuthenticator:
     """Test HMAC-SHA256 webhook authentication."""

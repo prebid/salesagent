@@ -282,9 +282,14 @@ def test_sync_creatives_rejects_unsafe_push_config_url() -> None:
 
 
 def test_reject_unsafe_a2a_webhook_url_rejects_metadata() -> None:
-    """A2A registration helper maps SSRF to InvalidParamsError (not VALIDATION_ERROR)."""
-    with pytest.raises(InvalidParamsError, match="Invalid webhook URL"):
+    """A2A registration helper maps SSRF to InvalidParamsError + AdCP envelope in data."""
+    with pytest.raises(InvalidParamsError, match="Invalid webhook URL") as exc_info:
         _reject_unsafe_a2a_webhook_url(_METADATA_URL)
+    envelope = exc_info.value.data
+    assert isinstance(envelope, dict)
+    assert envelope["errors"][0]["code"] == "VALIDATION_ERROR"
+    assert envelope["errors"][0]["recovery"] == "correctable"
+    assert envelope["errors"][0].get("suggestion")
 
 
 @pytest.mark.asyncio

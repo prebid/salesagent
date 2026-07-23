@@ -443,8 +443,8 @@ Feature: BR-UC-002 Create Media Buy
     # MCP/REST/A2A tool transports. Schema is silent on SSRF. A2A-native
     # push-config endpoints (message/send configuration,
     # setTaskPushNotificationConfig) map the same gate to InvalidParamsError
-    # instead — covered by unit pins, not this scenario.
-    # @source repo=adcp ref=v3.1.1 path=adcp/_schemas/3.1/manifest.json (error recovery enum)
+    # with the AdCP VALIDATION_ERROR envelope in data= — unit-pinned, not this scenario.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json (error recovery enum)
 
   @T-UC-002-ext-o @extension @ext-o @error @post-f1 @post-f2 @post-f3
   Scenario: Creative IDs not found in library

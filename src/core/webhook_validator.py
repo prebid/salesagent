@@ -12,7 +12,7 @@ import os
 from typing import Any
 from urllib.parse import urlparse
 
-from adcp.types import TaskType
+from adcp.types import ContextObject, TaskType
 
 from src.core.config import is_production
 from src.core.exceptions import AdCPValidationError
@@ -92,7 +92,7 @@ def reject_unsafe_webhook_registration_url(
     url: str,
     *,
     field: str,
-    context: Any = None,
+    context: ContextObject | dict[str, Any] | None = None,
 ) -> None:
     """Raise AdCPValidationError when ``url`` fails the registration SSRF gate."""
     is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(str(url))

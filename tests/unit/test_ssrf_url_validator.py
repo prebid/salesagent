@@ -97,6 +97,11 @@ class TestCheckUrlSsrf:
         assert is_safe is False
         assert "224.0.0.0/4" in error
 
+    def test_ipv6_multicast_ff00_rejected(self):
+        is_safe, error = check_url_ssrf("http://[ff02::1]/")
+        assert is_safe is False
+        assert "ff00::/8" in error
+
     def test_require_https_rejects_http(self):
         with patch("src.core.security.url_validator.socket.gethostbyname", return_value="93.184.216.34"):
             is_safe, error = check_url_ssrf("http://example.com/agent", require_https=True)

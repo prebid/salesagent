@@ -2159,7 +2159,8 @@ async def _create_media_buy_impl(
                 sanitize_webhook_url_for_log(str(url) if url else None),
             )
 
-            if url:
+            # Match the pre-gate: whitespace-only URL must not reach upsert.
+            if url is not None and str(url).strip():
                 schemes = authentication.get("schemes", []) if authentication else []
                 auth_type = schemes[0] if schemes else None
                 credentials = authentication.get("credentials") if authentication else None

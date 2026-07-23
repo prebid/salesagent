@@ -21,6 +21,7 @@ BLOCKED_NETWORKS = [
     ipaddress.ip_network("::1/128"),
     ipaddress.ip_network("fc00::/7"),
     ipaddress.ip_network("fe80::/10"),
+    ipaddress.ip_network("ff00::/8"),  # IPv6 multicast (AdCP L1 SSRF step 2)
 ]
 
 # Blocked hostnames (cloud metadata services, localhost aliases, Docker-internal hostnames)
