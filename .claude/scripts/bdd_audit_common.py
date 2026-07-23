@@ -81,20 +81,39 @@ def transport_coverage(
     return graduates, passing, missing
 
 
+def _worst_transport_outcome(outcomes: list[str]) -> str:
+    """Aggregate example-row outcomes for one transport.
+
+    A transport passes only if every example passed/xpassed and none
+    failed/xfailed. Any failing example dominates; otherwise the first
+    non-passing outcome blocks graduation; else prefer ``passed`` over
+    ``xpassed``.
+    """
+    if any(o in _FAILING_OUTCOMES for o in outcomes):
+        return "failed" if "failed" in outcomes else "xfailed"
+    non_passing = [o for o in outcomes if o not in _PASSING_OUTCOMES]
+    if non_passing:
+        return non_passing[0]
+    if "passed" in outcomes:
+        return "passed"
+    return "xpassed"
+
+
 def outcomes_by_transport_for_base(
     base: str,
     nodeid_outcomes: Iterable[tuple[str, str]],
 ) -> dict[str, str]:
-    """Build ``{transport: outcome}`` for one scenario base.
+    """Build ``{transport: aggregated_outcome}`` for one scenario base.
 
-    When the same transport appears more than once, the last outcome wins
-    (deterministic for a single bdd.json entry per transport).
+    Scenario outlines emit one bdd.json entry per example row per transport.
+    Aggregate a worst-outcome per transport: the transport passes only if
+    every example passed/xpassed and none failed/xfailed.
     """
-    out: dict[str, str] = {}
+    collected: dict[str, list[str]] = {}
     for nodeid, outcome in nodeid_outcomes:
         if extract_scenario_base(nodeid) != base:
             continue
         transport = extract_transport(nodeid)
         if transport:
-            out[transport] = outcome
-    return out
+            collected.setdefault(transport, []).append(outcome)
+    return {t: _worst_transport_outcome(outs) for t, outs in collected.items()}

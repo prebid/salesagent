@@ -92,13 +92,30 @@ class TestClassifyXpass:
         bucket, cat, detail = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
         assert bucket == "FIX_NOW"
         assert cat == "GRADUATE"
-        assert "All transports pass" in detail
+        assert "All 3 present transports pass" in detail
 
     def test_two_transport_uc_graduates_without_rest(self, bdd_full_audit) -> None:
         """UC-019 style (a2a+mcp only) must not demand rest."""
         all_entries = [self._entry(bdd_full_audit, f"tests/bdd/test_uc019.py::test_s[{t}]") for t in ("a2a", "mcp")]
-        _, cat, _ = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
+        _, cat, detail = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
         assert cat == "GRADUATE"
+        assert "All 2 present transports pass" in detail
+
+    def test_single_transport_needs_confirmation(self, bdd_full_audit) -> None:
+        """Single-/e2e_rest-only present sets must not auto-graduate."""
+        all_entries = [self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[e2e_rest]")]
+        _, cat, detail = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
+        assert cat == "GRADUATE_CONFIRM"
+        assert "needs confirmation" in detail
+
+    def test_mixed_outline_examples_same_transport_not_graduate(self, bdd_full_audit) -> None:
+        """Outline rows for one transport: xpassed+xfailed must not graduate."""
+        all_entries = [
+            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_o[e2e_rest-ex1]", "xpassed"),
+            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_o[e2e_rest-ex2]", "xfailed"),
+        ]
+        _, cat, _ = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
+        assert cat == "PARTIAL_XPASS"
 
     def test_strict_subset_is_partial_xpass(self, bdd_full_audit) -> None:
         all_entries = [
@@ -133,6 +150,10 @@ class TestClassifyXpass:
         cats = {i.category for i in items}
         assert cats == {"GRADUATE", "PARTIAL_XPASS"}
         assert len(items) == 2
+        graduate_item = next(i for i in items if i.category == "GRADUATE")
+        assert graduate_item.title.startswith("Graduate (all 3 present):")
+        partial_item = next(i for i in items if i.category == "PARTIAL_XPASS")
+        assert "gaps remain" in partial_item.title
 
 
 class TestClassifyXpassedAudit:
@@ -157,6 +178,17 @@ class TestClassifyXpassedAudit:
         graduate, partial = audit_xfails.classify_xpassed(all_tests)
         assert graduate == set()
         assert partial == {base: {"a2a"}}
+
+    def test_mixed_outline_examples_same_transport_do_not_graduate(self, audit_xfails) -> None:
+        """Last-wins would graduate; worst-outcome must keep graduate empty."""
+        base = "tests/bdd/test_uc004.py::test_outline"
+        all_tests = [
+            {"nodeid": f"{base}[e2e_rest-ex1]", "outcome": "xpassed"},
+            {"nodeid": f"{base}[e2e_rest-ex2]", "outcome": "xfailed"},
+        ]
+        graduate, partial = audit_xfails.classify_xpassed(all_tests)
+        assert graduate == set()
+        assert partial == {}  # no passing transport after worst-outcome aggregate
 
 
 class TestSalvageDedupe:
@@ -279,10 +311,23 @@ class TestPrematureXfailCrashMatch:
         )
         assert entry.category != "PREMATURE_XFAIL"
 
-    def test_crash_in_conftest_is_not_premature(self, audit_xfails, tmp_path: Path) -> None:
+    def test_crash_in_different_file_in_range_is_not_premature(self, audit_xfails, tmp_path: Path) -> None:
+        """Path-equality must reject: in-range lineno in a *different* file.
+
+        A far-out lineno alone would already fail the range check, so this
+        pin puts the crash line inside the premature step's span while the
+        crash path is another file — only ``resolved == step.path`` decides.
+        """
         source = self._premature_source()
-        (tmp_path / "steps.py").write_text(source)
+        steps_file = tmp_path / "steps.py"
+        steps_file.write_text(source)
         premature = audit_xfails.find_premature_xfails(tmp_path)
+        assert len(premature) == 1
+        step = premature[0]
+        other = tmp_path / "conftest.py"
+        other.write_text("# decoy crash site\n")
+        in_range = (step.lineno + step.end_lineno) // 2
+        assert step.lineno <= in_range <= step.end_lineno
         entry = audit_xfails.classify_xfail(
             {
                 "nodeid": "t::s[a2a]",
@@ -291,8 +336,8 @@ class TestPrematureXfailCrashMatch:
                 "setup": {
                     "outcome": "failed",
                     "crash": {
-                        "path": "/repo/tests/bdd/conftest.py",
-                        "lineno": 2561,
+                        "path": str(other.resolve()),
+                        "lineno": in_range,
                         "message": "_pytest.outcomes.XFailed: UC harness not wired",
                     },
                 },
