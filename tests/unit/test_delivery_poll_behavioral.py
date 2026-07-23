@@ -729,7 +729,11 @@ class TestNextExpectedAtSerialization:
             0, notification_type="scheduled", next_expected_at=datetime(2025, 6, 2, tzinfo=UTC)
         )
         dumped = resp.model_dump(mode="json")
-        assert isinstance(dumped["next_expected_at"], str)
+        # Shape via the shared rule (the same helper the present=False siblings and the
+        # e2e/BDD graders use), then the concrete value on top -- the value assert is the
+        # stronger claim and stays, but the SHAPE must come from the one home so a
+        # date-time format change cannot pass here while reddening the other graders.
+        assert_next_expected_at_shape(dumped, present=True, context="scheduled notification dump")
         assert dumped["next_expected_at"].startswith("2025-06-02T00:00:00")
 
     def test_no_notification_type_excludes_next_expected_at(self):

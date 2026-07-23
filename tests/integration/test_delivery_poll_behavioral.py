@@ -16,7 +16,7 @@ Each test targets exactly one obligation ID and follows the 6 hard rules:
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -26,6 +26,17 @@ from src.core.exceptions import (
 )
 from src.core.schemas import GetMediaBuyDeliveryResponse
 from tests.harness.delivery_poll import mock_send_notification
+
+if TYPE_CHECKING:
+    import threading
+    from collections.abc import Callable
+
+    from sqlalchemy.orm import Session
+
+    from src.core.database.models import MediaBuy
+    from src.core.database.repositories.delivery import DeliveryRepository
+    from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+    from tests.harness import DeliveryPollEnv
 from tests.helpers.delivery_assertions import assert_next_expected_at_shape, assert_omits_webhook_only_fields
 from tests.helpers.delivery_fixtures import DAILY_REPORTING_WEBHOOK, flight_window
 
@@ -43,7 +54,16 @@ from tests.helpers.delivery_fixtures import DAILY_REPORTING_WEBHOOK, flight_wind
 
 
 def _serving_webhook_buy(
-    env: Any, *, flight: str = "live", mb_id: str | None = None, tenant: Any = None, principal: Any = None
+    # Left ``Any``: this helper's params/return are factory-boy products, and the
+    # factories are not typed as the ORM models they build (``MediaBuyFactory(...)``
+    # is not a ``MediaBuy`` to a type checker), so concrete annotations here fail
+    # rather than document. Typing it needs factory stubs, not a signature edit.
+    env: Any,
+    *,
+    flight: str = "live",
+    mb_id: str | None = None,
+    tenant: Any = None,
+    principal: Any = None,
 ) -> Any:
     """Create a serving buy (tenant t1 / principal p1) with a daily reporting_webhook + adapter data.
 
@@ -80,14 +100,14 @@ def _serving_webhook_buy(
 
 
 def _seed_delivery_log(
-    env: Any,
-    buy: Any,
+    env: DeliveryPollEnv,
+    buy: MediaBuy,
     *,
     log_id: str,
     status: str,
     notification_type: str | None = None,
     sequence_number: int | None = None,
-) -> Any:
+) -> DeliveryRepository:
     """Seed one delivery-log row for *buy* (tenant t1 / principal p1) and commit it.
 
     The seed SHAPE lives here once — the webhook-url source, ``task_type``, and the
@@ -119,7 +139,7 @@ def _seed_delivery_log(
     return repo
 
 
-async def _drive_failed_send(scheduler: Any, env: Any, buy: Any) -> None:
+async def _drive_failed_send(scheduler: DeliveryWebhookScheduler, env: DeliveryPollEnv, buy: MediaBuy) -> None:
     """Drive one forced send whose outbound delivery fails, asserting the scheduler raises.
 
     ``send_notification`` returns False (never raises) on a permanent 4xx / exhausted
@@ -135,7 +155,7 @@ async def _drive_failed_send(scheduler: Any, env: Any, buy: Any) -> None:
             )
 
 
-def _race_two_workers(worker: Any) -> list[bool]:
+def _race_two_workers(worker: Callable[[Session, threading.Barrier], bool]) -> list[bool]:
     """Run ``worker(session, barrier)`` on two OS threads released together, return both bools.
 
     Single source of truth for the two-connection contention scaffold the concurrent

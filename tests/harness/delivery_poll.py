@@ -24,13 +24,17 @@ Available mocks via env.mock:
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.core.schemas import AdapterGetMediaBuyDeliveryResponse, GetMediaBuyDeliveryResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import DeliveryPollMixin
+
+if TYPE_CHECKING:
+    from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
 
 
 @contextmanager
@@ -58,7 +62,7 @@ def mock_webhook_post(scheduler: Any):
 
 
 @contextmanager
-def mock_send_notification(scheduler: Any, *, delivered: bool = True):
+def mock_send_notification(scheduler: DeliveryWebhookScheduler, *, delivered: bool = True) -> Iterator[AsyncMock]:
     """Stub a scheduler's ``webhook_service.send_notification`` with a fixed outcome.
 
     Single source of truth for the mocked-``send_notification`` shape the claim/dedup
