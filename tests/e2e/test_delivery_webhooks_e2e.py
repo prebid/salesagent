@@ -264,3 +264,4 @@ class TestDailyDeliveryWebhookFlow:
             assert final_webhook.get("task_id") == media_buy_id
             final_result = final_webhook.get("result") or {}
             assert_next_expected_at_shape(final_result, present=False, context="final webhook (real e2e wire)")
+            assert_partial_data_pairing(final_result, context="final webhook (real e2e wire)")

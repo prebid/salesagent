@@ -253,7 +253,7 @@ class DeliveryWebhookScheduler:
         )
         if existing_log:
             logger.info(
-                "Skipping daily delivery webhook for media buy %s – already sent (log id %s)",
+                "Daily delivery webhook for media buy %s already sent (log id %s) – skipping",
                 media_buy.media_buy_id,
                 existing_log.id,
             )

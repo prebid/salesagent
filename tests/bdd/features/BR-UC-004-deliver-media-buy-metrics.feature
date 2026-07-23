@@ -319,6 +319,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the scheduler webhook payload notification_type should be "<type>"
     And the scheduler webhook payload sequence_number should be 1
     And the scheduler webhook payload <next_expected> include next_expected_at
+    And the scheduler webhook payload should pair partial_data with unavailable_count
 
     # A completed (flight-ended) buy resolves to "completed" -> derive_notification_type
     # returns "final", which must OMIT next_expected_at; an in-flight buy -> "scheduled".

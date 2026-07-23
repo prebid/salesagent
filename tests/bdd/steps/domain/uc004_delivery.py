@@ -22,7 +22,11 @@ from tests.bdd.steps._outcome_helpers import _require, wire_dict
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
-from tests.helpers.delivery_assertions import assert_next_expected_at_shape, assert_omits_webhook_only_fields
+from tests.helpers.delivery_assertions import (
+    assert_next_expected_at_shape,
+    assert_omits_webhook_only_fields,
+    assert_partial_data_pairing,
+)
 from tests.helpers.delivery_fixtures import DAILY_REPORTING_WEBHOOK, flight_window
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -1740,6 +1744,18 @@ def then_scheduler_next_expected(ctx: dict, next_expected: str) -> None:
     wire ``result``, not ``env.mock["post"]``.
     """
     _assert_next_expected_presence(_scheduler_result(ctx), next_expected, context="scheduler wire result")
+
+
+@then("the scheduler webhook payload should pair partial_data with unavailable_count")
+def then_scheduler_partial_data_pairing(ctx: dict) -> None:
+    """Assert the partial_data/unavailable_count pairing on the real scheduler wire.
+
+    Same rule as the integration and e2e graders via the shared
+    ``assert_partial_data_pairing`` helper; this step reads the real scheduler
+    wire ``result``. Runs on both Examples rows, so the pairing is graded on the
+    final path as well as the scheduled one.
+    """
+    assert_partial_data_pairing(_scheduler_result(ctx), context="scheduler wire result")
 
 
 @then("the response omits the webhook-only fields")

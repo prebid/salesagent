@@ -208,9 +208,14 @@ COMPLETED_PERSISTED_STATUSES: frozenset[str] = REPORTABLE_PERSISTED_STATUSES - S
 # @ v3.1-04f59d2d5): notification_type, sequence_number, next_expected_at,
 # partial_data, and unavailable_count (the latter further scoped to
 # "when partial_data is true"). The polling _get_media_buy_delivery_impl must
-# omit all of them; the delivery webhook scheduler is the sole place they are
-# attached to the wire (#1570). Membership is pinned in
-# test_media_buy_status_consistency.py so a partial copy cannot drift silently.
+# omit all of them; on the polling-response path the delivery webhook scheduler
+# is the only place they are attached to the wire (#1570). NOT a repo-wide sole
+# emitter: webhook_delivery_service.send_delivery_webhook (GAM reporting,
+# delivery simulator) attaches its own notification_type / sequence_number /
+# next_expected_at from an in-memory counter rather than the WebhookDeliveryLog,
+# and is not covered by the omission/pairing oracles — reconciliation tracked in
+# #1624. Membership is pinned in test_media_buy_status_consistency.py so a
+# partial copy cannot drift silently.
 WEBHOOK_ONLY_FIELDS: frozenset[str] = frozenset(
     {"notification_type", "sequence_number", "next_expected_at", "partial_data", "unavailable_count"}
 )
