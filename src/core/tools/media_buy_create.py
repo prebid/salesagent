@@ -2136,10 +2136,14 @@ async def _create_media_buy_impl(
             from src.core.log_safety import redact_push_notification_config
 
             # Redacted: the config's authentication block carries the buyer's webhook
-            # credential — logging it raw leaks a replayable secret (#1617).
+            # credential — logging it raw leaks a replayable secret (#1617). The
+            # redactor takes a typed model, not this wire dict (the dict is a
+            # transport-boundary artifact: the two callers at model_dump(mode="json")
+            # serialize an already-validated PushNotificationConfig so SQLAlchemy can
+            # store it). Normalize back to the model here — a lossless round-trip.
             logger.info(
                 "[MCP/A2A] Registering push notification config from request: %s",
-                redact_push_notification_config(push_notification_config),
+                redact_push_notification_config(PushNotificationConfig.model_validate(push_notification_config)),
             )
 
             # Extract config details

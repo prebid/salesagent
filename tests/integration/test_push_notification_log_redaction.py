@@ -47,14 +47,28 @@ def _assert_log_redacted(mock_logger) -> None:
     would suppress the record, so this observes the real log site rather than a
     caplog buffer.
     """
-    logged = "\n".join(str(call.args) + str(call.kwargs) for call in mock_logger.info.call_args_list)
-    # The credential itself never appears in any log call (asserted first: it is the
+    calls = mock_logger.info.call_args_list
+    # The credential itself never appears in ANY log call (asserted first: it is the
     # security failure, and it is what a raw-wire-dict log site trips) ...
+    logged = "\n".join(str(call.args) + str(call.kwargs) for call in calls)
     assert _SECRET not in logged, "buyer webhook credential leaked to the logs (#1617)"
-    # ... and the site ran and routed through the redactor. See the module docstring:
-    # at the two DB-model sites this is the assertion the deletion oracle reddens,
-    # because the model's own repr masks the token.
-    assert REDACTED in logged, "the push-notification log site did not run redacted — this test guards nothing"
+    # ... and the push-notification-config log line specifically ran through the
+    # redactor. Scoped to that call — matched by normalized template so it covers all
+    # three sites ("push_notification_config: %s" and "[MCP/A2A] Registering push
+    # notification config ...") — so the presence assert can't pass on some unrelated
+    # info line that happened to carry the sentinel. At the two DB-model sites this is
+    # the assertion the deletion oracle reddens, because the model's own repr masks
+    # the token.
+    pnc_calls = [
+        call
+        for call in calls
+        if call.args and "push" in str(call.args[0]).lower() and "notif" in str(call.args[0]).lower()
+    ]
+    assert pnc_calls, (
+        "no push-notification-config log call was emitted — the log site did not run (test guards nothing)"
+    )
+    pnc_logged = "\n".join(str(call.args) + str(call.kwargs) for call in pnc_calls)
+    assert REDACTED in pnc_logged, "the push-notification log line did not run redacted — this test guards nothing"
 
 
 @pytest.mark.requires_db
