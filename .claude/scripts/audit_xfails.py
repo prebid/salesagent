@@ -22,6 +22,12 @@ Graduation criteria (STALE → remove xfail):
        (a2a/mcp/rest, plus e2e_rest when in the result set; not a hardcoded
        four-transport universe — #1417 dropped impl from BDD parametrization)
     2. Then steps are PASS in inspector report (if available)
+
+PREMATURE_XFAIL matching uses crash path+lineno against live step files.
+Run this audit against a bdd.json produced from the *current* tree; a stale
+artifact's linenos drift outside step ranges and reclassify as PRODUCTION_GAP
+(with an explicit line-drift warning when a crash hits a known step file
+outside every scanned range).
 """
 
 from __future__ import annotations
@@ -83,6 +89,9 @@ class AuditReport:
     xpassed_entries: list[XfailEntry] = field(default_factory=list)
     by_category: dict[str, list[XfailEntry]] = field(default_factory=lambda: defaultdict(list))
     by_uc: dict[str, Counter] = field(default_factory=lambda: defaultdict(Counter))
+    partial_passing: dict[str, set[str]] = field(default_factory=dict)
+    partial_missing: dict[str, set[str]] = field(default_factory=dict)
+    line_drift_warnings: list[str] = field(default_factory=list)
 
 
 # ── Conftest parser ───────────────────────────────────────────────────
@@ -280,6 +289,47 @@ def match_premature_by_crash(
     return None
 
 
+def crash_line_drift_warnings(
+    test: dict,
+    premature_xfails: Sequence[PrematureXfail],
+) -> list[str]:
+    """Warn when a crash hits a known premature step file outside every range.
+
+    That pattern usually means ``bdd.json`` linenos drifted from the live tree
+    (stale artifact). Matching is only meaningful when the json is co-current
+    with the scanned step files.
+    """
+    if not premature_xfails:
+        return []
+    known_paths = {step.path for step in premature_xfails}
+    warnings: list[str] = []
+    for phase in ("setup", "call"):
+        ph = test.get(phase) or {}
+        if not isinstance(ph, dict):
+            continue
+        crash = ph.get("crash") or {}
+        if not isinstance(crash, dict):
+            continue
+        cpath = crash.get("path")
+        clineno = crash.get("lineno")
+        if not cpath or clineno is None:
+            continue
+        try:
+            resolved = Path(cpath).resolve()
+            line = int(clineno)
+        except (OSError, TypeError, ValueError):
+            continue
+        if resolved not in known_paths:
+            continue
+        in_any = any(step.path == resolved and step.lineno <= line <= step.end_lineno for step in premature_xfails)
+        if not in_any:
+            warnings.append(
+                f"line-drift/stale-json?: {resolved}:{line} is in a premature step file "
+                "but outside every scanned step range — regenerate bdd.json from the current tree"
+            )
+    return warnings
+
+
 # ── JSON test result parser ───────────────────────────────────────────
 
 
@@ -308,8 +358,6 @@ def classify_xfail(
     test: dict,
     tag_map: dict[str, tuple[str, str]],
     premature_xfails: Sequence[PrematureXfail],
-    xpassed_all4: set[str],
-    xpassed_partial: dict[str, set[str]],
 ) -> XfailEntry:
     """Classify a single xfailed test."""
     nodeid = test["nodeid"]
@@ -491,26 +539,28 @@ def classify_xfail(
 
 def classify_xpassed(
     all_tests: list[dict],
-) -> tuple[set[str], dict[str, set[str]]]:
+) -> tuple[set[str], dict[str, set[str]], dict[str, set[str]]]:
     """Classify xpassed scenario bases into graduate vs partial.
 
     Graduation is relative to transports *present for that base* across the
     full result set (not a hardcoded impl/a2a/mcp/rest universe).
 
-    Returns (graduate_bases, partial_bases_with_passing_transports).
+    Returns ``(graduate_bases, partial_passing, partial_missing)``.
     """
     xpassed_bases = {extract_scenario_base(t["nodeid"]) for t in all_tests if t.get("outcome") == "xpassed"}
     graduate: set[str] = set()
-    partial: dict[str, set[str]] = {}
+    partial_passing: dict[str, set[str]] = {}
+    partial_missing: dict[str, set[str]] = {}
     nodeid_outcomes = [(t["nodeid"], t["outcome"]) for t in all_tests]
     for base in xpassed_bases:
         outcomes = outcomes_by_transport_for_base(base, nodeid_outcomes)
-        graduates, passing, _missing = transport_coverage(outcomes)
+        graduates, passing, missing = transport_coverage(outcomes)
         if graduates:
             graduate.add(base)
         elif passing:
-            partial[base] = passing
-    return graduate, partial
+            partial_passing[base] = passing
+            partial_missing[base] = missing
+    return graduate, partial_passing, partial_missing
 
 
 # ── Report generator ──────────────────────────────────────────────────
@@ -605,13 +655,24 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
     partial = [e for e in report.xpassed_entries if e.category == "PARTIAL_PASS"]
     if partial:
         lines.extend(["", "### Partial pass (some transports only)", ""])
-        seen_bases: dict[str, set[str | None]] = {}
-        for e in partial:
-            seen_bases.setdefault(e.scenario_base, set()).add(e.transport)
+        if report.partial_passing:
+            for base, transports in sorted(report.partial_passing.items()):
+                short = base.split("::")[-1] if "::" in base else base
+                missing = sorted(report.partial_missing.get(base, set()))
+                lines.append(f"- {short} — passes: {sorted(transports)}, missing: {missing}")
+        else:
+            seen_bases: dict[str, set[str | None]] = {}
+            for e in partial:
+                seen_bases.setdefault(e.scenario_base, set()).add(e.transport)
 
-        for base, transports in sorted(seen_bases.items()):
-            short = base.split("::")[-1] if "::" in base else base
-            lines.append(f"- {short} — passes: {sorted(t for t in transports if t)}")
+            for base, transports in sorted(seen_bases.items()):
+                short = base.split("::")[-1] if "::" in base else base
+                lines.append(f"- {short} — passes: {sorted(t for t in transports if t)}")
+
+    if report.line_drift_warnings:
+        lines.extend(["", "## Line-drift / stale bdd.json warnings", ""])
+        for warning in report.line_drift_warnings:
+            lines.append(f"- {warning}")
 
     # Actionable summary
     lines.extend(
@@ -677,19 +738,27 @@ def main() -> None:
 
     # Step 4: Classify xpassed tests (needs full suite for present-transport set)
     print("Classifying xpassed tests...")
-    all4_bases, partial_bases = classify_xpassed(all_tests)
-    print(f"  {len(all4_bases)} pass all present transports (graduation candidates)")
-    print(f"  {len(partial_bases)} pass some transports (partial)")
+    graduate_bases, partial_passing, partial_missing = classify_xpassed(all_tests)
+    print(f"  {len(graduate_bases)} pass all present transports (graduation candidates)")
+    print(f"  {len(partial_passing)} pass some transports (partial)")
 
     # Step 5: Classify each xfailed test
     print("Classifying xfailed tests...")
     report = AuditReport(
         total_xfailed=len(xfailed_tests),
         total_xpassed=len(xpassed_tests),
+        partial_passing=partial_passing,
+        partial_missing=partial_missing,
     )
 
+    seen_drift: set[str] = set()
     for test in xfailed_tests:
-        entry = classify_xfail(test, tag_map, premature_xfails, all4_bases, partial_bases)
+        for warning in crash_line_drift_warnings(test, premature_xfails):
+            if warning not in seen_drift:
+                seen_drift.add(warning)
+                report.line_drift_warnings.append(warning)
+                print(f"  WARNING: {warning}")
+        entry = classify_xfail(test, tag_map, premature_xfails)
         report.entries.append(entry)
         report.by_category[entry.category].append(entry)
         uc = extract_uc(entry.nodeid)
@@ -699,7 +768,7 @@ def main() -> None:
     for test in xpassed_tests:
         base = extract_scenario_base(test["nodeid"])
         transport = extract_transport(test["nodeid"])
-        if base in all4_bases:
+        if base in graduate_bases:
             category = "STALE"
         else:
             category = "PARTIAL_PASS"
@@ -733,8 +802,10 @@ def main() -> None:
             count = len(report.by_category.get(cat, []))
             if count > 0:
                 print(f"  {cat}: {count}")
-        print(f"\n  STALE (graduation candidates): {len(all4_bases)} scenarios")
-        print(f"  PARTIAL_PASS: {len(partial_bases)} scenarios")
+        print(f"\n  STALE (graduation candidates): {len(graduate_bases)} scenarios")
+        print(f"  PARTIAL_PASS: {len(partial_passing)} scenarios")
+        if report.line_drift_warnings:
+            print(f"  line-drift warnings: {len(report.line_drift_warnings)}")
 
 
 if __name__ == "__main__":

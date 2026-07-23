@@ -14,7 +14,9 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any, TextIO
 
 
 def parse_raw_output(raw_path: Path) -> dict:
@@ -71,7 +73,7 @@ def _placeholder_step(func_name: str) -> dict:
     }
 
 
-def iter_jsonl_records(path: Path):
+def iter_jsonl_records(path: Path) -> Iterator[dict[str, Any]]:
     """Yield parsed JSON objects from a JSONL file (skip blanks / bad lines)."""
     if not path.exists():
         return
@@ -94,12 +96,12 @@ def _load_existing_keys(store_path: Path) -> set[str]:
 
 
 def _append_if_new(
-    f,
+    f: TextIO,
     kind: str,
-    r: dict,
-    step_lookup: dict,
+    r: dict[str, Any],
+    step_lookup: dict[str, dict[str, Any]],
     existing_keys: set[str],
-    record: dict,
+    record: dict[str, Any],
 ) -> bool:
     """Write ``record`` once per kind-scoped key. Returns True if written."""
     step_info = step_lookup.get(r["func_name"], _placeholder_step(r["func_name"]))

@@ -29,7 +29,11 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from bdd_audit_common import extract_transport, extract_uc  # noqa: E402
+from bdd_audit_common import (  # noqa: E402
+    extract_longrepr_e_line,
+    extract_transport,
+    extract_uc,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -78,13 +82,8 @@ def parse_test_results(path: Path) -> list[TestOutcome]:
         nodeid = t["nodeid"]
         transport = extract_transport(nodeid)
 
-        # Extract error
-        error = ""
         longrepr = t.get("call", {}).get("longrepr", "")
-        for line in longrepr.split("\n"):
-            if line.strip().startswith("E "):
-                error = line.strip()[2:].strip()
-                break
+        error = extract_longrepr_e_line(longrepr)
 
         outcomes.append(
             TestOutcome(

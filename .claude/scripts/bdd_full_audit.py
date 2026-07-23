@@ -29,6 +29,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from bdd_audit_common import (  # noqa: E402
+    extract_longrepr_e_line,
     extract_scenario_base,
     extract_transport,
     extract_uc,
@@ -112,14 +113,8 @@ def parse_test_results(json_path: Path) -> list[TestEntry]:
     data = json.loads(json_path.read_text())
     entries = []
     for t in data["tests"]:
-        error = ""
         longrepr = t.get("call", {}).get("longrepr", "")
-        # Extract E-line from longrepr
-        for line in longrepr.split("\n"):
-            stripped = line.strip()
-            if stripped.startswith("E "):
-                error = stripped[2:].strip()
-                break
+        error = extract_longrepr_e_line(longrepr)
         entries.append(
             TestEntry(
                 nodeid=t["nodeid"],

@@ -13,6 +13,12 @@ Report-bucket vocabulary (intentional split, same underlying coverage grade):
 ``bdd_full_audit`` labels partial xpass as ``PARTIAL_XPASS`` / full as
 ``GRADUATE``; ``audit_xfails`` keeps ``PARTIAL_PASS`` / ``STALE``. Do not
 unify the report tokens without a deliberate cross-script rename.
+
+``parse_conftest_xfail_tags`` stays per-script on purpose: ``audit_xfails``
+returns ``tag → (reason, mechanism)`` for classification, while
+``bdd_full_audit`` returns the simpler ``tag → reason`` map for report
+titles. Those contracts diverge; sharing a single parser would force one
+consumer onto the other's shape.
 """
 
 from __future__ import annotations
@@ -20,7 +26,8 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping
 
-# e2e_rest before rest so extract_transport does not truncate the id.
+# `[` anchor + `(?:-|])` tail delimiter recognizes full ids (including
+# `e2e_rest`); alternation order is not load-bearing for that match.
 _TRANSPORT_RE = re.compile(r"\[(e2e_rest|impl|a2a|mcp|rest)(?:-|])")
 
 # Outcomes that count as "this transport passed for the scenario base".
@@ -53,6 +60,15 @@ def extract_uc(text: str) -> str:
     """
     m = re.search(r"(?:test_)?uc(\d+)", text, re.IGNORECASE)
     return f"UC-{m.group(1)}" if m else "GENERIC"
+
+
+def extract_longrepr_e_line(longrepr: str) -> str:
+    """Return the first pytest ``E `` error line from a longrepr, or ``\"\"``."""
+    for line in longrepr.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("E "):
+            return stripped[2:].strip()
+    return ""
 
 
 def transport_coverage(
