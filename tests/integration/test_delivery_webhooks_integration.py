@@ -27,7 +27,7 @@ from src.core.testing_hooks import AdCPTestContext
 from src.core.tools._media_buy_status import SERVING_PERSISTED_STATUSES
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
 from tests.helpers.delivery_assertions import assert_next_expected_at_shape, assert_partial_data_pairing
-from tests.helpers.delivery_fixtures import DAILY_REPORTING_WEBHOOK
+from tests.helpers.delivery_fixtures import DAILY_REPORTING_WEBHOOK, SIGNED_DAILY_REPORTING_WEBHOOK
 
 
 def _create_test_tenant_and_principal(ad_server: str | None = None) -> tuple[str, str]:
@@ -68,8 +68,13 @@ def _create_basic_media_buy_with_webhook(
     principal_id: str,
     start_date=None,
     end_date=None,
+    reporting_webhook: dict | None = None,
 ) -> str:
     """Create a minimal tenant/principal/media_buy with a daily reporting_webhook.
+
+    ``reporting_webhook`` defaults to the shared unsigned daily config; pass
+    ``SIGNED_DAILY_REPORTING_WEBHOOK`` to exercise the signed arm (the scheduler
+    then carries its credentials into the push config handed to the sender).
 
     Returns:
         (tenant_id, principal_id, media_buy_id)
@@ -119,7 +124,7 @@ def _create_basic_media_buy_with_webhook(
                 "packages": [{"product_id": product.product_id, "pricing_option_id": pricing_option.id}],
                 # Shared daily webhook config (outbound HTTP is mocked). This file's flight
                 # windows are bespoke boundary dates, NOT the flight_window named-phase taxonomy.
-                "reporting_webhook": dict(DAILY_REPORTING_WEBHOOK),
+                "reporting_webhook": dict(reporting_webhook or DAILY_REPORTING_WEBHOOK),
             },
         )
 
@@ -236,12 +241,67 @@ async def test_delivery_webhook_sends_for_fresh_data(integration_db):
         assert result.get("reporting_period") is not None
         assert result.get("errors") is None
 
+        # The principal registered no push config for this URL, so the scheduler
+        # took the fallback arm (PushNotificationConfigRepository.build_detached).
+        # Pin what that carrier hands the sender — it was previously extracted
+        # into a local and never asserted, so a dropped field was invisible here.
+        assert push_notification_config is not None
+        assert push_notification_config.tenant_id == tenant_id
+        assert push_notification_config.principal_id == principal_id
+        assert push_notification_config.url == DAILY_REPORTING_WEBHOOK["url"]
+        assert push_notification_config.is_active is True
+        # Unsigned webhook -> no credentials invented along the way.
+        assert push_notification_config.authentication_type is None
+        assert push_notification_config.authentication_token is None
+
         yesterday = datetime.now(UTC).date() - timedelta(days=1)
 
         expected_start_date = (datetime.combine(yesterday, time.min)).isoformat()
         expected_end_date = (datetime.combine(yesterday, time.max)).isoformat()
 
         assert len(result.get("media_buy_deliveries")) == 1
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_signed_reporting_webhook_carries_credentials_into_the_push_config(integration_db):
+    """A signed reporting_webhook's credentials reach the sender's push config.
+
+    The principal has no registered push config for this URL, so the scheduler
+    takes the fallback arm and builds a transient carrier. That carrier's
+    ``authentication_token`` becomes the outbound ``Authorization`` header, so it
+    is the only thing standing between a signed webhook and an unsigned one —
+    and no delivery fixture exercised the signed arm before this test.
+    """
+    tenant_id, principal_id = _create_test_tenant_and_principal()
+    _create_basic_media_buy_with_webhook(
+        tenant_id,
+        principal_id,
+        reporting_webhook=SIGNED_DAILY_REPORTING_WEBHOOK,
+    )
+
+    scheduler = DeliveryWebhookScheduler()
+
+    with patch.object(
+        scheduler.webhook_service,
+        "send_notification",
+        new_callable=AsyncMock,
+        return_value=True,
+    ) as mock_send_notification:
+        await scheduler._send_reports()
+
+        assert mock_send_notification.await_count == 1
+        cfg = mock_send_notification.await_args.kwargs.get("push_notification_config")
+
+        # Concrete literals, not re-derived from the fixture: the scheme->
+        # authentication_type and credentials->authentication_token mapping is
+        # exactly what is being graded here.
+        assert cfg is not None
+        assert cfg.authentication_type == "Bearer"
+        assert cfg.authentication_token == "test-webhook-credential"
+        assert cfg.url == "https://example.com/webhook"
+        assert cfg.tenant_id == tenant_id
+        assert cfg.principal_id == principal_id
 
 
 @pytest.mark.requires_db

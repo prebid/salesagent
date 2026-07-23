@@ -18,6 +18,19 @@ from datetime import UTC, date, datetime, timedelta
 # shared module-level dict into ORM state.
 DAILY_REPORTING_WEBHOOK = {"url": "https://example.com/webhook", "frequency": "daily"}
 
+# The same daily webhook, but SIGNED. The scheduler reads
+# ``reporting_webhook["authentication"]`` and carries ``schemes[0]`` /
+# ``credentials`` into the push config it hands the sender, which turns
+# ``credentials`` into the outbound Authorization header. Without a fixture
+# carrying an authentication block, no delivery test exercised that arm at all,
+# so a dropped auth field would have shipped an UNSIGNED webhook silently.
+# Built as a fresh dict (never a mutation of the shared one above) so persisting
+# callers cannot alias it into ORM state.
+SIGNED_DAILY_REPORTING_WEBHOOK = {
+    **DAILY_REPORTING_WEBHOOK,
+    "authentication": {"schemes": ["Bearer"], "credentials": "test-webhook-credential"},
+}
+
 # Flight phase → (start, end) day-offsets from ``today``. Single source of truth for
 # the phase→window contract shared by the integration and BDD scheduler fixtures.
 _FLIGHT_OFFSETS: dict[str, tuple[int, int]] = {
