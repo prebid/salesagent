@@ -36,24 +36,24 @@ from a2a.types import (
 )
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _dict_to_value
-from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPValidationError
+from src.core.exceptions import (
+    AUTH_REQUIRED_CANONICAL_SUGGESTION,
+    VALIDATION_ERROR_SUGGESTION,
+    AdCPCapabilityNotSupportedError,
+    AdCPValidationError,
+)
 from tests.a2a_helpers import make_a2a_context
 from tests.helpers import assert_envelope_shape
 from tests.helpers.secret_scrub import SECRET_BEARING_MESSAGE, assert_no_secret_leak
 from tests.utils.a2a_helpers import (
+    assert_failed_task_envelope,
     create_a2a_message_with_skill,
-    extract_data_from_artifact,
     extract_processing_error_envelope,
     make_nl_send_message_request,
     make_test_a2a_identity,
 )
 
 _TEST_IDENTITY = make_test_a2a_identity()
-
-
-def _first_error_message(artifact: Artifact) -> str:
-    """First error message from an artifact's two-layer envelope DataPart."""
-    return extract_data_from_artifact(artifact)["errors"][0]["message"]
 
 
 def _make_handler() -> tuple[AdCPRequestHandler, object]:
@@ -123,7 +123,7 @@ async def test_explicit_skill_untyped_crash_scrubs_secret_from_failed_task():
 
     Regression: the explicit-skill path routed ``str(exc)`` onto the wire (via
     ``normalize_to_adcp_error`` → ``AdCPError(str(exc))``) while the outer/NL path was
-    already sanitized. Both paths now share the single ``_safe_adcp_error`` policy, so an
+    already sanitized. Both paths now share the single ``safe_adcp_error`` policy, so an
     untyped crash becomes a generic internal error regardless of which path caught it.
     Mirrors the reviewer's repro: patch ``_handle_explicit_skill`` to raise a
     secret-shaped exception and inspect the returned failed Task.
@@ -136,18 +136,14 @@ async def test_explicit_skill_untyped_crash_scrubs_secret_from_failed_task():
         with patch.object(handler, "_handle_explicit_skill", new_callable=AsyncMock, side_effect=RuntimeError(secret)):
             result = await handler.on_message_send(params, context=ctx)
 
-    assert isinstance(result, Task), f"expected a returned failed Task, got {type(result).__name__}"
-    assert result.status.state == TaskState.TASK_STATE_FAILED, (
-        f"expected TASK_STATE_FAILED, got {result.status.state!r}"
-    )
+    # The shared strict oracle pins the whole wire contract at once: FAILED state, artifact name,
+    # exactly one DataPart + one TextPart, and BOTH envelope layers agreeing on code + recovery.
+    envelope = assert_failed_task_envelope(result, code="SERVICE_UNAVAILABLE", recovery="transient")
     # Scan the ENTIRE failed artifact: the structured DataPart envelope AND every TextPart.
-    artifact = result.artifacts[0]
-    envelope = extract_data_from_artifact(artifact)
-    text_parts = [p.text for p in artifact.parts if p.HasField("text")]
+    text_parts = [p.text for p in result.artifacts[0].parts if p.HasField("text")]
     client_facing = json.dumps(envelope) + " " + " ".join(text_parts)
     assert_no_secret_leak(client_facing)
-    # Sanitized to a generic internal error, not a str(exc)-derived message/code.
-    assert envelope["errors"][0]["code"] == "SERVICE_UNAVAILABLE"
+    # Sanitized to a generic internal error, not a str(exc)-derived message.
     assert "internal error" in envelope["errors"][0]["message"].lower()
 
 
@@ -188,14 +184,22 @@ async def test_failed_explicit_skill_task_is_pollable_via_tasks_get():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("exc_factory", "expected_code", "msg_keyword"),
+    ("exc_factory", "expected_code", "msg_keyword", "expected_suggestion"),
     [
-        pytest.param(lambda s: ValueError(s), "VALIDATION_ERROR", "validate", id="ValueError"),
-        pytest.param(lambda s: PermissionError(s), "AUTH_REQUIRED", "credential", id="PermissionError"),
+        pytest.param(
+            lambda s: ValueError(s), "VALIDATION_ERROR", "validate", VALIDATION_ERROR_SUGGESTION, id="ValueError"
+        ),
+        pytest.param(
+            lambda s: PermissionError(s),
+            "AUTH_REQUIRED",
+            "credential",
+            AUTH_REQUIRED_CANONICAL_SUGGESTION,
+            id="PermissionError",
+        ),
     ],
 )
 async def test_explicit_skill_raw_builtin_scrubs_secret_but_keeps_semantic_code(
-    exc_factory, expected_code, msg_keyword
+    exc_factory, expected_code, msg_keyword, expected_suggestion
 ):
     """A raw ``ValueError``/``PermissionError`` raised INSIDE a skill returns a failed Task whose
     envelope keeps the SEMANTIC code the synchronous boundaries emit (VALIDATION_ERROR /
@@ -217,19 +221,21 @@ async def test_explicit_skill_raw_builtin_scrubs_secret_but_keeps_semantic_code(
         ):
             result = await handler.on_message_send(params, context=ctx)
 
-    assert isinstance(result, Task), f"expected a returned failed Task, got {type(result).__name__}"
-    assert result.status.state == TaskState.TASK_STATE_FAILED
-    artifact = result.artifacts[0]
-    envelope = extract_data_from_artifact(artifact)
-    text_parts = [p.text for p in artifact.parts if p.HasField("text")]
+    # SEMANTIC code preserved (matches the synchronous boundary) and both envelope layers agree;
+    # a raw built-in normalizes to a CLIENT-CORRECTABLE code, never a transient/terminal one.
+    envelope = assert_failed_task_envelope(result, code=expected_code, recovery="correctable")
+    text_parts = [p.text for p in result.artifacts[0].parts if p.HasField("text")]
     client_facing = json.dumps(envelope) + " " + " ".join(text_parts)
     assert_no_secret_leak(client_facing)
-    # SEMANTIC code preserved (matches the synchronous boundary), message scrubbed AND
-    # category-appropriate — a VALIDATION_ERROR / AUTH_REQUIRED must not read "internal error".
-    assert envelope["errors"][0]["code"] == expected_code
+    # Message scrubbed AND category-appropriate — a VALIDATION_ERROR / AUTH_REQUIRED must not
+    # read "internal error".
     message = envelope["errors"][0]["message"].lower()
     assert msg_keyword in message
     assert "internal error" not in message
+    # The suggestion reaches the WIRE, not just the error object. Chain of custody: this pins
+    # wire == module constant, and test_sanitized_suggestions_match_pinned_spec_enum pins
+    # module constant == the pinned spec fixture's enumMetadata.
+    assert envelope["errors"][0]["suggestion"] == expected_suggestion
 
 
 @pytest.mark.asyncio
@@ -262,7 +268,7 @@ async def test_typed_adcp_error_keeps_its_own_wire_code_on_failed_task():
 
     The envelope must carry the AdCPError's code (here ``VALIDATION_ERROR``),
     not a blanket ``INTERNAL_ERROR`` — ``_build_error_envelope`` passes typed
-    errors through ``_safe_adcp_error`` unchanged (only untyped crashes are
+    errors through ``safe_adcp_error`` unchanged (only untyped crashes are
     replaced with a generic error).
     """
     handler, ctx = _make_handler()
@@ -297,7 +303,7 @@ async def test_auth_extraction_failure_raises_sanitized_internal_error_no_nameer
     InternalError (not a failed Task), the raw text is not leaked, and no webhook.
     """
     handler = AdCPRequestHandler()
-    handler._get_auth_token = MagicMock(side_effect=RuntimeError("auth context unavailable at db.internal"))
+    handler._get_auth_token = MagicMock(side_effect=RuntimeError(SECRET_BEARING_MESSAGE))
     handler._send_protocol_webhook = AsyncMock()
     ctx = make_a2a_context(headers={"host": "test.example.com"})
     params = make_nl_send_message_request("Show me available products in the catalog")
@@ -307,8 +313,8 @@ async def test_auth_extraction_failure_raises_sanitized_internal_error_no_nameer
 
     err = exc_info.value
     client_facing = f"{err.message} {json.dumps(err.data)}"
-    assert "db.internal" not in client_facing and "auth context unavailable" not in client_facing, client_facing
-    assert err.data["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
+    assert_no_secret_leak(client_facing, context="auth-extraction crash on the JSON-RPC wire")
+    assert_envelope_shape(err.data, "SERVICE_UNAVAILABLE", recovery="transient")
     handler._send_protocol_webhook.assert_not_awaited()
 
 
@@ -452,6 +458,49 @@ def test_read_failed_a2a_task_loose_falls_back_on_artifactless_task():
     assert envelope is None
     assert type(error) is AdCPError, f"expected bare AdCPError fallback, got {type(error).__name__}"
     assert "A2A task failed" in str(error)
+
+
+@pytest.mark.parametrize(
+    ("artifact", "expected_match"),
+    [
+        pytest.param(None, "must carry the error envelope artifact", id="no-artifact"),
+        pytest.param(
+            Artifact(artifact_id="e1", name="wrong_name", parts=[Part(text="boom"), Part(data=_dict_to_value({}))]),
+            "expected 'error_result' artifact",
+            id="wrong-artifact-name",
+        ),
+        pytest.param(
+            Artifact(artifact_id="e1", name="error_result", parts=[Part(data=_dict_to_value({}))]),
+            "must carry a human-readable TextPart",
+            id="datapart-alone",
+        ),
+        pytest.param(
+            Artifact(
+                artifact_id="e1",
+                name="error_result",
+                parts=[Part(text="boom"), Part(data=_dict_to_value({})), Part(data=_dict_to_value({}))],
+            ),
+            "exactly one authoritative DataPart",
+            id="two-dataparts",
+        ),
+    ],
+)
+def test_failed_task_artifact_reader_rejects_off_contract_shapes(artifact, expected_match):
+    """Known-bad self-tests for the strict failed-Task reader every A2A error test depends on.
+
+    The reader's pins are what make ``assert_failed_task_envelope`` stronger than a raw
+    ``artifacts[0]`` read. Without these, DELETING one of its assertions reddens nothing
+    test-side — the oracle could silently weaken while every call site stayed green.
+    Mirrors the harness twin's self-tests one file over.
+    """
+    from tests.utils.a2a_helpers import _read_failed_task_artifact
+
+    task = Task(id="t-shape", status=TaskStatus(state=TaskState.TASK_STATE_FAILED))
+    if artifact is not None:
+        task.artifacts.append(artifact)
+
+    with pytest.raises(AssertionError, match=expected_match):
+        _read_failed_task_artifact(task, "error_result")
 
 
 @pytest.mark.asyncio

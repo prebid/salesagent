@@ -13,6 +13,8 @@ from unittest.mock import ANY
 from a2a.types import Artifact, Message, Part, Role, SendMessageRequest, Task, TaskState
 from google.protobuf import json_format, struct_pb2
 
+from tests.helpers.envelope_assertions import assert_envelope_shape
+
 if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
 
@@ -98,20 +100,21 @@ def assert_failed_task_envelope(
     """Assert a synchronously-returned failed A2A Task carries the two-layer AdCP envelope with the
     given wire ``code`` and ``recovery``.
 
-    Pins the FAILED state then routes through the shared strict reader (artifact name, single
-    DataPart, single TextPart). ``recovery`` is REQUIRED, mirroring ``assert_envelope_shape``:
-    silent drift between a typed exception's recovery and the wire is exactly the regression
-    this helper exists to catch. The artifact NAME differs by path: a per-skill failure emits
-    ``error_result`` (the default), while a top-level rejection (e.g. the multi-skill guard)
-    emits ``processing_error`` — pass ``artifact_name`` for the latter.
+    Pins the FAILED state and the A2A ARTIFACT framing (name, single DataPart, single TextPart)
+    via the shared strict reader, then delegates the ENVELOPE assertion to the canonical
+    ``assert_envelope_shape`` — so both layers (``adcp_error`` and ``errors[0]``) are required to
+    agree here exactly as they are at every other transport boundary. Asserting only
+    ``adcp_error`` would let a divergence between the two layers pass every call site.
+    ``recovery`` is REQUIRED: silent drift between a typed exception's recovery and the wire is
+    exactly the regression this helper exists to catch. The artifact NAME differs by path: a
+    per-skill failure emits ``error_result`` (the default), while a top-level rejection (e.g. the
+    multi-skill guard) emits ``processing_error`` — pass ``artifact_name`` for the latter.
     Returns the decoded envelope for any test-specific follow-up assertions.
     """
     assert isinstance(task, Task), f"expected a failed Task, got {type(task).__name__}"
     assert task.status.state == TaskState.TASK_STATE_FAILED, f"expected FAILED task, got {task.status.state!r}"
     envelope = _read_failed_task_artifact(task, artifact_name)
-    adcp_error = envelope["adcp_error"]
-    assert adcp_error["code"] == code, f"expected wire code {code!r}, got {adcp_error!r}"
-    assert adcp_error["recovery"] == recovery, f"expected recovery {recovery!r}, got {adcp_error!r}"
+    assert_envelope_shape(envelope, code, recovery=recovery)
     return envelope
 
 

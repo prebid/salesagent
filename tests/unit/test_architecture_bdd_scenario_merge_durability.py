@@ -55,8 +55,14 @@ def _is_adcp_req_id(ref: str) -> bool:
     adcp-req render and is a LEGACY-DELETE risk. Keying on the ABSENCE of a requirement id
     (rather than the PRESENCE of a recognized artifact form) is what makes the discovery
     exhaustive: an empty or unmodeled ``upstream_refs`` can no longer slip past.
+
+    The id GRAMMAR is matched in full, not just the prefix: feature files and spec artifacts are
+    themselves named ``BR-UC-002-create-media-buy.feature``, so a bare-prefix test would read such
+    a ref as a requirement id and silently drop the row from the candidate set — a blind spot in
+    exactly the direction this guard exists to close.
     """
-    return bool(re.match(r"^\s*(BR|SR)-", str(ref)))
+    ref = str(ref)
+    return bool(re.fullmatch(r"\s*(BR|SR)-[A-Za-z0-9_-]+\s*", ref)) and not _is_spec_artifact_ref(ref)
 
 
 def _row_has_adcp_req_source(refs) -> bool:
@@ -72,7 +78,7 @@ def _is_spec_artifact_ref(ref: str) -> bool:
     ref = str(ref)
     if "://" in ref:
         return True
-    return bool(re.search(r"\.(mdx|ya?ml|json)(\b|#|$)", ref, re.IGNORECASE))
+    return bool(re.search(r"\.(mdx|ya?ml|json|feature)(\b|#|$)", ref, re.IGNORECASE))
 
 
 def _is_merge_set_feature(feature_name: str) -> bool:
@@ -247,6 +253,12 @@ def test_source_less_predicate_catches_empty_and_unmodeled_refs():
     assert _row_has_adcp_req_source(["docs/x.md#Anchor"]) is False  # unmodeled extension
     assert _row_has_adcp_req_source(["building/operating/transport-errors"]) is False  # bare path
     assert _row_has_adcp_req_source(["spec.txt"]) is False
+    # A ref NAMED like a requirement id but pointing at an artifact is not a requirement id —
+    # our own feature files are called BR-UC-*.feature, so a bare-prefix match would read this
+    # as adcp-req-sourced and silently drop the row from the candidate set.
+    assert _row_has_adcp_req_source(["BR-UC-002-create-media-buy.feature"]) is False
+    assert _row_has_adcp_req_source(["BR-UC-002.mdx"]) is False
+    assert _row_has_adcp_req_source(["https://example.test/BR-UC-002"]) is False
 
 
 def test_merge_set_scoping_excludes_hand_authored_features():
