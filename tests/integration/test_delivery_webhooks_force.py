@@ -1,7 +1,7 @@
 """Integration tests for manual/forced delivery webhook triggering."""
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
 from sqlalchemy import select
@@ -157,9 +157,7 @@ async def test_trigger_report_for_media_buy_public_method(integration_db):
 
             # 3. Verify result and call
             assert result is True
-            mock_send_internal.assert_called_once()
-            args, kwargs = mock_send_internal.call_args
-            assert kwargs.get("force") is True
+            mock_send_internal.assert_called_once_with(ANY, ANY, ANY, force=True)
 
 
 @pytest.mark.requires_db

@@ -22,7 +22,7 @@ from tests.bdd.steps._outcome_helpers import _require, wire_dict
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
-from tests.helpers.delivery_assertions import assert_omits_webhook_only_fields
+from tests.helpers.delivery_assertions import assert_next_expected_at_shape, assert_omits_webhook_only_fields
 from tests.helpers.delivery_fixtures import DAILY_REPORTING_WEBHOOK, flight_window
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -1610,8 +1610,6 @@ def _assert_next_expected_presence(payload: dict, phrase: str, *, context: str) 
     # This step owns only the Gherkin phrase -> boolean translation; the RULE itself
     # lives once in tests/helpers/delivery_assertions.py so the BDD, integration and
     # e2e graders cannot drift apart (CLAUDE.md DRY invariant).
-    from tests.helpers.delivery_assertions import assert_next_expected_at_shape
-
     assert_next_expected_at_shape(payload, present="should not" not in phrase, context=context)
 
 

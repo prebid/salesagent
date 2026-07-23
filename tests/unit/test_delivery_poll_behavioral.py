@@ -32,6 +32,7 @@ from src.core.tools.media_buy_delivery import (
     _get_media_buy_delivery_impl,
     _resolve_delivery_status_filter,
 )
+from tests.helpers.delivery_assertions import assert_next_expected_at_shape
 
 # UC-004-ALT-STATUS-FILTERED-DELIVERY-02
 # ---------------------------------------------------------------------------
@@ -715,7 +716,7 @@ class TestNextExpectedAtSerialization:
         """
         resp = _make_media_buy_delivery_response(0, notification_type="final")
         dumped = resp.model_dump(mode="json")
-        assert "next_expected_at" not in dumped
+        assert_next_expected_at_shape(dumped, present=False, context="final notification dump")
 
     def test_scheduled_notification_serializes_concrete_next_expected_at(self):
         """A non-final notification carries its concrete timestamp as a string.
@@ -738,7 +739,7 @@ class TestNextExpectedAtSerialization:
         """
         resp = _make_media_buy_delivery_response(0)
         dumped = resp.model_dump(mode="json")
-        assert "next_expected_at" not in dumped
+        assert_next_expected_at_shape(dumped, present=False, context="dump without notification_type")
 
 
 # ---------------------------------------------------------------------------

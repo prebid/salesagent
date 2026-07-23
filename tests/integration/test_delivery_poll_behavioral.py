@@ -105,7 +105,7 @@ def _race_two_workers(worker: Any) -> list[bool]:
         session = Session(bind=engine)
         try:
             results[index] = worker(session, barrier)
-        except BaseException as exc:  # noqa: BLE001 - surfaced via `errors` for the assertion below
+        except BaseException as exc:  # surfaced via `errors` for the assertion below
             errors.append(exc)
         finally:
             session.close()
@@ -120,7 +120,9 @@ def _race_two_workers(worker: Any) -> list[bool]:
     # deadlock (the exact hazard these tests exist to catch) leaves results=[False, False]
     # / a stale call_count and every downstream assertion still passes. daemon=True above
     # keeps a hung thread from wedging the interpreter at exit.
-    assert not [t for t in threads if t.is_alive()], "worker thread(s) did not finish within the 10s join timeout"
+    assert not [t for t in threads if t.is_alive()], (
+        f"worker thread(s) did not finish within the 10s join timeout; errors so far: {errors}"
+    )
     assert not errors, f"worker thread(s) raised: {errors}"
     return results
 

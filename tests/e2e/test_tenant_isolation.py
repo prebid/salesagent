@@ -153,7 +153,7 @@ class TestMultiTenantIsolation:
                     {"brief": "should fail", "context": {"e2e": "cross_tenant"}},
                 )
                 data = parse_tool_result(result)
-        except Exception as exc:  # noqa: BLE001 - we re-classify below
+        except Exception as exc:  # we re-classify below
             raised = exc
 
         # Fail-fast on the actual isolation-bypass scenario: the cross-tenant

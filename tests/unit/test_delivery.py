@@ -52,7 +52,7 @@ from src.core.tools.media_buy_delivery import (
 )
 from src.services.webhook_delivery_service import CircuitBreaker, CircuitState, WebhookDeliveryService
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
-from tests.helpers.delivery_assertions import assert_omits_webhook_only_fields
+from tests.helpers.delivery_assertions import assert_next_expected_at_shape, assert_omits_webhook_only_fields
 
 # ---------------------------------------------------------------------------
 # Fixtures (shared across all test classes)
@@ -1809,7 +1809,7 @@ class TestDeliveryWebhookHappyPath:
         # Verify the payload passed to _send_webhook_enhanced includes next_expected_at
         call_kwargs = mock_send.call_args[1]
         payload = call_kwargs["delivery_payload"]
-        assert "next_expected_at" in payload
+        assert_next_expected_at_shape(payload, present=True, context="scheduled webhook payload")
         assert payload["notification_type"] == "scheduled"
 
     def test_hmac_sha256_signature_headers(self):

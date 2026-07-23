@@ -80,10 +80,13 @@ def _retrieve(uri: str) -> referencing.Resource:
 def load_pinned_schema(filename: str) -> dict[str, Any]:
     """Load a pinned AdCP schema dict by bare filename (offline, from the vendored tree).
 
-    The read-only companion to ``validate_against_pinned_schema`` — lets a test read the
-    schema's own field metadata (e.g. which properties are marked "only present in webhook
-    deliveries") so a hand-maintained constant can be grounded against the spec rather than
-    re-typed. A missing schema is a HARD FAILURE (see ``_resolve_filename``), never a skip.
+    Internal helper for ``validate_against_pinned_schema``. A missing schema is a HARD
+    FAILURE (see ``_resolve_filename``), never a skip.
+
+    NOT a spec-grounding source. The vendored tree is frozen at an anchor that PREDATES
+    the targeted spec version, so reading field metadata from it to ground a constant is
+    blind to exactly the staleness it appears to rule out — derive from the pinned SDK
+    instead (see the webhook-only field oracle in tests/unit/test_media_buy_status_consistency.py).
     """
     return json.loads(_resolve_filename(filename).read_text())
 

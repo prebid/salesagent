@@ -170,7 +170,14 @@ class DeliveryWebhookScheduler:
                             reports_sent += 1
 
                     except Exception as e:
-                        logger.error(f"Error sending report for media buy {media_buy.media_buy_id}: {e}", exc_info=True)
+                        logger.error(
+                            "Error sending report for media buy %s (tenant %s, principal %s): %s",
+                            media_buy.media_buy_id,
+                            media_buy.tenant_id,
+                            media_buy.principal_id,
+                            e,
+                            exc_info=True,
+                        )
                         errors += 1
 
                 logger.info(f"Daily delivery report batch complete: {reports_sent} sent, {errors} errors")
@@ -286,7 +293,7 @@ class DeliveryWebhookScheduler:
                 media_buy.media_buy_id, claimed_at=claimed_at
             )
             session.commit()
-        except Exception:  # noqa: BLE001 - best-effort; lease recovery is the guarantee
+        except Exception:  # best-effort; lease recovery is the guarantee
             logger.debug(
                 "Failed to release final claim for media buy %s (lease will recover)",
                 media_buy.media_buy_id,
@@ -457,7 +464,11 @@ class DeliveryWebhookScheduler:
             next_day = datetime.now(UTC).date() + timedelta(days=1)
             delivery_response.next_expected_at = utc_flight_start(next_day)
         # derived is None (zero deliveries) -> leave next_expected_at unset;
-        # notification_type is None too, so the pair stays consistent.
+        # notification_type is None too, so the pair stays consistent. Unreachable from
+        # this scheduler today (a single-ID request yields >=1 row, or an advisory that
+        # aborts earlier); if it ever becomes reachable the body would omit
+        # notification_type, which the webhook-result schema marks REQUIRED -- add an
+        # explicit empty-deliveries no-send guard rather than emitting that body.
 
         delivery_response.sequence_number = sequence_number
         delivery_response.partial_data = False  # TODO: Check for reporting_delayed status

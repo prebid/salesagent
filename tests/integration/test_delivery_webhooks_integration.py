@@ -462,7 +462,7 @@ async def test_scheduler_uses_simulated_path_in_testing_mode(integration_db):
 @pytest.mark.requires_db
 @pytest.mark.asyncio
 @pytest.mark.parametrize("persisted_status", sorted(SERVING_PERSISTED_STATUSES))
-async def test_serving_persisted_status_receives_delivery_webhook(integration_db, persisted_status):
+async def test_serving_persisted_status_is_selected_for_delivery_webhook(integration_db, persisted_status):
     """Every serving persisted status — legacy aliases included — is selected for webhooks.
 
     Regression #1556: the scheduler queried a hardcoded ["active", "approved"],

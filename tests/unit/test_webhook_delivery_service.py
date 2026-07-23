@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.services.webhook_delivery_service import CircuitState, WebhookDeliveryService
+from tests.helpers.delivery_assertions import assert_next_expected_at_shape
 
 
 @pytest.fixture
@@ -186,7 +187,7 @@ def test_final_notification_type(webhook_service, mock_db_session):
         payload = mock_client.return_value.__enter__.return_value.post.call_args.kwargs["json"]
         assert payload["notification_type"] == "final"
         assert payload["is_adjusted"] is False
-        assert "next_expected_at" not in payload
+        assert_next_expected_at_shape(payload, present=False, context="final webhook payload")
 
 
 def test_reset_sequence(webhook_service, mock_db_session):
