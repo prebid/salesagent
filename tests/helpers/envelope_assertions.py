@@ -31,15 +31,19 @@ def assert_no_tenant_disclosure(target: Any, tenant_id: str) -> None:
     The tenant is resolved from request headers BEFORE the token is validated, so
     echoing it back to a caller whose token was rejected hands an unauthenticated
     party an internal identifier (the tenant UUID in a host-routed deploy). This
-    is the single assertion for that contract — four tests grade it (unit,
-    integration x2, the A2A wire pin), and a fourth hand-rolled ``json.dumps``
-    check is exactly how they would drift apart.
+    is the single assertion for that contract, so the sites grading it cannot
+    drift apart: the unit test (``test_resolved_identity``), both isolation
+    integration tests, and the A2A + MCP BDD no-disclosure scenarios all route
+    through here.
 
     Args:
-        target: What the buyer receives. Accepts either a two-layer envelope
-            ``dict`` (the wire body) or an ``Exception`` (an in-process guard
-            that has no wire; the envelope is built from it here so the
-            assertion covers the same surface either way).
+        target: What the buyer receives. Accepts:
+            - a two-layer envelope ``dict`` (the wire body);
+            - an ``AdCPError`` exception, whose two-layer envelope is built here
+              so the message AND every envelope field are graded;
+            - any other ``Exception`` (e.g. a raw fastmcp ``ToolError`` from an
+              MCP auth rejection, which has no envelope) — graded on its message
+              alone, the only buyer-facing surface it carries.
         tenant_id: The internal tenant identifier that must not appear. Use a
             UUID: a slug can collide with unrelated envelope text and make the
             check pass or fail for the wrong reason.
@@ -50,10 +54,18 @@ def assert_no_tenant_disclosure(target: Any, tenant_id: str) -> None:
     import json
 
     if isinstance(target, BaseException):
-        from src.core.exceptions import build_two_layer_error_envelope
-
         rendered = str(target)
-        envelope = build_two_layer_error_envelope(target)
+        if hasattr(target, "wire_error_code"):
+            from src.core.exceptions import build_two_layer_error_envelope
+
+            envelope = build_two_layer_error_envelope(target)
+        else:
+            # A non-AdCP exception — a raw fastmcp ``ToolError`` — has no two-layer
+            # envelope to build: MCP raises the rejection outside the tool boundary
+            # that would wrap it, so the message is the only buyer-facing surface.
+            # Grade the message alone; the MCP no-disclosure scenario documents this
+            # as the weaker, message-only half of the same contract.
+            envelope = {"errors": [{"message": rendered}]}
     else:
         envelope = target.envelope if hasattr(target, "envelope") else target
         assert isinstance(envelope, dict), f"envelope target must resolve to dict, got {type(envelope).__name__}"

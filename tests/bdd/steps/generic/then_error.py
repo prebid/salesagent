@@ -318,6 +318,29 @@ def then_error_discloses_no_tenant(ctx: dict) -> None:
     assert_no_tenant_disclosure(result.wire_error_envelope, tenant_id)
 
 
+@then("the error message discloses no tenant id")
+def then_error_message_discloses_no_tenant(ctx: dict) -> None:
+    """MCP counterpart of ``the error discloses no tenant id``, graded on the message.
+
+    MCP rejects an invalid token as a bare ``ToolError`` with no two-layer
+    envelope (``wire_error_envelope`` is ``None``) because the rejection is raised
+    outside the tool boundary that builds the envelope. There is no envelope to
+    inspect, but the ToolError MESSAGE is exactly what the buyer receives, so it is
+    the leak surface. This is deliberately weaker than the A2A pin above — message
+    only, no envelope — and routes through the same ``assert_no_tenant_disclosure``
+    (which accepts an exception) so the two transports grade one contract.
+    """
+    from tests.helpers import assert_no_tenant_disclosure
+
+    tenant_id = ctx.get("undisclosed_tenant_id")
+    assert tenant_id, "No ctx['undisclosed_tenant_id'] — the Given step must record the tenant under test"
+    result = ctx.get("result")
+    assert result is not None and result.error is not None, (
+        "No error captured; MCP must reject the invalid token as a ToolError to grade its message"
+    )
+    assert_no_tenant_disclosure(result.error, tenant_id)
+
+
 # ── Error message content (generic) ───────────────────────────────────
 
 

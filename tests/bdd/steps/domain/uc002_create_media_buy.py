@@ -26,6 +26,13 @@ from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 # GIVEN steps — request setup and account state
 # ═══════════════════════════════════════════════════════════════════════
 
+# The tenant id the invalid-token no-disclosure scenarios must never echo back.
+# A UUID, not the harness slug: in a host-routed deploy the tenant id IS a UUID,
+# and that is the internal identifier the redaction exists to withhold from an
+# unauthenticated caller. Grading a slug would be a weaker check for the same
+# contract.
+HOST_ROUTED_TENANT_UUID = "f3d2c1b0-a9e8-7654-3210-fedcba987654"
+
 
 def _attach_account_to_full_request(ctx: dict) -> None:
     """Build a complete, valid create request carrying the account reference.
@@ -280,10 +287,17 @@ def given_invalid_auth_token(ctx: dict) -> None:
     from tests.factories.principal import PrincipalFactory
 
     env = ctx["env"]
-    ctx["undisclosed_tenant_id"] = env._tenant_id
+    # Grade a UUID, the shape a host-routed deploy actually carries — the harness
+    # slug ``env._tenant_id`` is a weaker stand-in (a UUID is the internal id the
+    # redaction protects). The dispatched identity carries it, so resolve_identity
+    # detects it as the tenant and the pre-redaction message echoes THIS value;
+    # confirmed by the deletion oracle on reject_invalid_token. It needs no DB
+    # tenant row: the invalid token fails at token resolution, before principal
+    # lookup.
+    ctx["undisclosed_tenant_id"] = HOST_ROUTED_TENANT_UUID
     ctx["dispatch_identity"] = PrincipalFactory.make_identity(
         principal_id=env._principal_id,
-        tenant_id=env._tenant_id,
+        tenant_id=HOST_ROUTED_TENANT_UUID,
         auth_token="not-a-real-token",
         protocol="a2a",
     )
@@ -801,6 +815,21 @@ def when_send_create_media_buy_via_a2a(ctx: dict) -> None:
     from tests.harness.transport import Transport
 
     ctx["transport"] = Transport.A2A
+    when_send_create_media_buy(ctx)
+
+
+@when("the Buyer Agent sends the create_media_buy request via MCP")
+def when_send_create_media_buy_via_mcp(ctx: dict) -> None:
+    """MCP counterpart of the A2A step, for the invalid-token no-disclosure pair.
+
+    @mcp scenarios are not multiplied by ``pytest_generate_tests`` either, so the
+    wire is named explicitly. MCP rejects an invalid token without building a
+    two-layer envelope (the ToolError is raised outside the tool boundary), so the
+    paired Then step grades the ToolError message rather than a wire envelope.
+    """
+    from tests.harness.transport import Transport
+
+    ctx["transport"] = Transport.MCP
     when_send_create_media_buy(ctx)
 
 

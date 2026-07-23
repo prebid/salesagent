@@ -40,21 +40,23 @@ Feature: BR-UC-002 Account access scoping
   # BUYER receives, so it is graded on the real wire envelope here, not on an
   # envelope rebuilt in-process from a caught exception.
   #
-  # A2A-only, and deliberately not dressed up as three-transport coverage. Each
-  # claim below was checked against the harness, not assumed:
+  # Graded on A2A and MCP, not REST. Each claim below was checked against the
+  # harness, not assumed:
+  #   - A2A carries the full auth chain in-process
+  #     (_get_auth_token -> _resolve_a2a_identity -> resolve_identity) and returns
+  #     a real two-layer wire envelope, so the A2A scenario grades the ENVELOPE.
+  #   - MCP rejects the invalid token too, but as a bare `ToolError` with no
+  #     two-layer envelope (wire_error_envelope is None), because the rejection is
+  #     raised outside the tool boundary that builds the envelope. There is no
+  #     envelope to grade, but the ToolError MESSAGE is what the buyer receives, so
+  #     the MCP scenario grades the MESSAGE — a deliberately weaker pin for the
+  #     same non-disclosure contract. That MCP auth rejection reaching the buyer
+  #     without a structured envelope is a separate production gap, tracked in
+  #     issue #1704.
   #   - REST: the in-process harness overrides `_require_auth_dep` with the
   #     injected identity (tests/harness/_base.py::_configure_rest_auth_override),
-  #     so the invalid-token raise site is never reached — the request proceeds
-  #     as authenticated. A REST variant would grade nothing.
-  #   - MCP: the rejection DOES happen, but it reaches the buyer as a bare
-  #     `ToolError` with no two-layer envelope at all (wire_error_envelope is
-  #     None), because MCPAuthMiddleware raises outside the tool boundary that
-  #     builds the envelope. There is nothing to assert non-disclosure ON. That
-  #     missing MCP auth envelope is a real production gap and is filed as a
-  #     follow-up; it is NOT covered here.
-  # A2A is the one transport whose full auth chain runs in-process
-  # (_get_auth_token -> _resolve_a2a_identity -> resolve_identity), so the
-  # scenario is tagged @a2a and dispatches explicitly.
+  #     so the invalid-token raise site is never reached — the request proceeds as
+  #     authenticated. A REST variant would grade nothing, so there is none.
   @T-UC-002-invalid-token-no-disclosure @account @error @a2a
   Scenario: An invalid token is rejected without disclosing the tenant id
     Given a valid create_media_buy request with account natural key brand "leak-brand.com" operator "leak-agency.com"
@@ -62,3 +64,13 @@ Feature: BR-UC-002 Account access scoping
     When the Buyer Agent sends the create_media_buy request via A2A
     Then the rejection reaches the buyer as a real "AUTH_REQUIRED" wire envelope
     And the error discloses no tenant id
+
+  # MCP grades the same non-disclosure contract on the ToolError message, since
+  # MCP rejects without a two-layer envelope (see the note above). Weaker than the
+  # A2A envelope pin, but it covers the transport A2A does not.
+  @T-UC-002-invalid-token-no-disclosure-mcp @account @error @mcp
+  Scenario: An invalid token is rejected over MCP without disclosing the tenant id
+    Given a valid create_media_buy request with account natural key brand "leak-brand.com" operator "leak-agency.com"
+    And the Buyer Agent presents an invalid authentication token
+    When the Buyer Agent sends the create_media_buy request via MCP
+    Then the error message discloses no tenant id

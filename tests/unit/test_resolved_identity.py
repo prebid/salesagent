@@ -194,8 +194,14 @@ class TestResolveIdentity:
                 require_valid_token=True,
             )
 
+        from tests.helpers import assert_no_tenant_disclosure
+
         message = str(exc.value)
-        assert tenant_uuid not in message, f"auth error leaked the tenant id: {message!r}"
+        # The one shared assertion the BDD scenarios and the two isolation tests
+        # also use — grading the message AND the full built envelope — so the sites
+        # that pin non-disclosure cannot drift apart. (Was a hand-rolled
+        # ``tenant_uuid not in message`` here, which only checked the message.)
+        assert_no_tenant_disclosure(exc.value, tenant_uuid)
         assert message == INVALID_TOKEN_MESSAGE  # the shared constant — one wording, no drift
         # Compensating control: the tenant is still recorded in a server-side log.
         assert any(tenant_uuid in r.getMessage() for r in caplog.records), (
