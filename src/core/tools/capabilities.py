@@ -300,7 +300,7 @@ def _get_adcp_capabilities_impl(
             raw = adapter.get_supported_pricing_models()
         except Exception as e:
             logger.warning(f"Could not get adapter pricing models: {e}")
-            raw = []
+            raw = set()  # match the set[str] the try returns; the helper takes any iterable
         supported_pricing_models = (
             _map_adapter_capability(raw, _PRICING_MODEL_VALUES, PricingModel, "pricing model") or None
         )
