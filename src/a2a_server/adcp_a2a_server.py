@@ -293,8 +293,10 @@ class AdCPRequestHandler(RequestHandler):
 
         Per the A2A binding for errors, a failed artifact carries BOTH a
         human-readable TextPart and the authoritative structured DataPart (the
-        two-layer AdCP envelope) — not a DataPart alone. The strict reader accepts
-        this shape (one DataPart, optional TextPart)."""
+        two-layer AdCP envelope) — not a DataPart alone. The strict reader REQUIRES
+        exactly that shape (one DataPart AND one TextPart), and every failed-artifact
+        emitter — this one, the per-skill ``error_result``, and the durable rebuild in
+        ``_durable_result_artifact`` — must satisfy it."""
         envelope = AdCPRequestHandler._build_error_envelope(exc)
         errors = envelope.get("errors") or []
         text = errors[0].get("message") if errors else "Request failed."
@@ -1131,9 +1133,9 @@ class AdCPRequestHandler(RequestHandler):
 
             # Notify ONLY for a non-terminal (submitted) initial response. An
             # immediately-completed task is returned synchronously in this response,
-            # and AdCP 3.1.1 a2a-guide.mdx ("Webhook Trigger Rules for
-            # Terminal States") says no webhook is sent when the initial response is
-            # already terminal — the buyer already has the result. Only the
+            # and AdCP 3.1.1 a2a-guide.mdx ("Webhook Trigger Rules") says no webhook is
+            # sent when the initial response is already terminal — the buyer already
+            # has the result. Only the
             # sync_creatives-pending → submitted transition reaches here as
             # non-terminal (create_media_buy submitted returns earlier).
             if task_status_str == "submitted":
@@ -1329,6 +1331,12 @@ class AdCPRequestHandler(RequestHandler):
         ``identity`` is the caller's resolved identity (see ``_durable_lookup_identity``);
         the lookup is tenant+principal-scoped, so an unresolved or non-owning identity
         yields None. Callers resolve identity once and pass it here.
+
+        A FAILED step is rebuilt with the SAME error framing the synchronous paths emit —
+        an ``error_result`` artifact carrying a human-readable TextPart alongside the
+        authoritative envelope DataPart (see ``_failed_task_artifact``). A buyer polling
+        an async failure must not receive a differently-shaped artifact than the one they
+        would have received had the same failure surfaced synchronously.
         """
         with self._owned_durable_step(task_id, identity) as owned:
             if owned is None:
@@ -1338,13 +1346,35 @@ class AdCPRequestHandler(RequestHandler):
             task = Task(id=task_id, context_id=step.context_id, status=TaskStatus(state=state))
             if step.response_data:
                 task.artifacts.append(
-                    Artifact(
-                        artifact_id=f"{task_id}_result",
-                        name="media_buy_result",
-                        parts=[Part(data=_dict_to_value(step.response_data))],
+                    self._durable_result_artifact(
+                        task_id, step.response_data, failed=state == TaskState.TASK_STATE_FAILED
                     )
                 )
             return task
+
+    @staticmethod
+    def _durable_result_artifact(task_id: str, response_data: dict[str, Any], *, failed: bool) -> "Artifact":
+        """The stored-result artifact for a durably-rebuilt Task.
+
+        Success keeps the ``media_buy_result`` DataPart. Failure mirrors the synchronous
+        error binding: an ``error_result`` artifact whose TextPart is the envelope's
+        human-readable message and whose DataPart is the two-layer envelope
+        ``audit_workflow_step_failure`` persisted — one framing for a failed artifact,
+        whether the buyer saw it synchronously or by polling.
+        """
+        if not failed:
+            return Artifact(
+                artifact_id=f"{task_id}_result",
+                name="media_buy_result",
+                parts=[Part(data=_dict_to_value(response_data))],
+            )
+        errors = response_data.get("errors") or []
+        text = (errors[0].get("message") if errors else None) or "Request failed."
+        return Artifact(
+            artifact_id=f"{task_id}_result",
+            name="error_result",
+            parts=[Part(text=text), Part(data=_dict_to_value(response_data))],
+        )
 
     async def on_cancel_task(
         self,

@@ -248,6 +248,49 @@ class TestA2ASkillInvocation:
         assert task.artifacts[0].parts, "result artifact must have parts"
 
     @pytest.mark.asyncio
+    async def test_durable_get_task_rebuilds_failed_task_with_the_error_binding(
+        self, handler, sample_tenant, sample_principal, mock_identity
+    ):
+        """A FAILED step polled durably must carry the SAME error framing a synchronous failure
+        emits — an ``error_result`` artifact with a human-readable TextPart beside the
+        authoritative envelope DataPart.
+
+        Regression: the durable rebuild emitted one ``media_buy_result`` DataPart for every
+        state, so a buyer who polled an async failure got a differently-shaped artifact than the
+        identical failure returned synchronously — and the strict reader would reject it.
+        Graded through that same strict reader, so the two paths cannot drift apart again.
+        """
+        external_task_id = "task_durable_failed_1"
+        envelope = {
+            "adcp_error": {
+                "code": "SERVICE_UNAVAILABLE",
+                "message": "An internal error occurred while processing the request.",
+                "recovery": "transient",
+            },
+            "errors": [
+                {
+                    "code": "SERVICE_UNAVAILABLE",
+                    "message": "An internal error occurred while processing the request.",
+                    "recovery": "transient",
+                }
+            ],
+        }
+        self._persist_a2a_step(
+            sample_tenant["tenant_id"],
+            sample_principal["principal_id"],
+            external_task_id,
+            envelope,
+            status="failed",
+        )
+
+        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
+        with patch.object(handler, "_resolve_a2a_identity", return_value=mock_identity):
+            task = handler._durable_task_from_step(external_task_id, mock_identity)
+
+        assert task is not None, "durable fallback must resolve the buyer's outer task id to the step"
+        assert_failed_task_envelope(task, code="SERVICE_UNAVAILABLE", recovery="transient")
+
+    @pytest.mark.asyncio
     async def test_durable_get_task_is_tenant_isolated(self, handler, sample_tenant, sample_principal):
         """The durable lookup is tenant-scoped: a poll authenticated as a DIFFERENT tenant must
         not resolve another tenant's outer task id."""
