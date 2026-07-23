@@ -349,12 +349,7 @@ def test_deliver_rejects_metadata_url_without_post(webhook_service, mock_db_sess
     mock_config.webhook_secret = None
     mock_db_session.scalars.return_value.all.return_value = [mock_config]
 
-    from src.services.webhook_delivery_service import CircuitBreaker
-
-    with (
-        patch("src.services.webhook_delivery_service.httpx.Client") as mock_client,
-        patch.object(CircuitBreaker, "record_failure", autospec=True) as mock_record_failure,
-    ):
+    with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
         result = webhook_service.send_delivery_webhook(
             media_buy_id="buy_ssrf",
             tenant_id="tenant1",
@@ -367,7 +362,9 @@ def test_deliver_rejects_metadata_url_without_post(webhook_service, mock_db_sess
 
     assert result is False
     mock_client.assert_not_called()
-    mock_record_failure.assert_called()
+    endpoint_key = f"tenant1:{mock_config.url}"
+    breaker = webhook_service._circuit_breakers[endpoint_key]
+    assert breaker.failure_count == 1
 
 
 def test_deliver_disables_httpx_redirects(webhook_service, mock_db_session):
