@@ -158,7 +158,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And the error code should be "AUTH_REQUIRED"
     And the error should include a "suggestion" field
 
-  @T-UC-006-ext-webhook-ssrf @extension @webhook-ssrf @error @post-f1 @post-f2 @post-f3
+  @T-UC-006-ext-webhook-ssrf @extension @ext-webhook-ssrf @webhook-ssrf @error @post-f1 @post-f2 @post-f3
   Scenario: Push notification webhook URL targeting a blocked host is rejected
     Given the Buyer is authenticated with a valid principal_id
     And a creative with name "Summer Banner" and a known format_id
@@ -171,7 +171,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # Registration SSRF gate (AdCP 3.1): VALIDATION_ERROR / recovery=correctable + suggestion
     # on MCP/REST/A2A tool transports. A2A-native push-config endpoints map the same
     # gate to InvalidParamsError — covered by unit pins, not this scenario.
-    # @source repo=adcp ref=v3.1.0-beta.3 path=dist/docs (error recovery enum)
+    # @source repo=adcp ref=v3.1.1 path=adcp/_schemas/3.1/manifest.json (error recovery enum)
     # POST-F1, POST-F2, POST-F3
     # --- ext-b: TENANT_NOT_FOUND ---
 
