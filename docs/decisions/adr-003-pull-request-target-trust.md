@@ -38,9 +38,17 @@ Current approved uses:
   then the same verify module and re-triggers failed `ipr-check` jobs on the PR
   head SHA. Path B checkouts the default branch for scripts (never PR head).
 - Residual trust note: because verify YAML comes from the PR tip, a hostile tip
-  could gut the job while keeping the check name. Accepted for now —
-  `ipr-check` is **not** in the org required-checks ruleset (compliance-gate
-  integrity, not secret escalation). Revisit if `ipr-check` becomes required.
+  could gut the job while keeping the check name. Accepted for now for the
+  standalone `IPR Agreement / ipr-check` workflow check.
+- **Merge-gate confirmation (2026-07-23 / #1669):** the `main` repository
+  ruleset `required_status_checks` contexts are exactly `E2E Tests`,
+  `Unit Tests`, and `Summary` — **not** `ipr-check` / `IPR Agreement`. A fresh
+  unsigned PR is therefore **not** blocked by the IPR workflow job alone.
+  Mitigation: CI job `ipr-gate` (`CI / IPR Gate`) runs the same
+  `scripts/ci/ipr_verify.py` verify on `pull_request` and is listed in
+  `summary.needs`, so an unsigned head fails the required `Summary` check.
+  Tip-YAML residual remains (hostile tip can gut `ipr-gate` the same way);
+  org owners may additionally add `ipr-check` to the ruleset later.
 
 Future `pull_request_target` additions require a separate ADR entry and @chrishuie review.
 

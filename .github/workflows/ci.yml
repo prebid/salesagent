@@ -297,7 +297,6 @@ jobs:
           docker ps -q | xargs -r docker kill || true
           docker compose down -v 2>/dev/null || true
           docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
-          docker compose down -v 2>/dev/null || true
           docker container prune -f 2>/dev/null || true
           docker network prune -f 2>/dev/null || true
           docker volume prune -f 2>/dev/null || true
@@ -622,6 +621,49 @@ jobs:
           uv run coverage combine --data-file=.coverage.combined .coverage "${bdd_data_files[@]}"
           ./scripts/ci/coverage_report.sh --data-file .coverage.combined
 
+
+  # Merge-gate IPR for pull_request: org ruleset requires Summary (not IPR Agreement /
+  # ipr-check). Wire the same verify into CI so unsigned heads fail Summary.
+  # Skipped on push/dispatch (no PR number); Summary accepts skipped.
+  ipr-gate:
+    name: IPR Gate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    timeout-minutes: 10
+    steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+          disable-sudo-and-containers: true
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Verify IPR signatures (read-only)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -euo pipefail
+          # SSOT: same IPR_BOT_ALLOWLIST string as .github/workflows/ipr-agreement.yml
+          IPR_BOT_ALLOWLIST="$(sed -n 's/^  IPR_BOT_ALLOWLIST: "\(.*\)"$/\1/p' \
+            .github/workflows/ipr-agreement.yml)"
+          test -n "${IPR_BOT_ALLOWLIST}"
+          export IPR_BOT_ALLOWLIST
+          # shellcheck source=scripts/ci/ipr_gh_retry.sh
+          . scripts/ci/ipr_gh_retry.sh
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+          ipr_fetch_sigs_and_commits "${tmp}" "${REPO}" "${PR_NUMBER}"
+          python3 scripts/ci/ipr_verify.py verify \
+            --sigs "${tmp}/sigs.json" \
+            --commits "${tmp}/commits.json" \
+            --pr-author "${PR_AUTHOR}"
+
   summary:
     name: Summary
     runs-on: ubuntu-latest
@@ -645,6 +687,7 @@ jobs:
         bdd-in-network,
         migration-roundtrip,
         coverage,
+        ipr-gate,
       ]
     steps:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
@@ -666,7 +709,7 @@ jobs:
              [ "${{ needs.bdd-tests.result }}" != "success" ] || \
              [ "${{ needs.bdd-in-network.result }}" != "success" ] || \
              [ "${{ needs.migration-roundtrip.result }}" != "success" ] || \
-             [ "${{ needs.coverage.result }}" != "success" ]; then
+             [ "${{ needs.coverage.result }}" != "success" ] ||              { [ "${{ needs.ipr-gate.result }}" != "success" ] && [ "${{ needs.ipr-gate.result }}" != "skipped" ]; }; then
             echo "One or more required checks failed."
             exit 1
           fi

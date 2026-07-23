@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-import yaml
 
 from scripts.ci.ipr_verify import (
     collect_authors,
@@ -20,9 +19,9 @@ from scripts.ci.ipr_verify import (
     signed_names,
     verify_ipr,
 )
-from tests.unit._architecture_helpers import repo_root
+from tests.unit._architecture_helpers import ipr_agreement_workflow_path, load_yaml_mapping
 
-_IPR_WORKFLOW = repo_root() / ".github" / "workflows" / "ipr-agreement.yml"
+_IPR_WORKFLOW = ipr_agreement_workflow_path()
 
 # Canonical bot logins that must match the workflow IPR_BOT_ALLOWLIST globs.
 # Real [bot] accounts only — bare "bot" is not a GitHub login and would pin the
@@ -70,6 +69,16 @@ def _run_verify(
             allowlist,
         ]
     )
+
+
+def _run_failed_run_ids(tmp_path: Path, *, payload: object, head_sha: str = "abc") -> int:
+    """Shared failed-run-ids CLI setup mirroring ``_run_verify``."""
+    runs = tmp_path / "runs.json"
+    if isinstance(payload, (dict, list)):
+        runs.write_text(json.dumps(payload), encoding="utf-8")
+    else:
+        runs.write_text(str(payload), encoding="utf-8")
+    return main(["failed-run-ids", "--runs", str(runs), "--head-sha", head_sha])
 
 
 def test_bot_glob_matches_bot_prefix_not_robot():
@@ -189,10 +198,10 @@ def test_allowlisted_bot_skips_signature(tmp_path: Path):
 def test_main_rejects_non_object_sigs(tmp_path: Path, capsys):
     sigs_path, commits_path = _write_verify_inputs(
         tmp_path,
-        sigs=[],  # type: ignore[arg-type]  # intentional bad shape
+        sigs={"signedContributors": []},
         commits=[{"author": {"login": "alice"}}],
     )
-    # Overwrite sigs with a JSON array (not object).
+    # Corrupt to a JSON array (not object) — single write after valid setup.
     sigs_path.write_text("[]", encoding="utf-8")
     rc = main(
         [
@@ -213,9 +222,9 @@ def test_main_rejects_non_list_commits(tmp_path: Path, capsys):
     sigs_path, commits_path = _write_verify_inputs(
         tmp_path,
         sigs={"signedContributors": []},
-        commits={"not": "a list"},  # type: ignore[arg-type]  # intentional bad shape
+        commits=[{"author": {"login": "alice"}}],
     )
-    # Overwrite commits with a JSON object (not list).
+    # Corrupt to a JSON object (not list) — single write after valid setup.
     commits_path.write_text(json.dumps({"not": "a list"}), encoding="utf-8")
     rc = main(
         [
@@ -277,16 +286,44 @@ def test_main_rejects_missing_commits_file(tmp_path: Path, capsys):
 
 
 def test_failed_run_ids_rejects_non_object_payload(tmp_path: Path, capsys):
+    rc = _run_failed_run_ids(tmp_path, payload=[])
+    assert rc == 2
+    assert "expected workflow runs object" in capsys.readouterr().err
+
+
+def test_failed_run_ids_cli_prints_failed_id(tmp_path: Path, capsys):
+    """CLI altitude: non-empty failed runs print the id (rc 0)."""
+    rc = _run_failed_run_ids(
+        tmp_path,
+        payload={
+            "workflow_runs": [
+                {"id": 99, "head_sha": "abc", "status": "completed", "conclusion": "failure"},
+                {"id": 100, "head_sha": "abc", "status": "completed", "conclusion": "success"},
+            ]
+        },
+    )
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == "99"
+
+
+def test_failed_run_ids_cli_rejects_corrupt_json(tmp_path: Path, capsys):
     runs = tmp_path / "runs.json"
-    runs.write_text("[]", encoding="utf-8")
+    runs.write_text("{not-json", encoding="utf-8")
     rc = main(["failed-run-ids", "--runs", str(runs), "--head-sha", "abc"])
+    assert rc == 2
+    assert "expected workflow runs object" in capsys.readouterr().err
+
+
+def test_failed_run_ids_cli_rejects_missing_file(tmp_path: Path, capsys):
+    missing = tmp_path / "missing-runs.json"
+    rc = main(["failed-run-ids", "--runs", str(missing), "--head-sha", "abc"])
     assert rc == 2
     assert "expected workflow runs object" in capsys.readouterr().err
 
 
 def test_canonical_bot_logins_match_workflow_allowlist():
     """Membership pin: workflow IPR_BOT_ALLOWLIST globs cover known bot logins."""
-    data = yaml.safe_load(_IPR_WORKFLOW.read_text(encoding="utf-8"))
+    data = load_yaml_mapping(_IPR_WORKFLOW)
     raw = str((data.get("env") or {})["IPR_BOT_ALLOWLIST"])
     allow_res = compile_allowlist(parse_allowlist_globs(raw))
     for login in _CANONICAL_BOT_LOGINS:
@@ -327,8 +364,6 @@ def test_failed_run_ids_and_format_omit_blank_line_when_empty():
 
 
 def test_failed_run_ids_cli_prints_nothing_when_empty(tmp_path: Path, capsys):
-    runs = tmp_path / "runs.json"
-    runs.write_text(json.dumps({"workflow_runs": []}), encoding="utf-8")
-    rc = main(["failed-run-ids", "--runs", str(runs), "--head-sha", "abc"])
+    rc = _run_failed_run_ids(tmp_path, payload={"workflow_runs": []})
     assert rc == 0
     assert capsys.readouterr().out == ""

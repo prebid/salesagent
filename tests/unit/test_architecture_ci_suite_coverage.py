@@ -9,31 +9,63 @@ must propagate BDD/E2E failures so a red suite turns CI red.
 This is a configuration-contract assertion: the workflow file is parsed as
 YAML data and the job graph is inspected. It is NOT a source-code AST scan.
 
-No allowlist — zero tolerance. Every locally-run suite must have a gating
-CI job, or a broken suite can silently land on main again.
+No allowlist — zero tolerance for mapped suites. Every locally-run suite in
+``run_all_tests.sh`` ALL_SUITES must map to a summary gate **or** an explicit
+documented exclusion (currently ``ui`` — Playwright / full-stack cost, no CI
+job yet). CI-only gates (smoke, bdd-in-network, ipr-gate) are listed separately.
 """
 
+import re
 from pathlib import Path
 
 import pytest
-import yaml
 
 from scripts.ci.workflow_helpers import load_ci_workflow
-from tests.unit._architecture_helpers import repo_root
+from tests.unit._architecture_helpers import load_yaml_mapping, repo_root
 
-# Suite jobs that must appear in summary.needs — a suite that runs but is absent
-# from summary.needs leaves CI green on its failure (PR #1299 silent-breakage class).
-REQUIRED_SUMMARY_GATES = frozenset(
+# Local suite → summary.needs job. Derived from run_all_tests.sh ALL_SUITES;
+# unmapped suites must be listed in UNGATED_LOCAL_SUITES with a documented reason.
+_LOCAL_SUITE_TO_SUMMARY_GATE: dict[str, str] = {
+    "unit": "unit-tests",
+    "integration": "integration-tests",
+    "bdd": "bdd-tests",
+    "admin": "admin-ui-tests",
+    "e2e": "e2e-tests",
+}
+# Intentionally ungated in CI (no job yet). Soften the "every suite" claim:
+# these are excluded at the source map, not silently omitted from a hand list.
+UNGATED_LOCAL_SUITES = frozenset({"ui"})
+
+# CI-only gates that are not ALL_SUITES entries but must still floor Summary.
+_EXTRA_SUMMARY_GATES = frozenset(
     {
-        "unit-tests",
-        "integration-tests",
-        "e2e-tests",
-        "bdd-tests",
-        "admin-ui-tests",
         "bdd-in-network",
         "smoke-tests",
+        "ipr-gate",  # merge-gate IPR via Summary (org ruleset does not require ipr-check)
     }
 )
+
+
+def _all_suites_from_runner() -> list[str]:
+    runner = repo_root() / "run_all_tests.sh"
+    m = re.search(r'ALL_SUITES="([^"]+)"', runner.read_text(encoding="utf-8"))
+    assert m, "run_all_tests.sh must define ALL_SUITES"
+    return [s.strip() for s in m.group(1).split(",") if s.strip()]
+
+
+def _required_summary_gates() -> frozenset[str]:
+    suites = _all_suites_from_runner()
+    unknown = [s for s in suites if s not in _LOCAL_SUITE_TO_SUMMARY_GATE and s not in UNGATED_LOCAL_SUITES]
+    assert not unknown, (
+        f"ALL_SUITES entries {unknown} are neither mapped to a summary gate nor listed in "
+        f"UNGATED_LOCAL_SUITES — add a CI job map entry or an explicit exclusion."
+    )
+    mapped = {_LOCAL_SUITE_TO_SUMMARY_GATE[s] for s in suites if s in _LOCAL_SUITE_TO_SUMMARY_GATE}
+    return frozenset(mapped | _EXTRA_SUMMARY_GATES)
+
+
+# Back-compat name used by tests below (computed once at import).
+REQUIRED_SUMMARY_GATES = _required_summary_gates()
 
 _FREE_DISK_USES = "./.github/actions/_free-disk"
 _FREE_DISK_ACTION = repo_root() / ".github" / "actions" / "_free-disk" / "action.yml"
@@ -115,12 +147,10 @@ def _assert_free_disk_action_reclaims_runner(action: dict | Path | None = None) 
     """
     label: str
     if action is None:
-        assert _FREE_DISK_ACTION.is_file(), f"missing {_FREE_DISK_ACTION}"
-        data = yaml.safe_load(_FREE_DISK_ACTION.read_text(encoding="utf-8"))
+        data = load_yaml_mapping(_FREE_DISK_ACTION)
         label = str(_FREE_DISK_ACTION)
     elif isinstance(action, Path):
-        assert action.is_file(), f"missing {action}"
-        data = yaml.safe_load(action.read_text(encoding="utf-8"))
+        data = load_yaml_mapping(action)
         label = str(action)
     else:
         data = action
@@ -137,9 +167,8 @@ def _assert_free_disk_action_reclaims_runner(action: dict | Path | None = None) 
 
 
 def _load_e2e_compose() -> dict:
-    assert _E2E_COMPOSE.is_file(), f"missing {_E2E_COMPOSE}"
-    data = yaml.safe_load(_E2E_COMPOSE.read_text(encoding="utf-8"))
-    assert isinstance(data, dict) and data.get("services"), f"{_E2E_COMPOSE} must declare services."
+    data = load_yaml_mapping(_E2E_COMPOSE)
+    assert data.get("services"), f"{_E2E_COMPOSE} must declare services."
     return data
 
 
@@ -344,6 +373,14 @@ class TestCISuiteCoverage:
         assert not missing, "CI jobs missing hygiene fields:\n" + "\n".join(f"  - {m}" for m in missing)
 
     @pytest.mark.arch_guard
+    @pytest.mark.arch_guard
+    def test_local_suites_map_or_explicit_exclusion(self):
+        """ALL_SUITES must map to summary gates or UNGATED_LOCAL_SUITES (no silent drops)."""
+        suites = _all_suites_from_runner()
+        assert "ui" in UNGATED_LOCAL_SUITES, "ui must stay an explicit ungated exclusion until a CI job exists"
+        assert "ui" in suites, "run_all_tests.sh ALL_SUITES must still list ui (exclusion is at the gate map)"
+        assert "ipr-gate" in REQUIRED_SUMMARY_GATES, "Summary must gate IPR (merge-block via required Summary check)"
+
     def test_summary_gates_every_required_job(self):
         """summary must include every suite gate AND fail for every job in summary.needs."""
         workflow = load_ci_workflow()

@@ -7,25 +7,26 @@ or drop post-sign re-verify / re-run without failing Quality Gate.
 
 from __future__ import annotations
 
-from pathlib import Path
+import re
 from typing import Any
 
 import pytest
-import yaml
 
-from tests.unit._architecture_helpers import repo_root
+from tests.unit._architecture_helpers import (
+    ipr_agreement_workflow_path,
+    load_yaml_mapping,
+    repo_root,
+)
 
-_IPR_WORKFLOW = repo_root() / ".github" / "workflows" / "ipr-agreement.yml"
+_IPR_WORKFLOW = ipr_agreement_workflow_path()
 _ZIZMOR = repo_root() / ".github" / "zizmor.yml"
+_RETRY_SH = repo_root() / "scripts" / "ci" / "ipr_gh_retry.sh"
 _VERIFY_SCRIPT = "scripts/ci/ipr_verify.py"
 _RETRY_SCRIPT = "scripts/ci/ipr_gh_retry.sh"
 
-
-def _load_yaml(path: Path) -> dict[str, Any]:
-    assert path.is_file(), f"missing {path}"
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    assert isinstance(data, dict), f"{path} must parse to a mapping"
-    return data
+# Keep in lockstep with ``gh_retry_to`` in ipr_gh_retry.sh (and the Path B health probe).
+_IPR_RETRY_MAX = 5
+_IPR_RETRY_SLEEP_FACTOR = 15
 
 
 def _job_run_text(job: dict[str, Any]) -> str:
@@ -36,10 +37,20 @@ def _job_run_text(job: dict[str, Any]) -> str:
     return "\n".join(chunks)
 
 
+def _soft_swallow_suffix(line: str) -> bool:
+    """True if a shell line soft-swallows failure (``|| true`` / ``|| :`` / trailing ``set +e``)."""
+    stripped = line.rstrip()
+    if stripped.endswith("|| true") or stripped.endswith("||:"):
+        return True
+    if stripped.endswith("|| :"):
+        return True
+    return False
+
+
 class TestIPRAgreementContract:
     @pytest.mark.arch_guard
     def test_ipr_workflow_has_no_pull_request_target(self):
-        wf = _load_yaml(_IPR_WORKFLOW)
+        wf = load_yaml_mapping(_IPR_WORKFLOW)
         on = wf.get("on") or wf.get(True)  # YAML may parse `on` as True
         assert on is not None, "ipr-agreement.yml must declare an `on:` trigger block"
         if isinstance(on, dict):
@@ -54,7 +65,7 @@ class TestIPRAgreementContract:
 
     @pytest.mark.arch_guard
     def test_ipr_bot_allowlist_is_ssot(self):
-        wf = _load_yaml(_IPR_WORKFLOW)
+        wf = load_yaml_mapping(_IPR_WORKFLOW)
         env = wf.get("env") or {}
         assert "IPR_BOT_ALLOWLIST" in env, "workflow env must define IPR_BOT_ALLOWLIST SSOT"
         allowlist = str(env["IPR_BOT_ALLOWLIST"])
@@ -92,7 +103,7 @@ class TestIPRAgreementContract:
 
     @pytest.mark.arch_guard
     def test_path_b_post_sign_reverify_and_rerun(self):
-        wf = _load_yaml(_IPR_WORKFLOW)
+        wf = load_yaml_mapping(_IPR_WORKFLOW)
         sign = (wf.get("jobs") or {}).get("ipr-sign") or {}
         run_text = _job_run_text(sign)
         assert "ipr_verify.py verify" in run_text, "Path B must re-verify after CLA Assistant sign"
@@ -100,9 +111,7 @@ class TestIPRAgreementContract:
         # Soft-swallow of re-run failure must not return (sign green / check red).
         for line in run_text.splitlines():
             if "rerun-failed-jobs" in line or ("actions/runs" in line and "/rerun" in line):
-                assert not line.rstrip().endswith("|| true"), (
-                    f"re-run API line must not soft-swallow failures: {line!r}"
-                )
+                assert not _soft_swallow_suffix(line), f"re-run API line must not soft-swallow failures: {line!r}"
 
     @pytest.mark.arch_guard
     def test_ipr_sign_checkouts_default_branch_not_pr_head(self):
@@ -112,7 +121,7 @@ class TestIPRAgreementContract:
         execute tip workflow/scripts with a write token — pin ``ref`` explicitly.
         ``ipr-check`` tip checkout under ``pull_request`` remains allowed.
         """
-        wf = _load_yaml(_IPR_WORKFLOW)
+        wf = load_yaml_mapping(_IPR_WORKFLOW)
         sign = (wf.get("jobs") or {}).get("ipr-sign") or {}
         steps = sign.get("steps") or []
         checkouts = [s for s in steps if isinstance(s, dict) and str(s.get("uses", "")).startswith("actions/checkout")]
@@ -129,10 +138,107 @@ class TestIPRAgreementContract:
         assert not any(tok in ref for ref in refs for tok in ("pull_request", ".head", "refs/pull", "event.issue")), (
             f"ipr-sign must not checkout PR-head-derived refs (got refs={refs!r})"
         )
+        # Privileged job: no repository override, credentials never persisted.
+        assert all(not (s.get("with") or {}).get("repository") for s in checkouts), (
+            "ipr-sign checkout must not override repository (would run fork code with the write token)"
+        )
+        assert all((s.get("with") or {}).get("persist-credentials") is False for s in checkouts), (
+            "ipr-sign checkout must set persist-credentials: false"
+        )
+        # The gate consumes ipr_verify.py's exit code; keep it fail-closed.
+        verify_steps = 0
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            run = step.get("run") or ""
+            if "ipr_verify.py verify" in run:
+                verify_steps += 1
+                assert "set -euo pipefail" in run, "verify step must keep set -euo pipefail"
+                assert step.get("continue-on-error") is not True, "verify step must not continue-on-error"
+                # Soft-swallow / set +e would mask a failed verify exit.
+                assert "set +e" not in run, "verify step must not disable errexit with set +e"
+                for line in run.splitlines():
+                    if "ipr_verify.py verify" in line:
+                        assert not _soft_swallow_suffix(line), f"verify invocation must not soft-swallow: {line!r}"
+        assert verify_steps >= 1, "ipr-sign must include a run step that invokes ipr_verify.py verify"
+
+        # Invisible PR-head checkout via shell (not actions/checkout).
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            run = step.get("run") or ""
+            assert "gh pr checkout" not in run, "ipr-sign must not gh pr checkout (would run PR-head code)"
+            assert not re.search(r"git\s+fetch\s+.*pull/\d+/head", run), (
+                "ipr-sign must not git fetch pull/N/head (would run PR-head code)"
+            )
 
     @pytest.mark.arch_guard
+    def test_ipr_retry_constants_match_health_probe(self):
+        """Path B health probe backoff must match ``gh_retry_to`` (same max / sleep factor)."""
+        retry_src = _RETRY_SH.read_text(encoding="utf-8")
+        assert f"local max={_IPR_RETRY_MAX}" in retry_src, f"ipr_gh_retry.sh must keep max={_IPR_RETRY_MAX}"
+        assert f"attempt * {_IPR_RETRY_SLEEP_FACTOR}" in retry_src or (
+            f"attempt*{_IPR_RETRY_SLEEP_FACTOR}" in retry_src
+        ), f"ipr_gh_retry.sh must keep attempt*{_IPR_RETRY_SLEEP_FACTOR} sleep"
+
+        wf = load_yaml_mapping(_IPR_WORKFLOW)
+        sign = (wf.get("jobs") or {}).get("ipr-sign") or {}
+        probe = next(
+            (
+                s
+                for s in (sign.get("steps") or [])
+                if isinstance(s, dict) and "Wait for GitHub API" in str(s.get("name", ""))
+            ),
+            None,
+        )
+        assert probe is not None, "ipr-sign must include Wait for GitHub API step"
+        run = probe.get("run") or ""
+        assert f"max={_IPR_RETRY_MAX}" in run, f"health probe must use max={_IPR_RETRY_MAX} (same as gh_retry_to)"
+        assert f"attempt * {_IPR_RETRY_SLEEP_FACTOR}" in run or (f"attempt*{_IPR_RETRY_SLEEP_FACTOR}" in run), (
+            f"health probe must use attempt*{_IPR_RETRY_SLEEP_FACTOR} (same as gh_retry_to)"
+        )
+
+    @pytest.mark.arch_guard
+    def test_path_a_uses_module_default_missing_message(self):
+        """Path A must not fork ``--missing-message`` (module argparse default is SSOT)."""
+        wf = load_yaml_mapping(_IPR_WORKFLOW)
+        check_run = _job_run_text((wf.get("jobs") or {}).get("ipr-check") or {})
+        assert "--missing-message" not in check_run, (
+            "Path A must omit --missing-message so ipr_verify.py argparse default cannot drift"
+        )
+
+    @pytest.mark.arch_guard
+    def test_ipr_sign_harden_runner_disables_sudo_and_containers(self):
+        wf = load_yaml_mapping(_IPR_WORKFLOW)
+        sign = (wf.get("jobs") or {}).get("ipr-sign") or {}
+        harden = next(
+            (s for s in (sign.get("steps") or []) if isinstance(s, dict) and "harden-runner" in str(s.get("uses", ""))),
+            None,
+        )
+        assert harden is not None, "ipr-sign must use harden-runner"
+        with_block = harden.get("with") or {}
+        assert with_block.get("disable-sudo-and-containers") is True, (
+            "ipr-sign harden-runner must set disable-sudo-and-containers: true (write-token job)"
+        )
+
+    @pytest.mark.arch_guard
+    @pytest.mark.arch_guard
+    def test_ci_ipr_gate_reads_allowlist_ssot(self):
+        """CI ipr-gate must extract IPR_BOT_ALLOWLIST from ipr-agreement.yml (no forked literal)."""
+        from scripts.ci.workflow_helpers import load_ci_workflow
+
+        job = (load_ci_workflow().get("jobs") or {}).get("ipr-gate") or {}
+        assert job, "ci.yml must define ipr-gate (Summary merge-gate for unsigned PRs)"
+        run = _job_run_text(job)
+        assert "ipr-agreement.yml" in run and "IPR_BOT_ALLOWLIST" in run, (
+            "ipr-gate must derive IPR_BOT_ALLOWLIST from ipr-agreement.yml SSOT"
+        )
+        assert 'IPR_BOT_ALLOWLIST: "bot*' not in str(job), (
+            "ipr-gate must not hardcode a forked IPR_BOT_ALLOWLIST env literal"
+        )
+
     def test_zizmor_does_not_relist_ipr_for_dangerous_triggers(self):
-        ziz = _load_yaml(_ZIZMOR)
+        ziz = load_yaml_mapping(_ZIZMOR)
         rules = ziz.get("rules") or {}
         dangerous = (rules.get("dangerous-triggers") or {}).get("ignore") or []
         assert isinstance(dangerous, list) and dangerous, (

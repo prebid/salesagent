@@ -37,6 +37,9 @@ env:
   #   - trailing-* prefix globs only (e.g. bot*, not *bot); verify expands * → .*
   #     with ^…$ anchors so exact entries cannot suffix-overmatch
   # Keep CLA Assistant and ipr_verify in lockstep — do not fork a second literal.
+  # Authors whose commit email is not linked to a GitHub account (null login) are
+  # not required to sign — login-based CLA matching; fail-safe because the PR
+  # author login is always included in the author set.
   IPR_BOT_ALLOWLIST: "bot*,dependabot*,renovate*,github-actions*"
 
 jobs:
@@ -51,6 +54,7 @@ jobs:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
           egress-policy: audit
+          disable-sudo-and-containers: true
       # pull_request (not PRT): tip checkout is the trust model; ADR-003 only
       # forbids PR-head checkout under pull_request_target.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -77,8 +81,7 @@ jobs:
           python3 scripts/ci/ipr_verify.py verify \
             --sigs "${tmp}/sigs.json" \
             --commits "${tmp}/commits.json" \
-            --pr-author "${PR_AUTHOR}" \
-            --missing-message "IPR Policy not signed by: {missing}. Comment on the PR with exactly: I have read the IPR Policy"
+            --pr-author "${PR_AUTHOR}"
 
   # ── B: record a new signature (comment path only) ─────────────────────────
   # Keep the standard CLA model: any commenter with the exact phrase may sign.
@@ -100,6 +103,7 @@ jobs:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
           egress-policy: audit
+          disable-sudo-and-containers: true
       - name: Wait for GitHub API (retry on Unicorn/503)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
