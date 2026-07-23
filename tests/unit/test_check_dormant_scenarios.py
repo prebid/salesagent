@@ -7,12 +7,14 @@ touched paths to the BDD test modules that bind them, the ``git status
 --porcelain`` parsing, and the run-result guard (mocked subprocess) that fails
 a broken pytest run instead of reporting a false all-clear.
 
-The classification tests deliberately do NOT restate the script's own marker
-literals — that would only prove the classifier agrees with itself. They build
-reasons with ``tests.bdd.xfail_taxonomy``'s builders, the same functions
-``tests/bdd/conftest.py`` emits from, so a reason reworded outside the shared
-module reddens here instead of silently reclassifying dormant scenarios as
-documented gaps.
+The two drift-pin tests (``test_every_conftest_dormant_reason_classifies_as_dormant``
+and the ``_harness_env`` taxonomy-derivation guard) deliberately build reasons
+from ``tests.bdd.xfail_taxonomy``'s builders — the same functions
+``tests/bdd/conftest.py`` emits from — rather than restating markers, so a reason
+reworded outside the shared module reddens here instead of silently reclassifying
+dormant scenarios as documented gaps. The ``TestClassify`` cases and their
+``SAMPLE_OUTPUT`` fixture DO spell the marker strings out verbatim; that is fine —
+they are a parser fixture exercising the split, not a claim about the vocabulary.
 """
 
 from __future__ import annotations
@@ -205,6 +207,11 @@ class TestRunWithoutDbForcesNoColor:
         monkeypatch.setattr(cds.subprocess, "run", fake_run)
         monkeypatch.setenv("FORCE_COLOR", "1")
         monkeypatch.setenv("PY_COLORS", "1")
+        # Set in the parent env so the DATABASE_URL-strip assertion below is real:
+        # the child run must NOT inherit it, or a wired scenario connects and skips
+        # instead of xfailing, and the dormant/documented split the tool exists to
+        # make silently breaks.
+        monkeypatch.setenv("DATABASE_URL", "postgresql://should-be-stripped/x")
         cds.run_without_db([cds.REPO_ROOT / "tests" / "bdd" / "test_uc018_list_creatives.py"])
         return captured
 
@@ -215,6 +222,16 @@ class TestRunWithoutDbForcesNoColor:
         env = self._capture(monkeypatch)["env"]
         assert env.get("PY_COLORS") == "0"
         assert "FORCE_COLOR" not in env
+
+    def test_database_url_stripped_from_child_env(self, monkeypatch):
+        """The child pytest must run WITHOUT a DB so wired scenarios skip (not run).
+
+        That skip-vs-xfail split is the whole classification: a wired scenario that
+        connects would run green and never surface as dormant. Deletion oracle:
+        drop the ``if k != "DATABASE_URL"`` filter in ``run_without_db`` and this
+        reddens.
+        """
+        assert "DATABASE_URL" not in self._capture(monkeypatch)["env"]
 
 
 class TestConftestUsesSharedTaxonomy:
@@ -240,11 +257,8 @@ class TestConftestUsesSharedTaxonomy:
             # pytest.xfail("...") / xfail("...") positional reason
             if isinstance(node, ast.Call):
                 func = node.func
-                if (
-                    isinstance(func, ast.Attribute)
-                    and func.attr == "xfail"
-                    or isinstance(func, ast.Name)
-                    and func.id == "xfail"
+                if (isinstance(func, ast.Attribute) and func.attr == "xfail") or (
+                    isinstance(func, ast.Name) and func.id == "xfail"
                 ):
                     for arg in node.args:
                         if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
@@ -273,6 +287,80 @@ class TestConftestUsesSharedTaxonomy:
             f"tests/bdd/conftest.py re-types the xfail reason fragment {fragment!r} instead of "
             f"building it from tests/bdd/xfail_taxonomy. The dormant-scenario checker classifies "
             f"on that vocabulary, so a hand-typed copy drifts silently. Offenders: {offenders}"
+        )
+
+
+class TestHarnessEnvReasonsAreTaxonomyDerived:
+    """Every ``_harness_env`` xfail reason must be BUILT from ``xfail_taxonomy``.
+
+    This is the positive class-closer the negative anti-retype guard above does
+    not provide. That guard only fires on a re-typed KNOWN marker; a brand-new
+    no-marker wiring phrasing — the shape all these sites had before the routing
+    fix (e.g. ``"...create_media_buy harness wiring is tracked in #1652"``) —
+    contains no marker, so ``is_dormant_reason`` returns False, the scenario
+    silently re-buckets as a documented gap, and the negative guard stays green.
+
+    This test instead requires every ``pytest.xfail(...)`` reason inside
+    ``_harness_env`` to REFERENCE ``xfail_taxonomy`` — a builder call
+    (``xfail_taxonomy.no_harness_wired(uc)``) or an f-string / constant that
+    names a taxonomy constant (``f"... {xfail_taxonomy.NOT_YET_WIRED} ..."``). A
+    bare string literal, or an f-string with no taxonomy reference, is an
+    offender. So a bespoke wiring reason cannot be written in this function
+    without reddening here — the class is closed, not just the known instances.
+
+    Deletion oracle: revert any routed reason to a bare literal and this reddens.
+    (No exemption is needed today: every branch already routes through the
+    taxonomy, including the documented ``e2e_unsupported_setup`` builder used
+    outside this function.)
+    """
+
+    @staticmethod
+    def _references_taxonomy(node: object) -> bool:
+        import ast
+
+        return any(
+            isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name) and sub.value.id == "xfail_taxonomy"
+            for sub in ast.walk(node)  # type: ignore[arg-type]
+        )
+
+    @classmethod
+    def _reason_is_derived(cls, reason: object) -> bool:
+        import ast
+
+        if isinstance(reason, ast.Call):  # a builder call, e.g. xfail_taxonomy.no_harness_wired(uc)
+            return cls._references_taxonomy(reason.func)
+        if isinstance(reason, ast.JoinedStr | ast.Attribute | ast.Name):  # f-string or bare constant ref
+            return cls._references_taxonomy(reason)
+        return False  # a bare Constant string, or anything with no taxonomy reference
+
+    def test_every_harness_env_xfail_reason_is_taxonomy_derived(self):
+        import ast
+
+        conftest = Path(__file__).resolve().parents[1] / "bdd" / "conftest.py"
+        source = conftest.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        env = next(
+            (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_harness_env"),
+            None,
+        )
+        assert env is not None, "could not find _harness_env in tests/bdd/conftest.py"
+
+        offenders: list[str] = []
+        for node in ast.walk(env):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "xfail"):
+                continue
+            if not node.args:
+                continue
+            reason = node.args[0]
+            if not self._reason_is_derived(reason):
+                offenders.append(ast.get_source_segment(source, reason) or ast.dump(reason))
+
+        assert offenders == [], (
+            "_harness_env passes a bespoke wiring reason to pytest.xfail() instead of building it from "
+            "tests/bdd/xfail_taxonomy. A reason with no taxonomy marker classifies as a documented gap, so "
+            "the scenario silently drops out of the dormant count. Route it through a builder or an f-string "
+            f"referencing a taxonomy constant. Offenders: {offenders}"
         )
 
 
