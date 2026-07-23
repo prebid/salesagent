@@ -825,9 +825,10 @@ class TestFailedWebhookSendRaisesNotCountedAsSent:
     Headline correctness fix (#1570/#1575): ``_send_report_for_media_buy`` returns
     ``bool`` and raises ``RuntimeError`` when the outbound send reports failure,
     and ``_send_reports`` increments ``reports_sent`` only on a truthy return.
-    Every ``fake_send_notification`` elsewhere in the suite returns ``True``, so
-    this is the only test that drives the ``if not delivered: raise`` branch —
-    deleting that branch turns this red.
+    The ``if not delivered: raise`` branch is driven through the shared
+    ``_drive_failed_send`` helper — here and in
+    ``test_failed_send_releases_the_claim_for_immediate_retry`` — so deleting the
+    branch turns both red.
 
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
     """
