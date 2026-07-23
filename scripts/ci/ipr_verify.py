@@ -153,7 +153,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "failed-run-ids":
-        payload = _load_json(args.runs)
+        try:
+            payload = _load_json(args.runs)
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"expected workflow runs object from GitHub API ({exc})", file=sys.stderr)
+            return 2
         if not isinstance(payload, dict):
             print("expected workflow runs object from GitHub API", file=sys.stderr)
             return 2
@@ -162,8 +166,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(text)
         return 0
 
-    sigs_doc = _load_json(args.sigs)
-    commits = _load_json(args.commits)
+    try:
+        sigs_doc = _load_json(args.sigs)
+        commits = _load_json(args.commits)
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"expected signatures/commits JSON from GitHub API ({exc})", file=sys.stderr)
+        return 2
     if not isinstance(sigs_doc, dict):
         print("expected signatures object from GitHub API", file=sys.stderr)
         return 2

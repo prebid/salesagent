@@ -19,14 +19,25 @@ import pytest
 import yaml
 
 from scripts.ci.workflow_helpers import load_ci_workflow
+from tests.unit._architecture_helpers import repo_root
 
 # Suite jobs that must appear in summary.needs — a suite that runs but is absent
 # from summary.needs leaves CI green on its failure (PR #1299 silent-breakage class).
-REQUIRED_SUMMARY_GATES = frozenset({"unit-tests", "integration-tests", "e2e-tests", "bdd-tests", "admin-ui-tests"})
+REQUIRED_SUMMARY_GATES = frozenset(
+    {
+        "unit-tests",
+        "integration-tests",
+        "e2e-tests",
+        "bdd-tests",
+        "admin-ui-tests",
+        "bdd-in-network",
+        "smoke-tests",
+    }
+)
 
 _FREE_DISK_USES = "./.github/actions/_free-disk"
-_FREE_DISK_ACTION = Path(__file__).resolve().parents[2] / ".github" / "actions" / "_free-disk" / "action.yml"
-_E2E_COMPOSE = Path(__file__).resolve().parents[2] / "docker-compose.e2e.yml"
+_FREE_DISK_ACTION = repo_root() / ".github" / "actions" / "_free-disk" / "action.yml"
+_E2E_COMPOSE = repo_root() / "docker-compose.e2e.yml"
 
 
 def _is_adcp_testing_true(value: object) -> bool:

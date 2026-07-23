@@ -107,6 +107,18 @@ def test_empty_allowlist_exits_2(capsys):
     assert "IPR_BOT_ALLOWLIST is empty" in capsys.readouterr().err
 
 
+def test_main_empty_allowlist_returns_2(tmp_path: Path, capsys):
+    """SystemExit relay in main() must be on a test path (empty allowlist)."""
+    rc = _run_verify(
+        tmp_path,
+        sigs={"signedContributors": []},
+        commits=[{"author": {"login": "alice"}}],
+        allowlist=" , ",
+    )
+    assert rc == 2
+    assert "IPR_BOT_ALLOWLIST is empty" in capsys.readouterr().err
+
+
 def test_no_authors_exits_2(capsys):
     with pytest.raises(SystemExit) as exc:
         verify_ipr(
@@ -116,6 +128,19 @@ def test_no_authors_exits_2(capsys):
             allowlist_raw="bot*",
         )
     assert exc.value.code == 2
+    assert "no PR authors/committers found" in capsys.readouterr().err
+
+
+def test_main_no_authors_returns_2(tmp_path: Path, capsys):
+    """SystemExit relay in main() must be on a test path (no authors)."""
+    rc = _run_verify(
+        tmp_path,
+        sigs={"signedContributors": []},
+        commits=[{"author": None, "committer": None}],
+        pr_author="",
+        allowlist="bot*",
+    )
+    assert rc == 2
     assert "no PR authors/committers found" in capsys.readouterr().err
 
 
@@ -184,9 +209,12 @@ def test_main_rejects_non_object_sigs(tmp_path: Path, capsys):
 
 
 def test_main_rejects_non_list_commits(tmp_path: Path, capsys):
-    sigs_path = tmp_path / "sigs.json"
-    commits_path = tmp_path / "commits.json"
-    sigs_path.write_text(json.dumps({"signedContributors": []}), encoding="utf-8")
+    sigs_path, commits_path = _write_verify_inputs(
+        tmp_path,
+        sigs={"signedContributors": []},
+        commits={"not": "a list"},  # type: ignore[arg-type]  # intentional bad shape
+    )
+    # Overwrite commits with a JSON object (not list).
     commits_path.write_text(json.dumps({"not": "a list"}), encoding="utf-8")
     rc = main(
         [
@@ -201,6 +229,50 @@ def test_main_rejects_non_list_commits(tmp_path: Path, capsys):
     )
     assert rc == 2
     assert "expected commits list" in capsys.readouterr().err
+
+
+def test_main_rejects_corrupt_sigs_json(tmp_path: Path, capsys):
+    sigs_path, commits_path = _write_verify_inputs(
+        tmp_path,
+        sigs={"signedContributors": []},
+        commits=[{"author": {"login": "alice"}}],
+    )
+    sigs_path.write_text("{not-json", encoding="utf-8")
+    rc = main(
+        [
+            "verify",
+            "--sigs",
+            str(sigs_path),
+            "--commits",
+            str(commits_path),
+            "--allowlist",
+            "bot*",
+        ]
+    )
+    assert rc == 2
+    assert "expected signatures/commits JSON from GitHub API" in capsys.readouterr().err
+
+
+def test_main_rejects_missing_commits_file(tmp_path: Path, capsys):
+    sigs_path, commits_path = _write_verify_inputs(
+        tmp_path,
+        sigs={"signedContributors": []},
+        commits=[{"author": {"login": "alice"}}],
+    )
+    commits_path.unlink()
+    rc = main(
+        [
+            "verify",
+            "--sigs",
+            str(sigs_path),
+            "--commits",
+            str(commits_path),
+            "--allowlist",
+            "bot*",
+        ]
+    )
+    assert rc == 2
+    assert "expected signatures/commits JSON from GitHub API" in capsys.readouterr().err
 
 
 def test_failed_run_ids_rejects_non_object_payload(tmp_path: Path, capsys):

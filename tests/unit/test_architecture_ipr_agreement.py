@@ -125,6 +125,10 @@ class TestIPRAgreementContract:
         assert all((s.get("with") or {}).get("ref") for s in checkouts), (
             "ipr-sign checkout must not omit ref (would default to the triggering ref)"
         )
+        # Reject a second checkout on PR-head / issue-event tip refs beside default_branch.
+        assert not any(tok in ref for ref in refs for tok in ("pull_request", ".head", "refs/pull", "event.issue")), (
+            f"ipr-sign must not checkout PR-head-derived refs (got refs={refs!r})"
+        )
 
     @pytest.mark.arch_guard
     def test_zizmor_does_not_relist_ipr_for_dangerous_triggers(self):
