@@ -210,6 +210,45 @@ class TestOperationsApproveAtomicity:
         assert _status(tenant_id, step_id) == "requires_approval", "unknown action must not transition the step"
         assert "unknown action" in resp.get_data(as_text=True).lower()
 
+    def test_successful_approve_does_run_the_adapter(self, client, factory_session):
+        """POSITIVE CONTROL for the ``execute_approved_media_buy`` patch target.
+
+        Every other test in this file asserts the adapter was NOT called. If the patch target were
+        wrong (the route body-imports the symbol, so it must be patched at its SOURCE module), all
+        of those would pass vacuously — the mock would simply never be the object the route calls.
+        This test drives a genuine approve to completion through the SAME target and asserts it WAS
+        called, so the negative assertions are anchored to a target proven to intercept.
+        """
+        from tests.factories import MediaBuyFactory
+
+        suffix = uuid.uuid4().hex[:8]
+        media_buy = MediaBuyFactory(
+            tenant__tenant_id=f"t_{suffix}",
+            tenant__subdomain=f"sub-{suffix}",
+            principal__principal_id=f"p_{suffix}",
+            principal__access_token=f"tok_{suffix}",
+            media_buy_id=f"mb_{suffix}",
+            status="pending_approval",
+        )
+        tenant_id = media_buy.tenant_id
+        media_buy_id = media_buy.media_buy_id
+        _auth(client, tenant_id)
+        step_id = _make_step(tenant_id, media_buy.principal_id, "requires_approval", media_buy_id=media_buy_id)
+
+        with patch(
+            "src.core.tools.media_buy_create.execute_approved_media_buy", return_value=(True, None)
+        ) as mock_execute:
+            client.post(
+                f"/tenant/{tenant_id}/media-buy/{media_buy_id}/approve",
+                data={"action": "approve", "workflow_step_id": step_id},
+                follow_redirects=True,
+            )
+
+        mock_execute.assert_called_once_with(media_buy_id, tenant_id)
+        # ``claim_approval`` lands the step on ``approved`` — deliberately NON-terminal, which is
+        # why the route uses the source-state-guarded claim rather than a broad terminal guard.
+        assert _status(tenant_id, step_id) == "approved", "a successful approve must claim the step"
+
     def test_media_buy_detail_approves_legacy_approval_status_step(self, client, sample_tenant, sample_principal):
         """[Round-21] The media-buy detail approve route finds and approves a legacy ``approval``
         step — its lookup previously prefiltered on {requires_approval, pending_approval} only and

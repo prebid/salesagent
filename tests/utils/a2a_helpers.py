@@ -62,19 +62,30 @@ def extract_data_from_artifact(artifact: Artifact) -> dict[str, Any]:
     return {}
 
 
+def _locate_failed_task_artifact(task: Task, artifact_name: str) -> Artifact:
+    """THE single locator of a failed Task's error artifact — presence + NAME.
+
+    Split from the strict reader so the reader and the leak oracle share one definition of
+    "which artifact carries the failure"; a change to how it is located (position, naming) is
+    then a single edit rather than two that can drift.
+    """
+    assert task.artifacts, "failed Task must carry the error envelope artifact"
+    artifact = task.artifacts[0]
+    assert artifact.name == artifact_name, f"expected {artifact_name!r} artifact, got {artifact.name!r}"
+    return artifact
+
+
 def _read_failed_task_artifact(task: Task, artifact_name: str) -> dict[str, Any]:
     """THE single strict reader of a failed Task's error artifact.
 
-    Pins the artifact NAME, exactly one authoritative DataPart, AND exactly one
-    human-readable TextPart (the A2A error binding: a FAILED artifact carries the
+    Pins the artifact NAME (via the shared locator), exactly one authoritative DataPart, AND
+    exactly one human-readable TextPart (the A2A error binding: a FAILED artifact carries the
     error message as its TextPart, never a DataPart alone), then decodes the
     DataPart. Both public entries (``extract_processing_error_envelope`` and
     ``assert_failed_task_envelope``) route through here so the shape contract has
     exactly one home.
     """
-    assert task.artifacts, "failed Task must carry the error envelope artifact"
-    artifact = task.artifacts[0]
-    assert artifact.name == artifact_name, f"expected {artifact_name!r} artifact, got {artifact.name!r}"
+    artifact = _locate_failed_task_artifact(task, artifact_name)
     data_parts = [p for p in artifact.parts if p.HasField("data")]
     text_parts = [p for p in artifact.parts if p.HasField("text")]
     assert len(data_parts) == 1, f"error artifact must carry exactly one authoritative DataPart, got {len(data_parts)}"
@@ -129,9 +140,7 @@ def assert_failed_task_no_secret_leak(task: Task, *, artifact_name: str = "error
     """
     from tests.helpers.secret_scrub import assert_no_secret_leak
 
-    assert task.artifacts, "failed Task must carry the error artifact"
-    artifact = task.artifacts[0]
-    assert artifact.name == artifact_name, f"expected {artifact_name!r} artifact, got {artifact.name!r}"
+    artifact = _locate_failed_task_artifact(task, artifact_name)
     envelope = extract_data_from_artifact(artifact)
     text_parts = [p.text for p in artifact.parts if p.HasField("text")]
     client_facing = json.dumps(envelope) + " " + " ".join(text_parts)

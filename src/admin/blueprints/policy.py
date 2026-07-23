@@ -11,6 +11,7 @@ from src.admin.utils.audit_decorator import log_admin_action
 from src.core.audit_logger import AuditLogger
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuditLog, Tenant, WorkflowStep
+from src.core.database.repositories.workflow import WorkflowRepository
 
 logger = logging.getLogger(__name__)
 
@@ -227,8 +228,6 @@ def review_task(tenant_id, task_id):
                 # Read AND mutate through the same repository: the tenant-scoping join and the
                 # policy_review type guard live in one place (get_policy_review_step) for both the
                 # POST and GET legs, so the mutation route can't drift from a hand-rolled read.
-                from src.core.database.repositories.workflow import WorkflowRepository
-
                 repo = WorkflowRepository(db_session, tenant_id)
                 step = repo.get_policy_review_step(task_id)
 
@@ -275,8 +274,6 @@ def review_task(tenant_id, task_id):
 
         # GET request - show review form
         try:
-            from src.core.database.repositories.workflow import WorkflowRepository
-
             step = WorkflowRepository(db_session, tenant_id).get_policy_review_step(task_id)
 
             if not step:
