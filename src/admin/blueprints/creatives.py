@@ -77,7 +77,7 @@ def _cleanup_completed_tasks():
                 completed_tasks.append(task_id)
         for task_id in completed_tasks:
             del _ai_review_tasks[task_id]
-            logger.debug(f"Cleaned up completed AI review task: {task_id}")
+            logger.debug("Cleaned up completed AI review task: %s", sanitize_log_value(task_id))
 
 
 # The flight-window→status decision for creative-unblock finalization now lives in
@@ -460,7 +460,7 @@ def _send_post_commit_side_effects(
             notifier = get_slack_notifier(tenant_config)
             notifier.send_message(slack_data["message"])
         except Exception as slack_e:
-            logger.warning(f"Failed to send Slack notification: {slack_e}")
+            logger.warning("Failed to send Slack notification: %s", sanitize_log_value(slack_e))
 
     # Log audit trail
     if audit_data:
@@ -820,7 +820,7 @@ async def _ai_review_creative_async(
         slack_webhook_url: Optional Slack webhook for notifications
         principal_name: Principal name for Slack notification
     """
-    logger.info(f"[AI Review Async] Starting background review for creative {creative_id}")
+    logger.info("[AI Review Async] Starting background review for creative %s", sanitize_log_value(creative_id))
 
     # Collect data for post-commit side effects
     slack_notification_data: dict[str, Any] = {}
@@ -836,7 +836,11 @@ async def _ai_review_creative_async(
                 tenant_id=tenant_id, creative_id=creative_id, db_session=uow.session, promoted_offering=None
             )
 
-            logger.info(f"[AI Review Async] Review completed for {creative_id}: {ai_result['status']}")
+            logger.info(
+                "[AI Review Async] Review completed for %s: %s",
+                sanitize_log_value(creative_id),
+                sanitize_log_value(ai_result["status"]),
+            )
 
             # Update creative status in database
             creative = uow.creatives.admin_get_by_id(creative_id)
@@ -879,11 +883,15 @@ async def _ai_review_creative_async(
 
                 should_call_webhook = bool(webhook_url)
             else:
-                logger.error(f"[AI Review Async] Creative not found: {creative_id}")
+                logger.error("[AI Review Async] Creative not found: %s", sanitize_log_value(creative_id))
 
             # UoW auto-commits here
 
-        logger.info(f"[AI Review Async] Database updated for {creative_id}: status={ai_result['status']}")
+        logger.info(
+            "[AI Review Async] Database updated for %s: status=%s",
+            sanitize_log_value(creative_id),
+            sanitize_log_value(ai_result["status"]),
+        )
 
         # --- Post-commit side effects ---
 
@@ -901,16 +909,21 @@ async def _ai_review_creative_async(
                     tenant_id=tenant_id,
                     ai_review_reason=slack_notification_data["ai_review_reason"],
                 )
-                logger.info(f"[AI Review Async] Slack notification sent for {creative_id}")
+                logger.info("[AI Review Async] Slack notification sent for %s", sanitize_log_value(creative_id))
             except Exception as slack_e:
-                logger.warning(f"[AI Review Async] Failed to send Slack notification: {slack_e}")
+                logger.warning("[AI Review Async] Failed to send Slack notification: %s", sanitize_log_value(slack_e))
 
         if should_call_webhook:
             asyncio.run(_call_webhook_for_creative_status(creative_id=creative_id, tenant_id=tenant_id))
-            logger.info(f"[AI Review Async] Webhook called for {creative_id}")
+            logger.info("[AI Review Async] Webhook called for %s", sanitize_log_value(creative_id))
 
     except Exception as e:
-        logger.error(f"[AI Review Async] Error reviewing creative {creative_id}: {e}", exc_info=True)
+        logger.error(
+            "[AI Review Async] Error reviewing creative %s: %s",
+            sanitize_log_value(creative_id),
+            sanitize_log_value(e),
+            exc_info=True,
+        )
 
         # Try to mark creative as pending with error (separate UoW)
         try:
@@ -929,9 +942,12 @@ async def _ai_review_creative_async(
                     }
                     uow.creatives.update_data(creative, creative.data)
                     # UoW auto-commits
-                    logger.info(f"[AI Review Async] Creative {creative_id} marked as pending_review due to error")
+                    logger.info(
+                        "[AI Review Async] Creative %s marked as pending_review due to error",
+                        sanitize_log_value(creative_id),
+                    )
         except Exception as inner_e:
-            logger.error(f"[AI Review Async] Failed to mark creative as pending: {inner_e}")
+            logger.error("[AI Review Async] Failed to mark creative as pending: %s", sanitize_log_value(inner_e))
 
 
 def get_ai_review_status(task_id: str) -> dict:
@@ -1009,10 +1025,19 @@ def _create_review_record(
 
         creative_repo.create_review(review_record)
 
-        logger.debug(f"Created review record {review_id} for creative {creative_id}")
+        logger.debug(
+            "Created review record %s for creative %s",
+            sanitize_log_value(review_id),
+            sanitize_log_value(creative_id),
+        )
 
     except Exception as e:
-        logger.error(f"Error creating review record for creative {creative_id}: {e}", exc_info=True)
+        logger.error(
+            "Error creating review record for creative %s: %s",
+            sanitize_log_value(creative_id),
+            sanitize_log_value(e),
+            exc_info=True,
+        )
         # Don't fail the review if we can't create the record — let UoW handle rollback
 
 
@@ -1047,7 +1072,7 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
             promoted_offering=promoted_offering,
         )
     except Exception as e:
-        logger.error(f"Error running AI review: {e}", exc_info=True)
+        logger.error("Error running AI review: %s", sanitize_log_value(e), exc_info=True)
         # Record error metrics (error_type bounded to a fixed enum)
         record_ai_review_error(tenant_id=tenant_id, error=e)
         return {"status": "pending_review", "error": str(e), "reason": "AI review failed - requires manual approval"}
