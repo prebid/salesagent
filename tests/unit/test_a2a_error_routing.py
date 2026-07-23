@@ -556,3 +556,53 @@ async def test_task_management_auth_failures_stay_on_json_rpc_wire(handler_metho
     serialized = json.dumps(wire if isinstance(wire, dict) else wire.model_dump(), default=str)
     assert "Authentication" in serialized or "authentication" in serialized
     assert "task_auth" not in serialized, "auth failures must not be downgraded to task-not-found output"
+
+
+def _auth_guarded_methods():
+    """Every A2A method whose auth failure a buyer can branch on, with minimal params.
+
+    Built as a function (not a module constant) so the request objects are fresh per test.
+    """
+    from a2a.types import (
+        DeleteTaskPushNotificationConfigRequest,
+        GetTaskPushNotificationConfigRequest,
+        ListTaskPushNotificationConfigsRequest,
+    )
+
+    return [
+        ("on_get_task", GetTaskRequest(id="task_envelope")),
+        ("on_cancel_task", CancelTaskRequest(id="task_envelope")),
+        (
+            "on_get_task_push_notification_config",
+            GetTaskPushNotificationConfigRequest(id="pnc_1", task_id="task_envelope"),
+        ),
+        ("on_create_task_push_notification_config", TaskPushNotificationConfig(id="pnc_1", task_id="task_envelope")),
+        ("on_list_task_push_notification_configs", ListTaskPushNotificationConfigsRequest(task_id="task_envelope")),
+        (
+            "on_delete_task_push_notification_config",
+            DeleteTaskPushNotificationConfigRequest(id="pnc_1", task_id="task_envelope"),
+        ),
+    ]
+
+
+@pytest.mark.parametrize(("handler_method", "params"), _auth_guarded_methods())
+@pytest.mark.asyncio
+async def test_every_auth_guarded_method_carries_the_auth_required_envelope(handler_method, params):
+    """EVERY A2A method's auth failure carries the two-layer AUTH_REQUIRED envelope in ``data``.
+
+    "Stays on the JSON-RPC wire" and "carries the envelope in ``data``" are orthogonal: the
+    sibling test above pins only the former. Regression this closes: the envelope was attached
+    at the message/send arm alone, so a buyer branching on
+    ``error.data.adcp_error.code == "AUTH_REQUIRED"`` got it from message/send but NOT from
+    tasks/get, tasks/cancel, or any push-notification-config method. All auth raises now share
+    one enveloped source, so this parametrization reddens if any arm regresses to a bare error.
+    """
+    handler = AdCPRequestHandler()
+    handler._get_auth_token = MagicMock(return_value=None)
+
+    with pytest.raises(InvalidRequestError) as exc_info:
+        await getattr(handler, handler_method)(params, context=None)
+
+    err = exc_info.value
+    assert err.data is not None, f"{handler_method} auth failure dropped the AdCP envelope from error.data"
+    assert_envelope_shape(err.data, "AUTH_REQUIRED", recovery="correctable")

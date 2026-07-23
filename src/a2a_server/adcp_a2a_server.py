@@ -178,6 +178,25 @@ def _sanitized_envelope(exc: Exception) -> tuple[AdCPError, dict[str, Any]]:
     return sanitized, build_two_layer_error_envelope(sanitized)
 
 
+def _auth_required_error(message: str, *, cause: Exception | None = None) -> InvalidRequestError:
+    """A2A JSON-RPC auth rejection that ALSO carries the two-layer AUTH_REQUIRED envelope in ``data``.
+
+    THE single source for every A2A auth-failure raise — missing/invalid token in
+    ``_resolve_a2a_identity``, and the standalone skill-invocation identity check. Routing them
+    all here means a buyer branching on ``error.data.adcp_error.code == "AUTH_REQUIRED"`` gets it
+    from EVERY method (message/send, tasks/get, tasks/cancel, the push-notification-config arms),
+    not just message/send — "stays on the JSON-RPC wire" and "carries the envelope in data" are
+    orthogonal, and this closes the gap between them.
+
+    The wire ``message`` is the SANITIZED envelope message, never ``str(cause)``: a typed
+    ``AdCPAuthenticationError`` message is controlled, but sourcing it from the envelope keeps one
+    definition and stays leak-safe if a future caller ever passes an untyped cause.
+    """
+    exc = cause if isinstance(cause, AdCPError) else AdCPAuthenticationError(message)
+    sanitized, envelope = _sanitized_envelope(exc)
+    return InvalidRequestError(message=sanitized.message, data=envelope)
+
+
 def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     """Canonical JSON-RPC ``InternalError`` for A2A boundary failures — SANITIZED.
 
@@ -406,7 +425,7 @@ class AdCPRequestHandler(RequestHandler):
         headers = auth_ctx.headers if auth_ctx else {}
 
         if require_valid_token and not auth_token:
-            raise InvalidRequestError(message="Missing authentication token")
+            raise _auth_required_error("Missing authentication token")
 
         # Extract testing context from A2A request headers (same as MCP does)
         testing_context = AdCPTestContext.from_headers(headers)
@@ -420,15 +439,13 @@ class AdCPRequestHandler(RequestHandler):
                 testing_context=testing_context,
             )
         except AdCPAuthenticationError as e:
-            # Carry the two-layer envelope in ``data`` so the buyer-facing AUTH_REQUIRED
-            # code reaches the A2A wire — matching the missing-token branch below (and
-            # REST's no-identity envelope), which the bare A2AError otherwise dropped.
-            _sanitized, envelope = _sanitized_envelope(e)
-            raise InvalidRequestError(message=str(e), data=envelope) from e
+            # One source for the enveloped auth error (sanitized message, AUTH_REQUIRED in
+            # ``data``) so every A2A method surfaces it identically — not just message/send.
+            raise _auth_required_error(str(e), cause=e) from e
 
         if require_valid_token:
             if not identity.principal_id:
-                raise InvalidRequestError(message="Authentication token is invalid or expired.")
+                raise _auth_required_error("Authentication token is invalid or expired.")
 
             if not identity.tenant:
                 raise InvalidRequestError(
@@ -1498,8 +1515,8 @@ class AdCPRequestHandler(RequestHandler):
         tool_context = None
         try:
             auth_token = self._get_auth_token(context)
-            if not auth_token:
-                raise InvalidRequestError(message="Missing authentication token")
+            # No missing-token pre-check here: _resolve_a2a_identity (require_valid_token=True
+            # by default) raises the single enveloped auth error for exactly this condition.
             identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "get_push_notification_config")
 
@@ -1561,8 +1578,8 @@ class AdCPRequestHandler(RequestHandler):
         tool_context = None
         try:
             auth_token = self._get_auth_token(context)
-            if not auth_token:
-                raise InvalidRequestError(message="Missing authentication token")
+            # No missing-token pre-check here: _resolve_a2a_identity (require_valid_token=True
+            # by default) raises the single enveloped auth error for exactly this condition.
             identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "set_push_notification_config")
 
@@ -1635,8 +1652,8 @@ class AdCPRequestHandler(RequestHandler):
         tool_context = None
         try:
             auth_token = self._get_auth_token(context)
-            if not auth_token:
-                raise InvalidRequestError(message="Missing authentication token")
+            # No missing-token pre-check here: _resolve_a2a_identity (require_valid_token=True
+            # by default) raises the single enveloped auth error for exactly this condition.
             identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "list_push_notification_configs")
 
@@ -1693,8 +1710,8 @@ class AdCPRequestHandler(RequestHandler):
         tool_context = None
         try:
             auth_token = self._get_auth_token(context)
-            if not auth_token:
-                raise InvalidRequestError(message="Missing authentication token")
+            # No missing-token pre-check here: _resolve_a2a_identity (require_valid_token=True
+            # by default) raises the single enveloped auth error for exactly this condition.
             identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "delete_push_notification_config")
 
@@ -1860,7 +1877,7 @@ class AdCPRequestHandler(RequestHandler):
 
         # Validate identity for non-discovery skills
         if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
-            raise InvalidRequestError(message="Authentication required for skill invocation")
+            raise _auth_required_error("Authentication required for skill invocation")
 
         skill_handlers = self._skill_handler_map()
 
