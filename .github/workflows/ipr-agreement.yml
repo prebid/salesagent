@@ -24,6 +24,12 @@ on:
 
 permissions: {}
 
+# Serialize Path A/B work per PR so comment storms cannot race the
+# ipr-signatures branch commit (ChrisHuie #1669 NIT).
+concurrency:
+  group: ipr-agreement-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
 env:
   # Single canonical bot allowlist (glob syntax). Contract for both consumers
   # (ipr_verify.py and CLA Assistant `allowlist`):
@@ -42,6 +48,9 @@ jobs:
       contents: read
       pull-requests: read
     steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
       # pull_request (not PRT): tip checkout is the trust model; ADR-003 only
       # forbids PR-head checkout under pull_request_target.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -88,6 +97,9 @@ jobs:
       pull-requests: write
       statuses: write
     steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
       - name: Wait for GitHub API (retry on Unicorn/503)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

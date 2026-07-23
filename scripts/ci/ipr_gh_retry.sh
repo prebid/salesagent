@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared gh API retry helper for IPR Agreement workflow jobs.
 # Source from a workflow run step after checkout: `. scripts/ci/ipr_gh_retry.sh`
 #
