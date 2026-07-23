@@ -4,8 +4,11 @@ Pins that ``wait_for_e2e_stack`` is the SSOT for ordered E2E probes
 (postgres → creative-agent → adcp_health), that both ``docker_services_e2e``
 wait paths call it (verify-only ``if`` and standalone ``else``), that call
 sites omit ``required=`` or pass the full ordered set, and that
-``wait_for_server_readiness`` delegates rather than owning a second HTTP poll
-loop.
+``wait_for_server_readiness`` delegates to ``wait_for_e2e_stack``.
+
+The inline HTTP poll-loop detector only flags ``.get(...)`` URL arguments that
+literally embed ``/health`` (JoinedStr / Constant / BinOp *operands*). Variable-
+hoisted URLs are out of scope; delegation is pinned via the call-name check.
 
 CI pre-start / ``compose up --wait`` contracts live in
 ``test_architecture_ci_suite_coverage.py`` — this module pins the **Python**
@@ -19,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.e2e.stack_readiness import _PROBE_FUNCS, REQUIRED_E2E_PROBES
 from tests.unit._architecture_helpers import iter_call_expressions, iter_git_tracked_files, repo_root
 
 _HELPER_REL = "tests/e2e/stack_readiness.py"
@@ -73,8 +77,22 @@ def _assign_tuple_strs(tree: ast.Module, name: str) -> tuple[str, ...]:
     raise AssertionError(f"Constant sequence {name!r} not found")
 
 
+def _binop_operand_contains_health(node: ast.AST) -> bool:
+    """True when a BinOp tree has ``/health`` in a string Constant operand."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str) and "/health" in node.value:
+        return True
+    if isinstance(node, ast.BinOp):
+        return _binop_operand_contains_health(node.left) or _binop_operand_contains_health(node.right)
+    return False
+
+
 def _http_poll_loop_in_function(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """True if the function body still owns an HTTP health poll loop (dedupe breach)."""
+    """True if the function body still owns an HTTP health poll loop (dedupe breach).
+
+    Detects sleep + ``.get(...)`` whose URL arg literally embeds ``/health``
+    (f-string JoinedStr, string Constant, or BinOp with ``/health`` in an
+    operand). Does not follow variable-hoisted URLs.
+    """
     has_sleep = False
     has_health_get = False
     for node in iter_call_expressions(func):
@@ -94,7 +112,7 @@ def _http_poll_loop_in_function(func: ast.FunctionDef | ast.AsyncFunctionDef) ->
                         has_health_get = True
                 if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and "/health" in arg.value:
                     has_health_get = True
-                if isinstance(arg, ast.BinOp):  # url + "/health" style
+                if isinstance(arg, ast.BinOp) and _binop_operand_contains_health(arg):
                     has_health_get = True
     return has_sleep and has_health_get
 
@@ -154,6 +172,25 @@ def _wait_default_required_is_full_hard_gate(tree: ast.Module) -> bool:
     return False
 
 
+# Shared predicates — production tests and self-tests call the same checkers.
+def _assert_required_probe_order(order: tuple[str, ...]) -> None:
+    assert order == _REQUIRED_ORDER, (
+        f"REQUIRED_E2E_PROBES must be {_REQUIRED_ORDER}, got {order} — creative-agent hard gate cannot silently drop"
+    )
+
+
+def _assert_both_wait_branches(then_calls: list[ast.Call], else_calls: list[ast.Call]) -> None:
+    assert len(then_calls) >= 1, "docker_services_e2e verify-only branch (if body) must call wait_for_e2e_stack"
+    assert len(else_calls) >= 1, "docker_services_e2e standalone branch (else) must call wait_for_e2e_stack"
+
+
+def _assert_default_required_full_hard_gate(tree: ast.Module) -> None:
+    assert _wait_default_required_is_full_hard_gate(tree), (
+        "wait_for_e2e_stack default required= must be REQUIRED_E2E_PROBES "
+        "(call sites omit required= and inherit the full hard gate)"
+    )
+
+
 def _assert_calls_use_full_hard_gate(calls: list[ast.Call], *, where: str) -> None:
     assert calls, f"expected wait_for_e2e_stack call(s) in {where}"
     for call in calls:
@@ -161,6 +198,12 @@ def _assert_calls_use_full_hard_gate(calls: list[ast.Call], *, where: str) -> No
             f"{where}: wait_for_e2e_stack must omit required= or pass {_REQUIRED_ORDER} "
             "(narrowing the hard gate silently drops creative-agent)"
         )
+
+
+def _assert_no_inline_health_poll(func: ast.FunctionDef | ast.AsyncFunctionDef, *, where: str) -> None:
+    assert not _http_poll_loop_in_function(func), (
+        f"{where} must not keep an inline HTTP /health poll loop; use wait_for_e2e_stack only"
+    )
 
 
 def _imports_name_from(tree: ast.Module, module: str, name: str) -> bool:
@@ -205,14 +248,14 @@ class TestE2EStackReadinessHelperContract:
         tree = _parse_tracked(repo, _HELPER_REL)
         _function_def(tree, "wait_for_e2e_stack")
         order = _assign_tuple_strs(tree, "REQUIRED_E2E_PROBES")
-        assert order == _REQUIRED_ORDER, (
-            f"REQUIRED_E2E_PROBES must be {_REQUIRED_ORDER}, got {order} — "
-            "creative-agent hard gate cannot silently drop"
+        _assert_required_probe_order(order)
+        _assert_default_required_full_hard_gate(tree)
+
+    def test_probe_funcs_cover_required_set(self):
+        assert frozenset(_PROBE_FUNCS) >= frozenset(REQUIRED_E2E_PROBES), (
+            f"_PROBE_FUNCS keys {sorted(_PROBE_FUNCS)} must cover REQUIRED_E2E_PROBES {list(REQUIRED_E2E_PROBES)}"
         )
-        assert _wait_default_required_is_full_hard_gate(tree), (
-            "wait_for_e2e_stack default required= must be REQUIRED_E2E_PROBES "
-            "(call sites omit required= and inherit the full hard gate)"
-        )
+        assert tuple(REQUIRED_E2E_PROBES) == _REQUIRED_ORDER
 
     def test_compose_files_ssot_exported_and_imported(self):
         repo = repo_root()
@@ -223,6 +266,15 @@ class TestE2EStackReadinessHelperContract:
         assert files == _COMPOSE_FILES, f"DEFAULT_E2E_COMPOSE_FILES must be {_COMPOSE_FILES}, got {files}"
         assert _imports_name_from(conftest, "tests.e2e.stack_readiness", "DEFAULT_E2E_COMPOSE_FILES"), (
             "conftest must import DEFAULT_E2E_COMPOSE_FILES from stack_readiness (no duplicate tuple)"
+        )
+        assert _imports_name_from(conftest, "tests.e2e.stack_readiness", "BASE_E2E_COMPOSE_FILE"), (
+            "conftest must import BASE_E2E_COMPOSE_FILE from stack_readiness (no bare base-compose literal)"
+        )
+        assert _imports_name_from(conftest, "tests.e2e.stack_readiness", "compose_argv"), (
+            "conftest must import public compose_argv (not underscore-private)"
+        )
+        assert _imports_name_from(conftest, "tests.e2e.stack_readiness", "compose_available"), (
+            "conftest must import public compose_available (not underscore-private)"
         )
         assert _imports_name_from(utils, "tests.e2e.stack_readiness", "DEFAULT_E2E_COMPOSE_FILES"), (
             "utils must import DEFAULT_E2E_COMPOSE_FILES from stack_readiness"
@@ -235,13 +287,10 @@ class TestE2EStackReadinessHelperContract:
         repo = repo_root()
         tree = _parse_tracked(repo, _CONFTEST_REL)
         then_calls, else_calls = _wait_calls_by_branch(tree)
-        assert len(then_calls) >= 1, "docker_services_e2e verify-only branch (if body) must call wait_for_e2e_stack"
-        assert len(else_calls) >= 1, "docker_services_e2e standalone branch (else) must call wait_for_e2e_stack"
+        _assert_both_wait_branches(then_calls, else_calls)
         # No residual inline /health-only poll loops inside the fixture.
         func = _function_def(tree, "docker_services_e2e")
-        assert not _http_poll_loop_in_function(func), (
-            "docker_services_e2e must not keep an inline HTTP /health poll loop; use wait_for_e2e_stack only"
-        )
+        _assert_no_inline_health_poll(func, where="docker_services_e2e")
 
     def test_call_sites_use_full_hard_gate(self):
         repo = repo_root()
@@ -259,11 +308,9 @@ class TestE2EStackReadinessHelperContract:
         tree = _parse_tracked(repo, _UTILS_REL)
         func = _function_def(tree, "wait_for_server_readiness")
         assert "wait_for_e2e_stack" in _call_names(func), (
-            "wait_for_server_readiness must call wait_for_e2e_stack (no second readiness oracle)"
+            "wait_for_server_readiness must call wait_for_e2e_stack (delegation, not a second oracle)"
         )
-        assert not _http_poll_loop_in_function(func), (
-            "wait_for_server_readiness must not own an HTTP /health poll loop body"
-        )
+        _assert_no_inline_health_poll(func, where="wait_for_server_readiness")
 
     def test_failure_path_dumps_creative_agent_logs(self):
         repo = repo_root()
@@ -285,10 +332,7 @@ class TestE2EStackReadinessGuardSelfTest:
         bad = ast.parse('REQUIRED_E2E_PROBES = ("postgres", "adcp_health")\n')
         order = _assign_tuple_strs(bad, "REQUIRED_E2E_PROBES")
         with pytest.raises(AssertionError):
-            assert order == _REQUIRED_ORDER, (
-                f"REQUIRED_E2E_PROBES must be {_REQUIRED_ORDER}, got {order} — "
-                "creative-agent hard gate cannot silently drop"
-            )
+            _assert_required_probe_order(order)
 
     def test_both_branches_detector_rejects_double_call_in_then_only(self):
         src = (
@@ -303,9 +347,7 @@ class TestE2EStackReadinessGuardSelfTest:
         assert len(then_calls) == 2
         assert len(else_calls) == 0
         with pytest.raises(AssertionError):
-            assert len(then_calls) >= 1 and len(else_calls) >= 1, (
-                "docker_services_e2e standalone branch (else) must call wait_for_e2e_stack"
-            )
+            _assert_both_wait_branches(then_calls, else_calls)
 
     def test_hard_gate_detector_rejects_narrow_required_kw(self):
         src = 'wait_for_e2e_stack(ports={}, required=("adcp_health",))\n'
@@ -322,6 +364,24 @@ class TestE2EStackReadinessGuardSelfTest:
         with pytest.raises(AssertionError):
             _assert_calls_use_full_hard_gate([call], where="kwargs-bypass")
 
+    def test_hard_gate_detector_accepts_omitted_required(self):
+        src = "wait_for_e2e_stack(ports={})\n"
+        call = next(iter_call_expressions(ast.parse(src), name="wait_for_e2e_stack"))
+        assert _required_kw_uses_full_hard_gate(call)
+        _assert_calls_use_full_hard_gate([call], where="known-good-omit")
+
+    def test_hard_gate_detector_accepts_required_name(self):
+        src = "wait_for_e2e_stack(ports={}, required=REQUIRED_E2E_PROBES)\n"
+        call = next(iter_call_expressions(ast.parse(src), name="wait_for_e2e_stack"))
+        assert _required_kw_uses_full_hard_gate(call)
+        _assert_calls_use_full_hard_gate([call], where="known-good-name")
+
+    def test_hard_gate_detector_accepts_full_tuple(self):
+        src = 'wait_for_e2e_stack(ports={}, required=("postgres", "creative-agent", "adcp_health"))\n'
+        call = next(iter_call_expressions(ast.parse(src), name="wait_for_e2e_stack"))
+        assert _required_kw_uses_full_hard_gate(call)
+        _assert_calls_use_full_hard_gate([call], where="known-good-tuple")
+
     def test_default_required_detector_rejects_narrow_default(self):
         src = (
             "REQUIRED_E2E_PROBES = ('postgres', 'creative-agent', 'adcp_health')\n"
@@ -331,23 +391,57 @@ class TestE2EStackReadinessGuardSelfTest:
         tree = ast.parse(src)
         assert not _wait_default_required_is_full_hard_gate(tree)
         with pytest.raises(AssertionError):
-            assert _wait_default_required_is_full_hard_gate(tree), (
-                "wait_for_e2e_stack default required= must be REQUIRED_E2E_PROBES"
-            )
+            _assert_default_required_full_hard_gate(tree)
 
-    def test_inline_health_loop_detector_flags_known_bad(self):
-        # Concatenate '/hea'+'lth' so this fixture source never contains a
-        # literal "/health" token that live scanners could match in unit tests.
+    def test_inline_health_loop_detector_flags_binop_with_health(self):
         src = (
             "import time\n"
             "import requests\n"
             "def docker_services_e2e():\n"
             "    for _ in range(30):\n"
-            "        requests.get('http://localhost:8000' + '/hea' + 'lth')\n"
+            "        requests.get('http://localhost:8000' + '/health')\n"
             "        time.sleep(2)\n"
         )
         func = _function_def(ast.parse(src), "docker_services_e2e")
         assert _http_poll_loop_in_function(func)
+
+    def test_inline_health_loop_detector_flags_fstring_health(self):
+        src = (
+            "import time\n"
+            "import requests\n"
+            "def docker_services_e2e():\n"
+            "    u = 'http://localhost:8000'\n"
+            "    for _ in range(30):\n"
+            '        requests.get(f"{u}/health")\n'
+            "        time.sleep(2)\n"
+        )
+        func = _function_def(ast.parse(src), "docker_services_e2e")
+        assert _http_poll_loop_in_function(func)
+
+    def test_inline_health_loop_detector_flags_constant_health(self):
+        src = (
+            "import time\n"
+            "import requests\n"
+            "def docker_services_e2e():\n"
+            "    for _ in range(30):\n"
+            "        requests.get('http://localhost:8000/health')\n"
+            "        time.sleep(2)\n"
+        )
+        func = _function_def(ast.parse(src), "docker_services_e2e")
+        assert _http_poll_loop_in_function(func)
+
+    def test_inline_health_loop_detector_ignores_binop_without_health(self):
+        # sleep + .get(BinOp) must not flag when no operand contains /health.
+        src = (
+            "import time\n"
+            "def docker_services_e2e():\n"
+            "    a, b = 'x', 'y'\n"
+            "    for _ in range(30):\n"
+            "        d.get(a + b)\n"
+            "        time.sleep(2)\n"
+        )
+        func = _function_def(ast.parse(src), "docker_services_e2e")
+        assert not _http_poll_loop_in_function(func)
 
     def test_delegate_detector_rejects_poll_only_wrapper(self):
         src = (
@@ -356,9 +450,11 @@ class TestE2EStackReadinessGuardSelfTest:
             "def wait_for_server_readiness(mcp_url, timeout=60):\n"
             "    for _ in range(timeout):\n"
             "        with httpx.Client() as client:\n"
-            "            client.get(mcp_url + '/hea' + 'lth')\n"
+            "            client.get(mcp_url + '/health')\n"
             "        time.sleep(1)\n"
         )
         func = _function_def(ast.parse(src), "wait_for_server_readiness")
         assert _http_poll_loop_in_function(func)
         assert "wait_for_e2e_stack" not in _call_names(func)
+        with pytest.raises(AssertionError):
+            _assert_no_inline_health_poll(func, where="known-bad-wrapper")

@@ -41,27 +41,29 @@ class TestComposeReportsReadyContract:
     def test_empty_health_running_state_is_not_ready(self):
         payload = json.dumps({"Health": "", "State": "running", "Name": "creative-agent"})
         with (
-            patch("tests.e2e.stack_readiness._compose_available", return_value=True),
+            patch("tests.e2e.stack_readiness.compose_available", return_value=True),
             patch("tests.e2e.stack_readiness.subprocess.run", return_value=_ps_completed(payload)),
         ):
-            health = _compose_service_health("creative-agent", ("docker-compose.e2e.yml",))
+            health, err = _compose_service_health("creative-agent", ("docker-compose.e2e.yml",))
         assert health is None
+        assert err is None
         assert _compose_reports_ready(health) is False
 
     def test_explicit_healthy_is_ready(self):
         payload = json.dumps({"Health": "healthy", "State": "running"})
         with (
-            patch("tests.e2e.stack_readiness._compose_available", return_value=True),
+            patch("tests.e2e.stack_readiness.compose_available", return_value=True),
             patch("tests.e2e.stack_readiness.subprocess.run", return_value=_ps_completed(payload)),
         ):
-            health = _compose_service_health("creative-agent", ("docker-compose.e2e.yml",))
+            health, err = _compose_service_health("creative-agent", ("docker-compose.e2e.yml",))
         assert health == "healthy"
+        assert err is None
         assert _compose_reports_ready(health) is True
 
     def test_host_creative_agent_probe_rejects_running_only(self):
         payload = json.dumps({"Health": "", "Status": "Up", "Name": "creative-agent"})
         with (
-            patch("tests.e2e.stack_readiness._compose_available", return_value=True),
+            patch("tests.e2e.stack_readiness.compose_available", return_value=True),
             patch("tests.e2e.stack_readiness.subprocess.run", return_value=_ps_completed(payload)),
         ):
             assert _probe_creative_agent(host="localhost", compose_files=("docker-compose.e2e.yml",)) is False

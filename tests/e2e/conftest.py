@@ -25,9 +25,10 @@ _GETPID = os.getpid
 # Import contract validation - this automatically validates tool calls at test collection time
 from tests.e2e.conftest_contract_validation import pytest_collection_modifyitems  # noqa: F401
 from tests.e2e.stack_readiness import (
+    BASE_E2E_COMPOSE_FILE,
     DEFAULT_E2E_COMPOSE_FILES,
-    _compose_argv,
-    _compose_available,
+    compose_argv,
+    compose_available,
     wait_for_e2e_stack,
 )
 
@@ -191,7 +192,7 @@ def docker_services_e2e(request):
         # Always clean up existing services and volumes to ensure fresh state
         print("Cleaning up any existing Docker services and volumes...")
         subprocess.run(
-            [*_compose_argv(("docker-compose.e2e.yml",)), "down", "-v"],
+            [*compose_argv((BASE_E2E_COMPOSE_FILE,)), "down", "-v"],
             capture_output=True,
             check=False,
         )
@@ -260,7 +261,7 @@ def docker_services_e2e(request):
 
         print("Step 1/2: Building Docker images...")
         # Same argv preference as readiness (`docker compose` plugin first).
-        compose_base = _compose_argv(DEFAULT_E2E_COMPOSE_FILES)
+        compose_base = compose_argv(DEFAULT_E2E_COMPOSE_FILES)
         build_result = subprocess.run(
             [*compose_base, "build", "--progress=plain"],
             env=env,
@@ -294,9 +295,9 @@ def docker_services_e2e(request):
     # In-network there is no compose CLI, but the runner already has
     # DATABASE_URL=postgres:5432 and the source, so it runs the seed script
     # itself — the script only needs a DB connection, not Docker.
-    if _compose_available():
+    if compose_available():
         init_cmd = [
-            *_compose_argv(("docker-compose.e2e.yml",)),
+            *compose_argv((BASE_E2E_COMPOSE_FILE,)),
             "exec",
             "-T",
             "adcp-server",
@@ -422,7 +423,7 @@ def docker_services_e2e(request):
         try:
             # Stop and remove containers + volumes
             subprocess.run(
-                [*_compose_argv(("docker-compose.e2e.yml",)), "down", "-v"],
+                [*compose_argv((BASE_E2E_COMPOSE_FILE,)), "down", "-v"],
                 capture_output=True,
                 check=False,
                 timeout=30,
