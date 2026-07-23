@@ -1787,11 +1787,14 @@ def then_error_contains(ctx: dict, fragment: str) -> None:
 
 @then(parsers.parse('the response errors array should include error code "{code}"'))
 def then_response_errors_include(ctx: dict, code: str) -> None:
-    """Assert response.errors contains the specified error code."""
-    resp = ctx.get("response")
-    assert resp is not None, f"Expected response, got error: {ctx.get('error')}"
-    errors = getattr(resp, "errors", None) or []
-    codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
+    """Assert response.errors contains the specified error code — wire-first.
+
+    Converges onto ``_response_errors`` (same channel as
+    ``then_response_errors_include_code``): prefer the serialized wire body;
+    fall back to the typed payload only when ``wire_response is None``.
+    """
+    errors = _response_errors(ctx)
+    codes = [_error_attr(e, "code") for e in errors]
     assert code in codes, f"Expected error code '{code}' in response errors, got {codes}"
 
 
