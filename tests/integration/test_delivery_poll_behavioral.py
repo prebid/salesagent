@@ -37,7 +37,11 @@ if TYPE_CHECKING:
     from src.core.database.repositories.delivery import DeliveryRepository
     from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
     from tests.harness import DeliveryPollEnv
-from tests.helpers.delivery_assertions import assert_next_expected_at_shape, assert_omits_webhook_only_fields
+from tests.helpers.delivery_assertions import (
+    assert_next_expected_at_shape,
+    assert_omits_webhook_only_fields,
+    assert_partial_data_pairing,
+)
 from tests.helpers.delivery_fixtures import DAILY_REPORTING_WEBHOOK, flight_window
 
 # ---------------------------------------------------------------------------
@@ -267,6 +271,7 @@ class TestWebhookNotificationTypeFinal:
 
             assert wire["result"]["notification_type"] == "final"
             assert_next_expected_at_shape(wire["result"], present=False, context="final webhook wire")
+            assert_partial_data_pairing(wire["result"], context="final webhook wire")
 
             # The poll for the same completed buy reports the status but no
             # webhook metadata (#1570).
@@ -828,6 +833,7 @@ class TestWebhookNextExpectedAt:
             # the BDD/e2e graders (a date-only or empty-string regression slips past
             # `is not None`).
             assert_next_expected_at_shape(wire["result"], present=True, context="scheduled webhook wire")
+            assert_partial_data_pairing(wire["result"], context="scheduled webhook wire")
 
             response = env.call_impl(media_buy_ids=[buy.media_buy_id])
             assert response.next_expected_at is None
