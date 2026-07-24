@@ -33,8 +33,7 @@ from bdd_audit_common import (  # noqa: E402
     extract_scenario_base,
     extract_transport,
     extract_uc,
-    outcomes_by_transport_for_base,
-    transport_coverage,
+    grade_base,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -287,8 +286,8 @@ def classify_xfail(entry: TestEntry, tag_reasons: dict[str, str]) -> tuple[str, 
     return "XFAIL_IT", "NOT_IMPLEMENTED", reason
 
 
-def classify_xpass(entry: TestEntry, all_entries: list[TestEntry]) -> tuple[str, str, str]:
-    """Classify an xpassed test. Returns (bucket, category, detail).
+def classify_xpass(entry: TestEntry, all_entries: list[TestEntry]) -> tuple[str, str, str, int]:
+    """Classify an xpassed test. Returns (bucket, category, detail, present_count).
 
     FIX_NOW either way: GRADUATE when every transport *present for this base*
     passed (remove the stale xfail tag); GRADUATE_CONFIRM when that present
@@ -297,19 +296,29 @@ def classify_xpass(entry: TestEntry, all_entries: list[TestEntry]) -> tuple[str,
     PARTIAL_XPASS when only a subset of the present transports passed.
     """
     base = extract_scenario_base(entry.nodeid)
-    outcomes = outcomes_by_transport_for_base(base, ((e.nodeid, e.outcome) for e in all_entries))
-    graduates, passing, missing = transport_coverage(outcomes)
+    graduates, passing, missing, present_n, needs_confirmation = grade_base(
+        base, ((e.nodeid, e.outcome) for e in all_entries)
+    )
     if graduates:
-        n = len(passing)
-        # Single-transport or e2e_rest-only: do not auto-graduate.
-        if n == 1 or passing == {"e2e_rest"}:
+        if needs_confirmation:
             return (
                 "FIX_NOW",
                 "GRADUATE_CONFIRM",
-                f"All {n} present transports pass (needs confirmation): {sorted(passing)}",
+                f"All {present_n} present transports pass (needs confirmation): {sorted(passing)}",
+                present_n,
             )
-        return "FIX_NOW", "GRADUATE", f"All {n} present transports pass: {sorted(passing)}"
-    return "FIX_NOW", "PARTIAL_XPASS", f"Passes: {sorted(passing)}, missing: {sorted(missing)}"
+        return (
+            "FIX_NOW",
+            "GRADUATE",
+            f"All {present_n} present transports pass: {sorted(passing)}",
+            present_n,
+        )
+    return (
+        "FIX_NOW",
+        "PARTIAL_XPASS",
+        f"Passes: {sorted(passing)}, missing: {sorted(missing)}",
+        present_n,
+    )
 
 
 # ── Work item generation ─────────────────────────────────────────────
@@ -375,20 +384,17 @@ def generate_work_items(
             )
 
     # ── 2. Xpassed tests → FIX_NOW (graduate when all present transports pass) ─
-    grad_groups: dict[tuple[str, str], list[TestEntry]] = defaultdict(list)
+    grad_groups: dict[tuple[str, str, int], list[TestEntry]] = defaultdict(list)
     for entry in xpassed:
-        _, cat, detail = classify_xpass(entry, all_entries)
-        grad_groups[(cat, detail)].append(entry)
+        _, cat, detail, present_n = classify_xpass(entry, all_entries)
+        grad_groups[(cat, detail, present_n)].append(entry)
 
-    for (cat, detail), entries in grad_groups.items():
+    for (cat, detail, present_n), entries in grad_groups.items():
         uc = extract_uc(entries[0].nodeid) if entries else "MIXED"
-        if cat in ("GRADUATE", "GRADUATE_CONFIRM"):
-            base = extract_scenario_base(entries[0].nodeid)
-            present_n = len(outcomes_by_transport_for_base(base, ((e.nodeid, e.outcome) for e in all_entries)))
-            if cat == "GRADUATE_CONFIRM":
-                title = f"Graduate needs confirmation (all {present_n} present): {uc}"
-            else:
-                title = f"Graduate (all {present_n} present): {uc}"
+        if cat == "GRADUATE_CONFIRM":
+            title = f"Graduate needs confirmation (all {present_n} present): {uc}"
+        elif cat == "GRADUATE":
+            title = f"Graduate (all {present_n} present): {uc}"
         else:
             title = f"Partial xpass (gaps remain): {uc}"
         items.append(
