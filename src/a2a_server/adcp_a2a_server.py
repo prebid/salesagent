@@ -188,6 +188,10 @@ class AdCPRequestHandler(RequestHandler):
         """Initialize the AdCP A2A request handler."""
         self.tasks: dict[str, Task] = {}  # In-memory task storage
         self._task_push_configs: dict[str, TaskPushNotificationConfig] = {}
+        # (tenant_id, principal_id) recorded when the task was created, so
+        # tasks/get and tasks/cancel can authorize an in-memory hit instead of
+        # serving/mutating it for anyone who learned the task_id. See #1702.
+        self._task_owners: dict[str, tuple[str | None, str | None]] = {}
         logger.info("AdCP Request Handler initialized for direct function calls")
 
     @staticmethod
@@ -643,6 +647,17 @@ class AdCPRequestHandler(RequestHandler):
                 # Unauthenticated discovery request — resolve tenant from headers only
                 identity = self._resolve_a2a_identity(None, require_valid_token=False, context=context)
 
+            # Record the owner now, before any skill dispatch can raise — get/cancel
+            # authorize an in-memory hit against this. An identity resolved without
+            # require_valid_token can carry a None principal_id, which can never match
+            # a later poll authenticated with require_valid_token=True (that path
+            # always has a non-None principal_id — see _resolve_a2a_identity), so an
+            # anonymously-created task simply becomes unpollable via the in-memory
+            # path rather than owned by nobody-in-particular. #1702
+            self._task_owners[task_id] = (
+                (identity.tenant_id, identity.principal_id) if identity is not None else (None, None)
+            )
+
             # Route: Handle explicit skill invocations first, then natural language fallback
             if skill_invocations:
                 # Process explicit skill invocations
@@ -1033,8 +1048,9 @@ class AdCPRequestHandler(RequestHandler):
         # result is already Task | Message — yield it directly
         yield result
 
-    def _get_task_or_raise(self, task_id: str) -> Task:
-        """Return the in-memory task, or raise ``TaskNotFoundError``.
+    @staticmethod
+    def _task_not_found(task_id: str) -> TaskNotFoundError:
+        """Build the shared not-found shape for get/cancel (no existence oracle).
 
         A bare ``None`` return makes the SDK synthesize a generic internal error;
         the A2A spec defines ``TaskNotFoundError`` for an unknown task id, so
@@ -1058,13 +1074,37 @@ class AdCPRequestHandler(RequestHandler):
         ``CoreInternalError(message=str(e))``, which drops ``data`` — driving
         the real route returns ``data: null``. Populating it is still correct
         and becomes readable when #1670 closes, the same as the code.
-
-        Shared by ``on_get_task`` and ``on_cancel_task`` so both surface the
-        same error.
         """
+        return TaskNotFoundError(message=f"Task not found: {task_id}", data={"task_id": task_id})
+
+    def _get_owned_in_memory_task_or_raise(self, task_id: str, context: ServerCallContext | None) -> Task:
+        """Auth-first owned in-memory lookup shared by ``on_get_task`` and ``on_cancel_task``.
+
+        Authenticates the caller and checks OWNERSHIP before returning anything.
+        A task_id is unguessable but not secret once known (webhook payloads,
+        logs, shared support channels); serving/mutating an in-memory hit
+        unconditionally let any caller who learned it read or cancel a sibling
+        principal's task with no authentication. Ownership is checked against
+        ``self._task_owners`` (the (tenant_id, principal_id) recorded at create).
+
+        Failed auth, wrong principal, or unknown id all raise the same
+        ``TaskNotFoundError`` — identical to an unknown task_id, so this cannot
+        be used as an existence oracle. #1702
+        """
+        try:
+            auth_token = self._get_auth_token(context)
+            identity = self._resolve_a2a_identity(auth_token, require_valid_token=True, context=context)
+        except Exception as e:
+            logger.warning(
+                "Denying task access for %s — identity resolution failed: %s",
+                task_id,
+                e,
+            )
+            raise self._task_not_found(task_id) from e
+
         task = self.tasks.get(task_id)
-        if task is None:
-            raise TaskNotFoundError(message=f"Task not found: {task_id}", data={"task_id": task_id})
+        if task is None or self._task_owners.get(task_id) != (identity.tenant_id, identity.principal_id):
+            raise self._task_not_found(task_id)
         return task
 
     async def on_get_task(
@@ -1074,10 +1114,11 @@ class AdCPRequestHandler(RequestHandler):
     ) -> Task:
         """Handle 'tasks/get' method to retrieve task status.
 
-        Raises ``TaskNotFoundError`` for an unknown task id — see
-        ``_get_task_or_raise`` (and #1670 for why the wire code is still -32603).
+        Authenticates the poller and checks ownership before serving an
+        in-memory hit — see ``_get_owned_in_memory_task_or_raise`` (#1702;
+        and #1670 for why the wire code is still -32603).
         """
-        return self._get_task_or_raise(params.id)
+        return self._get_owned_in_memory_task_or_raise(params.id, context)
 
     async def on_cancel_task(
         self,
@@ -1086,12 +1127,12 @@ class AdCPRequestHandler(RequestHandler):
     ) -> Task:
         """Handle 'tasks/cancel' method to cancel a task.
 
-        Raises ``TaskNotFoundError`` for an unknown task id — cancelling a task
-        that does not exist is the same not-found condition as get, not a silent
-        no-op. See ``_get_task_or_raise`` (and #1670 for why the wire code is
-        still -32603).
+        Same auth-first ownership gate as get — cancelling another principal's
+        in-memory task is the same not-found condition as an unknown id, not a
+        silent no-op. See ``_get_owned_in_memory_task_or_raise`` (#1702; and
+        #1670 for why the wire code is still -32603).
         """
-        task = self._get_task_or_raise(params.id)
+        task = self._get_owned_in_memory_task_or_raise(params.id, context)
         # CopyFrom mutates the stored Task in place — self.tasks already holds
         # this exact reference, so re-storing it would rebind the same object.
         task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_CANCELED))
