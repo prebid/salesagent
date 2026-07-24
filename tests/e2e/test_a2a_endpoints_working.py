@@ -11,7 +11,7 @@ This test validates the actual HTTP endpoints that our A2A server exposes.
 import json
 import os
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
@@ -22,6 +22,7 @@ from adcp import get_adcp_spec_version
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from tests.e2e.conftest import e2e_host
+from tests.factories import PrincipalFactory
 
 
 def _a2a_base_url() -> str:
@@ -310,14 +311,14 @@ class TestA2ARequestHandler:
     async def test_unknown_task_id_raises_task_not_found(self, request_cls, method_name):
         """An unknown task id raises TaskNotFoundError, not the generic internal
         error a bare None return produces — cancel is the same not-found condition
-        as get, and both route through the shared ``_get_task_or_raise``.
+        as get, and both route through the shared ``_get_owned_in_memory_task_or_raise``.
 
         Fast smoke check on the raise only. It does NOT prove the wire code: the
         exception carries no code, and the client actually sees -32603 — see
-        ``_get_task_or_raise`` (src/a2a_server/adcp_a2a_server.py) and #1670 for
-        why, plus the xfail'd live-server test in TestA2AServerIntegration that
-        grades the code on the wire. Assert on str(exc), not exc.code — there is
-        none.
+        ``_get_owned_in_memory_task_or_raise`` (src/a2a_server/adcp_a2a_server.py)
+        and #1670 for why, plus the xfail'd live-server test in
+        TestA2AServerIntegration that grades the code on the wire. Assert on
+        str(exc), not exc.code — there is none.
 
         Parametrized over both entry points so the shared assertion cannot drift
         between two byte-identical copies.
@@ -326,9 +327,20 @@ class TestA2ARequestHandler:
         structured ``data`` payload clients actually parse. Asserting the message
         alone would let ``data={"task_id": ...}`` be deleted with the suite still
         green, since the id appears in the message either way.
+
+        Auth is mocked so this grades the not-found shape after the identity
+        gate (#1702), not an auth-failure collapse into the same error.
         """
-        with pytest.raises(TaskNotFoundError) as exc:
-            await getattr(self.handler, method_name)(request_cls(id="task_does_not_exist"), MagicMock())
+        with (
+            patch.object(self.handler, "_get_auth_token", return_value="tok"),
+            patch.object(
+                self.handler,
+                "_resolve_a2a_identity",
+                return_value=PrincipalFactory.make_identity(protocol="a2a"),
+            ),
+        ):
+            with pytest.raises(TaskNotFoundError) as exc:
+                await getattr(self.handler, method_name)(request_cls(id="task_does_not_exist"), MagicMock())
         assert "task_does_not_exist" in str(exc.value)  # the requested id is surfaced
         assert exc.value.data == {"task_id": "task_does_not_exist"}  # ...and machine-readable
 
@@ -389,8 +401,9 @@ class TestA2AServerIntegration:
         locked in when #1670 lands.
 
         STRICT xfail against #1670: the code is -32603 today, not the spec's
-        -32001 — see ``_get_task_or_raise`` (src/a2a_server/adcp_a2a_server.py) and
-        #1670 for the enable_v0_3_compat dispatch path that flattens it. Both
+        -32001 — see ``_get_owned_in_memory_task_or_raise``
+        (src/a2a_server/adcp_a2a_server.py) and #1670 for the
+        enable_v0_3_compat dispatch path that flattens it. Both
         `tasks/get` and `tasks/cancel` reach that path, so both are -32603 today
         whether they raise TaskNotFoundError or return None.
 
