@@ -3783,7 +3783,7 @@ class TestRegisteredPushConfigLookup:
     the signed/unsigned scheduler integration tests. This arm — which reads a
     *stored* ``authentication_token`` out of the database and hands it to the
     outbound sender — had no test at all: both its ``tenant_id`` and
-    ``principal_id`` predicates could be deleted with the whole unit suite still
+    ``principal_id`` predicates could be deleted with the whole suite still
     green, and no test seeded a row that made the lookup return anything, so the
     branch (including its ``session.expunge``) never executed.
 
