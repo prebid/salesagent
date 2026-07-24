@@ -14,7 +14,7 @@ import json
 # echo to the buyer.
 SECRET_BEARING_MESSAGE = "postgresql://svc:hunter2@db.internal/prod TOKEN=abc123 SELECT * FROM principals"
 
-_SECRET_TOKENS = ("hunter2", "postgresql://", "db.internal", "TOKEN=abc123", "SELECT", "principals")
+_SECRET_TOKENS = ("hunter2", "postgresql://", "svc", "db.internal", "TOKEN=abc123", "SELECT", "principals")
 
 
 def assert_no_secret_leak(blob: object, *, context: str = "") -> None:

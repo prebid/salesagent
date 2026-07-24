@@ -20,8 +20,6 @@ import pytest
 
 from tests.unit._architecture_helpers import REPO_ROOT, assert_violations_match_allowlist, iter_call_expressions
 
-ROOT = Path(__file__).resolve().parents[2]
-
 # ---------------------------------------------------------------------------
 # Invariant 1: No get_db_session() in _impl functions
 # ---------------------------------------------------------------------------
@@ -73,7 +71,9 @@ def _discover_integration_test_files() -> list[str]:
 
     Globs are anchored on the repo root derived from ``__file__``, not the cwd: a cwd-relative
     glob silently matches NOTHING when pytest is invoked from anywhere else, and a guard that
-    scans zero files passes rather than fails.
+    scans zero files passes rather than fails. Same escape closed in
+    test_architecture_capability_constant_parity.py, which had the identical cwd-relative
+    ``Path("src").rglob(...)`` defect.
     """
     root_dir = REPO_ROOT
     roots = ("tests/integration*", "tests/admin", "tests/e2e")
@@ -522,7 +522,7 @@ def _find_matching_calls(file_path: str, predicate: Callable[[ast.expr], bool]) 
 
     Returns list of (file_path, function_name, line_number) — one per function.
     """
-    source_path = ROOT / file_path
+    source_path = REPO_ROOT / file_path
     if not source_path.exists():
         return []
 

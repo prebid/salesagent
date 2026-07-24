@@ -19,14 +19,17 @@ from tests.helpers.secret_scrub import _SECRET_TOKENS, SECRET_BEARING_MESSAGE, a
 # the oracle silently weakened. Declared here, every drop from the shared set fails
 # ``test_shared_token_set_matches_the_independent_expectation`` below.
 #
-# Not listed: the ``svc`` user and ``prod`` database name from the connection string. They are
-# real secret fragments but unusable as bare substrings — "prod" matches the legitimate word
-# "product", which appears throughout this codebase's buyer-facing copy, so tokenizing them
-# would fire on clean messages. The surrounding ``postgresql://`` and ``db.internal`` fragments
-# already catch any leak of that connection string.
+# Not listed: the ``prod`` database name from the connection string. It is a real secret
+# fragment but unusable as a bare substring — it matches the legitimate word "product", which
+# appears throughout this codebase's buyer-facing copy, so tokenizing it would fire on clean
+# messages now and for as long as "product" stays in that copy. The surrounding
+# ``postgresql://`` and ``db.internal`` fragments already catch any leak of that connection
+# string. The ``svc`` username has no such collision (verified: no hit for "svc" anywhere in
+# src/) and IS tokenized below.
 _EXPECTED_LEAK_FRAGMENTS = (
     "hunter2",  # password
     "postgresql://",  # connection-string scheme
+    "svc",  # connection-string username
     "db.internal",  # internal hostname
     "TOKEN=abc123",  # bearer credential
     "SELECT",  # inline SQL

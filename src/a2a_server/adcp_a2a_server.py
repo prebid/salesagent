@@ -184,7 +184,11 @@ def _enveloped_invalid_request(exc: AdCPError) -> InvalidRequestError:
     sanctioned transport-envelope location, and ``error.data.adcp_error`` is a MUST-check in the
     client detection order — so a protocol-level rejection can stay a JSON-RPC error AND still let
     a buyer branch on the AdCP code. "Stays on the JSON-RPC wire" and "carries the envelope in
-    ``data``" are orthogonal; every A2A rejection here does both.
+    ``data``" are orthogonal; every AdCP-layer rejection routed through this helper does both.
+    Protocol-native JSON-RPC errors — ``UnsupportedOperationError`` (task listing/subscription,
+    the extended agent card) and ``TaskNotFoundError`` (push-config lookups) — are correctly
+    envelope-free: they signal a transport-protocol condition with no corresponding AdCP wire
+    code, not an escape from this helper.
 
     Both wire layers carry the SAME sanitized message — the JSON-RPC ``message`` is taken from the
     envelope — so ``error.message`` and ``error.data.adcp_error.message`` can never disagree.
@@ -196,12 +200,15 @@ def _enveloped_invalid_request(exc: AdCPError) -> InvalidRequestError:
 def _auth_required_error(auth_error: AdCPAuthenticationError) -> InvalidRequestError:
     """THE single source for every A2A auth rejection — AUTH_REQUIRED envelope in ``data``.
 
-    Covers all six auth raises: the missing-token, resolution-failure, and invalid-principal arms
-    of ``_resolve_a2a_identity`` (inherited by tasks/get, tasks/cancel and the four
+    Covers five auth raises: the missing-token, resolution-failure, and invalid-principal arms of
+    ``_resolve_a2a_identity`` (inherited by tasks/get, tasks/cancel and the four
     push-notification-config methods), the ``message/send`` pre-dispatch check, and the standalone
     ``_handle_explicit_skill`` identity guard. Before this, only ``message/send`` carried the
     envelope, so a buyer branching on ``error.data.adcp_error.code == "AUTH_REQUIRED"`` got it
-    there and nowhere else.
+    there and nowhere else. (``_resolve_a2a_identity`` has a SIXTH raise — no resolvable tenant for
+    an otherwise-authenticated principal — that is a seller-side config failure, not an auth
+    failure, and deliberately routes through ``_enveloped_invalid_request`` with
+    ``AdCPConfigurationError`` instead; it is excluded from this helper by design, not by omission.)
 
     Takes the TYPED error rather than a message + optional cause: the wire code, recovery, and the
     graded ``suggestion`` then all come from the class defaults (one definition, never re-specified
@@ -1364,8 +1371,9 @@ class AdCPRequestHandler(RequestHandler):
             yield None
             return
 
-        # get_db_session stays function-local: tests patch it at its SOURCE module
-        # (tests/conftest.py), which only takes effect when it is resolved per call.
+        # get_db_session stays function-local: this repo's tests patch it at its SOURCE
+        # module (20+ call sites across tests/), which only takes effect when the name is
+        # re-resolved per call rather than bound once at import time.
         from src.core.database.database_session import get_db_session
 
         with get_db_session() as session:

@@ -15,9 +15,8 @@ The non-AST-detectable slice (one invariant computed two ways) stays a review co
 """
 
 import ast
-from pathlib import Path
 
-from tests.unit._architecture_helpers import iter_call_expressions
+from tests.unit._architecture_helpers import REPO_ROOT, iter_call_expressions
 
 # Capability keywords whose value must be derived from an enforced constant, not a literal.
 _DERIVED_CAPABILITY_KEYWORDS = {"replay_ttl_seconds"}
@@ -47,7 +46,11 @@ def test_capability_values_are_derived_not_literal():
     silently (the #1b bug class).
     """
     offenders: list[str] = []
-    for path in Path("src").rglob("*.py"):
+    # Anchored on the repo root derived from __file__, not the cwd: a cwd-relative glob
+    # silently matches nothing when pytest runs from anywhere else, and a guard that scans
+    # zero files passes rather than fails (same escape as _discover_integration_test_files
+    # in test_architecture_repository_pattern.py).
+    for path in (REPO_ROOT / "src").rglob("*.py"):
         try:
             for site in _literal_capability_sites_in(path.read_text()):
                 offenders.append(f"{path}:{site.split('@')[1]} ({site.split('@')[0]})")

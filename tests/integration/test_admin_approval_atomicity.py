@@ -480,26 +480,7 @@ class TestMediaBuyDetailApprovalUI:
     canonical lookup (hiding the UI again) would leave all tests green. This closes that gap."""
 
     def test_detail_page_renders_approval_controls_for_legacy_approval_step(self, client, factory_session):
-        from tests.factories import MediaBuyFactory
-
-        # A persisted media buy with its own linked tenant/principal (super-admin auth below
-        # bypasses tenant scoping), plus a mapped legacy ``approval`` workflow step. Unique
-        # SubFactory ids avoid the factory Sequence colliding with the persistent agent-db.
-        suffix = uuid.uuid4().hex[:8]
-        media_buy = MediaBuyFactory(
-            tenant__tenant_id=f"t_{suffix}",
-            tenant__subdomain=f"sub-{suffix}",
-            principal__principal_id=f"p_{suffix}",
-            principal__access_token=f"tok_{suffix}",
-            media_buy_id=f"mb_{suffix}",
-            status="pending_approval",
-        )
-        tenant_id = media_buy.tenant_id
-        principal_id = media_buy.principal_id
-        media_buy_id = media_buy.media_buy_id
-
-        _auth(client, tenant_id)
-        step_id = _make_step(tenant_id, principal_id, "approval", media_buy_id=media_buy_id)
+        tenant_id, media_buy_id, step_id = _authed_media_buy_awaiting_approval(client, "approval")
 
         resp = client.get(f"/tenant/{tenant_id}/media-buy/{media_buy_id}")
 

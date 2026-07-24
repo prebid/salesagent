@@ -39,6 +39,7 @@ from a2a.types import (
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, _dict_to_value
 from src.core.exceptions import (
     AUTH_REQUIRED_CANONICAL_SUGGESTION,
+    AUTH_REQUIRED_SUGGESTION,
     VALIDATION_ERROR_SUGGESTION,
     AdCPAuthenticationError,
     AdCPCapabilityNotSupportedError,
@@ -543,8 +544,6 @@ async def test_task_management_auth_failures_stay_on_json_rpc_wire(handler_metho
     Drive both public handlers and serialize the real ``InvalidRequestError`` through
     the SDK dispatcher helper so the regression is pinned at the JSON-RPC wire altitude.
     """
-    from a2a.server.request_handlers.response_helpers import build_error_response
-
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value=auth_token)
     if auth_token:
@@ -622,6 +621,12 @@ async def test_every_auth_guarded_method_carries_the_auth_required_envelope(hand
     # failed to survive it would never reach a buyer regardless of what the object held.
     body = build_error_response("req-auth", err)
     assert_envelope_shape(body["error"]["data"], "AUTH_REQUIRED", recovery="correctable")
+    # Both wire layers must carry the SAME sanitized message (per _enveloped_invalid_request's
+    # contract), and the suggestion must be the graded AUTH_REQUIRED hint — neither property was
+    # pinned above, so a regression that desynced ``error.message`` from the envelope's message, or
+    # dropped/replaced the suggestion, would have gone undetected.
+    assert body["error"]["message"] == body["error"]["data"]["adcp_error"]["message"]
+    assert body["error"]["data"]["adcp_error"]["suggestion"] == AUTH_REQUIRED_SUGGESTION
 
 
 # The parametrization above drives only the MISSING-TOKEN arm. The remaining auth arms each
