@@ -540,7 +540,7 @@ class DeliveryWebhookScheduler:
             "media_buy_id": media_buy.media_buy_id,
         }
 
-        # SDK 5.7: returns McpWebhookPayload directly; 3rd arg is task_type.
+        # SDK 6.6.0: returns McpWebhookPayload directly; 3rd arg is task_type.
         # Delivery reports are status updates on existing media buys,
         # so we use update_media_buy as the canonical task type.
         # Serialize via webhook_payload(): the schema scopes aggregated_totals to
