@@ -10,6 +10,7 @@ the repository owns the query, the helper owns the assertion.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from tests.harness.transport import Transport
@@ -59,6 +60,31 @@ def wire_dict(ctx: dict) -> dict:
     return _require_response(ctx).model_dump(mode="json")
 
 
+def wire_integer(ctx: dict, container: dict, field: str) -> int:
+    """Read an integer-valued ``field`` from a serialized wire container.
+
+    ONE home for the per-transport integer nuance: JSON-native transports
+    (REST/MCP) and the IMPL serializer carry the field as a genuine ``int``, but
+    A2A serializes DataParts through a protobuf ``Struct`` whose only numeric
+    type is ``double`` — an integer arrives as a whole-number float (e.g.
+    ``1.0``). Both are the same integer value. Rejects strings, null, bool, and
+    fractional values on every transport; returns the value as ``int`` for
+    comparisons. The wire-type divergence is tracked in #1583 — tighten this to
+    require ``int`` everywhere if A2A gains a JSON-native serialization.
+    """
+    value = container.get(field)
+    if ctx.get("transport") == Transport.A2A:
+        assert isinstance(value, (int, float)) and not isinstance(value, bool), (
+            f"{field} must be a number on the A2A wire, got {type(value).__name__}: {value!r}"
+        )
+        assert float(value).is_integer(), f"{field} must be a whole number on the wire, got {value!r}"
+        return int(value)
+    assert isinstance(value, int) and not isinstance(value, bool), (
+        f"{field} must be a JSON integer on the wire, got {type(value).__name__}: {value!r}"
+    )
+    return value
+
+
 def _require(ctx: dict, key: str, *, hint: str | None = None) -> object:
     """Return ``ctx[key]``, failing with a diagnostic if it is absent.
 
@@ -104,6 +130,54 @@ def _require_error(ctx: dict) -> object:
         f"may have succeeded. Response: {ctx.get('response')!r}"
     )
     return error
+
+
+def require_success_response(ctx: dict, noun: str = "success", *, response: object | None = None) -> object:
+    """Return the response, failing with the recorded error if absent.
+
+    Defaults to ``ctx["response"]``; pass ``response`` to guard an
+    explicitly-stashed response (e.g. a t1/t2 cross-read) instead. ``noun``
+    names the expected response kind in the failure message ("success",
+    "query", ...) so the step's wording survives the shared guard.
+    """
+    resp = ctx.get("response") if response is None else response
+    assert resp is not None, f"Expected a {noun} response, got error: {ctx.get('error')!r}"
+    return resp
+
+
+def parse_iso_8601(timestamp: str | datetime) -> datetime:
+    """Parse an ISO 8601 string (Z suffix tolerated), preserving its offset.
+
+    Returns the value unchanged if it is already a ``datetime``. Single
+    source for the ISO-parse expression shared by the confirmed_at wire
+    assertion (uc002) and the UC-019 timestamp normalizer — callers that
+    need UTC normalization or a timezone-presence assertion layer that on
+    top of the parsed value.
+    """
+    return (
+        timestamp if isinstance(timestamp, datetime) else datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+    )
+
+
+def assert_valid_actions_array(ctx: dict, *, require_nonempty: bool = True) -> list:
+    """The success WIRE body carries a valid_actions array (INT-002).
+
+    Wire-graded via :func:`wire_dict` (the reconstructed payload re-defaults an
+    absent field, hiding a serialization drop) and non-empty by default — every
+    scenario currently binding a valid_actions Then targets an ACTIVE buy
+    (create sync-success / applied update), for which an empty array would be a
+    real regression. Pass ``require_nonempty=False`` from a step whose scenario
+    legitimately expects no valid actions (e.g. a terminal-status buy).
+    Returns the wire array so callers can add value-level checks.
+    """
+    require_success_response(ctx)
+    actions = wire_dict(ctx).get("valid_actions")
+    assert isinstance(actions, list), (
+        f"Expected a valid_actions array on the wire, got {type(actions).__name__}: {actions!r}"
+    )
+    if require_nonempty:
+        assert actions, "valid_actions must be non-empty for an active buy"
+    return actions
 
 
 def _get_response_field(resp: object, field: str) -> object:

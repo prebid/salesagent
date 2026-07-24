@@ -103,15 +103,19 @@ Automatically fetches and parses Agent Cards to:
 
 ### AdCP Extension Support
 
-The agent card includes the AdCP extension in `capabilities.extensions`. The version is dynamically
-determined from the installed `adcp` library via `get_adcp_spec_version()`:
+The agent card includes the AdCP extension in `capabilities.extensions`. It uses the **stable**
+extension URI `https://adcontextprotocol.org/extensions/adcp` (the versioned `adcp-extension.json`
+schema was a v2 artifact removed in v3). The `adcp_version` here is a v2 static-metadata convention
+emitted at full patch precision from `get_adcp_spec_version()` — it is **not** subject to the v3
+envelope release-precision rule, and it is not the normative version-negotiation surface. For v3
+version negotiation/discovery use `get_adcp_capabilities` and the envelope-root `adcp_version`.
 
 ```json
 {
   "capabilities": {
     "extensions": [
       {
-        "uri": "https://adcontextprotocol.org/schemas/{version}/protocols/adcp-extension.json",
+        "uri": "https://adcontextprotocol.org/extensions/adcp",
         "description": "AdCP protocol version and supported domains",
         "params": {
           "adcp_version": "{version}",

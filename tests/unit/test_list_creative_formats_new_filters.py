@@ -4,6 +4,9 @@ Tests the is_responsive, name_search, asset_types, and dimension filters
 that were added to match the AdCP spec.
 """
 
+import pytest
+from pydantic import ValidationError
+
 from src.core.schemas import FormatId, ListCreativeFormatsRequest
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -61,7 +64,9 @@ class TestListCreativeFormatsNewFilters:
             min_height=50,
             max_height=300,
         )
-        # type removed from ListCreativeFormatsRequest in adcp 3.12
+        # The media-buy ListCreativeFormatsRequest has no `type` filter by design —
+        # `type` (audio/video/display/dooh) belongs to the creative-agent-role request
+        # (ListCreativeFormatsRequestCreativeAgent); a role boundary per SDK #971 triage.
         assert req.is_responsive is False
         assert req.name_search == "leaderboard"
         assert req.asset_types is not None
@@ -106,11 +111,68 @@ class TestListCreativeFormatsNewFilters:
             is_responsive=True,
             name_search="banner",
         )
-        # type removed in adcp 3.12, format_ids should be None
+        # The media-buy request has no `type` filter by design (role boundary, SDK #971
+        # triage); format_ids should be None
         assert req.format_ids is None
         # New filters should be set
         assert req.is_responsive is True
         assert req.name_search == "banner"
+
+
+class TestDisclosureFilterUniqueItemsValidation:
+    """Restore the authoritative schema's ``uniqueItems: true`` contract."""
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("disclosure_positions", ["footer", "prominent", "footer"]),
+            ("disclosure_persistence", ["continuous", "continuous", "initial"]),
+        ],
+    )
+    def test_duplicate_disclosure_filters_are_rejected(self, field, value):
+        with pytest.raises(ValidationError, match=f"{field} must not contain duplicate values"):
+            ListCreativeFormatsRequest(**{field: value})
+
+    def test_multiple_duplicate_disclosure_filters_are_all_rejected(self):
+        with pytest.raises(ValidationError) as exc_info:
+            ListCreativeFormatsRequest(
+                disclosure_positions=["prominent", "prominent"],
+                disclosure_persistence=["initial", "initial"],
+            )
+
+        assert {error["loc"][0] for error in exc_info.value.errors()} == {
+            "disclosure_positions",
+            "disclosure_persistence",
+        }
+
+    def test_unique_disclosure_filters_are_preserved_unchanged(self):
+        req = ListCreativeFormatsRequest(
+            disclosure_positions=["prominent", "footer", "audio"],
+        )
+        assert [p.value for p in req.disclosure_positions] == ["prominent", "footer", "audio"]
+
+    def test_none_disclosure_filters_stay_none(self):
+        req = ListCreativeFormatsRequest()
+        assert req.disclosure_positions is None
+        assert req.disclosure_persistence is None
+
+
+class TestMediaBuyRequestHasNoTypeFilter:
+    """Role boundary: the media-buy list_creative_formats request omits `type` by design.
+
+    Per the SDK team's #971 triage the `type` filter (audio/video/display/dooh) lives on
+    the creative-agent-role request (``ListCreativeFormatsRequestCreativeAgent``), NOT the
+    media-buy request our tool uses. This is a role boundary, not an omission or a removed
+    spec feature.
+    """
+
+    def test_media_buy_request_model_has_no_type_field(self):
+        assert "type" not in ListCreativeFormatsRequest.model_fields
+
+    def test_library_media_buy_request_also_has_no_type_field(self):
+        from adcp import ListCreativeFormatsRequest as LibraryRequest
+
+        assert "type" not in LibraryRequest.model_fields
 
 
 class TestListCreativeFormatsMCPToolSignature:

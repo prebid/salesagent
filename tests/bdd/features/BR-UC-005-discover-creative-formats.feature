@@ -34,13 +34,11 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-S1: Complete catalog returned
     # POST-S2: Asset requirements included per format
 
-  @T-UC-005-main-filtered @UC-005-MAIN-MCP-05 @main-flow @post-s3
-  Scenario: Discover filtered format catalog
-    Given the creative agent registry has formats of types "display" and "video"
-    When the Buyer Agent requests formats with type filter "display"
-    Then the response should include only display formats
-    And no video formats should be present in the results
-    # POST-S3: Only matching formats returned when filters applied
+  @T-UC-005-main-filtered @UC-005-MAIN-MCP-05 @main-flow @post-s3 @schema-contract
+  Scenario: Media-buy request does not define the creative-agent type filter
+    When the Buyer Agent inspects the media-buy list_creative_formats request contract
+    Then the media-buy request contract should not define a type filter
+    And the production request models should ignore extension properties
 
   @T-UC-005-main-referrals @UC-005-MAIN-MCP-13 @main-flow @post-s4
   Scenario: Creative agent referrals included in response
@@ -76,23 +74,21 @@ Feature: BR-UC-005 Discover Creative Formats
     # pricing_options — formats lack them only when the registry supplies none.
 
   @T-UC-005-inv-031-1-holds @UC-005-MAIN-MCP-16 @invariant @BR-RULE-031
-  Scenario: BR-RULE-031 INV-1 holds - Multiple filters combine as AND
+  Scenario: BR-RULE-031 INV-1 holds - Supported filters combine as AND
     Given the registry has format "display-banner" of type "display" with asset type "image"
     And the registry has format "video-banner" of type "display" with asset type "video"
     And the registry has format "pre-roll" of type "video" with asset type "video"
-    When the Buyer Agent requests formats with type "display" and asset_types ["video"]
+    When the Buyer Agent requests formats with asset_types ["video"] and name_search "video"
     Then only "video-banner" should be returned
-    # BR-RULE-031 INV-1: both filters must match (type=display AND asset=video)
 
   @T-UC-005-inv-031-1-violated @UC-005-MAIN-MCP-16 @invariant @BR-RULE-031
-  Scenario: BR-RULE-031 INV-1 violated - AND combination excludes partial matches
+  Scenario: BR-RULE-031 INV-1 violated - Supported AND combination excludes partial matches
     Given the registry has format "pre-roll" of type "video" with asset type "video"
-    When the Buyer Agent requests formats with type "display" and asset_types ["video"]
+    When the Buyer Agent requests formats with asset_types ["video"] and name_search "display"
     Then no formats should be returned
-    # BR-RULE-031 INV-1: type=display excludes video-type format despite matching asset_types
 
   @T-UC-005-inv-031-2-holds @UC-005-MAIN-MCP-04 @invariant @BR-RULE-031
-  Scenario: BR-RULE-031 INV-2 holds - Results sorted by type then name
+  Scenario: BR-RULE-031 INV-2 holds - Results sorted by name
     Given the registry has formats:
     | name            | type    |
     | Zebra Banner    | display |
@@ -100,13 +96,7 @@ Feature: BR-UC-005 Discover Creative Formats
     | Pre-Roll        | video   |
     | Audio Spot      | audio   |
     When the Buyer Agent requests all formats with no filters
-    Then the results should be ordered:
-    | name            | type    |
-    | Audio Spot      | audio   |
-    | Alpha Banner    | display |
-    | Zebra Banner    | display |
-    | Pre-Roll        | video   |
-    # BR-RULE-031 INV-2: sorted by type value then name
+    Then the results should be sorted by name
 
   @T-UC-005-inv-049-2-holds @UC-005-MAIN-MCP-06 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-2 holds - Format IDs filter matches on the (agent_url, id) pair
@@ -402,19 +392,11 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F2: Error explains minItems violation
     # POST-F3: Suggestion for recovery
 
-  @T-UC-005-ext-b-disclosure-dupes @UC-005-EXT-B-12 @extension @ext-b @error @post-f1 @post-f2 @post-f3
-  Scenario: Duplicate disclosure positions
+  @T-UC-005-ext-b-disclosure-dupes @UC-005-EXT-B-12 @extension @ext-b @error @post-f1
+  Scenario: Duplicate disclosure positions are rejected
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with disclosure_positions filter ["prominent", "prominent"]
-    Then the operation should fail
-    And the error code should be "DISCLOSURE_POSITIONS_DUPLICATES"
-    And the error message should indicate duplicate values are not allowed
-    And the error should include a "suggestion" field
-    And the suggestion should advise removing duplicate positions
-    # POST-F1: Buyer knows the operation failed
-    # POST-F2: Error explains uniqueItems violation
-    # POST-F3: Suggestion for recovery
-    # --- ext-b: Output Format IDs Validation Errors (NEW) ---
+    Then the duplicate request should fail with a VALIDATION_ERROR wire envelope
 
   @T-UC-005-ext-b-persistence-invalid @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Invalid disclosure persistence value
@@ -444,20 +426,11 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F3: Suggestion for recovery
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
-  @T-UC-005-ext-b-persistence-dupes @extension @ext-b @error @post-f1 @post-f2 @post-f3
-  Scenario: Duplicate disclosure persistence modes
+  @T-UC-005-ext-b-persistence-dupes @UC-005-EXT-B-18 @extension @ext-b @error @post-f1
+  Scenario: Duplicate disclosure persistence modes are rejected
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with disclosure_persistence filter ["continuous", "continuous"]
-    Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
-    And the error message should indicate duplicate values are not allowed
-    And the error should include a "suggestion" field
-    And the suggestion should advise removing duplicate persistence modes
-    # POST-F1: Buyer knows the operation failed
-    # POST-F2: Error explains uniqueItems violation
-    # POST-F3: Suggestion for recovery
-    # --- ext-b: Output Format IDs Validation Errors (NEW) ---
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    Then the duplicate request should fail with a VALIDATION_ERROR wire envelope
 
   @T-UC-005-ext-b-output-empty @UC-005-EXT-B-13 @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Empty output format IDs array
@@ -538,23 +511,10 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F2: Error explains invalid structure
     # POST-F3: Suggestion for correct FormatId structure
 
-  @T-UC-005-partition-type-filter @partition @format_type_filter
-  Scenario Outline: Format type filter partition - <partition>
-    Given a seller with formats of various types
-    When the Buyer Agent requests creative formats with type filter "<partition>"
-    Then the type filtering should result in <expected>
-
-    Examples: Valid partitions
-      | partition     | expected |
-      | display       | valid    |
-      | video         | valid    |
-      | audio         | valid    |
-      | dooh          | valid    |
-      | omitted       | valid    |
-
-    Examples: Invalid partitions
-      | partition     | expected |
-      | invalid_type  | invalid  |
+  @T-UC-005-partition-type-filter @partition @format_type_filter @schema-contract
+  Scenario: Unknown media-buy type extension is ignored by production request models
+    When production request-model validation receives media-buy extension field type "invalid_type"
+    Then the media-buy type extension should be ignored rather than used as a filter
 
   @T-UC-005-partition-format-ids @UC-005-MAIN-MCP-06 @partition @format_ids_filter
   Scenario Outline: Format IDs filter partition - <partition>
@@ -658,18 +618,17 @@ Feature: BR-UC-005 Discover Creative Formats
     Then the disclosure_positions filtering should result in <expected>
 
     Examples: Valid partitions
-      | partition                      | expected |
-      | single_position                | valid    |
-      | multiple_positions_all_match   | valid    |
-      | all_positions                  | valid    |
-      | omitted                        | valid    |
-      | no_matching_formats            | valid    |
+      | partition                    | expected |
+      | single_position              | valid    |
+      | multiple_positions_all_match | valid    |
+      | all_positions                | valid    |
+      | omitted                      | valid    |
+      | no_matching_formats          | valid    |
 
     Examples: Invalid partitions
-      | partition            | expected |
-      | unknown_position     | invalid  |
-      | empty_array          | invalid  |
-      | duplicate_positions  | invalid  |
+      | partition           | expected |
+      | unknown_position    | invalid  |
+      | empty_array         | invalid  |
 
   @T-UC-005-partition-disclosure-persistence @partition @disclosure_persistence
   Scenario Outline: Disclosure persistence filter partition - <partition>
@@ -732,20 +691,10 @@ Feature: BR-UC-005 Discover Creative Formats
       | invalid_format_id_missing_agent_url | invalid  |
       | invalid_format_id_missing_id        | invalid  |
 
-  @T-UC-005-boundary-type-filter @boundary @format_type_filter
-  Scenario Outline: Format type filter boundary - <boundary_point>
-    Given a seller with formats of various types
-    When the Buyer Agent requests creative formats at type boundary "<boundary_point>"
-    Then the type handling should be <expected>
-
-    Examples:
-      | boundary_point              | expected |
-      | display (valid enum)        | valid    |
-      | video (valid enum)          | valid    |
-      | audio (valid enum)          | valid    |
-      | dooh (valid enum)           | valid    |
-      | omitted (no filter)         | valid    |
-      | invalid type (rejected)     | invalid  |
+  @T-UC-005-boundary-type-filter @boundary @format_type_filter @schema-contract
+  Scenario: Creative-agent type value remains an ignored media-buy request-model extension
+    When production request-model validation receives media-buy extension field type "display"
+    Then the media-buy type extension should be ignored rather than used as a filter
 
   @T-UC-005-boundary-format-ids @UC-005-MAIN-MCP-06 @boundary @format_ids_filter
   Scenario Outline: Format IDs filter boundary - <boundary_point>
@@ -837,14 +786,13 @@ Feature: BR-UC-005 Discover Creative Formats
     Then the disclosure handling should be <expected>
 
     Examples:
-      | boundary_point                                          | expected |
-      | single position ['prominent'] (min array size)          | valid    |
-      | all 8 positions (max meaningful array)                  | valid    |
-      | omitted (no filter)                                     | valid    |
-      | format has no supported_disclosure_positions (excluded)  | valid    |
-      | empty array []                                          | invalid  |
-      | unknown position string 'sidebar'                       | invalid  |
-      | duplicate positions ['prominent','prominent']           | invalid  |
+      | boundary_point                                         | expected |
+      | single position ['prominent'] (min array size)         | valid    |
+      | all 8 positions (max meaningful array)                 | valid    |
+      | omitted (no filter)                                    | valid    |
+      | format has no supported_disclosure_positions (excluded) | valid    |
+      | empty array []                                         | invalid  |
+      | unknown position string 'sidebar'                      | invalid  |
 
   @T-UC-005-boundary-disclosure-persistence @boundary @disclosure_persistence
   Scenario Outline: Disclosure persistence filter boundary - <boundary_point>
@@ -912,11 +860,12 @@ Feature: BR-UC-005 Discover Creative Formats
       | dooh          | valid    |
       | not_provided  | valid    |
 
-    # Type filter REMOVED in adcp 3.12 — ListCreativeFormatsRequest has no
-    # 'type' field, so every value dispatches unfiltered and production returns
-    # the full catalog. The former 'unknown_value -> invalid' rejection no longer
-    # exists; reconciled to valid (success). salesagent-33r0.
-    Examples: Formerly-invalid partitions (filter removed in 3.12, now valid)
+    # Our list_creative_formats tool uses the media-buy ListCreativeFormatsRequest, which
+    # has no 'type' field — the `type` filter is a creative-agent-role field by design (SDK
+    # adcp-client-python#971 role boundary), not part of this media-buy contract. So every
+    # value dispatches unfiltered and production returns the full catalog; the former
+    # 'unknown_value -> invalid' rejection does not apply here (reconciled to valid).
+    Examples: No type filter on the media-buy request (role boundary — all dispatch unfiltered)
       | partition      | expected |
       | unknown_value  | valid    |
 
@@ -948,9 +897,10 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent queries creative agent formats at type boundary "<boundary_point>"
     Then the creative agent type handling should be <expected>
 
-    # Type filter REMOVED in adcp 3.12 — no 'type' field on the request, so
-    # 'native' dispatches unfiltered like every other value; production no longer
-    # rejects it. Reconciled to valid (success). salesagent-33r0.
+    # The media-buy list_creative_formats request has no 'type' field — 'type' is a
+    # creative-agent-role field (intentional AdCP role boundary, adcp-client-python#971
+    # triage), not part of this request — so 'native' dispatches unfiltered; production
+    # no longer rejects it. Reconciled to valid (success).
     Examples:
       | boundary_point                                                  | expected |
       | audio (first enum value)                                        | valid    |

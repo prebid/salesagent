@@ -124,7 +124,7 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 
 ## AdCP Spec Version
 
-This project targets AdCP spec **3.1.0-beta.3** via the `adcp==5.7.0` Python SDK. See
+This project targets AdCP spec **3.1.1** via the `adcp==6.6.0` Python SDK. See
 [docs/adcp-spec-version.md](docs/adcp-spec-version.md) for the version mapping
 and bump procedure. The CI guard at `tests/unit/test_adcp_spec_version.py`
 fails on pin drift.
@@ -511,7 +511,7 @@ def test_something():
 ```
 
 ### Quality Rules
-- Max 10 mocks per test file (pre-commit enforces)
+- Max 10 mocks per test file (convention — no hook enforces this; reviewers do)
 - AdCP compliance test for all client-facing models
 - Test YOUR code, not Python built-ins
 - Roundtrip test required for any operation using `apply_testing_hooks()`

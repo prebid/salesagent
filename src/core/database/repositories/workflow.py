@@ -60,6 +60,37 @@ class WorkflowRepository:
             )
         ).first()
 
+    def get_by_external_task_id(self, external_task_id: str, *, principal_id: str | None) -> WorkflowStep | None:
+        """Get the workflow step carrying a given transport outer task id (tenant-scoped).
+
+        The A2A boundary persists its outer ``task_*`` id (the id returned to the
+        buyer) on the create step's ``request_data.external_task_id`` (see
+        ``_create_media_buy_impl``), so a durable ``tasks/get`` poll can resolve the
+        buyer's id → step → terminal status + stored ``response_data`` artifact,
+        surviving a server restart (the admin approval that terminalized the step
+        runs in a different process, so the in-memory task map is not enough).
+        Tenant-scoped via the Context join like every other read; pass the
+        polling buyer's ``principal_id`` to ALSO scope by principal — a
+        same-tenant sibling buyer must not read another principal's buy outcome
+        on task-id knowledge alone. #1544 B6.
+
+        ``principal_id`` is keyword-only with NO default: a caller wanting the
+        tenant-wide read has to pass ``None`` explicitly, so the principal scope
+        cannot be lost by forgetting an argument. Pinned by
+        ``test_get_by_external_task_id_is_principal_scoped``.
+        """
+        stmt = (
+            select(WorkflowStep)
+            .join(DBContext)
+            .where(
+                WorkflowStep.request_data["external_task_id"].as_string() == external_task_id,
+                DBContext.tenant_id == self._tenant_id,
+            )
+        )
+        if principal_id is not None:
+            stmt = stmt.where(DBContext.principal_id == principal_id)
+        return self._session.scalars(stmt).first()
+
     def get_by_step_id_or_raise(self, step_id: str) -> WorkflowStep:
         """Get a workflow step by ID or raise ``AdCPTaskNotFoundError``.
 
@@ -169,6 +200,40 @@ class WorkflowRepository:
             )
             .order_by(ObjectWorkflowMapping.created_at.desc())
         ).first()
+
+    def list_actionable_steps_for_object(
+        self,
+        object_type: str,
+        object_id: str,
+        *,
+        tool_name: str,
+        statuses: tuple[str, ...],
+        limit: int = 5,
+    ) -> list[WorkflowStep]:
+        """Non-terminal steps of ``tool_name`` mapped to an object, NEWEST first (#1637).
+
+        Tenant-scoped via the Context join. Constraining to ``tool_name`` is what makes the
+        approve/reject route's step selection authoritative — it must act on the media-buy
+        CREATION step (``create_media_buy``), never an unrelated actionable step (e.g. an
+        ``update_media_buy`` step) mapped to the same buy. A small window is returned (not
+        just the newest) so the caller can warn when more than one is actionable.
+        """
+        return list(
+            self._session.scalars(
+                select(WorkflowStep)
+                .join(ObjectWorkflowMapping, WorkflowStep.step_id == ObjectWorkflowMapping.step_id)
+                .join(DBContext, WorkflowStep.context_id == DBContext.context_id)
+                .where(
+                    DBContext.tenant_id == self._tenant_id,
+                    ObjectWorkflowMapping.object_type == object_type,
+                    ObjectWorkflowMapping.object_id == object_id,
+                    WorkflowStep.tool_name == tool_name,
+                    WorkflowStep.status.in_(list(statuses)),
+                )
+                .order_by(WorkflowStep.created_at.desc())
+                .limit(limit)
+            ).all()
+        )
 
     def get_step_by_id(self, step_id: str) -> WorkflowStep | None:
         """Alias of :meth:`get_by_step_id` (identical tenant-scoped lookup).

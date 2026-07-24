@@ -12,7 +12,7 @@
 
 <!-- Approval Alert -->
 {% if pending_approval_step %}
-<div class="alert alert-warning">
+<div class="alert alert-warning" id="approval-actions">
     <div style="display: flex; justify-content: space-between; align-items: start;">
         <div>
             <strong>⚠️ Manual Approval Required</strong>
@@ -35,6 +35,29 @@
 <div class="alert alert-info">
     <strong>ℹ️ Pending</strong>
     <p style="margin: 0.5rem 0 0 0;">{{ status_message.message }}</p>
+</div>
+{% endif %}
+
+<!-- Possible-duplicate remote-order incident (#1637). Ownership-independent marker that
+     survives a clean publish, so it must show even when the buy is serving. -->
+{% if media_buy.finalize_reconcile_incident_at %}
+<div class="alert alert-warning">
+    <strong>⚠️ Possible duplicate remote order — reconcile</strong>
+    <p style="margin: 0.5rem 0 0 0;">
+        A finalization worker's ad-server call ran but could not confirm single ownership, so a
+        duplicate or partial remote order may exist. Verify the ad server and remove any duplicate.
+    </p>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9em;">
+        {% if media_buy.finalize_reconcile_incident_reason %}
+        Reason: {{ media_buy.finalize_reconcile_incident_reason }}<br>
+        {% endif %}
+        Recorded: {{ media_buy.finalize_reconcile_incident_at.strftime('%Y-%m-%d %H:%M:%S %Z') }}
+    </p>
+    {% if media_buy_approvable and pending_approval_step %}
+    <p style="margin: 0.5rem 0 0 0;">
+        Once reconciled, <a href="#approval-actions">re-approve this media buy</a> to resume finalization.
+    </p>
+    {% endif %}
 </div>
 {% endif %}
 

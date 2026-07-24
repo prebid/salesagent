@@ -32,17 +32,7 @@ class TestUpdateMediaBuyWireTransportStatus:
     object; _impl is exempt (no wire).
     """
 
-    @pytest.fixture
-    def env_with_media_buy(self, integration_db):
-        from tests.bdd.conftest import _setup_existing_media_buy
-        from tests.harness.media_buy_dual import MediaBuyDualEnv
-
-        with MediaBuyDualEnv() as env:
-            tenant, principal, product, _ = env.setup_media_buy_data()
-            ctx: dict = {}
-            _setup_existing_media_buy(ctx, env, tenant, principal, product)
-            env._seeded_media_buy_id = ctx["existing_media_buy"].media_buy_id
-            yield env, ctx["existing_media_buy"]
+    # env_with_media_buy comes from tests/integration/conftest.py (shared home).
 
     def _build_update_req(self, media_buy: object) -> object:
         from src.core.schemas import UpdateMediaBuyRequest

@@ -60,6 +60,62 @@ def make_media_buy(tenant_id: str, principal_id: str, media_buy_id: str, **kwarg
     )
 
 
+def make_create_media_buy_step(
+    context_manager,
+    tenant_id: str,
+    principal_id: str,
+    *,
+    media_buy_id: str = "mb_1",
+    status: str = "completed",
+    external_task_id: str | None = None,
+    response_data: dict | None = None,
+):
+    """Create a context + a ``create_media_buy`` workflow step for approval/async tests.
+
+    ``external_task_id`` (when set) is stored on ``request_metadata`` (merged into
+    ``request_data`` by ``create_workflow_step``) so ``on_get_task`` can correlate. Returns
+    the created ``WorkflowStep``.
+    """
+    context = context_manager.create_context(tenant_id=tenant_id, principal_id=principal_id)
+    request_metadata: dict = {"protocol": "a2a"}
+    if external_task_id is not None:
+        request_metadata["external_task_id"] = external_task_id
+    return context_manager.create_workflow_step(
+        context_id=context.context_id,
+        step_type="media_buy_creation",
+        owner="system",
+        status=status,
+        tool_name="create_media_buy",
+        request_data={"media_buy_id": media_buy_id},
+        response_data=response_data,
+        request_metadata=request_metadata,
+    )
+
+
+def seed_pending_buy_and_step(
+    context_manager, tenant_id: str, principal_id: str, media_buy_id: str
+) -> tuple[str, dict]:
+    """Seed a ``pending_approval`` buy + an in-progress create_media_buy step.
+
+    Shared by the approval finalizer race / crash-recovery suites (DRY): returns
+    ``(step_id, step_data)`` in the shape the finalizer entry points consume.
+    """
+    from src.core.database.repositories import MediaBuyUoW
+
+    with MediaBuyUoW(tenant_id) as uow:
+        uow.media_buys.create(make_media_buy(tenant_id, principal_id, media_buy_id, status="pending_approval"))
+    step = make_create_media_buy_step(
+        context_manager, tenant_id, principal_id, media_buy_id=media_buy_id, status="in_progress"
+    )
+    step_data = {
+        "step_id": step.step_id,
+        "context_id": step.context_id,
+        "tool_name": "create_media_buy",
+        "request_data": {},
+    }
+    return step.step_id, step_data
+
+
 def make_package(media_buy_id: str, package_id: str, **kwargs) -> MediaPackage:
     """Helper to construct a MediaPackage ORM object."""
     defaults = {
@@ -1239,3 +1295,28 @@ def seed_error_test_tenant(
         "principal_id": principal_id,
         "access_token": access_token,
     }
+
+
+@pytest.fixture
+def env_with_media_buy(integration_db):
+    """One shared MediaBuyDualEnv + seeded media buy for update-path wire tests.
+
+    Yields ``(env, media_buy)``. This is the SINGLE home for the fixture that
+    several update-path test modules previously hand-rolled (and one copy had
+    drifted): it ALWAYS sets ``env._seeded_media_buy_id`` — the harness's REST
+    update dispatcher builds its PUT target from ``req.media_buy_id`` falling
+    back to this attribute, so a copy that forgets it silently PUTs to
+    ``/media-buys/NOT_SEEDED`` — and ``env._owner_tenant`` for tests that need
+    the tenant row (e.g. to seed sibling principals).
+    """
+    from tests.bdd.conftest import _setup_existing_media_buy
+    from tests.harness.media_buy_dual import MediaBuyDualEnv
+
+    with MediaBuyDualEnv() as env:
+        tenant, principal, product, _ = env.setup_media_buy_data()
+        ctx: dict = {}
+        _setup_existing_media_buy(ctx, env, tenant, principal, product)
+        env._seeded_media_buy_id = ctx["existing_media_buy"].media_buy_id
+        env._owner_tenant = tenant
+        env._seeded_package = ctx["existing_package"]
+        yield env, ctx["existing_media_buy"]

@@ -9,32 +9,28 @@ from __future__ import annotations
 from pytest_bdd import parsers, then
 
 from src.core.helpers import enum_value
-from tests.bdd.steps.generic.then_media_buy import then_no_media_buy_persisted as _then_no_media_buy_persisted
+from src.core.schemas import UpdateMediaBuySuccess
 
-
-# ── No-persistence assertion (all-or-nothing failure) ────────────────────
-# then_media_buy.py is a helper module that is not registered as a pytest-bdd
-# plugin (its other steps duplicate domain-file steps). Re-expose only the
-# no-persistence assertion here, in a registered module, delegating to the
-# single implementation (DRY) so adapter-failure scenarios (UC-002 ext-j) can
-# assert the all-or-nothing rollback on the wire.
-@then("no media buy record should be persisted in the database")
-@then("no media buy record should be persisted")
-def then_no_media_buy_record_persisted(ctx: dict) -> None:
-    """Assert no new media buy was persisted (delegates to then_media_buy)."""
-    _then_no_media_buy_persisted(ctx)
+# The "no media buy record should be persisted[ in the database]" steps are
+# owned by the now-registered then_media_buy.py (upstream #1417 canonicalized
+# that module). Re-exposing them here would double-register (shadowed-steps guard).
 
 
 # ── Response status ──────────────────────────────────────────────────
 
 
-# Success collections that prove a status-less response is genuinely
-# "completed" — at least one must be present and a list, not None.
-_STATUSLESS_SUCCESS_ATTRS: tuple[str, ...] = (
-    "formats",  # ListCreativeFormatsResponse
-    "media_buy_deliveries",  # GetMediaBuyDeliveryResponse
-    "aggregated_totals",  # GetMediaBuyDeliveryResponse
-)
+# Success payloads that prove a status-less response is genuinely "completed":
+# at least one must be present and non-None. The value says whether the field is
+# a COLLECTION (list-typed, so its type is asserted too) or a single object —
+# recorded per field rather than as a name allowlist, so a newly added list-typed
+# collection cannot silently get the weaker present-only check.
+_STATUSLESS_SUCCESS_ATTRS: dict[str, bool] = {
+    "formats": True,  # ListCreativeFormatsResponse — list[Format]
+    "media_buy_deliveries": True,  # GetMediaBuyDeliveryResponse — list[MediaBuyDeliveryData]
+    "aggregated_totals": False,  # GetMediaBuyDeliveryResponse — a single AggregatedTotals object
+    # UpdateMediaBuySuccess (payload status field is the media-buy status, unset)
+    "affected_packages": True,  # list[AffectedPackage]
+}
 
 
 @then(parsers.parse('the response status should be "{status}"'))
@@ -57,12 +53,18 @@ def then_response_status(ctx: dict, status: str) -> None:
     # Uses getattr on the class (not instance) to handle non-Pydantic test doubles.
     resp_fields = getattr(type(resp), "model_fields", {})
     if "status" in resp_fields:
-        # SDK 5.7: status may be a non-StrEnum; enum_value normalizes to str.
-        actual_str = enum_value(resp.status)
-        assert actual_str == status, f"Expected status '{status}', got '{actual_str}'"
-        return
+        if resp.status is not None:
+            # status may be a non-StrEnum (e.g. a test double); enum_value normalizes to str.
+            actual_str = enum_value(resp.status)
+            assert actual_str == status, f"Expected status '{status}', got '{actual_str}'"
+            return
+        assert isinstance(resp, UpdateMediaBuySuccess), (
+            f"Response {type(resp).__name__} declares status but left it unset; "
+            "only UpdateMediaBuySuccess may use status-less completion evidence"
+        )
 
-    # Status-less response: only the completed/success state is representable.
+    # A truly status-less response, or the explicitly supported legacy
+    # UpdateMediaBuySuccess(status=None), can only represent completed/success.
     if status != "completed":
         raise AssertionError(
             f"Status '{status}' requested but response {type(resp).__name__} "
@@ -75,7 +77,7 @@ def then_response_status(ctx: dict, status: str) -> None:
 
     # Verify at least one schema-required success collection is present and populated.
     found_count = 0
-    for attr in _STATUSLESS_SUCCESS_ATTRS:
+    for attr, is_collection in _STATUSLESS_SUCCESS_ATTRS.items():
         if attr not in resp_fields:
             continue
         found_count += 1
@@ -83,13 +85,13 @@ def then_response_status(ctx: dict, status: str) -> None:
         assert value is not None, (
             f"Status 'completed' claimed but response.{attr} is None — the schema-required success payload is missing"
         )
-        if attr in ("formats", "media_buy_deliveries"):
+        if is_collection:
             assert isinstance(value, list), (
                 f"Status 'completed' claimed but response.{attr} is {type(value).__name__}, expected a list"
             )
     assert found_count >= 1, (
         f"Status-less response {type(resp).__name__} exposes none of the "
-        f"expected success collections {_STATUSLESS_SUCCESS_ATTRS} — cannot "
+        f"expected success collections {tuple(_STATUSLESS_SUCCESS_ATTRS)} — cannot "
         f"prove the operation completed successfully"
     )
 

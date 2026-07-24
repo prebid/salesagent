@@ -131,6 +131,7 @@ class TestConfigHelperFunctions:
 
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("ENVIRONMENT", None)
+            os.environ.pop("PRODUCTION", None)
             assert not is_production()
             assert get_pydantic_extra_mode() == "forbid"
 
@@ -145,6 +146,7 @@ class TestConfigHelperFunctions:
         from src.core.config import get_pydantic_extra_mode, is_production
 
         with patch.dict(os.environ, {"ENVIRONMENT": "staging"}):
+            os.environ.pop("PRODUCTION", None)
             assert not is_production()
             assert get_pydantic_extra_mode() == "forbid"
 
@@ -155,6 +157,51 @@ class TestConfigHelperFunctions:
             assert is_production()
         with patch.dict(os.environ, {"ENVIRONMENT": "Production"}):
             assert is_production()
+
+    def test_production_via_production_env_var_only(self):
+        """A deploy setting PRODUCTION=true but not ENVIRONMENT is still production.
+
+        is_production() takes the UNION of the two conventions so the admin
+        security gates (which historically keyed on PRODUCTION) and the test-header
+        gate (which keys on ENVIRONMENT) cannot diverge.
+        """
+        from src.core.config import is_production
+
+        with patch.dict(os.environ, {"PRODUCTION": "true"}):
+            os.environ.pop("ENVIRONMENT", None)
+            assert is_production()
+        # case-insensitive
+        with patch.dict(os.environ, {"PRODUCTION": "TRUE"}):
+            os.environ.pop("ENVIRONMENT", None)
+            assert is_production()
+
+    def test_not_production_when_neither_set(self):
+        from src.core.config import is_production
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ENVIRONMENT", None)
+            os.environ.pop("PRODUCTION", None)
+            assert not is_production()
+        # PRODUCTION set to a non-"true" value is not production
+        with patch.dict(os.environ, {"PRODUCTION": "false"}):
+            os.environ.pop("ENVIRONMENT", None)
+            assert not is_production()
+
+    def test_is_admin_production_delegates_to_is_production(self):
+        """is_admin_production() is a thin admin-facing alias of is_production()."""
+        from src.admin.utils import is_admin_production
+        from src.core.config import is_production
+
+        with patch.dict(os.environ, {"PRODUCTION": "true"}):
+            os.environ.pop("ENVIRONMENT", None)
+            assert is_admin_production() == is_production() is True
+        with patch.dict(os.environ, {"ENVIRONMENT": "production"}):
+            os.environ.pop("PRODUCTION", None)
+            assert is_admin_production() == is_production() is True
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ENVIRONMENT", None)
+            os.environ.pop("PRODUCTION", None)
+            assert is_admin_production() == is_production() is False
 
 
 class TestProductionModeBehavior:

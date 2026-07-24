@@ -10973,6 +10973,18 @@ mappings:
       upstream_refs: ["BR-UC-019", "BR-UC-019-si"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-019-lifecycle-approval"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-019", "BR-UC-019-si"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-019-inv-confirmed-at-null-provisional"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-019", "BR-UC-019-si"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-019-partition-confirmed-at"
       adcp_feature: "BR-UC-019-query-media-buys.feature"
       obligation_id: null

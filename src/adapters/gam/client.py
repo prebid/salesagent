@@ -10,6 +10,8 @@ from typing import Any
 
 from googleads import ad_manager
 
+from src.adapters.constants import ADAPTER_HTTP_READ_TIMEOUT
+
 from .auth import GAMAuthManager
 from .utils.health_check import GAMHealthChecker, HealthCheckResult, HealthStatus
 
@@ -67,6 +69,11 @@ class GAMClientManager:
             ad_manager_client = ad_manager.AdManagerClient(
                 credentials, "Prebid Sales Agent", network_code=self.network_code
             )
+            # Bound SOAP call duration so a hung GAM API cannot pin an
+            # update_media_buy row lock (held FOR UPDATE across the adapter call)
+            # indefinitely. googleads applies ``.timeout`` (seconds) to the zeep
+            # transport — default is 1 hour, far too long for a lock holder. #1544.
+            ad_manager_client.timeout = ADAPTER_HTTP_READ_TIMEOUT
 
             logger.info(
                 f"GAM client initialized for network {self.network_code} using {self.auth_manager.get_auth_method()}"

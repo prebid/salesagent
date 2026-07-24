@@ -365,10 +365,12 @@ class TestValidationModeSemantics:
         CREATIVE_NOT_FOUND — "Referenced creative does not exist in the agent's
         creative library. Recovery: correctable (...). Sellers MUST return this
         code uniformly for any creative_id not owned by the calling account".
-        error-handling.mdx "Not-found precedence" (newest prose at the pin,
-        3.1.0-beta.1): the resource-specific code for a creative_id reference
+        error-handling.mdx "Not-found precedence" (newest prose at
+        dist/docs/3.1.1, which resolves @main — not at tag v3.1.1, since the
+        3.1.1 prose snapshot was published after the tag): the code for a
+        creative_id reference
         SHOULD be CREATIVE_NOT_FOUND. Ungraded by storyboard (zero
-        CREATIVE_NOT_FOUND hits in dist/compliance/3.1.0-beta.3).
+        CREATIVE_NOT_FOUND hits in dist/compliance/3.1.1).
 
         Same-surface consistency: the strict-mode raise for the IDENTICAL
         condition already emits CREATIVE_NOT_FOUND on the wire (287c93099,
@@ -1551,6 +1553,9 @@ class TestMediaBuyStatusOnSync:
             mb = session.scalars(select(DBMediaBuy).filter_by(media_buy_id=mb_id, tenant_id="test_tenant")).first()
             assert mb is not None
             assert mb.status == "pending_creatives"
+            # The draft→pending_creatives transition is this pass's single revision
+            # bump (1 → 2) — not double-counted with the assignment mutation. #1544 B3.
+            assert mb.revision == 2
 
     def test_draft_without_approved_at_stays_draft(self, integration_db):
         """Covers: UC-006-MEDIA-BUY-STATUS-02 — draft without approved_at stays draft."""
@@ -1582,6 +1587,9 @@ class TestMediaBuyStatusOnSync:
             mb = session.scalars(select(DBMediaBuy).filter_by(media_buy_id=mb_id, tenant_id="test_tenant")).first()
             assert mb is not None
             assert mb.status == "draft"
+            # No status transition, but a NEW assignment materially changed the buy,
+            # so the revision still advances exactly once (1 → 2). #1544 B3.
+            assert mb.revision == 2
 
     def test_non_draft_status_unchanged(self, integration_db):
         """Covers: UC-006-MEDIA-BUY-STATUS-03 — active status not affected by assignment."""
@@ -1615,6 +1623,10 @@ class TestMediaBuyStatusOnSync:
             mb = session.scalars(select(DBMediaBuy).filter_by(media_buy_id=mb_id, tenant_id="test_tenant")).first()
             assert mb is not None
             assert mb.status == "active"
+            # An assignment to a live (active) buy leaves the status untouched but
+            # still advances the optimistic-concurrency revision (1 → 2) — the core
+            # B3 case: a creative change a buyer's next update must observe. #1544.
+            assert mb.revision == 2
 
     def test_upsert_assignment_still_transitions(self, integration_db):
         """Covers: UC-006-MEDIA-BUY-STATUS-04 — upserted assignment triggers status check."""
@@ -1655,6 +1667,11 @@ class TestMediaBuyStatusOnSync:
             mb = session.scalars(select(DBMediaBuy).filter_by(media_buy_id=mb_id, tenant_id="test_tenant")).first()
             assert mb is not None
             assert mb.status == "pending_creatives"
+            # First assignment bumps once (via the draft→pending_creatives transition,
+            # 1 → 2). The second is an idempotent no-op re-assign (weight already 100,
+            # status already pending_creatives), so it does NOT bump again — the
+            # revision stays at 2, proving no-ops are excluded. #1544 B3.
+            assert mb.revision == 2
 
 
 # ---------------------------------------------------------------------------

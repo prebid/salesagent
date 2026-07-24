@@ -433,6 +433,127 @@ def pending_media_buy_with_approved_creative(pending_media_buy_with_package):
     return {**data, "principal_id": principal.principal_id, "creative_id": creative.creative_id}
 
 
+@pytest.fixture
+def pending_buy_with_ok_and_failing_creatives(pending_media_buy_with_approved_creative):
+    """Extend the approved-creative fixture with a SECOND approved creative on the same
+    package, so a mixed upload batch (one success, one failure) is possible. Reuses the
+    parent's buy/package/first-creative — no duplication."""
+    from sqlalchemy import select
+
+    from src.core.database.models import MediaBuy as DBMediaBuy
+    from src.core.database.models import Principal as DBPrincipal
+    from src.core.database.models import Tenant as DBTenant
+    from tests.factories import CreativeAssignmentFactory, CreativeFactory, MediaBuyFactory
+
+    data = pending_media_buy_with_approved_creative
+    session = MediaBuyFactory._meta.sqlalchemy_session
+
+    tenant = session.scalars(select(DBTenant).filter_by(tenant_id=data["tenant_id"])).first()
+    principal = session.scalars(
+        select(DBPrincipal).filter_by(tenant_id=data["tenant_id"], principal_id=data["principal_id"])
+    ).first()
+    mb = session.scalars(
+        select(DBMediaBuy).filter_by(tenant_id=data["tenant_id"], media_buy_id=data["media_buy_id"])
+    ).first()
+
+    failing = CreativeFactory(
+        tenant=tenant,
+        principal=principal,
+        creative_id="cre_will_fail_upload",
+        status="approved",
+        format="display_300x250",
+        data={"assets": {"banner": {"url": "https://example.com/bad.jpg", "width": 300, "height": 250}}},
+    )
+    CreativeAssignmentFactory(creative=failing, media_buy=mb, package_id=data["package_id"])
+    return {**data, "ok_creative_id": data["creative_id"], "failed_creative_id": failing.creative_id}
+
+
+class TestMixedCreativeUploadPersistsEnrichmentThenFails:
+    """A MIXED creative upload (one asset succeeds, one FAILS) must fail the approval AND
+    still persist the successful asset's enrichment (#1637 review blocker).
+
+    The old code raised ``AdapterPostMutationIncomplete`` INSIDE the ``MediaBuyUoW`` that
+    held the enrichment writebacks, so ``__exit__`` rolled them back — the "successes are
+    enriched first" docstring claim was false. ``enrich_uploaded_creatives`` now returns
+    the failures without raising, and ``execute_approved_media_buy`` hoists the raise to
+    AFTER the UoW commits. This drives the REAL path and asserts BOTH properties.
+    """
+
+    def test_failed_asset_fails_approval_but_successful_enrichment_persists(
+        self, pending_buy_with_ok_and_failing_creatives
+    ):
+        from src.adapters.base import AdapterPostMutationIncomplete
+        from src.core.database.repositories import MediaBuyUoW
+        from src.core.schemas import AssetStatus
+
+        fixture = pending_buy_with_ok_and_failing_creatives
+        media_buy_id = fixture["media_buy_id"]
+        tenant_id = fixture["tenant_id"]
+        principal_id = fixture["principal_id"]
+        ok_id = fixture["ok_creative_id"]
+        bad_id = fixture["failed_creative_id"]
+        gam_order_id = "555"
+
+        adapter_response = CreateMediaBuySuccess(media_buy_id=gam_order_id, packages=[])
+        mock_adapter = MagicMock()
+        # MIXED per-asset result: ok enriches, bad fails.
+        mock_adapter.creatives_manager.add_creative_assets.return_value = [
+            AssetStatus(
+                creative_id=ok_id,
+                status="approved",
+                concept_id=f"gam-order-{gam_order_id}",
+                concept_name=f"GAM Order {gam_order_id}",
+                concept_source="gam_order",
+            ),
+            AssetStatus(creative_id=bad_id, status="failed", message="creative rejected: too large"),
+        ]
+        mock_adapter.orders_manager.approve_order.return_value = True
+        valid_asset = {
+            "creative_id": ok_id,
+            "package_assignments": [{"package_id": fixture["package_id"], "weight": 100}],
+            "width": 300,
+            "height": 250,
+            "url": "https://example.com/ad.jpg",
+            "click_url": None,
+            "asset_type": "image",
+            "name": "Test Creative",
+        }
+        with (
+            patch(
+                "src.core.tools.media_buy_create._execute_adapter_media_buy_creation",
+                return_value=adapter_response,
+            ),
+            patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
+            patch(
+                "src.core.tools.media_buy_create._build_adapter_asset_from_creative",
+                return_value=(valid_asset, None),
+            ),
+            patch("src.core.helpers.adapter_helpers.get_adapter", return_value=mock_adapter),
+        ):
+            from src.core.tools.media_buy_create import execute_approved_media_buy
+
+            # The approval FAILS post-mutation (the order exists but a creative is missing).
+            with pytest.raises(AdapterPostMutationIncomplete) as exc_info:
+                execute_approved_media_buy(media_buy_id, tenant_id)
+
+        assert "1 creative(s) failed" in str(exc_info.value)
+        assert bad_id in str(exc_info.value)
+
+        # THE KEY ASSERTION: the successful creative's enrichment was COMMITTED (the uow2
+        # transaction closed before the hoisted raise), visible in a FRESH UoW — while the
+        # failed creative was never enriched.
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.creatives is not None
+            # Materialise the data blobs inside the session (rows detach on exit).
+            data_by_id = {
+                c.creative_id: dict(c.data or {}) for c in uow.creatives.get_by_ids([ok_id, bad_id], principal_id)
+            }
+        assert data_by_id[ok_id].get("concept_id") == f"gam-order-{gam_order_id}"
+        assert data_by_id[ok_id].get("concept_source") == "gam_order"
+        assert data_by_id[ok_id].get("platform_creative_id") == ok_id
+        assert data_by_id[bad_id].get("concept_id") is None  # failed asset never enriched
+
+
 class TestExecuteApprovedEnrichesSellerConcept:
     """execute_approved_media_buy — the manual-approval GAM push path — enriches
     trafficked creatives with the seller-side concept + platform id (#1506), and the

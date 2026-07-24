@@ -9,6 +9,7 @@ based on flight dates:
 Uses real PostgreSQL database via integration_db fixture.
 """
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -165,14 +166,66 @@ def _create_creative_assignment(
         session.commit()
 
 
-def _get_media_buy_status(tenant_id: str, media_buy_id: str) -> str:
-    """Get the current status of a media buy."""
-    with get_db_session() as session:
-        from sqlalchemy import select
+@dataclass(frozen=True)
+class _MediaBuyState:
+    status: str
+    revision: int | None
 
-        stmt = select(MediaBuy).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)
-        media_buy = session.scalars(stmt).first()
-        return media_buy.status if media_buy else None
+
+def _load_media_buy_state(tenant_id: str, media_buy_id: str) -> _MediaBuyState | None:
+    """Capture persisted state inside a tenant-scoped UoW session."""
+    from src.core.database.repositories import MediaBuyUoW
+
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        media_buy = uow.media_buys.get_by_id(media_buy_id)
+        if media_buy is None:
+            return None
+        return _MediaBuyState(status=media_buy.status, revision=media_buy.revision)
+
+
+def _get_media_buy_status(tenant_id: str, media_buy_id: str) -> str:
+    """Get the current persisted status of a media buy."""
+    state = _load_media_buy_state(tenant_id, media_buy_id)
+    assert state is not None, f"media buy {media_buy_id!r} not found for tenant {tenant_id!r}"
+    return state.status
+
+
+def _get_media_buy_revision(tenant_id: str, media_buy_id: str) -> int | None:
+    """Get the current persisted revision of a media buy (read via a tenant-scoped UoW)."""
+    state = _load_media_buy_state(tenant_id, media_buy_id)
+    return state.revision if state else None
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_scheduler_transition_bumps_revision(integration_db):
+    """A scheduler-driven lifecycle transition advances the persisted revision.
+
+    Regression for #1544: the flight-date sweep mutated ``.status`` directly and
+    never bumped ``revision``, so seller-initiated transitions (scheduled →
+    active) left the AdCP 3.1.1 optimistic-concurrency token stale.
+    """
+    tenant_id = _create_test_tenant("tenant_sched_revision")
+    principal_id = _create_test_principal(tenant_id)
+
+    past_start = datetime.now(UTC) - timedelta(hours=1)
+    future_end = datetime.now(UTC) + timedelta(days=7)
+    media_buy_id = _create_media_buy(
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        media_buy_id="mb_sched_revision",
+        status="scheduled",
+        start_time=past_start,
+        end_time=future_end,
+    )
+    assert _get_media_buy_revision(tenant_id, media_buy_id) == 1
+
+    scheduler = MediaBuyStatusScheduler()
+    await scheduler._update_statuses()
+
+    assert _get_media_buy_status(tenant_id, media_buy_id) == "active"
+    assert _get_media_buy_revision(tenant_id, media_buy_id) == 2
 
 
 # =============================================================================

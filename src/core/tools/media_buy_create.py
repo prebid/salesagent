@@ -100,6 +100,7 @@ def validate_agent_url(url: str | None) -> bool:
 
 
 # Tool-specific imports
+from src.adapters.base import AdapterIdempotencyUncertain, AdapterPostMutationIncomplete
 from src.core import schemas
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
@@ -127,6 +128,7 @@ from src.core.helpers.creative_helpers import (
     process_and_upload_package_creatives,
 )
 from src.core.logging_config import log_safe
+from src.core.logging_utils import sanitize_log_value
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_brand_reference, to_context_object, to_reporting_webhook
 from src.core.schemas import (
@@ -543,6 +545,7 @@ def _execute_adapter_media_buy_creation(
     principal: Principal,
     testing_ctx: TestingContext | None = None,
     tenant: Any = None,
+    idempotency_key: str | None = None,
 ) -> schemas.CreateMediaBuyResponse:
     """Execute adapter's create_media_buy call.
 
@@ -557,6 +560,10 @@ def _execute_adapter_media_buy_creation(
         package_pricing_info: Pricing model info per package
         principal: The Principal object (buyer/advertiser)
         testing_ctx: Optional testing context for dry-run mode
+        idempotency_key: Stable key forwarded to the adapter so it can derive a
+            deterministic remote resource name and make a retry reuse (not duplicate)
+            an already-created remote object (#1637). The approval-replay path passes
+            the persisted ``media_buy_id``; the initial-create path passes None.
 
     Returns:
         CreateMediaBuyResponse from the adapter
@@ -570,7 +577,9 @@ def _execute_adapter_media_buy_creation(
 
     # Call adapter with detailed error logging
     try:
-        response = adapter.create_media_buy(request, packages, start_time, end_time, package_pricing_info)
+        response = adapter.create_media_buy(
+            request, packages, start_time, end_time, package_pricing_info, idempotency_key=idempotency_key
+        )
 
         # Log based on response type
         if isinstance(response, CreateMediaBuyError):
@@ -723,6 +732,38 @@ def _build_adapter_asset_from_creative(
     return asset, None
 
 
+def enrich_uploaded_creatives(asset_statuses, creative_map, creatives_repo) -> list[str]:
+    """Enrich successfully-uploaded creatives; RETURN the failed-upload descriptions.
+
+    A ``failed`` per-asset status means the remote order exists but is missing
+    creatives — the caller must FAIL the approval (post-mutation by definition: the
+    order was created before upload). This function ONLY enriches the successful assets
+    and REPORTS the failures; it MUST NOT raise. The caller runs it inside a
+    ``MediaBuyUoW`` and, if the returned list is non-empty, raises
+    :class:`AdapterPostMutationIncomplete` AFTER the UoW commits — otherwise the in-block
+    raise would roll back the very enrichment writebacks this function performs (the
+    exact bug this split fixes). #1637.
+
+    Returns the ``"<creative_id>: <message>"`` descriptions of assets that failed to
+    upload (empty when all succeeded).
+    """
+    failed_uploads: list[str] = []
+    for status in asset_statuses:
+        if status.status == "failed":
+            logger.error(log_safe(f"[APPROVAL] Failed to upload creative {status.creative_id}: {status.message}"))
+            failed_uploads.append(f"{status.creative_id}: {status.message}")
+            continue
+        if not status.creative_id:
+            continue
+        creative = creative_map.get(status.creative_id)
+        if creative is None:
+            continue
+        merged = _apply_creative_enrichment(creative, status)
+        if merged is not None:
+            creatives_repo.update_data(creative, merged)
+    return failed_uploads
+
+
 def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool, str | None]:
     """Execute adapter creation for a manually approved media buy.
 
@@ -751,6 +792,12 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
     # Set tenant context (required for adapter helpers to work)
     from src.core.config_loader import set_current_tenant
     from src.core.database.models import Tenant
+
+    # True once adapter.create_media_buy has SUCCEEDED — from that point every
+    # failure must surface as AdapterPostMutationIncomplete (a partial remote
+    # graph exists), never a plain (False, msg) that the finalizer would map to a
+    # terminal ``failed`` erasing the reconciliation signal. #1637.
+    remote_mutated = False
 
     try:
         # Load tenant and set context — single UoW for all reads
@@ -1038,7 +1085,10 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
             _validate_creatives_before_adapter_call(packages, tenant_id, buy_principal_id, session=session)
 
-        # Execute adapter creation (outside session to avoid conflicts)
+        # Execute adapter creation (outside session to avoid conflicts).
+        # Forward the persisted media_buy_id as the idempotency key so the adapter derives
+        # a deterministic remote order name — a re-approval/retry then reuses the existing
+        # remote order instead of minting a duplicate (#1637).
         response = _execute_adapter_media_buy_creation(
             request,
             packages,
@@ -1048,6 +1098,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             principal,
             testing_ctx,
             tenant=tenant_obj,
+            idempotency_key=media_buy_id,
         )
 
         # Check if adapter returned an error response
@@ -1059,6 +1110,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             return False, error_msg
 
         logger.info(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}: {response.media_buy_id}")
+        remote_mutated = True
 
         # Persist adapter IDs to package_config.
         # platform_order_id is per-buy — always write to all packages so retroactive creative
@@ -1079,22 +1131,27 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             logger.info("[APPROVAL] Adapter returned no media_buy_id — skipping ID persistence")
 
         # Upload and associate inline creatives if any exist
-        # This handles inline creatives that were uploaded during initial media buy creation
+        # This handles inline creatives that were uploaded during initial media buy creation.
+        # Failed per-asset uploads are collected here and raised AFTER uow2 commits, so the
+        # successful assets' enrichment writebacks are not rolled back by an in-block raise. #1637.
+        failed_creative_uploads: list[str] = []
         with MediaBuyUoW(tenant_id) as uow2:
             # FIXME(salesagent-9f2): creative handling should use repository methods
             assert uow2.session is not None
             session = uow2.session
-            from src.core.database.models import CreativeAssignment
 
             # Import adapter helper here (used for both creative upload and order approval)
+            # Load assignments through the tenant-scoped repository (a cross-tenant
+            # assignment row against this buy id must never feed the adapter
+            # upload; the repository's scoping carries its own red oracle —
+            # test_cross_tenant_assignment_invisible).
+            from src.core.database.repositories.creative import CreativeAssignmentRepository
             from src.core.helpers.adapter_helpers import get_adapter
 
-            # Get all creative assignments for this media buy
-            stmt_assignments = select(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
-            assignments = session.scalars(stmt_assignments).all()
+            assignments = CreativeAssignmentRepository(session, tenant_id).get_by_media_buy(media_buy_id)
 
             if assignments:
-                logger.info(f"[APPROVAL] Found {len(assignments)} creative assignments, uploading to adapter")
+                logger.info("[APPROVAL] Found %s creative assignments, uploading to adapter", len(assignments))
 
                 # Group packages by creative (REVERSED - key by creative_id, value is list of package assignments)
                 # This ensures each creative is uploaded ONCE with ALL its package assignments
@@ -1157,7 +1214,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         + "\n\nAll creatives must have dimensions (width/height) and a content URL."
                     )
                     logger.error(f"[APPROVAL] {error_msg}")
-                    return False, error_msg
+                    raise AdapterPostMutationIncomplete(error_msg)
 
                 if assets:
                     logger.info(f"[APPROVAL] Uploading {len(assets)} creatives to adapter")
@@ -1177,36 +1234,35 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                             )
                             logger.info(f"[APPROVAL] Creative upload completed: {len(asset_statuses)} assets processed")
 
-                            # Enrich creatives (concept + platform id) on success; log failures.
-                            # This is the manual-approval push path — the third of three GAM push
-                            # sites, wired here so admin-approved buys enrich like the other two
-                            # (#1506). uow2 commits the writeback on block exit.
-                            creatives_repo = CreativeRepository(session, tenant_id)
-                            for status in asset_statuses:
-                                if status.status == "failed":
-                                    logger.error(
-                                        log_safe(
-                                            f"[APPROVAL] Failed to upload creative {status.creative_id}: {status.message}"
-                                        )
-                                    )
-                                    continue
-                                if not status.creative_id:
-                                    continue
-                                creative = creative_map.get(status.creative_id)
-                                if creative is None:
-                                    continue
-                                merged = _apply_creative_enrichment(creative, status)
-                                if merged is not None:
-                                    creatives_repo.update_data(creative, merged)
+                            # Enrich creatives (concept + platform id) on success and
+                            # COLLECT any per-asset failures. The approval fails on a failed
+                            # upload (continuing would approve + publish the buy with creatives
+                            # missing from the remote order), but the raise is HOISTED below —
+                            # AFTER uow2 commits — so the successful enrichments persist. #1637.
+                            failed_creative_uploads = enrich_uploaded_creatives(
+                                asset_statuses, creative_map, CreativeRepository(session, tenant_id)
+                            )
                         else:
                             logger.warning("[APPROVAL] Adapter does not support creative upload, skipping")
+                    except AdapterPostMutationIncomplete:
+                        raise
                     except Exception as creative_error:
-                        # Creative upload failed - this is critical for GAM orders
+                        # Creative upload failed AFTER the remote order was created —
+                        # a partial graph exists; must not become terminal failed. #1637.
                         error_msg = f"Failed to upload creatives to adapter: {str(creative_error)}"
                         logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
-                        return False, error_msg
+                        raise AdapterPostMutationIncomplete(error_msg) from creative_error
             else:
                 logger.info(f"[APPROVAL] No creative assignments found for {media_buy_id}, skipping creative upload")
+
+        # uow2 has now committed the successful creative enrichments. If any asset FAILED
+        # to upload, fail the approval here — OUTSIDE the UoW, so the committed enrichments
+        # survive — with the post-mutation type (order exists, missing creatives). #1637.
+        if failed_creative_uploads:
+            raise AdapterPostMutationIncomplete(
+                f"{len(failed_creative_uploads)} creative(s) failed to upload to the remote order: "
+                + "; ".join(failed_creative_uploads)
+            )
 
         # After creatives are uploaded (or skipped), retry order approval
         # This is necessary because:
@@ -1227,31 +1283,73 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         f"GAM still processing inventory forecasts."
                     )
                     logger.warning(f"[APPROVAL] {error_msg}")
-                    return False, error_msg
+                    raise AdapterPostMutationIncomplete(error_msg)
             else:
                 logger.info("[APPROVAL] Adapter does not support order approval, skipping")
+        except AdapterPostMutationIncomplete:
+            raise
         except Exception as approval_error:
-            # Approval exception - return failure
+            # Approval failed AFTER the remote order was created — partial graph. #1637.
             error_msg = f"Failed to approve order {response.media_buy_id}: {str(approval_error)}"
             logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
-            return False, error_msg
+            raise AdapterPostMutationIncomplete(error_msg) from approval_error
 
-        # Update media buy status to 'active' after successful adapter execution
-        # (UC-002:437 — "updates the media buy status to active")
-        with MediaBuyUoW(tenant_id) as uow3:
-            assert uow3.media_buys is not None
-            uow3.media_buys.update_status(media_buy_id, "active")
-            logger.info(f"[APPROVAL] Updated media buy {media_buy_id} status to 'active'")
-
+        # Adapter execution succeeded. Status finalization is the CALLER's job, not
+        # this function's: the approval routes stamp approved_at/approved_by and set
+        # the FLIGHT-DERIVED status (scheduled/active/completed) in one write, so the
+        # write-once confirmed_at records the approval instant. This function used to
+        # force status="active" here — which overwrote the caller's flight-derived
+        # status, double-bumped revision, and (when it ran before approved_at was
+        # stamped) recorded confirmed_at=created_at. See #1544.
         return True, None
 
+    except AdapterIdempotencyUncertain:
+        # #1637: the adapter could not verify remote state and guarantees NO remote
+        # mutation happened. This must NOT collapse into the (False, msg) handled
+        # failure below — that would mark the buy permanently ``failed``. Re-raise so
+        # the finalizer keeps the claim in ``finalizing`` for automatic retry.
+        raise
+    except AdapterPostMutationIncomplete:
+        # #1637: remote mutations exist but the workflow did not complete — the
+        # finalizer preserves the manual-reconciliation state instead of failing.
+        raise
     except Exception as e:
         import traceback
 
         error_traceback = traceback.format_exc()
         error_msg = f"Adapter creation failed: {str(e)}"
         logger.error(f"[APPROVAL] {error_msg}\n{error_traceback}")
+        if remote_mutated:
+            # The remote order was already created (e.g. id persistence or a later
+            # stage blew up unexpectedly) — same partial-graph situation. #1637.
+            raise AdapterPostMutationIncomplete(error_msg) from e
         return False, error_msg
+
+
+def adapter_supports_full_create_replay(media_buy_id: str, tenant_id: str) -> bool:
+    """True if this buy's adapter may safely RE-RUN its entire create workflow (#1637).
+
+    The reconciler's disposition check for a buy stranded in ``finalizing`` AFTER the
+    adapter-invoked marker was committed: only adapters whose whole create graph is
+    idempotent (``AdapterCapabilities.supports_full_create_replay`` — currently mock
+    only) may be auto-re-invoked; real ad servers go to manual reconciliation.
+    Conservative on any resolution failure (missing buy/principal → False).
+    """
+    from src.core.config_loader import get_tenant_by_id
+    from src.core.database.repositories import MediaBuyUoW
+
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        media_buy = uow.media_buys.get_by_id(media_buy_id)
+        if media_buy is None:
+            return False
+        principal_id = media_buy.principal_id
+    tenant_config = get_tenant_by_id(tenant_id)
+    principal = get_principal_object(principal_id, tenant_id=tenant_id)
+    if principal is None or tenant_config is None:
+        return False
+    adapter = get_adapter(principal, dry_run=False, tenant=tenant_config)
+    return bool(adapter.capabilities.supports_full_create_replay)
 
 
 def push_creative_to_existing_buy(
@@ -1290,7 +1388,10 @@ def push_creative_to_existing_buy(
             creative = uow.creatives.admin_get_by_id(creative_id)
             if not creative:
                 return False, f"Creative {creative_id} not found"
-            if creative.status not in {"approved", "active"}:
+            # "approved" is the only creative-ready status — "active" is not a
+            # member of the creative status domain (same predicate as the shared
+            # readiness gate, CreativeAssignmentRepository.creative_readiness).
+            if creative.status != "approved":
                 return False, f"Creative {creative_id} is not approved (status={creative.status})"
 
             if (creative.data or {}).get("platform_creative_id"):
@@ -1833,6 +1934,9 @@ def _submitted_approval_result(step, req: CreateMediaBuyRequest, adapter) -> Cre
     revision would falsely assert seller commitment (PR #1567 round-2 item 2;
     mirrors the update-path fix b8b7e751b). Single construction site shared by the
     manual-approval and config-approval branches (DRY, PR #1567 round-3).
+
+    spec-introduced: 3.0.0 (Submitted variant); 3.1.0 (confirmed_at/revision
+    joined the Success required set, making the split load-bearing)
     """
     return CreateMediaBuyResult(
         response=CreateMediaBuySubmitted(
@@ -2010,6 +2114,7 @@ async def _create_media_buy_impl(
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
     raw_wire_payload: dict[str, Any] | None = None,
+    external_task_id: str | None = None,
 ) -> CreateMediaBuyResult:
     """Create a media buy with the specified parameters.
 
@@ -2074,12 +2179,23 @@ async def _create_media_buy_impl(
     # replay. request_hash is computed once here (in scope for the success-cache stores),
     # over the WIRE payload when the transport wrapper threaded it (the spec's
     # equivalence input); the model-dump fallback exists only for impl-direct callers.
+    # spec-introduced: 3.0.1 (idempotency contract in implementation prose)
     request_hash = None
     if req.idempotency_key:
         request_hash = (
             canonical_payload_hash(raw_wire_payload) if raw_wire_payload is not None else canonical_request_hash(req)
         )
-    if req.idempotency_key:
+    # A dry-run MUST always simulate: it has no side effects to deduplicate, so it never
+    # consults the idempotency replay cache. Gating the lookup on ``not dry_run`` is a
+    # correctness invariant, not an optimization — the dry_run simulation branch sits far
+    # below this probe, so without the gate a dry-run whose idempotency_key happened to hit
+    # a cached REAL create would REPLAY that committed buy (returning its real ``buy_`` id)
+    # instead of a fresh ``dry_run_`` simulation, violating INV-5 ("dry-run never invokes the
+    # adapter and persists nothing"; BR-RULE-020). Dry-runs are likewise never WRITTEN to the
+    # cache (the dry_run branch returns before ``_cache_and_return``), so the cache stays a
+    # committed-creates-only record. This probe is therefore reached only for a real
+    # (non-dry-run) create carrying a key.
+    if req.idempotency_key and not testing_ctx.dry_run:
         replay = _lookup_cached_replay(
             tenant["tenant_id"],
             principal_id=principal_id,
@@ -2117,6 +2233,12 @@ async def _create_media_buy_impl(
         workflow_metadata: dict[str, Any] = {"protocol": identity.protocol}
         if push_notification_config:
             workflow_metadata["push_notification_config"] = push_notification_config
+        # Persist the transport's outer async task id (opaque here — set only by the
+        # A2A boundary from the Task returned to the buyer) so the completion webhook
+        # and tasks/get can correlate to the id the BUYER holds, not the internal
+        # step_id. Durable so a poll survives a server restart. See #1544 (B6).
+        if external_task_id:
+            workflow_metadata["external_task_id"] = external_task_id
 
         step = ctx_manager.create_workflow_step(
             context_id=persistent_ctx.context_id,
@@ -2134,7 +2256,14 @@ async def _create_media_buy_impl(
             # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object (hoisting would bind the unpatched one at module load).
             from src.core.database.repositories import MediaBuyUoW
 
-            logger.info(f"[MCP/A2A] Registering push notification config from request: {push_notification_config}")
+            # Log the routing fields only — the config dict carries
+            # authentication.credentials (the buyer's webhook secret), which must
+            # never reach the logs.
+            logger.info(
+                "[MCP/A2A] Registering push notification config from request: id=%s url=%s",
+                sanitize_log_value(push_notification_config.get("id")),
+                sanitize_log_value(push_notification_config.get("url")),
+            )
 
             # Extract config details
             url = push_notification_config.get("url")
@@ -3546,7 +3675,8 @@ async def _create_media_buy_impl(
             # is SILENT on a dry_run response status -> production authoritative. A dry_run
             # buyer asked to SIMULATE the would-be outcome, which IS completion, so
             # "completed" is a truthful preview (unlike the pending-approval and reject paths, where the op
-            # did not apply). Guarded by tests/unit/test_media_buy_dry_run_status.py.
+            # did not apply). Guarded by
+            # tests/integration/test_media_buy_dry_run_status.py::test_create_media_buy_dry_run_reports_completed.
             # Simulated lifecycle: a would-be-created buy starts before its flight,
             # so pending_start — the SAME value must feed both the wire field and
             # valid_actions (spec 3.1.1 pending_creatives_to_start.yaml grades
@@ -3559,6 +3689,35 @@ async def _create_media_buy_impl(
                 valid_actions=valid_actions_for_status(simulated_lifecycle),
                 context=req.context,
                 errors=property_list_unsupported_advisories(req.packages, adapter),
+                # X-Dry-Run is proprietary internal tooling, NOT an AdCP concept:
+                # the spec's only sanctioned test mode is the account-level
+                # ``sandbox`` (dist/docs/3.1.1/media-buy/advanced-topics/
+                # sandbox.mdx — resolves @main, not at tag v3.1.1: the 3.1.1
+                # prose snapshot was published after the tag; simulated data,
+                # no real spend/side effects). Mark
+                # the simulated response ``sandbox=True`` so it is honestly labelled
+                # as simulated rather than masquerading as a real create.
+                # spec-introduced: 3.0.0 (sandbox.mdx first per-version snapshot)
+                sandbox=True,
+                # 3.1.1 create-media-buy-response.json oneOf[0] (CreateMediaBuySuccess)
+                # required = [media_buy_id, confirmed_at, revision, packages] (verified
+                # against authoritative dist/schemas/3.1.1/media-buy/
+                # create-media-buy-response.json). So the simulated success arm must be
+                # CONFORMANT, not thin:
+                # spec-introduced: 3.1.0 (confirmed_at/revision joined the required set)
+                #   revision=1     — the correct initial value of a would-be-fresh buy
+                #                    (schema: integer, minimum=1).
+                #   confirmed_at=None — honest (a simulation commits nothing) AND
+                #                    schema-valid: confirmed_at is typed
+                #                    ["string","null"] and "May be null in deferred or
+                #                    manual-approval flows until seller commitment
+                #                    occurs". The CreateMediaBuySuccess serializer
+                #                    (_base.py) re-emits confirmed_at as null for a
+                #                    sandbox success so exclude_none does not drop the
+                #                    required key — the wire body carries
+                #                    "confirmed_at": null. See #1544.
+                confirmed_at=None,
+                revision=1,
             )
             return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
 
@@ -3633,7 +3792,7 @@ async def _create_media_buy_impl(
         try:
             with MediaBuyUoW(tenant["tenant_id"]) as create_uow:
                 assert create_uow.media_buys is not None
-                create_uow.media_buys.create_from_request(
+                created_mb = create_uow.media_buys.create_from_request(
                     media_buy_id=response.media_buy_id,
                     req=req,
                     principal_id=principal_id,
@@ -3648,6 +3807,10 @@ async def _create_media_buy_impl(
                     account_id=identity.account_id if identity else None,
                     payload_hash=request_hash,
                 )
+                # Capture persisted values while the session is open (the
+                # instance is expired after UoW commit).
+                persisted_confirmed_at = created_mb.confirmed_at
+                persisted_revision = created_mb.revision
                 # UoW auto-commits on clean exit
         except IntegrityError as exc:
             return _resolve_idempotency_race_or_raise(
@@ -4100,6 +4263,9 @@ async def _create_media_buy_impl(
             creative_deadline=getattr(response, "creative_deadline", None),
             context=req.context,
             errors=property_list_unsupported_advisories(req.packages, adapter),
+            # The response echoes the write-once persisted confirmation instant.
+            confirmed_at=persisted_confirmed_at,
+            revision=persisted_revision,
         )
 
         # Log activity
@@ -4510,6 +4676,7 @@ async def create_media_buy_raw(
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
     raw_wire_payload: dict[str, Any] | None = None,
+    external_task_id: str | None = None,
 ):
     """Create a new media buy with specified parameters (raw function for A2A server use).
 
@@ -4532,6 +4699,9 @@ async def create_media_buy_raw(
         identity: Pre-resolved identity (if available)
         raw_wire_payload: The request dict as sent on the wire (A2A DataPart
             params / REST JSON body) — the idempotency payload-hash input
+        external_task_id: The transport's outer async task id (the A2A ``task_*``
+            returned to the buyer), persisted on the workflow step so the
+            completion webhook and tasks/get correlate to the buyer's id. #1544 B6.
 
     Returns:
         Dict with status and CreateMediaBuyResponse data
@@ -4582,6 +4752,7 @@ async def create_media_buy_raw(
         identity=identity,
         context_id=_ctx_id,
         raw_wire_payload=raw_wire_payload,
+        external_task_id=external_task_id,
     )
 
 

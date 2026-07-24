@@ -277,7 +277,11 @@ class TestRecoveryClassification:
         assert exc.recovery == "transient"
 
     def test_conflict_error_defaults_to_transient(self):
-        """AdCPConflictError defaults to recovery='transient' (CONFLICT per the pinned enum, #1417)."""
+        """AdCPConflictError defaults to recovery='transient'.
+
+        Pinned AdCP 3.1.1 error-code.json enumMetadata: CONFLICT → transient
+        ("re-read the resource and retry with current state"). #1544.
+        """
         from src.core.exceptions import AdCPConflictError
 
         exc = AdCPConflictError("duplicate idempotency key")
@@ -566,7 +570,7 @@ class TestFastAPIExceptionHandlers:
         client = TestClient(exc_handler_test_app, raise_server_exceptions=False)
         response = client.get("/test-exc/conflict")
         assert response.status_code == 409
-        # CONFLICT recovery is transient per the pinned enum (#1417).
+        # Pinned 3.1.1 error-code.json enumMetadata: CONFLICT → transient. #1544.
         assert_envelope_shape(response.json(), "CONFLICT", recovery="transient")
 
     def test_gone_error_returns_410(self, exc_handler_test_app):

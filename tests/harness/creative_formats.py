@@ -141,11 +141,24 @@ class CreativeFormatsEnv(IntegrationEnv):
 
     def call_a2a(self, **kwargs: Any) -> ListCreativeFormatsResponse:
         """Call list_creative_formats via real AdCPRequestHandler — full A2A pipeline."""
+        raw_params = kwargs.pop("raw_params", None)
+        if raw_params is not None:
+            kwargs.update(raw_params)
         return self._run_a2a_handler("list_creative_formats", ListCreativeFormatsResponse, **kwargs)
 
     def call_mcp(self, **kwargs: Any) -> ListCreativeFormatsResponse:
         """Call list_creative_formats via Client(mcp) — full pipeline dispatch."""
+        raw_params = kwargs.pop("raw_params", None)
+        if raw_params is not None:
+            kwargs.update(raw_params)
         return self._run_mcp_client("list_creative_formats", ListCreativeFormatsResponse, **kwargs)
+
+    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        """Allow error scenarios to submit raw JSON through the real REST route."""
+        raw_params = kwargs.get("raw_params")
+        if raw_params is not None:
+            return raw_params
+        return super().build_rest_body(**kwargs)
 
     # build_rest_body is inherited from IntegrationEnv: it serializes the Pydantic
     # ``req`` via model_dump(mode="json", exclude_none=True). ListCreativeFormatsBody

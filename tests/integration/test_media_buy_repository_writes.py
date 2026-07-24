@@ -8,17 +8,58 @@ Tests write operations against real PostgreSQL to verify:
 beads: salesagent-dyb6
 """
 
-from datetime import UTC, datetime
+import threading
+import time
+from collections.abc import Callable, Sequence
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import cast
 
 import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal, Tenant
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
+from tests.helpers.media_buy import read_back_media_buy
 from tests.integration.conftest import cleanup_tenant, make_media_buy, make_package
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+_MISSING = object()
+
+
+def _run_concurrently[T](
+    workers: Sequence[Callable[[threading.Barrier], T]],
+    *,
+    thread_name_prefix: str,
+    join_timeout: float = 60,
+) -> list[T]:
+    """Run synchronized workers and surface hangs/errors in the main thread."""
+    barrier = threading.Barrier(len(workers), timeout=30)
+    results: list[object] = [_MISSING] * len(workers)
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+
+    def run_worker(index: int, worker: Callable[[threading.Barrier], T]) -> None:
+        try:
+            results[index] = worker(barrier)
+        except BaseException as exc:  # noqa: BLE001 - surfaced to the main thread below
+            with lock:
+                errors.append(exc)
+
+    threads = [
+        threading.Thread(target=run_worker, args=(index, worker), name=f"{thread_name_prefix}-{index}")
+        for index, worker in enumerate(workers)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=join_timeout)
+
+    assert not any(thread.is_alive() for thread in threads), f"{thread_name_prefix} thread hung (possible deadlock)"
+    assert not errors, f"concurrent {thread_name_prefix} thread(s) failed: {errors}"
+    assert all(result is not _MISSING for result in results), f"{thread_name_prefix} worker returned no result"
+    return [cast(T, result) for result in results]
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +258,349 @@ class TestUpdateStatus:
             assert result.status == "active"
             assert result.approved_at is None
             assert result.approved_by is None
+
+
+class TestRevisionBumpsOnStatusTransition:
+    """Every status transition through the repository seam bumps the AdCP 3.1.1
+    ``revision`` counter, and manual approval stamps the confirmation instant.
+
+    Regression for #1544: the admin approve/reject routes, the flight-date
+    scheduler, and creative-sync assignment previously mutated ``.status``
+    directly, bypassing the bump — so ``revision`` never advanced on those
+    seller-side state changes and ``confirmed_at`` reported the buyer's request
+    time (``created_at``) instead of the approval moment.
+
+    Pins IN-SESSION materialization: values are asserted on the row the seam
+    returns within the mutating UoW (cross-session persistence is pinned
+    separately by ``TestPersistedRevisionBump``).
+    """
+
+    def test_update_status_bumps_revision(self, tenant_a, principal_a):
+        """A status change through update_status advances the persisted revision."""
+        with MediaBuyUoW(tenant_a) as uow:
+            mb = make_media_buy(tenant_a, principal_a, "mb_rev_status", status="pending_approval")
+            uow.media_buys.create(mb)
+
+        with MediaBuyUoW(tenant_a) as uow:
+            result = uow.media_buys.update_status("mb_rev_status", "active")
+            # Created at revision 1; a single transition bumps to exactly 2.
+            assert result is not None
+            assert result.revision == 2
+
+    def test_update_status_or_raise_returns_row_and_raises_when_missing(self, tenant_a, principal_a):
+        """The or-raise variant surfaces a vanished buy instead of reporting silent success.
+
+        The admin approve/reject routes verify the buy exists, then transition it;
+        a ``None`` from ``update_status`` at that point means the row disappeared
+        mid-request — No-Quiet-Failures requires a raise, not a skipped write.
+        """
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_rev_or_raise", status="pending_approval"))
+
+        with MediaBuyUoW(tenant_a) as uow:
+            result = uow.media_buys.update_status_or_raise("mb_rev_or_raise", "active")
+            assert result.status == "active"
+
+        with MediaBuyUoW(tenant_a) as uow:
+            with pytest.raises(RuntimeError, match="mb_never_existed"):
+                uow.media_buys.update_status_or_raise("mb_never_existed", "active")
+            with pytest.raises(RuntimeError, match="mb_never_existed"):
+                uow.media_buys.update_fields_or_raise("mb_never_existed", budget=Decimal("1.00"))
+            with pytest.raises(RuntimeError, match="mb_never_existed"):
+                uow.media_buys.bump_revision_or_raise("mb_never_existed")
+
+    def test_apply_status_transition_bumps_revision(self, tenant_a, principal_a):
+        """The cross-tenant seam (scheduler / creative-sync) bumps revision too."""
+        with MediaBuyUoW(tenant_a) as uow:
+            mb = make_media_buy(tenant_a, principal_a, "mb_rev_transition", status="pending_start")
+            uow.media_buys.create(mb)
+
+        with MediaBuyUoW(tenant_a) as uow:
+            buy = uow.media_buys.get_by_id("mb_rev_transition")
+            assert buy is not None
+            returned = MediaBuyRepository.apply_status_transition(buy, "active")
+            # CON-03: the seam returns the same (mutated) row, matching sibling mutators.
+            assert returned is buy
+            assert buy.status == "active"
+
+        # The revision increment is a server-side SQL expression that only
+        # materializes at flush/commit, so assert the value read back from the
+        # database (a fresh UoW session), not the transient in-memory attribute.
+        with MediaBuyUoW(tenant_a) as uow:
+            assert uow.media_buys is not None
+            persisted = uow.media_buys.get_by_id("mb_rev_transition")
+            assert persisted is not None
+            assert persisted.status == "active"
+            assert persisted.revision == 2
+
+    def test_manual_approval_stamps_confirmed_at_and_bumps_revision(self, tenant_a, principal_a):
+        """create (pending_approval) → approve → get: confirmed_at is the approval
+        instant (not created_at) and revision advanced past the create value."""
+        from tests.factories.principal import PrincipalFactory
+
+        with MediaBuyUoW(tenant_a) as uow:
+            mb = make_media_buy(tenant_a, principal_a, "mb_approve_life", status="pending_approval")
+            uow.media_buys.create(mb)
+
+        # A buy awaiting approval is not yet confirmed — get reports None.
+        identity = PrincipalFactory.make_identity(
+            tenant_id=tenant_a, principal_id=principal_a, tenant={"tenant_id": tenant_a}
+        )
+        before = read_back_media_buy(identity, "mb_approve_life")
+        assert before.confirmed_at is None
+        assert before.revision == 1
+
+        # Seller approves — the seam stamps approved_at and bumps revision.
+        approve_time = datetime.now(UTC)
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.update_status(
+                "mb_approve_life", "active", approved_at=approve_time, approved_by="admin@test.com"
+            )
+
+        after = read_back_media_buy(identity, "mb_approve_life")
+        # confirmed_at is the approval instant, NOT the buyer's create time.
+        assert after.confirmed_at == approve_time
+        assert after.confirmed_at != after.created_at
+        assert after.revision == 2
+
+    def test_apply_status_transition_stamps_confirmed_at(self, tenant_a, principal_a):
+        """draft → pending_creatives through the creative-sync/scheduler seam stamps
+        the write-once confirmed_at, so get_media_buys reports it on the wire.
+
+        Regression for #1544: apply_status_transition bumped revision but never
+        stamped confirmed_at, so a buy that reached a seller-confirmed status via
+        creative-sync reported confirmed_at=None forever. All three status seams now
+        route through MediaBuyRepository._stamp_confirmation_if_needed.
+        """
+        from tests.factories.principal import PrincipalFactory
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_transition_confirm", status="draft"))
+
+        with MediaBuyUoW(tenant_a) as uow:
+            buy = uow.media_buys.get_by_id("mb_transition_confirm")
+            assert buy is not None
+            MediaBuyRepository.apply_status_transition(buy, "pending_creatives")
+
+        identity = PrincipalFactory.make_identity(
+            tenant_id=tenant_a, principal_id=principal_a, tenant={"tenant_id": tenant_a}
+        )
+        after = read_back_media_buy(identity, "mb_transition_confirm")
+        # No manual approval, so confirmed_at falls back to the create instant — but
+        # it IS set, which the pre-fix seam failed to do.
+        assert after.confirmed_at is not None
+        assert after.confirmed_at == after.created_at
+
+    def test_apply_status_transition_never_clobbers_a_concurrent_confirmed_at(self, tenant_a, principal_a):
+        """Write-once confirmed_at survives a stale unlocked transition.
+
+        The cross-tenant sweep / creative-sync seam loads rows WITHOUT ``FOR
+        UPDATE``, so its in-memory state can be stale while a concurrent approval
+        commits a real stamp. Here the approval also advances the status
+        (draft→active), so apply_status_transition locks, refreshes, sees the
+        committed status changed under the stale read, and no-ops — which
+        preserves the committed ``confirmed_at`` (the write-once instant) rather
+        than clobbering it with this row's ``created_at``. Regression for #1544.
+        """
+        from sqlalchemy.orm import Session as SASession
+
+        from src.core.database.database_session import get_engine
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_confirm_race", status="draft"))
+
+        # A distinctive, fixed approval instant — unmistakably NOT this row's
+        # created_at (~now), so a clobber-with-created_at is unambiguous and immune
+        # to any client/server clock skew.
+        approve_time = datetime(2020, 1, 1, tzinfo=UTC)
+        engine = get_engine()
+        # Two INDEPENDENT sessions (not the thread-local scoped session, which the
+        # app's get_db_session shares — closing one would detach the other's rows).
+        stale_session = SASession(engine)
+        approve_session = SASession(engine)
+        try:
+            # Sweep-style unlocked load: in-memory status is 'draft', confirmed_at None.
+            stale = MediaBuyRepository(stale_session, tenant_a).get_by_id("mb_confirm_race")
+            assert stale is not None
+            assert stale.confirmed_at is None
+
+            # A concurrent approval commits status=active + confirmed_at=approve_time.
+            MediaBuyRepository(approve_session, tenant_a).update_status(
+                "mb_confirm_race", "active", approved_at=approve_time, approved_by="admin@test.com"
+            )
+            approve_session.commit()
+
+            # The stale session applies its own transition on the row it loaded
+            # BEFORE the approval — its status is still 'draft' in memory.
+            MediaBuyRepository.apply_status_transition(stale, "active")
+            stale_session.commit()
+        finally:
+            stale_session.close()
+            approve_session.close()
+
+        with MediaBuyUoW(tenant_a) as uow:
+            assert uow.media_buys is not None
+            persisted = uow.media_buys.get_by_id("mb_confirm_race")
+            assert persisted is not None
+            # The stale transition no-op'd (committed status advanced draft→active
+            # under it), so revision stayed at the approval's bump (1→2), not 3.
+            assert persisted.revision == 2
+            assert persisted.status == "active"
+            # The committed approval instant is preserved, not clobbered with created_at.
+            assert persisted.confirmed_at == approve_time
+            assert persisted.confirmed_at != persisted.created_at
+
+    def test_apply_status_transition_skips_when_status_changed_underneath(self, tenant_a, principal_a):
+        """A stale unlocked transition must not overwrite a concurrent terminal decision.
+
+        Scheduler loads 'active'; an admin commits 'rejected'; the scheduler's stale
+        active→completed transition must NO-OP under lock (the committed status
+        changed), leaving 'rejected' intact instead of writing 'completed'.
+        Regression for #1544: apply_status_transition previously refreshed only
+        confirmed_at, never status, so it blindly applied the caller's stale target.
+        """
+        from sqlalchemy.orm import Session as SASession
+
+        from src.core.database.database_session import get_engine
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_status_race", status="active"))
+
+        engine = get_engine()
+        stale_session = SASession(engine)
+        admin_session = SASession(engine)
+        try:
+            # Sweep-style unlocked load: in-memory status is the soon-to-be-stale 'active'.
+            stale = MediaBuyRepository(stale_session, tenant_a).get_by_id("mb_status_race")
+            assert stale is not None
+            assert stale.status == "active"
+
+            # An admin rejects the buy in an independent transaction (terminal decision).
+            MediaBuyRepository(admin_session, tenant_a).update_status("mb_status_race", "rejected")
+            admin_session.commit()
+
+            # The scheduler's stale active→completed transition must no-op under lock.
+            MediaBuyRepository.apply_status_transition(stale, "completed")
+            stale_session.commit()
+        finally:
+            stale_session.close()
+            admin_session.close()
+
+        with MediaBuyUoW(tenant_a) as uow:
+            assert uow.media_buys is not None
+            persisted = uow.media_buys.get_by_id("mb_status_race")
+            assert persisted is not None
+            # The terminal decision is preserved — NOT overwritten with 'completed'.
+            assert persisted.status == "rejected"
+            # Admin's write bumped 1→2; the skipped stale transition did NOT bump.
+            assert persisted.revision == 2
+
+    def test_lock_timeout_does_not_trip_the_db_circuit_breaker(self, tenant_a, principal_a):
+        """Expected lock contention must not poison the process-wide DB circuit
+        breaker. A lock_timeout raises OperationalError (SQLSTATE 55P03); a prior
+        version marked that as a DB outage in get_db_session, failing-fast every
+        unrelated request for 10s. It must re-raise WITHOUT flipping _is_healthy,
+        so a subsequent session still works. #1544.
+
+        The waiter/probe run through MediaBuyUoW, whose session is a real
+        get_db_session under the hood — so the OperationalError still propagates
+        through get_db_session's exit and exercises exactly the circuit-breaker
+        code path this test pins (``_is_healthy`` must stay ``True``).
+        """
+        from sqlalchemy import select, text
+        from sqlalchemy.exc import OperationalError
+        from sqlalchemy.orm import Session as SASession
+
+        import src.core.database.database_session as dbs
+        from src.core.database.database_session import get_engine, reset_health_state
+        from src.core.database.models import MediaBuy
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_lock_contended", status="active"))
+
+        # Independent session holds the row lock so the waiter below times out.
+        holder = SASession(get_engine())
+        try:
+            holder.execute(select(MediaBuy).filter_by(media_buy_id="mb_lock_contended").with_for_update()).first()
+
+            with pytest.raises(OperationalError) as exc_info:
+                with MediaBuyUoW(tenant_a) as waiter:
+                    waiter.session.execute(text("SET LOCAL lock_timeout = '1s'"))
+                    waiter.session.execute(
+                        select(MediaBuy).filter_by(media_buy_id="mb_lock_contended").with_for_update()
+                    ).first()
+            assert getattr(exc_info.value.orig, "pgcode", None) == "55P03"  # lock_not_available
+
+            # The breaker stayed closed: health intact and a fresh session works.
+            assert dbs._is_healthy is True
+            with MediaBuyUoW(tenant_a) as ok:
+                assert ok.session.execute(text("SELECT 1")).scalar() == 1
+        finally:
+            holder.rollback()
+            holder.close()
+            reset_health_state()
+
+    def test_get_by_id_lock_timeout_translates_contention_to_transient_conflict(self, tenant_a, principal_a):
+        """Production-path lock coverage: get_by_id(lock_timeout_seconds=...) (used by
+        _update_media_buy_impl) must arm its OWN lock_timeout and translate the
+        expected 55P03 contention into a transient AdCPConflictError — NOT rely on
+        a caller-installed timeout. A prior version put the SET LOCAL + SQLSTATE
+        handling in the _impl; deleting it there stayed green because tests
+        installed their own timeout. This drives the real repository seam under a
+        held lock so a regression reddens. #1544.
+        """
+        from sqlalchemy import select
+        from sqlalchemy.orm import Session as SASession
+
+        from src.core.database.database_session import get_engine, reset_health_state
+        from src.core.database.models import MediaBuy
+        from src.core.exceptions import AdCPConflictError
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_lock_prod_path", status="active"))
+
+        # Independent session holds the row lock so the repository waiter times out.
+        holder = SASession(get_engine())
+        try:
+            holder.execute(select(MediaBuy).filter_by(media_buy_id="mb_lock_prod_path").with_for_update()).first()
+
+            # The waiter runs its locked read through a MediaBuyUoW session (a real
+            # get_db_session under the hood); the repository seam arms its OWN
+            # lock_timeout and translates the 55P03 contention into AdCPConflictError,
+            # which propagates out through the UoW's rollback-and-re-raise exit.
+            with pytest.raises(AdCPConflictError) as exc_info:
+                with MediaBuyUoW(tenant_a) as waiter:
+                    assert waiter.media_buys is not None
+                    waiter.media_buys.get_by_id(
+                        "mb_lock_prod_path", for_update=True, populate_existing=True, lock_timeout_seconds=5
+                    )
+            # Pin the WIRE code, not just the class: a parent-class re-raise would keep
+            # isinstance green while flipping the buyer-facing code (P38).
+            assert exc_info.value.error_code == "CONFLICT"
+            # Buyer-facing recovery is transient (re-read and retry), not terminal.
+            assert exc_info.value.recovery == "transient"
+        finally:
+            holder.rollback()
+            holder.close()
+            reset_health_state()
+
+    def test_update_fields_staged_status_stamps_confirmed_at(self, tenant_a, principal_a):
+        """A staged status change through update_fields (the update tool's approval
+        path) also stamps confirmed_at — the third blessed seam. #1544."""
+        from tests.factories.principal import PrincipalFactory
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_fields_confirm", status="draft"))
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.update_fields("mb_fields_confirm", status="pending_creatives")
+
+        identity = PrincipalFactory.make_identity(
+            tenant_id=tenant_a, principal_id=principal_a, tenant={"tenant_id": tenant_a}
+        )
+        after = read_back_media_buy(identity, "mb_fields_confirm")
+        assert after.confirmed_at is not None
+        assert after.confirmed_at == after.created_at
 
 
 # ---------------------------------------------------------------------------
@@ -577,3 +961,337 @@ class TestCreatePackagesBulk:
         with pytest.raises(ValueError, match="not found"):
             with MediaBuyUoW(tenant_a) as uow:
                 uow.media_buys.create_packages_bulk("mb_bulk_iso", packages)
+
+
+# ---------------------------------------------------------------------------
+# Concurrent revision bump — the counter must not collide under real contention
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrentRevisionBump:
+    """Two concurrent bumps on the SAME buy must land on distinct revisions —
+    on BOTH the locked and the unlocked mutation seams.
+
+    The two mutation seams are protected by different mechanisms, so each needs
+    its own concurrent test:
+
+    - **Locked seam** (``bump_revision``/``update_fields``/``update_status`` →
+      ``_locked_mutate_and_bump``): the ``get_by_id(for_update=True,
+      populate_existing=True)`` re-reads the committed counter under the row lock
+      before the increment, so a stale identity-mapped read cannot survive. This
+      seam stays correct even under a Python read-modify-write — the lock +
+      ``populate_existing`` do the work, NOT the server-side increment.
+
+    - **Revision-excluded seam** (``apply_status_transition``, used by the
+      cross-tenant scheduler sweep and creative-sync): this seam DOES take a
+      ``FOR UPDATE`` lock, but its locked refresh set
+      (``MediaBuyRepository._LIFECYCLE_REFRESH_FIELDS``) deliberately EXCLUDES
+      ``revision`` — status/window/confirmed_at are reloaded under the lock, the
+      counter is not — so the locked re-read never clobbers the pending bump, and
+      the server-side ``revision = coalesce(revision, 0) + 1`` is the SOLE
+      protection. This is the seam that goes red if the increment regresses to a
+      Python read-modify-write (adding ``revision`` to the refresh set would
+      defeat it — see the guard note on ``_LIFECYCLE_REFRESH_FIELDS``).
+
+    The second test below is therefore the one that actually isolates the
+    server-side increment (#1544).
+    """
+
+    def test_two_concurrent_bumps_yield_distinct_revisions(self, tenant_a, principal_a):
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_concurrent_rev"))
+
+        # Starting revision after create.
+        with MediaBuyUoW(tenant_a) as uow:
+            start_rev = uow.media_buys.get_by_id("mb_concurrent_rev").revision
+        assert start_rev == 1
+
+        def bump_once(barrier: threading.Barrier) -> None:
+            with MediaBuyUoW(tenant_a) as uow:
+                # Preload the row into THIS transaction's identity map at the
+                # current revision, before either thread bumps. This is the
+                # stale-read setup that a naive Python increment would lose.
+                preloaded = uow.media_buys.get_by_id("mb_concurrent_rev")
+                assert preloaded is not None
+                barrier.wait()
+                updated = uow.media_buys.bump_revision("mb_concurrent_rev")
+                assert updated is not None
+                # UoW commit happens on clean exit.
+
+        _run_concurrently([bump_once, bump_once], thread_name_prefix="bump")
+
+        with MediaBuyUoW(tenant_a) as uow:
+            final_rev = uow.media_buys.get_by_id("mb_concurrent_rev").revision
+        # Two bumps from revision 1 → 3. A collision (lost update) would leave 2.
+        assert final_rev == 3, f"expected two distinct bumps 1→2→3, got final revision {final_rev}"
+
+    def test_two_concurrent_apply_status_transition_yield_distinct_revisions(self, tenant_a, principal_a):
+        """The revision-excluded seam relies solely on the server-side increment.
+
+        ``apply_status_transition`` (scheduler sweep, creative-sync) DOES take a
+        ``FOR UPDATE`` lock, but its locked refresh set
+        (``MediaBuyRepository._LIFECYCLE_REFRESH_FIELDS``) deliberately EXCLUDES
+        ``revision`` — the lifecycle inputs (status/window/confirmed_at) are
+        reloaded under the lock, the counter is not — so the stale identity-mapped
+        ``revision`` survives the re-read and the server-side
+        ``coalesce(revision, 0) + 1`` is the only thing standing between two
+        concurrent transitions and a lost update. Unlike the locked bump test
+        above, THIS one goes red if the increment regresses to a Python
+        read-modify-write (both threads would write ``2``, leaving the final
+        revision at 2 instead of 3). Verified: adding ``revision`` to the refresh
+        set flips this test green even under a Python read-modify-write, which is
+        exactly why the counter is kept out of that set. #1544.
+        """
+        # Start already 'active' so both threads transition active→active: the
+        # source status is unchanged under lock, so both legitimately proceed and
+        # bump. (A stale transition against a CHANGED status now no-ops — covered
+        # by test_apply_status_transition_skips_when_status_changed_underneath.)
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_ast_concurrent", status="active"))
+
+        def transition_once(barrier: threading.Barrier) -> None:
+            with MediaBuyUoW(tenant_a) as uow:
+                # Plain get_by_id: unlocked, no populate_existing — the stale
+                # in-memory revision both threads hold before either commits.
+                # apply_status_transition locks the row later, but its refresh set
+                # excludes revision, so this stale counter is never reloaded.
+                mb = uow.media_buys.get_by_id("mb_ast_concurrent")
+                assert mb is not None
+                barrier.wait()
+                MediaBuyRepository.apply_status_transition(mb, "active")
+                # UoW commit happens on clean exit.
+
+        _run_concurrently([transition_once, transition_once], thread_name_prefix="apply-status-transition")
+
+        with MediaBuyUoW(tenant_a) as uow:
+            final_rev = uow.media_buys.get_by_id("mb_ast_concurrent").revision
+        # Two transitions from revision 1 → 3. A Python read-modify-write loses one → 2.
+        assert final_rev == 3, f"lost update on the unlocked seam: expected 3, got {final_rev}"
+
+    def test_computed_transition_lock_blocks_stale_completed_over_extended_window(self, tenant_a, principal_a):
+        """The row lock on ``apply_computed_status_transition`` is load-bearing.
+
+        The race its docstring names, executed: the scheduler reads a window that
+        has already ended and is about to decide ``completed``, while a concurrent
+        transaction extends ``end_date`` into the future (leaving the buy
+        ``active``) and commits. Because ``compute_target`` is evaluated only
+        AFTER the ``FOR UPDATE`` refresh, the scheduler blocks on the extender's
+        write lock, re-reads the EXTENDED window, and declines to complete a buy
+        that is still live.
+
+        Red oracle: dropping ``with_for_update=True`` from the refresh makes the
+        scheduler read the stale (still-past) committed ``end_date`` under READ
+        COMMITTED instead of waiting, so it writes ``completed`` over a live
+        ``active`` buy and this assertion fails. #1544.
+        """
+        past = date.today() - timedelta(days=2)
+        future = date.today() + timedelta(days=30)
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_lock_race", status="active", end_date=past))
+
+        def extend_window(barrier: threading.Barrier) -> None:
+            """Take the row write-lock, extend the window, then commit after a beat."""
+            with MediaBuyUoW(tenant_a) as uow:
+                # FOR UPDATE takes the row lock at the SELECT and holds it until
+                # this UoW commits on clean exit.
+                mb = uow.media_buys.get_by_id("mb_lock_race", for_update=True)
+                assert mb is not None
+                mb.end_date = future
+                barrier.wait()
+                # Hold the lock long enough that the scheduler thread is provably
+                # inside the contended refresh before this transaction commits.
+                time.sleep(0.5)
+                # UoW commit happens on clean exit.
+
+        def complete_if_window_ended(barrier: threading.Barrier) -> None:
+            """The scheduler arm: decide the target only from the locked re-read."""
+            with MediaBuyUoW(tenant_a) as uow:
+                # Unlocked load — the stale identity-mapped row the real sweep holds.
+                mb = uow.media_buys.get_by_id("mb_lock_race")
+                assert mb is not None
+                assert mb.end_date == past, "precondition: the scheduler starts from the ENDED window"
+                barrier.wait()
+                MediaBuyRepository.apply_computed_status_transition(
+                    mb,
+                    lambda locked: "completed" if locked.end_date < date.today() else None,
+                )
+
+        _run_concurrently([extend_window, complete_if_window_ended], thread_name_prefix="computed-transition-lock")
+
+        with MediaBuyUoW(tenant_a) as uow:
+            final = uow.media_buys.get_by_id("mb_lock_race")
+            assert final is not None
+            final_status, final_end = final.status, final.end_date
+        assert final_end == future, "precondition: the extender's window write committed"
+        assert final_status == "active", (
+            f"stale 'completed' overwrote a live buy whose window was extended — got {final_status!r}; "
+            "the FOR UPDATE refresh is what makes compute_target see the committed window"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Persisted revision bump — assert the value the DB produces, not a mock echo
+# ---------------------------------------------------------------------------
+
+
+class TestPersistedRevisionBump:
+    """Each mutation path bumps the persisted counter, read back from the DB.
+
+    These replace the transient-instance unit assertions that became meaningless
+    once the bump moved server-side: ``_bump_revision`` now assigns a SQL
+    expression (``coalesce(revision, 0) + 1``), so the value only materializes on
+    flush — the number a buyer sees must be read back from PostgreSQL, never
+    asserted on an in-memory ORM attribute (#1544 round-2 TQ-03).
+
+    Pins CROSS-SESSION persistence: every value is re-read from the database in
+    a fresh session (in-session materialization on the seam's returned row is
+    pinned separately by ``TestRevisionBumpsOnStatusTransition``).
+    """
+
+    def _read_revision(self, tenant_id: str, media_buy_id: str) -> int:
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.media_buys is not None
+            buy = uow.media_buys.get_by_id(media_buy_id)
+            assert buy is not None
+            return buy.revision
+
+    def test_update_status_bumps_persisted_revision(self, tenant_a, principal_a):
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_rev_status"))
+        assert self._read_revision(tenant_a, "mb_rev_status") == 1
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.update_status("mb_rev_status", "paused")
+        assert self._read_revision(tenant_a, "mb_rev_status") == 2
+
+    def test_update_fields_bumps_persisted_revision(self, tenant_a, principal_a):
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_rev_fields"))
+        assert self._read_revision(tenant_a, "mb_rev_fields") == 1
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.update_fields("mb_rev_fields", budget=Decimal("250.00"), currency="USD")
+        assert self._read_revision(tenant_a, "mb_rev_fields") == 2
+
+    def test_bump_revision_is_strictly_monotonic_across_consecutive_commits(self, tenant_a, principal_a):
+        """Two sequential bumps yield 1 → 2 → 3 — no same-second collision.
+
+        A time-derived formula returns the same value for bumps within one clock
+        tick; the persisted counter advances by exactly one each time.
+        """
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_rev_mono"))
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.bump_revision("mb_rev_mono")
+        first = self._read_revision(tenant_a, "mb_rev_mono")
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.bump_revision("mb_rev_mono")
+        second = self._read_revision(tenant_a, "mb_rev_mono")
+
+        assert (first, second) == (2, 3)
+        assert second > first
+
+
+class TestExpectedRevisionUnderLock:
+    """The optimistic-concurrency token is enforced UNDER the row lock at the
+    mutation seam — the authoritative backstop, independent of the update tool's
+    pre-adapter gate (which holds the same lock in the same UoW).
+
+    AdCP 3.1.1 update-media-buy-request.json properties.revision MUST.
+    The discriminating case: the mutating session already holds a STALE
+    in-memory instance (identity map), another session bumps the row, and the
+    seam must still CONFLICT — the locked SELECT re-populates the counter under
+    the held lock (populate_existing) instead of trusting the stale attribute
+    (#1544 round-7).
+    """
+
+    def test_stale_identity_map_instance_still_conflicts(self, tenant_a, principal_a):
+        from src.core.exceptions import AdCPConflictError
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_lock_conflict"))
+
+        with MediaBuyUoW(tenant_a) as uow:
+            # Load the row unlocked into THIS session's identity map at revision 1.
+            stale = uow.media_buys.get_by_id("mb_lock_conflict")
+            assert stale is not None and (stale.revision or 1) == 1
+
+            # A concurrent writer bumps the committed row to 2.
+            with MediaBuyUoW(tenant_a) as other:
+                other.media_buys.bump_revision_or_raise("mb_lock_conflict")
+
+            # The seam must see the committed 2 under its lock and CONFLICT,
+            # even though this session's instance still reads 1.
+            with pytest.raises(AdCPConflictError) as exc_info:
+                uow.media_buys.update_fields_or_raise("mb_lock_conflict", expected_revision=1, budget=Decimal("500.00"))
+            # Pin the WIRE code (P38): the buyer-facing contract is CONFLICT, not
+            # merely the exception class.
+            assert exc_info.value.error_code == "CONFLICT"
+            assert exc_info.value.details["current_version"] == 2
+            assert exc_info.value.details["expected_version"] == 1
+
+    def test_matching_token_mutates_and_bumps(self, tenant_a, principal_a):
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_lock_match"))
+
+        with MediaBuyUoW(tenant_a) as uow:
+            row = uow.media_buys.update_fields_or_raise("mb_lock_match", expected_revision=1, budget=Decimal("750.00"))
+            assert row is not None
+
+        with MediaBuyUoW(tenant_a) as uow:
+            assert uow.media_buys is not None
+            persisted = uow.media_buys.get_by_id("mb_lock_match")
+            assert persisted is not None
+            assert persisted.revision == 2
+            assert persisted.budget == Decimal("750.00")
+
+    def test_two_concurrent_updates_same_token_one_wins_one_conflicts(self, tenant_a, principal_a):
+        """Both writers pass the fast unlocked gate with the SAME token; the
+        under-lock check must reject exactly one.
+
+        Mirrors ``TestConcurrentRevisionBump``'s barrier setup: two independent
+        transactions preload the row at revision 1 and both present
+        ``expected_revision=1``. The locked check serializes on the row
+        write-lock — the winner mutates and bumps to 2; the loser's
+        refresh-under-lock then reads the committed 2 and raises CONFLICT. A
+        gate that only checks the unlocked snapshot admits both writes
+        (#1544 round-7): this test is red under gate-only enforcement.
+        """
+        from src.core.exceptions import AdCPConflictError
+
+        with MediaBuyUoW(tenant_a) as uow:
+            uow.media_buys.create(make_media_buy(tenant_a, principal_a, "mb_token_race"))
+
+        def update_with_token(barrier: threading.Barrier, budget: str) -> str:
+            with MediaBuyUoW(tenant_a) as uow:
+                # Preload at revision 1 in THIS transaction — the unlocked
+                # snapshot both writers' fast gates would see.
+                preloaded = uow.media_buys.get_by_id("mb_token_race")
+                assert preloaded is not None and (preloaded.revision or 1) == 1
+                barrier.wait()
+                try:
+                    uow.media_buys.update_fields_or_raise("mb_token_race", expected_revision=1, budget=Decimal(budget))
+                except AdCPConflictError:
+                    return "conflict"
+            return "applied"
+
+        outcomes = _run_concurrently(
+            [lambda barrier, budget=budget: update_with_token(barrier, budget) for budget in ("100.00", "200.00")],
+            thread_name_prefix="update-with-token",
+        )
+
+        assert sorted(outcomes) == ["applied", "conflict"], (
+            f"exactly one writer must win and one must CONFLICT, got outcomes: {outcomes}"
+        )
+
+        # Exactly one mutation landed: revision advanced by exactly one, and the
+        # budget is whichever writer won (never a blend, never both).
+        with MediaBuyUoW(tenant_a) as uow:
+            assert uow.media_buys is not None
+            persisted = uow.media_buys.get_by_id("mb_token_race")
+            assert persisted is not None
+            assert persisted.revision == 2
+            assert persisted.budget in (Decimal("100.00"), Decimal("200.00"))

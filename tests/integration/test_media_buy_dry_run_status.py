@@ -153,3 +153,58 @@ def test_create_media_buy_dry_run_reports_completed(integration_db):
     assert response_envelope["media_buy_id"].startswith("dry_run_"), (
         "guard must exercise the dry_run branch — non-simulated media_buy_id returned"
     )
+
+
+def test_create_media_buy_dry_run_never_replays_a_cached_real_create(integration_db):
+    """A dry-run ALWAYS simulates — it never replays a cached REAL create (INV-5).
+
+    Regression for the e2e_rest INV-5 failure on PR #1544: the idempotency replay
+    probe in _create_media_buy_impl sits BEFORE the dry_run simulation branch, and
+    was gated only on ``req.idempotency_key`` — so a dry-run whose key hit a cached
+    real create REPLAYED that committed buy (returning its real ``buy_`` id) instead
+    of a fresh ``dry_run_`` simulation, violating BR-RULE-020 INV-5 ("dry-run never
+    invokes the adapter and persists nothing").
+
+    Setup deliberately makes the cache entry REPLAY-ELIGIBLE (same key + a MATCHING
+    canonical payload hash): a NON-dry-run retry of this exact request WOULD replay
+    ``buy_cached_real`` verbatim. The dry-run must ignore it entirely and mint a
+    ``dry_run_`` id. Asserting ``replayed is False`` pins that no replay occurred.
+    """
+    import uuid
+
+    from src.core.idempotency_canonical import canonical_request_hash
+    from src.core.schemas import CreateMediaBuyRequest
+
+    with MediaBuyCreateEnv(dry_run=True) as env:
+        _tenant, _principal, product, _pricing_option = env.setup_media_buy_data()
+
+        idem_key = f"dryrun-collide-{uuid.uuid4().hex}"
+        req = CreateMediaBuyRequest(
+            brand={"domain": "testbrand.com"},
+            start_time=_future(1),
+            end_time=_future(8),
+            packages=[
+                create_test_package_request(
+                    product_id=product.product_id,
+                    pricing_option_id="cpm_usd_fixed",
+                    budget=10000.0,
+                )
+            ],
+            idempotency_key=idem_key,
+        )
+        # Seed a REPLAY-ELIGIBLE cached real success under this exact key: matching
+        # payload hash means a non-dry-run retry WOULD replay buy_cached_real verbatim.
+        env.seed_success(idem_key, payload_hash=canonical_request_hash(req), media_buy_id="buy_cached_real")
+
+        result = env.call_impl(req=req)
+
+    response, _status = result
+    media_buy_id = response.model_dump(mode="json")["media_buy_id"]
+    assert media_buy_id.startswith("dry_run_"), (
+        "dry-run must SIMULATE, not replay the cached real create — expected a dry_run_ id, "
+        f"got {media_buy_id!r} (the pre-gate bug returned the cached buy_ id here)"
+    )
+    assert media_buy_id != "buy_cached_real", (
+        "dry-run returned the cached real buy id — replay leaked into a simulation"
+    )
+    assert result.replayed is False, "dry-run must never be marked as a verbatim idempotency replay"

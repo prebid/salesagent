@@ -394,7 +394,7 @@ def google_auth():
         # Only add /admin prefix in production mode with nginx (not in Docker standalone)
         # SKIP_NGINX=true indicates Docker standalone mode without nginx reverse proxy
         skip_nginx = os.environ.get("SKIP_NGINX", "").lower() == "true"
-        production = os.environ.get("PRODUCTION", "").lower() == "true"
+        production = is_admin_production()
 
         if not skip_nginx and production and "/admin/" not in base_url:
             # Production with nginx: add /admin prefix for nginx routing
@@ -454,7 +454,7 @@ def tenant_google_auth(tenant_id):
     host = request.headers.get("Host", "")
 
     # Always use the registered OAuth redirect URI for Google (no modifications allowed)
-    if os.environ.get("PRODUCTION") == "true":
+    if is_admin_production():
         # For production, always use the exact registered redirect URI
         redirect_uri = get_oauth_redirect_uri()
     else:
@@ -927,7 +927,7 @@ def gam_authorize(tenant_id):
             logger.info(f"Stored external domain for GAM OAuth redirect: {approximated_host}")
 
         # Determine callback URI
-        if os.environ.get("PRODUCTION") == "true":
+        if is_admin_production():
             callback_uri = f"{get_sales_agent_url()}/admin/auth/gam/callback"
         else:
             callback_uri = url_for("auth.gam_callback", _external=True)
@@ -994,7 +994,7 @@ def gam_callback():
         gam_config = get_gam_oauth_config()
 
         # Determine callback URI (must match the one used in authorization)
-        if os.environ.get("PRODUCTION") == "true":
+        if is_admin_production():
             callback_uri = f"{get_sales_agent_url()}/admin/auth/gam/callback"
         else:
             callback_uri = url_for("auth.gam_callback", _external=True)
@@ -1084,9 +1084,9 @@ def gam_callback():
             logger.warning(f"Could not suggest auto-detect: {detect_error}")
 
         # Redirect back to tenant settings
-        if external_domain and os.environ.get("PRODUCTION") == "true":
+        if external_domain and is_admin_production():
             return redirect(f"https://{external_domain}/admin/tenant/{tenant_id}/settings")
-        elif originating_host and os.environ.get("PRODUCTION") == "true":
+        elif originating_host and is_admin_production():
             return redirect(f"https://{originating_host}/admin/tenant/{tenant_id}/settings")
         else:
             return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))

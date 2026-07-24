@@ -95,9 +95,12 @@ def _call_impl(
 class TestSortOrderByName:
     """T-UC-005-inv10: Results sorted by name.
 
-    Behavioral contract at creative_formats.py:337. Refactoring during
-    migration could silently reorder results. In adcp 3.12, type was removed
-    from Format, so sorting is now by name only.
+    Behavioral contract of the `formats.sort(key=...name...)` step in
+    `_list_creative_formats_impl` (creative_formats.py). Refactoring could
+    silently reorder results. The media-buy ListCreativeFormatsRequest (pinned
+    dist/schemas/3.1.1/media-buy/list-creative-formats-request.json) has no
+    `type`/FormatCategory property — it is a creative-agent-role field (SDK
+    adcp-client-python#971 role boundary) — so sorting is by name only.
     """
 
     def test_sort_order_by_name(self):
@@ -163,11 +166,16 @@ class TestSortOrderByName:
 # ---------------------------------------------------------------------------
 
 
-class TestTypeFilterRemovedInAdcp312:
-    """T-UC-005-inv2-violated: Type filter removed in adcp 3.12."""
+class TestTypeFilterIsCreativeAgentRoleBoundary:
+    """T-UC-005-inv2-violated: the media-buy request has no `type` filter (creative-agent role boundary, SDK #971)."""
 
     def test_type_filter_rejected(self):
-        """type= parameter is no longer accepted on ListCreativeFormatsRequest."""
+        """type= parameter is not accepted on the media-buy ListCreativeFormatsRequest.
+
+        The `type` filter (audio/video/display/dooh) is a creative-agent-role field by
+        design (SDK adcp-client-python#971 role boundary), not part of this media-buy
+        contract, so extra=forbid rejects it.
+        """
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError, match="type"):
@@ -177,6 +185,48 @@ class TestTypeFilterRemovedInAdcp312:
         """Empty catalog returns empty list."""
         result = _call_impl([])
         assert result == []
+
+
+class TestDisclosureFilters:
+    """UC-005 disclosure filters use the authoritative AND-match semantics."""
+
+    def test_positions_match_structured_or_legacy_capabilities(self):
+        from adcp.types.generated_poc.core.format import DisclosureCapability
+
+        structured = _make_format("structured", "Structured")
+        structured.disclosure_capabilities = [
+            DisclosureCapability(position="prominent", persistence=["continuous"]),
+            DisclosureCapability(position="footer", persistence=["initial"]),
+        ]
+        legacy = _make_format("legacy", "Legacy")
+        legacy.supported_disclosure_positions = ["prominent", "footer"]
+        partial = _make_format("partial", "Partial")
+        partial.supported_disclosure_positions = ["prominent"]
+
+        result = _call_impl(
+            [structured, legacy, partial],
+            ListCreativeFormatsRequest(disclosure_positions=["prominent", "footer"]),
+        )
+
+        assert [format_.format_id.id for format_ in result] == ["legacy", "structured"]
+
+    def test_persistence_modes_may_be_satisfied_by_different_positions(self):
+        from adcp.types.generated_poc.core.format import DisclosureCapability
+
+        combined = _make_format("combined", "Combined")
+        combined.disclosure_capabilities = [
+            DisclosureCapability(position="prominent", persistence=["continuous"]),
+            DisclosureCapability(position="footer", persistence=["initial"]),
+        ]
+        partial = _make_format("partial", "Partial")
+        partial.disclosure_capabilities = [DisclosureCapability(position="prominent", persistence=["continuous"])]
+
+        result = _call_impl(
+            [combined, partial],
+            ListCreativeFormatsRequest(disclosure_persistence=["continuous", "initial"]),
+        )
+
+        assert [format_.format_id.id for format_ in result] == ["combined"]
 
 
 # ---------------------------------------------------------------------------
@@ -312,15 +362,21 @@ class TestAssetTypesFilterChecksGroupAssets:
 # ---------------------------------------------------------------------------
 
 
-class TestPartitionTypeFilterRemovedInAdcp312:
-    """T-UC-005-partition-type-filter: type filter removed in adcp 3.12."""
+class TestPartitionTypeFilterIsCreativeAgentRoleBoundary:
+    """T-UC-005-partition-type-filter: the media-buy request has no `type` filter (creative-agent role boundary, SDK #971)."""
 
-    def test_type_filter_no_longer_accepted(self):
-        """type= parameter is no longer accepted on ListCreativeFormatsRequest in adcp 3.12."""
+    def test_type_extension_rejected_by_development_strictness(self):
+        """Development rejects unknown fields even though production remains forward-compatible."""
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError, match="type"):
             ListCreativeFormatsRequest(type="native")
+
+    def test_type_extension_ignored_by_production_validation(self):
+        """Production accepts the extension without treating it as a media-buy filter."""
+        from tests.helpers.creative_formats_schema import validate_list_creative_formats_in_production
+
+        assert validate_list_creative_formats_in_production({"type": "native"}) == {}
 
 
 class TestPartitionFormatIdsNoMatch:

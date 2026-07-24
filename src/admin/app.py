@@ -38,6 +38,7 @@ from src.admin.blueprints.signals_agents import signals_agents_bp
 from src.admin.blueprints.tenants import tenants_bp
 from src.admin.blueprints.users import users_bp
 from src.admin.blueprints.workflows import workflows_bp
+from src.admin.utils import is_admin_production
 from src.core.config_loader import is_single_tenant_mode
 from src.core.domain_config import (
     get_session_cookie_domain,
@@ -111,7 +112,7 @@ def create_app(config=None):
     app.logger.setLevel(logging.INFO)
 
     # Configure session cookies for EventSource compatibility
-    if os.environ.get("PRODUCTION") == "true":
+    if is_admin_production():
         app.config["SESSION_COOKIE_SECURE"] = True  # Required for SameSite=None over HTTPS
         app.config["SESSION_COOKIE_HTTPONLY"] = False  # Allow EventSource to access cookies
         app.config["SESSION_COOKIE_SAMESITE"] = "None"  # Required for EventSource cross-origin requests
@@ -155,7 +156,7 @@ def create_app(config=None):
     app.jinja_env.filters["markdown"] = markdown_filter
 
     # Trust proxy headers in production
-    if os.environ.get("PRODUCTION") == "true":
+    if is_admin_production():
         app.config["PREFERRED_URL_SCHEME"] = "https"
         # Force external URLs to use HTTPS
         app.config["SERVER_NAME"] = None  # Let Flask detect from request
@@ -166,7 +167,7 @@ def create_app(config=None):
         app.config.update(config)
 
     # Apply proxy fixes for production
-    if os.environ.get("PRODUCTION") == "true":
+    if is_admin_production():
         # Create a middleware to copy Fly.io headers to standard headers
         # Fly sends Fly-Forwarded-Proto but Werkzeug expects X-Forwarded-Proto
         class FlyHeadersMiddleware:
@@ -258,7 +259,7 @@ def create_app(config=None):
             f"/admin{request.full_path}" if not request.full_path.startswith("/admin") else request.full_path
         )
 
-        if os.environ.get("PRODUCTION") == "true":
+        if is_admin_production():
             redirect_url = f"{get_tenant_url(tenant_subdomain)}{path_with_admin}"
         else:
             # Local dev: Use localhost with port (unified FastAPI port)
@@ -308,6 +309,19 @@ def create_app(config=None):
         context = {}
 
         context["script_name"] = request.script_root or request.environ.get("SCRIPT_NAME", "")
+
+        # Single-winner finalize copy, shared with the server routes so a client-side
+        # fallback cannot drift from what the 409/202 response body would have said.
+        # These fallbacks fire exactly when the response body fails to parse — the one
+        # case where the operator has no server text — so a hand-copied literal there
+        # reported a different entity/wording than the server. #1544.
+        from src.admin.services.media_buy_completion import (
+            MEDIA_BUY_FINALIZE_IN_PROGRESS_MESSAGE,
+            WORKFLOW_STEP_ALREADY_DECIDED_MESSAGE,
+        )
+
+        context["workflow_step_already_decided_message"] = WORKFLOW_STEP_ALREADY_DECIDED_MESSAGE
+        context["media_buy_finalize_in_progress_message"] = MEDIA_BUY_FINALIZE_IN_PROGRESS_MESSAGE
 
         # Inject support email (configurable via SUPPORT_EMAIL env var)
         context["support_email"] = get_support_email()

@@ -5,6 +5,8 @@ and dispatches through all transports. It does NOT test business logic —
 that's the BDD suite's job. This guards the harness infrastructure itself.
 """
 
+from unittest.mock import Mock
+
 
 class TestMediaBuyCreateEnvExists:
     """Verify the harness module can be imported and instantiated."""
@@ -74,3 +76,25 @@ class TestMediaBuyListEnvExists:
         from tests.harness.media_buy_list import MediaBuyListEnv
 
         assert MediaBuyListEnv is not None
+
+    def test_mcp_list_dispatch_delegates_to_run_mcp_client(self):
+        """_call_list_mcp forwards to _run_mcp_client with the tool name, response
+        type, and request kwargs. This pins the delegation wiring only; the real
+        FastMCP client wire is covered by the BDD transport-parity dispatch.
+        """
+        from src.core.schemas._base import GetMediaBuysResponse
+        from tests.harness.media_buy_list import MediaBuyListEnv
+
+        env = object.__new__(MediaBuyListEnv)
+        expected = object()
+        run_mcp_client = Mock(return_value=expected)
+        env._run_mcp_client = run_mcp_client
+
+        result = env._call_list_mcp(media_buy_ids=["mb-001"])
+
+        assert result is expected
+        run_mcp_client.assert_called_once_with(
+            "get_media_buys",
+            GetMediaBuysResponse,
+            media_buy_ids=["mb-001"],
+        )

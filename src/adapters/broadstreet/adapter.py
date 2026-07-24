@@ -297,6 +297,7 @@ class BroadstreetAdapter(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        idempotency_key: str | None = None,
     ) -> CreateMediaBuyResponse:
         """Create a new media buy (campaign) in Broadstreet.
 

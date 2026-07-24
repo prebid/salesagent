@@ -121,6 +121,10 @@ class MockAdServer(AdServerAdapter):
         supported_pricing_models=["cpm", "vcpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"],
         supports_webhooks=False,
         supports_realtime_reporting=True,
+        # Simulated server: create builds no real remote graph, so re-invoking the
+        # whole create workflow after a crash is side-effect-free (#1637). The only
+        # adapter that currently satisfies the full-replay contract.
+        supports_full_create_replay=True,
     )
 
     # Supported targeting dimensions (mock supports everything)
@@ -520,6 +524,7 @@ class MockAdServer(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        idempotency_key: str | None = None,
     ) -> CreateMediaBuyResponse:
         """Simulates the creation of a media buy using GAM-like templates.
 

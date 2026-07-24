@@ -75,7 +75,6 @@ The project has 11 pre-commit hooks that catch:
 - Route conflicts
 - SQLAlchemy 1.x patterns
 - Star imports
-- Excessive mocks in tests
 - Documentation link breakage
 - Import usage issues
 

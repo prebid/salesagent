@@ -14,6 +14,7 @@ This module handles all testing headers and provides isolated test execution:
 """
 
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -27,6 +28,36 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from src.core.tool_context import ToolContext
+
+
+_TEST_HOOKS_DEV_ENVIRONMENTS = frozenset({"development", "test"})
+
+
+def test_hooks_enabled() -> bool:
+    """Fail-CLOSED gate for the proprietary X-* test headers (#1544).
+
+    Production SUBTRACTS, it does not merely fail to add: ``is_production()``
+    is the union of both deployment conventions (``ENVIRONMENT=production`` OR
+    ``PRODUCTION=true``), and a process that matches EITHER can never honor the
+    headers — not even with ``ADCP_TEST_HOOKS_ENABLED=true``. Keying the gate
+    on ``ENVIRONMENT`` alone left ``PRODUCTION=true`` + ``ENVIRONMENT=development``
+    honoring buyer-supplied ``X-Dry-Run`` / ``X-Force-Error`` against a live
+    seller, which is precisely the two-convention divergence ``is_production()``
+    exists to close.
+
+    Absent production, the headers are honored only on explicit operator
+    opt-in: ``ENVIRONMENT`` set to a dev value (``development`` / ``test``), or
+    ``ADCP_TEST_HOOKS_ENABLED=true``. An UNSET ``ENVIRONMENT`` disables the
+    hooks — a deployment must not depend on remembering to set
+    ``ENVIRONMENT=production`` to be safe.
+    """
+    from src.core.config import is_production
+
+    if is_production():
+        return False
+    if os.getenv("ADCP_TEST_HOOKS_ENABLED", "").strip().lower() == "true":
+        return True
+    return (os.getenv("ENVIRONMENT") or "").strip().lower() in _TEST_HOOKS_DEV_ENVIRONMENTS
 
 
 def _ensure_aware(dt: datetime) -> datetime:
@@ -112,6 +143,21 @@ class AdCPTestContext(BaseModel):
         since ASGI/FastAPI normalizes headers to lowercase.
         """
         if not headers:
+            return None
+
+        # Proprietary X-* test headers (X-Dry-Run, X-Mock-Time, X-Force-Error,
+        # X-Simulated-Spend, …) are INTERNAL tooling, not an AdCP concept. The
+        # pinned sandbox guidance
+        # (dist/docs/3.1.1/media-buy/advanced-topics/sandbox.mdx — resolves
+        # @main, not at tag v3.1.1: the 3.1.1 prose snapshot was published
+        # after the tag) is explicit
+        # that sellers MUST NOT alter behavior based on these headers — the
+        # sanctioned test mode is the account-level ``sandbox``. So they are
+        # honored ONLY on explicit dev/test opt-in (fail-CLOSED: an unset
+        # ENVIRONMENT disables them), so no external MCP/A2A caller can activate
+        # dry-run / mock-time / forced errors against a live seller. #1544 (P1).
+        # spec-introduced: 3.0.0 (sandbox.mdx first per-version snapshot; absent 2.5.3)
+        if not test_hooks_enabled():
             return None
 
         # Normalize to case-insensitive lookup
@@ -686,3 +732,17 @@ def apply_testing_hooks(
         }
 
     return result
+
+
+# Startup visibility: honoring X-* test headers changes spend-committing
+# behavior, so an open gate must be loud in the process log. Import-time is
+# the right instant — every transport that honors the headers imports this
+# module at startup.
+if test_hooks_enabled():
+    logger.warning(
+        "AdCP test hooks are ENABLED (ENVIRONMENT=%r, ADCP_TEST_HOOKS_ENABLED=%r): "
+        "proprietary X-* test headers (X-Dry-Run, X-Mock-Time, X-Force-Error, ...) "
+        "will be honored. This must never be the case in a production deployment.",
+        os.getenv("ENVIRONMENT"),
+        os.getenv("ADCP_TEST_HOOKS_ENABLED"),
+    )

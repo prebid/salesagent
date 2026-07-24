@@ -187,7 +187,8 @@ def _list_creative_formats_impl(
 
     Returns formats from all registered creative agents (default + tenant-specific).
     Uses CreativeAgentRegistry for dynamic format discovery with caching.
-    Supports optional filtering by type, standard_only, category, and format_ids.
+    Supports the media-buy request's optional ID, responsive, name, asset,
+    dimension, accessibility, disclosure, and format-reference filters.
     """
     start_time = time.time()
 
@@ -361,6 +362,25 @@ def _list_creative_formats_impl(
                         types.add(str(at))
         return types
 
+    def get_disclosure_positions(f) -> set[str]:
+        """Return declared positions, preferring structured capabilities when present."""
+        capabilities = getattr(f, "disclosure_capabilities", None)
+        if capabilities:
+            return {enum_value(capability.position) for capability in capabilities}
+        return {enum_value(position) for position in getattr(f, "supported_disclosure_positions", None) or []}
+
+    def get_disclosure_persistence(f) -> set[str]:
+        """Return every persistence mode declared by structured disclosure capabilities."""
+        return {
+            enum_value(persistence)
+            for capability in getattr(f, "disclosure_capabilities", None) or []
+            for persistence in capability.persistence
+        }
+
+    def supports_all_disclosure_values(f, requested: set[str], extractor) -> bool:
+        """Require every requested disclosure capability; missing declarations are incompatible."""
+        return requested <= extractor(f)
+
     # Filter by is_responsive (AdCP filter)
     # Checks renders.dimensions.responsive per AdCP spec
     if req.is_responsive is not None:
@@ -374,7 +394,7 @@ def _list_creative_formats_impl(
     # Filter by asset_types - formats must support at least one of the requested types
     if req.asset_types:
         # Normalize requested asset types to string values for comparison.
-        # adcp 3.6.0: req.asset_types contains AssetContentType enums; use .value to get string.
+        # AdCP 3.1.1: req.asset_types contains AssetContentType enums; use .value to get string.
         # Format assets now use plain string literals, so must compare using .value not str(enum).
         requested_types = {enum_value(at) for at in req.asset_types}
         formats = [f for f in formats if get_format_asset_types(f) & requested_types]
@@ -404,6 +424,17 @@ def _list_creative_formats_impl(
             if f.accessibility is not None and _WCAG_ORDER.get(f.accessibility.wcag_level, 0) >= min_level
         ]
 
+    # Disclosure filters are AND filters by the pinned request schema: each requested
+    # position/persistence mode must be supported. Positions may use the legacy flat
+    # declaration; persistence requires structured disclosure_capabilities.
+    for requested_values, extractor in (
+        (req.disclosure_positions, get_disclosure_positions),
+        (req.disclosure_persistence, get_disclosure_persistence),
+    ):
+        if requested_values:
+            requested_disclosure_values = {enum_value(value) for value in requested_values}
+            formats = [f for f in formats if supports_all_disclosure_values(f, requested_disclosure_values, extractor)]
+
     # Filter by output_format_ids / input_format_ids (OR semantics each).
     # These $ref the same core/format-id.json schema as format_ids, so they carry
     # the same (agent_url, id) federation identity — match on the pair via
@@ -423,8 +454,12 @@ def _list_creative_formats_impl(
                 if getattr(f, attr) and {format_id_identity(fid) for fid in getattr(f, attr)} & requested
             ]
 
-    # Sort formats by name for consistent ordering
-    # (type field removed in adcp 3.12)
+    # Sort formats by name for consistent ordering.
+    # (The media-buy ListCreativeFormatsRequest — pinned
+    # dist/schemas/3.1.1/media-buy/list-creative-formats-request.json — has no
+    # `type`/FormatCategory property: it is a creative-agent-role field by design
+    # (SDK adcp-client-python#971 role boundary), so sort-by-type is not
+    # applicable in this media-buy contract — name is the sort key.)
     formats.sort(key=lambda f: f.name or "")
 
     # Ensure backward compatibility: populate both assets and assets_required

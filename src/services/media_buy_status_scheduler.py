@@ -15,12 +15,13 @@ import logging
 import os
 from datetime import UTC, datetime
 
-from sqlalchemy import select
-
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Creative, CreativeAssignment, MediaBuy
+from src.core.database.models import MediaBuy
 from src.core.database.repositories import MediaBuyRepository
-from src.core.utils import utc_flight_end, utc_flight_start
+from src.core.database.repositories.creative import CreativeAssignmentRepository
+from src.core.database.repositories.workflow import WorkflowRepository
+from src.core.logging_utils import sanitize_log_value
+from src.core.media_buy_flight import resolve_flight_window_utc
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ class MediaBuyStatusScheduler:
 
             self.is_running = True
             self._task = asyncio.create_task(self._run_scheduler())
-            logger.info(f"Media buy status scheduler started (checking every {STATUS_CHECK_INTERVAL_SECONDS}s)")
+            logger.info("Media buy status scheduler started (checking every %ss)", STATUS_CHECK_INTERVAL_SECONDS)
 
     async def stop(self) -> None:
         """Stop the scheduler background task."""
@@ -67,10 +68,13 @@ class MediaBuyStatusScheduler:
         while self.is_running:
             try:
                 await self._update_statuses()
+                # Resume any approval stranded mid-finalize by a crash (#1637). Runs
+                # after the flight-window sweep; its own errors never abort the loop.
+                await self._reconcile_finalizing_buys()
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Error in media buy status scheduler: {e}", exc_info=True)
+                logger.error("Error in media buy status scheduler: %s", sanitize_log_value(e), exc_info=True)
             finally:
                 # Wait before next check
                 await asyncio.sleep(STATUS_CHECK_INTERVAL_SECONDS)
@@ -90,20 +94,94 @@ class MediaBuyStatusScheduler:
                 )
 
                 for media_buy in media_buys:
-                    new_status = self._compute_new_status(media_buy, now, session)
-
-                    if new_status and new_status != media_buy.status:
-                        old_status = media_buy.status
-                        media_buy.status = new_status
+                    old_status = media_buy.status
+                    # Compute the target UNDER the row lock. The rows above were
+                    # loaded WITHOUT a lock, so their flight window / status may be
+                    # stale: apply_computed_status_transition takes FOR UPDATE,
+                    # refreshes every lifecycle input, and only THEN runs this
+                    # callback on the committed row. That closes the lost-update
+                    # race where a concurrent end_time extension (status still
+                    # active) would let a pre-lock "completed" decision win. The
+                    # seam bumps the AdCP 3.1.1 revision + stamps
+                    # confirmed_at on any real transition. #1544.
+                    MediaBuyRepository.apply_computed_status_transition(
+                        media_buy, lambda mb: self._compute_new_status(mb, now, session)
+                    )
+                    if media_buy.status != old_status:
                         updated_count += 1
-                        logger.info(f"Updated media buy {media_buy.media_buy_id} status: {old_status} -> {new_status}")
+                        logger.info(
+                            "Updated media buy %s status: %s -> %s",
+                            sanitize_log_value(media_buy.media_buy_id),
+                            sanitize_log_value(old_status),
+                            sanitize_log_value(media_buy.status),
+                        )
 
                 if updated_count > 0:
                     session.commit()
-                    logger.info(f"Updated {updated_count} media buy status(es)")
+                    logger.info("Updated %d media buy status(es)", updated_count)
 
         except Exception as e:
-            logger.error(f"Failed to update media buy statuses: {e}", exc_info=True)
+            logger.error("Failed to update media buy statuses: %s", sanitize_log_value(e), exc_info=True)
+
+    async def _reconcile_finalizing_buys(self) -> None:
+        """Re-drive media buys stranded in ``finalizing`` by a mid-finalize crash.
+
+        The approval finalizer claims a buy into ``finalizing`` (with a phase-2 lease)
+        and commits BEFORE the external adapter runs (#1637). If the process dies (or
+        the adapter raises unexpectedly) before the serving-status transition + step
+        terminalization, the buy is left in ``finalizing``. This pass scans for
+        RECOVERABLE strandings only — lease absent/expired (an unexpired lease means
+        a live worker owns phase 2) and ``finalize_recovery_mode IS NULL`` (buys
+        flagged ``manual_required`` are never re-touched: no hot loop) — and hands
+        each to ``resume_finalizing_media_buy``, whose lease CAS is the authoritative
+        single-winner gate and whose disposition check fail-closes non-replayable
+        adapters. Each buy is reconciled in its own transaction so one failure never
+        blocks the others.
+        """
+        from functools import partial
+
+        from src.admin.services.media_buy_completion import resume_finalizing_media_buy, workflow_step_snapshot
+        from src.core.tools.media_buy_create import adapter_supports_full_create_replay, execute_approved_media_buy
+
+        try:
+            with get_db_session() as session:
+                stranded = [
+                    (mb.tenant_id, mb.media_buy_id)
+                    for mb in MediaBuyRepository.get_finalizing_recoverable(session, datetime.now(UTC))
+                ]
+        except Exception as e:
+            logger.error("Failed to scan for stranded finalizing media buys: %s", sanitize_log_value(e), exc_info=True)
+            return
+
+        for tenant_id, media_buy_id in stranded:
+            try:
+                with get_db_session() as session:
+                    wf_repo = WorkflowRepository(session, tenant_id)
+                    mapping = wf_repo.get_latest_mapping_for_object("media_buy", media_buy_id)
+                    step = wf_repo.get_by_step_id(mapping.step_id) if mapping else None
+                    step_id = step.step_id if step else None
+                    step_data = workflow_step_snapshot(step) if step else None
+                    outcome, _ = resume_finalizing_media_buy(
+                        session,
+                        tenant_id,
+                        media_buy_id=media_buy_id,
+                        step_id=step_id,
+                        step_data=step_data,
+                        run_adapter=partial(execute_approved_media_buy, media_buy_id, tenant_id),
+                        adapter_supports_replay=partial(adapter_supports_full_create_replay, media_buy_id, tenant_id),
+                    )
+                logger.info(
+                    "Reconciled stranded finalizing media buy %s: %s",
+                    sanitize_log_value(media_buy_id),
+                    sanitize_log_value(outcome),
+                )
+            except Exception as e:
+                logger.error(
+                    "Failed to reconcile finalizing media buy %s: %s",
+                    sanitize_log_value(media_buy_id),
+                    sanitize_log_value(e),
+                    exc_info=True,
+                )
 
     def _compute_new_status(self, media_buy: MediaBuy, now: datetime, session) -> str | None:
         """Compute the new status for a media buy based on flight dates.
@@ -111,30 +189,12 @@ class MediaBuyStatusScheduler:
         Returns:
             New status string if change needed, None otherwise.
         """
-        # Get start and end times (prefer start_time/end_time over start_date/end_date)
-        start_time: datetime | None = None
-        if media_buy.start_time:
-            raw_start: datetime = media_buy.start_time
-            if raw_start.tzinfo is None:
-                start_time = raw_start.replace(tzinfo=UTC)
-            else:
-                start_time = raw_start
-        elif media_buy.start_date:
-            start_time = utc_flight_start(media_buy.start_date)  # type: ignore[arg-type]
+        # Resolve the effective UTC flight window (shared with the admin approve
+        # route and creative-review path — see resolve_flight_window_utc / #1544).
+        start_time, end_time = resolve_flight_window_utc(media_buy)
 
         if start_time is None:
             return None  # No start time defined
-
-        end_time: datetime | None = None
-        if media_buy.end_time:
-            raw_end: datetime = media_buy.end_time
-            if raw_end.tzinfo is None:
-                end_time = raw_end.replace(tzinfo=UTC)
-            else:
-                end_time = raw_end
-        elif media_buy.end_date:
-            end_time = utc_flight_end(media_buy.end_date)  # type: ignore[arg-type]
-
         if end_time is None:
             return None  # No end time defined
 
@@ -162,35 +222,35 @@ class MediaBuyStatusScheduler:
         return None
 
     def _are_creatives_approved(self, media_buy: MediaBuy, session) -> bool:
-        """Check if all creatives for a media buy are approved.
+        """Check if all ASSIGNED creatives for a media buy are approved.
 
         Returns:
-            True if no creatives assigned OR all creatives are approved.
+            True if no creatives assigned OR all assigned creatives are approved.
+
+        Shares the tenant-scoped readiness query with the admin approve gate
+        (``CreativeAssignmentRepository.creative_readiness``, #1544) but applies
+        the ACTIVATION policy (``all_assigned_approved``): a zero-assignment buy
+        can activate — some campaigns run without creatives initially. This is a
+        DELIBERATE divergence from the approve gate's ``ready_for_finalize``
+        (which HOLDS a zero-assignment buy at ``pending_creatives``): the
+        approve gate decides whether to create the ad-server order at all, while
+        this scheduler only flips an already-finalized buy to ``active`` when
+        its window opens.
+
+        Spec tension (deliberate, ungraded):
+        dist/docs/3.1.1/media-buy/specification.mdx:141 (resolves @main, not at
+        tag v3.1.1: the 3.1.1 prose snapshot was published after the tag; eight
+        files share the ``specification.mdx`` basename, so the full path matters)
+        says sellers MUST transition ``pending_start`` -> ``active`` when the
+        flight date arrives, while this check holds a buy with
+        assigned-but-unapproved creatives past that date — serving unapproved
+        creatives would be worse than a late start. Tracked with the
+        status-reconciliation follow-ups.
         """
-        # Get creative assignments for this media buy
-        stmt = select(CreativeAssignment).filter_by(tenant_id=media_buy.tenant_id, media_buy_id=media_buy.media_buy_id)
-        assignments = session.scalars(stmt).all()
-
-        if not assignments:
-            # No creatives assigned - can activate (some campaigns run without creatives initially)
-            return True
-
-        # Get all creative IDs
-        creative_ids = list({a.creative_id for a in assignments})
-
-        # Check creative statuses
-        creative_stmt = select(Creative).where(
-            Creative.tenant_id == media_buy.tenant_id,
-            Creative.creative_id.in_(creative_ids),
+        readiness = CreativeAssignmentRepository(session, media_buy.tenant_id).creative_readiness(
+            media_buy.media_buy_id
         )
-        creatives = session.scalars(creative_stmt).all()
-
-        # All creatives must be approved
-        for creative in creatives:
-            if creative.status != "approved":
-                return False
-
-        return True
+        return readiness.all_assigned_approved
 
 
 # Global singleton instance

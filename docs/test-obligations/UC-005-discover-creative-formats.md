@@ -8,16 +8,16 @@
 - **BR-UC-005-ext-a.md** -- Extension: No tenant context available
 - **BR-UC-005-ext-b.md** -- Extension: Invalid request parameters
 
-## 3.6 Upgrade Impact
+## 3.1.1 Contract Impact
 
 **Low direct impact.** UC-005 is a read-only discovery operation returning Format objects (not Creative objects). The Creative base-class bug (salesagent-goy2) does not directly affect this use case.
 
 However, UC-005 is a precondition for UC-006 (PRE-B3: "Each creative has a valid format_id referencing a known format -- see UC-005"). Broken format discovery cascades into creative sync failures.
 
-Key upgrade concerns:
-- Format schema stability: Verify `Format`, `FormatId`, `FormatCategory`, `AssetContentType`, `WcagLevel` types still match adcp 3.6.0
-- ListCreativeFormatsRequest/Response schema: Confirm field compatibility with 3.6.0 library types
-- CreativeAgentCapability enum: Confirm values unchanged in 3.6.0
+Key contract concerns:
+- Format schema stability: Verify `Format`, `FormatId`, `FormatCategory`, `AssetContentType`, `WcagLevel` types match AdCP 3.1.1
+- ListCreativeFormatsRequest/Response schema: Confirm field compatibility with the 3.1.1 library types
+- CreativeAgentCapability enum: Confirm values unchanged in 3.1.1
 
 ---
 
@@ -62,27 +62,28 @@ Source: BR-UC-005-main-mcp.md
 **Business Rule** BR-3: Formats aggregated from all registered creative agents plus adapter-specific formats
 **Priority** P1 -- aggregation correctness
 
-#### Scenario: Results sorted by format type then name (BR-4)
+#### Scenario: Results sorted by name (BR-4)
 **Obligation ID** UC-005-MAIN-MCP-04
 **Layer** behavioral
 
-**Given** the format catalog contains multiple formats of different types
+**Given** the format catalog contains multiple formats
 **When** the Buyer calls `list_creative_formats`
-**Then** results are sorted first by format type, then by name within each type
+**Then** results are sorted by name
 **And** the ordering is deterministic across repeated calls
-**Business Rule** BR-4: Results sorted by format type then name
+**Business Rule** BR-4: Deterministic results ordering
 **Priority** P2 -- ordering contract
 
-#### Scenario: Filter by format category (type)
+#### Scenario: Media-buy role omits creative-agent type filter
 **Obligation ID** UC-005-MAIN-MCP-05
 **Layer** behavioral
 
-**Given** the format catalog contains formats of type `display`, `video`, and `audio`
-**When** the Buyer calls `list_creative_formats` with `type=video`
-**Then** only formats with type `video` are returned
-**And** `display` and `audio` formats are excluded (POST-S3)
-**Business Rule** BR-1 (filter semantics)
-**Priority** P1 -- filter correctness
+**Given** the Buyer uses the media-buy `list_creative_formats` request
+**When** the request contract is inspected
+**Then** it has no `type` field
+**And** its `additionalProperties: true` extension policy remains forward-compatible
+**And** production request models ignore an extension named `type` instead of applying it as a filter
+**Business Rule** Role boundary
+**Priority** P1 -- contract correctness
 
 #### Scenario: Filter by format_ids
 **Obligation ID** UC-005-MAIN-MCP-06
@@ -192,8 +193,8 @@ Source: BR-UC-005-main-mcp.md
 **Layer** behavioral
 
 **Given** the format catalog contains diverse formats
-**When** the Buyer calls `list_creative_formats` with `type=display`, `asset_types=[image]`, `max_width=728`
-**Then** only display formats with image assets and at least one render under 728px are returned
+**When** the Buyer calls `list_creative_formats` with `asset_types=[image]`, `name_search`, and `max_width=728`
+**Then** only formats satisfying every supplied filter are returned
 **Business Rule** Multiple filters applied conjunctively
 **Priority** P2 -- combined filters
 
@@ -409,15 +410,15 @@ Source: BR-UC-005-ext-b.md
 
 ## Schema Compliance Scenarios
 
-These verify ListCreativeFormatsRequest/Response roundtrip against adcp 3.6.0 schemas.
+These verify ListCreativeFormatsRequest/Response roundtrip against AdCP 3.1.1 schemas.
 
-#### Scenario: ListCreativeFormatsResponse conforms to adcp 3.6.0 schema
+#### Scenario: ListCreativeFormatsResponse conforms to AdCP 3.1.1 schema
 **Obligation ID** UC-005-EXT-B-06
 **Layer** schema
 
 **Given** a valid `ListCreativeFormatsResponse` constructed by the system
 **When** serialized via `model_dump()`
-**Then** the output validates against adcp 3.6.0 `list-creative-formats-response.json` schema
+**Then** the output validates against AdCP 3.1.1 `list-creative-formats-response.json` schema
 **And** no extra fields are present (in strict/development mode)
 **Priority** P0 -- schema contract (adcp compliance test)
 
@@ -470,15 +471,30 @@ These verify ListCreativeFormatsRequest/Response roundtrip against adcp 3.6.0 sc
 **And** the error message indicates the array must not be empty
 **Priority** P2 -- validation error contract
 
-#### Scenario: Duplicate disclosure positions
+#### Scenario: Duplicate disclosure positions are rejected
 **Obligation ID** UC-005-EXT-B-12
 **Layer** schema
 
 **Given** the Seller Agent is operational
 **When** the Buyer calls `list_creative_formats` with duplicate values in `disclosure_positions`
-**Then** the response is an error with code `DISCLOSURE_POSITIONS_DUPLICATES`
-**And** the error message identifies the duplicate values
-**Priority** P2 -- validation error contract
+**Then** the response is an error with code `VALIDATION_ERROR`
+**And** the error message identifies duplicate values
+**Priority** P2 -- schema validation contract
+
+> AdCP 3.1.1 marks `disclosure_positions` with `uniqueItems: true`. The pinned
+> `adcp==6.6.0` codegen drops that constraint, so this repository's local BDD
+> override restores it at the request boundary. Duplicates are invalid input;
+> sellers must not silently rewrite a buyer request.
+
+#### Scenario: Duplicate disclosure persistence modes are rejected
+**Obligation ID** UC-005-EXT-B-18
+**Layer** schema
+
+**Given** the Seller Agent is operational
+**When** the Buyer calls `list_creative_formats` with duplicate values in `disclosure_persistence`
+**Then** the response is an error with code `VALIDATION_ERROR`
+**And** the error message identifies duplicate values
+**Priority** P2 -- schema validation contract
 
 #### Scenario: Empty output_format_ids array
 **Obligation ID** UC-005-EXT-B-13

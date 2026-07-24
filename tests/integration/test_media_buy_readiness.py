@@ -11,6 +11,15 @@ from sqlalchemy import delete
 from src.admin.services.media_buy_readiness_service import MediaBuyReadinessService
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy, Principal, Tenant
+from tests.factories import (
+    CreativeAssignmentFactory,
+    CreativeFactory,
+    MediaBuyFactory,
+    MediaPackageFactory,
+    PrincipalFactory,
+    TenantFactory,
+)
+from tests.harness._base import IntegrationEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -381,3 +390,56 @@ class TestMediaBuyReadinessService:
         with get_db_session() as session:
             session.execute(delete(MediaBuy).where(MediaBuy.tenant_id == test_tenant))
             session.commit()
+
+
+class _ReadinessEnv(IntegrationEnv):
+    """Bare integration env for readiness-service tests — factory-based, no patches."""
+
+    EXTERNAL_PATCHES: dict[str, str] = {}
+
+    def commit_factory_data(self):
+        """Commit the factory-built rows so the service's own session sees them."""
+        self._commit_factory_data()
+
+
+class TestReadinessCreativeCountScoping:
+    """The creative-status count is principal-scoped (composite creative key)."""
+
+    def test_sibling_principal_approved_creative_does_not_count(self, integration_db):
+        """A colliding creative_id APPROVED under a SIBLING principal must not be
+        counted toward this buy's readiness.
+
+        creatives are keyed by (tenant_id, principal_id, creative_id), and a
+        creative_id is unique only per principal. The buy's own "cr_collide" is
+        PENDING; a different principal in the same tenant has an APPROVED
+        "cr_collide". A tenant-only ``creative_id IN (...)`` lookup pulls the
+        sibling's APPROVED row into the count (creatives_approved == 1); the
+        composite match counts only the buy's own row (approved == 0). This is the
+        red oracle for that scoping — it fails on the tenant-only lookup. #1544.
+        """
+        with _ReadinessEnv() as env:
+            tenant = TenantFactory(tenant_id="readiness_scope_tenant")
+            owner = PrincipalFactory(tenant=tenant, principal_id="owner_principal")
+            sibling = PrincipalFactory(tenant=tenant, principal_id="sibling_principal")
+
+            # The buy's OWN creative is pending.
+            CreativeFactory(tenant=tenant, principal=owner, creative_id="cr_collide", status="pending_review")
+            media_buy = MediaBuyFactory(tenant=tenant, principal=owner, status="active")
+            pkg = MediaPackageFactory(media_buy=media_buy)
+            CreativeAssignmentFactory(
+                tenant_id=tenant.tenant_id,
+                creative_id="cr_collide",
+                principal_id=owner.principal_id,
+                media_buy_id=media_buy.media_buy_id,
+                package_id=pkg.package_id,
+            )
+            # A SIBLING principal owns an APPROVED creative with the SAME id.
+            CreativeFactory(tenant=tenant, principal=sibling, creative_id="cr_collide", status="approved")
+
+            env.commit_factory_data()
+            buy_id = media_buy.media_buy_id
+
+        readiness = MediaBuyReadinessService.get_readiness_state(buy_id, "readiness_scope_tenant")
+
+        assert readiness["creatives_approved"] == 0, "sibling principal's approved creative leaked into the count"
+        assert readiness["creatives_pending"] == 1

@@ -34,6 +34,7 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TRACEABILITY_PATH = PROJECT_ROOT / "docs" / "test-obligations" / "bdd-traceability.yaml"
 OUTPUT_DIR = PROJECT_ROOT / "tests" / "bdd" / "features"
+LOCAL_OVERRIDES_PATH = PROJECT_ROOT / "docs" / "test-obligations" / "bdd-local-overrides.yaml"
 
 DEFAULT_ADCP_REQ_PATH = Path(os.environ.get("ADCP_REQ_PATH", str(Path.home() / "projects" / "adcp-req")))
 
@@ -363,6 +364,107 @@ def parse_feature_file(text: str) -> Feature:
         scenarios=scenarios,
         preamble_comments=preamble_comments,
     )
+
+
+def _load_local_overrides(path: Path | None = None) -> dict[tuple[str, str], Scenario]:
+    """Load Sales Agent-owned scenario replacements for an inaccessible upstream.
+
+    Each replacement is complete compiled Gherkin (including its ``@T-`` tag),
+    so it survives an upstream merge and can be verified without the private
+    requirements checkout.  The upstream scenario remains the baseline; an
+    override is permitted only for a documented local protocol decision.
+    """
+    path = path or LOCAL_OVERRIDES_PATH
+    if not path.exists():
+        return {}
+    data = yaml.safe_load(path.read_text()) or {}
+    overrides: dict[tuple[str, str], Scenario] = {}
+    for entry in data.get("overrides", []):
+        feature = entry["feature"]
+        scenario_id = entry["scenario_id"]
+        gherkin = entry["gherkin"]
+        if not entry.get("authority") or not entry.get("reason"):
+            raise ValueError(f"local BDD override {feature}/{scenario_id} needs authority and reason")
+        parsed = parse_feature_file(f"Feature: Local override\n\n{gherkin}\n")
+        if len(parsed.scenarios) != 1:
+            raise ValueError(f"local BDD override {feature}/{scenario_id} must contain exactly one scenario")
+        scenario = parsed.scenarios[0]
+        if _extract_id_from_tags(scenario.tags) != scenario_id:
+            raise ValueError(f"local BDD override {feature}/{scenario_id} has a mismatched @T- tag")
+        key = (feature, scenario_id)
+        if key in overrides:
+            raise ValueError(f"duplicate local BDD override for {feature}/{scenario_id}")
+        overrides[key] = scenario
+    return overrides
+
+
+def _apply_local_overrides(feature_filename: str, scenarios: list[Scenario]) -> list[Scenario]:
+    """Replace merged scenarios with documented Sales Agent-owned overrides."""
+    overrides = _load_local_overrides()
+    scenario_ids = {_scenario_id(scenario) for scenario in scenarios}
+    missing = [
+        scenario_id
+        for override_feature, scenario_id in overrides
+        if override_feature == feature_filename and scenario_id not in scenario_ids
+    ]
+    if missing:
+        raise ValueError(f"local BDD override target missing from {feature_filename}: {', '.join(sorted(missing))}")
+    return [overrides.get((feature_filename, _scenario_id(scenario)), scenario) for scenario in scenarios]
+
+
+def _apply_local_overrides_to_text(feature_filename: str, text: str) -> str:
+    """Apply local replacements without reformatting unrelated generated content."""
+    overrides = _load_local_overrides()
+    targets = {
+        scenario_id: scenario
+        for (override_feature, scenario_id), scenario in overrides.items()
+        if override_feature == feature_filename
+    }
+    if not targets:
+        return text
+    lines = text.splitlines(keepends=True)
+    starts: dict[str, list[int]] = {scenario_id: [] for scenario_id in targets}
+    for index, line in enumerate(lines):
+        for scenario_id in targets:
+            if f"@{scenario_id}" in line.split():
+                starts[scenario_id].append(index)
+    missing = sorted(scenario_id for scenario_id, matches in starts.items() if not matches)
+    if missing:
+        raise ValueError(f"local BDD override target missing from {feature_filename}: {', '.join(missing)}")
+    duplicates = sorted(scenario_id for scenario_id, matches in starts.items() if len(matches) != 1)
+    if duplicates:
+        raise ValueError(f"local BDD override target duplicated in {feature_filename}: {', '.join(duplicates)}")
+    ordered = sorted(
+        ((scenario_id, matches[0]) for scenario_id, matches in starts.items()), key=lambda item: item[1], reverse=True
+    )
+    for scenario_id, start in ordered:
+        end = len(lines)
+        for index in range(start + 1, len(lines)):
+            if lines[index].startswith("  #"):
+                lookahead = lines[index + 1 : index + 5]
+                if any(candidate.startswith("  @") for candidate in lookahead):
+                    end = index
+                    break
+            if lines[index].startswith("  @") and any(
+                "Scenario" in candidate for candidate in lines[index + 1 : index + 4]
+            ):
+                end = index
+                break
+        replacement = "\n".join(_render_scenario_lines(targets[scenario_id])) + "\n\n"
+        lines[start:end] = [replacement]
+    return "".join(lines)
+
+
+def apply_local_overrides_to_compiled_features() -> None:
+    """Apply local replacements to existing compiled files without adcp-req access."""
+    overrides = _load_local_overrides()
+    touched = sorted({feature for feature, _scenario_id in overrides})
+    for feature_filename in touched:
+        path = OUTPUT_DIR / feature_filename
+        if not path.exists():
+            raise ValueError(f"compiled feature missing for local override: {feature_filename}")
+        path.write_text(_apply_local_overrides_to_text(feature_filename, path.read_text()))
+        print(f"Applied local overrides: {feature_filename}")
 
 
 # ---------------------------------------------------------------------------
@@ -792,7 +894,8 @@ def _render_feature(
 
         lines.append("")
 
-    return "\n".join(lines) + "\n", new_mappings, all_scenario_ids
+    output_text = "\n".join(lines) + "\n"
+    return _apply_local_overrides_to_text(feature_filename, output_text), new_mappings, all_scenario_ids
 
 
 # ---------------------------------------------------------------------------
@@ -1395,6 +1498,12 @@ def merge_feature(
             all_scenario_ids.add(sid)
         # LEGACY-DELETE: omit entirely
 
+    # Apply documented Sales Agent-owned replacements after the deterministic
+    # upstream/legacy merge. This is deliberately the final scenario transform:
+    # an inaccessible upstream cannot silently restore a locally-authoritative
+    # protocol decision on the next compilation.
+    merged_scenarios = _apply_local_overrides(feature_filename, merged_scenarios)
+
     # --- Render the merged file ---
     now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     out_lines: list[str] = []
@@ -1597,7 +1706,7 @@ def verify_features(adcp_req_path: Path) -> bool:
         text = source_path.read_text()
         feature = parse_feature_file(text)
         uc_key = _extract_uc_key(source_path.name)
-        expected, _new = _render_feature(feature, traceability, uc_key, source_path.name, commit_sha)
+        expected, _new, _scenario_ids = _render_feature(feature, traceability, uc_key, source_path.name, commit_sha)
         actual = output_path.read_text()
         # Compare ignoring timestamp differences in the generation stamp
         # (first two lines contain the timestamp)
@@ -1615,7 +1724,52 @@ def verify_features(adcp_req_path: Path) -> bool:
         print("\nRe-run: python scripts/compile_bdd.py --all")
         return False
 
+    # ``_render_feature`` applies overrides during ordinary compilation.  Verify
+    # the checked-in artifacts independently as well, so an override that no
+    # longer targets a compiled scenario cannot be hidden by a successful
+    # upstream freshness check.
+    if not verify_local_overrides():
+        return False
+
     print(f"All {len(feature_files)} compiled feature files are up-to-date.")
+    return True
+
+
+def verify_local_overrides() -> bool:
+    """Verify every local override is present byte-for-byte in compiled output.
+
+    This check intentionally needs no ``adcp-req`` checkout: it is the durable
+    verification path available to this repository when upstream requirements
+    are private or unavailable to the current contributor.
+    """
+    try:
+        overrides = _load_local_overrides()
+    except (ValueError, yaml.YAMLError) as exc:
+        print(f"INVALID local BDD overrides: {exc}")
+        return False
+
+    stale: list[str] = []
+    for (feature_filename, scenario_id), expected in overrides.items():
+        feature_path = OUTPUT_DIR / feature_filename
+        if not feature_path.exists():
+            stale.append(f"{feature_filename}/{scenario_id}: feature missing")
+            continue
+        actual_feature = parse_feature_file(feature_path.read_text())
+        matches = [scenario for scenario in actual_feature.scenarios if _scenario_id(scenario) == scenario_id]
+        if len(matches) != 1:
+            detail = "missing" if not matches else f"duplicated ({len(matches)} occurrences)"
+            stale.append(f"{feature_filename}/{scenario_id}: scenario {detail}")
+            continue
+        actual = matches[0]
+        if actual is None:
+            stale.append(f"{feature_filename}/{scenario_id}: scenario missing")
+        elif _render_scenario_lines(actual) != _render_scenario_lines(expected):
+            stale.append(f"{feature_filename}/{scenario_id}: scenario differs from override")
+
+    if stale:
+        print("STALE local BDD overrides:\n  " + "\n  ".join(stale))
+        return False
+    print(f"All {len(overrides)} local BDD override(s) are applied.")
     return True
 
 
@@ -1641,6 +1795,16 @@ def main() -> None:
         "--verify",
         action="store_true",
         help="Check if compiled files are up-to-date (no writes).",
+    )
+    group.add_argument(
+        "--verify-local-overrides",
+        action="store_true",
+        help="Verify Sales Agent-owned scenario overrides without requiring adcp-req access.",
+    )
+    group.add_argument(
+        "--apply-local-overrides",
+        action="store_true",
+        help="Apply Sales Agent-owned scenario overrides to current compiled features without adcp-req access.",
     )
     parser.add_argument(
         "--dry-run",
@@ -1706,6 +1870,12 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+
+    if args.verify_local_overrides:
+        sys.exit(0 if verify_local_overrides() else 1)
+    if args.apply_local_overrides:
+        apply_local_overrides_to_compiled_features()
+        sys.exit(0)
 
     adcp_req_path = args.adcp_req_path.resolve()
     if not adcp_req_path.exists():

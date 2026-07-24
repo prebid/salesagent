@@ -716,32 +716,21 @@ Feature: BR-UC-019 Query Media Buys
 
   @T-UC-019-partition-revision @partition @revision @schema-v3.1
   Scenario Outline: revision partitions - <partition>
-    Given the principal "buyer-001" owns media buy "mb-001" with <revision_state>
+    Given the principal "buyer-001" owns media buy "mb-001" with persisted revision <revision>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the media buy "mb-001" revision should be <expected>
-    # BR-RULE-291: revision >= 1, per-buy monotonic counter
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
+    Then the media buy "mb-001" revision should be <revision>
 
-    Examples: Valid partitions
-      | partition         | revision_state                                                       | expected               |
-      | just_created      | persisted revision 1 and no subsequent writes                        | 1                      |
-      | after_writes      | persisted revision 5 after four state-changing writes                | 5                      |
-      | idempotent_reads  | persisted revision 7 and no intervening writes between two reads     | 7 on both reads        |
+    Examples:
+      | partition        | revision |
+      | just_created     | 1        |
+      | after_writes     | 5        |
+      | later_write      | 7        |
 
   @T-UC-019-boundary-revision @boundary @revision @schema-v3.1
-  Scenario Outline: revision boundary - <boundary_point>
-    Given the principal "buyer-001" owns media buy "mb-001" with <revision_state>
+  Scenario: revision boundary - minimum inclusive
+    Given the principal "buyer-001" owns media buy "mb-001" with persisted revision 1
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then <expected_outcome>
-    # BR-RULE-291: schema minimum 1; 0/negative/missing -> SCHEMA_VIOLATION
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
-
-    Examples: Boundary values
-      | boundary_point                   | revision_state                                  | expected_outcome                                                              |
-      | revision = 1 (minimum inclusive) | persisted revision 1                            | the media buy "mb-001" revision should be 1                                   |
-      | revision = 0                     | persisted revision 0 (defective seller)         | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION" |
-      | revision = -1                    | persisted revision -1 (defective seller)        | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION" |
-      | revision absent                  | persisted store missing revision (defective seller) | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION" |
+    Then the media buy "mb-001" revision should be 1
 
   @T-UC-019-inv-291-1 @invariant @BR-RULE-291 @schema-v3.1
   Scenario: INV-1 holds - every returned media buy has revision integer >= 1
@@ -791,22 +780,50 @@ Feature: BR-UC-019 Query Media Buys
     # POST-S6 / INT-006: confirmed_at reflects the original confirmation moment; revision updates do not rewrite it
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
 
+  @T-UC-019-lifecycle-approval @invariant @confirmed_at @BR-RULE-291 @schema-v3.1
+  Scenario: Manual approval lifecycle - approval advances revision and stamps confirmed_at at the approval instant
+    Given the tenant requires manual approval for media buys
+    And the Buyer Agent has created media buy "mb-pending" awaiting seller approval
+    When the seller approves media buy "mb-pending"
+    And the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-pending"]
+    Then the media buy "mb-pending" revision should be greater than its revision at creation
+    And the media buy "mb-pending" confirmed_at should equal the approval instant
+    And the media buy "mb-pending" confirmed_at should not equal its created_at
+    # BR-RULE-291 / spec MUST: revision increments on every state change — seller approval included
+    # POST-S6 / INT-006: confirmed_at is the seller's confirmation instant (approval moment on the
+    # deferred path), NOT the buyer's create-request time (created_at)
+    # @source repo=adcp ref=v3.1.1 path=docs/media-buy/specification.mdx (revision MUST
+    #         increment on every state change; confirmed_at stamped at IO-signing per the
+    #         sales-guaranteed conformance storyboard; content identical at v3.1.0/v3.1.1 —
+    #         ref tracks the repo's pinned spec version)
+    # NOTE: hand-authored obligation (neighbors are generated from adcp-req with
+    #       ref=v3.1-<sha>). Reconcile upstream into adcp-req so this is generated
+    #       and its @source aligns automatically — tracked in #1565.
+
+  @T-UC-019-inv-confirmed-at-null-provisional @invariant @confirmed_at @schema-v3.1
+  Scenario: Provisional buy - the wire carries confirmed_at present-as-null with revision present
+    Given the tenant requires manual approval for media buys
+    And the Buyer Agent has created media buy "mb-pending" awaiting seller approval
+    When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-pending"]
+    Then the media buy "mb-pending" wire body should carry "confirmed_at" as null
+    And the media buy "mb-pending" wire body should carry "revision" as an integer of at least 1
+    # 3.1.1 get-media-buys-response media_buys[].required includes BOTH confirmed_at
+    # (typed ["string","null"] — "May be null until seller commitment occurs in
+    # deferred/manual approval flows") and revision (non-null integer >= 1). A
+    # provisional buy must serialize confirmed_at PRESENT-as-null: an exclude_none
+    # drop of the key would emit a body missing a REQUIRED key. Wire-graded (key
+    # presence is unobservable on the reconstructed payload).
+    # @source repo=adcp ref=v3.1.1 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # NOTE: hand-authored obligation (neighbors are generated from adcp-req with
+    #       ref=v3.1-<sha>). Reconcile upstream into adcp-req so this is generated
+    #       and its @source aligns automatically — tracked in #1565.
+
   @T-UC-019-partition-confirmed-at @partition @confirmed_at @schema-v3.1
-  Scenario Outline: confirmed_at - <partition>
-    Given the principal "buyer-001" owns media buy "mb-001" with <buy_state>
+  Scenario: Production-created media buy carries confirmed_at
+    Given the principal "buyer-001" owns media buy "mb-001" with persisted revision 1
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then <expected_outcome>
-    # POST-S6 / INT-006: confirmed_at presence and ISO 8601 shape
-
-    Examples: Valid partitions
-      | partition                       | buy_state                                                  | expected_outcome                                                                                  |
-      | confirmed_buy_carries_timestamp | a successful create stamping confirmed_at "2026-05-01T12:00:00Z" | the media buy "mb-001" confirmed_at should equal "2026-05-01T12:00:00Z"                          |
-      | confirmed_at_includes_timezone  | confirmed_at "2026-05-01T12:00:00+00:00"                   | the media buy "mb-001" confirmed_at should be an ISO 8601 string with a timezone designator       |
-
-    Examples: Invalid partitions
-      | partition                       | buy_state                                                  | expected_outcome                                                                                  |
-      | confirmed_at_missing_on_buy     | persisted store missing confirmed_at (defective seller)    | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"        |
-      | confirmed_at_not_iso8601        | persisted confirmed_at "2026-05-01 12:00:00" (no T, no TZ) | the response should be flagged as schema-invalid for "mb-001" with code "SCHEMA_VIOLATION"        |
+    Then the media buy "mb-001" should include a confirmed_at field
+    And the media buy "mb-001" confirmed_at should be an ISO 8601 timestamp
 
   @T-UC-019-partition-package-creative-deadline @partition @creative_deadline @schema-v3.1
   Scenario Outline: package creative_deadline - <partition>

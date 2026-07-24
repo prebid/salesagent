@@ -135,7 +135,9 @@ class TestMCPToolTypedSchemas:
         sig = inspect.signature(list_creative_formats)
         params = sig.parameters
 
-        # type parameter removed in adcp 3.12
+        # The media-buy list_creative_formats has no `type` parameter — `type` is a
+        # creative-agent-role field by design (SDK adcp-client-python#971 role boundary)
+        assert "type" not in params
 
         # Check format_ids uses FormatId type (alias for FormatReferenceStructuredObject in adcp 4.3)
         annotation_str = str(params["format_ids"].annotation)

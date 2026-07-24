@@ -13,6 +13,7 @@ from werkzeug.wrappers import Response
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.helpers import is_admin_production
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuthorizedProperty, PropertyTag, Tenant
 from src.core.domain_config import get_tenant_url
@@ -214,7 +215,6 @@ def _parse_and_save_properties_file(file, tenant_id: str) -> tuple[int, int, lis
 
 def _construct_agent_url(tenant_id: str, request: Any) -> str:
     """Construct the agent URL using existing tenant resolution logic."""
-    import os
 
     from src.core.database.models import Tenant
 
@@ -240,7 +240,7 @@ def _construct_agent_url(tenant_id: str, request: Any) -> str:
         logger.info(f"🏢 Tenant info - subdomain: '{subdomain}', virtual_host: '{virtual_host}'")
 
         # In production, use the existing virtual host system
-        if os.environ.get("PRODUCTION") == "true":
+        if is_admin_production():
             if virtual_host:
                 url = f"https://{virtual_host}"
                 logger.info(f"🌐 Production: using virtual_host -> {url}")
@@ -312,7 +312,7 @@ def list_authorized_properties(tenant_id: str) -> str | Response:
             logger.info("Rendering template...")
 
             # Get environment info for dev/production detection
-            is_production = os.environ.get("PRODUCTION") == "true"
+            is_production = is_admin_production()
 
             return render_template(
                 "authorized_properties_list.html",
@@ -538,7 +538,7 @@ def verify_all_properties(tenant_id: str) -> Response:
     try:
         # In production, always construct agent URL from tenant context
         # Dev overrides only allowed in development
-        is_production = os.environ.get("PRODUCTION") == "true"
+        is_production = is_admin_production()
 
         if is_production:
             # Production: ignore any dev overrides, always use tenant context
@@ -752,7 +752,7 @@ def verify_property_auto(tenant_id: str, property_id: str) -> Response:
 
         # In production, always construct agent URL from tenant context
         # Dev overrides only allowed in development
-        is_production = os.environ.get("PRODUCTION") == "true"
+        is_production = is_admin_production()
         logger.info(f"🏭 Environment: {'PRODUCTION' if is_production else 'DEVELOPMENT'}")
 
         if is_production:

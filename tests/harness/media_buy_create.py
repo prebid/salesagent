@@ -201,6 +201,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
             return real.link_workflow_to_object(**kwargs)
 
         mgr.create_context.side_effect = _create_context
+        mgr.get_or_create_context.side_effect = _get_or_create_context
         mgr.get_context.return_value = None
         mgr.get_or_create_context.side_effect = _get_or_create_context
         mgr.create_workflow_step.side_effect = _create_workflow_step
@@ -334,7 +335,18 @@ class MediaBuyCreateEnv(IntegrationEnv):
         self.mock["format_spec"].side_effect = _format_spec_side_effect
 
     def call_impl(self, **kwargs: Any) -> CreateMediaBuyResult:
-        """Call _create_media_buy_impl with real DB."""
+        """Call _create_media_buy_impl with real DB.
+
+        In e2e mode the create is realized on the LIVE SERVER instead: the
+        in-process impl reads/writes the suite DB, which the server never
+        sees, so Given plumbing built on call_impl would seed buys the
+        graded HTTP reads cannot find. This is the transport-aware setup
+        branch the ledger-retirement design prescribes
+        (docs/test-redesign/e2e-rest-ledger-retirement.md).
+        """
+        if self.e2e_config is not None:
+            return self._call_impl_via_live_server(kwargs)
+
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from src.core.transport_helpers import enrich_identity_with_account
 
@@ -348,6 +360,74 @@ class MediaBuyCreateEnv(IntegrationEnv):
 
         identity = enrich_identity_with_account(identity, req.account)
         return asyncio.run(_create_media_buy_impl(req=req, identity=identity))
+
+    def _call_impl_via_live_server(self, kwargs: dict[str, Any]) -> CreateMediaBuyResult:
+        """Realize a create on the live e2e server; return the impl-shaped result.
+
+        Drives the same REST body/parse surface the rest transport uses
+        (``build_rest_body`` / ``parse_rest_response``), so the returned
+        ``CreateMediaBuyResult`` is interchangeable with the in-process one.
+        Raises the reconstructed error like the in-process impl would. The
+        create endpoint is named explicitly — composite envs (dual/lifecycle)
+        point their graded REST_ENDPOINT elsewhere.
+        """
+        # The in-process arm neutralizes the manual-approval gate through the
+        # MOCKED adapter (manual_approval_operations=[]); the live server runs
+        # the real adapter, so realize the same auto-approve default through
+        # the shared review-mode writer — unless the scenario explicitly
+        # pinned a mode (set_review_requirement records the override).
+        if "human_review_required" not in self._tenant_overrides:
+            from src.core.database.models import Tenant
+
+            tenant_row = self._session.get(Tenant, self._tenant_id)
+            if tenant_row is not None and tenant_row.human_review_required:
+                self.set_review_requirement(tenant_row, False)
+
+        identity = kwargs.pop("identity", self.identity)
+        data = self.live_server_request(
+            "post", MediaBuyCreateEnv.REST_ENDPOINT, body=self.build_rest_body(**kwargs), identity=identity
+        )
+        return self.parse_rest_response(data)
+
+    def default_create_kwargs(self, product: Any, *, brand_domain: str = "harness-default.example") -> dict[str, Any]:
+        """The canonical default create request: 30-day flight starting tomorrow, one CPM package at 5000.0.
+
+        Single source of truth for the request shape. ``create_default_buy``
+        drives it through the synchronous arm; manual-approval steps drive the
+        same shape onto the submitted arm and keep their own status assertion.
+        """
+        from datetime import UTC, datetime, timedelta
+
+        from tests.helpers.adcp_factories import create_test_package_request_dict
+
+        start = datetime.now(UTC) + timedelta(days=1)
+        end = start + timedelta(days=30)
+        return {
+            "brand": {"domain": brand_domain},
+            "packages": [
+                create_test_package_request_dict(
+                    product_id=product.product_id,
+                    pricing_option_id="cpm_usd_fixed",
+                    budget=5000.0,
+                )
+            ],
+            "start_time": start.isoformat(),
+            "end_time": end.isoformat(),
+        }
+
+    def create_default_buy(
+        self, product: Any, *, brand_domain: str = "harness-default.example"
+    ) -> CreateMediaBuySuccess:
+        """Drive a one-package create through ``call_impl``; assert and return success.
+
+        Shared by tests that just need a persisted buy (the
+        ``default_create_kwargs`` shape) without caring about the request
+        shape. Tests exercising create parameters call ``call_impl`` directly.
+        """
+        result = self.call_impl(**self.default_create_kwargs(product, brand_domain=brand_domain))
+        created = result.response
+        assert isinstance(created, CreateMediaBuySuccess), f"create must succeed, got {type(created).__name__}"
+        return created
 
     def _flatten_request(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         """Convert a ``req=`` kwarg into the flat parameter dict the wrappers take.
@@ -380,7 +460,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
         top-level ``status``, which a plain Pydantic class can't recover.
         """
         return self._run_a2a_handler(
-            "create_media_buy", lambda **data: self.parse_rest_response(data), **self._flatten_request(kwargs)
+            "create_media_buy", lambda **data: self._parse_create_rest_response(data), **self._flatten_request(kwargs)
         )
 
     def call_mcp(self, **kwargs: Any) -> CreateMediaBuyResult:
@@ -393,11 +473,25 @@ class MediaBuyCreateEnv(IntegrationEnv):
         ``parse_rest_response`` for the success|error union discrimination.
         """
         return self._run_mcp_client(
-            "create_media_buy", lambda **data: self.parse_rest_response(data), **self._flatten_request(kwargs)
+            "create_media_buy", lambda **data: self._parse_create_rest_response(data), **self._flatten_request(kwargs)
         )
+
+    # Parse selector stashed by build_rest_body. Dispatcher-driven paths
+    # (in-process REST, RestE2EDispatcher, live_server_request callers) call
+    # build-then-parse with no routing hook in between, so the selector
+    # travels with the body build — composite envs (dual/lifecycle) point it
+    # at their update/list parsers instead of stacking per-layer boolean
+    # flags that go stale across the MRO.
+    _rest_parser: Any = None
+
+    def parse_rest_response(self, data: dict[str, Any]) -> Any:
+        """Parse a REST body with the parser selected by the last ``build_rest_body``."""
+        parser = self._rest_parser or self._parse_create_rest_response
+        return parser(data)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Build REST request body from kwargs."""
+        self._rest_parser = self._parse_create_rest_response
         kwargs.pop("identity", None)
         req = kwargs.pop("req", None)
         if req is not None:
@@ -407,7 +501,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
             return body
         return _ensure_idempotency_key(kwargs)
 
-    def parse_rest_response(self, data: dict[str, Any]) -> CreateMediaBuyResult:
+    def _parse_create_rest_response(self, data: dict[str, Any]) -> CreateMediaBuyResult:
         """Parse a flattened create_media_buy wire body back into a CreateMediaBuyResult.
 
         ``CreateMediaBuyResult`` serializes flat: the response fields plus a

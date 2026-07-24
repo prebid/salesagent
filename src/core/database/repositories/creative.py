@@ -36,6 +36,36 @@ class CreativeListResult(NamedTuple):
     total_count: int
 
 
+class CreativeReadiness(NamedTuple):
+    """Creative-approval readiness facts for one media buy (tenant-scoped).
+
+    Carries the raw facts; the two POLICIES over them live here as named
+    properties so the "what does ready mean?" decision has exactly one home:
+
+    - ``ready_for_finalize`` — the admin approve gate: a zero-assignment buy is
+      NOT ready (it holds at ``pending_creatives`` — per the AdCP
+      media-buy-status.json enum, "approved by the seller and has no creatives
+      assigned — the buyer must attach creatives via sync_creatives"; creatives
+      legitimately arrive after approval).
+    - ``all_assigned_approved`` — the activation scheduler's policy: a
+      zero-assignment buy IS ready (some campaigns run without creatives
+      initially), only assigned-but-unapproved creatives block activation.
+    """
+
+    has_assignments: bool
+    unapproved_creative_ids: list[str]
+
+    @property
+    def ready_for_finalize(self) -> bool:
+        """Admin approve gate: finalize only when creatives are assigned AND all approved."""
+        return self.has_assignments and not self.unapproved_creative_ids
+
+    @property
+    def all_assigned_approved(self) -> bool:
+        """Activation policy: every ASSIGNED creative is approved (vacuously true when none)."""
+        return not self.unapproved_creative_ids
+
+
 class CreativeRepository:
     """Tenant-scoped data access for Creative.
 
@@ -126,11 +156,16 @@ class CreativeRepository:
         # Filter out creatives without valid assets (legacy data)
         stmt = stmt.where(Creative.data["assets"].isnot(None))
 
-        # Apply media_buy_ids filter via join
+        # Apply media_buy_ids filter via join. Creatives are keyed by
+        # (tenant_id, principal_id, creative_id) — joining on creative_id alone
+        # lets another tenant's/principal's assignment row satisfy the filter,
+        # so the join carries the full composite key. #1544.
         if media_buy_ids:
             stmt = stmt.join(
                 CreativeAssignment,
-                Creative.creative_id == CreativeAssignment.creative_id,
+                (Creative.creative_id == CreativeAssignment.creative_id)
+                & (Creative.tenant_id == CreativeAssignment.tenant_id)
+                & (Creative.principal_id == CreativeAssignment.principal_id),
             ).where(CreativeAssignment.media_buy_id.in_(media_buy_ids))
 
         if status:
@@ -376,6 +411,46 @@ class CreativeAssignmentRepository:
                 )
             ).all()
         )
+
+    def creative_readiness(self, media_buy_id: str) -> CreativeReadiness:
+        """Tenant-scoped creative-approval readiness for ``media_buy_id``.
+
+        ONE query home for the "are the assigned creatives approved?" gate that
+        the workflow approve route, the operations approve route, and the
+        activation scheduler previously each open-coded — with drift on tenant
+        scoping and on the empty-assignments case. Callers pick their policy via
+        the named properties on :class:`CreativeReadiness`.
+
+        The status lookup matches the FULL composite creative key
+        ``(creative_id, tenant_id, principal_id)`` taken from each assignment —
+        a tenant-only match could resolve a colliding ``creative_id`` to ANOTHER
+        principal's row and judge readiness off its status. Only an assignment
+        whose OWN creative row is approved satisfies the gate (the composite FK
+        guarantees every assignment has such a row; a lookup miss — only
+        possible if that constraint ever relaxes — fails closed as unapproved).
+        """
+        assignments = self.get_by_media_buy(media_buy_id)
+        if not assignments:
+            return CreativeReadiness(has_assignments=False, unapproved_creative_ids=[])
+        ids_by_principal: dict[str, set[str]] = {}
+        for assignment in assignments:
+            ids_by_principal.setdefault(assignment.principal_id, set()).add(assignment.creative_id)
+        approved: set[tuple[str, str]] = set()
+        for principal_id, creative_ids in ids_by_principal.items():
+            rows = self._session.scalars(
+                select(Creative).where(
+                    Creative.tenant_id == self._tenant_id,
+                    Creative.principal_id == principal_id,
+                    Creative.creative_id.in_(sorted(creative_ids)),
+                )
+            ).all()
+            # "approved" is the ONLY creative-ready status; "active" is not a
+            # member of the creative status domain (the DB column is free-form,
+            # but no production path writes it — the schemas' CreativeStatusEnum
+            # and the pinned spec enum both lack it).
+            approved.update((principal_id, c.creative_id) for c in rows if c.status == "approved")
+        unapproved = sorted({a.creative_id for a in assignments if (a.principal_id, a.creative_id) not in approved})
+        return CreativeReadiness(has_assignments=True, unapproved_creative_ids=unapproved)
 
     def get_by_package(self, package_id: str) -> list[CreativeAssignment]:
         """Get all assignments for a package within the tenant."""

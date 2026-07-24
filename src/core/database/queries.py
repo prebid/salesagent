@@ -199,10 +199,18 @@ def get_creatives_needing_human_review(
     Returns:
         List of (Creative, CreativeReview) tuples for pending creatives
     """
-    # Get pending creatives with their latest AI review
+    # Get pending creatives with their latest AI review. Reviews are keyed by
+    # (tenant_id, principal_id, creative_id) like the creative itself, so the join
+    # carries the full composite key — matching on creative_id alone would let
+    # another tenant's/principal's review attach to this tenant's creative. #1544.
     stmt = (
         select(Creative, CreativeReview)
-        .join(CreativeReview, Creative.creative_id == CreativeReview.creative_id)
+        .join(
+            CreativeReview,
+            (Creative.creative_id == CreativeReview.creative_id)
+            & (Creative.tenant_id == CreativeReview.tenant_id)
+            & (Creative.principal_id == CreativeReview.principal_id),
+        )
         .filter(
             Creative.tenant_id == tenant_id,
             Creative.status == "pending_review",

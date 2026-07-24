@@ -26,8 +26,9 @@ Each negative case below PASSED vacuously before the fix and must FAIL
 from __future__ import annotations
 
 import pytest
+from pydantic import BaseModel
 
-from src.core.schemas import ListCreativeFormatsResponse
+from src.core.schemas import ListCreativeFormatsResponse, UpdateMediaBuySuccess
 from tests.bdd.steps.generic.then_payload import (
     then_boundary_handling_result,
     then_partition_filtering_result,
@@ -135,3 +136,22 @@ def test_response_status_completed_valid_still_passes() -> None:
 def test_response_status_non_completed_against_statusless_fails() -> None:
     with pytest.raises(AssertionError):
         then_response_status(_valid_uc005_ctx(), status="working")
+
+
+def test_response_declaring_status_cannot_fall_back_when_unset() -> None:
+    class _OptionalStatusResponse(BaseModel):
+        status: str | None = None
+        formats: list[object] = []
+
+    with pytest.raises(AssertionError, match="declares status but left it unset"):
+        then_response_status({"response": _OptionalStatusResponse()}, status="completed")
+
+
+def test_update_media_buy_legacy_unset_status_uses_completion_evidence() -> None:
+    response = UpdateMediaBuySuccess.model_construct(
+        media_buy_id="mb_legacy_statusless",
+        status=None,
+        affected_packages=[],
+    )
+
+    then_response_status({"response": response}, status="completed")

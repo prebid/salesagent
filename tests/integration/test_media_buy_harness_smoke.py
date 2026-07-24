@@ -9,12 +9,7 @@ gap by entering the real (IntegrationEnv) envs against a real DB.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-
 import pytest
-
-from src.core.schemas._base import CreateMediaBuySuccess
-from tests.helpers.adcp_factories import create_test_package_request_dict
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -35,20 +30,5 @@ class TestMediaBuyCreateEnvEntersAndSeeds:
             assert product is not None, "setup_product_chain must create a Product"
             assert pricing_option is not None, "setup_product_chain must create a PricingOption"
 
-            start = datetime.now(UTC) + timedelta(days=1)
-            end = start + timedelta(days=30)
-            result = env.call_impl(
-                brand={"domain": "harness-smoke.example"},
-                packages=[
-                    create_test_package_request_dict(
-                        product_id=product.product_id,
-                        pricing_option_id="cpm_usd_fixed",
-                        budget=5000.0,
-                    )
-                ],
-                start_time=start.isoformat(),
-                end_time=end.isoformat(),
-            )
-            created = result.response
-            assert isinstance(created, CreateMediaBuySuccess), f"create must succeed, got {type(created).__name__}"
+            created = env.create_default_buy(product, brand_domain="harness-smoke.example")
             assert created.media_buy_id is not None

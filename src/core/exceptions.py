@@ -440,6 +440,14 @@ class AdCPInvalidRequestError(AdCPValidationError):
 
 AUTH_REQUIRED_SUGGESTION = "Provide valid credentials (x-adcp-auth token)."
 
+# Canonical buyer-facing suggestions from error-code.json enumMetadata (AdCP 3.1.1):
+# each code carries its own default hint, so a VALIDATION_ERROR must not borrow
+# INVALID_REQUEST's text. Declared here (above the exception classes) so a class
+# can name its own default via ``_default_suggestion``.
+INVALID_REQUEST_SUGGESTION = "check request parameters and fix"
+VALIDATION_ERROR_SUGGESTION = "review error details and fix field values"
+POLICY_VIOLATION_SUGGESTION = "review policy requirements in the error details"
+
 
 class AdCPAuthenticationError(AdCPError):
     """Missing or invalid authentication credentials (401).
@@ -574,6 +582,11 @@ class AdCPConflictError(AdCPError):
 
     _default_status_code: ClassVar[int] = 409
     _default_error_code: ClassVar[str] = "CONFLICT"
+    # Pinned AdCP 3.1.1 error-code.json enumMetadata classifies CONFLICT as
+    # ``transient`` ("re-read the resource and retry with current state"). The
+    # installed SDK's STANDARD_ERROR_CODES table says ``correctable``, but the SDK
+    # is a cross-check, not the authority, and diverges here. Subclasses whose
+    # pinned recovery differs (ACCOUNT_AMBIGUOUS → correctable) override below (#1417, #1544).
     _default_recovery: ClassVar[RecoveryHint] = "transient"
 
 
@@ -581,8 +594,9 @@ class AdCPAccountAmbiguousError(AdCPConflictError):
     """Natural key matches multiple accounts (409, ACCOUNT_AMBIGUOUS)."""
 
     _default_error_code: ClassVar[str] = "ACCOUNT_AMBIGUOUS"
-    # ACCOUNT_AMBIGUOUS is correctable per the enum (the buyer disambiguates with
-    # an explicit account_id) — override the transient CONFLICT parent (#1417).
+    # Pinned 3.1.1 error-code.json enumMetadata: ACCOUNT_AMBIGUOUS → correctable (the buyer
+    # disambiguates by supplying the exact account), unlike the CONFLICT base which
+    # is transient. Explicit override so the base change does not leak here (#1417, #1544).
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -666,6 +680,45 @@ class AdCPServiceUnavailableError(AdCPError):
 # raise sites can use semantic names (AdCPMediaBuyNotFoundError) instead of
 # constructing Error(code="MEDIA_BUY_NOT_FOUND") inline. The boundary
 # translator runs build_two_layer_error_envelope() on the raised exception.
+
+
+def media_buy_revision_conflict(
+    media_buy_id: str,
+    *,
+    expected: int,
+    current: int,
+    context: ContextObject | dict[str, Any] | None = None,
+) -> AdCPConflictError:
+    """CONFLICT for an optimistic-concurrency revision mismatch.
+
+    AdCP 3.1.1 update-media-buy-request.json ``properties.revision``:
+    "When provided, sellers MUST reject the update with CONFLICT if the media
+    buy's current revision does not match." One definition of the error shape,
+    shared by the fast pre-adapter gate in ``_update_media_buy_impl`` and the
+    authoritative under-row-lock check in ``MediaBuyRepository``.
+    """
+    # Details use the spec's recommended CONFLICT shape
+    # (static/schemas/source/error-details/conflict.json:
+    # resource_id / expected_version / current_version) so optimistic-
+    # concurrency clients can re-read and retry generically.
+    #
+    # recovery=transient per the pinned AdCP 3.1.1 error-code.json
+    # enumMetadata for CONFLICT ("re-read the resource and retry with current
+    # state"). Equals AdCPConflictError's default; passed explicitly so the
+    # wire value is pinned at the raise site. The suggestion carries the
+    # re-read-then-retry guidance the transient classification implies.
+    return AdCPConflictError(
+        f"Revision mismatch for media buy '{media_buy_id}': request expected "
+        f"revision {expected}, current revision is {current}",
+        field="revision",
+        suggestion=(
+            f"Re-read the media buy via get_media_buys and retry the update with "
+            f"revision {current} and a fresh idempotency_key."
+        ),
+        details={"resource_id": media_buy_id, "expected_version": expected, "current_version": current},
+        recovery="transient",
+        context=context,
+    )
 
 
 class AdCPMediaBuyNotFoundError(AdCPNotFoundError):
@@ -952,6 +1005,9 @@ class AdCPMediaBuyRejectedError(AdCPError):
     _default_status_code: ClassVar[int] = 422
     _default_error_code: ClassVar[str] = "MEDIA_BUY_REJECTED"
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
+    # Same POLICY_VIOLATION hint on every surface — the synchronous tool-path wire
+    # and the async webhook artifact both read this default, so they cannot diverge.
+    _default_suggestion: ClassVar[str | None] = POLICY_VIOLATION_SUGGESTION
 
 
 class AdCPInventoryUnavailableError(AdCPError):
@@ -1024,13 +1080,6 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
     if serialized_context is not None:
         envelope["context"] = serialized_context
     return envelope
-
-
-# Canonical buyer-facing suggestions from error-code.json enumMetadata (AdCP 3.1.1):
-# each code carries its own default hint, so a VALIDATION_ERROR must not borrow
-# INVALID_REQUEST's text.
-INVALID_REQUEST_SUGGESTION = "check request parameters and fix"
-VALIDATION_ERROR_SUGGESTION = "review error details and fix field values"
 
 
 def first_validation_error_field(validation_error: ValidationError) -> str | None:

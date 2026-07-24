@@ -163,10 +163,19 @@ def get_gam_oauth_config() -> GAMOAuthConfig:
 def is_production() -> bool:
     """Check if running in production environment.
 
+    A deployment is treated as production if EITHER convention marks it so:
+    ``ENVIRONMENT=production`` OR ``PRODUCTION=true``. Historically the codebase
+    used both independently — the test-header gate keyed on ENVIRONMENT while the
+    admin auth/cookie gates keyed on PRODUCTION — so a deploy that set only one
+    could diverge. Taking the union is the safe direction: setting EITHER var
+    correctly detects production; it only ever ADDS production-detection.
+
     Returns:
-        bool: True if ENVIRONMENT=production, False otherwise
+        bool: True if ENVIRONMENT=production or PRODUCTION=true, False otherwise
     """
-    return os.getenv("ENVIRONMENT", "development").lower() == "production"
+    if os.getenv("ENVIRONMENT", "development").lower() == "production":
+        return True
+    return os.getenv("PRODUCTION", "").lower() == "true"
 
 
 def get_pydantic_extra_mode() -> Literal["ignore", "forbid"]:

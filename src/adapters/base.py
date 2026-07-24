@@ -148,6 +148,48 @@ class AdapterCapabilities:
     supports_webhooks: bool = False  # Supports webhook notifications
     supports_realtime_reporting: bool = False  # Supports real-time delivery reporting
 
+    # Crash-recovery contract (#1637): True ONLY if the adapter's ENTIRE create
+    # workflow — order creation, per-package line items, creative associations,
+    # AND order approval — is idempotent / safely re-invocable after a crash at
+    # any point. Order-name dedup alone does NOT qualify (a crash mid-graph would
+    # duplicate line items on re-invocation), so GAM and every other real ad
+    # server stay False: the approval reconciler will never auto-re-run their
+    # create after the adapter may have started mutating remote state (the buy is
+    # flagged for manual reconciliation instead). Upgrade path: a
+    # ``resume_or_reconcile_media_buy(operation_key, ...)`` adapter operation
+    # that finds/reuses the deterministic order, each package's deterministic
+    # line item, resumes missing creative associations, and makes approval
+    # repeatable — when an adapter implements and proves that, it may flip this
+    # to True. Only the mock adapter (simulated server, no real remote graph)
+    # currently qualifies.
+    supports_full_create_replay: bool = False
+
+
+class AdapterIdempotencyUncertain(Exception):
+    """The adapter could not determine whether remote state already exists (#1637).
+
+    STRICT CONTRACT: an adapter may raise this ONLY while it is still certain that
+    NO remote mutation has occurred (e.g. a pre-create existence lookup failed).
+    The approval finalizer relies on that guarantee to keep the media buy in the
+    AUTOMATIC recovery path — the claim stays ``finalizing`` with the
+    adapter-invoked marker cleared, and the reconciler simply re-attempts later.
+    Raising it after any remote write would break exactly-once recovery.
+    """
+
+
+class AdapterPostMutationIncomplete(Exception):
+    """Remote mutations HAVE occurred but the create workflow did not complete (#1637).
+
+    The inverse contract of :class:`AdapterIdempotencyUncertain`: raised when the
+    remote order was created (and possibly persisted) but a LATER stage failed —
+    creative upload, order approval, id persistence. The approval finalizer must
+    NOT map this to a terminal ``failed`` that erases the finalization state (that
+    would leave a dangling partial remote graph with no reconciliation signal):
+    instead the buy stays ``finalizing`` with the adapter-invoked marker intact and
+    ``finalize_recovery_mode='manual_required'``, surfacing the partial graph to an
+    operator exactly like a crash-after-marker stranding.
+    """
+
 
 class BaseConnectionConfig(BaseModel):
     """Base schema for adapter connection configuration."""
@@ -400,6 +442,7 @@ class AdServerAdapter(ABC):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        idempotency_key: str | None = None,
     ) -> CreateMediaBuyResponse:
         """Creates a new media buy on the ad server from selected packages.
 
@@ -410,6 +453,11 @@ class AdServerAdapter(ABC):
             end_time: Campaign end time
             package_pricing_info: Optional validated pricing information per package (AdCP PR #88)
                 Maps package_id → {pricing_model, rate, currency, is_fixed, bid_price}
+            idempotency_key: Optional stable key that lets an adapter derive a
+                deterministic remote resource name so a retry reuses (rather than
+                duplicates) an already-created remote object (#1637). Callers pass
+                the persisted ``media_buy_id`` on the approval-replay path; adapters
+                that do not need it may ignore it.
 
         Returns:
             CreateMediaBuyResponse with media buy details
@@ -483,7 +531,18 @@ class AdServerAdapter(ABC):
         budget: int | None,
         today: datetime,
     ) -> UpdateMediaBuyResponse:
-        """Updates a media buy with a specific action."""
+        """Updates a media buy with a specific action.
+
+        Bounded-execution contract (#1544): ``update_media_buy`` runs inside the
+        update tool's Unit of Work while a ``FOR UPDATE`` row lock is held, so an
+        unbounded ad-server call would pin that lock (and its DB connection) until
+        the TCP stack gives up. Implementations MUST bound every outbound network
+        call with a connect+read timeout (see
+        :data:`src.adapters.constants.ADAPTER_HTTP_TIMEOUT`, or the client's
+        equivalent) so the call raises in-thread within the bound; the tool then
+        rolls back and releases the lock cleanly. The same applies to
+        :meth:`create_media_buy` and any other method that reaches the ad server.
+        """
         pass
 
     def get_config_ui_endpoint(self) -> str | None:

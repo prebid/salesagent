@@ -1124,8 +1124,12 @@ class TestCreateMediaBuyStatusDetermination:
     def test_pending_when_missing_creatives(self):
         """UC-002-ST04: no creatives -> pending_creatives.
 
-        Spec: CONFIRMED -- media-buy-status.json: pending_creatives = "Media buy awaiting creative assets"
-        https://github.com/adcontextprotocol/adcp/blob/main/schemas/enums/media-buy-status.json
+        Spec: CONFIRMED -- media-buy-status.json enum, pending_creatives:
+        "approved by the seller and has no creatives assigned — the buyer must
+        attach creatives via sync_creatives". (The shorter paraphrase "awaiting
+        creative assets" is from create-media-buy-response.json's
+        media_buy_status description, not the enum file.)
+        https://github.com/adcontextprotocol/adcp/blob/main/dist/schemas/3.1.1/enums/media-buy-status.json
         Covers: UC-002-MAIN-21
         """
         from src.core.tools.media_buy_create import _determine_media_buy_status
@@ -1646,6 +1650,25 @@ class TestCreateMediaBuyAdapterInteraction:
             assert status == "completed"
             assert response.media_buy_id is not None
             assert response.media_buy_id.startswith("dry_run_")
+            # 3.1.1 create-media-buy-response.json oneOf[0] (CreateMediaBuySuccess)
+            # required = [media_buy_id, confirmed_at, revision, packages], so the
+            # simulated success arm must be CONFORMANT, not thin:
+            #   revision == 1  — correct initial value of a would-be-fresh buy
+            #                    (schema: integer, minimum=1).
+            #   confirmed_at is None on the model (a simulation commits nothing) but,
+            #                    because confirmed_at is a REQUIRED nullable field
+            #                    (["string","null"]), the sandbox serializer emits it
+            #                    as null on the wire so the required key is present.
+            # #1544.
+            assert response.revision == 1
+            assert response.confirmed_at is None
+            # Wire body: confirmed_at MUST be present-with-null (not omitted by
+            # exclude_none) and revision MUST serialize as 1.
+            wire = response.model_dump(mode="json")
+            assert "confirmed_at" in wire
+            assert wire["confirmed_at"] is None
+            assert wire["revision"] == 1
+            assert wire["sandbox"] is True
 
 
 # ===========================================================================
@@ -1713,6 +1736,7 @@ class TestUpdateMediaBuySchemaCompliance:
             status=MediaBuyStatus.active,
             currency="USD",
             total_budget=5000.0,
+            revision=1,
             packages=[],
         )
         dumped = mb.model_dump()
@@ -4131,6 +4155,10 @@ class TestGetMediaBuysStatusComputation:
             updated_at=None,
             status=status,
             is_paused=is_paused,
+            # PR1544 fields — required (no dataclass defaults, by design): the
+            # status-computation tests don't exercise them, so fixed values suffice.
+            confirmed_at=None,
+            revision=1,
         )
 
     def test_active_persisted_before_flight_refines_to_pending_start(self):
@@ -4248,6 +4276,7 @@ class TestGetMediaBuysResponseShape:
                     status=MediaBuyStatus.active,
                     currency="USD",
                     total_budget=5000.0,
+                    revision=1,
                     packages=[
                         GetMediaBuysPackage(package_id="pkg_1"),
                     ],
@@ -4274,6 +4303,7 @@ class TestGetMediaBuysResponseShape:
                     status=MediaBuyStatus.active,
                     currency="USD",
                     total_budget=5000.0,
+                    revision=1,
                     packages=[
                         GetMediaBuysPackage(package_id="pkg_1", budget=2500.0, product_id="p1"),
                         GetMediaBuysPackage(package_id="pkg_2", budget=2500.0, product_id="p2"),

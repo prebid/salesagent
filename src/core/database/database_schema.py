@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS media_buys (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     approved_at TIMESTAMPTZ,
+    confirmed_at TIMESTAMPTZ,
     approved_by VARCHAR(255),
     raw_request JSONB NOT NULL,
     FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id) ON DELETE CASCADE,

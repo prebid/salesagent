@@ -16,19 +16,15 @@ from src.core.schemas._base import GetMediaBuysRequest, GetMediaBuysResponse
 from tests.harness._base import IntegrationEnv
 
 
-class MediaBuyListEnv(IntegrationEnv):
-    """Integration test environment for _get_media_buys_impl.
+class MediaBuyListDispatchMixin:
+    """get_media_buys dispatch shared by MediaBuyListEnv and MediaBuyLifecycleEnv.
 
-    No patches — list is read-only, no external service calls.
+    Provides the four transport bodies as ``_call_list_*`` / ``_*_list_rest_*``
+    so a composite env (create + update + get) can route to them without
+    duplicating the dispatch logic.
     """
 
-    EXTERNAL_PATCHES: dict[str, str] = {}
-    REST_ENDPOINT = "/api/v1/media-buys/query"
-
-    def _configure_mocks(self) -> None:
-        """No mocks needed for read-only list operation."""
-
-    def call_impl(self, **kwargs: Any) -> GetMediaBuysResponse:
+    def _call_list_impl(self, **kwargs: Any) -> GetMediaBuysResponse:
         """Call _get_media_buys_impl with real DB."""
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
@@ -42,33 +38,61 @@ class MediaBuyListEnv(IntegrationEnv):
 
         return _get_media_buys_impl(req=req, identity=identity, include_snapshot=include_snapshot)
 
-    def call_a2a(self, **kwargs: Any) -> Any:
+    def _call_list_a2a(self, **kwargs: Any) -> Any:
         """Dispatch get_media_buys through the REAL A2A pipeline (on_message_send).
 
         The production A2A path is ``_handle_get_media_buys_skill`` —
         ``get_media_buys_raw`` has ZERO production callers, so dispatching to it
         here gave false confidence (#1417): a boundary fix on the raw
         wrapper made 'A2A' tests green while the real skill handler still
-        leaked bare ValidationErrors.
+        leaked bare ValidationErrors. Named ``_call_list_*`` (HEAD convention) so
+        MediaBuyListEnv / MediaBuyLifecycleEnv can route to it via their public
+        ``call_a2a`` wrappers.
         """
         return self._run_a2a_handler("get_media_buys", GetMediaBuysResponse, **kwargs)
 
-    def call_mcp(self, **kwargs: Any) -> Any:
-        """Call get_media_buys MCP wrapper."""
-        from src.core.tools.media_buy_list import get_media_buys
+    def _call_list_mcp(self, **kwargs: Any) -> Any:
+        """Dispatch get_media_buys through the real FastMCP client pipeline."""
+        return self._run_mcp_client("get_media_buys", GetMediaBuysResponse, **kwargs)
 
-        return self._run_mcp_wrapper(get_media_buys, GetMediaBuysResponse, **kwargs)
-
-    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+    def _build_list_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to GetMediaBuysBody shape for REST POST."""
         body: dict[str, Any] = {}
-        for key in ("media_buy_ids", "status_filter", "account_id", "context"):
+        for key in ("media_buy_ids", "status_filter", "account", "context"):
             if key in kwargs and kwargs[key] is not None:
                 body[key] = kwargs[key]
         if kwargs.get("include_snapshot"):
             body["include_snapshot"] = True
         return body
 
-    def parse_rest_response(self, data: dict[str, Any]) -> GetMediaBuysResponse:
+    def _parse_list_rest_response(self, data: dict[str, Any]) -> GetMediaBuysResponse:
         """Parse REST response JSON."""
         return GetMediaBuysResponse(**data)
+
+
+class MediaBuyListEnv(MediaBuyListDispatchMixin, IntegrationEnv):
+    """Integration test environment for _get_media_buys_impl.
+
+    No patches — list is read-only, no external service calls.
+    """
+
+    EXTERNAL_PATCHES: dict[str, str] = {}
+    REST_ENDPOINT = "/api/v1/media-buys/query"
+
+    def _configure_mocks(self) -> None:
+        """No mocks needed for read-only list operation."""
+
+    def call_impl(self, **kwargs: Any) -> GetMediaBuysResponse:
+        return self._call_list_impl(**kwargs)
+
+    def call_a2a(self, **kwargs: Any) -> Any:
+        return self._call_list_a2a(**kwargs)
+
+    def call_mcp(self, **kwargs: Any) -> Any:
+        return self._call_list_mcp(**kwargs)
+
+    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        return self._build_list_rest_body(**kwargs)
+
+    def parse_rest_response(self, data: dict[str, Any]) -> GetMediaBuysResponse:
+        return self._parse_list_rest_response(data)

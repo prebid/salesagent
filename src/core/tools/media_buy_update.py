@@ -50,11 +50,13 @@ from src.core.exceptions import (
     AdCPGoneError,
     AdCPInvalidRequestError,
     AdCPValidationError,
+    media_buy_revision_conflict,
 )
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
+from src.adapters.constants import MEDIA_BUY_UPDATE_IDLE_TX_TIMEOUT
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
     require_identity,
@@ -107,6 +109,23 @@ from src.services.targeting_capabilities import (
 )
 
 
+def _require_current_buy(mb: MediaBuy | None) -> MediaBuy:
+    """The post-mutation buy re-read from the DB, guaranteed present.
+
+    Every update response site runs after ``_verify_principal`` has already
+    raised MEDIA_BUY_NOT_FOUND for a missing buy, so a ``None`` here is an
+    internal invariant violation — we raise rather than fabricate a fallback.
+    Callers read ``revision`` and ``status`` off the returned (non-optional)
+    row: a defaulted revision could report a token *regression* (a later read
+    returning a lower value than an earlier one), which an optimistic-concurrency
+    counter must never do, and a defaulted ``""`` status would advertise a
+    graceful path that does not exist.
+    """
+    if mb is None:
+        raise RuntimeError("update response built with no media buy — the buy must exist post-mutation")
+    return mb
+
+
 def _adcp_status_and_actions(
     buy: "MediaBuy | None", today: date | None = None, *, fallback_status: str | None = None
 ) -> tuple[MediaBuyStatus | None, list[str]]:
@@ -115,8 +134,8 @@ def _adcp_status_and_actions(
     Routes through ``get_media_buys``' ``_compute_status`` (``resolve_canonical_status``
     + the delivery-only ``failed`` -> ``rejected`` mapping) so the update-response
     ``media_buy_status`` agrees with ``get_media_buys`` for the same buy and reference
-    date — the two surfaces must describe one buy identically (the 8plg agreement;
-    salesagent-109m). A past-end serving buy therefore reports ``completed`` on both,
+    date — the two surfaces must describe one buy identically (status-parity
+    agreement, PR #1544). A past-end serving buy therefore reports ``completed`` on both,
     not the un-refined persisted ``active`` (the status scheduler that transitions the
     column may lag behind the flight window).
 
@@ -407,8 +426,50 @@ def _update_media_buy_impl(
             # ``AdCPGoneError`` carries the spec-mandated ``INVALID_STATE`` code
             # for both terminal states and disallowed actions — see
             # ``adcp.server.helpers.MEDIA_BUY_STATE_MACHINE`` for the source of truth.
-            _current_mb = uow.media_buys.get_by_id(media_buy_id_to_use)
+            # Optimistic-concurrency gate — AdCP 3.1.1
+            # update-media-buy-request.json properties.revision: "When
+            # provided, sellers MUST reject the update with CONFLICT if the
+            # media buy's current revision does not match." (Schema-optional
+            # field; graded by T-UC-003-partition-revision /
+            # boundary-revision; no conformance storyboard step — ungraded.)
+            # Acquire the authoritative row lock before any workflow or adapter
+            # side effect. The lock is held by this UoW until commit, so two
+            # same-token requests cannot both reach the adapter. lock_timeout
+            # bounds the WAITER; idle_in_transaction_session_timeout bounds the
+            # HOLDER — a hung adapter (SOAP/GAM, or one that forgot its client
+            # timeout) sits idle-in-transaction holding this lock, and the bound
+            # releases it instead of pinning the row indefinitely. Both live in
+            # the repository — the lock policy is a data-access concern, kept out
+            # of this transport-agnostic _impl. #1544.
+            _current_mb = uow.media_buys.get_by_id(
+                media_buy_id_to_use,
+                for_update=True,
+                populate_existing=True,
+                lock_timeout_seconds=5,
+                idle_in_transaction_timeout_seconds=MEDIA_BUY_UPDATE_IDLE_TX_TIMEOUT,
+                context=req.context,
+            )
             _current_status = _current_mb.status if _current_mb else ""
+            # Precedence: the revision-conflict gate runs BEFORE the terminal-state
+            # gate. Two separate things:
+            #   * Spec fact — the pinned update-media-buy-request schema
+            #     ``properties.revision`` says sellers MUST reject an update with
+            #     CONFLICT when the supplied revision does not match.
+            #   * Project decision — the spec does NOT specify precedence when a buy
+            #     is BOTH stale-revision AND terminal. We run the CONFLICT check
+            #     first so the buyer gets the refetch-and-retry recovery CONFLICT
+            #     signals: CONFLICT carries ``recovery="transient"`` plus the
+            #     expected/current revisions, which feeds the re-read-and-retry loop
+            #     the buyer already implements — it then sees the terminal state and
+            #     stops for the right reason. Running the terminal gate first would
+            #     mask the stale write as INVALID_STATE and drop the version detail.
+            #     #1544.
+            if req.revision is not None and _current_mb is not None:
+                _persisted_revision = _current_mb.revision
+                if req.revision != _persisted_revision:
+                    raise media_buy_revision_conflict(
+                        req.media_buy_id, expected=req.revision, current=_persisted_revision, context=req.context
+                    )
             if is_terminal_status(_current_status):
                 raise AdCPGoneError(
                     f"Cannot update media buy in terminal state: {_current_status}",
@@ -543,7 +604,7 @@ def _update_media_buy_impl(
 
                 # Look up current status for valid_actions (date-refined for
                 # parity with get_media_buys — see _adcp_status_and_actions).
-                _dry_run_mb = uow.media_buys.get_by_id(req.media_buy_id)
+                _dry_run_mb = _require_current_buy(uow.media_buys.get_by_id(req.media_buy_id))
 
                 # Build simulated response.
                 # The wire status="completed" is KEPT for dry_run and is
@@ -559,6 +620,8 @@ def _update_media_buy_impl(
                 _dry_run_mbs, _dry_run_actions = _adcp_status_and_actions(_dry_run_mb)
                 dry_run_response = UpdateMediaBuySuccess(
                     media_buy_id=req.media_buy_id or "",
+                    # dry-run: nothing persisted — echo the current revision
+                    revision=_dry_run_mb.revision,
                     media_buy_status=_dry_run_mbs,  # AdCP 3.1: mirrors `status`
                     affected_packages=simulated_affected,
                     valid_actions=_dry_run_actions,
@@ -725,18 +788,27 @@ def _update_media_buy_impl(
                     media_buy_id = getattr(result, "media_buy_id", req.media_buy_id or "")
                     affected_pkgs = getattr(result, "affected_packages", [])
 
-                    # Derive post-action status from the DB (date-refined for parity
-                    # with get_media_buys — see _adcp_status_and_actions) so
-                    # valid_actions reflects what the buyer can actually do next.
-                    # Fall back to the current state-machine target only if the DB
-                    # row is missing (e.g., adapter deleted it under us) — no row
-                    # means no dates to refine.
-                    _post_action_mb = uow.media_buys.get_by_id(req.media_buy_id)
+                    # A successful pause/resume is a mutation — bump the
+                    # persisted revision so the token advances (parity with the
+                    # package-level pause path, which already bumps).
+                    # bump_revision_or_raise loads FOR UPDATE, bumps, and raises
+                    # on a vanished row (a missing buy here is an internal
+                    # invariant violation — _verify_principal already proved it
+                    # exists); derive the post-action status from that same row
+                    # (date-refined for parity with get_media_buys — see
+                    # _adcp_status_and_actions) so valid_actions reflects what the
+                    # buyer can actually do next.
+                    _post_action_mb = uow.media_buys.bump_revision_or_raise(
+                        req.media_buy_id, expected_revision=req.revision, context=req.context
+                    )
                     _post_action_mbs, _post_action_actions = _adcp_status_and_actions(
                         _post_action_mb, fallback_status=("paused" if req.paused else "active")
                     )
                     success_response = UpdateMediaBuySuccess(
                         media_buy_id=media_buy_id,
+                        # Current persisted revision for this buy. bump_revision_or_raise
+                        # returns the non-optional locked row, so read it directly.
+                        revision=_post_action_mb.revision,
                         media_buy_status=_post_action_mbs,  # AdCP 3.1: mirrors `status`
                         affected_packages=affected_pkgs,
                         valid_actions=_post_action_actions,
@@ -758,6 +830,15 @@ def _update_media_buy_impl(
                     )
                     ctx_manager.audit_workflow_step_result(step.step_id, success_response)
                     return UpdateMediaBuyResult(response=success_response, status=AdcpTaskStatus.completed.value)
+
+            # Every column mutation from this update is staged here and applied
+            # with a SINGLE update_fields() call at the end of the flow, so one
+            # accepted update bumps the persisted revision exactly once (AdCP 3.1.1
+            # revision is a per-resource version token). Intra-update status
+            # transitions (draft → pending_creatives on creative assignment)
+            # stage into this dict rather than writing ``.status`` directly —
+            # see #1544 and the guard test_architecture_media_buy_status_writes.
+            pending_field_updates: dict[str, Any] = {}
 
             # Handle package-level updates
             if req.packages:
@@ -946,7 +1027,7 @@ def _update_media_buy_impl(
                             and media_buy_obj.status == "draft"
                             and media_buy_obj.approved_at is not None
                         ):
-                            media_buy_obj.status = "pending_creatives"
+                            pending_field_updates["status"] = "pending_creatives"
                             logger.info(
                                 f"[UPDATE] Media buy {actual_media_buy_id} transitioned from draft to pending_creatives "
                                 f"(creative_ids: {pkg_update.creative_ids})"
@@ -1182,7 +1263,7 @@ def _update_media_buy_impl(
                             and media_buy_obj.status == "draft"
                             and media_buy_obj.approved_at is not None
                         ):
-                            media_buy_obj.status = "pending_creatives"
+                            pending_field_updates["status"] = "pending_creatives"
                             logger.info(
                                 f"[UPDATE] Media buy {actual_media_buy_id} transitioned from draft to pending_creatives "
                                 f"(creative_assignments processed: {updated_assignments})"
@@ -1240,6 +1321,15 @@ def _update_media_buy_impl(
                             )
                         )
 
+            # Package-level changes above persist directly on the session
+            # (package_config writes, creative assignment rows, adapter
+            # pause/resume) and never pass through update_fields — track whether
+            # any occurred so the single bump below also covers a package-only
+            # update (pending_field_updates is staged from the top of the flow).
+            package_level_changed = bool(
+                req.packages and (affected_packages_list or any(pkg.paused is not None for pkg in req.packages))
+            )
+
             # Handle budget updates (handle both float and Budget object)
             if req.budget is not None:
                 # Extract budget amount - handle both float and Budget object
@@ -1278,9 +1368,10 @@ def _update_media_buy_impl(
                 # This creates data inconsistency between our database and GAM
                 # Need to implement: adapter.orders_manager.update_order_budget(order_id, total_budget)
 
-                # Persist top-level budget update to database via repository
+                # Stage the top-level budget update; persisted with one bump below.
                 if req.budget:
-                    uow.media_buys.update_fields(req.media_buy_id, budget=total_budget, currency=budget_currency)
+                    pending_field_updates["budget"] = total_budget
+                    pending_field_updates["currency"] = budget_currency
                     logger.warning(
                         f"Updated MediaBuy {req.media_buy_id} budget to {total_budget} {budget_currency} in database ONLY"
                     )
@@ -1362,12 +1453,26 @@ def _update_media_buy_impl(
                             context=req.context,
                         )
 
-                    uow.media_buys.update_fields(req.media_buy_id, **update_values)
+                    pending_field_updates.update(update_values)
                     logger.warning(
                         f"Updated MediaBuy {req.media_buy_id} dates in database ONLY: "
                         f"start_time={update_values.get('start_time')}, end_time={update_values.get('end_time')}"
                     )
                     logger.warning("GAM sync NOT implemented - GAM still has old dates")
+
+            # Apply every accumulated column update in a single revision bump.
+            # update_fields() bumps once and covers any concurrent package-level
+            # change; if ONLY package-level changes occurred (no column updates),
+            # bump once directly. Exactly one increment per accepted update — see
+            # #1544.
+            if pending_field_updates:
+                uow.media_buys.update_fields_or_raise(
+                    req.media_buy_id, expected_revision=req.revision, context=req.context, **pending_field_updates
+                )
+            elif package_level_changed:
+                uow.media_buys.bump_revision_or_raise(
+                    req.media_buy_id, expected_revision=req.revision, context=req.context
+                )
 
             # Create ObjectWorkflowMapping to link media buy update to workflow step
             # This enables webhook delivery when the update completes
@@ -1387,10 +1492,13 @@ def _update_media_buy_impl(
             # - AdCP-required fields (package_id) for spec compliance
             # - Internal tracking fields (buyer_package_ref, changes_applied) excluded via exclude=True
 
-            _final_mb = uow.media_buys.get_by_id(req.media_buy_id)
+            _final_mb = _require_current_buy(uow.media_buys.get_by_id(req.media_buy_id))
             _final_mbs, _final_actions = _adcp_status_and_actions(_final_mb)
             final_response = UpdateMediaBuySuccess(
                 media_buy_id=req.media_buy_id or "",
+                # Persisted revision after this update's mutations (bumped by
+                # update_fields / bump_revision above).
+                revision=_final_mb.revision,
                 media_buy_status=_final_mbs,  # AdCP 3.1: mirrors `status`
                 affected_packages=affected_packages_list,
                 valid_actions=_final_actions,
@@ -1439,6 +1547,7 @@ def _build_update_request(
     reporting_webhook: Any = None,
     ext: Any = None,
     idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
+    revision: int | None = None,
 ) -> UpdateMediaBuyRequest:
     """Build UpdateMediaBuyRequest from flat parameters.
 
@@ -1494,7 +1603,14 @@ def _build_update_request(
         request_params["ext"] = ext
     if idempotency_key is not None:
         request_params["idempotency_key"] = idempotency_key
+    if revision is not None:
+        request_params["revision"] = revision
 
+    # The ONE sanctioned ValidationError→AdCPValidationError translation point
+    # (#1417): a schema-invalid update request (e.g. revision below its minimum)
+    # emits VALIDATION_ERROR with the error.json top-level suggestion + field.
+    # PR1544's earlier INVALID_REQUEST variant was reverted on merge to comply
+    # with the no-handrolled-boundary guard.
     with adcp_validation_boundary(context="update_media_buy request"):
         req = UpdateMediaBuyRequest(**request_params)
 
@@ -1537,6 +1653,10 @@ async def update_media_buy(
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
+    revision: Annotated[
+        int | None,
+        Field(description="Expected current revision for optimistic concurrency (CONFLICT on mismatch)"),
+    ] = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Update a media buy with campaign-level and/or package-level changes.
@@ -1563,6 +1683,7 @@ async def update_media_buy(
         reporting_webhook: Webhook configuration for automated reporting delivery (optional, per AdCP spec)
         ext: Extension object for custom fields (optional, per AdCP spec)
         idempotency_key: Idempotency key for retry safety (optional, per AdCP spec)
+        revision: Expected current revision for optimistic concurrency — CONFLICT on mismatch (optional, per AdCP spec)
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -1587,6 +1708,7 @@ async def update_media_buy(
         reporting_webhook=reporting_webhook,
         ext=ext,
         idempotency_key=idempotency_key,
+        revision=revision,
     )
     # Read identity and context_id pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
@@ -1616,6 +1738,7 @@ def update_media_buy_raw(
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     idempotency_key: str | None = None,  # AdCP idempotency key for retry safety
+    revision: int | None = None,  # AdCP optimistic-concurrency token (CONFLICT on mismatch)
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -1642,6 +1765,7 @@ def update_media_buy_raw(
         reporting_webhook: Webhook configuration for automated reporting delivery
         ext: Extension object for custom fields (optional, per AdCP spec)
         idempotency_key: Idempotency key for retry safety (optional, per AdCP spec)
+        revision: Expected current revision for optimistic concurrency — CONFLICT on mismatch (optional, per AdCP spec)
         ctx: Context for authentication (deprecated, use identity)
         identity: Pre-resolved identity (if available)
 
@@ -1665,6 +1789,7 @@ def update_media_buy_raw(
         reporting_webhook=reporting_webhook,
         ext=ext,
         idempotency_key=idempotency_key,
+        revision=revision,
     )
     if identity is None:
         identity = resolve_identity_from_context(ctx, require_valid_token=True)

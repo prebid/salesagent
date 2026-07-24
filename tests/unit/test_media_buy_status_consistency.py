@@ -171,6 +171,7 @@ class TestAdcpProjectionAgreesWithCanonicalMap:
         "pending_approval": "pending_start",
         "pending_creatives": "pending_creatives",
         "pending_start": "pending_start",
+        "finalizing": "pending_start",  # transient crash-recoverable claim (#1637)
     }
 
     def test_expected_rows_cover_the_canonical_key_universe(self):

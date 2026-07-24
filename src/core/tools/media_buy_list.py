@@ -42,6 +42,12 @@ class _MediaBuyData:
     updated_at: datetime | None
     status: str | None
     is_paused: bool
+    # Persisted seller confirmation instant; stable across later status changes.
+    confirmed_at: datetime | None
+    # Persisted monotonic optimistic-concurrency counter (media_buys.revision).
+    # No default: a constructor that forgot it would silently report revision=1
+    # for every buy — every caller passes the row's value explicitly.
+    revision: int
 
 
 @dataclass
@@ -94,7 +100,11 @@ def _get_media_buys_impl(
         req: Validated GetMediaBuysRequest with all protocol fields
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
         include_snapshot: When True, include near-real-time delivery stats per package.
-            This is an internal flag controlled by transport wrappers, not by the request object.
+            ``include_snapshot`` IS a field of the pinned AdCP 3.1.1
+            get-media-buys-request schema, but the installed ``adcp`` library's
+            ``GetMediaBuysRequest`` type does not surface it. As an implementation
+            decision (not a spec fact), the transport wrappers thread it as a
+            separate parameter alongside ``req`` rather than as a ``req`` field. #1544.
 
     Returns:
         GetMediaBuysResponse with matching media buys
@@ -285,6 +295,13 @@ def _get_media_buys_impl(
                 packages=response_packages,
                 created_at=buy.created_at,
                 updated_at=buy.updated_at,
+                # AdCP 3.1.1 media-buy item fields. confirmed_at is the
+                # seller's confirmation instant — None until the seller has
+                # committed to the buy. revision is the persisted
+                # monotonic counter bumped by MediaBuyRepository on every
+                # successful mutation.
+                confirmed_at=buy.confirmed_at,
+                revision=buy.revision,
             )
         )
 
@@ -417,6 +434,8 @@ def _fetch_target_media_buys(
             updated_at=buy.updated_at,
             status=buy.status,
             is_paused=buy.is_paused,
+            confirmed_at=buy.confirmed_at,
+            revision=buy.revision,
         )
         for buy in buys
         if filter_statuses is None or _compute_status(buy, today) in filter_statuses

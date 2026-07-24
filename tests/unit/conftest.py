@@ -169,3 +169,105 @@ def make_users_test_client():
                 yield client, mock_session
 
     return _factory
+
+
+# ── Shared Kevel/Triton/Xandr create_media_buy fixtures ──
+# Used by test_adapter_packages_fix.py and test_adapter_post_mutation_boundary.py
+# — the SAME (principal, request, packages) triple both files need to drive
+# these three adapters' create_media_buy. Single source so the two files cannot
+# drift apart (CLAUDE.md DRY invariant).
+
+
+@pytest.fixture
+def mock_principal():
+    """Mock principal for adapter create_media_buy tests."""
+    from unittest.mock import Mock
+
+    principal = Mock()
+    principal.name = "test_principal"
+    principal.principal_id = "principal_123"
+    return principal
+
+
+@pytest.fixture
+def sample_request():
+    """Sample CreateMediaBuyRequest for adapter create_media_buy tests."""
+    from datetime import UTC, datetime, timedelta
+
+    from src.core.schemas import CreateMediaBuyRequest
+    from tests.helpers.adcp_factories import create_test_package_request
+
+    start_time = datetime.now(UTC)
+    end_time = start_time + timedelta(days=30)
+    # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
+    return CreateMediaBuyRequest(
+        brand={"domain": "testbrand.com"},
+        idempotency_key="unit-test-key-adapters-0001",
+        packages=[
+            create_test_package_request(product_id="prod_123"),
+            create_test_package_request(product_id="prod_456"),
+        ],
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+
+@pytest.fixture
+def sample_packages():
+    """Sample packages list for adapter create_media_buy tests."""
+    from src.core.schemas import FormatId, MediaPackage
+
+    return [
+        MediaPackage(
+            package_id="pkg_001",
+            name="Package 1",
+            delivery_type="guaranteed",
+            impressions=10000,
+            cpm=5.0,
+            format_ids=[FormatId(agent_url="https://test.com", id="display_300x250")],
+        ),
+        MediaPackage(
+            package_id="pkg_002",
+            name="Package 2",
+            delivery_type="guaranteed",
+            impressions=20000,
+            cpm=7.5,
+            format_ids=[FormatId(agent_url="https://test.com", id="display_728x90")],
+        ),
+    ]
+
+
+@pytest.fixture
+def make_xandr_test_adapter():
+    """Factory for a XandrAdapter with abstract methods + auth mocked out.
+
+    Shared by test_adapter_packages_fix.py and test_adapter_post_mutation_boundary.py
+    — both need the identical (config, mocked-abstracts, mocked-auth) construction
+    to drive Xandr's create_media_buy. Single source (CLAUDE.md DRY invariant).
+    Caller supplies ``mock_principal`` (its ``platform_mappings`` is set here).
+    """
+    from datetime import datetime, timedelta
+    from unittest.mock import Mock, patch
+
+    from src.adapters.xandr import XandrAdapter
+
+    def _factory(mock_principal, *, advertiser_id: str = "789"):
+        config = {
+            "api_endpoint": "https://api.appnexus.com",
+            "username": "test_user",
+            "password": "test_pass",
+            "member_id": "123",
+        }
+        mock_principal.platform_mappings = {"xandr": {"advertiser_id": advertiser_id}}
+        with patch.multiple("src.adapters.xandr.XandrAdapter", __abstractmethods__=set()):
+            adapter = XandrAdapter(config=config, principal=mock_principal, tenant_id="test_tenant")
+        adapter.add_creative_assets = Mock()
+        adapter.associate_creatives = Mock()
+        adapter.check_media_buy_status = Mock()
+        adapter.update_media_buy_performance_index = Mock()
+        adapter._log_operation = Mock()
+        adapter.token = "test_token"
+        adapter.token_expiry = datetime.now() + timedelta(hours=2)
+        return adapter
+
+    return _factory

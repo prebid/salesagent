@@ -64,7 +64,7 @@ class TestCombinedFilters:
 
         Given diverse formats, only formats with image assets and
         at least one render width <= 728 are returned.
-        The type filter was removed in adcp 3.12.
+        The media-buy request has no `type` filter — `type` is a creative-agent-role field by design (SDK adcp-client-python#971 role boundary), not part of this media-buy contract.
         """
         # Image asset, width 300 -- SHOULD MATCH
         display_small_image = _make_format(

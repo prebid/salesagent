@@ -668,6 +668,72 @@ class TestGetMediaBuysResponseStructure:
         assert "media_buys" in data
         assert data["media_buys"] == []
 
+    def test_unconfirmed_buy_wire_carries_required_confirmed_at_and_revision(self):
+        """3.1.1 requires confirmed_at (nullable) + revision on each returned buy.
+
+        For an unconfirmed buy (confirmed_at=None), the inherited exclude_none=True
+        would drop confirmed_at from the wire body — but get-media-buys-response lists
+        it REQUIRED, so the serializer re-injects it as null. revision is a non-null
+        persisted int and always survives. This exercises the production wire path
+        (model_dump(exclude_none=True), the same call the tool serialization uses).
+        """
+        resp = GetMediaBuysResponse(
+            media_buys=[
+                GetMediaBuysMediaBuy(
+                    media_buy_id="mb_unconfirmed",
+                    status=MediaBuyStatus.pending_start,
+                    currency="USD",
+                    total_budget=1000.0,
+                    packages=[],
+                    confirmed_at=None,
+                    revision=1,
+                ),
+            ],
+        )
+
+        data = resp.model_dump(exclude_none=True)
+
+        mb = data["media_buys"][0]
+        assert "confirmed_at" in mb, "confirmed_at REQUIRED on the wire even when null"
+        assert mb["confirmed_at"] is None
+        assert "revision" in mb
+        assert isinstance(mb["revision"], int)
+        assert mb["revision"] == 1
+
+    def test_mcp_structured_content_wire_carries_required_confirmed_at(self):
+        """The MCP transport serializes structured_content via pydantic_core
+        ``to_jsonable_python`` (FastMCP), NOT the Python ``model_dump()`` override — so
+        this pins the MCP wire independently of the sibling test above. The required
+        nullable ``confirmed_at`` reaches the MCP wire only because
+        ``NestedModelSerializerMixin`` uses a ``@model_serializer(mode="wrap")`` that
+        fires under ``to_jsonable_python`` and re-dumps each child through
+        ``GetMediaBuysMediaBuy.model_dump``. Removing the child's ``setdefault`` reddens
+        this test as well as the model_dump-path one, proving one guard covers all
+        transports.
+        """
+        from pydantic_core import to_jsonable_python
+
+        resp = GetMediaBuysResponse(
+            media_buys=[
+                GetMediaBuysMediaBuy(
+                    media_buy_id="mb_unconfirmed_mcp",
+                    status=MediaBuyStatus.pending_start,
+                    currency="USD",
+                    total_budget=1000.0,
+                    packages=[],
+                    confirmed_at=None,
+                    revision=1,
+                ),
+            ],
+        )
+
+        wire = to_jsonable_python(resp, exclude_none=True)
+
+        mb = wire["media_buys"][0]
+        assert "confirmed_at" in mb, "confirmed_at REQUIRED on the MCP structured-content wire even when null"
+        assert mb["confirmed_at"] is None
+        assert mb["revision"] == 1
+
     def test_nested_serialization_roundtrip(self):
         """model_dump() recursively serializes all nested models to plain dicts.
 
@@ -683,6 +749,7 @@ class TestGetMediaBuysResponseStructure:
                     status=MediaBuyStatus.active,
                     currency="USD",
                     total_budget=1000.0,
+                    revision=1,
                     packages=[
                         GetMediaBuysPackage(
                             package_id="pkg_1",
@@ -763,3 +830,90 @@ class TestGetMediaBuysRequestRejectsInternalFlags:
         """Even include_snapshot=False must be rejected — the field doesn't belong here."""
         with pytest.raises(ValidationError):
             GetMediaBuysRequest(include_snapshot=False)
+
+
+def _confirmed_statuses() -> list[str]:
+    """Every persisted status that IS seller-confirmed, derived from the canonical
+    vocabulary rather than hand-copied.
+
+    The production guard is ``status not in MEDIA_BUY_UNCONFIRMED_STATUSES``, so
+    the confirmed set is exactly the complement over the persisted-status
+    vocabulary. A hand-copied literal here silently dropped ``pending_activation``,
+    ``ready`` and ``scheduled`` — all three seller-confirmed and all three actively
+    driven by the status scheduler — leaving the write-once stamp ungraded for
+    them. Deriving means a status added to the vocabulary is graded on arrival.
+    """
+    from src.core.database.models import MEDIA_BUY_UNCONFIRMED_STATUSES
+    from src.core.tools._media_buy_status import PERSISTED_STATUS_TO_CANONICAL
+
+    return sorted(set(PERSISTED_STATUS_TO_CANONICAL) - set(MEDIA_BUY_UNCONFIRMED_STATUSES))
+
+
+class TestConfirmedAtStamping:
+    """The write-once confirmed_at stamp must fire exactly once the seller has
+    committed to the buy. ``MediaBuyRepository._stamp_confirmation_if_needed`` is
+    the single seam every status-mutation path routes through (update_status,
+    update_fields, apply_status_transition), so the persisted column
+    get_media_buys reads back cannot drift from what create_media_buy emitted for
+    the same buy. A still-pending_approval buy carries no confirmed_at; a buy that
+    reached a committed status on any seam carries one. See #1544."""
+
+    def test_unconfirmed_statuses_are_not_stamped(self):
+        from datetime import UTC, datetime
+
+        from src.core.database.models import MEDIA_BUY_UNCONFIRMED_STATUSES, MediaBuy
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+
+        created = datetime(2026, 1, 1, tzinfo=UTC)
+        # Iterate the CANONICAL unconfirmed set (the production guard is
+        # ``status not in MEDIA_BUY_UNCONFIRMED_STATUSES``) rather than a
+        # hand-copied literal, so a future add/remove (e.g. ``finalizing``) is
+        # covered automatically instead of silently dropped. #1544.
+        for status in MEDIA_BUY_UNCONFIRMED_STATUSES:
+            buy = MediaBuy(status=status, created_at=created, approved_at=None, confirmed_at=None)
+            MediaBuyRepository._stamp_confirmation_if_needed(buy)
+            assert buy.confirmed_at is None, f"{status} must not be stamped"
+
+    def test_confirmed_statuses_without_approval_stamp_created_at(self):
+        """Synchronous confirmation: no approved_at, so confirmed_at is created_at
+        (a successful create_media_buy response constitutes order confirmation)."""
+        from datetime import UTC, datetime
+
+        from src.core.database.models import MediaBuy
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+
+        created = datetime(2026, 1, 1, tzinfo=UTC)
+        for status in _confirmed_statuses():
+            buy = MediaBuy(status=status, created_at=created, approved_at=None, confirmed_at=None)
+            MediaBuyRepository._stamp_confirmation_if_needed(buy)
+            assert buy.confirmed_at == created, f"{status} must stamp confirmed_at=created_at"
+
+    def test_confirmed_statuses_prefer_approval_instant(self):
+        """Manual-approval path: confirmed_at is approved_at (the moment the seller
+        committed), NOT the buyer's create time — see #1544."""
+        from datetime import UTC, datetime
+
+        from src.core.database.models import MediaBuy
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+
+        created = datetime(2026, 1, 1, tzinfo=UTC)
+        approved = datetime(2026, 1, 5, tzinfo=UTC)
+        for status in _confirmed_statuses():
+            buy = MediaBuy(status=status, created_at=created, approved_at=approved, confirmed_at=None)
+            MediaBuyRepository._stamp_confirmation_if_needed(buy)
+            assert buy.confirmed_at == approved, f"{status} must stamp confirmed_at=approved_at"
+
+    def test_stamp_is_write_once(self):
+        """Already-stamped buys keep their original instant across later transitions —
+        confirmed_at is stable even when a subsequent status change would compute a
+        different candidate instant."""
+        from datetime import UTC, datetime
+
+        from src.core.database.models import MediaBuy
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+
+        original = datetime(2026, 1, 1, tzinfo=UTC)
+        later = datetime(2026, 2, 1, tzinfo=UTC)
+        buy = MediaBuy(status="active", created_at=later, approved_at=later, confirmed_at=original)
+        MediaBuyRepository._stamp_confirmation_if_needed(buy)
+        assert buy.confirmed_at == original, "confirmed_at must be write-once"

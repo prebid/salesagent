@@ -113,6 +113,17 @@ class TestCreativeQueryTenantIsolation:
         assert _function_calls_repo_get_by_ids("src/core/tools/media_buy_create.py", "execute_approved_media_buy"), (
             "execute_approved_media_buy must load creatives via CreativeRepository(...).get_by_ids()."
         )
+        # The assignment load is the same isolation surface: an inline
+        # select(CreativeAssignment) here (tenant-filtered or not) is a
+        # regression — it must route through the tenant-scoped
+        # CreativeAssignmentRepository.get_by_media_buy, whose scoping carries
+        # its own red oracle (test_cross_tenant_assignment_invisible).
+        assignment_selects = [s for s in selects if "assignment" in s["model"].lower()]
+        assert not assignment_selects, (
+            f"Inline CreativeAssignment select() at media_buy_create.py:"
+            f"{[s['lineno'] for s in assignment_selects]} — assignment loads must go "
+            f"through CreativeAssignmentRepository.get_by_media_buy."
+        )
 
     def test_get_creative_with_latest_review_scopes_by_tenant(self):
         """get_creative_with_latest_review must accept and filter by tenant_id.
@@ -150,3 +161,29 @@ class TestCreativeQueryTenantIsolation:
                 f"Query at queries.py:{s['lineno']} on {s['model']} is missing tenant_id filter. "
                 f"This is a cross-tenant data leak (salesagent-s9eg)."
             )
+
+
+class TestExtractSelectCallsAliasResolution:
+    """Self-test: the shared matcher resolves import aliases.
+
+    ``select(DBAssignment)`` — the alias media_buy_create.py itself already
+    uses for CreativeAssignment — must report the SOURCE model name, or the
+    file's own alias convention silently evades every predicate keyed on the
+    real name (including the inline-CreativeAssignment ban above). Removing the
+    alias resolution from ``extract_select_calls`` turns this red.
+    """
+
+    def test_aliased_select_resolves_to_source_model(self, tmp_path):
+        from tests.unit._architecture_helpers import extract_select_calls
+
+        source = tmp_path / "mod.py"
+        source.write_text(
+            "from src.core.database.models import Creative as DBCreative\n"
+            "from src.core.database.models import CreativeAssignment as DBAssignment\n"
+            "def load(session, media_buy_id):\n"
+            "    a = session.scalars(select(DBAssignment).filter_by(media_buy_id=media_buy_id)).all()\n"
+            "    c = session.scalars(select(DBCreative).filter_by(creative_id='x')).all()\n"
+            "    return a, c\n"
+        )
+        selects = extract_select_calls(source, "load", model_predicate=lambda name: "creative" in name.lower())
+        assert sorted(s["model"] for s in selects) == ["Creative", "CreativeAssignment"]

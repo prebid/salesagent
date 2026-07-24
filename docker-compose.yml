@@ -86,6 +86,9 @@ services:
       ADCP_SALES_PORT: "8080"
       # Enable test login mode for development
       ADCP_AUTH_TEST_MODE: "true"
+      # Explicit dev opt-in: the X-* test-header gate is fail-closed (#1544);
+      # the local dev stack keeps the hooks enabled.
+      ENVIRONMENT: development
       # Development settings (venv at /opt/venv in image — see Dockerfile UV_PROJECT_ENVIRONMENT)
       PYTHONPATH: "/app"
       PYTHONUNBUFFERED: "1"

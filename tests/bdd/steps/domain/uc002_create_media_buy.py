@@ -19,7 +19,14 @@ from unittest.mock import ANY
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session as _db_session
-from tests.bdd.steps._outcome_helpers import _get_response_field
+from tests.bdd.steps._outcome_helpers import (
+    _get_response_field,
+    assert_valid_actions_array,
+    parse_iso_8601,
+)
+from tests.bdd.steps._outcome_helpers import (
+    require_success_response as _require_success_response,
+)
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -103,17 +110,15 @@ def given_request_with_creative_assignments(ctx: dict) -> None:
 
 @given("a valid create_media_buy request")
 def given_valid_request(ctx: dict) -> None:
-    """Set up a generic valid create_media_buy request (account populated separately).
+    """Assemble a full valid create_media_buy request against the seeded product.
 
-    Populates ctx['request_kwargs'] with the shared valid defaults so the step
-    text's claim ("a VALID request") holds for full-create dispatch — without
-    this, dispatch fails request validation before ever reaching the gate the
-    scenario targets (e.g. the transport auth gates, #1417).
+    Wired full-create scenarios (e.g. T-UC-002-v31-success-revision-and-actions)
+    dispatch this request through the parametrized transport; the harness adds
+    the required idempotency_key when the scenario doesn't pin one.
     """
-    from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
-
     ctx.setdefault("account_ref", None)
-    _ensure_request_defaults(ctx)
+    _build_valid_request_kwargs(ctx)
+    ctx["full_create_request"] = True
 
 
 @given(parsers.parse('a valid create_media_buy request with account "{account_id}"'))
@@ -717,13 +722,15 @@ def when_send_create_media_buy(ctx: dict) -> None:
     Four dispatch modes share this step text — every one routes a full
     ``create_media_buy`` through the parametrized wire transport (a2a/mcp/rest):
 
-    - v3.1 idempotency scenarios (``ctx["idempotency_create"]``) dispatch flat
-      ``request_kwargs`` so the production idempotency replay path runs end-to-end.
+    - Full-create scenarios (``ctx["full_create_request"]`` — v3.1 idempotency
+      replay/missing and GA-fields scenarios) dispatch a full ``create_media_buy``
+      through the parametrized transport so the production idempotency replay path
+      runs end-to-end.
     - Manual-approval scenarios (``ctx["uc002_full_create"]``, PR #1567) dispatch
       the harness-seeded base request with a fresh idempotency key, carrying the
       Given-step account reference, so the submitted-envelope path runs end-to-end.
-    - ``dispatch_mode == "create"`` builds a typed ``CreateMediaBuyRequest`` from
-      ctx["request_kwargs"] (carrying a typed ``account`` for account-resolution
+    - ``dispatch_mode == "create"`` (default) builds a typed ``CreateMediaBuyRequest``
+      from ctx["request_kwargs"] (carrying a typed ``account`` for account-resolution
       and budget/pricing scenarios) and dispatches it. Production resolves the
       account at the transport boundary and emits the outcome on the wire.
     - ``dispatch_mode == "create_raw"`` dispatches ctx["request_kwargs"] as a RAW
@@ -731,10 +738,8 @@ def when_send_create_media_buy(ctx: dict) -> None:
       field, or a oneOf-both dict) reaches the production Pydantic boundary, which
       either accepts it (account is optional) or rejects it on the wire.
     """
-    if ctx.get("idempotency_create"):
-        from tests.bdd.steps.generic._dispatch import dispatch_request
-
-        dispatch_request(ctx, **ctx["request_kwargs"])
+    if ctx.get("full_create_request"):
+        _dispatch_honoring_identity(ctx, **ctx["request_kwargs"])
         return
 
     if ctx.get("uc002_full_create"):
@@ -744,7 +749,7 @@ def when_send_create_media_buy(ctx: dict) -> None:
         # account resolution runs too.
         from tests.bdd.steps.generic._dispatch import dispatch_request
 
-        kwargs = _build_idempotency_request_kwargs(ctx)
+        kwargs = _build_valid_request_kwargs(ctx)
         kwargs["idempotency_key"] = f"uc002-manual-{uuid.uuid4().hex}"
         account_ref = ctx.get("account_ref")
         if account_ref is not None:
@@ -758,12 +763,27 @@ def when_send_create_media_buy(ctx: dict) -> None:
         _dispatch_full_create(ctx)
 
 
+def _dispatch_honoring_identity(ctx: dict, **kwargs) -> None:
+    """Dispatch, forwarding the scenario's identity override when one is staged.
+
+    No-auth scenarios (#1417 nfr-001) stash ``ctx["dispatch_identity"] = None`` so
+    each transport's REAL auth gate produces the wire rejection — EVERY create
+    dispatch path must honor it, or the request silently runs authenticated and
+    reaches business logic (the exact regression the nfr scenario pins).
+    """
+    from tests.bdd.steps.generic._dispatch import dispatch_request
+
+    if "dispatch_identity" in ctx:
+        dispatch_request(ctx, identity=ctx["dispatch_identity"], **kwargs)
+    else:
+        dispatch_request(ctx, **kwargs)
+
+
 def _dispatch_full_create(ctx: dict) -> None:
     """Build a typed CreateMediaBuyRequest from ctx['request_kwargs'] and dispatch."""
     from pydantic import ValidationError
 
     from src.core.schemas import CreateMediaBuyRequest
-    from tests.bdd.steps.generic._dispatch import dispatch_request
 
     kwargs = ctx.get("request_kwargs", {})
     try:
@@ -772,12 +792,7 @@ def _dispatch_full_create(ctx: dict) -> None:
         ctx["error"] = e
         return
 
-    # No-auth scenarios (#1417) stash an unauthenticated identity so the
-    # transport-boundary account-resolution guard is exercised on the wire.
-    if "dispatch_identity" in ctx:
-        dispatch_request(ctx, req=req, identity=ctx["dispatch_identity"])
-    else:
-        dispatch_request(ctx, req=req)
+    _dispatch_honoring_identity(ctx, req=req)
 
 
 def _dispatch_raw_create(ctx: dict) -> None:
@@ -851,6 +866,10 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
         assert ctx.get("response") is not None, "Expected a response for success outcome but ctx['response'] is None"
     elif outcome.startswith("account resolution succeeds"):
         _assert_account_resolution_succeeds(ctx)
+    elif outcome.strip() == "success":
+        # Plain-success partition arm: the operation returned a response, no error.
+        assert ctx.get("error") is None, f"Expected success, got error: {ctx.get('error')!r}"
+        _require_success_response(ctx)
     elif outcome.startswith("error"):
         _assert_error_outcome(ctx, outcome)
     elif _is_pipeline_routing_outcome(outcome):
@@ -1284,6 +1303,17 @@ def _assert_task_list_outcome(ctx: dict, outcome: str) -> None:
                 )
 
 
+def _assert_error_has_suggestion(error: object) -> None:
+    """The error carries a buyer-actionable suggestion at the TOP LEVEL.
+
+    error.json places ``suggestion`` at the top level of the error object;
+    reading it out of the free-form ``details`` dict masks non-conformant
+    emitters (#1417), so we assert the top-level attribute only.
+    """
+    suggestion = getattr(error, "suggestion", None)
+    assert suggestion, f"Expected a top-level suggestion on the error, got: {error!r}"
+
+
 def _assert_error_outcome(ctx: dict, outcome: str) -> None:
     """Assert error outcome with exact code, recovery, and message matching.
 
@@ -1321,20 +1351,21 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
         assert isinstance(error, AdCPError), (
             f"Expected AdCPError for suggestion check, got {type(error).__name__}: {error}"
         )
-        # STRICT error.json conformance: suggestion is a top-level error
-        # attribute; a copy buried in details does not count (#1417).
-        assert error.suggestion, f"Expected top-level suggestion on the error, got: {error.suggestion!r}"
+        _assert_error_has_suggestion(error)
         return
 
-    # Check if first word is a structured error code (UPPER_CASE with _).
-    # Strip surrounding quotes: the partition/boundary outlines write the code
-    # quoted (e.g. error "INVALID_REQUEST" with suggestion).
+    # Check if first word is a structured error code — UPPER_CASE with an
+    # underscore, or an explicitly quoted code (e.g. 'error "CONFLICT" with
+    # suggestion' from the revision partition outlines, where the code has no
+    # underscore but the quotes mark it as a wire code, not prose).
     parts = remainder.split()
-    first_word = parts[0].strip('"') if parts else ""
-    is_structured = bool(first_word) and first_word == first_word.upper() and "_" in first_word
+    first_word = parts[0] if parts else ""
+    quoted = len(first_word) > 2 and first_word.startswith('"') and first_word.endswith('"')
+    code_token = first_word.strip('"')
+    is_structured = bool(code_token) and code_token == code_token.upper() and ("_" in code_token or quoted)
 
     if is_structured:
-        expected_code = first_word
+        expected_code = code_token
         recovery = parts[1] if len(parts) >= 2 and parts[1] in ("terminal", "correctable", "transient") else None
         require_suggestion = "with suggestion" in outcome.lower()
 
@@ -1350,8 +1381,7 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
         if recovery is not None:
             assert error.recovery == recovery, f"Expected recovery '{recovery}', got '{error.recovery}'"
         if require_suggestion:
-            # STRICT error.json conformance: top-level attribute only (#1417).
-            assert error.suggestion, f"Expected top-level suggestion on the error, got: {error.suggestion!r}"
+            _assert_error_has_suggestion(error)
     else:
         # Descriptive: "error unknown sort field"
         description = remainder
@@ -1500,7 +1530,7 @@ def _idempotency_pricing_option_id(pricing_option) -> str:
     return f"{pricing_option.pricing_model}_{pricing_option.currency.lower()}_{fixed_str}"
 
 
-def _build_idempotency_request_kwargs(ctx: dict) -> dict:
+def _build_valid_request_kwargs(ctx: dict) -> dict:
     """Assemble a valid create_media_buy request dict against the seeded product.
 
     Stored on ctx["request_kwargs"]; the When step and the "already created"
@@ -1539,9 +1569,9 @@ def _build_idempotency_request_kwargs(ctx: dict) -> dict:
 @given(parsers.parse('a valid create_media_buy request with idempotency_key "{key}"'))
 def given_valid_request_with_idempotency_key(ctx: dict, key: str) -> None:
     """Build a valid create_media_buy request carrying a literal idempotency_key."""
-    kwargs = _build_idempotency_request_kwargs(ctx)
+    kwargs = _build_valid_request_kwargs(ctx)
     kwargs["idempotency_key"] = key
-    ctx["idempotency_create"] = True
+    ctx["full_create_request"] = True
     ctx["idempotency_key"] = key
 
 
@@ -1559,9 +1589,9 @@ def given_request_idempotency_key_omitted(ctx: dict) -> None:
     """
     from tests.harness.media_buy_create import OMIT_IDEMPOTENCY_KEY
 
-    kwargs = _build_idempotency_request_kwargs(ctx)
+    kwargs = _build_valid_request_kwargs(ctx)
     kwargs["idempotency_key"] = OMIT_IDEMPOTENCY_KEY
-    ctx["idempotency_create"] = True
+    ctx["full_create_request"] = True
 
 
 @given("a media buy was already created for the same seller with that idempotency_key")
@@ -1696,14 +1726,8 @@ def then_response_should_succeed(ctx: dict) -> None:
     assert "response" in ctx, "No response recorded in ctx"
 
 
-@then("the budget validation should pass")
-def then_budget_validation_passes(ctx: dict) -> None:
-    """Assert budget validation passed -- no error, response has media_buy_id."""
-    assert "error" not in ctx, f"Expected budget validation to pass but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found (budget validation may have failed silently)"
-    media_buy_id = _get_response_field(resp, "media_buy_id")
-    assert media_buy_id, "Expected media_buy_id in response -- budget validation passed but no media buy created"
+# "the budget validation should pass" is owned by the registered generic
+# then_media_buy.py (shadowed-steps guard forbids a duplicate here).
 
 
 @then(parsers.parse('the response should include a "{field}"'))
@@ -2132,6 +2156,226 @@ def then_webhook_notification(ctx: dict) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# THEN steps — v3.1 GA sync-success fields: revision / confirmed_at /
+# valid_actions (T-UC-002-v31-success-revision-and-actions, #1544)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _serialized_success_body(ctx: dict) -> dict:
+    """The success response as the buyer sees it on the serialized wire.
+
+    Delegates to the shared :func:`tests.bdd.steps._outcome_helpers.wire_dict`
+    oracle (single home for the wire-vs-IMPL read and its loud missing-wire
+    guard), after a success-specific diagnostic: a scenario that errored fails
+    with "Expected a success response, got error: ..." instead of a bare
+    missing-response message.
+
+    Asserting on this (not the already type-coerced ``ctx["response"]`` payload)
+    is what makes a *serialization* claim — confirmed_at as an ISO 8601 string,
+    revision as an integer — actually observe the wire.
+    """
+    from tests.bdd.steps._outcome_helpers import wire_dict
+
+    _require_success_response(ctx)
+    return wire_dict(ctx)
+
+
+@then(parsers.parse('the response should include "confirmed_at" as an ISO 8601 timestamp'))
+def then_response_confirmed_at_is_iso(ctx: dict) -> None:
+    """confirmed_at is present on the SERIALIZED wire body and is an ISO 8601 string.
+
+    The claim here is specifically about serialization, so it is asserted on the
+    serialized body (``wire_response`` for REST/A2A/MCP; the production serializer
+    for IMPL) rather than the type-coerced payload — otherwise the ISO-string
+    parse never runs (the payload's confirmed_at is already a ``datetime``).
+
+    AdCP 3.1.1 media-buy/specification.mdx: a successful synchronous
+    create_media_buy response constitutes order confirmation. At 3.1.1
+    ``confirmed_at``/``revision`` are schema-REQUIRED on the success arm
+    (create-media-buy-response.json ``oneOf[0].required`` =
+    [media_buy_id, confirmed_at, revision, packages]). The divergence tracked in
+    #1564 is that the pinned SDK types ``confirmed_at`` as non-nullable while the
+    spec schema types it ``["string","null"]`` (nullable) — SDK-required-non-nullable
+    vs spec-nullable; a committed success carries a real ISO instant regardless.
+    """
+    body = _serialized_success_body(ctx)
+    confirmed_at = body.get("confirmed_at")
+    assert confirmed_at is not None, f"serialized response is missing confirmed_at: {body!r}"
+    assert isinstance(confirmed_at, str), (
+        f"confirmed_at must be an ISO 8601 STRING on the wire, got {type(confirmed_at).__name__}: {confirmed_at!r}"
+    )
+    parsed = parse_iso_8601(confirmed_at)
+    assert parsed.tzinfo is not None, f"confirmed_at must carry a timezone designator, got {confirmed_at!r}"
+
+
+@then(parsers.parse('the serialized wire body should carry "revision" as an integer'))
+def then_response_revision_is_integer_on_wire(ctx: dict) -> None:
+    """revision is an integer-VALUED number on the serialized wire (not a string/None).
+
+    The per-transport integer nuance (A2A serializes DataParts through a
+    protobuf ``Struct`` whose only numeric type is ``double``, so an integer
+    arrives as a whole-number float — #1583) lives in the shared
+    :func:`tests.bdd.steps._outcome_helpers.wire_integer` oracle, which rejects
+    a string, null, bool, or fractional revision on every transport. See #1544
+    round-3.
+    """
+    from tests.bdd.steps._outcome_helpers import wire_integer
+
+    wire_integer(ctx, _serialized_success_body(ctx), "revision")
+
+
+@then(parsers.parse('the response should include "revision" with an integer value of 1'))
+def then_response_revision_is_1(ctx: dict) -> None:
+    """revision is the persisted optimistic-concurrency counter; a freshly created
+    buy starts at EXACTLY 1 — the same value the integration test pins
+    (test_media_buy_revision.py). Asserting the exact initial value, not merely
+    ``>= 1``, is what catches a create arm that echoes a stale/garbage counter
+    (#1544 round-2 TQ-02). Wire-graded via ``wire_integer`` so a serialization
+    regression of the token goes red here too (#1544 round-4)."""
+    from tests.bdd.steps._outcome_helpers import wire_integer
+
+    _require_success_response(ctx)
+    revision = wire_integer(ctx, _serialized_success_body(ctx), "revision")
+    assert revision == 1, f"Expected a fresh create to report revision 1 on the wire, got {revision!r}"
+
+
+@then(parsers.parse('the response should include a "valid_actions" array'))
+def then_response_valid_actions_array(ctx: dict) -> None:
+    """The sync success arm carries a POPULATED valid_actions array on the wire.
+
+    Delegates to the shared wire-graded ``assert_valid_actions_array`` oracle
+    (one home for the wire read + non-empty check; the only scenario binding
+    this step is the auto-approved sync success — an active buy, for which an
+    empty valid_actions would be a real regression). The BR-UC-019
+    terminal-status scenarios that legitimately expect an EMPTY array bind
+    different step text. #1544 round-4.
+    """
+    assert_valid_actions_array(ctx)
+
+
+@then("every value in valid_actions should be a member of the media-buy-valid-action enum")
+def then_valid_actions_are_enum_members(ctx: dict) -> None:
+    """Each valid_actions entry belongs to the AdCP media-buy-valid-action enum.
+
+    Authority chain: the allowed set is the pinned spec's
+    enums/media-buy-valid-action.json; the SDK enum imported here is the
+    CI-pinned derivation of it (adcp==6.6.0 ↔ 3.1.1, guarded by
+    tests/unit/test_adcp_spec_version.py) — re-verify against the JSON on an
+    SDK bump.
+    """
+    from adcp.types.generated_poc.enums.media_buy_valid_action import MediaBuyValidAction
+
+    # Shared wire-graded + non-empty oracle: an empty array would make this
+    # membership check pass vacuously. #1544 round-4.
+    actions = assert_valid_actions_array(ctx)
+    allowed = {member.value for member in MediaBuyValidAction}
+    outside = [value for value in actions if value not in allowed]
+    assert not outside, f"valid_actions contains values outside the enum: {outside} (allowed: {sorted(allowed)})"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Dry-run mode (INV-5): the simulated success arm carries revision and confirmed_at,
+# never invokes the adapter, and persists nothing (T-UC-002-inv-020-5, #1544)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given("the request is sent in dry-run mode")
+def given_dry_run_mode(ctx: dict) -> None:
+    """Enable dry-run so the create dispatches with ``x-dry-run: true``.
+
+    Toggling ``env._dry_run`` before the When step makes the harness stamp the
+    dry-run testing context onto the identity/headers for whichever transport is
+    parametrized. The identity cache is cleared so the not-yet-built identity
+    picks up the flag.
+    """
+    env = ctx["env"]
+    env._dry_run = True
+    env._identity_cache.clear()
+
+
+@then("the ad server adapter should never be invoked")
+def then_adapter_never_invoked(ctx: dict) -> None:
+    """The dry-run arm returns a simulated success before any ad-server booking.
+
+    In-process: assert the pytest-process adapter mock's ``create_media_buy`` was
+    never called. Over an e2e_* transport the create runs in the live server,
+    whose adapter this mock can never see, so assert the wire-level proxy for the
+    same invariant — the response's simulated ``dry_run_`` media_buy_id. A live
+    server that ignored x-dry-run and actually booked the buy would return a real
+    persisted id, failing this; a vacuous ``response is not None`` would not.
+    """
+    from tests.bdd.steps._outcome_helpers import is_e2e
+
+    if is_e2e(ctx):
+        # Shared by INV-5 (dry-run) and INV-4 (pre-adapter validation failure).
+        # On the error path the rejection itself proves the adapter was never
+        # reached — there is no success response to inspect.
+        if ctx.get("error") is not None:
+            return
+        resp = _require_success_response(ctx)
+        media_buy_id = _get_response_field(resp, "media_buy_id")
+        assert isinstance(media_buy_id, str) and media_buy_id.startswith("dry_run_"), (
+            f"dry-run over e2e must return a simulated dry_run_ media_buy_id (proof the adapter "
+            f"was not invoked), got {media_buy_id!r}"
+        )
+        return
+    env = ctx["env"]
+    adapter = env.mock["adapter"].return_value
+    assert not adapter.create_media_buy.called, (
+        "dry-run must not invoke the adapter's create_media_buy — it returns a simulated response"
+    )
+
+
+@then("a simulated success should be returned")
+def then_simulated_success(ctx: dict) -> None:
+    """Dry-run returns a CreateMediaBuySuccess with a synthetic ``dry_run_`` id."""
+    resp = _require_success_response(ctx)
+    media_buy_id = _get_response_field(resp, "media_buy_id")
+    assert isinstance(media_buy_id, str) and media_buy_id.startswith("dry_run_"), (
+        f"expected a simulated dry_run_ media_buy_id, got {media_buy_id!r}"
+    )
+
+
+# "no database records should be created" is owned by the registered generic
+# then_error.py (shadowed-steps guard forbids a duplicate here).
+
+
+@then("the simulated response should be labelled sandbox with revision 1 and confirmed_at null")
+def then_dry_run_sandbox_labelled_conformant(ctx: dict) -> None:
+    """The simulated success arm is a CONFORMANT 3.1.1 create-media-buy success.
+
+    3.1.1 create-media-buy-response.json oneOf[0] (CreateMediaBuySuccess) required =
+    [media_buy_id, confirmed_at, revision, packages], so the dry-run arm cannot be
+    thin. The response is honestly labelled ``sandbox=true`` (the proprietary
+    X-Dry-Run header maps onto the spec's sanctioned account-level ``sandbox`` test
+    concept), and:
+      revision == 1  — correct initial value of a would-be-fresh buy (schema:
+                       integer, minimum=1).
+      confirmed_at is None — a simulation commits nothing; confirmed_at is a REQUIRED
+                       but nullable field (["string","null"], "May be null in deferred
+                       or manual-approval flows"), so the sandbox serializer emits it
+                       as null on the wire (present, not omitted). #1544.
+
+    The confirmed_at claim is a SERIALIZATION claim, so it is asserted on the wire
+    body (present-as-null) as well as on the typed payload — mirroring the unit
+    test. exclude_none would otherwise DROP a null confirmed_at and silently omit a
+    REQUIRED key; the model serializer re-injects it explicitly (see
+    CreateMediaBuySuccess._serialize_model).
+    """
+    from tests.bdd.steps._outcome_helpers import wire_integer
+
+    resp = _require_success_response(ctx)
+    assert _get_response_field(resp, "sandbox") is True, "dry-run must be labelled sandbox=true"
+    body = _serialized_success_body(ctx)
+    # revision is graded on the WIRE like the sibling exact-value steps — a
+    # serialization regression of the token must go red here too. #1544 round-4.
+    assert wire_integer(ctx, body, "revision") == 1, "dry-run must carry the initial revision 1 on the wire"
+    assert "confirmed_at" in body, f"REQUIRED confirmed_at must be PRESENT on the wire, not omitted: {body!r}"
+    assert body["confirmed_at"] is None, (
+        f"dry-run confirmed_at must serialize as null (present-with-null), got {body['confirmed_at']!r}"
+    )
+
+
 # THEN steps — seller notification (manual-approval wiring, PR #1567 round-2 item 2)
 # ═══════════════════════════════════════════════════════════════════════
 # Moved from steps/generic/then_media_buy.py (a module NOT in pytest_plugins,

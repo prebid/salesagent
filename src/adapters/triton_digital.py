@@ -4,8 +4,8 @@ from typing import Any
 
 import requests
 
-from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
-from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
+from src.adapters.base import AdapterPostMutationIncomplete, AdServerAdapter, CreativeEngineAdapter
+from src.adapters.constants import ADAPTER_HTTP_TIMEOUT, REQUIRED_UPDATE_ACTIONS
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
@@ -133,6 +133,7 @@ class TritonDigital(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict[str, Any]] | None = None,
+        idempotency_key: str | None = None,
     ) -> CreateMediaBuyResponse:
         """Creates a new Campaign and Flights in the Triton TAP API."""
         # Log operation
@@ -235,43 +236,64 @@ class TritonDigital(AdServerAdapter):
                 "active": True,
             }
 
-            response = requests.post(f"{self.base_url}/campaigns", headers=self.headers, json=campaign_payload)
+            response = requests.post(
+                f"{self.base_url}/campaigns", headers=self.headers, json=campaign_payload, timeout=ADAPTER_HTTP_TIMEOUT
+            )
             response.raise_for_status()
             campaign_data = response.json()
             campaign_id = campaign_data["id"]
 
-            # Create flights for each package
-            for package in packages:
-                # Get pricing for this package
-                pricing_info = package_pricing_info.get(package.package_id) if package_pricing_info else None
-                if pricing_info:
-                    rate = (
-                        pricing_info["rate"] if pricing_info["is_fixed"] else pricing_info.get("bid_price", package.cpm)
+            # ── POST-MUTATION BOUNDARY (#1637 parity with GAM) ──────────────────
+            # The remote campaign now EXISTS. A failure creating any package's
+            # flight from here on leaves a partial remote graph (campaign +
+            # possibly some flights) — it must surface as
+            # AdapterPostMutationIncomplete so the approval finalizer preserves
+            # the manual-reconciliation state instead of terminal-failing the buy
+            # and erasing the only signal that a real campaign was created.
+            try:
+                # Create flights for each package
+                for package in packages:
+                    # Get pricing for this package
+                    pricing_info = package_pricing_info.get(package.package_id) if package_pricing_info else None
+                    if pricing_info:
+                        rate = (
+                            pricing_info["rate"]
+                            if pricing_info["is_fixed"]
+                            else pricing_info.get("bid_price", package.cpm)
+                        )
+                    else:
+                        rate = package.cpm
+
+                    flight_payload = {
+                        "name": package.name,
+                        "campaignId": campaign_id,
+                        "type": "STANDARD",
+                        "goal": {"type": "IMPRESSIONS", "value": package.impressions},
+                        "rate": rate,  # Use pricing from pricing option or fallback
+                        "rateType": "CPM",
+                        "startDate": start_time.date().isoformat(),
+                        "endDate": end_time.date().isoformat(),
+                    }
+
+                    # Add targeting if provided (from package-level targeting_overlay per AdCP spec)
+                    if package.targeting_overlay:
+                        targeting = self._build_targeting(package.targeting_overlay)
+                        if targeting and "targeting" in targeting:
+                            flight_payload["targeting"] = targeting["targeting"]
+                        if targeting and "stationIds" in targeting:
+                            flight_payload["stationIds"] = targeting["stationIds"]
+
+                    flight_response = requests.post(
+                        f"{self.base_url}/flights",
+                        headers=self.headers,
+                        json=flight_payload,
+                        timeout=ADAPTER_HTTP_TIMEOUT,
                     )
-                else:
-                    rate = package.cpm
-
-                flight_payload = {
-                    "name": package.name,
-                    "campaignId": campaign_id,
-                    "type": "STANDARD",
-                    "goal": {"type": "IMPRESSIONS", "value": package.impressions},
-                    "rate": rate,  # Use pricing from pricing option or fallback
-                    "rateType": "CPM",
-                    "startDate": start_time.date().isoformat(),
-                    "endDate": end_time.date().isoformat(),
-                }
-
-                # Add targeting if provided (from package-level targeting_overlay per AdCP spec)
-                if package.targeting_overlay:
-                    targeting = self._build_targeting(package.targeting_overlay)
-                    if targeting and "targeting" in targeting:
-                        flight_payload["targeting"] = targeting["targeting"]
-                    if targeting and "stationIds" in targeting:
-                        flight_payload["stationIds"] = targeting["stationIds"]
-
-                flight_response = requests.post(f"{self.base_url}/flights", headers=self.headers, json=flight_payload)
-                flight_response.raise_for_status()
+                    flight_response.raise_for_status()
+            except Exception as post_campaign_error:
+                raise AdapterPostMutationIncomplete(
+                    f"Triton campaign {campaign_id} was created but flight creation failed: {post_campaign_error}"
+                ) from post_campaign_error
 
             # Use the actual campaign ID from Triton
             media_buy_id = f"triton_{campaign_id}"
@@ -307,7 +329,10 @@ class TritonDigital(AdServerAdapter):
 
                 # Get all flights for the campaign to map package names to flight IDs
                 flights_response = requests.get(
-                    f"{self.base_url}/flights", headers=self.headers, params={"campaignId": campaign_id}
+                    f"{self.base_url}/flights",
+                    headers=self.headers,
+                    params={"campaignId": campaign_id},
+                    timeout=ADAPTER_HTTP_TIMEOUT,
                 )
                 flights_response.raise_for_status()
                 flights = flights_response.json()
@@ -323,7 +348,10 @@ class TritonDigital(AdServerAdapter):
                     creative_payload = {"name": asset["name"], "type": "AUDIO", "url": asset["media_url"]}
 
                     creative_response = requests.post(
-                        f"{self.base_url}/creatives", headers=self.headers, json=creative_payload
+                        f"{self.base_url}/creatives",
+                        headers=self.headers,
+                        json=creative_payload,
+                        timeout=ADAPTER_HTTP_TIMEOUT,
                     )
                     creative_response.raise_for_status()
                     creative_data = creative_response.json()
@@ -338,7 +366,10 @@ class TritonDigital(AdServerAdapter):
                         for flight_id in flight_ids_to_associate:
                             association_payload = {"creativeIds": [creative_id]}
                             assoc_response = requests.put(
-                                f"{self.base_url}/flights/{flight_id}", headers=self.headers, json=association_payload
+                                f"{self.base_url}/flights/{flight_id}",
+                                headers=self.headers,
+                                json=association_payload,
+                                timeout=ADAPTER_HTTP_TIMEOUT,
                             )
                             assoc_response.raise_for_status()
 
@@ -386,7 +417,9 @@ class TritonDigital(AdServerAdapter):
                 # Extract campaign ID from media_buy_id
                 campaign_id = media_buy_id.replace("triton_", "")
 
-                response = requests.get(f"{self.base_url}/campaigns/{campaign_id}", headers=self.headers)
+                response = requests.get(
+                    f"{self.base_url}/campaigns/{campaign_id}", headers=self.headers, timeout=ADAPTER_HTTP_TIMEOUT
+                )
                 response.raise_for_status()
                 campaign_data = response.json()
 
@@ -454,7 +487,9 @@ class TritonDigital(AdServerAdapter):
             }
 
             try:
-                response = requests.post(f"{self.base_url}/reports", headers=self.headers, json=report_payload)
+                response = requests.post(
+                    f"{self.base_url}/reports", headers=self.headers, json=report_payload, timeout=ADAPTER_HTTP_TIMEOUT
+                )
                 response.raise_for_status()
                 report_job = response.json()
                 job_id = report_job["id"]
@@ -462,7 +497,9 @@ class TritonDigital(AdServerAdapter):
                 import time
 
                 for _ in range(10):  # Poll for up to 5 seconds
-                    status_response = requests.get(f"{self.base_url}/reports/{job_id}", headers=self.headers)
+                    status_response = requests.get(
+                        f"{self.base_url}/reports/{job_id}", headers=self.headers, timeout=ADAPTER_HTTP_TIMEOUT
+                    )
                     status_response.raise_for_status()
                     status_data = status_response.json()
                     if status_data["status"] == "COMPLETED":
@@ -472,7 +509,7 @@ class TritonDigital(AdServerAdapter):
                 else:
                     raise Exception("Triton report did not complete in time.")
 
-                report_response = requests.get(report_url)
+                report_response = requests.get(report_url, timeout=ADAPTER_HTTP_TIMEOUT)
                 report_response.raise_for_status()
 
                 import csv
@@ -622,14 +659,20 @@ class TritonDigital(AdServerAdapter):
                     # Update campaign status
                     update_payload: dict[str, Any] = {"active": action == "resume_media_buy"}
                     response = requests.put(
-                        f"{self.base_url}/campaigns/{campaign_id}", headers=self.headers, json=update_payload
+                        f"{self.base_url}/campaigns/{campaign_id}",
+                        headers=self.headers,
+                        json=update_payload,
+                        timeout=ADAPTER_HTTP_TIMEOUT,
                     )
                     response.raise_for_status()
 
                 elif action in ["pause_package", "resume_package"] and package_id:
                     # Get flight ID by name
                     flights_response = requests.get(
-                        f"{self.base_url}/flights", headers=self.headers, params={"campaignId": campaign_id}
+                        f"{self.base_url}/flights",
+                        headers=self.headers,
+                        params={"campaignId": campaign_id},
+                        timeout=ADAPTER_HTTP_TIMEOUT,
                     )
                     flights_response.raise_for_status()
                     flights = flights_response.json()
@@ -642,7 +685,10 @@ class TritonDigital(AdServerAdapter):
                     is_resume = action == "resume_package"
                     flight_update_payload: dict[str, Any] = {"active": is_resume}
                     response = requests.put(
-                        f"{self.base_url}/flights/{flight['id']}", headers=self.headers, json=flight_update_payload
+                        f"{self.base_url}/flights/{flight['id']}",
+                        headers=self.headers,
+                        json=flight_update_payload,
+                        timeout=ADAPTER_HTTP_TIMEOUT,
                     )
                     response.raise_for_status()
 
@@ -667,7 +713,10 @@ class TritonDigital(AdServerAdapter):
                 ):
                     # Get flight and update goal
                     flights_response = requests.get(
-                        f"{self.base_url}/flights", headers=self.headers, params={"campaignId": campaign_id}
+                        f"{self.base_url}/flights",
+                        headers=self.headers,
+                        params={"campaignId": campaign_id},
+                        timeout=ADAPTER_HTTP_TIMEOUT,
                     )
                     flights_response.raise_for_status()
                     flights = flights_response.json()
@@ -686,7 +735,10 @@ class TritonDigital(AdServerAdapter):
 
                     goal_update_payload: dict[str, Any] = {"goal": {"type": "IMPRESSIONS", "value": new_impressions}}
                     response = requests.put(
-                        f"{self.base_url}/flights/{flight['id']}", headers=self.headers, json=goal_update_payload
+                        f"{self.base_url}/flights/{flight['id']}",
+                        headers=self.headers,
+                        json=goal_update_payload,
+                        timeout=ADAPTER_HTTP_TIMEOUT,
                     )
                     response.raise_for_status()
 

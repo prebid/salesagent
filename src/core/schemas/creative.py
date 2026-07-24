@@ -45,6 +45,7 @@ from adcp.types.generated_poc.creative.sync_creatives_response import (
 from pydantic import (
     ConfigDict,
     Field,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -516,11 +517,28 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
         return msg
 
 
+def _validate_unique_enum_list(value: list[Any] | None, field_name: str) -> list[Any] | None:
+    """Enforce the authoritative schema's ``uniqueItems: true`` constraint.
+
+    ``adcp==6.6.0`` omits this JSON-Schema constraint during code generation, but
+    the pinned AdCP 3.1.1 request schema remains authoritative: duplicate values
+    are invalid input, not a request the seller may silently rewrite.
+    """
+    if value is not None and len(set(value)) != len(value):
+        raise ValueError(f"{field_name} must not contain duplicate values")
+    return value
+
+
 class ListCreativeFormatsRequest(LibraryListCreativeFormatsRequest):
     """Extends library ListCreativeFormatsRequest from AdCP spec.
 
     Inherits all AdCP-compliant fields from adcp library,
     ensuring we stay in sync with spec updates.
+
+    Note: this is the media-buy-role request model. It intentionally has no ``type``
+    filter (audio/video/display/dooh) — that filter belongs to the creative-agent-role
+    request ``ListCreativeFormatsRequestCreativeAgent``, a role boundary by design per
+    the SDK team's #971 triage — not an omission or a removed spec feature.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -530,6 +548,12 @@ class ListCreativeFormatsRequest(LibraryListCreativeFormatsRequest):
     def upgrade_legacy_format_ids(cls, values: dict) -> dict:
         """Convert dict format_ids to FormatId objects (AdCP v2.4 compliance)."""
         return _upgrade_legacy_format_ids(values)
+
+    @field_validator("disclosure_positions", "disclosure_persistence")
+    @classmethod
+    def _validate_unique_disclosure_filters(cls, value: list[Any] | None, info: ValidationInfo) -> list[Any] | None:
+        """Restore the AdCP 3.1.1 ``uniqueItems: true`` validation SDK codegen dropped."""
+        return _validate_unique_enum_list(value, info.field_name or "disclosure filter")
 
 
 class ListCreativeFormatsResponse(NestedModelSerializerMixin, LibraryListCreativeFormatsResponse):

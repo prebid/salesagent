@@ -15,7 +15,9 @@ from typing import Any
 from pytest_bdd import given, parsers, when
 
 from src.core.schemas import FormatId, ListCreativeFormatsRequest
+from tests.bdd.steps.generic._dispatch import stash_transport_result
 from tests.harness.transport import Transport
+from tests.helpers.creative_formats_schema import validate_list_creative_formats_in_production
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
@@ -66,13 +68,7 @@ def _call_via(
 
     try:
         result = env.call_via(t, **kwargs)
-        if result.is_error:
-            ctx["error"] = result.error
-        else:
-            ctx["response"] = result.payload
-            # Real serialized wire (REST/A2A/MCP); None on IMPL — surfaced for
-            # success-path wire-shape steps (e.g. format_id federation contract).
-            ctx["wire_response"] = result.wire_response
+        stash_transport_result(ctx, result)
     except Exception as exc:
         ctx["error"] = exc
 
@@ -99,13 +95,17 @@ def when_send_a2a(ctx: dict) -> None:
 
 @when(parsers.parse('the Buyer Agent sends a list_creative_formats task via A2A with type filter "{type_filter}"'))
 def when_send_a2a_type_filter(ctx: dict, type_filter: str) -> None:
-    # type filter removed in adcp 3.12 — delegate to unfiltered
+    # The media-buy ListCreativeFormatsRequest has no `type` filter — that filter is a
+    # creative-agent-role field by design (SDK adcp-client-python#971 role boundary), not
+    # part of this media-buy contract; dispatch unfiltered.
     when_send_a2a_no_filters(ctx)
 
 
 @when(parsers.parse('the Buyer Agent sends a list_creative_formats task via A2A with type "{type_value}"'))
 def when_send_a2a_type_value(ctx: dict, type_value: str) -> None:
-    # type filter removed in adcp 3.12 — delegate to unfiltered
+    # The media-buy ListCreativeFormatsRequest has no `type` filter — that filter is a
+    # creative-agent-role field by design (SDK adcp-client-python#971 role boundary), not
+    # part of this media-buy contract; dispatch unfiltered.
     when_send_a2a_no_filters(ctx)
 
 
@@ -124,7 +124,9 @@ def when_call_mcp(ctx: dict) -> None:
 
 @when(parsers.parse('the Buyer Agent calls list_creative_formats MCP tool with type "{type_value}"'))
 def when_call_mcp_type(ctx: dict, type_value: str) -> None:
-    # type filter removed in adcp 3.12 — delegate to unfiltered
+    # The media-buy ListCreativeFormatsRequest has no `type` filter — that filter is a
+    # creative-agent-role field by design (SDK adcp-client-python#971 role boundary), not
+    # part of this media-buy contract; dispatch unfiltered.
     when_call_mcp_no_filters(ctx)
 
 
@@ -163,8 +165,8 @@ def when_send_request_invalid_dimensions(ctx: dict) -> None:
 
 @when(parsers.parse('the Buyer Agent requests formats with type "{fmt_type}" and asset_types {asset_types}'))
 def when_request_type_and_asset(ctx: dict, fmt_type: str, asset_types: str) -> None:
-    # type filter was removed from ListCreativeFormatsRequest in adcp 3.12;
-    # only asset_types filter is applied
+    # The media-buy ListCreativeFormatsRequest has no `type` filter (creative-agent-role
+    # field by design, SDK adcp-client-python#971 role boundary); only asset_types applies.
     parsed_assets = json.loads(asset_types)
     try:
         req = ListCreativeFormatsRequest(asset_types=parsed_assets)
@@ -192,8 +194,21 @@ def when_request_asset_types_and_name_search(ctx: dict, asset_types: str, name_s
 @when(parsers.parse('the Buyer Agent requests formats with type filter "{fmt_type}"'))
 @when(parsers.parse('the Buyer Agent requests formats with type "{fmt_type}"'))
 def when_request_type_filter(ctx: dict, fmt_type: str) -> None:
-    # type filter was removed from ListCreativeFormatsRequest in adcp 3.12
+    # The media-buy ListCreativeFormatsRequest has no `type` filter (creative-agent-role
+    # field by design, SDK adcp-client-python#971 role boundary); dispatch unfiltered.
     _call(ctx)
+
+
+@when("the Buyer Agent inspects the media-buy list_creative_formats request contract")
+def when_inspect_media_buy_creative_formats_contract(ctx: dict) -> None:
+    """Capture the real request model for role-boundary assertions."""
+    ctx["creative_formats_request_model"] = ListCreativeFormatsRequest
+
+
+@when(parsers.parse('production request-model validation receives media-buy extension field type "{fmt_type}"'))
+def when_production_validates_media_buy_type_extension(ctx: dict, fmt_type: str) -> None:
+    """Validate through the real request model in a fresh production process."""
+    ctx["validated_creative_formats_request"] = validate_list_creative_formats_in_production({"type": fmt_type})
 
 
 # ── Filter: format_ids ───────────────────────────────────────────────
@@ -258,11 +273,13 @@ def when_request_name_search(ctx: dict, search: str) -> None:
 @when(parsers.parse("the Buyer Agent requests formats with disclosure_positions filter {filter_value}"))
 def when_request_disclosure_positions(ctx: dict, filter_value: str) -> None:
     parsed = json.loads(filter_value)
-    try:
-        req = ListCreativeFormatsRequest(disclosure_positions=parsed)
-        _call(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    _call_via(ctx, ctx["transport"], raw_params={"disclosure_positions": parsed})
+
+
+@when(parsers.parse("the Buyer Agent requests formats with disclosure_persistence filter {filter_value}"))
+def when_request_disclosure_persistence(ctx: dict, filter_value: str) -> None:
+    parsed = json.loads(filter_value)
+    _call_via(ctx, ctx["transport"], raw_params={"disclosure_persistence": parsed})
 
 
 # ── Filter: output_format_ids ────────────────────────────────────────
@@ -301,8 +318,10 @@ def when_request_input_format_ids(ctx: dict, filter_value: str) -> None:
 def _partition_type(ctx: dict, partition: str) -> None:
     """Map type partition label to filter and call harness.
 
-    type filter was removed from ListCreativeFormatsRequest in adcp 3.12.
-    All partitions now dispatch an unfiltered request.
+    The media-buy ListCreativeFormatsRequest has no `type` filter — that filter
+    (audio/video/display/dooh) is a creative-agent-role field by design (SDK
+    adcp-client-python#971 role boundary), not part of this media-buy contract, so all
+    partitions dispatch an unfiltered request.
     """
     _call(ctx)
 
@@ -752,21 +771,24 @@ def when_boundary_input_ids(ctx: dict, boundary_point: str) -> None:
 
 # ── Creative agent format queries (partition / boundary) ─────────────
 # These test creative-agent-specific format filtering through the same
-# list_creative_formats harness. Type filter was removed in adcp 3.12
-# so type partitions dispatch unfiltered. Asset type partitions map to
-# the asset_types filter on ListCreativeFormatsRequest.
+# list_creative_formats harness. The media-buy ListCreativeFormatsRequest has no
+# `type` filter — that filter (audio/video/display/dooh) is a creative-agent-role
+# field by design (SDK adcp-client-python#971 triage), not part of the media-buy
+# contract our tool exposes — so type partitions dispatch unfiltered. Asset type
+# partitions map to the asset_types filter on ListCreativeFormatsRequest.
 
 
 def _partition_agent_type(ctx: dict, partition: str) -> None:
-    """Creative agent type filter — REMOVED in adcp 3.12, all dispatch unfiltered.
+    """Creative agent type filter — absent from the media-buy request, all dispatch unfiltered.
 
-    ``ListCreativeFormatsRequest`` has no ``type`` field (the creative-agent-type
-    filter was excised in adcp 3.12), so EVERY type partition — including the
-    former 'unknown_value'/'native' rejection cases — carries no field to land on
-    and dispatches the same unfiltered request through the wire. Production no
-    longer rejects any value; it returns the full catalog. The previous code
+    The media-buy ``ListCreativeFormatsRequest`` has no ``type`` field: the `type`
+    filter (audio/video/display/dooh) is a creative-agent-role field by design (SDK
+    adcp-client-python#971 role boundary), NOT an omission of a media-buy feature. So
+    EVERY type partition — including the former 'unknown_value'/'native' rejection
+    cases — carries no field to land on and dispatches the same unfiltered request
+    through the wire. Production returns the full catalog. The previous code
     constructed a test-side ``ValueError`` to fake a rejection production never
-    performs. Per the schema hierarchy (3.12 authoritative), these reconcile to
+    performs. With the filter absent from the media-buy contract, these reconcile to
     SUCCESS: dispatch unfiltered via the wire (_call) and let production emit the
     real result. #1417.
     """

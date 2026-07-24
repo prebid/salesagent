@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 _PATH_TO_TOOL: dict[str, str] = {
     "/products": "get_products",
     "/media-buys": "create_media_buy",
+    "/media-buys/query": "get_media_buys",
     "/creatives/sync": "sync_creatives",
 }
 

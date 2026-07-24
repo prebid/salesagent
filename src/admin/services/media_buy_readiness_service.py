@@ -11,15 +11,16 @@ No database schema changes required - computes state from existing data.
 """
 
 import logging
-from datetime import UTC, date, datetime
-from typing import TypedDict, cast
+from datetime import UTC, datetime
+from typing import TypedDict
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, GAMLineItem, GAMOrder, MediaBuy, Tenant
 from src.core.database.repositories import MediaBuyRepository
+from src.core.media_buy_flight import resolve_flight_window_utc
 
 logger = logging.getLogger(__name__)
 
@@ -120,11 +121,18 @@ class MediaBuyReadinessService:
             creative_ids = list({a.creative_id for a in assignments})
             creatives_total = len(creative_ids)
 
-            # Get creative statuses
+            # Get creative statuses. Match the FULL composite creative key
+            # (tenant_id, principal_id, creative_id) taken from each assignment —
+            # a creative_id is buyer-assignable and unique only per principal, so
+            # a tenant-only IN could pull in a colliding creative_id owned by
+            # ANOTHER principal and count its status. Same derivation as
+            # CreativeAssignmentRepository.creative_readiness. #1544.
             creatives: list[Creative] = []
-            if creative_ids:
-                creatives_stmt = select(Creative).filter(
-                    Creative.tenant_id == tenant_id, Creative.creative_id.in_(creative_ids)
+            creative_keys = {(a.principal_id, a.creative_id) for a in assignments}
+            if creative_keys:
+                creatives_stmt = select(Creative).where(
+                    Creative.tenant_id == tenant_id,
+                    tuple_(Creative.principal_id, Creative.creative_id).in_(sorted(creative_keys)),
                 )
                 creatives = list(session.scalars(creatives_stmt).all())
 
@@ -265,29 +273,19 @@ class MediaBuyReadinessService:
         if media_buy.status == "pending_approval":
             return "needs_approval"
 
-        # Check flight timing - ensure timezone-aware datetimes
-        # Note: SQLAlchemy's DateTime and Date map to Python's datetime and date at runtime
-        if media_buy.start_time:
-            # media_buy.start_time is datetime | None (from Mapped[DateTime | None])
-            # Cast to help mypy understand the runtime type
-            start_datetime = cast(datetime, media_buy.start_time)
-            start_time = start_datetime if start_datetime.tzinfo else start_datetime.replace(tzinfo=UTC)
-        else:
-            # media_buy.start_date is date (from Mapped[Date])
-            # Cast to help mypy understand the runtime type
-            start_date_val = cast(date, media_buy.start_date)
-            start_time = datetime.combine(start_date_val, datetime.min.time()).replace(tzinfo=UTC)
-
-        if media_buy.end_time:
-            # media_buy.end_time is datetime | None (from Mapped[DateTime | None])
-            # Cast to help mypy understand the runtime type
-            end_datetime = cast(datetime, media_buy.end_time)
-            end_time = end_datetime if end_datetime.tzinfo else end_datetime.replace(tzinfo=UTC)
-        else:
-            # media_buy.end_date is date (from Mapped[Date])
-            # Cast to help mypy understand the runtime type
-            end_date_val = cast(date, media_buy.end_date)
-            end_time = datetime.combine(end_date_val, datetime.max.time()).replace(tzinfo=UTC)
+        # Resolve the effective UTC flight window (shared helper — same
+        # start_time/end_time-preferred, date-fallback resolution used by the
+        # scheduler, admin approve route, and creative-review path). See #1544.
+        # start_date/end_date are NOT NULL, so the window is always fully
+        # resolved for a persisted media buy; None here is an internal
+        # invariant violation (raise, don't assert — assert is stripped
+        # under python -O).
+        start_time, end_time = resolve_flight_window_utc(media_buy)
+        if start_time is None or end_time is None:
+            raise RuntimeError(
+                f"resolve_flight_window_utc returned an unresolved window for persisted "
+                f"media buy {media_buy.media_buy_id} (start_date/end_date are NOT NULL)"
+            )
 
         # Completed if past end date
         if now > end_time:

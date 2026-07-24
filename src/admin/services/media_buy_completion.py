@@ -1,0 +1,1175 @@
+"""Shared media-buy completion / rejection webhook emission for the admin approval routes.
+
+The operations approve and reject routes duplicated a near-identical
+notification-emission block. Extracting it here (a) removes the duplication and
+(b) lets the workflow and creative-unblock approval routes emit the same
+completion artifact — async buyers otherwise never receive the final
+``revision``/``confirmed_at`` for an approved buy. See #1544.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import datetime
+import logging
+import os
+import threading
+from collections.abc import Callable, Iterator
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any
+
+from adcp import Error, create_a2a_webhook_payload, create_mcp_webhook_payload
+from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
+from sqlalchemy.orm import Session
+
+from src.adapters.base import AdapterIdempotencyUncertain, AdapterPostMutationIncomplete
+from src.admin.utils.helpers import echo_context
+from src.core.database.models import MEDIA_BUY_FINALIZING_STATUS
+from src.core.database.repositories import MediaBuyRepository
+from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeReadiness
+from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
+from src.core.database.repositories.workflow import WorkflowRepository
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPMediaBuyRejectedError,
+    build_two_layer_error_envelope,
+)
+from src.core.logging_utils import sanitize_log_value
+from src.core.media_buy_flight import lifecycle_status_for_window, resolve_flight_window_utc
+from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess, Package
+from src.core.schemas.creative import SyncCreativesResponse
+from src.core.thread_registry import ThreadRegistry
+from src.core.webhook_validator import validate_webhook_task_type
+from src.services.protocol_webhook_service import get_protocol_webhook_service
+
+if TYPE_CHECKING:
+    from src.core.database.models import MediaBuy, MediaPackage, WorkflowStep
+
+logger = logging.getLogger(__name__)
+
+
+class FinalizeOutcome(StrEnum):
+    """Result of an approve/reject finalization, for single-winner orchestration. #1544.
+
+    ``APPLIED`` — this request won the claim and applied the decision (order created /
+    rejected). ``ADAPTER_FAILED`` — won the claim but the adapter reported a handled
+    failure (buy marked failed). ``NOT_CLAIMED`` — a competing request/owner already
+    decided or took over the buy (or it vanished): this request did NOTHING further
+    (no adapter, no terminalization, no emit). ``RETRYING`` — the operation could not
+    complete NOW but the buy remains in the ``finalizing`` claim for the scheduler's
+    reconciler: either the adapter raised ``AdapterIdempotencyUncertain`` (nothing
+    remote happened; automatic retry) or a crash left a possibly-partial remote graph
+    on a non-replayable adapter (``manual_required`` — operator action). #1637.
+    """
+
+    APPLIED = "applied"
+    ADAPTER_FAILED = "adapter_failed"
+    NOT_CLAIMED = "not_claimed"
+    RETRYING = "retrying"
+
+
+# Phase-2 lease TTL (#1637): must cover the WORST-CASE full finalization — GAM order
+# create (60s timeout) + line items (up to 300s) + order approval (up to 620s) +
+# creative upload — ≈1300s worst case, so default 3600s (~2.5× margin). A worker that
+# somehow outlives even this cannot double-publish (every mutation is lease-CAS'd);
+# at worst the reconciler flags manual_required and the worker's eventual successful
+# publish self-heals it.
+#
+# TAKEOVER GRACE ≥ WORST-CASE RUNTIME (Fix #1637). Reconciler/operator takeover of a buy
+# whose lease was left in place fires only when the lease has been expired for at least
+# ``MediaBuyRepository.claim_finalizing``'s ``abandoned_owner_grace_seconds`` (default 3600s)
+# BEYOND its TTL-sized expiry. 3600s ≥ the ≈1300s worst-case adapter runtime above, so an
+# ALIVE worker (whose heartbeat renews every ~TTL/3) is never mistaken for abandoned: its
+# lease only ages out after the heartbeat STOPS, and takeover then waits a further full
+# grace. Keep grace ≥ the worst-case runtime if either bound is re-tuned.
+# Operator-facing conflict copy shared by the operations + workflow blueprints
+# (flash and JSON error alike), so the "lost the single-winner claim" message
+# has exactly one home. #1544.
+MEDIA_BUY_ALREADY_DECIDED_MESSAGE = "This media buy was already decided by another request"
+WORKFLOW_STEP_ALREADY_DECIDED_MESSAGE = "This workflow step was already decided"
+
+# Sibling of the two above: the single-winner finalize is claimed and in flight
+# (RETRYING, or a plain in-flight ``finalizing`` row), and the reconciler completes
+# it automatically. One logical event, so one wording — it was previously spelled
+# three different ways across the two admin blueprints and the review template,
+# which reported the same state to operators differently. #1544.
+MEDIA_BUY_FINALIZE_IN_PROGRESS_MESSAGE = (
+    "Media buy approval is in progress — the ad-server order will be created automatically shortly"
+)
+
+
+def workflow_step_snapshot(step: WorkflowStep) -> dict[str, Any]:
+    """Snapshot the fields a finalize/webhook call needs from a WorkflowStep row.
+
+    The ORM instance may expire/detach after the caller's commit (nested
+    sessions, the post-commit webhook read), so every finalize seam takes this
+    dict instead of the live row. ``request_data`` is JSONType (``dict|str|None``)
+    — narrowed to a dict here so every consumer's ``.get()`` is safe, rather than
+    each of the five call sites narrowing (or forgetting to narrow) it themselves.
+    #1544.
+    """
+    request_data = step.request_data
+    return {
+        "step_id": step.step_id,
+        "context_id": step.context_id,
+        "tool_name": step.tool_name,
+        "request_data": request_data if isinstance(request_data, dict) else {},
+    }
+
+
+def require_finalize_applied(outcome: FinalizeOutcome) -> None:
+    """Guard a success branch against a silently mis-rendered ``FinalizeOutcome``.
+
+    Every admin surface hand-rolls its own ``if outcome is …`` ladder and then
+    falls through to a terminal branch. Those fall-throughs disagreed: the two
+    approve routes reported an unmatched member to the operator as "order created
+    successfully" while the creative route logged it as an error. ``FinalizeOutcome``
+    is a StrEnum designed to grow (the #1637 lease states), so a member added later
+    would be rendered as SUCCESS on the surfaces the operator actually sees.
+
+    Calling this immediately before a success branch makes each ladder exhaustive
+    by construction: anything that is not ``APPLIED`` raises rather than being
+    reported as a completed booking. The routes keep their own wording and
+    modality (flash vs jsonify); only the "is this actually success?" decision is
+    single-sourced. #1544.
+    """
+    if outcome is not FinalizeOutcome.APPLIED:
+        raise ValueError(
+            f"Unhandled FinalizeOutcome at a success branch: {outcome!r}. "
+            "Add an explicit branch for it before the success path."
+        )
+
+
+def _positive_duration_from_env(name: str, default: int) -> int:
+    """Read a safety-critical duration and reject values that disable its fence."""
+    raw = os.getenv(name)
+    try:
+        value = default if raw is None else int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a positive integer number of seconds") from exc
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer number of seconds")
+    return value
+
+
+FINALIZE_LEASE_TTL_SECONDS = _positive_duration_from_env("MEDIA_BUY_FINALIZE_LEASE_TTL", 3600)
+
+# Cool-down applied to the AMBIGUOUS post-mutation manual transition (#1637 Hole B).
+# ``AdapterPostMutationIncomplete`` means a remote (GAM) order MAY have been created but is
+# not yet confirmed complete/visible. Releasing the owner's lease immediately (the old
+# behaviour) let an operator RE-APPROVE before ``create_order``'s lookup-before-create dedup
+# could SEE that first order — GAM has a read-after-write visibility lag — risking a SECOND
+# ``createOrders``. So instead of releasing the lease we RETAIN it with expiry now + this
+# cool-down, so ``MediaBuyRepository.claim_finalizing``'s re-approval guard
+# ("manual_required + lease expired beyond ``abandoned_owner_grace_seconds``") WITHHOLDS
+# re-approval until the first order is reliably visible. The EFFECTIVE re-approval delay is
+# this cool-down PLUS that abandoned-owner grace. Default 300s comfortably exceeds GAM's
+# read-after-write propagation; override via MEDIA_BUY_FINALIZE_AMBIGUOUS_COOLDOWN. The
+# The ownership-loss path requests the same cool-down. It normally loses the owner-CAS,
+# but retaining the lease if it wins the heartbeat/publish race fences re-approval too.
+FINALIZE_AMBIGUOUS_COOLDOWN_SECONDS = _positive_duration_from_env("MEDIA_BUY_FINALIZE_AMBIGUOUS_COOLDOWN", 300)
+
+# Named registry of in-flight phase-2 heartbeat threads (#1637). Dead-thread reaping is
+# built in; used only so the renewers are discoverable/joinable, never for correctness.
+_FINALIZE_HEARTBEAT_REGISTRY = ThreadRegistry()
+
+
+@contextlib.contextmanager
+def finalize_lease_heartbeat(
+    tenant_id: str,
+    media_buy_id: str,
+    lease_id: str,
+    *,
+    lease_ttl_seconds: int = FINALIZE_LEASE_TTL_SECONDS,
+    now_fn: Callable[[], datetime.datetime] | None = None,
+) -> Iterator[threading.Event]:
+    """Renew the owner's phase-2 lease on a background thread while its adapter runs (#1637).
+
+    Elapsed time alone is NOT an ownership fence: a worker blocked inside a long network
+    call is ALIVE but silent, and "lease expired + grace" would wrongly declare it dead —
+    letting a reconciler or an operator re-approval start a SECOND adapter invocation.
+    While this context is open a daemon thread renews the lease at ~TTL/3 on its OWN
+    session, so a blocked-but-alive owner keeps its lease unexpired and "expired + grace"
+    genuinely means the process died or lost DB connectivity.
+
+    GUARANTEE BOUNDARY. This heartbeat is a LIVENESS SIGNAL, not a hard fence: a DB lease
+    cannot fence a live remote (GAM) side effect, and GAM has no server-side idempotency
+    token, so hard exactly-once remote-CREATE is impossible. The heartbeat only SHRINKS the
+    concurrent-invocation window. The authoritative guarantee (no double-PUBLISH) is the
+    lease-CAS on every status transition; double remote-CREATE is mitigated by the adapter's
+    deterministic-name dedup and, on any ambiguity, by FAILING SAFE to manual reconciliation.
+
+    Yields an ``ownership_lost`` :class:`threading.Event` the caller checks after its adapter
+    returns. It is set when this worker can PROVE it no longer owns the lease — either (a)
+    ``renew_finalize_lease`` reports ``still_owner=False`` (the buy moved on / a different
+    lease took over), or (b) renewals have failed continuously long enough that more than
+    ``lease_ttl_seconds`` elapsed since the last SUCCESSFUL renewal, so the lease has
+    certainly expired (e.g. Postgres connectivity was lost mid-run). Elapsed time is measured
+    on ``now_fn`` (injected only by tests, advancing a fake clock instead of row surgery).
+    """
+    stop = threading.Event()
+    ownership_lost = threading.Event()
+    interval = max(lease_ttl_seconds / 3.0, 0.05)
+    key = f"finalize-heartbeat:{tenant_id}:{media_buy_id}:{lease_id}"
+    _now = now_fn or (lambda: datetime.datetime.now(datetime.UTC))
+    lease_ttl = datetime.timedelta(seconds=lease_ttl_seconds)
+
+    def _renew_loop() -> None:
+        from src.core.database.database_session import get_db_session
+
+        # The lease was freshly minted (expiry = now + TTL) at context entry, so seed the
+        # last-success instant to now: (b) below measures continuous renewal failure from it.
+        last_success = _now()
+        # stop.wait returns True once stop is set (context exiting) → loop ends; False on
+        # timeout → time to renew. First renewal is one interval in (the lease was just
+        # freshly minted), always < TTL.
+        while not stop.wait(interval):
+            try:
+                with get_db_session() as renew_session:
+                    still_owner = MediaBuyRepository(renew_session, tenant_id, now_fn=now_fn).renew_finalize_lease(
+                        media_buy_id, lease_id, lease_ttl_seconds=lease_ttl_seconds
+                    )
+                    renew_session.commit()
+                if not still_owner:
+                    # (a) Provably lost ownership — the buy moved on / another lease took over.
+                    ownership_lost.set()
+                    break
+                last_success = _now()
+            except Exception:  # noqa: BLE001 - renewal is best-effort; never break the adapter run
+                logger.exception(
+                    "[FINALIZE] lease heartbeat renew failed for %s",
+                    sanitize_log_value(media_buy_id),
+                )
+                # (b) If renewals have been failing longer than the full TTL, the lease has
+                # CERTAINLY expired since the last successful renewal — signal loss and stop.
+                if _now() - last_success > lease_ttl:
+                    ownership_lost.set()
+                    break
+
+    thread = threading.Thread(target=_renew_loop, name=key, daemon=True)
+    _FINALIZE_HEARTBEAT_REGISTRY.add(key, thread)
+    thread.start()
+    try:
+        yield ownership_lost
+    finally:
+        stop.set()
+        thread.join(timeout=max(interval * 2, 1.0))
+        _FINALIZE_HEARTBEAT_REGISTRY.remove(key)
+
+
+def build_media_buy_result(
+    media_buy: MediaBuy,
+    packages: list[MediaPackage],
+    *,
+    rejection_reason: str | None = None,
+    context: Any = None,
+) -> CreateMediaBuySuccess | CreateMediaBuyError:
+    """Build the internal artifact the completion/rejection webhook carries.
+
+    Approve path → ``CreateMediaBuySuccess`` echoing the persisted
+    ``confirmed_at``/``revision``. Reject path (``rejection_reason`` set) →
+    ``CreateMediaBuyError``: AdCP 3.1.1 ``create-media-buy-response`` models
+    non-success outcomes as the Error variant of the ``oneOf`` (Success / Error /
+    Submitted — there is NO rejection arm), so a seller decline cannot be a success
+    body with a ``rejection_reason`` field. The wire code is routed through the typed
+    ``AdCPMediaBuyRejectedError`` cascade (internal ``MEDIA_BUY_REJECTED`` →
+    ``POLICY_VIOLATION``), matching the create-media-buy tool path — never hand-picked.
+    Authority: dist/compliance/3.1.1/domains/media-buy/scenarios/governance_denied.yaml
+    (create_media_buy_denied, Case-2 wire placement). #1544 / PR #1567.
+    """
+    if rejection_reason is not None:
+        rejection = AdCPMediaBuyRejectedError(f"Rejected: {rejection_reason}")
+        return CreateMediaBuyError(
+            errors=[
+                Error(
+                    code=rejection.wire_error_code,
+                    message=rejection.message,
+                    recovery=rejection.recovery,
+                    # Read the canonical POLICY_VIOLATION hint off the exception's
+                    # own default, so this webhook artifact and the synchronous
+                    # tool-path wire carry identical buyer guidance (single source).
+                    suggestion=rejection.suggestion,
+                )
+            ]
+        )
+    return CreateMediaBuySuccess.sync_success(
+        media_buy_id=media_buy.media_buy_id,
+        packages=[Package(package_id=p.package_id) for p in packages],
+        # Echo the buyer's request context verbatim (None -> omitted by exclude_none).
+        context=context,
+        confirmed_at=media_buy.confirmed_at,
+        revision=media_buy.revision,
+    )
+
+
+async def emit_protocol_result_webhook_async(
+    step_data: dict[str, Any],
+    webhook_config: Any,
+    result: CreateMediaBuySuccess | CreateMediaBuyError | SyncCreativesResponse,
+    status: AdcpTaskStatus,
+    metadata: dict[str, Any],
+) -> bool:
+    """Async core of :func:`emit_media_buy_webhook` (one payload-construction home).
+
+    Shared by the media-buy approval routes (via the sync wrapper) and the
+    creative-review path in ``blueprints/creatives.py`` (already inside an event
+    loop, so it awaits this directly with the ``SyncCreativesResponse`` result).
+    Protocol (``mcp``/``a2a``) is read from the workflow step's ``request_data``.
+    ``metadata`` carries the app-specific delivery/audit fields the protocol webhook
+    service logs (task_type/tenant_id/principal_id/media_buy_id — PR #1567 round-2).
+    Best-effort: a webhook failure is logged, never raised — the DB transition has
+    already committed and must not be rolled back by a delivery error (mirrors the
+    approval routes). Returns ``True`` when the notification was sent. #1544.
+    """
+    # Default to MCP for backward compatibility with steps recorded before the
+    # protocol was persisted on request_data.
+    protocol = step_data["request_data"].get("protocol", "mcp")
+    # Correlate to the id the BUYER holds. A2A returned an outer transport task id
+    # (persisted on the step's request_data as ``external_task_id`` at create time);
+    # the buyer polls / receives the webhook against THAT id, not the internal
+    # step_id. MCP/REST have no outer id, so they fall back to step_id. #1544 B6.
+    correlation_task_id = step_data["request_data"].get("external_task_id") or step_data["step_id"]
+    payload: Any
+    if protocol == "a2a":
+        payload = create_a2a_webhook_payload(
+            task_id=correlation_task_id,
+            status=status,
+            result=result,
+            context_id=step_data["context_id"],
+        )
+    else:
+        # tool_name is untrusted (workflow_steps DB column) — validate a COPY for the
+        # SDK payload; metadata keeps the original label.
+        payload = create_mcp_webhook_payload(
+            task_id=correlation_task_id,
+            task_type=validate_webhook_task_type(step_data.get("tool_name", "create_media_buy")),
+            result=result,
+            status=status,
+        )
+    try:
+        service = get_protocol_webhook_service()
+        await service.send_notification(
+            push_notification_config=webhook_config,
+            payload=payload,
+            metadata=metadata,
+        )
+        # CreateMediaBuyError (reject path) carries no media_buy_id — fall back to the step id.
+        result_media_buy_id = getattr(result, "media_buy_id", None) or step_data["step_id"]
+        logger.info(
+            "Sent %s webhook notification for task %s",
+            sanitize_log_value(status),
+            sanitize_log_value(result_media_buy_id),
+        )
+        return True
+    except Exception as webhook_err:
+        logger.warning("Failed to send webhook notification: %s", sanitize_log_value(webhook_err))
+        return False
+
+
+def emit_media_buy_webhook(
+    step_data: dict[str, Any],
+    webhook_config: Any,
+    result: CreateMediaBuySuccess | CreateMediaBuyError,
+    status: AdcpTaskStatus,
+    metadata: dict[str, Any],
+) -> None:
+    """Sync entry point for the approval routes (no running event loop).
+
+    See :func:`emit_protocol_result_webhook_async` for the shared semantics.
+    """
+    asyncio.run(emit_protocol_result_webhook_async(step_data, webhook_config, result, status, metadata))
+
+
+def emit_media_buy_completion(
+    session: Session,
+    tenant_id: str,
+    media_buy: MediaBuy | None,
+    packages: list[MediaPackage],
+    step_data: dict[str, Any],
+    status: AdcpTaskStatus,
+    *,
+    rejection_reason: str | None = None,
+) -> None:
+    """Look up the buyer's active push config from the workflow step and emit the
+    completion/rejection artifact if one is configured. No-op when the buy has no
+    push_notification_config — so every approval route (operations, workflow,
+    creative-unblock) delivers the final revision/confirmed_at the same way. #1544.
+    """
+    if media_buy is None:
+        return
+    push_config = (step_data.get("request_data") or {}).get("push_notification_config") or {}
+    url = push_config.get("url")
+    if not url:
+        return
+    # Repository lookup (no raw select): the buyer's active configs for this
+    # principal, matched to the step's push URL — newest wins if more than one.
+    configs = PushNotificationConfigRepository(session, tenant_id).list_active_by_principal(media_buy.principal_id)
+    matches = sorted((c for c in configs if c.url == url), key=lambda c: c.created_at, reverse=True)
+    if not matches:
+        return
+    webhook_config = matches[0]
+    # App-specific metadata the protocol webhook service reads for delivery logging and
+    # the audit trail (task_type/tenant_id/principal_id/media_buy_id — PR #1567 round-2).
+    metadata = {
+        "task_type": step_data["tool_name"],
+        "tenant_id": tenant_id,
+        "principal_id": media_buy.principal_id,
+        "media_buy_id": media_buy.media_buy_id,
+    }
+    emit_media_buy_webhook(
+        step_data,
+        webhook_config,
+        build_media_buy_result(
+            media_buy,
+            packages,
+            rejection_reason=rejection_reason,
+            context=echo_context(step_data.get("request_data") or {}),
+        ),
+        status,
+        metadata,
+    )
+
+
+def _terminalize_step_and_emit(
+    session: Session,
+    tenant_id: str,
+    *,
+    media_buy: MediaBuy,
+    packages: list[MediaPackage],
+    step_id: str,
+    step_data: dict[str, Any],
+    step_status: str,
+    task_status: AdcpTaskStatus,
+    rejection_reason: str | None = None,
+) -> None:
+    """Persist the terminal decision artifact on the workflow step, commit, then emit.
+
+    The single place a media-buy approve/reject decision becomes durable AND
+    observable: stores the built ``CreateMediaBuySuccess`` on
+    ``WorkflowStep.response_data`` under ``step_status``
+    (``completed``/``rejected``/``failed``) so ``tasks/get`` can return the final
+    artifact, commits, then emits the buyer's completion/rejection webhook AFTER
+    commit (best-effort — a delivery failure never rolls back the committed
+    decision). The workflow + creative-unblock routes previously left the step
+    non-terminal with no artifact; centralising it here fixes both. #1544.
+    """
+    result = build_media_buy_result(
+        media_buy,
+        packages,
+        rejection_reason=rejection_reason,
+        context=echo_context(step_data.get("request_data") or {}),
+    )
+    WorkflowRepository(session, tenant_id).update_status(
+        step_id,
+        status=step_status,
+        response_data=result.model_dump(mode="json"),
+        error_message=rejection_reason,
+    )
+    session.commit()
+    emit_media_buy_completion(
+        session, tenant_id, media_buy, packages, step_data, task_status, rejection_reason=rejection_reason
+    )
+
+
+def finalize_media_buy_approval(
+    session: Session,
+    tenant_id: str,
+    *,
+    media_buy_id: str,
+    step_id: str | None,
+    step_data: dict[str, Any] | None,
+    compute_target: Callable[[MediaBuy], str | None],
+    run_adapter: Callable[[], tuple[bool, str | None]],
+    expected_status: str | tuple[str, ...],
+    approved_by: str | None = None,
+    approved_at: datetime.datetime | None = None,
+    now_fn: Callable[[], datetime.datetime] | None = None,
+) -> tuple[FinalizeOutcome, str | None]:
+    """Atomic, single-winner approve finalizer (operations / workflow / creative-unblock).
+
+    ``step_id``/``step_data`` are ``None`` for the step-less creative-unblock path (no
+    async buyer task); they flow through to :func:`_run_adapter_and_finalize`, which
+    commits the serving transition on its own when there is no step to terminalize.
+
+    Sequence (see #1544 review B4/B5 and the P1 single-winner fix):
+
+      1. CLAIM the decision UNDER THE ROW LOCK: transition ONLY if the committed status
+         is still in ``expected_status`` (``update_status_computed`` with
+         ``expected_status``), to the flight-derived target computed post-lock. If the
+         claim is lost (a concurrent approve/reject/hold already moved the buy) →
+         rollback and return ``NOT_CLAIMED`` WITHOUT touching the adapter, so the remote
+         order is created exactly once. The claim stamps ``approved_at``/``approved_by``
+         (when supplied) — the write-once approval instant ``confirmed_at`` records,
+         BEFORE any external work. commit.
+      2. Run the adapter. On failure: mark the buy + step ``failed`` (with a buyer-facing
+         error envelope on ``response_data``), commit, return ``ADAPTER_FAILED``.
+      3. On success: terminalize the step (``completed``) with the response artifact,
+         commit, emit the completion webhook after commit, return ``APPLIED``.
+
+    ``approved_at``/``approved_by`` are omitted when finalizing a buy already stamped at
+    an earlier ``pending_creatives`` hold (creative-unblock): ``confirmed_at`` is
+    write-once and ``approved_at`` keeps the original admin-approval instant.
+
+    **Crash-recoverable (#1637).** The claim moves the buy to the transient
+    ``finalizing`` status (NOT the final serving status) and commits BEFORE the
+    adapter, so a crash between the commit and terminalization never leaves the buy
+    seller-confirmed/serving with no remote order. Phase 2
+    (:func:`_run_adapter_and_finalize`) runs the adapter idempotently, then publishes
+    the flight-derived serving status AND terminalizes the step in ONE transaction;
+    the scheduler's reconciliation pass re-drives any buy stranded in ``finalizing``.
+    """
+    repo = MediaBuyRepository(session, tenant_id, now_fn=now_fn)
+    # PHASE 1 — single-winner CLAIM to the transient ``finalizing`` status + a fresh
+    # phase-2 LEASE, committed BEFORE any external work. Bumps revision (the
+    # approval's single token advance) + stamps approved_at/approved_by. The buy is
+    # NOT yet seller-confirmed (finalizing is unconfirmed), so confirmed_at is
+    # deferred to the serving transition in phase 2 (stamped from this approved_at). #1637.
+    claim = repo.claim_finalizing(
+        media_buy_id,
+        expected_status=expected_status,
+        lease_ttl_seconds=FINALIZE_LEASE_TTL_SECONDS,
+        approved_at=approved_at,
+        approved_by=approved_by,
+    )
+    if claim is None:
+        # Lost the claim (another request decided this buy) or the buy vanished — do
+        # NOTHING further, so no duplicate adapter order / notification. #1544.
+        session.rollback()
+        return FinalizeOutcome.NOT_CLAIMED, None
+    session.commit()
+    _, lease_id = claim
+
+    return _run_adapter_and_finalize(
+        session,
+        tenant_id,
+        media_buy_id=media_buy_id,
+        step_id=step_id,
+        step_data=step_data,
+        compute_target=compute_target,
+        run_adapter=run_adapter,
+        lease_id=lease_id,
+        now_fn=now_fn,
+    )
+
+
+def _record_takeover_incident(
+    session: Session,
+    repo: MediaBuyRepository,
+    *,
+    tenant_id: str,
+    media_buy_id: str,
+    step_id: str | None,
+    reason: str,
+) -> None:
+    """Discard a failed post-adapter lease-CAS, then durably record the ownership-INDEPENDENT
+    possible-duplicate incident on its own transaction and log the remediation (#1637 Hole A).
+
+    Shared by every path where THIS worker's adapter provably RAN this attempt but the worker
+    then lost a lease-CAS to a newer owner — so the newer owner will also run the adapter and a
+    duplicate remote order may exist. Covers the ``_flag_manual_reconciliation`` CAS-lost case
+    (heartbeat proved the loss) AND the two post-adapter transition CAS losses where the
+    heartbeat did NOT prove it in time (path (ii)). The ``session.rollback()`` drops the aborted
+    CAS's row lock/mutation before the ownership-independent incident write commits.
+    """
+    session.rollback()
+    repo.record_finalize_reconcile_incident(media_buy_id, reason)
+    session.commit()
+    logger.error(
+        "Media buy %s (tenant %s, step %s) ran its adapter but lost the finalize lease to a newer owner: "
+        "%s. Recorded a possible-duplicate reconcile incident (ownership-independent) — the new owner may "
+        "publish a SECOND remote order; reconcile the remote state.",
+        sanitize_log_value(media_buy_id),
+        sanitize_log_value(tenant_id),
+        sanitize_log_value(step_id),
+        sanitize_log_value(reason),
+    )
+
+
+def _flag_manual_reconciliation(
+    session: Session,
+    repo: MediaBuyRepository,
+    *,
+    tenant_id: str,
+    media_buy_id: str,
+    step_id: str | None,
+    lease_id: str,
+    reason: str,
+    cooldown_seconds: int | None = None,
+) -> tuple[FinalizeOutcome, str | None]:
+    """Owner-CAS a ``finalizing`` buy to ``manual_required`` (fail-safe) and log remediation.
+
+    Shared by the two conservative outcomes that leave a possibly-partial remote graph with
+    NO proof of completion, and so must NOT be reported as success:
+
+    - ``AdapterPostMutationIncomplete`` (AMBIGUOUS): the adapter created the remote order but
+      a later stage (creative upload / order approval / id persistence) failed. Pass
+      ``cooldown_seconds`` so the owner-CAS RETAINS the lease with a cool-down expiry, fencing
+      re-approval until a committed-but-invisible first remote order becomes visible (#1637
+      Hole B).
+    - PROVABLE ownership loss during the adapter run — the phase-2 heartbeat lost the lease
+      (a newer owner took over) or the lease provably expired because renewals kept failing,
+      so this worker can no longer assert it owns the finalization even though its adapter
+      call ran. Request the same cool-down: normally the owner-CAS loses, but if it wins
+      the heartbeat/publish race, retaining the lease fences re-approval during reconciliation.
+
+    In BOTH cases this worker's adapter RAN, so a duplicate/partial remote graph may exist —
+    a durable, OWNERSHIP-INDEPENDENT reconcile incident is recorded either way (#1637 Hole A),
+    so the possible duplicate is never silently swallowed:
+
+    - CAS WON (this worker still owns the lease): keep the buy ``finalizing`` with the invoked
+      marker intact, record the incident, ``RETRYING``.
+    - CAS LOST (a NEWER owner already took the row over — a real takeover): DON'T touch the
+      finalize state (the winner owns it), but still record the incident ownership-independently
+      and return ``NOT_CLAIMED``. The incident marker SURVIVES the winner's clean publish.
+    #1637.
+    """
+    flagged = repo.set_finalize_recovery_manual(media_buy_id, lease_id=lease_id, cooldown_seconds=cooldown_seconds)
+    if not flagged:
+        # Lost the owner-CAS to a NEWER owner (a real takeover installed a fresh lease while
+        # this worker's adapter was still running). Discard the failed CAS attempt, then record
+        # the possible-duplicate incident WITHOUT ownership so it is not silently swallowed.
+        _record_takeover_incident(
+            session, repo, tenant_id=tenant_id, media_buy_id=media_buy_id, step_id=step_id, reason=reason
+        )
+        return FinalizeOutcome.NOT_CLAIMED, reason
+    _record_manual_reconciliation(
+        session, repo, tenant_id=tenant_id, media_buy_id=media_buy_id, step_id=step_id, reason=reason
+    )
+    return FinalizeOutcome.RETRYING, f"manual reconciliation required: {reason}"
+
+
+def _record_manual_reconciliation(
+    session: Session,
+    repo: MediaBuyRepository,
+    *,
+    tenant_id: str,
+    media_buy_id: str,
+    step_id: str | None,
+    reason: str,
+) -> None:
+    """Durably expose a manual-reconciliation incident in the current transaction."""
+    repo.record_finalize_reconcile_incident(media_buy_id, reason)
+    session.commit()
+    logger.error(
+        "Media buy %s (tenant %s, step %s) could not be confirmed as successfully created: %s. Marked "
+        "finalize_recovery_mode=manual_required and recorded a possible-duplicate reconcile incident — "
+        "reconcile the remote state, then RE-APPROVE the buy (preferred) or clear BOTH flags to let the "
+        "reconciler retry: UPDATE media_buys SET finalize_recovery_mode = NULL, "
+        "finalize_adapter_invoked_at = NULL WHERE media_buy_id = '%s'.",
+        sanitize_log_value(media_buy_id),
+        sanitize_log_value(tenant_id),
+        sanitize_log_value(step_id),
+        sanitize_log_value(reason),
+        sanitize_log_value(media_buy_id),
+    )
+
+
+def _run_adapter_and_finalize(
+    session: Session,
+    tenant_id: str,
+    *,
+    media_buy_id: str,
+    step_id: str | None,
+    step_data: dict[str, Any] | None,
+    compute_target: Callable[[MediaBuy], str | None],
+    run_adapter: Callable[[], tuple[bool, str | None]],
+    lease_id: str,
+    now_fn: Callable[[], datetime.datetime] | None = None,
+) -> tuple[FinalizeOutcome, str | None]:
+    """Phase 2 of the crash-recoverable approval: OWNED adapter run + atomic publish.
+
+    GUARANTEE BOUNDARY (#1637). The HARD, provable guarantee here is no double-PUBLISH:
+    every status transition below is a lease-CAS whose result is checked, so at most one
+    worker ever publishes the serving status / terminalizes the step / emits the webhook.
+    Double remote-CREATE is a SEPARATE, weaker guarantee: a DB lease cannot fence a live
+    remote (GAM) side effect, and GAM exposes no server-side idempotency token, so hard
+    exactly-once remote-create is NOT achievable. It is mitigated instead by
+    deterministic-name dedup in the adapter (a retry reuses the same order name) and, on ANY
+    ambiguity, by FAILING SAFE to manual reconciliation — both the adapter's
+    ``AdapterPostMutationIncomplete`` and a proven mid-run ownership loss (below) route to
+    :func:`_flag_manual_reconciliation` rather than claiming success. The heartbeat only
+    SHRINKS the concurrent-invocation window (it is a liveness signal, not a fence).
+
+    Precondition: the caller holds the buy's phase-2 lease (``lease_id``) while the
+    buy is claimed in ``finalizing``. Shared by the initial finalizer and the
+    scheduler's reconciler, so a mid-finalize crash is resumed WITHOUT a duplicate
+    remote order and WITHOUT a stale worker clobbering a newer owner — every
+    mutation below is a lease-CAS whose result is CHECKED (``None`` → rollback →
+    ``NOT_CLAIMED``: never run the adapter further, mark failed, terminalize, or
+    emit on lost ownership):
+
+      1. CAS-commit the adapter-invoked marker (durable "remote mutations may exist"
+         signal), reset stale per-package platform ids (a replay re-creates the
+         remote graph — see below), then run the adapter. The adapter ALWAYS runs:
+         a persisted ``platform_order_id`` is NOT proof the remote workflow
+         completed (it is written before creative upload and order approval), so
+         phase 2 never skips the adapter on its account — the serving status
+         becomes visible ONLY after adapter success in THIS attempt. #1637.
+         - ``AdapterIdempotencyUncertain`` (contract: NOTHING remote happened) →
+           one owner-CAS returns the buy to the FULLY automatic state (marker,
+           lease, AND ``finalize_recovery_mode`` cleared — a manual flag set by a
+           reconciler while this expired-lease worker was in flight must not
+           outlive an exception that guarantees automatic retry is safe), return
+           ``RETRYING``.
+         - handled failure ``(False, msg)`` → ``failed`` transition via lease-CAS
+           (+ step failed with a buyer-facing envelope), commit, ``ADAPTER_FAILED``.
+      2. Success publish: ``finalizing`` → flight-derived serving status via
+         lease-CAS with ``bump=False`` (the claim already advanced the revision) and
+         ``clear_finalize_state=True`` (lease/marker/recovery_mode cleared —
+         including the self-heal of a ``manual_required`` flag set while this slow
+         owner was still running). The step terminalization commits IN THE SAME
+         transaction, so the serving status and the completion artifact become
+         durable together; the webhook emits after commit (best-effort).
+
+    ``step_id``/``step_data`` are ``None`` for the step-less creative-unblock path
+    (no async buyer task): the serving transition is committed on its own. #1637.
+    """
+    repo = MediaBuyRepository(session, tenant_id, now_fn=now_fn)
+    # Durable marker BEFORE the adapter: a crash after this commit means remote
+    # mutations may exist, so only full-replay adapters may auto-resume past it.
+    if not repo.set_finalize_adapter_invoked(media_buy_id, lease_id):
+        session.rollback()
+        return FinalizeOutcome.NOT_CLAIMED, None
+    # A (re)run re-creates the remote graph and may mint a DIFFERENT order id —
+    # drop stale per-package platform ids so _persist_adapter_package_ids' mismatch
+    # guard (which protects against concurrent writers, not replays) doesn't strand
+    # the buy. No-op on first attempts. Committed atomically with the marker.
+    repo.clear_stale_platform_order_ids(media_buy_id)
+    session.commit()
+
+    try:
+        # Heartbeat-renew the lease while the adapter is in flight so a blocked-but-alive
+        # owner keeps its lease unexpired (#1637): elapsed time is not an ownership fence.
+        # ``ownership_lost`` is set if the heartbeat PROVES this worker no longer owns the
+        # lease (a newer owner took over, or renewals failed long enough that the lease
+        # certainly expired) — checked after the adapter returns, below. Renew with the SAME
+        # TTL the claim minted the lease with (FINALIZE_LEASE_TTL_SECONDS) so the "lease
+        # provably expired" bound in the heartbeat matches the row's real expiry.
+        with finalize_lease_heartbeat(
+            tenant_id, media_buy_id, lease_id, lease_ttl_seconds=FINALIZE_LEASE_TTL_SECONDS, now_fn=now_fn
+        ) as ownership_lost:
+            success, error_msg = run_adapter()
+    except AdapterIdempotencyUncertain as exc:
+        # Contract: no remote mutation happened. ONE owner-CAS restores the fully
+        # automatic state — marker, lease, and any manual_required flag a
+        # reconciler set while this (expired-lease but alive) worker was in
+        # flight. compute_target=None leaves the status at ``finalizing``.
+        logger.warning(
+            "Adapter idempotency uncertain for media buy %s; will retry: %s",
+            sanitize_log_value(media_buy_id),
+            sanitize_log_value(exc),
+        )
+        repo.update_status_computed(
+            media_buy_id,
+            lambda _mb: None,
+            expected_status=MEDIA_BUY_FINALIZING_STATUS,
+            expected_lease_id=lease_id,
+            clear_finalize_state=True,
+            bump=False,
+        )
+        session.commit()
+        return FinalizeOutcome.RETRYING, str(exc)
+    except AdapterPostMutationIncomplete as exc:
+        # Remote mutations EXIST but the workflow did not complete (creative upload /
+        # order approval / id persistence failed after the order was created). This
+        # must NOT become a terminal ``failed`` that erases the finalization state —
+        # that would leave a dangling partial remote graph with no reconciliation
+        # signal. Keep the buy ``finalizing`` with the invoked marker intact and flag
+        # manual_required (owner CAS). AMBIGUOUS path (#1637 Hole B): RETAIN the lease with a
+        # cool-down so re-approval is fenced until a committed-but-invisible first remote order
+        # becomes visible to the adapter's lookup-before-create dedup.
+        return _flag_manual_reconciliation(
+            session,
+            repo,
+            tenant_id=tenant_id,
+            media_buy_id=media_buy_id,
+            step_id=step_id,
+            lease_id=lease_id,
+            reason=str(exc),
+            cooldown_seconds=FINALIZE_AMBIGUOUS_COOLDOWN_SECONDS,
+        )
+    # PROVABLE ownership loss DURING the adapter run (#1637). The adapter returned normally,
+    # but the heartbeat could no longer keep the lease alive — a newer owner took over, or
+    # renewals failed long enough that the lease certainly expired. The lease-CAS publish
+    # below would already return None (blocking a double-publish), but a losing worker must
+    # ALSO not silently report NOT_CLAIMED as if nothing happened: its adapter call ran and
+    # a duplicate/partial remote graph may exist while another owner runs concurrently. Fail
+    # SAFE to manual reconciliation, exactly like AdapterPostMutationIncomplete.
+    if ownership_lost.is_set():
+        # Retain the same cool-down as the other ambiguous post-mutation outcome. Normally the
+        # owner CAS below loses, but if it wins in the heartbeat/publish race the lease must stay
+        # fenced while a possibly duplicated remote graph is reconciled.
+        return _flag_manual_reconciliation(
+            session,
+            repo,
+            tenant_id=tenant_id,
+            media_buy_id=media_buy_id,
+            step_id=step_id,
+            lease_id=lease_id,
+            reason="finalization lease ownership was lost while the adapter was running",
+            cooldown_seconds=FINALIZE_AMBIGUOUS_COOLDOWN_SECONDS,
+        )
+    if not success:
+        failed = repo.update_status_computed(
+            media_buy_id,
+            lambda _mb: "failed",
+            expected_status=MEDIA_BUY_FINALIZING_STATUS,
+            expected_lease_id=lease_id,
+            clear_finalize_state=True,
+        )
+        if failed is None:
+            # Lost ownership while the adapter ran — a newer owner decides. The adapter RAN this
+            # attempt (the invoked marker was committed before it), so a duplicate/partial remote
+            # graph may exist once the newer owner also runs: record the ownership-independent
+            # incident before returning NOT_CLAIMED, exactly like the ownership_lost path but for
+            # the case where the heartbeat did NOT prove the loss in time (#1637 Hole A, path (ii)).
+            _record_takeover_incident(
+                session,
+                repo,
+                tenant_id=tenant_id,
+                media_buy_id=media_buy_id,
+                step_id=step_id,
+                reason="adapter ran (reported failure) but the failed-status transition lost the "
+                "finalize lease to a newer owner; a duplicate remote order may exist",
+            )
+            return FinalizeOutcome.NOT_CLAIMED, error_msg
+        if step_id is not None:
+            # Store a buyer-facing two-layer error envelope as the step's response_data
+            # (NOT just error_message): durable tasks/get rebuilds the failed Task's
+            # artifact from response_data. #1544 (P1).
+            #
+            # SECURITY: response_data is served to the BUYER cross-process via
+            # durable ``on_get_task``. The raw adapter ``error_msg`` (``str(e)`` /
+            # reconstruction text) may embed internal state (e.g. package_config
+            # corruption) and MUST NOT reach the wire. Use a STABLE generic message
+            # for the envelope and carry only structured ``details`` (media_buy_id)
+            # for buyer correlation. The raw ``error_msg`` stays in the internal
+            # ``error_message`` column, never on the envelope.
+            error_envelope = build_two_layer_error_envelope(
+                AdCPAdapterError(
+                    "Adapter execution failed while creating the media buy",
+                    details={"media_buy_id": media_buy_id},
+                )
+            )
+            WorkflowRepository(session, tenant_id).update_status(
+                step_id, status="failed", error_message=error_msg, response_data=error_envelope
+            )
+        session.commit()
+        return FinalizeOutcome.ADAPTER_FAILED, error_msg
+
+    # Publish the serving status — OWNERSHIP-CHECKED (#1637): a stale worker whose
+    # lease was taken over (or whose buy was already published/failed by the new
+    # owner) gets None and must do NOTHING — no terminalize, no second webhook.
+    published = repo.update_status_computed(
+        media_buy_id,
+        compute_target,
+        expected_status=MEDIA_BUY_FINALIZING_STATUS,
+        expected_lease_id=lease_id,
+        clear_finalize_state=True,
+        bump=False,
+    )
+    if published is None:
+        # The adapter RAN this attempt but a newer owner (W2) took the row over before this
+        # worker could publish the serving status — W2 will ALSO run the adapter, so a duplicate
+        # remote order may exist. This is the SAME silent-double-invocation hole as the
+        # ownership_lost path, reached when the heartbeat did NOT prove the loss in time: record
+        # the ownership-independent incident before returning NOT_CLAIMED (#1637 Hole A, path (ii)).
+        _record_takeover_incident(
+            session,
+            repo,
+            tenant_id=tenant_id,
+            media_buy_id=media_buy_id,
+            step_id=step_id,
+            reason="adapter ran but the serving-status publish lost the finalize lease to a newer owner; "
+            "a duplicate remote order may exist",
+        )
+        return FinalizeOutcome.NOT_CLAIMED, None
+    if step_id is not None and step_data is not None:
+        # Commits the serving-status transition AND the terminal step artifact together.
+        _terminalize_step_and_emit(
+            session,
+            tenant_id,
+            media_buy=published,
+            packages=repo.get_packages(media_buy_id),
+            step_id=step_id,
+            step_data=step_data,
+            step_status="completed",
+            task_status=AdcpTaskStatus.completed,
+        )
+    else:
+        session.commit()
+    return FinalizeOutcome.APPLIED, None
+
+
+def resume_finalizing_media_buy(
+    session: Session,
+    tenant_id: str,
+    *,
+    media_buy_id: str,
+    step_id: str | None,
+    step_data: dict[str, Any] | None,
+    run_adapter: Callable[[], tuple[bool, str | None]],
+    adapter_supports_replay: Callable[[], bool],
+    now_fn: Callable[[], datetime.datetime] | None = None,
+) -> tuple[FinalizeOutcome, str | None]:
+    """Re-drive a buy stranded in ``finalizing`` — the reconciler's single entry (#1637).
+
+    Sequence:
+
+      1. Disposition (fail-closed): if the adapter-invoked marker is set and this
+         buy's adapter does NOT support full create replay, a crash may have left a
+         partial remote graph (order without line items / creatives / approval —
+         even a persisted ``platform_order_id`` doesn't prove completeness). Flag
+         ``manual_required`` (locked CAS that respects a live lease and never steals
+         it, so a slow-but-alive worker's eventual publish still self-heals), log
+         ONCE, return ``RETRYING``. The reconciler scan excludes flagged buys — no
+         hot loop.
+      2. Otherwise acquire the phase-2 lease via CAS (absent/expired only) — the
+         authoritative single-winner gate against concurrent reconcilers AND live
+         workers. Failure → ``NOT_CLAIMED``, touch nothing.
+      3. Run phase 2 with the new lease (marker absent ⇒ nothing remote happened ⇒
+         safe for EVERY adapter; marker set ⇒ only replay-capable adapters reach
+         here).
+    """
+    repo = MediaBuyRepository(session, tenant_id, now_fn=now_fn)
+    stranded = repo.get_by_id(media_buy_id)
+    if stranded is None or stranded.status != MEDIA_BUY_FINALIZING_STATUS or stranded.finalize_recovery_mode:
+        return FinalizeOutcome.NOT_CLAIMED, None
+
+    if stranded.finalize_adapter_invoked_at is not None:
+        try:
+            replayable = adapter_supports_replay()
+        except Exception:
+            # Conservative disposition (#1637): if the adapter/capability cannot even
+            # be RESOLVED, we cannot prove the remote graph is safely replayable —
+            # treat as non-replayable so the row goes manual_required ONCE below,
+            # instead of re-raising into the scheduler and retrying (and
+            # error-logging) the same row on every pass forever.
+            logger.exception(
+                "Capability resolution failed for media buy %s (tenant %s); treating adapter as non-replayable",
+                sanitize_log_value(media_buy_id),
+                sanitize_log_value(tenant_id),
+            )
+            replayable = False
+        if not replayable:
+            if repo.set_finalize_recovery_manual(media_buy_id):
+                _record_manual_reconciliation(
+                    session,
+                    repo,
+                    tenant_id=tenant_id,
+                    media_buy_id=media_buy_id,
+                    step_id=step_id,
+                    reason=(
+                        "crash after adapter invocation on a non-replayable adapter; "
+                        "the remote finalization graph may be partial"
+                    ),
+                )
+            else:
+                session.rollback()
+            return FinalizeOutcome.RETRYING, "manual reconciliation required"
+
+    lease_id = repo.acquire_finalize_lease(media_buy_id, lease_ttl_seconds=FINALIZE_LEASE_TTL_SECONDS)
+    if lease_id is None:
+        # A live worker (unexpired lease) or a competing reconciler owns it.
+        session.rollback()
+        return FinalizeOutcome.NOT_CLAIMED, None
+    session.commit()
+
+    return _run_adapter_and_finalize(
+        session,
+        tenant_id,
+        media_buy_id=media_buy_id,
+        step_id=step_id,
+        step_data=step_data,
+        compute_target=_flight_derived_status,
+        run_adapter=run_adapter,
+        lease_id=lease_id,
+        now_fn=now_fn,
+    )
+
+
+def _flight_derived_status(media_buy: MediaBuy) -> str:
+    """Lifecycle status from the buy's flight window — the shared window→status decision.
+
+    Evaluated by the finalizer AFTER the row lock, so it reads the committed window.
+    """
+    return lifecycle_status_for_window(datetime.datetime.now(datetime.UTC), *resolve_flight_window_utc(media_buy))
+
+
+def creatives_ready_for_finalize(
+    session: Session,
+    tenant_id: str,
+    *,
+    media_buy_id: str,
+) -> CreativeReadiness:
+    """Tenant-scoped creative-readiness for the admin approve gate (#1544).
+
+    ONE decision home for finalize-vs-hold, shared by the workflow approve route
+    and the operations approve route (previously each open-coded the query, with
+    drift on tenant scoping and on the empty-assignments case). Delegates to
+    :meth:`CreativeAssignmentRepository.creative_readiness`; the gate policy is
+    :attr:`CreativeReadiness.ready_for_finalize` — a zero-assignment buy HOLDS at
+    ``pending_creatives`` (per the media-buy-status.json enum: approved by the
+    seller, no creatives assigned yet), it does not finalize.
+    """
+    return CreativeAssignmentRepository(session, tenant_id).creative_readiness(media_buy_id)
+
+
+def claim_pending_creatives_hold(
+    session: Session,
+    tenant_id: str,
+    *,
+    media_buy_id: str,
+    approved_by: str | None,
+) -> bool:
+    """Single-winner CLAIM of ``pending_approval`` → ``pending_creatives`` (the approval
+    HOLD taken when creatives are not yet approved).
+
+    Stamps the approval instant + bumps revision UNDER THE ROW LOCK, so a concurrent
+    approve/reject that already decided the buy is not overwritten. Returns ``True`` if
+    this request won the claim (committed), ``False`` if it lost (rolled back). Shared by
+    the operations + workflow approve routes. #1544.
+    """
+    held = MediaBuyRepository(session, tenant_id).update_status_computed(
+        media_buy_id,
+        lambda _mb: "pending_creatives",
+        approved_at=datetime.datetime.now(datetime.UTC),
+        approved_by=approved_by,
+        expected_status="pending_approval",
+    )
+    if held is None:
+        session.rollback()
+        return False
+    session.commit()
+    return True
+
+
+def finalize_pending_media_buy_approval(
+    session: Session,
+    tenant_id: str,
+    *,
+    media_buy_id: str,
+    step_id: str,
+    step_data: dict[str, Any],
+    approved_by: str | None,
+) -> tuple[FinalizeOutcome, str | None]:
+    """finalize_media_buy_approval with the standard manual-approval callbacks.
+
+    The operations and workflow approve routes finalize a ``pending_approval`` buy
+    identically — the single-winner claim on ``pending_approval``, the flight-derived
+    status computed UNDER THE LOCK, the shared adapter execution, and the approval
+    instant stamped now. Centralising those callbacks here keeps the two routes from
+    duplicating them (they differ only in how they render the outcome). #1544.
+    """
+    from src.core.tools.media_buy_create import execute_approved_media_buy
+
+    return finalize_media_buy_approval(
+        session,
+        tenant_id,
+        media_buy_id=media_buy_id,
+        step_id=step_id,
+        step_data=step_data,
+        compute_target=_flight_derived_status,
+        run_adapter=lambda: execute_approved_media_buy(media_buy_id, tenant_id),
+        # pending_approval is the normal path; ``finalizing`` admits the operator
+        # RE-APPROVAL of a manual_required buy — claim_finalizing's guard rejects
+        # any finalizing buy that is NOT flagged manual, so an in-flight
+        # finalization can never be stolen. #1637.
+        expected_status=("pending_approval", MEDIA_BUY_FINALIZING_STATUS),
+        approved_by=approved_by,
+        approved_at=datetime.datetime.now(datetime.UTC),
+    )
+
+
+def finalize_unblocked_media_buy(tenant_id: str, media_buy_id: str) -> tuple[FinalizeOutcome, str | None]:
+    """Finalize ONE media buy whose last blocking creative was just approved.
+
+    Called from the creative-approval route once all of a buy's creatives are
+    approved. Owns its OWN DB session (the caller's creative UoW has already
+    committed, and — unlike a plain route blueprint — ``creatives.py`` is a scanned
+    business-logic module that must not open ``get_db_session`` itself), then routes
+    through the shared approve finalizer: a single-winner claim on ``pending_creatives``
+    (so concurrent creative-unblocks of the same buy run the adapter exactly once),
+    then adapter → flight-derived status → terminalize step + emit. ``approved_at`` /
+    ``approved_by`` are NOT re-stamped — ``confirmed_at`` was recorded at the earlier
+    ``pending_creatives`` hold (write-once). Falls back to a claim + adapter +
+    status-only transition when the buy has no workflow step (no async buyer task).
+    Returns ``(outcome, error_message)``. #1544.
+    """
+    from src.core.database.database_session import get_db_session
+    from src.core.tools.media_buy_create import execute_approved_media_buy
+
+    with get_db_session() as session:
+        wf_repo = WorkflowRepository(session, tenant_id)
+        mapping = wf_repo.get_latest_mapping_for_object("media_buy", media_buy_id)
+        step = wf_repo.get_by_step_id(mapping.step_id) if mapping else None
+        if step is None:
+            # No workflow step (no async buyer task to notify) — still single-winner
+            # AND crash-recoverable: the shared approve finalizer claims
+            # pending_creatives → finalizing + phase-2 lease BEFORE the adapter,
+            # commits, then runs owned phase 2. step_id/step_data=None routes the
+            # step-less serving transition. #1544 / #1637.
+            return finalize_media_buy_approval(
+                session,
+                tenant_id,
+                media_buy_id=media_buy_id,
+                step_id=None,
+                step_data=None,
+                compute_target=_flight_derived_status,
+                run_adapter=lambda: execute_approved_media_buy(media_buy_id, tenant_id),
+                expected_status="pending_creatives",
+            )
+
+        step_data = workflow_step_snapshot(step)
+        return finalize_media_buy_approval(
+            session,
+            tenant_id,
+            media_buy_id=media_buy_id,
+            step_id=step.step_id,
+            step_data=step_data,
+            compute_target=_flight_derived_status,
+            run_adapter=lambda: execute_approved_media_buy(media_buy_id, tenant_id),
+            expected_status="pending_creatives",
+        )
+
+
+def finalize_media_buy_rejection(
+    session: Session,
+    tenant_id: str,
+    *,
+    media_buy_id: str,
+    step_id: str,
+    step_data: dict[str, Any],
+    reason: str,
+    expected_status: str | tuple[str, ...] = ("pending_approval", "pending_creatives"),
+) -> FinalizeOutcome:
+    """Atomic, single-winner reject finalizer (operations + workflow reject routes).
+
+    CLAIMS the decision under the row lock: transitions the buy to ``rejected`` ONLY if
+    the committed status is in ``expected_status`` (revision bump via the repo seam), so
+    a reject that lost to a concurrent approve (or vice-versa) is a ``NOT_CLAIMED`` no-op
+    instead of overwriting the winner. Callers pass the OBSERVED buy status so a reject
+    that raced an approve-HOLD (``pending_approval`` → ``pending_creatives``) and observed
+    ``pending_approval`` loses the claim rather than also succeeding. On a won claim,
+    stores the rejection artifact on the workflow step, commits, and emits the rejection
+    webhook as a ``CreateMediaBuyError`` (POLICY_VIOLATION) — AdCP 3.1.1 create-media-buy
+    has no rejection arm; see ``build_media_buy_result``. #1544 / PR #1567.
+    """
+    repo = MediaBuyRepository(session, tenant_id)
+    claimed = repo.update_status_computed(media_buy_id, lambda _mb: "rejected", expected_status=expected_status)
+    if claimed is None:
+        session.rollback()
+        return FinalizeOutcome.NOT_CLAIMED
+    _terminalize_step_and_emit(
+        session,
+        tenant_id,
+        media_buy=claimed,
+        packages=repo.get_packages(media_buy_id),
+        step_id=step_id,
+        step_data=step_data,
+        step_status="rejected",
+        task_status=AdcpTaskStatus.rejected,
+        rejection_reason=reason,
+    )
+    return FinalizeOutcome.APPLIED

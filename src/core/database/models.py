@@ -894,6 +894,65 @@ class AgentAccountAccess(Base):
     )
 
 
+# Statuses in which the seller has NOT yet committed to running the buy. The
+# AdCP 3.1.1 `confirmed_at` field ("when the seller committed to this
+# media buy") MUST be absent for these. This is the SINGLE source of truth for
+# "seller committed", consulted by both create_media_buy (which omits
+# confirmed_at on its not-yet-committed arms) and the repository's write-once
+# confirmation stamp (MediaBuyRepository._stamp_confirmation_if_needed, applied
+# on every status-mutation seam) — so the create path and the persisted column
+# get_media_buys reads back cannot drift: adding a new not-yet-committed status
+# here fixes both at once. See #1544.
+# ``finalizing`` is the crash-recoverable intermediate claim: the approval
+# finalizer moves the buy here (single-winner) and commits BEFORE the external
+# adapter runs, so the buy never reads as seller-confirmed/serving while its
+# remote order is unconfirmed. It is UNCONFIRMED on purpose — confirmed_at is
+# stamped only when the buy reaches its real serving status after adapter
+# success. A reconciler re-drives any buy stranded here by a mid-finalize crash.
+# #1637.
+MEDIA_BUY_UNCONFIRMED_STATUSES: frozenset[str] = frozenset(
+    {"draft", "pending", "pending_approval", "rejected", "failed", "finalizing"}
+)
+
+# The transient claim status the approval finalizer commits before external
+# adapter work; a buy left here by a crash is resumed by the status scheduler's
+# reconciliation pass. #1637.
+MEDIA_BUY_FINALIZING_STATUS: str = "finalizing"
+
+
+# Canonical value for MediaBuy.finalize_recovery_mode when an operator must
+# reconcile a partial remote graph before recovery can continue (#1637).
+MEDIA_BUY_RECOVERY_MANUAL = "manual_required"
+
+
+def is_media_buy_approvable(media_buy: "MediaBuy") -> bool:
+    """True when an admin approve action may (re)claim this buy (#1637).
+
+    Two eligible shapes:
+    - ``pending_approval`` — the normal manual-approval queue.
+    - ``finalizing`` parked ``manual_required`` — operator RE-APPROVAL after
+      reconciling a partial remote graph. A plain in-flight ``finalizing`` buy is
+      NOT approvable (an owner holds its lease); ``claim_finalizing``'s guard
+      enforces the same invariant under the row lock, so this unlocked check is
+      UX-only (the CAS is authoritative).
+    """
+    return media_buy.status == "pending_approval" or (
+        media_buy.status == MEDIA_BUY_FINALIZING_STATUS
+        and media_buy.finalize_recovery_mode == MEDIA_BUY_RECOVERY_MANUAL
+    )
+
+
+def is_media_buy_seller_confirmed(status: str | None) -> bool:
+    """True once the seller has committed to running the buy (confirmed_at is set).
+
+    The inverse of :data:`MEDIA_BUY_UNCONFIRMED_STATUSES`. Case-insensitive; a
+    missing/empty status reads as not-confirmed (we never emit confirmed_at when
+    the state is unknown).
+    """
+    normalized = (status or "").lower()
+    return bool(normalized) and normalized not in MEDIA_BUY_UNCONFIRMED_STATUSES
+
+
 class MediaBuy(Base):
     __tablename__ = "media_buys"
 
@@ -913,12 +972,20 @@ class MediaBuy(Base):
     start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    # Monotonic optimistic-concurrency counter (AdCP 3.1.1 `revision`).
+    # Starts at 1 on create; bumped by MediaBuyRepository on every successful
+    # mutation. Never derived from timestamps — two updates within one second
+    # must still yield strictly increasing revisions.
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     approved_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Write-once seller confirmation instant. Unlike approved_at, this remains
+    # stable across later creative/status transitions.
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     raw_request: Mapped[dict] = mapped_column(JSONType, nullable=False)
     strategy_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
@@ -934,6 +1001,37 @@ class MediaBuy(Base):
         nullable=True,
         comment="RFC 8785 JCS SHA-256 of the create request (excluded fields stripped); degraded-path IDEMPOTENCY_CONFLICT signal",
     )
+    # ── Crash-recoverable approval finalization state (#1637) ──────────────
+    # While status == "finalizing", exactly ONE owner (the worker/reconciler
+    # holding finalize_lease_id, unexpired) may run the external adapter and
+    # publish the serving status; every such mutation is a lease-CAS.
+    finalize_lease_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    finalize_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Committed IMMEDIATELY BEFORE the adapter is invoked: presence means
+    # "remote mutations may exist", so only fully-replayable adapters
+    # (AdapterCapabilities.supports_full_create_replay) may auto-resume past it.
+    finalize_adapter_invoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # NULL = automatic recovery; "manual_required" = the reconciler must not
+    # touch this buy again (a crash left a possibly-partial remote graph on a
+    # non-replayable adapter). Cleared by a successful publish (self-heal) or by an
+    # operator AFTER reconciling the remote state. The operator must clear BOTH this
+    # flag AND finalize_adapter_invoked_at (the surviving marker would immediately
+    # re-flag manual): UPDATE media_buys SET finalize_recovery_mode = NULL,
+    # finalize_adapter_invoked_at = NULL WHERE ... — or, preferred, RE-APPROVE the
+    # buy (claim_finalizing resets the whole operation state).
+    finalize_recovery_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Ownership-INDEPENDENT possible-duplicate-remote-order marker (#1637 Hole A). Set when
+    # a worker's adapter RAN but the worker could not durably assert single ownership of the
+    # finalization — it lost the lease to a NEWER owner mid-run, or a post-mutation ambiguity
+    # (AdapterPostMutationIncomplete) left a partial/duplicate remote graph. Recorded WITHOUT
+    # a lease CAS so the LOSING worker (which owns no lease) can still leave a durable trace,
+    # instead of silently swallowing the possible duplicate. Keep-first: the earliest incident
+    # instant/reason wins; a later incident never overwrites it. Deliberately NOT cleared by a
+    # successful publish (unlike the lease/recovery fields) — the winning owner's clean publish
+    # leaves it set so an operator still discovers the possible duplicate even though the buy
+    # shows serving. Surfaced on the admin media-buy detail page.
+    finalize_reconcile_incident_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finalize_reconcile_incident_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Relationships
     tenant = relationship("Tenant", back_populates="media_buys", overlaps="media_buys")
@@ -1798,6 +1896,13 @@ class Context(Base):
         Index("idx_contexts_principal", "principal_id"),
         Index("idx_contexts_last_activity", "last_activity_at"),
     )
+
+
+# A workflow step in one of these statuses is DECIDED — the decision is durable and must
+# not be reverted or re-decided (a replayed approve/reject on such a step is a 409). These
+# are exactly the statuses the A2A durable poll maps to a terminal TaskState
+# (adcp_a2a_server._STEP_STATUS_TO_TASK_STATE); every other status reads as in-progress. #1544.
+WORKFLOW_STEP_TERMINAL_STATUSES: frozenset[str] = frozenset({"completed", "rejected", "failed"})
 
 
 class WorkflowStep(Base, JSONValidatorMixin):

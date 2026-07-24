@@ -36,6 +36,7 @@ from src.core.tools import capabilities as capabilities_module
 from src.core.tools import creative_formats as creative_formats_module
 from src.core.tools import media_buy_create as media_buy_create_module
 from src.core.tools import media_buy_delivery as media_buy_delivery_module
+from src.core.tools import media_buy_list as media_buy_list_module
 from src.core.tools import media_buy_update as media_buy_update_module
 from src.core.tools import performance as performance_module
 from src.core.tools import products as products_module
@@ -101,6 +102,13 @@ class UpdateMediaBuyBody(SalesAgentBaseModel):
     currency: str | None = None
     start_time: str | None = None
     end_time: str | None = None
+    # AdCP 3.1.1 optimistic-concurrency token; mismatch -> CONFLICT.
+    # Typing this ``int | None`` makes FastAPI reject a wrong-TYPE token at
+    # body-parse as INVALID_REQUEST before the shared adcp_validation_boundary
+    # (which emits VALIDATION_ERROR for schema-invalid values that reach it on
+    # MCP/A2A), and lax-coerces numeric strings ("7" -> 7) that the A2A raw-dict
+    # gate rejects. Both sides of that cross-transport split are tracked in #1582.
+    revision: int | None = None
     # Fields update_media_buy_raw plumbs through to UpdateMediaBuyRequest. Raw dicts
     # are coerced downstream (Pattern #7 extra policy inherited from SalesAgentBaseModel).
     # NOTE: top-level targeting_overlay/creatives are intentionally omitted — the raw
@@ -127,6 +135,23 @@ class GetMediaBuyDeliveryBody(SalesAgentBaseModel):
     include_package_daily_breakdown: bool | None = None
     account: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
+    adcp_version: str = "1.0.0"
+
+
+class GetMediaBuysBody(SalesAgentBaseModel):
+    """POST /media-buys/query body — mirrors get_media_buys_raw's parameters."""
+
+    # Preserve the raw wire value until the shared GetMediaBuysRequest validation
+    # boundary. Typing this as list[str] here makes FastAPI reject wrong types before
+    # that boundary, producing INVALID_REQUEST while MCP/A2A produce VALIDATION_ERROR.
+    # This deviation governs the two FILTER fields only — they are what the shared
+    # boundary classifies. ``account`` and ``context`` carry no such cross-transport
+    # split, so they keep the concrete typing every sibling *Body model uses.
+    media_buy_ids: Any = None
+    status_filter: Any = None
+    include_snapshot: bool = False
+    account: dict[str, Any] | None = None  # AccountReference; coerced downstream
+    context: dict[str, Any] | None = None  # ContextObject; coerced by GetMediaBuysRequest
     adcp_version: str = "1.0.0"
 
 
@@ -359,6 +384,7 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         currency=body.currency,
         start_time=body.start_time,
         end_time=body.end_time,
+        revision=body.revision,
         pacing=body.pacing,
         daily_budget=body.daily_budget,
         # packages stay wire dicts: UpdateMediaBuyRequest validates them as the
@@ -369,6 +395,24 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         reporting_webhook=reporting_webhook,
         ext=body.ext,
         idempotency_key=body.idempotency_key,
+        identity=identity,
+    )
+    return response.model_dump(mode="json")
+
+
+@router.post("/media-buys/query")
+async def get_media_buys(body: GetMediaBuysBody, identity: ResolvedIdentity = require_auth):
+    """Query media buys (auth required).
+
+    REST binding for get_media_buys — previously the tool was reachable only
+    over MCP/A2A, breaking transport parity (#1544).
+    """
+    response = media_buy_list_module.get_media_buys_raw(
+        media_buy_ids=body.media_buy_ids,
+        status_filter=body.status_filter,
+        include_snapshot=body.include_snapshot,
+        account=to_account_reference(body.account),
+        context=to_context_object(body.context),
         identity=identity,
     )
     return response.model_dump(mode="json")

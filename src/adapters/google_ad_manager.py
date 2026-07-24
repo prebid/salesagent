@@ -12,7 +12,9 @@ __all__ = [
     "NON_GUARANTEED_LINE_ITEM_TYPES",
 ]
 
+import hashlib
 import logging
+import time
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -24,7 +26,13 @@ if TYPE_CHECKING:
 
 from flask import Flask
 
-from src.adapters.base import AdapterCapabilities, AdServerAdapter, TargetingCapabilities
+from src.adapters.base import (
+    AdapterCapabilities,
+    AdapterIdempotencyUncertain,
+    AdapterPostMutationIncomplete,
+    AdServerAdapter,
+    TargetingCapabilities,
+)
 
 # Import modular components
 from src.adapters.gam.client import GAMClientManager
@@ -76,6 +84,14 @@ from src.core.schemas import (
 
 # Set up logger
 logger = logging.getLogger(__name__)
+
+# Bounded post-failure recovery lookup (#1637). ``create_order`` can fail AMBIGUOUSLY —
+# createOrders may have committed remotely before a timeout severed the response — and GAM
+# createOrders is NOT read-your-writes consistent, so a just-committed order can be briefly
+# invisible to a name lookup. Retry the deterministic-name lookup a few times with short
+# backoff to absorb that visibility lag before concluding a MISS (which fails safe).
+_CREATE_RECOVERY_LOOKUP_ATTEMPTS = 3
+_CREATE_RECOVERY_LOOKUP_BACKOFF_SECONDS = 0.5
 
 
 class GoogleAdManager(AdServerAdapter):
@@ -397,6 +413,7 @@ class GoogleAdManager(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
+        idempotency_key: str | None = None,
     ) -> CreateMediaBuyResponse:
         """Create a new media buy (order) in GAM - main orchestration method.
 
@@ -407,6 +424,11 @@ class GoogleAdManager(AdServerAdapter):
             end_time: Campaign end time
             package_pricing_info: Optional validated pricing info (AdCP PR #88)
                 Maps package_id → {pricing_model, rate, currency, is_fixed, bid_price}
+            idempotency_key: Stable key used to derive a DETERMINISTIC GAM order name
+                so a retry searches for and reuses the same order rather than minting a
+                duplicate (#1637). The approval-replay path passes the persisted
+                ``media_buy_id``; the initial-create path passes None and the name is
+                derived from a stable hash of ``(tenant_id, request.idempotency_key)``.
 
         Returns:
             CreateMediaBuyResponse with GAM order details
@@ -646,15 +668,39 @@ class GoogleAdManager(AdServerAdapter):
         except sqlalchemy.exc.SQLAlchemyError as e:
             logger.warning(f"Could not load tenant Gemini key: {e}")
 
-        # Generate a pre-order media_buy_id for naming (GAM order_id replaces this in the response)
-        pre_order_id = f"gam_{uuid.uuid4().hex[:8]}"
+        # Derive a DETERMINISTIC id for the order name (#1637). The order name is the
+        # idempotency anchor: create_order looks it up before creating, so a retry MUST
+        # produce the byte-identical name to reuse the existing order instead of minting
+        # a second one. A per-invocation uuid would defeat that — every attempt would
+        # search for a different name. When the caller supplies an idempotency_key (the
+        # persisted media_buy_id on the approval-replay path) use it directly; otherwise
+        # (initial create, no persisted id yet) hash the client-stable AdCP anchor
+        # (tenant_id, request.idempotency_key). Spec-grounding (#1637): this repo PINS
+        # adcp==6.6.0 -> AdCP 3.1.1 (the authoritative version here), in which
+        # create-media-buy carries the required per-request idempotency_key (the field was
+        # introduced in the 3.0.1 spec line and carries forward, byte-identical required str
+        # in 6.6.0). This deterministic-name
+        # reuse is an INTERNAL crash/timeout recovery mechanism, ungraded by the conformance
+        # storyboard — so the same request yields the same order name every attempt.
+        if idempotency_key:
+            stable_order_id = idempotency_key
+        else:
+            # Collision resistance (#1637): use 128 bits (32 hex chars) of the digest, NOT
+            # 32 bits. At 32 bits the birthday bound gives ~50% collision near 2^16 (~77k
+            # buys/tenant), so two DISTINCT idempotency keys could hash to ONE order name
+            # and the second buy would silently reuse the first's order. 128 bits pushes
+            # that bound past 2^64. The suffix stays tiny — truncate_name_with_suffix
+            # preserves it well inside GAM's 255-char order-name budget.
+            stable_seed = f"{self.tenant_id}:{request.idempotency_key}"
+            stable_order_id = f"gam_{hashlib.sha256(stable_seed.encode()).hexdigest()[:32]}"
+
         context = build_order_name_context(
-            request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key, media_buy_id=pre_order_id
+            request, packages, start_time, end_time, tenant_gemini_key=tenant_gemini_key, media_buy_id=stable_order_id
         )
         base_order_name = apply_naming_template(order_name_template, context)
 
-        # Add unique identifier to prevent duplicate order names
-        unique_suffix = f"mb_{pre_order_id}"
+        # Add deterministic identifier to prevent duplicate order names across retries
+        unique_suffix = f"mb_{stable_order_id}"
         full_order_name = f"{base_order_name} [{unique_suffix}]"
 
         # Truncate to GAM's 255-character limit while preserving the unique suffix
@@ -663,46 +709,133 @@ class GoogleAdManager(AdServerAdapter):
         # Calculate total budget from package budgets (AdCP v2.2.0)
         total_budget_amount = request.get_total_budget()
 
-        order_id = self.orders_manager.create_order(
-            order_name=order_name,
-            total_budget=total_budget_amount,
-            start_time=start_time,
-            end_time=end_time,
-            currency=order_currency,
-        )
+        # ── GAM MUTATION BOUNDARY starts AT create_order (#1637) ──────────────
+        # create_order() is the actual remote-mutation point. A failure raised from
+        # it is ambiguous: createOrders may have COMMITTED remotely before a timeout
+        # severed the response. Wrapping it here (not only the later stages) is what
+        # makes the retry protection real.
+        try:
+            order_id = self.orders_manager.create_order(
+                order_name=order_name,
+                total_budget=total_budget_amount,
+                start_time=start_time,
+                end_time=end_time,
+                currency=order_currency,
+            )
+        except AdapterIdempotencyUncertain:
+            # The PRE-create existence lookup inside create_order failed → the strict
+            # contract guarantees NO remote mutation happened yet. Re-raise unchanged so
+            # the buy stays in the automatic-retry path (finalizing; reconciler retries).
+            raise
+        except Exception as create_error:
+            # create_order raised AFTER possibly committing createOrders. Attempt a BOUNDED
+            # recovery lookup by the DETERMINISTIC name to disambiguate (see the helper — it
+            # retries to absorb GAM's create-visibility lag, and raises
+            # AdapterPostMutationIncomplete if the lookup RPC itself fails).
+            recovered_order_id = self._recover_order_id_after_create_failure(order_name, create_error)
+            if recovered_order_id is not None:
+                # POSITIVE find → createOrders DID commit before the failure. Recover its id
+                # and continue into the post-mutation finalizer.
+                order_id = recovered_order_id
+                self.log(f"✓ Recovered GAM Order ID after create failure: {order_id}")
+            else:
+                # A lookup MISS does NOT prove pre-mutation. GAM createOrders is NOT
+                # read-your-writes consistent, so a committed order may still be invisible
+                # even after the bounded retries — a miss cannot be classified as a plain
+                # retryable pre-mutation failure. Fail SAFE: raise
+                # AdapterPostMutationIncomplete (remote state unknown → manual
+                # reconciliation), IDENTICAL to the lookup-FAILED branch. Only a POSITIVE
+                # find recovers the id and continues.
+                raise AdapterPostMutationIncomplete(
+                    f"GAM order create for '{order_name}' failed ({create_error}) and a bounded "
+                    f"recovery lookup did not find the order; GAM createOrders is not "
+                    f"read-your-writes consistent, so a committed order may still be invisible — "
+                    f"remote state is unknown. Manual reconciliation required."
+                ) from create_error
 
         self.log(f"✓ Created GAM Order ID: {order_id}")
 
+        # ── GAM MUTATION BOUNDARY (#1637) ─────────────────────────────────
+        # The remote order now EXISTS. Any failure from here on (targeting build,
+        # line items, activation workflow, response assembly) leaves a partial
+        # remote graph — it must surface as AdapterPostMutationIncomplete so the
+        # approval finalizer preserves the manual-reconciliation state instead of
+        # terminal-failing the buy and erasing the signal. The typed exception
+        # originates HERE, at the actual mutation boundary, because the caller's
+        # post-hoc flag cannot see an exception thrown mid-adapter.
+        try:
+            return self._finish_create_media_buy(
+                request=request,
+                packages=packages,
+                start_time=start_time,
+                end_time=end_time,
+                products_map=products_map,
+                order_id=order_id,
+                order_name=order_name,
+                package_pricing_info=package_pricing_info,
+            )
+        except AdapterPostMutationIncomplete:
+            raise
+        except Exception as post_order_error:
+            raise AdapterPostMutationIncomplete(
+                f"GAM order {order_id} was created but a later stage failed: {post_order_error}"
+            ) from post_order_error
+
+    def _recover_order_id_after_create_failure(self, order_name: str, create_error: Exception) -> str | None:
+        """Bounded recovery lookup by deterministic order name after a create failure (#1637).
+
+        ``orders_manager.create_order`` failed AMBIGUOUSLY — createOrders may have committed
+        remotely before a timeout severed the response. GAM createOrders is NOT
+        read-your-writes consistent, so a just-committed order can be momentarily invisible
+        to a name lookup. Retry ``find_order_by_name`` up to
+        ``_CREATE_RECOVERY_LOOKUP_ATTEMPTS`` times with a short backoff to absorb that
+        visibility lag.
+
+        Returns the recovered order id on a POSITIVE find, or ``None`` if the order is still
+        not found after every attempt. The caller MUST treat that ``None`` (a MISS)
+        conservatively — a miss does NOT prove pre-mutation. A lookup RPC failure is itself
+        ambiguous (a mutation MAY exist) and is raised as
+        :class:`AdapterPostMutationIncomplete` (NEVER ``AdapterIdempotencyUncertain``, whose
+        contract falsely asserts no mutation).
+        """
+        for attempt in range(_CREATE_RECOVERY_LOOKUP_ATTEMPTS):
+            try:
+                recovered_order_id = self.orders_manager.find_order_by_name(order_name)
+            except Exception as lookup_error:
+                raise AdapterPostMutationIncomplete(
+                    f"GAM order create for '{order_name}' failed ({create_error}) and the "
+                    f"recovery lookup also failed ({lookup_error}); remote state is unknown."
+                ) from create_error
+            if recovered_order_id is not None:
+                return recovered_order_id
+            if attempt < _CREATE_RECOVERY_LOOKUP_ATTEMPTS - 1:
+                time.sleep(_CREATE_RECOVERY_LOOKUP_BACKOFF_SECONDS)
+        return None
+
+    def _finish_create_media_buy(
+        self,
+        *,
+        request: CreateMediaBuyRequest,
+        packages: list[MediaPackage],
+        start_time: datetime,
+        end_time: datetime,
+        products_map: dict,
+        order_id: str,
+        order_name: str,
+        package_pricing_info: dict[str, dict] | None,
+    ) -> CreateMediaBuyResponse:
+        """Everything after the remote order exists — line items, activation, response.
+
+        Runs strictly INSIDE the post-mutation boundary of ``create_media_buy``: any
+        exception escaping here is converted to ``AdapterPostMutationIncomplete``. #1637.
+        """
         # Build targeting for each package (per AdCP spec, targeting is at package level)
         package_targeting = {}
         for package in packages:
             if package.targeting_overlay:
                 package_targeting[package.package_id] = self._build_targeting(package.targeting_overlay)
 
-        # Build placement_targeting_map from all products' impl_configs (adcp#208)
-        # This maps placement_id → targeting_name for creative-level targeting
-        self._placement_targeting_map.clear()  # Reset for this order
-        for _pid, prod_info in products_map.items():
-            if not prod_info or not isinstance(prod_info, dict):
-                continue
-            prod_impl_config = cast(dict[str, Any], prod_info.get("implementation_config", {}) or {})
-            placement_targeting = cast(list[dict[str, Any]], prod_impl_config.get("placement_targeting", []))
-            for pt in placement_targeting:
-                placement_id = pt.get("placement_id")
-                targeting_name = pt.get("targeting_name")
-                if placement_id and targeting_name:
-                    # Warn if there's a collision from different products
-                    if placement_id in self._placement_targeting_map:
-                        existing = self._placement_targeting_map[placement_id]
-                        if existing != targeting_name:
-                            self.log(
-                                f"[yellow]Warning: placement_id '{placement_id}' has conflicting "
-                                f"targeting_names: '{existing}' vs '{targeting_name}'. Using '{targeting_name}'[/yellow]"
-                            )
-                    self._placement_targeting_map[placement_id] = targeting_name
-
-        if self._placement_targeting_map:
-            self.log(f"Built placement_targeting_map with {len(self._placement_targeting_map)} placements")
+        self._build_placement_targeting_map(products_map)
 
         # Create line items for each package
         try:
@@ -724,54 +857,7 @@ class GoogleAdManager(AdServerAdapter):
             # NOTE: platform_line_item_id persistence is handled by media_buy_create.py
             # after response object is returned. See CreateMediaBuySuccess._platform_line_item_ids mapping.
 
-            # Approve the order now that it has line items
-            # GAM requires line items to exist before an order can be APPROVED
-            # Try once - if forecasting not ready, start background task
-            self.log(f"[cyan]Attempting to approve GAM Order {order_id} (max_retries=1)[/cyan]")
-            try:
-                approval_success = self.orders_manager.approve_order(order_id, max_retries=1)
-                if approval_success:
-                    self.log(f"✓ Approved GAM Order {order_id}")
-                else:
-                    # Approval failed (likely NO_FORECAST_YET) - start background polling
-                    self.log(
-                        f"[yellow]Order {order_id} forecasting not ready - starting background approval task[/yellow]"
-                    )
-
-                    # Get webhook URL from push notification config
-                    # Note: push_notification_config is not part of AdCP library's CreateMediaBuyRequest
-                    # Use getattr for backward compatibility with internal extensions
-                    webhook_url = None
-                    push_config = getattr(request, "push_notification_config", None)
-                    if push_config:
-                        webhook_url = (
-                            push_config.get("url")
-                            if isinstance(push_config, dict)
-                            else getattr(push_config, "url", None)
-                        )
-
-                    # Get principal_id from adapter's principal object
-                    principal_id = self.principal.principal_id if hasattr(self.principal, "principal_id") else "unknown"
-
-                    # Start background approval polling task
-                    from src.services.order_approval_service import start_order_approval_background
-
-                    try:
-                        approval_id = start_order_approval_background(
-                            order_id=order_id,
-                            media_buy_id=order_id,  # In automatic mode, media_buy_id = order_id
-                            tenant_id=self.tenant_id,
-                            principal_id=principal_id,
-                            webhook_url=webhook_url,
-                            max_attempts=12,  # 2 minutes with 10 second intervals
-                            poll_interval_seconds=10,
-                        )
-                        self.log(f"✓ Started background approval polling (job: {approval_id})")
-                    except ValueError as e:
-                        self.log(f"[red]Failed to start background approval: {e}[/red]")
-            except Exception as approval_error:
-                # Non-fatal error - order and line items were created successfully
-                self.log(f"[yellow]Warning: Could not approve order {order_id}: {approval_error}[/yellow]")
+            self._approve_order_or_start_background(order_id, request)
 
         except AdCPError:
             raise
@@ -785,62 +871,105 @@ class GoogleAdManager(AdServerAdapter):
             raise AdCPLineItemError(error_msg)
 
         # Check if activation approval is needed (guaranteed line items require human approval)
-        has_guaranteed, item_types = self._check_order_has_guaranteed_items(order_id)
+        has_guaranteed, _item_types = self._check_order_has_guaranteed_items(order_id)
+        workflow_step_id = None
         if has_guaranteed:
             self.log("[yellow]Order contains guaranteed line items - creating activation workflow step[/yellow]")
+            workflow_step_id = self.workflow_manager.create_activation_workflow_step(order_id, packages)
 
-            step_id = self.workflow_manager.create_activation_workflow_step(order_id, packages)
-
-            # Create response and attach platform_line_item_id mapping for database persistence
-            # This mapping is used by media_buy_create.py to update MediaPackage records
-            response = self._build_create_success(
-                request,
-                order_id,
-                packages,
-                creative_deadline_days=None,
-                workflow_step_id=step_id,
-            )
-
-            # Store platform_line_item_id mapping as a non-standard attribute
-            # This survives Pydantic validation since it's set after construction
-            # Build mapping from parallel arrays: packages (with package_id) and line_item_ids
-            platform_line_item_ids = {}
-            for package, line_item_id in zip(packages, line_item_ids, strict=False):
-                platform_line_item_ids[package.package_id] = line_item_id
-
-            self.log(f"[DEBUG] Guaranteed path: Created platform_line_item_ids mapping: {platform_line_item_ids}")
-
-            # Attach to response object (bypass Pydantic validation)
-            object.__setattr__(response, "_platform_line_item_ids", platform_line_item_ids)
-            self.log("[DEBUG] Attached _platform_line_item_ids to response object")
-            self.log(f"[DEBUG] Verify attribute exists: {hasattr(response, '_platform_line_item_ids')}")
-
-            return response
-
-        # Create response and store platform_line_item_id mapping for database persistence
-        # This mapping is used by media_buy_create.py to update MediaPackage records
+        # Create response and attach platform_line_item_id mapping for database persistence.
+        # This mapping is used by media_buy_create.py to update MediaPackage records.
         response = self._build_create_success(
             request,
             order_id,
             packages,
             creative_deadline_days=None,
+            workflow_step_id=workflow_step_id,
         )
-
-        # Store platform_line_item_id mapping as a non-standard attribute
-        # This survives Pydantic validation since it's set after construction
-        # Build mapping from parallel arrays: packages (with package_id) and line_item_ids
-        platform_line_item_ids = {}
-        for package, line_item_id in zip(packages, line_item_ids, strict=False):
-            platform_line_item_ids[package.package_id] = line_item_id
-
-        self.log(f"[DEBUG] Created platform_line_item_ids mapping: {platform_line_item_ids}")
-
-        # Attach to response object (bypass Pydantic validation)
-        object.__setattr__(response, "_platform_line_item_ids", platform_line_item_ids)
-        self.log("[DEBUG] Attached _platform_line_item_ids to response object")
-        self.log(f"[DEBUG] Verify attribute exists: {hasattr(response, '_platform_line_item_ids')}")
-
+        self._attach_platform_line_item_ids(response, packages, line_item_ids)
         return response
+
+    def _build_placement_targeting_map(self, products_map: dict) -> None:
+        """Populate ``self._placement_targeting_map`` (placement_id → targeting_name) from products (adcp#208)."""
+        self._placement_targeting_map.clear()  # Reset for this order
+        for _pid, prod_info in products_map.items():
+            if not prod_info or not isinstance(prod_info, dict):
+                continue
+            prod_impl_config = cast(dict[str, Any], prod_info.get("implementation_config", {}) or {})
+            placement_targeting = cast(list[dict[str, Any]], prod_impl_config.get("placement_targeting", []))
+            for pt in placement_targeting:
+                placement_id = pt.get("placement_id")
+                targeting_name = pt.get("targeting_name")
+                if not (placement_id and targeting_name):
+                    continue
+                existing = self._placement_targeting_map.get(placement_id)
+                if existing and existing != targeting_name:
+                    self.log(
+                        f"[yellow]Warning: placement_id '{placement_id}' has conflicting "
+                        f"targeting_names: '{existing}' vs '{targeting_name}'. Using '{targeting_name}'[/yellow]"
+                    )
+                self._placement_targeting_map[placement_id] = targeting_name
+
+        if self._placement_targeting_map:
+            self.log(f"Built placement_targeting_map with {len(self._placement_targeting_map)} placements")
+
+    def _approve_order_or_start_background(self, order_id: str, request: CreateMediaBuyRequest) -> None:
+        """Approve the order (line items now exist); on NO_FORECAST_YET start background polling. Non-fatal."""
+        # GAM requires line items to exist before an order can be APPROVED.
+        # Try once - if forecasting not ready, start a background task.
+        self.log(f"[cyan]Attempting to approve GAM Order {order_id} (max_retries=1)[/cyan]")
+        try:
+            if self.orders_manager.approve_order(order_id, max_retries=1):
+                self.log(f"✓ Approved GAM Order {order_id}")
+                return
+
+            # Approval failed (likely NO_FORECAST_YET) - start background polling
+            self.log(f"[yellow]Order {order_id} forecasting not ready - starting background approval task[/yellow]")
+
+            # Get webhook URL from push notification config.
+            # push_notification_config is not part of AdCP library's CreateMediaBuyRequest;
+            # use getattr for backward compatibility with internal extensions.
+            webhook_url = None
+            push_config = getattr(request, "push_notification_config", None)
+            if push_config:
+                webhook_url = (
+                    push_config.get("url") if isinstance(push_config, dict) else getattr(push_config, "url", None)
+                )
+
+            principal_id = self.principal.principal_id if hasattr(self.principal, "principal_id") else "unknown"
+
+            from src.services.order_approval_service import start_order_approval_background
+
+            try:
+                approval_id = start_order_approval_background(
+                    order_id=order_id,
+                    media_buy_id=order_id,  # In automatic mode, media_buy_id = order_id
+                    tenant_id=self.tenant_id,
+                    principal_id=principal_id,
+                    webhook_url=webhook_url,
+                    max_attempts=12,  # 2 minutes with 10 second intervals
+                    poll_interval_seconds=10,
+                )
+                self.log(f"✓ Started background approval polling (job: {approval_id})")
+            except ValueError as e:
+                self.log(f"[red]Failed to start background approval: {e}[/red]")
+        except Exception as approval_error:
+            # Non-fatal - order and line items were created successfully
+            self.log(f"[yellow]Warning: Could not approve order {order_id}: {approval_error}[/yellow]")
+
+    def _attach_platform_line_item_ids(
+        self, response: CreateMediaBuyResponse, packages: list[MediaPackage], line_item_ids: list
+    ) -> None:
+        """Attach the package_id → platform_line_item_id mapping used by media_buy_create.py for persistence."""
+        # Non-standard attribute set after construction so it survives Pydantic validation.
+        platform_line_item_ids = {
+            package.package_id: line_item_id for package, line_item_id in zip(packages, line_item_ids, strict=False)
+        }
+        self.log(f"[DEBUG] Created platform_line_item_ids mapping: {platform_line_item_ids}")
+        object.__setattr__(response, "_platform_line_item_ids", platform_line_item_ids)
+        self.log(
+            f"[DEBUG] Attached _platform_line_item_ids; attribute exists: {hasattr(response, '_platform_line_item_ids')}"
+        )
 
     def archive_order(self, order_id: str) -> bool:
         """Archive a GAM order for cleanup purposes (delegated to orders manager)."""

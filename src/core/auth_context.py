@@ -66,22 +66,39 @@ get_auth_context: Any = Depends(_get_auth_context)
 # ---------------------------------------------------------------------------
 
 
-def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIdentity | None":
-    """FastAPI dependency: resolve identity (auth-optional, for discovery endpoints).
+def _resolve_rest_identity(auth_ctx: AuthContext, *, require_valid_token: bool) -> "ResolvedIdentity | None":
+    """Resolve a ResolvedIdentity at the REST boundary, honoring X-* test headers.
 
-    Returns ResolvedIdentity if a valid token is present, None otherwise.
-    Does not raise on missing or invalid tokens.
+    Shared by _resolve_auth_dep (auth-optional) and _require_auth_dep
+    (auth-required). Returns None when no token is present or the resolved
+    identity carries no principal (so both callers apply their own missing-auth
+    policy: None vs. raise).
+
+    Crucially, this extracts the proprietary testing context (X-Dry-Run,
+    X-Mock-Time, X-Force-Error, …) from the request headers via
+    ``AdCPTestContext.from_headers`` — exactly as the A2A boundary does
+    (adcp_a2a_server.py) and the MCP boundary does (resolve_identity_from_context).
+    Without this, the live REST server silently dropped x-dry-run and executed a
+    REAL create/booking instead of a simulation, breaking transport parity for
+    BR-RULE-020 INV-5 (only the e2e_rest transport exercises this path; the
+    in-process rest dispatch injects testing_context directly). ``from_headers``
+    itself is fail-closed (honored only with an explicit dev ENVIRONMENT or
+    ADCP_TEST_HOOKS_ENABLED=true), so these internal headers can never activate
+    dry-run/mock-time against a live seller.
     """
     if not auth_ctx.auth_token:
         return None
 
     from src.core.resolved_identity import resolve_identity
+    from src.core.testing_hooks import AdCPTestContext
 
+    headers = dict(auth_ctx.headers)
     identity = resolve_identity(
-        headers=dict(auth_ctx.headers),
+        headers=headers,
         auth_token=auth_ctx.auth_token,
-        require_valid_token=False,
+        require_valid_token=require_valid_token,
         protocol="rest",
+        testing_context=AdCPTestContext.from_headers(headers),
     )
 
     if not identity.principal_id:
@@ -94,6 +111,15 @@ def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
         set_current_tenant(identity.tenant)
 
     return identity
+
+
+def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIdentity | None":
+    """FastAPI dependency: resolve identity (auth-optional, for discovery endpoints).
+
+    Returns ResolvedIdentity if a valid token is present, None otherwise.
+    Does not raise on missing or invalid tokens.
+    """
+    return _resolve_rest_identity(auth_ctx, require_valid_token=False)
 
 
 def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIdentity":
@@ -110,23 +136,10 @@ def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
     if not auth_ctx.auth_token:
         raise AdCPAuthRequiredError("Authentication required", suggestion=AUTH_REQUIRED_SUGGESTION)
 
-    from src.core.resolved_identity import resolve_identity
+    identity = _resolve_rest_identity(auth_ctx, require_valid_token=True)
 
-    identity = resolve_identity(
-        headers=dict(auth_ctx.headers),
-        auth_token=auth_ctx.auth_token,
-        require_valid_token=True,
-        protocol="rest",
-    )
-
-    if not identity.principal_id:
+    if identity is None:
         raise AdCPAuthRequiredError("Authentication required", suggestion=AUTH_REQUIRED_SUGGESTION)
-
-    # Set tenant ContextVar at the REST transport boundary
-    if identity.tenant:
-        from src.core.config_loader import set_current_tenant
-
-        set_current_tenant(identity.tenant)
 
     return identity
 

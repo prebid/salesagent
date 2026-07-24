@@ -1,0 +1,1182 @@
+"""P0 crash-recovery (#1637): approval finalization is exactly-once under crashes AND races.
+
+Protocol under test (media_buy_completion.py + MediaBuyRepository lease seams):
+
+- Phase 1 claims the buy ``pending_approval → finalizing`` WITH a durable expiring
+  lease, committed before any external work.
+- Phase 2 may run the adapter / publish ONLY while owning the lease; every mutation is
+  a lease-CAS whose result is checked (lost ownership ⇒ NOT_CLAIMED, no side effects).
+- A durable ``finalize_adapter_invoked_at`` marker committed immediately before the
+  adapter splits the safe auto-retry window (marker absent ⇒ nothing remote happened)
+  from the dangerous one (marker present ⇒ only full-replay adapters auto-resume;
+  real adapters are flagged ``manual_required`` once — never a blind re-create, never
+  a hot loop).
+- ``AdapterPostMutationIncomplete`` (remote mutations exist, workflow incomplete)
+  parks the buy manual; the owner RETAINS its lease with a cool-down expiry (#1637
+  Hole B) so re-approval is fenced until a committed-but-invisible first remote order
+  becomes visible, and a durable OWNERSHIP-INDEPENDENT reconcile incident is recorded
+  (#1637 Hole A) — a losing worker (which owns no lease after a real takeover) still
+  leaves the trace, and it survives the winning owner's clean publish.
+
+DB access is consolidated in the module helpers below, which go through the production
+lease API / repositories over independent ``MediaBuyUoW`` sessions — no raw
+``get_db_session``/``session.add``, so none carries a repository-guard allowlist entry.
+"""
+
+import datetime
+import threading
+import time
+from datetime import UTC
+from types import SimpleNamespace
+
+import pytest
+
+from src.adapters.base import AdapterIdempotencyUncertain, AdapterPostMutationIncomplete
+from src.admin.services.media_buy_completion import (
+    FinalizeOutcome,
+    finalize_lease_heartbeat,
+    finalize_media_buy_approval,
+    resume_finalizing_media_buy,
+)
+from src.core.context_manager import ContextManager
+from src.core.database.models import MEDIA_BUY_RECOVERY_MANUAL
+from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
+from src.core.database.repositories.workflow import WorkflowRepository
+from tests.integration.conftest import seed_pending_buy_and_step
+
+
+class _FakeClock:
+    """Thread-safe fake clock shared by a repo's lease/guard logic and a heartbeat, so
+    tests advance time instead of doing row surgery on lease expiries (#1637)."""
+
+    def __init__(self, start: datetime.datetime) -> None:
+        self._t = start
+        self._lock = threading.Lock()
+
+    def now(self) -> datetime.datetime:
+        with self._lock:
+            return self._t
+
+    def advance(self, seconds: float) -> None:
+        with self._lock:
+            self._t = self._t + datetime.timedelta(seconds=seconds)
+
+    def set(self, value: datetime.datetime) -> None:
+        with self._lock:
+            self._t = value
+
+
+def _lease_expires_at(tenant_id: str, media_buy_id: str) -> datetime.datetime | None:
+    """The buy's committed lease expiry, read through a UoW (no raw session)."""
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        buy = uow.media_buys.get_by_id(media_buy_id)
+        assert buy is not None
+        return buy.finalize_lease_expires_at
+
+
+def _reapproval_would_claim(tenant_id: str, media_buy_id: str, now_fn=None) -> bool:
+    """Probe the widened re-approval claim (optionally on an injected clock), rolled back
+    either way. ``now_fn=None`` uses wall-clock UTC."""
+    captured: dict[str, bool] = {}
+
+    class _Rollback(Exception):
+        pass
+
+    try:
+        with MediaBuyUoW(tenant_id, now_fn=now_fn) as uow:
+            assert uow.media_buys is not None
+            captured["claimed"] = (
+                uow.media_buys.claim_finalizing(
+                    media_buy_id, expected_status=("pending_approval", "finalizing"), lease_ttl_seconds=3600
+                )
+                is not None
+            )
+            raise _Rollback  # never persist a probe claim
+    except _Rollback:
+        pass
+    return captured["claimed"]
+
+
+# ── UoW-owning module helpers — each opens an INDEPENDENT MediaBuyUoW session (what the
+# crash/ownership tests need) and goes through the production lease API / repositories.
+# No raw get_db_session, no session.add — so none carries a guard-allowlist entry. ──
+
+
+def _resume(
+    tenant_id, media_buy_id, step_id, step_data, run_adapter, *, replayable=False, replay_probe=None, now_fn=None
+):
+    """Drive the reconciler entry on its own UoW session; returns (outcome, msg)."""
+    with MediaBuyUoW(tenant_id) as uow:
+        return resume_finalizing_media_buy(
+            uow.session,
+            tenant_id,
+            media_buy_id=media_buy_id,
+            step_id=step_id,
+            step_data=step_data,
+            run_adapter=run_adapter,
+            adapter_supports_replay=replay_probe if replay_probe is not None else (lambda: replayable),
+            now_fn=now_fn,
+        )
+
+
+def _finalize_approval(
+    tenant_id, media_buy_id, step_id, step_data, run_adapter, *, expected_status="pending_approval", now_fn=None
+):
+    """Drive the real approval finalizer on its own UoW session; returns (outcome, msg)."""
+    with MediaBuyUoW(tenant_id) as uow:
+        return finalize_media_buy_approval(
+            uow.session,
+            tenant_id,
+            media_buy_id=media_buy_id,
+            step_id=step_id,
+            step_data=step_data,
+            compute_target=lambda _mb: "active",
+            run_adapter=run_adapter,
+            expected_status=expected_status,
+            approved_by="admin",
+            approved_at=datetime.datetime.now(UTC),
+            now_fn=now_fn,
+        )
+
+
+def _buy_snapshot(tenant_id: str, media_buy_id: str) -> SimpleNamespace:
+    """Committed-state snapshot of the fields these tests assert on."""
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        buy = uow.media_buys.get_by_id(media_buy_id)
+        assert buy is not None
+        return SimpleNamespace(
+            status=buy.status,
+            revision=buy.revision,
+            approved_at=buy.approved_at,
+            confirmed_at=buy.confirmed_at,
+            finalize_lease_id=buy.finalize_lease_id,
+            finalize_lease_expires_at=buy.finalize_lease_expires_at,
+            finalize_adapter_invoked_at=buy.finalize_adapter_invoked_at,
+            finalize_recovery_mode=buy.finalize_recovery_mode,
+            finalize_reconcile_incident_at=buy.finalize_reconcile_incident_at,
+            finalize_reconcile_incident_reason=buy.finalize_reconcile_incident_reason,
+        )
+
+
+def _step_snapshot(tenant_id: str, step_id: str) -> SimpleNamespace:
+    with MediaBuyUoW(tenant_id) as uow:
+        step = WorkflowRepository(uow.session, tenant_id).get_by_step_id(step_id)
+        assert step is not None
+        return SimpleNamespace(status=step.status, response_data=step.response_data)
+
+
+def _recoverable_ids(tenant_id: str) -> set[str]:
+    """The media_buy_ids the scheduler's reconciler scan would pick up right now."""
+    with MediaBuyUoW(tenant_id) as uow:
+        return {
+            b.media_buy_id
+            for b in MediaBuyRepository.get_finalizing_recoverable(uow.session, datetime.datetime.now(UTC))
+        }
+
+
+def _claim_expired(
+    tenant_id: str,
+    media_buy_id: str,
+    *,
+    mark_invoked: bool,
+    expired_by_seconds: int = 1,
+    expected_status: str = "pending_approval",
+) -> str:
+    """Model a CRASHED worker: claimed ``finalizing`` with an already-expired lease,
+    optionally past the adapter-invoked marker, via the real production lease API. Only
+    the aging of the DEAD worker's lease is seeded directly (``expired_by_seconds`` back).
+    A LIVE worker is fenced GENUINELY — by a running heartbeat on an injected clock — in
+    ``test_heartbeat_fences_reapproval_of_live_worker_until_it_crashes``, not here."""
+    with MediaBuyUoW(tenant_id) as uow:
+        repo = uow.media_buys
+        assert repo is not None
+        # Model the real approve claim: phase 1 always stamps the approval instant.
+        claim = repo.claim_finalizing(
+            media_buy_id,
+            expected_status=expected_status,
+            lease_ttl_seconds=3600,
+            approved_at=datetime.datetime.now(UTC),
+            approved_by="admin",
+        )
+        assert claim is not None
+        buy, lease_id = claim
+        if mark_invoked:
+            assert repo.set_finalize_adapter_invoked(media_buy_id, lease_id)
+        buy.finalize_lease_expires_at = datetime.datetime.now(UTC) - datetime.timedelta(seconds=expired_by_seconds)
+    return lease_id
+
+
+def _clear_recovery_and_marker(tenant_id: str, media_buy_id: str) -> None:
+    """The documented operator remediation: clear BOTH flags after remote reconciliation."""
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        buy = uow.media_buys.get_by_id(media_buy_id)
+        assert buy is not None
+        buy.finalize_recovery_mode = None
+        buy.finalize_adapter_invoked_at = None
+
+
+def _seed_platform_order_id(tenant_id: str, media_buy_id: str, package_id: str) -> None:
+    """Persist a stale platform order/line-item id pair on a package (crash artifact),
+    through the production ``create_package`` repository method (not raw session.add)."""
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        uow.media_buys.create_package(
+            media_buy_id,
+            package_id,
+            {"platform_order_id": "stale_order", "platform_line_item_id": "stale_li"},
+        )
+
+
+def _package_configs(tenant_id: str, media_buy_id: str) -> list[dict]:
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        return [dict(p.package_config or {}) for p in uow.media_buys.get_packages(media_buy_id)]
+
+
+def _install_takeover_lease(tenant_id: str, media_buy_id: str, lease_id: str) -> None:
+    """Model a competing owner (W2) installing a NEW finalize lease — a real takeover — while
+    the buy is still ``finalizing``, so a returning original worker's owner-CAS on its OWN
+    lease id FAILS. Uses the same UoW row-edit seam ``_claim_expired`` uses to age a lease."""
+    from src.core.database.models import MEDIA_BUY_FINALIZING_STATUS
+
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        buy = uow.media_buys.get_by_id(media_buy_id)
+        assert buy is not None and buy.status == MEDIA_BUY_FINALIZING_STATUS
+        buy.finalize_lease_id = lease_id
+        buy.finalize_lease_expires_at = datetime.datetime.now(UTC) + datetime.timedelta(seconds=3600)
+
+
+def _clean_publish_as(tenant_id: str, media_buy_id: str, lease_id: str) -> None:
+    """The new owner's clean serving publish through the production seam: clears the finalize
+    state (lease/marker/recovery_mode) but must LEAVE the reconcile-incident marker."""
+    from src.core.database.models import MEDIA_BUY_FINALIZING_STATUS
+
+    with MediaBuyUoW(tenant_id) as uow:
+        assert uow.media_buys is not None
+        published = uow.media_buys.update_status_computed(
+            media_buy_id,
+            lambda _mb: "active",
+            expected_status=MEDIA_BUY_FINALIZING_STATUS,
+            expected_lease_id=lease_id,
+            clear_finalize_state=True,
+            bump=False,
+        )
+        assert published is not None
+
+
+def _finalize_incident_audit_count(tenant_id: str, media_buy_id: str) -> int:
+    """Count durable ownership-independent AuditLog incident rows for this buy."""
+    from src.core.database.repositories.audit_log import AuditLogRepository
+
+    with MediaBuyUoW(tenant_id) as uow:
+        logs = AuditLogRepository(uow.session, tenant_id).find_by_operation("finalize_reconcile_incident")
+        return sum(1 for log in logs if (log.details or {}).get("media_buy_id") == media_buy_id)
+
+
+def _start_approval_worker(
+    tenant_id: str, media_buy_id: str, step_id: str, step_data: dict, run_adapter, *, now_fn=None
+) -> tuple[threading.Thread, dict]:
+    """Start a background thread driving the REAL approval finalizer on its own session.
+
+    Shared by the ownership-race tests (blocked-worker / stale-worker / self-heal) so
+    the finalize call site lives once (DRY). ``now_fn`` injects the fake clock the
+    stale-worker/self-heal tests advance to expire the lease (instead of row surgery).
+    Returns ``(thread, result)`` where ``result`` receives ``outcome`` (or ``error``).
+    """
+    result: dict = {}
+
+    def worker() -> None:
+        try:
+            result["outcome"] = _finalize_approval(
+                tenant_id, media_buy_id, step_id, step_data, run_adapter, now_fn=now_fn
+            )[0]
+        except BaseException as exc:  # noqa: BLE001 - surfaced to the main thread
+            result["error"] = exc
+
+    thread = threading.Thread(target=worker, name=f"approval-worker-{media_buy_id}")
+    thread.start()
+    return thread, result
+
+
+def _seed_pending_creatives_buy(tenant_id: str, principal_id: str, media_buy_id: str) -> None:
+    """Seed a buy held at pending_creatives (the step-less creative-unblock shape)."""
+    from src.core.database.repositories import MediaBuyUoW
+    from tests.integration.conftest import make_media_buy
+
+    with MediaBuyUoW(tenant_id) as uow:
+        uow.media_buys.create(make_media_buy(tenant_id, principal_id, media_buy_id, status="pending_creatives"))
+
+
+@pytest.mark.requires_db
+class TestApprovalCrashRecovery:
+    @pytest.fixture
+    def context_manager(self):
+        return ContextManager()
+
+    def _seed_pending(self, context_manager, tenant_id, principal_id, media_buy_id) -> tuple[str, dict]:
+        return seed_pending_buy_and_step(context_manager, tenant_id, principal_id, media_buy_id)
+
+    # ── Crash windows ────────────────────────────────────────────────────
+
+    def test_crash_before_marker_is_auto_recoverable_even_for_real_adapters(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """A crash AFTER the claim but BEFORE the adapter-invoked marker means nothing
+        remote happened — the reconciler safely re-attempts even for a non-replayable
+        (real) adapter, and completes with exactly one adapter invocation."""
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(context_manager, tenant_id, sample_principal["principal_id"], "mb_pre")
+        self._claim = _claim_expired(tenant_id, "mb_pre", mark_invoked=False)
+
+        adapter_calls: list[str] = []
+
+        def adapter():
+            adapter_calls.append("call")
+            return True, None
+
+        outcome, _ = _resume(tenant_id, "mb_pre", step_id, step_data, adapter, replayable=False)
+
+        assert outcome is FinalizeOutcome.APPLIED
+        assert adapter_calls == ["call"]
+        buy = _buy_snapshot(tenant_id, "mb_pre")
+        assert buy.status == "active"
+        assert buy.confirmed_at is not None and buy.confirmed_at == buy.approved_at  # B4 preserved
+        assert buy.finalize_lease_id is None and buy.finalize_adapter_invoked_at is None
+        step = _step_snapshot(tenant_id, step_id)
+        assert step.status == "completed" and step.response_data is not None
+
+    def test_crash_after_marker_on_real_adapter_goes_manual_once_no_hot_loop(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """Marker present + non-replayable adapter: the remote graph may be partial, so
+        the reconciler NEVER re-invokes the adapter — it flags ``manual_required`` ONCE
+        and every later pass skips the buy entirely (hot-loop pin). This holds even
+        when ``platform_order_id`` was persisted (order ≠ complete graph)."""
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_manual"
+        )
+        _claim_expired(tenant_id, "mb_manual", mark_invoked=True)
+        # Even a persisted order id must not unlock auto-resume for a real adapter.
+        _seed_platform_order_id(tenant_id, "mb_manual", "pkg_1")
+
+        adapter_calls: list[str] = []
+
+        def adapter():
+            adapter_calls.append("call")
+            return True, None
+
+        outcome, msg = _resume(tenant_id, "mb_manual", step_id, step_data, adapter, replayable=False)
+        assert outcome is FinalizeOutcome.RETRYING and "manual" in (msg or "")
+        assert adapter_calls == []  # never re-invoked
+
+        buy = _buy_snapshot(tenant_id, "mb_manual")
+        assert buy.status == "finalizing"
+        assert buy.finalize_recovery_mode == MEDIA_BUY_RECOVERY_MANUAL
+        assert buy.finalize_reconcile_incident_at is not None
+        assert "crash after adapter invocation" in (buy.finalize_reconcile_incident_reason or "")
+        assert _finalize_incident_audit_count(tenant_id, "mb_manual") == 1
+        # The scan the scheduler uses excludes flagged buys — no hot loop.
+        assert "mb_manual" not in _recoverable_ids(tenant_id)
+
+        # A second reconciler pass must not touch it (NOT_CLAIMED, still no adapter call).
+        outcome2, _ = _resume(tenant_id, "mb_manual", step_id, step_data, adapter, replayable=False)
+        assert outcome2 is FinalizeOutcome.NOT_CLAIMED
+        assert adapter_calls == []
+
+    def test_crash_after_marker_on_replay_capable_adapter_auto_resumes(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """Marker present + full-replay adapter (mock): safe to re-run the whole create
+        workflow — the reconciler resumes and completes."""
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_replay"
+        )
+        _claim_expired(tenant_id, "mb_replay", mark_invoked=True)
+
+        adapter_calls: list[str] = []
+
+        def adapter():
+            adapter_calls.append("call")
+            return True, None
+
+        outcome, _ = _resume(tenant_id, "mb_replay", step_id, step_data, adapter, replayable=True)
+        assert outcome is FinalizeOutcome.APPLIED
+        assert adapter_calls == ["call"]
+        assert _buy_snapshot(tenant_id, "mb_replay").status == "active"
+
+    # ── Ownership races (reviewer-required) ──────────────────────────────
+
+    def test_reconciler_does_not_touch_a_live_workers_buy(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """A worker blocked INSIDE the adapter past a reconciler pass: the reconciler
+        must neither invoke the adapter nor flag manual (the lease is unexpired) —
+        the adapter runs exactly once and the worker completes normally."""
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(context_manager, tenant_id, sample_principal["principal_id"], "mb_live")
+
+        adapter_entered = threading.Event()
+        adapter_release = threading.Event()
+        adapter_calls: list[str] = []
+
+        def blocked_adapter():
+            adapter_calls.append("worker")
+            adapter_entered.set()
+            assert adapter_release.wait(timeout=30), "test deadlock: adapter never released"
+            return True, None
+
+        t, worker_result = _start_approval_worker(tenant_id, "mb_live", step_id, step_data, blocked_adapter)
+        try:
+            assert adapter_entered.wait(timeout=30), "worker never reached the adapter"
+
+            # A reconciler pass fires while the worker is mid-adapter.
+            def reconciler_adapter():
+                adapter_calls.append("reconciler")
+                return True, None
+
+            outcome, _ = _resume(tenant_id, "mb_live", step_id, step_data, reconciler_adapter, replayable=True)
+            assert outcome is FinalizeOutcome.NOT_CLAIMED  # unexpired lease → hands off
+            assert _buy_snapshot(tenant_id, "mb_live").finalize_recovery_mode is None  # NOT flagged manual
+        finally:
+            adapter_release.set()
+            t.join(timeout=60)
+
+        assert not t.is_alive(), "worker hung"
+        assert "error" not in worker_result, f"worker failed: {worker_result.get('error')}"
+        assert worker_result["outcome"] is FinalizeOutcome.APPLIED
+        assert adapter_calls == ["worker"]  # exactly once, by the worker
+        assert _buy_snapshot(tenant_id, "mb_live").status == "active"
+        assert _step_snapshot(tenant_id, step_id).status == "completed"
+
+    def test_stale_worker_returning_after_takeover_records_incident_not_publishes(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """A worker's lease expires mid-adapter and a reconciler takes over and completes; when
+        the stale worker's adapter finally returns, its success-publish CAS loses the lease — it
+        must not publish, mark failed, terminalize, or emit a second artifact. This is #1637
+        Hole A path (ii): the heartbeat did NOT prove the loss in time (it is dormant), so the
+        loss surfaces at the publish CAS, NOT via ``ownership_lost``/``_flag_manual_reconciliation``.
+        Because the stale worker's adapter provably RAN this attempt, it must still record the
+        durable ownership-independent incident (buy column + AuditLog) rather than silently
+        returning NOT_CLAIMED — otherwise a genuine double remote-create leaves no trace. The
+        incident is recorded on the already-serving buy the winner published (it survives)."""
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_stale"
+        )
+        clock = _FakeClock(datetime.datetime.now(UTC))
+
+        adapter_entered = threading.Event()
+        adapter_release = threading.Event()
+
+        def slow_adapter():
+            adapter_entered.set()
+            assert adapter_release.wait(timeout=30), "test deadlock: adapter never released"
+            return True, None
+
+        t, worker_result = _start_approval_worker(
+            tenant_id, "mb_stale", step_id, step_data, slow_adapter, now_fn=clock.now
+        )
+        try:
+            assert adapter_entered.wait(timeout=30)
+            # Advance the shared clock past the lease TTL so the worker's lease reads
+            # expired (its dormant heartbeat has not renewed) — no row surgery.
+            clock.advance(3601)
+            # Reconciler takes over (marker is set; use a replay-capable adapter) and completes.
+            outcome, _ = _resume(
+                tenant_id, "mb_stale", step_id, step_data, lambda: (True, None), replayable=True, now_fn=clock.now
+            )
+            assert outcome is FinalizeOutcome.APPLIED
+            step_after = _step_snapshot(tenant_id, step_id)
+            assert step_after.status == "completed"
+            revision_after_takeover = _buy_snapshot(tenant_id, "mb_stale").revision
+        finally:
+            adapter_release.set()
+            t.join(timeout=60)
+
+        assert not t.is_alive(), "stale worker hung"
+        assert "error" not in worker_result, f"stale worker failed: {worker_result.get('error')}"
+        # The stale worker lost ownership at the publish CAS → NOT_CLAIMED, did not publish.
+        assert worker_result["outcome"] is FinalizeOutcome.NOT_CLAIMED
+        buy = _buy_snapshot(tenant_id, "mb_stale")
+        assert buy.status == "active"
+        assert buy.revision == revision_after_takeover  # no extra bump — incident does not bump revision
+        step_final = _step_snapshot(tenant_id, step_id)
+        assert step_final.status == "completed"
+        assert step_final.response_data == step_after.response_data  # artifact untouched
+        # But its adapter RAN, so the possible-duplicate incident IS durably recorded (path (ii)),
+        # and it survives the winner's clean publish (buy shows serving, incident still set).
+        assert buy.finalize_reconcile_incident_at is not None
+        assert "adapter ran" in (buy.finalize_reconcile_incident_reason or "")
+        assert _finalize_incident_audit_count(tenant_id, "mb_stale") == 1
+
+    # ── Uncertain-before-mutation + self-heal ────────────────────────────
+
+    def test_adapter_uncertain_keeps_automatic_retry_path(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """``AdapterIdempotencyUncertain`` (guaranteed no remote mutation): the approval
+        returns RETRYING, the invoked marker is cleared and the lease released, so the
+        next reconciler pass re-attempts automatically — for ANY adapter."""
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_uncertain"
+        )
+
+        def uncertain_adapter():
+            raise AdapterIdempotencyUncertain("GAM lookup failed")
+
+        outcome, msg = _finalize_approval(tenant_id, "mb_uncertain", step_id, step_data, uncertain_adapter)
+        assert outcome is FinalizeOutcome.RETRYING and "lookup failed" in (msg or "")
+
+        buy = _buy_snapshot(tenant_id, "mb_uncertain")
+        assert buy.status == "finalizing"
+        assert buy.finalize_adapter_invoked_at is None  # cleared: nothing remote happened
+        assert buy.finalize_lease_id is None  # released: no TTL wait
+        assert buy.finalize_recovery_mode is None  # AUTOMATIC path
+
+        # Next reconciler pass re-attempts and completes — even for a real adapter.
+        outcome2, _ = _resume(tenant_id, "mb_uncertain", step_id, step_data, lambda: (True, None), replayable=False)
+        assert outcome2 is FinalizeOutcome.APPLIED
+
+    def test_slow_worker_publish_self_heals_manual_flag(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """A reconciler flags manual_required while a slow (lease-expired but alive)
+        worker is still running; the worker's successful publish — its own lease was
+        never stolen — clears the flag (self-heal)."""
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(context_manager, tenant_id, sample_principal["principal_id"], "mb_heal")
+        clock = _FakeClock(datetime.datetime.now(UTC))
+
+        adapter_entered = threading.Event()
+        adapter_release = threading.Event()
+
+        def slow_adapter():
+            adapter_entered.set()
+            assert adapter_release.wait(timeout=30)
+            return True, None
+
+        t, worker_result = _start_approval_worker(
+            tenant_id, "mb_heal", step_id, step_data, slow_adapter, now_fn=clock.now
+        )
+        try:
+            assert adapter_entered.wait(timeout=30)
+            clock.advance(3601)  # worker's lease reads expired (dormant heartbeat has not renewed)
+            # Reconciler (non-replayable adapter, marker set) flags manual — WITHOUT
+            # stealing the worker's lease id.
+            outcome, _ = _resume(
+                tenant_id, "mb_heal", step_id, step_data, lambda: (True, None), replayable=False, now_fn=clock.now
+            )
+            assert outcome is FinalizeOutcome.RETRYING
+            assert _buy_snapshot(tenant_id, "mb_heal").finalize_recovery_mode == MEDIA_BUY_RECOVERY_MANUAL
+        finally:
+            adapter_release.set()
+            t.join(timeout=60)
+
+        assert not t.is_alive() and "error" not in worker_result
+        assert worker_result["outcome"] is FinalizeOutcome.APPLIED  # its own lease survived
+        buy = _buy_snapshot(tenant_id, "mb_heal")
+        assert buy.status == "active"
+        assert buy.finalize_recovery_mode is None  # self-healed on publish
+
+    def test_uncertain_clears_a_concurrent_manual_flag(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """An expired-lease worker whose adapter raises ``AdapterIdempotencyUncertain``
+        (guaranteed: nothing remote happened) must return the buy to the FULLY
+        automatic state — including clearing a ``manual_required`` flag a reconciler
+        set while the worker was in flight — and the next resume completes."""
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_unmanual"
+        )
+        clock = _FakeClock(datetime.datetime.now(UTC))
+
+        adapter_entered = threading.Event()
+        adapter_release = threading.Event()
+
+        def uncertain_after_release():
+            adapter_entered.set()
+            assert adapter_release.wait(timeout=30)
+            raise AdapterIdempotencyUncertain("lookup failed mid-flight")
+
+        t, worker_result = _start_approval_worker(
+            tenant_id, "mb_unmanual", step_id, step_data, uncertain_after_release, now_fn=clock.now
+        )
+        try:
+            assert adapter_entered.wait(timeout=30)
+            clock.advance(3601)  # worker's lease reads expired (dormant heartbeat has not renewed)
+            # Reconciler flags manual (marker set, real adapter, expired lease).
+            outcome, _ = _resume(
+                tenant_id, "mb_unmanual", step_id, step_data, lambda: (True, None), replayable=False, now_fn=clock.now
+            )
+            assert outcome is FinalizeOutcome.RETRYING
+            assert _buy_snapshot(tenant_id, "mb_unmanual").finalize_recovery_mode == MEDIA_BUY_RECOVERY_MANUAL
+        finally:
+            adapter_release.set()
+            t.join(timeout=60)
+
+        assert not t.is_alive() and "error" not in worker_result
+        assert worker_result["outcome"] is FinalizeOutcome.RETRYING  # the worker's Uncertain path
+        buy = _buy_snapshot(tenant_id, "mb_unmanual")
+        assert buy.status == "finalizing"
+        # FULLY automatic again — Uncertain outlives the stale manual flag.
+        assert buy.finalize_recovery_mode is None
+        assert buy.finalize_adapter_invoked_at is None
+        assert buy.finalize_lease_id is None
+
+        # And the next reconciler pass completes it.
+        outcome2, _ = _resume(tenant_id, "mb_unmanual", step_id, step_data, lambda: (True, None), replayable=False)
+        assert outcome2 is FinalizeOutcome.APPLIED
+
+    def test_provable_ownership_loss_during_adapter_routes_to_manual_not_success(
+        self, integration_db, sample_tenant, sample_principal, context_manager, monkeypatch
+    ):
+        """Heartbeat is a liveness signal, not a hard fence (#1637). If the phase-2
+        heartbeat PROVES ownership loss while the adapter is running — renewals keep
+        FAILING (e.g. Postgres connectivity lost) until more than the lease TTL has elapsed
+        since the last successful renewal, so the lease certainly expired — the worker must
+        NOT report success even though its adapter returned ``(True, None)``. It fails safe
+        to manual reconciliation, exactly like ``AdapterPostMutationIncomplete``: a
+        duplicate/partial remote graph may exist. The lease-CAS already blocks a
+        double-PUBLISH; this pins that the LOSING worker also does not claim success."""
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(context_manager, tenant_id, sample_principal["principal_id"], "mb_lost")
+
+        # Small lease TTL so the heartbeat's ~TTL/3 interval fires quickly in REAL time; the
+        # finalizer reads this module constant for both the claim and the heartbeat renew.
+        monkeypatch.setattr("src.admin.services.media_buy_completion.FINALIZE_LEASE_TTL_SECONDS", 3)
+        clock = _FakeClock(datetime.datetime.now(UTC))
+
+        adapter_entered = threading.Event()
+        adapter_release = threading.Event()
+
+        def slow_adapter():
+            adapter_entered.set()
+            assert adapter_release.wait(timeout=30), "test deadlock: adapter never released"
+            return True, None  # adapter "succeeds" — but ownership was lost meanwhile
+
+        # Make EVERY heartbeat renewal FAIL (models DB connectivity lost mid-run). Only the
+        # heartbeat thread calls renew_finalize_lease, so nothing else in the flow is affected.
+        renew_attempts: list[int] = []
+
+        def failing_renew(self, media_buy_id, lease_id, *, lease_ttl_seconds):
+            renew_attempts.append(1)  # list.append is GIL-atomic — thread-safe counter
+            raise RuntimeError("renew failed: db connectivity lost")
+
+        monkeypatch.setattr(MediaBuyRepository, "renew_finalize_lease", failing_renew)
+
+        t, worker_result = _start_approval_worker(
+            tenant_id, "mb_lost", step_id, step_data, slow_adapter, now_fn=clock.now
+        )
+        try:
+            assert adapter_entered.wait(timeout=30)
+            before = len(renew_attempts)
+            # Advance the shared clock past the (small) TTL so the NEXT failed renewal proves
+            # the lease has expired since the last success → heartbeat sets ownership_lost.
+            clock.advance(4)
+            deadline = time.time() + 30
+            while len(renew_attempts) <= before and time.time() < deadline:
+                time.sleep(0.05)
+            assert len(renew_attempts) > before, "heartbeat never re-attempted a renewal after the advance"
+            time.sleep(0.3)  # let the post-failure ownership_lost.set() execute in the heartbeat thread
+        finally:
+            adapter_release.set()
+            t.join(timeout=60)
+
+        assert not t.is_alive(), "worker hung"
+        assert "error" not in worker_result, f"worker failed: {worker_result.get('error')}"
+        # Fails safe: RETRYING via manual reconciliation, NOT APPLIED.
+        assert worker_result["outcome"] is FinalizeOutcome.RETRYING
+        buy = _buy_snapshot(tenant_id, "mb_lost")
+        assert buy.status == "finalizing"  # did NOT publish the serving status
+        assert buy.finalize_recovery_mode == MEDIA_BUY_RECOVERY_MANUAL  # manual flag set, not cleared
+        # This is the ownership_lost/CAS-win race: no competing worker took the row,
+        # so the conservative owner-CAS must retain the lease and its cooldown. If
+        # the cooldown argument is removed from that exact branch, reapproval becomes
+        # immediately claimable here despite an adapter call that may have created a
+        # remote graph.
+        assert buy.finalize_lease_id is not None
+        assert not _reapproval_would_claim(tenant_id, "mb_lost", clock.now)
+        assert _step_snapshot(tenant_id, step_id).status != "completed"  # no success artifact emitted
+
+    # ── Round N+6/N+7 pins: shortcut removal / remediation / probe / fencing ──
+
+    def test_persisted_order_id_never_skips_the_adapter(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """A persisted ``platform_order_id`` is NOT proof the remote workflow completed
+        (it lands before creative upload and order approval). The re-approval shape —
+        marker ABSENT, stale order id present — must RUN the adapter before publishing,
+        never skip; and the stale per-package ids are reset for the fresh full create."""
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_orderid"
+        )
+        _claim_expired(tenant_id, "mb_orderid", mark_invoked=False)
+        _seed_platform_order_id(tenant_id, "mb_orderid", "pkg_1")
+
+        adapter_calls: list[str] = []
+
+        def adapter():
+            adapter_calls.append("call")
+            # Pin the stale-id reset: by adapter time the partial identifiers are gone,
+            # so a fresh full create cannot trip the persist mismatch guard.
+            for config in _package_configs(tenant_id, "mb_orderid"):
+                assert "platform_order_id" not in config
+                assert "platform_line_item_id" not in config
+            return True, None
+
+        outcome, _ = _resume(tenant_id, "mb_orderid", step_id, step_data, adapter, replayable=False)
+
+        assert outcome is FinalizeOutcome.APPLIED
+        assert adapter_calls == ["call"]  # the adapter RAN — publish never rode a stale order id
+
+    def test_documented_operator_remediation_recovers(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """The documented remediation clears BOTH fields (recovery_mode AND the invoked
+        marker) — after which the reconciler auto-recovers even a real adapter (the
+        marker-absent window). Clearing only recovery_mode would immediately re-flag."""
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_operator"
+        )
+        _claim_expired(tenant_id, "mb_operator", mark_invoked=True)
+        outcome, _ = _resume(tenant_id, "mb_operator", step_id, step_data, lambda: (True, None))
+        assert outcome is FinalizeOutcome.RETRYING  # manual_required now set
+
+        # The documented operator remediation: clear BOTH fields.
+        _clear_recovery_and_marker(tenant_id, "mb_operator")
+
+        adapter_calls: list[str] = []
+
+        def adapter():
+            adapter_calls.append("call")
+            return True, None
+
+        outcome2, _ = _resume(tenant_id, "mb_operator", step_id, step_data, adapter, replayable=False)
+        assert outcome2 is FinalizeOutcome.APPLIED  # NOT re-flagged manual
+        assert adapter_calls == ["call"]
+        assert _buy_snapshot(tenant_id, "mb_operator").status == "active"
+
+    def test_capability_probe_failure_goes_manual_once(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """A capability-resolution exception must NOT escape to the scheduler (which
+        would retry the same row every pass forever): it is treated conservatively as
+        non-replayable → ``manual_required`` ONCE; the second pass skips entirely."""
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_probe"
+        )
+        _claim_expired(tenant_id, "mb_probe", mark_invoked=True)
+
+        adapter_calls: list[str] = []
+
+        def adapter():
+            adapter_calls.append("call")
+            return True, None
+
+        def exploding_probe():
+            raise RuntimeError("adapter resolution failed")
+
+        outcome, msg = _resume(tenant_id, "mb_probe", step_id, step_data, adapter, replay_probe=exploding_probe)
+        assert outcome is FinalizeOutcome.RETRYING and "manual" in (msg or "")  # no exception escaped
+        assert adapter_calls == []
+        assert _buy_snapshot(tenant_id, "mb_probe").finalize_recovery_mode == MEDIA_BUY_RECOVERY_MANUAL
+
+        # Second pass: skipped entirely — no hot loop, probe not even consulted.
+        outcome2, _ = _resume(tenant_id, "mb_probe", step_id, step_data, adapter, replay_probe=exploding_probe)
+        assert outcome2 is FinalizeOutcome.NOT_CLAIMED
+        assert adapter_calls == []
+
+    def test_post_mutation_failure_preserves_reconciliation_signal(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """A handled failure AFTER the remote order was created (creative upload /
+        order approval — ``AdapterPostMutationIncomplete``) must NOT become a
+        terminal ``failed`` that erases the finalization state: the buy stays
+        ``finalizing`` with the invoked marker INTACT, flagged ``manual_required``,
+        the step stays non-terminal, and the reconciler skips it.
+
+        AMBIGUOUS-path fixes (#1637 Holes A/B): the owner RETAINS its lease with a
+        cool-down expiry (not released) so re-approval is fenced until a
+        committed-but-invisible first remote order becomes visible, and a durable
+        ownership-independent reconcile incident is recorded (buy column + AuditLog)."""
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_partial"
+        )
+
+        def post_mutation_failing_adapter():
+            raise AdapterPostMutationIncomplete("order created; creative upload failed")
+
+        outcome, msg = _finalize_approval(tenant_id, "mb_partial", step_id, step_data, post_mutation_failing_adapter)
+
+        assert outcome is FinalizeOutcome.RETRYING and "manual" in (msg or "")
+        buy = _buy_snapshot(tenant_id, "mb_partial")
+        assert buy.status == "finalizing"  # NOT terminal failed
+        assert buy.finalize_recovery_mode == MEDIA_BUY_RECOVERY_MANUAL
+        assert buy.finalize_adapter_invoked_at is not None  # signal preserved
+        # Hole B: lease RETAINED (cool-down), not released, so re-approval is fenced.
+        assert buy.finalize_lease_id is not None
+        assert buy.finalize_lease_expires_at is not None
+        # Hole A: durable ownership-independent incident recorded (buy column + AuditLog).
+        assert buy.finalize_reconcile_incident_at is not None
+        assert "creative upload failed" in (buy.finalize_reconcile_incident_reason or "")
+        assert _finalize_incident_audit_count(tenant_id, "mb_partial") == 1
+        assert _step_snapshot(tenant_id, step_id).status == "in_progress"  # not failed/terminal
+        # Reconciler never re-touches it (manual_required excluded from the scan).
+        assert "mb_partial" not in _recoverable_ids(tenant_id)
+
+    def test_operator_reapproval_is_fenced_against_maybe_alive_workers(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """Re-approving a ``manual_required`` buy is FENCED (#1637 round N+8):
+
+        - A reconciler-flagged row keeps the expired lease of a possibly-still-alive
+          worker → re-approval is REJECTED until the lease has been expired beyond
+          the abandonment grace (no concurrent second adapter invocation).
+        - An owner-flagged row (post-mutation failure released its own lease) is
+          re-approvable immediately.
+        - A plain in-flight ``finalizing`` buy is never re-claimable.
+        """
+        tenant_id = sample_tenant["tenant_id"]
+
+        # (a) reconciler-flagged manual, lease expired only just now → FENCED.
+        step_id, step_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_fenced"
+        )
+        _claim_expired(tenant_id, "mb_fenced", mark_invoked=True, expired_by_seconds=1)
+        outcome, _ = _resume(tenant_id, "mb_fenced", step_id, step_data, lambda: (True, None))
+        assert outcome is FinalizeOutcome.RETRYING  # manual_required set, lease left in place
+        assert not _reapproval_would_claim(tenant_id, "mb_fenced"), (
+            "a freshly-expired lease may belong to a still-running worker — re-approval must be fenced"
+        )
+        # Re-approvability once the prior owner is GENUINELY gone (a live heartbeat vs a
+        # true crash, not a fast-forwarded dead timestamp) is pinned by
+        # test_heartbeat_fences_reapproval_of_live_worker_until_it_crashes below.
+
+        # (b) owner-flagged manual via the AMBIGUOUS post-mutation path RETAINS the lease with
+        # a cool-down (#1637 Hole B), so re-approval is FENCED — not immediate — until the
+        # cool-down + abandoned-owner grace elapses (the fenced→permitted transition on an
+        # injected clock is pinned by test_ambiguous_post_mutation_cooldown_fences_reapproval).
+        step2_id, step2_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_owner_manual"
+        )
+
+        def post_mutation_failing_adapter():
+            raise AdapterPostMutationIncomplete("order created; approval failed")
+
+        outcome_b, _ = _finalize_approval(
+            tenant_id, "mb_owner_manual", step2_id, step2_data, post_mutation_failing_adapter
+        )
+        assert outcome_b is FinalizeOutcome.RETRYING
+        buy_b = _buy_snapshot(tenant_id, "mb_owner_manual")
+        assert buy_b.finalize_lease_id is not None  # lease retained for the cool-down fence
+        assert not _reapproval_would_claim(tenant_id, "mb_owner_manual"), (
+            "the ambiguous post-mutation cool-down must fence re-approval until it elapses"
+        )
+
+        # (c) a plain in-flight finalizing buy (no manual flag) is never re-claimable.
+        self._seed_pending(context_manager, tenant_id, sample_principal["principal_id"], "mb_inflight")
+        _claim_expired(tenant_id, "mb_inflight", mark_invoked=False, expired_by_seconds=-3600)  # unexpired
+        assert not _reapproval_would_claim(tenant_id, "mb_inflight")
+
+    def test_heartbeat_fences_reapproval_of_live_worker_until_it_crashes(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """Elapsed time is NOT an ownership fence (#1637). A GENUINELY live worker whose
+        phase-2 heartbeat keeps renewing its lease fences operator re-approval even after
+        the clock advances far past TTL+grace; only when the heartbeat STOPS (the worker
+        crashed) does the lease age out and re-approval succeed.
+
+        Replaces the earlier timestamp-aging pin, which fast-forwarded a DEAD lease and so
+        never exercised a live renewer — it could not distinguish "abandoned" from
+        "blocked but alive", the exact bug this fence exists to prevent.
+        """
+        tenant_id = sample_tenant["tenant_id"]
+        self._seed_pending(context_manager, tenant_id, sample_principal["principal_id"], "mb_hb")
+
+        clock = _FakeClock(datetime.datetime(2026, 1, 1, tzinfo=UTC))
+        ttl = 3  # small so the renewer's ~TTL/3 interval fires quickly in REAL time
+        grace = 3600  # claim_finalizing's default abandoned_owner_grace_seconds
+
+        # Reach the reconciler-flagged shape (finalizing + manual_required + lease LEFT in
+        # place) through the real repo API on the fake clock: claim → mark invoked →
+        # advance past TTL so the lease reads expired → reconciler-mode manual flag, which
+        # keeps the lease of the possibly-still-alive worker.
+        with MediaBuyUoW(tenant_id, now_fn=clock.now) as uow:
+            assert uow.media_buys is not None
+            claim = uow.media_buys.claim_finalizing(
+                "mb_hb",
+                expected_status="pending_approval",
+                lease_ttl_seconds=ttl,
+                approved_at=clock.now(),
+                approved_by="admin",
+            )
+            assert claim is not None
+            _, lease_id = claim
+            assert uow.media_buys.set_finalize_adapter_invoked("mb_hb", lease_id)
+        clock.advance(ttl + 1)
+        with MediaBuyUoW(tenant_id, now_fn=clock.now) as uow:
+            assert uow.media_buys is not None
+            assert uow.media_buys.set_finalize_recovery_manual("mb_hb")  # reconciler mode; lease retained
+
+        # The worker is still ALIVE: run its heartbeat renewer on the SAME fake clock.
+        with finalize_lease_heartbeat(tenant_id, "mb_hb", lease_id, lease_ttl_seconds=ttl, now_fn=clock.now):
+            clock.advance(ttl + grace + 100_000)  # far past any abandonment threshold
+            # Wait until the live renewer bumps the lease forward to the advanced clock.
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                exp = _lease_expires_at(tenant_id, "mb_hb")
+                if exp is not None and exp > clock.now() - datetime.timedelta(seconds=grace):
+                    break
+                time.sleep(0.05)
+            else:
+                pytest.fail("heartbeat never renewed the lease")
+            # Re-approval MUST be fenced: the live worker keeps the lease fresh, so
+            # "expired + grace" never fires.
+            assert not _reapproval_would_claim(tenant_id, "mb_hb", clock.now), (
+                "a live worker's renewed lease must fence re-approval"
+            )
+
+        # The worker CRASHED: heartbeat stopped + joined. Read the FINAL lease expiry and
+        # advance past it + grace so the lease is GENUINELY abandoned.
+        final_expiry = _lease_expires_at(tenant_id, "mb_hb")
+        assert final_expiry is not None
+        clock.set(final_expiry + datetime.timedelta(seconds=grace + 10))
+        assert _reapproval_would_claim(tenant_id, "mb_hb", clock.now), (
+            "once the heartbeat stops and the lease ages out, re-approval must succeed"
+        )
+
+    def test_stepless_resume_completes_without_step(self, integration_db, sample_tenant, sample_principal):
+        """The step-less path (creative-unblock with no async buyer task) recovers the
+        same way: a marker-absent stranding resumes to the serving status."""
+        tenant_id = sample_tenant["tenant_id"]
+        _seed_pending_creatives_buy(tenant_id, sample_principal["principal_id"], "mb_nostep")
+        _claim_expired(tenant_id, "mb_nostep", mark_invoked=False, expected_status="pending_creatives")
+
+        outcome, _ = _resume(tenant_id, "mb_nostep", None, None, lambda: (True, None), replayable=False)
+        assert outcome is FinalizeOutcome.APPLIED
+        buy = _buy_snapshot(tenant_id, "mb_nostep")
+        assert buy.status == "active" and buy.finalize_lease_id is None
+
+    # ── Fix A: real takeover records a durable ownership-independent incident ──
+
+    def _run_worker_through_takeover(
+        self, context_manager, tenant_id, principal_id, media_buy_id, takeover_lease_id, adapter_terminal
+    ):
+        """Drive W1 (the real approval finalizer) through a REAL takeover and assert the
+        ownership-independent-incident invariants COMMON to both CAS-loss branches.
+
+        Seeds the buy/step, starts W1 on a blocking adapter whose post-release terminal
+        behaviour is ``adapter_terminal`` (a 0-arg callable that either RETURNS
+        ``(success, msg)`` or RAISES — the ONLY thing that genuinely differs between the two
+        branches), then installs W2's REAL replacement lease (``takeover_lease_id``) while W1
+        is mid-adapter so W1's owner-CAS on its OWN lease id loses, and releases + joins W1.
+
+        Asserts the shared outcome: the worker neither hung nor raised, lost the CAS
+        (NOT_CLAIMED) yet was NOT silent — it recorded EXACTLY ONE durable
+        ownership-independent incident (buy column + AuditLog) without stealing W2's finalize
+        state (W2 still owns ``takeover_lease_id``, status still ``finalizing``).
+
+        Returns ``(step_id, worker_result, buy_snapshot)`` so each caller pins its OWN
+        branch discriminator (the incident REASON, incident survival, step terminal-ness) —
+        deliberately NOT folded in here, so each test still proves its distinct branch.
+        """
+        step_id, step_data = self._seed_pending(context_manager, tenant_id, principal_id, media_buy_id)
+
+        adapter_entered = threading.Event()
+        adapter_release = threading.Event()
+
+        def w1_adapter():
+            adapter_entered.set()
+            assert adapter_release.wait(timeout=30), "test deadlock: adapter never released"
+            return adapter_terminal()
+
+        t, worker_result = _start_approval_worker(tenant_id, media_buy_id, step_id, step_data, w1_adapter)
+        try:
+            assert adapter_entered.wait(timeout=30), "worker never reached the adapter"
+            # W2 takes over with a NEW lease while W1 is mid-adapter (status stays finalizing),
+            # so W1's own-lease CAS (manual_required OR failed) loses.
+            _install_takeover_lease(tenant_id, media_buy_id, takeover_lease_id)
+        finally:
+            adapter_release.set()
+            t.join(timeout=60)
+
+        assert not t.is_alive(), "worker hung"
+        assert "error" not in worker_result, f"worker failed: {worker_result.get('error')}"
+        # W1 lost the owner-CAS to W2's lease → NOT_CLAIMED, but NOT silent.
+        assert worker_result["outcome"] is FinalizeOutcome.NOT_CLAIMED
+        buy = _buy_snapshot(tenant_id, media_buy_id)
+        # Durable ownership-independent incident recorded (buy column + AuditLog), exactly once.
+        assert buy.finalize_reconcile_incident_at is not None
+        assert _finalize_incident_audit_count(tenant_id, media_buy_id) == 1
+        # W1 did NOT steal W2's finalize state.
+        assert buy.finalize_lease_id == takeover_lease_id
+        assert buy.status == "finalizing"
+        return step_id, worker_result, buy
+
+    def test_real_takeover_records_incident_that_survives_winner_publish(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """Hole A (the reviewer-named gap): a worker (W1) loses its lease to a NEWER owner
+        (W2) WHILE its adapter is still running. When W1's adapter returns, its owner-CAS to
+        ``manual_required`` FAILS (W2 owns a different lease). W1 must NOT silently return
+        NOT_CLAIMED and touch nothing — TWO remote adapter invocations may have occurred with
+        no durable trace. Instead W1 records a durable, OWNERSHIP-INDEPENDENT reconcile incident
+        (buy column + AuditLog). The incident SURVIVES W2's subsequent clean publish: the buy
+        shows serving AND the incident marker is still set.
+
+        Unlike the earlier ownership-loss test, this installs a REAL replacement lease (W2's),
+        so W1's manual CAS genuinely fails — exercising the takeover path, not the still-own-
+        the-lease path whose CAS succeeds.
+        """
+        tenant_id = sample_tenant["tenant_id"]
+
+        def w1_terminal():
+            # W1's post-mutation ambiguity: its remote order may exist.
+            raise AdapterPostMutationIncomplete("W1 order created; approval failed")
+
+        _step_id, _worker_result, mid = self._run_worker_through_takeover(
+            context_manager,
+            tenant_id,
+            sample_principal["principal_id"],
+            "mb_takeover",
+            "lease_w2_takeover",
+            w1_terminal,
+        )
+        # Branch discriminator: the incident REASON pins the manual-CAS (post-mutation) branch.
+        assert "W1 order created" in (mid.finalize_reconcile_incident_reason or "")
+
+        # W2 (the new owner) now publishes cleanly — clears finalize state but MUST leave the incident.
+        _clean_publish_as(tenant_id, "mb_takeover", "lease_w2_takeover")
+        final = _buy_snapshot(tenant_id, "mb_takeover")
+        assert final.status == "active"  # winner's clean publish
+        assert final.finalize_lease_id is None and final.finalize_recovery_mode is None  # finalize state cleared
+        assert (
+            final.finalize_reconcile_incident_at == mid.finalize_reconcile_incident_at
+        )  # ...but the incident SURVIVES
+        assert final.finalize_reconcile_incident_reason == mid.finalize_reconcile_incident_reason
+
+    def test_handled_adapter_failure_that_lost_the_failed_transition_records_incident(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """Hole A, the HANDLED-FAILURE branch: W1's adapter returns a handled failure
+        ``(False, msg)`` (not a raise), but while it ran a NEWER owner (W2) took the row
+        over. W1's ``failed``-status transition is a lease-CAS on its OWN lease id, so it
+        LOSES (``failed is None``). W1 must NOT silently return NOT_CLAIMED touching
+        nothing — its adapter provably RAN (the invoked marker was committed before it),
+        so a duplicate/partial remote graph may exist once W2 also runs. It records the
+        durable ownership-independent reconcile incident (buy column + AuditLog) and
+        returns NOT_CLAIMED without marking the buy failed or stealing W2's finalize state.
+
+        Mirrors ``test_real_takeover_records_incident_that_survives_winner_publish`` (real
+        W2 takeover lease) but exercises the ``if not success:`` → ``if failed is None:``
+        path, whose incident recording only the success-publish CAS-loss sibling covered.
+        """
+        tenant_id = sample_tenant["tenant_id"]
+
+        def w1_terminal():
+            # A HANDLED failure return (the (False, msg) contract), NOT a raise — after the
+            # remote order may already have been created.
+            return False, "GAM order creation failed after the remote order was created"
+
+        step_id, _worker_result, buy = self._run_worker_through_takeover(
+            context_manager,
+            tenant_id,
+            sample_principal["principal_id"],
+            "mb_fail_takeover",
+            "lease_w2_fail_takeover",
+            w1_terminal,
+        )
+        # Branch discriminator: the incident REASON pins the FAILED-transition branch
+        # (``if not success:`` → ``if failed is None:``), NOT the publish/manual-CAS branch.
+        assert "adapter ran" in (buy.finalize_reconcile_incident_reason or "")
+        assert "reported failure" in (buy.finalize_reconcile_incident_reason or "")
+        # The step was not terminalized as failed — W2 owns the decision.
+        assert _step_snapshot(tenant_id, step_id).status != "failed"
+
+    # ── Fix B: cool-down fences re-approval on the ambiguous path ──
+
+    def test_ambiguous_post_mutation_cooldown_fences_reapproval_until_elapsed(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """Hole B: an ambiguous ``AdapterPostMutationIncomplete`` manual transition must NOT
+        leave the buy immediately re-approvable — a committed-but-invisible first remote order
+        needs time to become visible to ``create_order``'s lookup-before-create dedup. The
+        owner RETAINS its lease with a cool-down expiry, so re-approval is fenced until the
+        cool-down PLUS the abandoned-owner grace elapses on the injected clock, then permitted.
+        """
+        from src.admin.services.media_buy_completion import FINALIZE_AMBIGUOUS_COOLDOWN_SECONDS
+
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_cooldown"
+        )
+        clock = _FakeClock(datetime.datetime.now(UTC))
+
+        def post_mutation_failing_adapter():
+            raise AdapterPostMutationIncomplete("order created; approval failed")
+
+        outcome, _ = _finalize_approval(
+            tenant_id, "mb_cooldown", step_id, step_data, post_mutation_failing_adapter, now_fn=clock.now
+        )
+        assert outcome is FinalizeOutcome.RETRYING
+        buy = _buy_snapshot(tenant_id, "mb_cooldown")
+        assert buy.status == "finalizing"
+        assert buy.finalize_recovery_mode == MEDIA_BUY_RECOVERY_MANUAL
+        assert buy.finalize_lease_id is not None  # retained (not released)
+
+        # Immediately fenced: the cool-down has not elapsed.
+        assert not _reapproval_would_claim(tenant_id, "mb_cooldown", clock.now), (
+            "re-approval must be fenced during the ambiguous cool-down"
+        )
+        # Still fenced partway through the cool-down.
+        clock.advance(FINALIZE_AMBIGUOUS_COOLDOWN_SECONDS // 2)
+        assert not _reapproval_would_claim(tenant_id, "mb_cooldown", clock.now)
+
+        # Past cool-down + the abandoned-owner grace (3600s default) → permitted.
+        clock.advance(FINALIZE_AMBIGUOUS_COOLDOWN_SECONDS + 3600 + 10)
+        assert _reapproval_would_claim(tenant_id, "mb_cooldown", clock.now), (
+            "re-approval must be permitted once the cool-down and grace elapse"
+        )
+
+    def test_happy_path_bumps_revision_once_and_stamps_confirmed_at(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """No crash: pending_approval → finalizing → active in one call; adapter exactly
+        once; revision advances exactly one (claim bumps; owned publish does not); all
+        finalize state cleared."""
+        tenant_id = sample_tenant["tenant_id"]
+        step_id, step_data = self._seed_pending(
+            context_manager, tenant_id, sample_principal["principal_id"], "mb_happy"
+        )
+        before = _buy_snapshot(tenant_id, "mb_happy").revision
+
+        adapter_calls: list[str] = []
+
+        def adapter():
+            adapter_calls.append("call")
+            return True, None
+
+        outcome, _ = _finalize_approval(tenant_id, "mb_happy", step_id, step_data, adapter)
+
+        assert outcome is FinalizeOutcome.APPLIED
+        assert adapter_calls == ["call"]
+        buy = _buy_snapshot(tenant_id, "mb_happy")
+        assert buy.status == "active"
+        assert buy.confirmed_at is not None
+        assert buy.revision == before + 1  # exactly one advance for the whole approval
+        assert buy.finalize_lease_id is None
+        assert buy.finalize_adapter_invoked_at is None
+        assert buy.finalize_recovery_mode is None

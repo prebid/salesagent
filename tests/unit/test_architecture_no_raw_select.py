@@ -170,7 +170,8 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/oidc.py", "enable"),
     ("src/admin/blueprints/oidc.py", "login"),
     ("src/admin/blueprints/oidc.py", "test_initiate"),
-    ("src/admin/blueprints/operations.py", "approve_media_buy"),
+    # approve_media_buy removed — creative-readiness gate migrated to
+    # CreativeAssignmentRepository.creative_readiness (#1544)
     ("src/admin/blueprints/operations.py", "media_buy_detail"),
     ("src/admin/blueprints/operations.py", "reporting"),
     ("src/admin/blueprints/policy.py", "index"),
@@ -236,7 +237,8 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/users.py", "remove_domain"),
     ("src/admin/blueprints/users.py", "toggle_user"),
     ("src/admin/blueprints/users.py", "update_role"),
-    ("src/admin/blueprints/workflows.py", "approve_workflow_step"),  # select(CreativeAssignment) — no creative repo yet
+    # _hold_for_unapproved_creatives removed — creative-readiness gate migrated to
+    # CreativeAssignmentRepository.creative_readiness (#1544)
     ("src/admin/blueprints/workflows.py", "list_workflows"),  # select(Tenant) — no tenant repo yet
     ("src/admin/blueprints/workflows.py", "review_workflow_step"),  # select(Context) — context lookup
     # ── Admin services / utils ──
@@ -352,7 +354,8 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/gcp_service_account_service.py", "create_service_account_for_tenant"),
     ("src/services/gcp_service_account_service.py", "delete_service_account"),
     ("src/services/gcp_service_account_service.py", "get_service_account_email"),
-    ("src/services/media_buy_status_scheduler.py", "_are_creatives_approved"),
+    # _are_creatives_approved removed — creative-readiness gate migrated to
+    # CreativeAssignmentRepository.creative_readiness (#1544)
     ("src/services/order_approval_service.py", "_mark_approval_complete"),
     ("src/services/order_approval_service.py", "_mark_approval_failed"),
     # _run_approval_thread removed — uses AdapterConfigRepository (salesagent-zj9)

@@ -25,11 +25,13 @@ from src.core.tools.creatives.listing import list_creatives_raw
 from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
 from src.core.tools.media_buy_create import create_media_buy_raw
 from src.core.tools.media_buy_delivery import get_media_buy_delivery_raw
+from src.core.tools.media_buy_list import get_media_buys_raw
 from src.core.tools.media_buy_update import update_media_buy_raw
 from src.core.tools.performance import update_performance_index_raw
 from src.routes.api_v1 import (
     CreateMediaBuyBody,
     GetMediaBuyDeliveryBody,
+    GetMediaBuysBody,
     ListCreativesBody,
     SyncCreativesBody,
     UpdateMediaBuyBody,
@@ -40,7 +42,10 @@ from src.routes.api_v1 import (
 # Server-injected plumbing, never buyer-supplied body fields: ctx/identity are
 # resolved at the transport boundary; raw_wire_payload is the raw wire request
 # body captured server-side for idempotency hashing (FastAPI raw_json_body dependency).
-_TRANSPORT_PARAMS = {"ctx", "identity", "raw_wire_payload"}
+# external_task_id is the transport's outer async task id (the A2A ``task_*``),
+# injected by the A2A wrapper for durable task correlation (#1544) — transport
+# plumbing like ctx/identity/raw_wire_payload, never a buyer-supplied body field.
+_TRANSPORT_PARAMS = {"ctx", "identity", "raw_wire_payload", "external_task_id"}
 # Body-only meta field (not a raw-wrapper param).
 _BODY_META = {"adcp_version"}
 
@@ -65,6 +70,7 @@ _PAIRS = [
     (CreateMediaBuyBody, create_media_buy_raw),
     (UpdateMediaBuyBody, update_media_buy_raw),
     (GetMediaBuyDeliveryBody, get_media_buy_delivery_raw),
+    (GetMediaBuysBody, get_media_buys_raw),
     (SyncCreativesBody, sync_creatives_raw),
     (ListCreativesBody, list_creatives_raw),
     (UpdatePerformanceIndexBody, update_performance_index_raw),

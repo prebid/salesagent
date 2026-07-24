@@ -11,6 +11,9 @@ import os
 from datetime import UTC, datetime
 from typing import Any
 
+from src.core.config import is_production as config_is_production
+from src.core.logging_utils import sanitize_log_value
+
 
 class ClientDisconnectFilter(logging.Filter):
     """Filter out noisy ClientDisconnect errors from MCP library.
@@ -89,13 +92,24 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(log_entry)
 
 
+class SingleLineFormatter(logging.Formatter):
+    """Keep development logs and rendered tracebacks on one physical line."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return sanitize_log_value(super().format(record), max_length=20_000)
+
+
 def setup_structured_logging() -> None:
     """Setup structured JSON logging for production environments.
 
-    In production (Fly.io), configures all loggers to output single-line JSON.
+    In production, configures all loggers to output single-line JSON.
     This prevents multiline log messages from appearing as separate log entries.
     """
-    is_production = bool(os.environ.get("FLY_APP_NAME") or os.environ.get("PRODUCTION"))
+    # config.is_production() is the canonical ENVIRONMENT/PRODUCTION union; the
+    # log path deliberately ADDS the deploy-platform signal (FLY_APP_NAME) so a
+    # platform deploy gets JSON logs even if neither env-var convention is set.
+    # Union only ever widens production detection — never weakens it.
+    is_production = bool(os.environ.get("FLY_APP_NAME")) or config_is_production()
 
     if is_production:
         # Configure root logger with JSON formatter
@@ -136,11 +150,9 @@ def setup_structured_logging() -> None:
     else:
         # Development mode - use standard format
         # force=True ensures configuration is applied even if logging was already configured
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            force=True,
-        )
+        handler = logging.StreamHandler()
+        handler.setFormatter(SingleLineFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+        logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
 
 
 # Create custom logger for OAuth operations
@@ -229,11 +241,20 @@ def setup_oauth_logging() -> None:
 
 
 def log_safe(value: object) -> str:
-    """Neutralize CR/LF in request-provided values before logging.
+    """Neutralize control characters in request-provided values before logging.
 
     Buyer-supplied ids (creative_id, package_id) flow into log lines; a
     newline embedded in one would forge log entries (CodeQL py/log-injection).
-    Response payloads and exception messages are NOT sanitized — buyers
-    correlate on exact ids.
+    Delegates to :func:`src.core.logging_utils.sanitize_log_value` so the two
+    sanitizers share one escape table — note this ESCAPES control characters
+    (``\n`` renders as ``\\n``) where the historical implementation stripped
+    them; ids stay correlatable, only the rendered log text changes. No
+    truncation: callers pass whole pre-formatted messages, not single values.
+
+    CANONICAL IDIOM for new code: ``logger.x("... %s", sanitize_log_value(v))``
+    — sanitize each interpolated VALUE and keep the static message text
+    unescaped. ``log_safe(f"...")`` is the legacy whole-message form (same
+    escape table, so equally injection-safe) kept for its existing call sites;
+    prefer the ``%s`` form when writing or touching log lines.
     """
-    return str(value).replace("\r", "").replace("\n", "")
+    return sanitize_log_value(value, max_length=None)

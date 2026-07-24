@@ -688,7 +688,7 @@ class TestRecoveryOverrideInSerialization:
         """to_dict() reflects custom recovery, not class default."""
         from src.core.exceptions import AdCPConflictError
 
-        # Default recovery is "transient" (CONFLICT per the pinned enum, #1417)
+        # Default recovery is "transient" (pinned 3.1.1 error-code.json: CONFLICT). #1417, #1544
         default = AdCPConflictError("dup")
         assert default.to_dict()["recovery"] == "transient"
 

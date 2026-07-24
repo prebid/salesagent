@@ -18,6 +18,7 @@ from sqlalchemy.exc import DisconnectionError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
 
 from src.core.database.db_config import DatabaseConfig, int_env
+from src.core.logging_utils import sanitize_log_value
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,11 @@ _scoped_session = None
 _last_health_check: float = 0.0
 _health_check_interval = 60  # Check health every 60 seconds
 _is_healthy = True
+
+# PostgreSQL SQLSTATE for lock_timeout expiry (lock_not_available). Expected
+# contention (e.g. a second writer waiting on a FOR UPDATE row lock), not an
+# outage — must not trip the circuit breaker. #1544.
+LOCK_NOT_AVAILABLE = "55P03"
 
 
 def _pydantic_json_serializer(obj: Any) -> str:
@@ -227,8 +233,15 @@ def get_db_session() -> Generator[Session, None, None]:
     try:
         yield session
     except (OperationalError, DisconnectionError) as e:
-        logger.error(f"Database connection error: {e}")
         session.rollback()
+        # Expected lock contention (lock_timeout, SQLSTATE 55P03) is NOT a
+        # database outage. Tripping the process-wide circuit breaker for it would
+        # let one contended row fail-fast unrelated requests for 10s. Roll back
+        # and re-raise so the caller can translate it to a typed protocol error,
+        # but leave the connection and health state intact. #1544.
+        if getattr(getattr(e, "orig", None), "pgcode", None) == LOCK_NOT_AVAILABLE:
+            raise
+        logger.error("Database connection error: %s", sanitize_log_value(e))
         # Remove session from registry to force reconnection
         scoped.remove()
         # Mark as unhealthy for circuit breaker

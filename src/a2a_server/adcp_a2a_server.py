@@ -68,6 +68,7 @@ from src.core.exceptions import (
     build_two_layer_error_envelope,
     normalize_to_adcp_error,
 )
+from src.core.logging_utils import sanitize_log_value
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import coerce_creative_filters, to_account_reference, to_brand_reference
 from src.core.schemas import CreativeStatusEnum
@@ -112,6 +113,7 @@ from src.core.validation_helpers import (
     adcp_validation_boundary,
 )
 from src.core.version import get_version
+from src.services.durable_task_service import resolve_durable_task_outcome
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -188,6 +190,10 @@ class AdCPRequestHandler(RequestHandler):
         """Initialize the AdCP A2A request handler."""
         self.tasks: dict[str, Task] = {}  # In-memory task storage
         self._task_push_configs: dict[str, TaskPushNotificationConfig] = {}
+        # (tenant_id, principal_id) recorded when the task was created, so
+        # on_get_task can authorize an in-memory hit instead of serving it to
+        # anyone who learned the task_id. See on_get_task's docstring.
+        self._task_owners: dict[str, tuple[str | None, str | None]] = {}
         logger.info("AdCP Request Handler initialized for direct function calls")
 
     @staticmethod
@@ -643,6 +649,17 @@ class AdCPRequestHandler(RequestHandler):
                 # Unauthenticated discovery request — resolve tenant from headers only
                 identity = self._resolve_a2a_identity(None, require_valid_token=False, context=context)
 
+            # Record the owner now, before any skill dispatch can raise — on_get_task
+            # authorizes an in-memory hit against this. An identity resolved without
+            # require_valid_token can carry a None principal_id, which can never match
+            # a later poll authenticated with require_valid_token=True (that path
+            # always has a non-None principal_id — see _resolve_a2a_identity), so an
+            # anonymously-created task simply becomes unpollable via the in-memory
+            # path rather than owned by nobody-in-particular.
+            self._task_owners[task_id] = (
+                (identity.tenant_id, identity.principal_id) if identity is not None else (None, None)
+            )
+
             # Route: Handle explicit skill invocations first, then natural language fallback
             if skill_invocations:
                 # Process explicit skill invocations
@@ -658,6 +675,7 @@ class AdCPRequestHandler(RequestHandler):
                             parameters,
                             identity,
                             push_notification_config=push_notification_config,
+                            task_id=task_id,
                         )
                         results.append({"skill": skill_name, "result": result, "success": True})
                     except A2AError:
@@ -1033,6 +1051,24 @@ class AdCPRequestHandler(RequestHandler):
         # result is already Task | Message — yield it directly
         yield result
 
+    # Terminal persisted workflow-step status → A2A TaskState, for the durable
+    # tasks/get fallback. Non-terminal steps (in_progress, approved, …) surface as
+    # WORKING. #1544 B6.
+    _STEP_STATUS_TO_TASK_STATE = {
+        "completed": TaskState.TASK_STATE_COMPLETED,
+        "rejected": TaskState.TASK_STATE_REJECTED,
+        "failed": TaskState.TASK_STATE_FAILED,
+    }
+    # A2A task states that are DECIDED — a task in one of these will not change again.
+    _TERMINAL_TASK_STATES = frozenset(
+        {
+            TaskState.TASK_STATE_COMPLETED,
+            TaskState.TASK_STATE_FAILED,
+            TaskState.TASK_STATE_REJECTED,
+            TaskState.TASK_STATE_CANCELED,
+        }
+    )
+
     async def on_get_task(
         self,
         params: GetTaskRequest,
@@ -1040,15 +1076,86 @@ class AdCPRequestHandler(RequestHandler):
     ) -> Task | None:
         """Handle 'tasks/get' method to retrieve task status.
 
-        Args:
-            params: Parameters specifying the task ID
-            context: Server call context
+        Authenticates the poller and checks OWNERSHIP before returning anything —
+        terminal or not, in-memory or persisted. A task_id is unguessable but not
+        secret once known (it can surface in webhook payloads, logs, or a shared
+        support channel); serving an in-memory hit unconditionally let any caller
+        who learned it read a sibling principal's terminal result artifacts with
+        no authentication at all. Ownership for the in-memory path is checked
+        against ``self._task_owners`` (the (tenant_id, principal_id) recorded when
+        the task was created); the persisted path is scoped inside
+        ``resolve_durable_task_outcome`` itself. A poller who fails to
+        authenticate, or who authenticates as someone else, gets ``None`` either
+        way — identical to an unknown task_id, so this cannot be used as an
+        existence oracle.
 
-        Returns:
-            Task object if found, otherwise None
+        Once ownership is established, prefers the TERMINAL decision, wherever it
+        lives. The in-memory ``self.tasks`` snapshot for an async media-buy task
+        stays ``SUBMITTED``/``WORKING`` — the admin approve/reject that
+        terminalizes the persisted workflow step runs in a DIFFERENT process and
+        never mutates this map. So a bare in-memory hit would keep reporting
+        ``SUBMITTED`` after the buy is decided (until restart/eviction). Instead:
+        an already-terminal OWNED in-memory task is authoritative; otherwise
+        consult the persisted step and return it when IT is terminal (the
+        out-of-band decision); only when neither is terminal fall back to the
+        OWNED in-flight in-memory task (or the durable non-terminal view).
+        See #1544 (B6/P1).
         """
         task_id = params.id
-        return self.tasks.get(task_id)
+        try:
+            auth_token = self._get_auth_token(context)
+            identity = self._resolve_a2a_identity(auth_token, require_valid_token=True, context=context)
+        except Exception as e:
+            logger.warning(
+                "Denying task poll %s — identity resolution failed: %s",
+                sanitize_log_value(task_id),
+                sanitize_log_value(e),
+            )
+            return None
+        if not identity.tenant_id:
+            return None
+
+        in_memory = self.tasks.get(task_id)
+        owns_in_memory = in_memory is not None and self._task_owners.get(task_id) == (
+            identity.tenant_id,
+            identity.principal_id,
+        )
+        if owns_in_memory and in_memory is not None and in_memory.status.state in self._TERMINAL_TASK_STATES:
+            return in_memory
+        durable = self._durable_task_from_step(task_id, identity.tenant_id, identity.principal_id)
+        if durable is not None and durable.status.state in self._TERMINAL_TASK_STATES:
+            return durable
+        return in_memory if owns_in_memory else durable
+
+    def _durable_task_from_step(self, task_id: str, tenant_id: str, principal_id: str | None) -> Task | None:
+        """Rebuild a terminal Task from the workflow step that stored this transport id.
+
+        The caller (``on_get_task``) has already authenticated the poller; ``tenant_id``
+        and ``principal_id`` are that resolved identity, so this only needs to run the
+        tenant/principal-scoped lookup.
+
+        This handler owns only the transport concerns — A2A Task/Artifact framing; the
+        DB read (session + tenant-scoped step lookup + error/result classification)
+        lives in the transport-neutral ``resolve_durable_task_outcome`` service. #1544.
+        """
+        outcome = resolve_durable_task_outcome(tenant_id, task_id, principal_id=principal_id)
+        if outcome is None:
+            return None
+        state = self._STEP_STATUS_TO_TASK_STATE.get(outcome.step_status, TaskState.TASK_STATE_WORKING)
+        task = Task(id=task_id, context_id=outcome.context_id, status=TaskStatus(state=state))
+        if outcome.response_data:
+            # A failed step stores a two-layer error envelope. A completed step
+            # stores CreateMediaBuySuccess; a rejected one stores
+            # CreateMediaBuyError — the artifact name media_buy_result covers
+            # both, TaskState signals the outcome. #1544.
+            task.artifacts.append(
+                Artifact(
+                    artifact_id=f"{task_id}_{'error' if outcome.is_error else 'result'}",
+                    name="media_buy_error" if outcome.is_error else "media_buy_result",
+                    parts=[Part(data=_dict_to_value(outcome.response_data))],
+                )
+            )
+        return task
 
     async def on_cancel_task(
         self,
@@ -1378,6 +1485,7 @@ class AdCPRequestHandler(RequestHandler):
         parameters: dict,
         identity: ResolvedIdentity | None,
         push_notification_config: TaskPushNotificationConfig | None = None,
+        task_id: str | None = None,
     ) -> dict:
         """Handle explicit AdCP skill invocations.
 
@@ -1467,7 +1575,7 @@ class AdCPRequestHandler(RequestHandler):
             handler = skill_handlers[skill_name]
             # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
             if skill_name == "create_media_buy":
-                result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload)
+                result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload, a2a_task_id=task_id)
             else:
                 result = await handler(parameters, identity)
             # Serialize at the boundary — models become dicts with protocol fields
@@ -1544,6 +1652,7 @@ class AdCPRequestHandler(RequestHandler):
         parameters: dict,
         identity: ResolvedIdentity,
         raw_wire_payload: dict | None = None,
+        a2a_task_id: str | None = None,
     ) -> dict:
         """Handle explicit create_media_buy skill invocation.
 
@@ -1637,6 +1746,9 @@ class AdCPRequestHandler(RequestHandler):
             # the idempotency payload-hash input; the post-processed dict is the
             # fallback only for direct handler callers.
             raw_wire_payload=raw_wire_payload if raw_wire_payload is not None else params,
+            # Persist the outer A2A task id on the workflow step so the completion
+            # webhook / tasks/get correlate to the id the buyer holds. #1544 B6.
+            external_task_id=a2a_task_id,
         )
 
         return response
@@ -1844,6 +1956,8 @@ class AdCPRequestHandler(RequestHandler):
                 max_width=parameters.get("max_width"),
                 min_height=parameters.get("min_height"),
                 max_height=parameters.get("max_height"),
+                disclosure_positions=parameters.get("disclosure_positions"),
+                disclosure_persistence=parameters.get("disclosure_persistence"),
                 context=parameters.get("context"),
             )
 
@@ -1942,7 +2056,15 @@ class AdCPRequestHandler(RequestHandler):
             )
 
         # Validate top-level fields via typed model (packages validated by _raw
-        # which handles legacy formats with extra fields like 'status')
+        # which handles legacy formats with extra fields like 'status').
+        # ``revision`` is passed raw to the core below, which validates it through
+        # the ONE sanctioned adcp_validation_boundary — a schema-invalid value
+        # that REACHES that boundary emits VALIDATION_ERROR on every transport
+        # (#1417 reconciliation; PR1544's INVALID_REQUEST variant was reverted).
+        # Parity caveat: a wrong-TYPE token never reaches it on REST — FastAPI's
+        # body-parse (``revision: int | None``) rejects it first as
+        # INVALID_REQUEST. That structural-vs-value split (with the
+        # numeric-string coercion divergence) is tracked in #1582.
         with adcp_validation_boundary():
             req = UpdateMediaBuyRequest(
                 media_buy_id=params.get("media_buy_id"),
@@ -1952,6 +2074,16 @@ class AdCPRequestHandler(RequestHandler):
                 context=params.get("context"),
             )
 
+        # A2A carries numbers as protobuf doubles, so an inbound integer ``revision``
+        # arrives as a whole-number float (7 -> 7.0) — the same shape A2A serializes
+        # it as on the response. Coerce whole-number floats back to int here so a
+        # round-tripped token is accepted; a non-integral float (7.5) stays a float
+        # and is still rejected downstream. Tracked with the other A2A float-token
+        # notes under #1583.
+        _revision = params.get("revision")
+        if isinstance(_revision, float) and _revision.is_integer():
+            _revision = int(_revision)
+
         # Call core function with validated fields + raw nested structures and identity
         response = core_update_media_buy_tool(
             media_buy_id=req.media_buy_id or "",
@@ -1959,9 +2091,13 @@ class AdCPRequestHandler(RequestHandler):
             start_time=params.get("start_time"),
             end_time=params.get("end_time"),
             budget=params.get("budget"),
+            currency=params.get("currency"),
+            pacing=params.get("pacing"),
+            daily_budget=params.get("daily_budget"),
             packages=params.get("packages"),
             push_notification_config=params.get("push_notification_config"),
             context=params.get("context"),
+            revision=_revision,
             identity=identity,
         )
 
@@ -2023,7 +2159,7 @@ class AdCPRequestHandler(RequestHandler):
             reporting_dimensions=req.reporting_dimensions,
             attribution_window=req.attribution_window,
             include_package_daily_breakdown=req.include_package_daily_breakdown,
-            # account is a typed AccountReference on GetMediaBuyDeliveryRequest (adcp SDK 5.7);
+            # account is a typed AccountReference on GetMediaBuyDeliveryRequest (adcp SDK 6.6);
             # forward the validated model field rather than re-coercing the raw dict (#1438).
             account=req.account,
             context=params.get("context"),
@@ -2140,6 +2276,26 @@ class AdCPRequestHandler(RequestHandler):
         )
 
 
+# Agent-card AdCP extension: grounded in the pinned A2A guide
+# (dist/docs/3.1.1/building/by-layer/L0/a2a-guide.mdx § "AdCP Extension" —
+# resolves @main, not at tag v3.1.1: the 3.1.1 prose snapshot was published
+# after the tag), NOT the v3 version-envelope contract. Two facts from that
+# guide drive the shape:
+#   * The extension URI is the STABLE ``https://adcontextprotocol.org/extensions/adcp``
+#     — the versioned ``adcp-extension.json`` schema was a v2 artifact and was
+#     removed in v3, so a ``/schemas/<version>/protocols/adcp-extension.json`` URI
+#     addresses nothing.
+#   * The card's ``adcp_version`` is a v2 static-metadata CONVENTION (for agent
+#     registries), explicitly "not part of the v3 spec". It is therefore emitted
+#     at full patch precision (e.g. "3.1.1"), NOT run through the v3
+#     envelope release-precision rule — that rule governs the envelope-root
+#     ``adcp_version`` on request/response wire (handled by version_compat), not
+#     this card. Release-precision here (normalize_to_release_precision("3.1.1")
+#     == "3.1") drops the patch component that registries key on.
+# Normative v3 version negotiation/discovery is get_adcp_capabilities +
+# envelope-root ``adcp_version`` — not this card. See #1544 review.
+
+
 def create_agent_card() -> AgentCard:
     """Create the agent card describing capabilities.
 
@@ -2157,12 +2313,11 @@ def create_agent_card() -> AgentCard:
     # Get sales agent version from package metadata or pyproject.toml
     sales_agent_version = get_version()
 
-    # Create AdCP extension (AdCP 2.5 spec)
-    # As of adcp 2.12.1, get_adcp_spec_version() returns the protocol version (e.g., "2.5.0")
-    # Previously it returned the schema version (e.g., "v1"), but this was fixed upstream
+    # Stable extension URI + patch-precision v2-convention ``adcp_version`` per the
+    # pinned A2A guide (see the module comment above create_agent_card / #1544).
     protocol_version = get_adcp_spec_version()
     adcp_extension = AgentExtension(
-        uri=f"https://adcontextprotocol.org/schemas/{protocol_version}/protocols/adcp-extension.json",
+        uri="https://adcontextprotocol.org/extensions/adcp",
         description="AdCP protocol version and supported domains",
         params=_dict_to_struct(
             {

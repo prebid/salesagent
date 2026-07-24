@@ -254,6 +254,12 @@ def _envelope_to_adcp_error(envelope: dict, fallback_message: str = "") -> Excep
         return None
     reconstructed = _adcp_error_from_code(error_code, message, recovery, details, suggestion, field)
     if reconstructed is not None:
+        # Restore the buyer-actionable suggestion the envelope carries at
+        # errors[0].suggestion — dropping it made reconstruction lossier
+        # than necessary (steps asserting "with suggestion" over the wire
+        # transports would fail against errors whose suggestion lives only
+        # on the typed attribute, not duplicated inside details).
+        reconstructed.suggestion = suggestion
         # Stash the REAL wire envelope on the reconstructed exception so the
         # A2A/REST dispatchers can capture the actual wire bytes (artifact
         # DataPart for A2A, HTTP body for REST) rather than re-synthesizing
@@ -483,6 +489,19 @@ class BaseTestEnv:
         ).first()
         return token
 
+    def _wire_auth_headers(self, auth_token: str, tenant_id: str | None) -> dict[str, str]:
+        """Build the wire auth headers for an integration-mode transport call.
+
+        Shared by the A2A and MCP dispatch paths. When the env is in dry-run
+        mode, stamps ``x-dry-run`` so production reads it from the wire headers
+        (apply_testing_hooks) exactly as a real dry-run client would — the
+        identity object's testing_context is not consulted on those transports.
+        """
+        headers = {"x-adcp-auth": auth_token, "x-adcp-tenant": tenant_id or ""}
+        if self._dry_run:
+            headers["x-dry-run"] = "true"
+        return headers
+
     def switch_principal(self, principal_id: str) -> None:
         """Re-point the env at *principal_id*, clearing cached identity.
 
@@ -666,10 +685,7 @@ class BaseTestEnv:
         if auth_token:
             from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 
-            headers = {
-                "x-adcp-auth": auth_token,
-                "x-adcp-tenant": a2a_identity.tenant_id or "",
-            }
+            headers = self._wire_auth_headers(auth_token, a2a_identity.tenant_id)
             server_context = ServerCallContext(
                 state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=auth_token, headers=headers)}
             )
@@ -810,15 +826,16 @@ class BaseTestEnv:
             # Patch get_http_headers in BOTH modules that import it:
             # transport_helpers (called by resolve_identity_from_context) and
             # mcp_auth_middleware (called for context_id extraction).
-            headers = {
-                "x-adcp-auth": auth_token,
-                "x-adcp-tenant": mcp_identity.tenant_id or "",
-            }
+            headers = self._wire_auth_headers(auth_token, mcp_identity.tenant_id)
 
             async def _call():
                 mock_th = patch("src.core.transport_helpers.get_http_headers", return_value=headers)
                 mock_mw = patch("src.core.mcp_auth_middleware.get_http_headers", return_value=headers)
-                with mock_th as patched_th, mock_mw as patched_mw:
+                # testing_hooks.TestContext.from_context reads its OWN imported
+                # get_http_headers, so the testing context (e.g. x-dry-run) only
+                # reaches the mcp path if this third module is patched too.
+                mock_hooks = patch("src.core.testing_hooks.get_http_headers", return_value=headers)
+                with mock_th as patched_th, mock_mw as patched_mw, mock_hooks:
                     async with Client(mcp) as client:
                         result = await client.call_tool(tool_name, arguments)
                         # Guard: verify the header patches were called.
@@ -1044,6 +1061,48 @@ class BaseTestEnv:
         }
         error_cls = STATUS_TO_ERROR.get(status_code, Exception)
         return error_cls(message)
+
+    def set_review_requirement(self, tenant: Any, required: bool) -> None:
+        """Flip ``human_review_required`` on the real tenant row AND the env identity.
+
+        The single writer of the review mode: the manual/auto-approval Given
+        steps (which call this method directly) and the e2e create plumbing both
+        realize the mode through the real surface — the tenant row — plus the
+        identity-side override, so in-process and live-server behavior stay in
+        lockstep. Commits the row and clears cached identities so identities
+        built later reflect the new mode.
+        """
+        tenant.human_review_required = required
+        self._commit_factory_data()
+        self._identity_cache.clear()
+        self._tenant_overrides["human_review_required"] = required
+
+    def live_server_request(self, method: str, endpoint: str, *, body: dict[str, Any], identity: Any) -> dict[str, Any]:
+        """One wire round-trip to the live e2e server; raise the materialized error on >= 400.
+
+        The transport-aware Given-plumbing seam for e2e mode
+        (docs/test-redesign/e2e-rest-ledger-retirement.md): env setup methods
+        that realize intent on the live server use this instead of the
+        static-endpoint RestE2EDispatcher, because plumbing endpoints (create,
+        per-buy update) differ from the env's graded dispatch endpoint. Owns
+        the visibility precondition — pending factory rows are committed here,
+        so no caller can forget and hand the server a DB it can't see — and
+        shares the client construction and non-JSON-tolerant error
+        materialization with RestE2EDispatcher.
+        """
+        from tests.harness.dispatchers import e2e_client, e2e_wire_headers, materialize_e2e_error
+
+        if self.e2e_config is None:
+            raise RuntimeError("live_server_request requires e2e mode (env.e2e_config is not set)")
+        commit = getattr(self, "_commit_factory_data", None)
+        if commit is not None:
+            commit()
+        with e2e_client(self) as client:
+            response = getattr(client, method)(endpoint, json=body, headers=e2e_wire_headers(identity))
+        if response.status_code >= 400:
+            error, _error_body = materialize_e2e_error(self, response)
+            raise error
+        return response.json()
 
     def get_rest_client(self) -> Any:
         """Return FastAPI TestClient with auth dependency overridden.

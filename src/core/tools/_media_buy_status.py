@@ -13,7 +13,7 @@ delivery-only terminal ``failed``::
     pending_creatives, pending_start, active, paused, completed,
     rejected, canceled, failed
 
-(``get-media-buy-delivery-response.json`` status enum; AdCP spec 3.1.0-beta.3.)
+(``get-media-buy-delivery-response.json`` status enum; AdCP spec 3.1.1.)
 The two callers adapt this single result to their own surface:
 
 - ``get_media_buy_delivery`` uses the canonical string directly and overlays
@@ -107,6 +107,9 @@ PERSISTED_STATUS_TO_CANONICAL: dict[str, str] = {
     "pending_approval": "pending_start",
     "pending_creatives": "pending_creatives",
     "pending_start": "pending_start",
+    # Transient crash-recoverable claim (#1637): approved, remote order being
+    # created, not yet serving — closest canonical bucket is pending_start.
+    "finalizing": "pending_start",
 }
 
 # The complete set of values ``resolve_canonical_status`` may return, derived

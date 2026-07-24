@@ -9,11 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any
 
-from a2a.types import Task, TaskStatusUpdateEvent
-from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
 from adcp.types import (
     CreativeAction,
-    McpWebhookPayload,
 )
 from adcp.webhooks import GeneratedTaskStatus
 
@@ -21,9 +18,8 @@ from src.core.database.models import (
     PushNotificationConfig as DBPushNotificationConfig,
 )
 from src.core.database.repositories.creative import CreativeRepository
+from src.core.logging_utils import sanitize_log_value
 from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
-from src.core.webhook_validator import validate_webhook_task_type
-from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 # TODO: Missing module - these functions need to be implemented
 # from creative_formats import discover_creative_formats_from_url, parse_creative_spec
@@ -42,10 +38,15 @@ def discover_creative_formats_from_url(url):
 
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 
+from src.admin.services.media_buy_completion import (
+    FinalizeOutcome,
+    emit_protocol_result_webhook_async,
+    finalize_unblocked_media_buy,
+)
 from src.admin.utils import echo_context, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.repositories.uow import AdminCreativeUoW
-from src.core.tools.media_buy_create import execute_approved_media_buy, push_creative_to_existing_buy
+from src.core.tools.media_buy_create import push_creative_to_existing_buy
 
 # Note: CreativeFormat table was dropped in migration f2addf453200
 # All format-related routes have been removed
@@ -76,32 +77,12 @@ def _cleanup_completed_tasks():
                 completed_tasks.append(task_id)
         for task_id in completed_tasks:
             del _ai_review_tasks[task_id]
-            logger.debug(f"Cleaned up completed AI review task: {task_id}")
+            logger.debug("Cleaned up completed AI review task: %s", sanitize_log_value(task_id))
 
 
-def _compute_media_buy_status_from_flight_dates(media_buy) -> str:
-    """Compute status based on flight dates: 'active' if within window, else 'scheduled'."""
-    now = datetime.now(UTC)
-
-    start_time = None
-    if media_buy.start_time:
-        raw_start = media_buy.start_time
-        start_time = raw_start.replace(tzinfo=UTC) if raw_start.tzinfo is None else raw_start.astimezone(UTC)
-    elif media_buy.start_date:
-        start_time = datetime.combine(media_buy.start_date, datetime.min.time()).replace(tzinfo=UTC)
-
-    end_time = None
-    if media_buy.end_time:
-        raw_end = media_buy.end_time
-        end_time = raw_end.replace(tzinfo=UTC) if raw_end.tzinfo is None else raw_end.astimezone(UTC)
-    elif media_buy.end_date:
-        end_time = datetime.combine(media_buy.end_date, datetime.max.time()).replace(tzinfo=UTC)
-
-    # If start time passed and end time not passed, set to active
-    if start_time and end_time and now >= start_time and now <= end_time:
-        return "active"
-
-    return "scheduled"
+# The flight-window→status decision for creative-unblock finalization now lives in
+# the admin service (media_buy_completion.finalize_unblocked_media_buy), computed
+# UNDER THE ROW LOCK. See #1544.
 
 
 async def _call_webhook_for_creative_status(
@@ -129,13 +110,17 @@ async def _call_webhook_for_creative_status(
             mapping = uow.workflows.get_latest_mapping_for_object("creative", creative_id)
 
             if not mapping:
-                logger.debug(f"No workflow mapping found for creative {creative_id}; skipping webhook notification")
+                logger.debug(
+                    "No workflow mapping found for creative %s; skipping webhook notification",
+                    sanitize_log_value(creative_id),
+                )
                 return False
 
             step = uow.workflows.get_step_by_id(mapping.step_id)
             if not step or not step.request_data:
                 logger.debug(
-                    f"Workflow step missing or has no request_data for creative {creative_id}; skipping webhook notification"
+                    "Workflow step missing or has no request_data for creative %s; skipping webhook notification",
+                    sanitize_log_value(creative_id),
                 )
                 return False
 
@@ -143,7 +128,7 @@ async def _call_webhook_for_creative_status(
             all_mappings = [m for m in uow.workflows.get_mappings_for_step(step.step_id) if m.object_type == "creative"]
 
             if not all_mappings:
-                logger.debug(f"No creative mappings found for workflow step {step.step_id}")
+                logger.debug("No creative mappings found for workflow step %s", sanitize_log_value(step.step_id))
                 return False
 
             # Get creative statuses for all creatives in this task
@@ -155,13 +140,20 @@ async def _call_webhook_for_creative_status(
 
             if pending_count > 0:
                 logger.info(
-                    f"Creative {creative_id} reviewed, but {pending_count}/{len(all_creatives)} "
-                    f"creatives still pending in task {step.step_id}; not firing webhook yet"
+                    "Creative %s reviewed, but %d/%d creatives still pending in task %s; not firing webhook yet",
+                    sanitize_log_value(creative_id),
+                    pending_count,
+                    len(all_creatives),
+                    sanitize_log_value(step.step_id),
                 )
                 return False
 
             # ALL creatives have been reviewed! Build complete result for webhook
-            logger.info(f"All {len(all_creatives)} creatives in task {step.step_id} have been reviewed; firing webhook")
+            logger.info(
+                "All %d creatives in task %s have been reviewed; firing webhook",
+                len(all_creatives),
+                sanitize_log_value(step.step_id),
+            )
 
             # Build SyncCreativesResponse with all creative results
 
@@ -188,7 +180,7 @@ async def _call_webhook_for_creative_status(
             cfg_dict = step.request_data.get("push_notification_config") or {}
             url = cfg_dict.get("url")
             if not url:
-                logger.error(f"No push notification URL present for creative {creative_id}")
+                logger.error("No push notification URL present for creative %s", sanitize_log_value(creative_id))
                 return False
 
             authentication = cfg_dict.get("authentication") or {}
@@ -219,67 +211,39 @@ async def _call_webhook_for_creative_status(
 
         # --- Session closed here; webhook delivery is outside the transaction ---
 
-        service = get_protocol_webhook_service()
-        try:
-            logger.info(f"tool name: {step_tool_name}")
-            logger.info(f"task id: {step_step_id}")
-            logger.info(f"task type: {step_tool_name}")
-            logger.info("status: completed")
-            logger.info(f"result: {complete_result}")
-            logger.info("error: None")
-            logger.info(f"push_notification_config: {push_notification_config}")
-
-            # Determine protocol type from workflow step request_data
-            protocol = step_request_data.get("protocol", "mcp")  # Default to MCP for backward compatibility
-
-            # Create appropriate webhook payload based on protocol
-            # Convert result to dict for webhook payload functions
-            result_dict = complete_result.model_dump(mode="json")
-
-            # step_tool_name is untrusted (workflow_steps DB column). Validate a
-            # COPY for the SDK payload; keep the original label for metadata
-            # (salesagent-yi3s, salesagent-yk7o).
-            wire_task_type = validate_webhook_task_type(step_tool_name or "sync_creatives")
-
-            payload: Task | TaskStatusUpdateEvent | McpWebhookPayload
-            if protocol == "a2a":
-                payload = create_a2a_webhook_payload(
-                    task_id=step_step_id,
-                    status=GeneratedTaskStatus.completed,
-                    result=result_dict,
-                    context_id=step_context_id,
-                )
-            else:
-                # SDK 5.7: returns McpWebhookPayload directly
-                payload = create_mcp_webhook_payload(
-                    task_id=step_step_id,
-                    status=GeneratedTaskStatus.completed,
-                    task_type=wire_task_type,
-                    result=result_dict,
-                )
-
-            metadata = {
-                "task_type": step_tool_name
-                # TODO: @yusuf - check if we were passing principal_id and tenant to this previously
-                # TODO: @yusuf - check if we want to make metadata typed
-            }
-
-            await service.send_notification(
-                push_notification_config=push_notification_config, payload=payload, metadata=metadata
-            )
-
+        # Route through the shared protocol-webhook emitter — the same payload
+        # construction (protocol detection, buyer-facing task-id correlation,
+        # untrusted tool_name validation) the media-buy approval routes use.
+        # This path already runs inside an event loop, so it awaits the async
+        # core directly instead of the asyncio.run wrapper. #1544.
+        step_data = {
+            "step_id": step_step_id,
+            "context_id": step_context_id,
+            "tool_name": step_tool_name or "sync_creatives",
+            "request_data": step_request_data or {},
+        }
+        sent = await emit_protocol_result_webhook_async(
+            step_data,
+            push_notification_config,
+            complete_result,
+            GeneratedTaskStatus.completed,
+            metadata={"task_type": step_tool_name},
+        )
+        if sent:
             logger.info(
-                f"Successfully sent protocol webhook for sync_creatives task {step_step_id} "
-                f"with {len(all_creatives)} reviewed creatives"
+                "Successfully sent protocol webhook for sync_creatives task %s with %d reviewed creatives",
+                sanitize_log_value(step_step_id),
+                len(all_creatives),
             )
-
-            return True
-        except Exception as send_e:
-            logger.error(f"Failed to send protocol webhook for creative {creative_id}: {send_e}")
-            return False
+        return sent
 
     except Exception as e:
-        logger.error(f"Error sending protocol webhook for creative {creative_id}: {e}", exc_info=True)
+        logger.error(
+            "Error sending protocol webhook for creative %s: %s",
+            sanitize_log_value(creative_id),
+            sanitize_log_value(e),
+            exc_info=True,
+        )
         return False
 
 
@@ -414,8 +378,10 @@ def analyze(tenant_id, **kwargs):
         return jsonify(result)
 
     except Exception as e:
-        logger.error(f"Error analyzing creative format: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        # Same discipline as approve/reject_creative: detail in the sanitized
+        # server log, generic message to the client.
+        logger.error("Error analyzing creative format: %s", sanitize_log_value(e), exc_info=True)
+        return jsonify({"error": "Creative format analysis failed — see server logs for details"}), 500
 
 
 def _create_human_review_record(
@@ -494,7 +460,7 @@ def _send_post_commit_side_effects(
             notifier = get_slack_notifier(tenant_config)
             notifier.send_message(slack_data["message"])
         except Exception as slack_e:
-            logger.warning(f"Failed to send Slack notification: {slack_e}")
+            logger.warning("Failed to send Slack notification: %s", sanitize_log_value(slack_e))
 
     # Log audit trail
     if audit_data:
@@ -587,7 +553,9 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             assignment_buy_ids = [a.media_buy_id for a in assignments]
 
             logger.info(
-                f"[CREATIVE APPROVAL] Creative {creative_id} approved, checking {len(assignments)} media buy assignments"
+                "[CREATIVE APPROVAL] Creative %s approved, checking %s media buy assignments",
+                sanitize_log_value(creative_id),
+                len(assignments),
             )
 
             # Snapshot buy statuses here to avoid a second UoW after commit
@@ -600,28 +568,32 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                     continue
 
                 assignment_buy_statuses[media_buy_id] = media_buy.status
-                logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} status: {media_buy.status}")
+                logger.info(
+                    "[CREATIVE APPROVAL] Media buy %s status: %s",
+                    sanitize_log_value(media_buy_id),
+                    sanitize_log_value(media_buy.status),
+                )
 
                 if media_buy.status in {"pending_creatives", "draft"}:
-                    # Get all creative assignments for this media buy
-                    all_assignments = uow.assignments.get_by_media_buy(media_buy_id)
-
-                    creative_ids = [a.creative_id for a in all_assignments]
-                    all_creatives = uow.creatives.admin_get_by_ids(creative_ids)
-
-                    unapproved_creatives = [
-                        c.creative_id for c in all_creatives if c.status not in ["approved", "active"]
-                    ]
+                    # Shared tenant-scoped readiness query (#1544) — same home as the
+                    # admin approve gates; this buy has >= 1 assignment (the creative
+                    # just approved), so ready_for_finalize == all assigned approved.
+                    readiness = uow.assignments.creative_readiness(media_buy_id)
 
                     logger.info(
-                        f"[CREATIVE APPROVAL] Media buy {media_buy_id} has {len(unapproved_creatives)} unapproved creatives remaining"
+                        "[CREATIVE APPROVAL] Media buy %s has %s unapproved creatives remaining",
+                        sanitize_log_value(media_buy_id),
+                        len(readiness.unapproved_creative_ids),
                     )
 
-                    if not unapproved_creatives:
+                    if readiness.ready_for_finalize:
                         media_buy_actions.append({"media_buy_id": media_buy_id})
                     else:
                         logger.info(
-                            f"[CREATIVE APPROVAL] Media buy {media_buy_id} still waiting for {len(unapproved_creatives)} creatives: {unapproved_creatives}"
+                            "[CREATIVE APPROVAL] Media buy %s still waiting for %s creatives: %s",
+                            sanitize_log_value(media_buy_id),
+                            len(readiness.unapproved_creative_ids),
+                            sanitize_log_value(readiness.unapproved_creative_ids),
                         )
 
             # UoW auto-commits here
@@ -636,29 +608,57 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             actor=approved_by,
         )
 
-        # Execute adapter creation for unblocked media buys
+        # Finalize each unblocked media buy through the shared seam: adapter →
+        # flight-derived status COMPUTED UNDER THE ROW LOCK → workflow-step terminal +
+        # response artifact → completion webhook. Previously this ran the adapter and
+        # set the status but never terminalized the create step or emitted the
+        # completion artifact, so async buyers who had been waiting on creative
+        # approval never learned their buy went live. approved_at/approved_by are NOT
+        # re-stamped here — confirmed_at was recorded at the earlier pending_creatives
+        # hold (write-once); this system unblock is not a new approval instant. #1544.
         for action in media_buy_actions:
+            media_buy_id = action["media_buy_id"]
             logger.info(
-                f"[CREATIVE APPROVAL] All creatives approved for media buy {action['media_buy_id']}, executing adapter creation"
+                "[CREATIVE APPROVAL] All creatives approved for media buy %s, finalizing",
+                sanitize_log_value(media_buy_id),
             )
-
-            success, error_msg = execute_approved_media_buy(action["media_buy_id"], tenant_id)
-
-            if success:
-                # Update media buy status in a separate UoW
-                with AdminCreativeUoW(tenant_id) as uow2:
-                    assert uow2.media_buys is not None
-                    mb = uow2.media_buys.get_by_id(action["media_buy_id"])
-                    if mb:
-                        new_status = _compute_media_buy_status_from_flight_dates(mb)
-                        mb.status = new_status
-                        mb.approved_at = datetime.now(UTC)
-                        mb.approved_by = "system"
-                    # auto-commits
-
-                logger.info(f"[CREATIVE APPROVAL] Media buy {action['media_buy_id']} successfully created in adapter")
+            # Session ownership + step lookup + finalize live in the admin service
+            # (this blueprint is a scanned business-logic module that must route DB
+            # access through repositories, not open get_db_session itself). #1544.
+            outcome, error_msg = finalize_unblocked_media_buy(tenant_id, media_buy_id)
+            if outcome is FinalizeOutcome.APPLIED:
+                logger.info(
+                    "[CREATIVE APPROVAL] Media buy %s successfully created in adapter",
+                    sanitize_log_value(media_buy_id),
+                )
+            elif outcome is FinalizeOutcome.NOT_CLAIMED:
+                logger.info(
+                    "[CREATIVE APPROVAL] Media buy %s already finalized by another request",
+                    sanitize_log_value(media_buy_id),
+                )
+            elif outcome is FinalizeOutcome.RETRYING:
+                # #1637: claimed; the reconciler completes it automatically.
+                logger.info(
+                    "[CREATIVE APPROVAL] Media buy %s finalization deferred: %s",
+                    sanitize_log_value(media_buy_id),
+                    sanitize_log_value(error_msg),
+                )
+            elif outcome is FinalizeOutcome.ADAPTER_FAILED:
+                logger.error(
+                    "[CREATIVE APPROVAL] Adapter creation failed for %s: %s",
+                    sanitize_log_value(media_buy_id),
+                    sanitize_log_value(error_msg),
+                )
             else:
-                logger.error(f"[CREATIVE APPROVAL] Adapter creation failed for {action['media_buy_id']}: {error_msg}")
+                # A FinalizeOutcome member with no branch above. Naming it keeps this
+                # ladder exhaustive instead of filing an unknown member under the
+                # adapter-failure message. #1544.
+                logger.error(
+                    "[CREATIVE APPROVAL] Unhandled FinalizeOutcome %s for media buy %s: %s",
+                    sanitize_log_value(outcome),
+                    sanitize_log_value(media_buy_id),
+                    sanitize_log_value(error_msg),
+                )
 
         # Retroactive push for already-live buys (#1038):
         # Buys in pending_creatives/draft were handled above. For buys that are
@@ -670,15 +670,25 @@ def approve_creative(tenant_id, creative_id, **kwargs):
         ]
 
         for buy_id in buys_to_push:
-            logger.info(f"[CREATIVE APPROVAL] Retroactive push: creative {creative_id} → live buy {buy_id}")
+            logger.info(
+                "[CREATIVE APPROVAL] Retroactive push: creative %s → live buy %s",
+                sanitize_log_value(creative_id),
+                sanitize_log_value(buy_id),
+            )
             push_success, push_err = push_creative_to_existing_buy(
                 creative_id=creative_id,
                 media_buy_id=buy_id,
                 tenant_id=tenant_id,
             )
             if not push_success:
+                # push_err is adapter-returned text — sanitize like every other
+                # adapter value in this function (same convention as the finalize
+                # arm above). #1544.
                 logger.error(
-                    f"[CREATIVE APPROVAL] Retroactive push failed for creative {creative_id} → buy {buy_id}: {push_err}"
+                    "[CREATIVE APPROVAL] Retroactive push failed for creative %s → buy %s: %s",
+                    sanitize_log_value(creative_id),
+                    sanitize_log_value(buy_id),
+                    sanitize_log_value(push_err),
                 )
                 push_warnings.append(f"Creative push to buy {buy_id} failed — see server logs for details")
 
@@ -688,8 +698,11 @@ def approve_creative(tenant_id, creative_id, **kwargs):
         return jsonify(response_body)
 
     except Exception as e:
-        logger.error(f"Error approving creative: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        # Detail stays in the server log (sanitized, with traceback); the client
+        # gets a generic message — same information-exposure discipline as the
+        # admin approve routes. #1544.
+        logger.error("Error approving creative: %s", sanitize_log_value(e), exc_info=True)
+        return jsonify({"error": "Creative approval failed — see server logs for details"}), 500
 
 
 @creatives_bp.route("/review/<creative_id>/reject", methods=["POST"])
@@ -788,8 +801,10 @@ def reject_creative(tenant_id, creative_id, **kwargs):
         return jsonify({"success": True, "status": "rejected"})
 
     except Exception as e:
-        logger.error(f"Error rejecting creative: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        # Same discipline as approve_creative: detail in the sanitized server log,
+        # generic message to the client. #1544.
+        logger.error("Error rejecting creative: %s", sanitize_log_value(e), exc_info=True)
+        return jsonify({"error": "Creative rejection failed — see server logs for details"}), 500
 
 
 async def _ai_review_creative_async(
@@ -815,7 +830,7 @@ async def _ai_review_creative_async(
         slack_webhook_url: Optional Slack webhook for notifications
         principal_name: Principal name for Slack notification
     """
-    logger.info(f"[AI Review Async] Starting background review for creative {creative_id}")
+    logger.info("[AI Review Async] Starting background review for creative %s", sanitize_log_value(creative_id))
 
     # Collect data for post-commit side effects
     slack_notification_data: dict[str, Any] = {}
@@ -831,7 +846,11 @@ async def _ai_review_creative_async(
                 tenant_id=tenant_id, creative_id=creative_id, db_session=uow.session, promoted_offering=None
             )
 
-            logger.info(f"[AI Review Async] Review completed for {creative_id}: {ai_result['status']}")
+            logger.info(
+                "[AI Review Async] Review completed for %s: %s",
+                sanitize_log_value(creative_id),
+                sanitize_log_value(ai_result["status"]),
+            )
 
             # Update creative status in database
             creative = uow.creatives.admin_get_by_id(creative_id)
@@ -874,11 +893,15 @@ async def _ai_review_creative_async(
 
                 should_call_webhook = bool(webhook_url)
             else:
-                logger.error(f"[AI Review Async] Creative not found: {creative_id}")
+                logger.error("[AI Review Async] Creative not found: %s", sanitize_log_value(creative_id))
 
             # UoW auto-commits here
 
-        logger.info(f"[AI Review Async] Database updated for {creative_id}: status={ai_result['status']}")
+        logger.info(
+            "[AI Review Async] Database updated for %s: status=%s",
+            sanitize_log_value(creative_id),
+            sanitize_log_value(ai_result["status"]),
+        )
 
         # --- Post-commit side effects ---
 
@@ -896,16 +919,21 @@ async def _ai_review_creative_async(
                     tenant_id=tenant_id,
                     ai_review_reason=slack_notification_data["ai_review_reason"],
                 )
-                logger.info(f"[AI Review Async] Slack notification sent for {creative_id}")
+                logger.info("[AI Review Async] Slack notification sent for %s", sanitize_log_value(creative_id))
             except Exception as slack_e:
-                logger.warning(f"[AI Review Async] Failed to send Slack notification: {slack_e}")
+                logger.warning("[AI Review Async] Failed to send Slack notification: %s", sanitize_log_value(slack_e))
 
         if should_call_webhook:
             asyncio.run(_call_webhook_for_creative_status(creative_id=creative_id, tenant_id=tenant_id))
-            logger.info(f"[AI Review Async] Webhook called for {creative_id}")
+            logger.info("[AI Review Async] Webhook called for %s", sanitize_log_value(creative_id))
 
     except Exception as e:
-        logger.error(f"[AI Review Async] Error reviewing creative {creative_id}: {e}", exc_info=True)
+        logger.error(
+            "[AI Review Async] Error reviewing creative %s: %s",
+            sanitize_log_value(creative_id),
+            sanitize_log_value(e),
+            exc_info=True,
+        )
 
         # Try to mark creative as pending with error (separate UoW)
         try:
@@ -924,9 +952,12 @@ async def _ai_review_creative_async(
                     }
                     uow.creatives.update_data(creative, creative.data)
                     # UoW auto-commits
-                    logger.info(f"[AI Review Async] Creative {creative_id} marked as pending_review due to error")
+                    logger.info(
+                        "[AI Review Async] Creative %s marked as pending_review due to error",
+                        sanitize_log_value(creative_id),
+                    )
         except Exception as inner_e:
-            logger.error(f"[AI Review Async] Failed to mark creative as pending: {inner_e}")
+            logger.error("[AI Review Async] Failed to mark creative as pending: %s", sanitize_log_value(inner_e))
 
 
 def get_ai_review_status(task_id: str) -> dict:
@@ -1004,10 +1035,19 @@ def _create_review_record(
 
         creative_repo.create_review(review_record)
 
-        logger.debug(f"Created review record {review_id} for creative {creative_id}")
+        logger.debug(
+            "Created review record %s for creative %s",
+            sanitize_log_value(review_id),
+            sanitize_log_value(creative_id),
+        )
 
     except Exception as e:
-        logger.error(f"Error creating review record for creative {creative_id}: {e}", exc_info=True)
+        logger.error(
+            "Error creating review record for creative %s: %s",
+            sanitize_log_value(creative_id),
+            sanitize_log_value(e),
+            exc_info=True,
+        )
         # Don't fail the review if we can't create the record — let UoW handle rollback
 
 
@@ -1042,7 +1082,7 @@ def _ai_review_creative_impl(tenant_id, creative_id, db_session=None, promoted_o
             promoted_offering=promoted_offering,
         )
     except Exception as e:
-        logger.error(f"Error running AI review: {e}", exc_info=True)
+        logger.error("Error running AI review: %s", sanitize_log_value(e), exc_info=True)
         # Record error metrics (error_type bounded to a fixed enum)
         record_ai_review_error(tenant_id=tenant_id, error=e)
         return {"status": "pending_review", "error": str(e), "reason": "AI review failed - requires manual approval"}

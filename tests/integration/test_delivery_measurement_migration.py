@@ -10,7 +10,7 @@ Verifies upgrade, data transformation, downgrade, and roundtrip on a real DB.
 import pytest
 from sqlalchemy import text
 
-from tests.integration.migration_helpers import run_alembic_downgrade, run_alembic_upgrade
+from tests.integration.migration_helpers import get_column_info, run_alembic_downgrade, run_alembic_upgrade
 
 # Migration revisions under test
 BACKFILL_REV = "6aee724a2d1d"
@@ -101,17 +101,13 @@ def _get_delivery_measurement(engine, product_id):
 
 
 def _get_column_info(engine):
-    """Get is_nullable and column_default for delivery_measurement."""
-    with engine.connect() as conn:
-        result = conn.execute(
-            text(
-                "SELECT is_nullable, column_default "
-                "FROM information_schema.columns "
-                "WHERE table_name = 'products' AND column_name = 'delivery_measurement'"
-            ),
-        )
-        row = result.fetchone()
-        return row if row else None
+    """is_nullable/column_default for products.delivery_measurement.
+
+    Thin wrapper over the shared migration_helpers.get_column_info so the four
+    call sites below read cleanly; the SQL lives in one place (removes the
+    former local copy that duplicated the shared helper — #1544 review).
+    """
+    return get_column_info(engine, "products", "delivery_measurement")
 
 
 @pytest.mark.requires_db

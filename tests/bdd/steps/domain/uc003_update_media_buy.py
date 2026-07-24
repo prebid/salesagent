@@ -15,7 +15,13 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
-from tests.bdd.steps._outcome_helpers import _require_response
+from tests.bdd.steps.domain._media_buy_steps_shared import (
+    _media_buy_repo,
+    advance_revision_to,
+    create_and_load_real_buy,
+    load_real_buy,
+    resolve_media_buy_id,
+)
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.given_media_buy import _resolve_date_token
@@ -75,27 +81,14 @@ def given_buyer_owns_media_buy(ctx: dict) -> None:
     _verify_existing_media_buy(ctx)
 
 
-@given(parsers.parse('the Buyer owns an existing media buy with media_buy_id "{media_buy_id}"'))
-def given_buyer_owns_media_buy_by_id(ctx: dict, media_buy_id: str) -> None:
-    """Verify the existing media buy is in ctx, persisted in DB, and register its label.
-
-    The media_buy_id from Gherkin (e.g. "mb_existing") is a label — the actual
-    factory-generated ID may differ (label mechanism), or the UC-003 harness may
-    seed the literal id (PR #1567 MediaBuyDualEnv), in which case the label maps
-    to itself. This step registers the label mapping so subsequent steps
-    (update_kwargs, assertions) can use the Gherkin label, and the shared verify
-    checks DB persistence by the real id so a mis-seeded / phantom media buy
-    fails loudly here rather than deep in the update path.
-    """
-    _verify_existing_media_buy(ctx)
-    mb = ctx["existing_media_buy"]
-    # Register the Gherkin label → real media_buy_id mapping
-    ctx.setdefault("media_buy_labels", {})[media_buy_id] = mb.media_buy_id
+# The with-id variant 'the Buyer owns an existing media buy with media_buy_id "{}"'
+# is owned by given_buyer_owns_media_buy_labeled below (it CREATES a real buy for the
+# #1544 wired revision scenarios); a duplicate verify-only def here would collide
+# (duplicate-step-literals guard).
 
 
 def _verify_existing_media_buy(ctx: dict) -> None:
     """Shared verification: existing_media_buy is in ctx and persisted in DB."""
-    from src.core.database.repositories.media_buy import MediaBuyRepository
 
     mb = ctx.get("existing_media_buy")
     assert mb is not None, "No existing_media_buy in ctx — conftest setup_update_data() failed"
@@ -104,8 +97,7 @@ def _verify_existing_media_buy(ctx: dict) -> None:
     env._commit_factory_data()
     tenant = ctx.get("tenant")
     assert tenant is not None, "No tenant in ctx — cannot verify media buy ownership"
-    repo = MediaBuyRepository(env._session, tenant.tenant_id)
-    db_mb = repo.get_by_id(mb.media_buy_id)
+    db_mb = _media_buy_repo(ctx).get_by_id(mb.media_buy_id)
     assert db_mb is not None, (
         f"Media buy '{mb.media_buy_id}' not found in DB for tenant '{tenant.tenant_id}' — "
         "step claims 'Buyer owns an existing media buy' but it is not persisted"
@@ -256,7 +248,6 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
         "invoice_recipient",
     }
     kwargs = _ensure_update_defaults(ctx)
-    clock = ctx["env"].clock
     # Skip header row (pytest-bdd datatables include the header as first row)
     rows = datatable[1:] if datatable and datatable[0][0].strip() == "field" else datatable
     # Track which fields the table explicitly sets
@@ -274,9 +265,10 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
         elif field == "paused":
             kwargs["paused"] = value.lower() == "true"
         elif field == "start_time":
-            kwargs["start_time"] = _resolve_date_token(value, clock)
+            # clock is fetched lazily — only date-token tables need it
+            kwargs["start_time"] = _resolve_date_token(value, ctx["env"].clock)
         elif field == "end_time":
-            kwargs["end_time"] = _resolve_date_token(value, clock)
+            kwargs["end_time"] = _resolve_date_token(value, ctx["env"].clock)
         elif field == "budget":
             kwargs["budget"] = float(value)
         elif field == "packages":
@@ -794,9 +786,11 @@ def when_send_update_request(ctx: dict) -> None:
     from src.core.schemas import UpdateMediaBuyRequest
 
     update_kwargs = ctx.get("update_kwargs", {})
-    # Resolve Gherkin package_id labels ("pkg_001") to real factory-generated
-    # package_ids before sending the request to production code. See
-    # _resolve_package_id / _register_package above.
+    # Resolve Gherkin media_buy_id / package_id labels ("mb_existing",
+    # "pkg_001") to real factory-generated ids before sending the request to
+    # production code. See _resolve_package_id / _register_package above.
+    if update_kwargs.get("media_buy_id"):
+        update_kwargs["media_buy_id"] = resolve_media_buy_id(ctx, update_kwargs["media_buy_id"])
     packages = update_kwargs.get("packages")
     if packages:
         for pkg in packages:
@@ -804,10 +798,13 @@ def when_send_update_request(ctx: dict) -> None:
                 pkg["package_id"] = _resolve_package_id(ctx, pkg["package_id"])
     try:
         req = UpdateMediaBuyRequest(**update_kwargs)
-    except ValidationError as e:
-        # Schema validation rejects the request before production code runs.
-        # Store as ctx["error"] so Then steps can assert on it.
-        ctx["error"] = e
+    except ValidationError:
+        # Send the raw invalid payload through the selected transport so the
+        # boundary, not this step, produces the buyer-visible envelope.
+        if ctx.get("has_auth") is False:
+            dispatch_request(ctx, identity=None, **update_kwargs)
+        else:
+            dispatch_request(ctx, **update_kwargs)
         return
     except AdCPError as e:
         # A schema-level validator raised a typed AdCP error (e.g. the immutable
@@ -1135,23 +1132,16 @@ def then_response_has_errors_array(ctx: dict) -> None:
 def _submitted_wire_dict(ctx: dict) -> dict[str, Any]:
     """Return the success-path response as the buyer sees it on the serialized wire.
 
-    REST/A2A/MCP expose the real success-path wire dict via ``ctx["wire_response"]``
-    (stashed by the dispatcher). IMPL has no wire, so serialize the typed payload
-    through the production serializer — the same path that produces wire bytes for
-    the other transports. A real-wire transport that did NOT stash wire_response is
-    a loud failure, not a silent fallback to the typed model (which would let the
-    UpdateMediaBuySubmitted assertions pass vacuously). Mirrors
-    tests/bdd/steps/domain/uc005_format_id_shape.py::_serialized_formats.
+    Delegates to the shared :func:`tests.bdd.steps._outcome_helpers.wire_dict`
+    oracle — single home for the wire-vs-IMPL read: REST/A2A/MCP get the real
+    ``ctx["wire_response"]`` dict, IMPL serializes the typed payload through the
+    production serializer, and a real-wire transport that did NOT stash
+    wire_response is a loud failure, not a silent fallback to the typed model
+    (which would let the UpdateMediaBuySubmitted assertions pass vacuously).
     """
-    from tests.harness.transport import Transport
+    from tests.bdd.steps._outcome_helpers import wire_dict
 
-    wire = ctx.get("wire_response")
-    transport = ctx.get("transport")
-    if wire is None and transport not in (None, Transport.IMPL):
-        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
-    if wire is not None:
-        return wire
-    return _require_response(ctx).model_dump(mode="json")
+    return wire_dict(ctx)
 
 
 @then("the response should contain a task_id")
@@ -2319,3 +2309,104 @@ def _ensure_update_defaults(ctx: dict) -> dict[str, Any]:
             "media_buy_id": mb.media_buy_id,
         }
     return ctx["update_kwargs"]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Revision counter steps (T-UC-003-revision-success-increments, #1544)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse('the Buyer owns an existing media buy with media_buy_id "{label}"'))
+def given_buyer_owns_media_buy_labeled(ctx: dict, label: str) -> None:
+    """Register the Gherkin media_buy_id label against a real, persisted buy.
+
+    Two wired UC-003 families reach this step with different setup:
+    - ext-/targeting-overlay scenarios: conftest ``_setup_existing_media_buy``
+      already seeded ``ctx["existing_media_buy"]`` (+ its package) — VERIFY it.
+    - revision scenarios (``_UC003_WIRED`` via ``_seed_media_buy_ctx``, which does
+      NOT pre-seed a buy) — CREATE one through the real create tool.
+    Either way the label maps to the factory-generated real media_buy_id so
+    subsequent steps resolve it before hitting production. (#1544/#1417 merge.)
+    """
+    if ctx.get("existing_media_buy") is not None:
+        _verify_existing_media_buy(ctx)
+        media_buy = ctx["existing_media_buy"]
+    else:
+        media_buy = create_and_load_real_buy(ctx)
+        ctx["existing_media_buy"] = media_buy
+    ctx.setdefault("media_buy_labels", {})[label] = media_buy.media_buy_id
+
+
+@given(parsers.parse('the media buy "{label}" is at revision {revision:d}'))
+@given(parsers.parse('the media buy "{label}" is at version {revision:d}'))
+def given_media_buy_at_revision(ctx: dict, label: str, revision: int) -> None:
+    """Advance the persisted revision to the target via real repository bumps.
+
+    Registered under both spellings: the generated revision outlines say
+    "at revision"; the v3.1 CONFLICT-details scenario says "at version"
+    (the spec's error-details/conflict.json speaks in versions).
+    """
+    media_buy = load_real_buy(ctx, resolve_media_buy_id(ctx, label))
+    advance_revision_to(ctx, media_buy, revision)
+
+
+@given(parsers.parse('the Buyer Agent\'s last-read version of "{label}" is {version:d}'))
+def given_last_read_version(ctx: dict, label: str, version: int) -> None:
+    """Stage the stale token the buyer believes is current (CONFLICT setup)."""
+    kwargs = _ensure_update_defaults(ctx)
+    kwargs["media_buy_id"] = label
+    kwargs["revision"] = version
+
+
+# The 'the error "details" object should include "{}" with value {}' step is owned by
+# the registered generic then_error.py (numeric + quoted-string variants); a duplicate
+# here collides (duplicate-step-literals guard, #1417).
+
+
+@given(parsers.parse("the request revision is set to {value}"))
+def given_request_revision(ctx: dict, value: str) -> None:
+    """Set the optimistic-concurrency token on the update request.
+
+    Scenario Outline cells: ``<not provided>`` omits the field (LWW arm);
+    a quoted cell (wrong-type partition) stays a raw string so the boundary
+    sees the type violation; a bare number becomes the integer token.
+    """
+    stripped = value.strip()
+    if stripped == "<not provided>":
+        return
+    kwargs = _ensure_update_defaults(ctx)
+    if stripped.startswith('"') and stripped.endswith('"') and len(stripped) > 1:
+        kwargs["revision"] = stripped[1:-1]
+    else:
+        kwargs["revision"] = int(stripped)
+
+
+@then(parsers.parse("the response should contain a revision with value {revision:d}"))
+def then_response_revision_value(ctx: dict, revision: int) -> None:
+    """The success WIRE body carries the new persisted revision (BR-RULE-215 INV-4).
+
+    Graded on the serialized wire (``wire_dict``), not the reconstructed typed
+    payload — reconstruction re-defaults absent fields, so an ``exclude_none``
+    omission or a wrong JSON type of the optimistic-concurrency token would
+    stay green there. ``wire_integer`` carries the per-transport integer
+    nuance (A2A whole-number float, #1583).
+    """
+    from tests.bdd.steps._outcome_helpers import require_success_response, wire_dict, wire_integer
+
+    require_success_response(ctx)
+    actual = wire_integer(ctx, wire_dict(ctx), "revision")
+    assert actual == revision, f"Expected revision {revision} on the wire, got {actual!r}"
+
+
+@then("the response should contain a valid_actions array")
+def then_response_contains_valid_actions(ctx: dict) -> None:
+    """The applied-update success WIRE body carries a POPULATED valid_actions array.
+
+    Shares the wire-graded + non-empty oracle with the uc002 sync-success steps
+    (INT-002): the binding scenario updates an ACTIVE buy, so an empty array
+    would be a real regression, and the reconstructed payload would hide a
+    serialization drop of the field.
+    """
+    from tests.bdd.steps._outcome_helpers import assert_valid_actions_array
+
+    assert_valid_actions_array(ctx)

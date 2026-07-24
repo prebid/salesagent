@@ -10,7 +10,7 @@ CRITICAL: These tests catch protocol mismatches like 'updates' vs 'packages'
 before they reach production.
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types import AccountReference as LibraryAccountReference
@@ -28,6 +28,28 @@ _MOCK_IDENTITY = PrincipalFactory.make_identity(
 
 class TestA2AParameterMapping:
     """Test parameter extraction and mapping in A2A skill handlers."""
+
+    def test_list_creative_formats_forwards_disclosure_filters(self):
+        """A2A forwards both disclosure filters into the shared request model."""
+        import asyncio
+
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        handler = AdCPRequestHandler()
+        parameters = {
+            "disclosure_positions": ["prominent", "footer"],
+            "disclosure_persistence": ["continuous"],
+            "type": "display",
+        }
+
+        with patch("src.a2a_server.adcp_a2a_server.core_list_creative_formats_tool") as mock_list:
+            mock_list.return_value = MagicMock()
+            asyncio.run(handler._handle_list_creative_formats_skill(parameters, _MOCK_IDENTITY))
+
+        request = mock_list.call_args.kwargs["req"]
+        assert [position.value for position in request.disclosure_positions] == ["prominent", "footer"]
+        assert [mode.value for mode in request.disclosure_persistence] == ["continuous"]
+        assert "type" not in type(request).model_fields
 
     def test_update_media_buy_uses_packages_parameter(self):
         """
@@ -55,6 +77,11 @@ class TestA2AParameterMapping:
                 "media_buy_id": "mb_123",
                 "paused": False,  # adcp 2.12.0+: paused=False means resume
                 "packages": [{"package_id": "pkg_1", "paused": False}],  # AdCP v2.12.0+ field name
+                # Budget/pacing fields the skill handler must forward to the core tool
+                # (#1544 parity fix — previously silently dropped on the A2A path).
+                "currency": "USD",
+                "pacing": "even",
+                "daily_budget": 500.0,
             }
 
             # Call the skill handler (synchronous wrapper for async method)
@@ -80,6 +107,55 @@ class TestA2AParameterMapping:
             # Verify other AdCP v2.12.0+ parameters are passed
             assert call_kwargs["media_buy_id"] == "mb_123"
             assert call_kwargs["paused"] is False  # adcp 2.12.0+: paused=False means resume
+
+            # Budget/pacing parity (#1544): these three must reach the core tool.
+            # Removing any of the handler's params.get(...) forwards makes the key
+            # absent here, so this pins the plumbing that otherwise reverts green.
+            assert call_kwargs["currency"] == "USD"
+            assert call_kwargs["pacing"] == "even"
+            assert call_kwargs["daily_budget"] == 500.0
+
+    def test_update_media_buy_invalid_revision_emits_validation_error(self):
+        """A schema-invalid revision emits VALIDATION_ERROR on the A2A skill path.
+
+        On the #1417 merge, the update path was reconciled to the ONE sanctioned
+        translation point — ``adcp_validation_boundary`` — which emits
+        VALIDATION_ERROR (with the error.json top-level suggestion + field) for a
+        schema-invalid revision. PR1544's earlier hand-rolled INVALID_REQUEST
+        variant was reverted to comply with the no-handrolled-boundary guard.
+
+        Drives the REAL boundary — ``on_message_send`` → skill dispatch → failed
+        Task — and asserts on the wire error envelope in the Task's artifact
+        DataPart, not a reconstructed Python exception. This is what pins the
+        dispatcher + envelope-builder against regression (per tests/CLAUDE.md error
+        policy); a probe of the private skill handler would miss those layers.
+        Validation fails before any DB access, so no adapter/session mock is needed.
+        """
+        import asyncio
+
+        from a2a.types import SendMessageRequest
+
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+        from tests.a2a_helpers import make_a2a_context
+        from tests.helpers import assert_envelope_shape
+        from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
+
+        handler = AdCPRequestHandler()
+        handler._get_auth_token = MagicMock(return_value="test-token")
+        ctx = make_a2a_context(auth_token="test-token", headers={"host": "test.example.com"})
+        message = create_a2a_message_with_skill(
+            "update_media_buy",
+            {"media_buy_id": "mb_123", "revision": 0},  # below schema minimum of 1
+        )
+        params = SendMessageRequest(message=message)
+
+        with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
+            result = asyncio.run(handler.on_message_send(params, context=ctx))
+
+        assert result.artifacts, "failed skill must still return a Task with an artifact"
+        envelope = extract_data_from_artifact(result.artifacts[0])
+        # Assert on the actual wire envelope the buyer receives, not exc.error_code.
+        assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
 
     def test_update_media_buy_backward_compatibility_with_updates(self):
         """

@@ -1016,9 +1016,14 @@ class TestMainFlowObligations:
 
             # Auto-approval: adapter.create_media_buy was called (not the manual path)
             # with the original request and the resolved package/flight arguments.
+            # #1544 (Blocker 1) threads the idempotency_key kwarg to the adapter; it is
+            # None on the initial create (no persisted media_buy_id yet — the adapter
+            # derives its deterministic anchor from req.idempotency_key internally).
             assert isinstance(result.response, CreateMediaBuySuccess)
             assert result.status == "completed"
-            env.mock["adapter"].return_value.create_media_buy.assert_called_once_with(req, ANY, ANY, ANY, ANY)
+            env.mock["adapter"].return_value.create_media_buy.assert_called_once_with(
+                req, ANY, ANY, ANY, ANY, idempotency_key=None
+            )
 
     @pytest.mark.asyncio
     async def test_format_id_validation(self, integration_db):

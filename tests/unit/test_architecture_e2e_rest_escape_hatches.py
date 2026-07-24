@@ -79,6 +79,9 @@ EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
     "'T-UC-004-dim-sortby-fallback' in marker_names and is_e2e_rest",
     "(is_rest or is_e2e_rest) and 'T-UC-019-boundary-principal' in marker_names",
     "(is_rest or is_e2e_rest) and 'T-UC-019-ext-a' in marker_names",
+    # T-UC-019-ext-d graduated for REST/e2e_rest with #1544: the REST boundary now
+    # delegates mistyped media_buy_ids validation to the shared AdCP boundary, so all
+    # transports emit the scenario's pinned VALIDATION_ERROR without an escape hatch.
     "(is_rest or is_e2e_rest) and 'T-UC-019-partition-principal-invalid' in marker_names",
     "_samp_is_named and (is_rest or is_e2e_rest)",
     "is_e2e_rest",
@@ -89,9 +92,6 @@ EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
     "is_e2e_rest and any((t.startswith('T-UC-019') for t in marker_names))",
     "is_e2e_rest and marker_names & _UC004_E2E_WEBHOOK_INTERNAL_TAGS",
     "is_e2e_rest and marker_names & _UC005_E2E_FIXTURE_INJECTION_TAGS",
-    "is_e2e_rest and tag in uc005_filter_e2e_untestable",
-    "is_e2e_rest and tag in uc005_filter_e2e_untestable",
-    "marker_names & _UC005_PARTIAL_TAGS and (not is_e2e_rest)",
     "not is_e2e_rest",
 )
 

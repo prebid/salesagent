@@ -138,14 +138,14 @@ def test_combined_campaign_and_package_update():
         # Set up DB return values for the currency validation path:
         # 1. uow.media_buys.get_by_id() -> media_buy (for currency check)
         # 2. session.scalars().first() -> currency_limit (for daily spend check)
-        # 3. uow.media_buys.update_fields() -> updated media buy (for budget update)
+        # 3. uow.media_buys.update_fields_or_raise() -> updated media buy (for budget update)
         # 4. uow.media_buys.get_packages() -> packages (for affected tracking)
         mock_media_buy = _make_mock_media_buy("mb_combined")
         mock_currency_limit = _make_mock_currency_limit(max_daily=100000)
 
         # Configure repo mock for media buy lookups and writes
         env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_media_buy
-        env.mock["uow"].return_value.media_buys.update_fields.return_value = mock_media_buy
+        env.mock["uow"].return_value.media_buys.update_fields_or_raise.return_value = mock_media_buy
 
         # Mock packages for campaign-level budget affected tracking
         mock_pkg_a = MagicMock()
@@ -337,7 +337,7 @@ class TestFlightDateValidationAndPersistence:
             assert isinstance(result.response, UpdateMediaBuySuccess)
             assert result.response.media_buy_id == "mb_dates"
             # Date update should have been persisted via repository
-            env.mock["uow"].return_value.media_buys.update_fields.assert_called()
+            env.mock["uow"].return_value.media_buys.update_fields_or_raise.assert_called()
 
     def test_invalid_date_range_returns_error(self):
         """When end_time <= start_time, returns code='invalid_date_range'."""
@@ -452,7 +452,7 @@ class TestCampaignBudgetValidationAndPersistence:
             assert result.response.affected_packages[0].package_id == "pkg_budget_1"
 
             # Budget should have been persisted via repository
-            env.mock["uow"].return_value.media_buys.update_fields.assert_called()
+            env.mock["uow"].return_value.media_buys.update_fields_or_raise.assert_called()
             env.mock["uow"].return_value.media_buys.get_packages.assert_called_once_with("mb_budget")
 
     def test_zero_budget_returns_error(self):
@@ -880,6 +880,44 @@ class TestUC003MainObligations:
             assert call_kwargs["package_id"] == "pkg_x"
             assert call_kwargs["budget"] == 5000
 
+    def test_pre_adapter_gate_acquires_row_lock(self):
+        """The optimistic-concurrency gate loads the buy FOR UPDATE before any
+        adapter dispatch, so two same-token requests serialize on the row lock
+        and cannot both reach the ad server.
+
+        Reverting the gate (media_buy_update.py) to an unlocked read leaves the
+        repository CONFLICT backstop green but lets both requests hit the adapter
+        — this pins the lock acquisition the repository-level backstop tests
+        cannot observe. #1544.
+        """
+        with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
+            mock_session = env.mock["uow"].return_value.session
+            get_by_id = env.mock["uow"].return_value.media_buys.get_by_id
+            mock_mb = _make_mock_media_buy("mb_lock_gate")
+            mock_mb.revision = 3
+            get_by_id.return_value = mock_mb
+            mock_session.scalars.return_value.first.return_value = _make_mock_currency_limit(max_daily=100000)
+
+            env.mock["adapter"].return_value.update_media_buy.return_value = UpdateMediaBuySuccess(
+                media_buy_id="mb_lock_gate", affected_packages=[]
+            )
+
+            req = UpdateMediaBuyRequest(
+                media_buy_id="mb_lock_gate",
+                packages=[{"package_id": "pkg_lock", "budget": 5000.0}],
+            )
+            _update_media_buy_impl(req=req, identity=env.identity)
+
+            # The flow reached the adapter (ran end to end)...
+            assert env.mock["adapter"].return_value.update_media_buy.called
+            # ...and the pre-adapter gate loaded the buy under a row write-lock.
+            locked_calls = [c for c in get_by_id.call_args_list if c.kwargs.get("for_update")]
+            assert locked_calls, (
+                "pre-adapter gate must load the buy with for_update=True; "
+                f"get_by_id calls were {get_by_id.call_args_list}"
+            )
+            assert locked_calls[0].kwargs.get("populate_existing") is True
+
     def test_database_persisted_after_adapter_success(self):
         """After adapter returns success, affected_packages tracked in response.
 
@@ -991,8 +1029,8 @@ class TestUC003UpdateTiming:
 
             assert isinstance(result.response, UpdateMediaBuySuccess)
             # update_fields should have been called with both start_time and end_time
-            env.mock["uow"].return_value.media_buys.update_fields.assert_called()
-            call_kwargs = env.mock["uow"].return_value.media_buys.update_fields.call_args
+            env.mock["uow"].return_value.media_buys.update_fields_or_raise.assert_called()
+            call_kwargs = env.mock["uow"].return_value.media_buys.update_fields_or_raise.call_args
             assert "start_time" in call_kwargs[1]
             assert "end_time" in call_kwargs[1]
 
@@ -2056,7 +2094,7 @@ class TestUC003ExtA:
             # No adapter call
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
             # No DB writes through UoW
-            env.mock["uow"].return_value.media_buys.update_fields.assert_not_called()
+            env.mock["uow"].return_value.media_buys.update_fields_or_raise.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -2086,7 +2124,7 @@ class TestUC003ExtC:
             # No adapter call
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
             # No DB writes
-            env.mock["uow"].return_value.media_buys.update_fields.assert_not_called()
+            env.mock["uow"].return_value.media_buys.update_fields_or_raise.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -2498,7 +2536,7 @@ class TestUC003ExtK:
             # No adapter call
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
             # No DB writes through UoW
-            env.mock["uow"].return_value.media_buys.update_fields.assert_not_called()
+            env.mock["uow"].return_value.media_buys.update_fields_or_raise.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -2791,7 +2829,7 @@ class TestUC003StateMachine:
             # No adapter call when precondition rejects
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
             # No DB writes when precondition rejects
-            env.mock["uow"].return_value.media_buys.update_fields.assert_not_called()
+            env.mock["uow"].return_value.media_buys.update_fields_or_raise.assert_not_called()
 
     def test_active_status_accepts_pause(self):
         """A non-terminal status (active) accepts pause (state machine allows it)."""
@@ -2865,8 +2903,11 @@ class TestUC003StateMachine:
             post_action_mb = _make_mock_media_buy("mb_post_action", status="pending_creatives")
             env.mock["uow"].return_value.media_buys.get_by_id.side_effect = [
                 active_mb,  # state-machine precondition
-                post_action_mb,  # post-action status lookup (the line-421 fix)
             ]
+            # A successful pause now reads the post-action buy via bump_revision
+            # (bump + return in one FOR UPDATE round trip); the derived status
+            # comes from that returned row.
+            env.mock["uow"].return_value.media_buys.bump_revision_or_raise.return_value = post_action_mb
 
             env.mock["adapter"].return_value.update_media_buy.return_value = UpdateMediaBuySuccess(
                 media_buy_id="mb_post_action",
@@ -2883,3 +2924,46 @@ class TestUC003StateMachine:
                 "valid_actions must reflect the DB-derived post-action status "
                 f"('pending_creatives'), not the hardcoded ('paused'). Got: {action_values}"
             )
+
+    def test_pause_routes_through_bump_revision_and_echoes_its_result(self):
+        """A campaign-level pause routes the revision bump through ``bump_revision``
+        and echoes the row that method returns.
+
+        This is the DB-independent plumbing half of the contract: the pause path
+        must call the bumping seam (not echo the un-bumped current revision) and
+        surface whatever it returns. The actual increment the seam produces —
+        that revision genuinely advances 1 → 2 in PostgreSQL — is asserted
+        against the real database in
+        ``tests/integration/test_media_buy_revision.py::...::test_pause_bumps_persisted_revision``
+        (#1544 round-2 TQ-03: never assert a magic revision literal sourced from
+        the mock).
+        """
+        with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
+            active_mb = _make_mock_media_buy("mb_pause_rev", status="active")
+            active_mb.revision = 1
+            # The seam's return value IS the response's revision — assert the
+            # response echoes exactly what bump_revision handed back (referenced
+            # via the variable), not a hardcoded literal that pretends to be a
+            # real increment. That the seam genuinely advances 1 → 2 is proven
+            # against PostgreSQL in the integration test named above.
+            bumped_mb = _make_mock_media_buy("mb_pause_rev", status="paused")
+            bumped_mb.revision = active_mb.revision + 1
+            env.mock["uow"].return_value.media_buys.get_by_id.side_effect = [active_mb]
+            env.mock["uow"].return_value.media_buys.bump_revision_or_raise.return_value = bumped_mb
+
+            env.mock["adapter"].return_value.update_media_buy.return_value = UpdateMediaBuySuccess(
+                media_buy_id="mb_pause_rev",
+                affected_packages=[],
+            )
+
+            req = UpdateMediaBuyRequest(media_buy_id="mb_pause_rev", paused=True)
+            result = _update_media_buy_impl(req=req, identity=env.identity)
+
+            # _update_media_buy_impl uniformly returns UpdateMediaBuyResult wrapping
+            # the UpdateMediaBuySuccess response (upstream #1417 unified the return
+            # type; the pause path no longer returns the bare success early).
+            assert isinstance(result.response, UpdateMediaBuySuccess)
+            env.mock["uow"].return_value.media_buys.bump_revision_or_raise.assert_called_once_with(
+                "mb_pause_rev", expected_revision=None, context=None
+            )
+            assert result.response.revision == bumped_mb.revision

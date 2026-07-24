@@ -28,7 +28,6 @@ import pytest
 
 from tests.factories import CreativeFactory, PrincipalFactory
 from tests.harness.media_buy_create import MediaBuyCreateEnv
-from tests.harness.media_buy_dual import MediaBuyDualEnv
 from tests.harness.transport import Transport
 from tests.helpers import assert_envelope_shape
 from tests.integration.media_buy_helpers import _make_create_request
@@ -157,28 +156,23 @@ class TestUpdateMediaBuyCrossPrincipalCreative:
     on the assignment INSERT.
     """
 
-    def test_update_creative_ids_rejects_cross_principal_creative(self, integration_db):
+    def test_update_creative_ids_rejects_cross_principal_creative(self, env_with_media_buy):
         from src.core.schemas import UpdateMediaBuyRequest
-        from tests.bdd.conftest import _setup_existing_media_buy
 
-        with MediaBuyDualEnv() as env:
-            tenant, principal, product, _po = env.setup_media_buy_data()
-            _seed_other_principals_creative(tenant)
-            ctx: dict = {}
-            _setup_existing_media_buy(ctx, env, tenant, principal, product)
-            mb = ctx["existing_media_buy"]
-            pkg = ctx["existing_package"]
-            env._seeded_media_buy_id = mb.media_buy_id
+        env, mb = env_with_media_buy
+        _seed_other_principals_creative(env._owner_tenant)
+        env._commit_factory_data()
+        pkg = env._seeded_package
 
-            req = UpdateMediaBuyRequest(
-                media_buy_id=mb.media_buy_id,
-                packages=[
-                    {
-                        "package_id": pkg.package_id,
-                        "creative_ids": [_OTHER_CREATIVE_ID],
-                    }
-                ],
-            )
-            result = env.call_via(Transport.REST, req=req)
+        req = UpdateMediaBuyRequest(
+            media_buy_id=mb.media_buy_id,
+            packages=[
+                {
+                    "package_id": pkg.package_id,
+                    "creative_ids": [_OTHER_CREATIVE_ID],
+                }
+            ],
+        )
+        result = env.call_via(Transport.REST, req=req)
 
-            _assert_not_found_and_no_leak(result)
+        _assert_not_found_and_no_leak(result)

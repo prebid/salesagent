@@ -14,6 +14,12 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps.domain._media_buy_steps_shared import (
+    _media_buy_repo,
+    advance_revision_to,
+    create_and_load_real_buy,
+    resolve_media_buy_id,
+)
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _wire_code, _wire_error_object, _wire_suggestion
 from tests.factories import (
@@ -49,17 +55,9 @@ def _register_media_buy(ctx: dict, label: str, media_buy: Any) -> None:
     ctx.setdefault("seeded_media_buys", {})[label] = media_buy
 
 
-def _resolve_media_buy_id(ctx: dict, label: str) -> str:
-    """Resolve a Gherkin label to the real database media_buy_id."""
-    labels = ctx.get("media_buy_labels", {})
-    if label in labels:
-        return labels[label]
-    return label  # fallback: label IS the real ID (legacy)
-
-
 def _resolve_media_buy_ids(ctx: dict, labels: list[str]) -> list[str]:
     """Resolve a list of Gherkin labels to real database media_buy_ids."""
-    return [_resolve_media_buy_id(ctx, label) for label in labels]
+    return [resolve_media_buy_id(ctx, label) for label in labels]
 
 
 def _register_principal(ctx: dict, label: str) -> None:
@@ -158,16 +156,23 @@ def given_principal_owns_media_buy_with_dates(ctx: dict, principal_id: str, mb_i
 def given_today_is(ctx: dict, today_str: str) -> None:
     """Override 'today' for status computation.
 
-    Production code uses ``datetime.now(UTC).date()`` in
-    ``src.core.tools.media_buy_list`` (line 116). We patch ``datetime``
-    in that module so ``now()`` returns a datetime whose ``.date()``
-    yields the desired date.
+    In-process transports: production uses ``datetime.now(UTC).date()`` in
+    ``src.core.tools.media_buy_list``. We patch ``datetime`` in that module
+    so ``now()`` returns a datetime whose ``.date()`` yields the desired date.
+
+    e2e transports: the live server runs in a separate process the patch
+    can't reach, and the pinned spec offers no protocol clock control (see
+    ``_shift_seeded_windows_to_real_clock``). The pin is realized instead by
+    shifting seeded flight windows onto the real clock at dispatch time.
     """
     from datetime import UTC, datetime
     from unittest.mock import patch
 
     parsed = date.fromisoformat(today_str)
     ctx["mock_today"] = today_str
+
+    if ctx["env"].e2e_config is not None:
+        return
 
     # Build a datetime that corresponds to the target date
     fake_now = datetime(parsed.year, parsed.month, parsed.day, 12, 0, 0, tzinfo=UTC)
@@ -279,7 +284,7 @@ def given_media_buy_has_dates(ctx: dict, mb_id: str, start: str, end: str) -> No
 
     from src.core.database.models import MediaBuy as DBMediaBuy
 
-    real_id = _resolve_media_buy_id(ctx, mb_id)
+    real_id = resolve_media_buy_id(ctx, mb_id)
     env = ctx["env"]
     row = env._session.scalars(select(DBMediaBuy).filter_by(media_buy_id=real_id)).first()
     assert row is not None, f"Media buy '{mb_id}' (real_id={real_id}) not seeded before setting its dates"
@@ -1122,10 +1127,42 @@ def given_snapshot_available(ctx: dict, pkg_id: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _shift_seeded_windows_to_real_clock(ctx: dict) -> None:
+    """Realize a pinned mock clock against the live e2e server via the seeded data.
+
+    Over e2e transports the server classifies lifecycle status with its real
+    clock; the ``today is`` patch can't reach that process. Nor may the clock
+    be pinned over the wire: AdCP 3.1.1 deprecates the X-Mock-Time
+    testing header — "Sellers MUST NOT alter behavior based on these headers"
+    (media-buy/advanced-topics/sandbox.mdx) — so the seeded flight windows are
+    the only real time surface. Translate every seeded window by
+    (real today − pinned today): status resolution is pure date comparison,
+    so a uniform day shift preserves every phase/boundary relationship the
+    scenario asserts against its pinned clock.
+    """
+    from datetime import UTC, datetime
+
+    env = ctx["env"]
+    mock_today = ctx.get("mock_today")
+    if env.e2e_config is None or mock_today is None or ctx.get("_e2e_windows_shifted"):
+        return
+    ctx["_e2e_windows_shifted"] = True
+    delta = datetime.now(UTC).date() - date.fromisoformat(mock_today)
+    if not delta:
+        return
+    for mb in ctx.get("seeded_media_buys", {}).values():
+        for field in ("start_date", "end_date", "start_time", "end_time"):
+            value = getattr(mb, field)
+            if value is not None:
+                setattr(mb, field, value + delta)
+    env._session.commit()
+
+
 def _dispatch_query(ctx: dict, **extra_kwargs: Any) -> None:
     """Build and dispatch a get_media_buys request."""
     if ctx.get("error") is not None:
         return
+    _shift_seeded_windows_to_real_clock(ctx)
     query_kwargs = ctx.get("query_kwargs", {})
     query_kwargs.update(extra_kwargs)
 
@@ -1317,7 +1354,7 @@ def _get_media_buys(ctx: dict) -> list:
 @then(parsers.parse('the response should include media buy "{mb_id}" with status "{status}"'))
 def then_response_includes_mb_with_status(ctx: dict, mb_id: str, status: str) -> None:
     """Assert response includes the media buy with expected status."""
-    real_id = _resolve_media_buy_id(ctx, mb_id)
+    real_id = resolve_media_buy_id(ctx, mb_id)
     buys = _get_media_buys(ctx)
     matching = [b for b in buys if getattr(b, "media_buy_id", None) == real_id]
     assert len(matching) == 1, (
@@ -1468,8 +1505,8 @@ def then_buyer_campaign_ref_for_correlation(ctx: dict) -> None:
 @then(parsers.parse('the response should include media buys "{mb1}" and "{mb2}"'))
 def then_response_includes_two(ctx: dict, mb1: str, mb2: str) -> None:
     """Assert response includes both specified media buys."""
-    real_id1 = _resolve_media_buy_id(ctx, mb1)
-    real_id2 = _resolve_media_buy_id(ctx, mb2)
+    real_id1 = resolve_media_buy_id(ctx, mb1)
+    real_id2 = resolve_media_buy_id(ctx, mb2)
     buys = _get_media_buys(ctx)
     ids = {getattr(b, "media_buy_id", None) for b in buys}
     assert real_id1 in ids, f"Expected '{mb1}' (real_id={real_id1}) in response, got {ids}"
@@ -1479,7 +1516,7 @@ def then_response_includes_two(ctx: dict, mb1: str, mb2: str) -> None:
 @then(parsers.parse('the response should not include media buy "{mb_id}"'))
 def then_response_excludes(ctx: dict, mb_id: str) -> None:
     """Assert response does not include the specified media buy."""
-    real_id = _resolve_media_buy_id(ctx, mb_id)
+    real_id = resolve_media_buy_id(ctx, mb_id)
     buys = _get_media_buys(ctx)
     ids = {getattr(b, "media_buy_id", None) for b in buys}
     assert real_id not in ids, f"Expected '{mb_id}' (real_id={real_id}) NOT in response, but it was present"
@@ -1488,7 +1525,7 @@ def then_response_excludes(ctx: dict, mb_id: str) -> None:
 @then(parsers.parse('the response should include media buy "{mb_id}"'))
 def then_response_includes_one(ctx: dict, mb_id: str) -> None:
     """Assert response includes the specified media buy."""
-    real_id = _resolve_media_buy_id(ctx, mb_id)
+    real_id = resolve_media_buy_id(ctx, mb_id)
     buys = _get_media_buys(ctx)
     ids = {getattr(b, "media_buy_id", None) for b in buys}
     assert real_id in ids, f"Expected '{mb_id}' (real_id={real_id}) in response, got {ids}"
@@ -1666,7 +1703,7 @@ def then_suggestion_contains_any_of_three(ctx: dict, text1: str, text2: str, tex
 @then(parsers.parse('the media buy "{mb_id}" should have status "{expected_status}"'))
 def then_media_buy_has_status(ctx: dict, mb_id: str, expected_status: str) -> None:
     """Assert a specific media buy has the expected status in the response."""
-    real_id = _resolve_media_buy_id(ctx, mb_id)
+    real_id = resolve_media_buy_id(ctx, mb_id)
     buys = _get_media_buys(ctx)
     matching = [b for b in buys if getattr(b, "media_buy_id", None) == real_id]
     assert len(matching) == 1, (
@@ -2506,4 +2543,498 @@ def then_unavailable_reason_shorthand(ctx: dict, reason: str) -> None:
                 return
     raise AssertionError(
         f"snapshot_unavailable_reason='{reason}' not found on any package across {len(buys)} media buy(s)"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Revision / confirmed_at invariants (BR-RULE-291, POST-S6 / INT-006, #1544)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _parse_iso_utc(timestamp: str | Any) -> Any:
+    """Normalize an ISO 8601 string (or datetime) to an aware UTC datetime."""
+    from datetime import UTC
+
+    from tests.bdd.steps._outcome_helpers import parse_iso_8601
+
+    parsed = parse_iso_8601(timestamp)
+    return parsed.astimezone(UTC) if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _labeled_buy_from_response(ctx: dict, response: Any, label: str) -> Any:
+    """Find the media buy registered under a Gherkin label in a query response."""
+    from tests.bdd.steps._outcome_helpers import require_success_response
+
+    response = require_success_response(ctx, "query", response=response)
+    real_id = resolve_media_buy_id(ctx, label)
+    matches = [b for b in response.media_buys if b.media_buy_id == real_id]
+    assert matches, f"media buy {label!r} ({real_id}) not in response: {[b.media_buy_id for b in response.media_buys]}"
+    return matches[0]
+
+
+def _create_real_buy(ctx: dict, mb_id: str, principal_id: str) -> Any:
+    """Drive a real create through the tool and register the Gherkin label.
+
+    Returns the ORM row loaded through the repository (factory-bound session).
+    """
+    _register_principal(ctx, principal_id)
+    media_buy = create_and_load_real_buy(ctx)
+    _register_media_buy(ctx, mb_id, media_buy)
+    return media_buy
+
+
+def _seed_buy_confirmed_at(ctx: dict, principal_id: str, mb_id: str, timestamp: str) -> None:
+    """Real-create a buy, then pin its confirmed_at to the literal the scenario asserts.
+
+    On the synchronous path the create response constitutes confirmation, so
+    production stamps confirmed_at == created_at at the real wall clock. Pin BOTH
+    columns to the scenario's literal (test plumbing on the factory-bound session
+    — the columns are repository-immutable by design) so the read-back value is
+    deterministic. Pinning created_at alone is NOT enough: confirmed_at is a
+    separate persisted column already stamped during create, so it must be pinned
+    explicitly or the read-back returns the real creation instant.
+    """
+    env = ctx["env"]
+    media_buy = _create_real_buy(ctx, mb_id, principal_id)
+    pinned = _parse_iso_utc(timestamp)
+    media_buy.created_at = pinned
+    media_buy.confirmed_at = pinned
+    env._commit_factory_data()
+
+
+# ---- Given ------------------------------------------------------------
+
+
+@given(parsers.parse('the principal "{principal_id}" owns {count:d} media buys'))
+def given_principal_owns_count(ctx: dict, principal_id: str, count: int) -> None:
+    """Seed N active media buys owned by the ctx principal."""
+    _register_principal(ctx, principal_id)
+    env = ctx["env"]
+    for i in range(count):
+        label = f"mb-owned-{i + 1}"
+        mb = MediaBuyFactory(
+            tenant=ctx["tenant"],
+            principal=ctx["principal"],
+            media_buy_id=_generate_unique_id(label),
+            status="active",
+        )
+        _register_media_buy(ctx, label, mb)
+    env._commit_factory_data()
+
+
+@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with persisted revision {revision:d}'))
+def given_owns_media_buy_at_revision(ctx: dict, principal_id: str, mb_id: str, revision: int) -> None:
+    """Real-create a buy (revision 1) and advance it via repository bumps.
+
+    Each bump is a real mutation through the production seam
+    (MediaBuyRepository.bump_revision) — the persisted value is derived from
+    real transitions, never seeded directly.
+    """
+    media_buy = _create_real_buy(ctx, mb_id, principal_id)
+    advance_revision_to(ctx, media_buy, revision)
+
+
+@given(
+    parsers.parse(
+        'the principal "{principal_id}" owns media buy "{mb_id}" that was successfully created at "{timestamp}"'
+    )
+)
+def given_owns_media_buy_created_at(ctx: dict, principal_id: str, mb_id: str, timestamp: str) -> None:
+    """A buy whose synchronous create (order confirmation) happened at the literal instant."""
+    _seed_buy_confirmed_at(ctx, principal_id, mb_id, timestamp)
+
+
+@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with confirmed_at "{timestamp}"'))
+def given_owns_media_buy_confirmed_at(ctx: dict, principal_id: str, mb_id: str, timestamp: str) -> None:
+    """A confirmed buy whose confirmation instant is the literal timestamp."""
+    _seed_buy_confirmed_at(ctx, principal_id, mb_id, timestamp)
+
+
+@given("no state-changing writes occur between two reads")
+def given_no_writes_between_reads(ctx: dict) -> None:
+    """Declarative precondition — the scenario performs no writes between its reads."""
+    ctx["writes_between_reads"] = 0
+
+
+@given("the tenant requires manual approval for media buys")
+def given_tenant_manual_approval(ctx: dict) -> None:
+    """Configure the tenant so create_media_buy defers to seller approval.
+
+    The production gate (media_buy_create.py) is
+    ``(tenant.human_review_required OR adapter.manual_approval_required) AND
+    'create_media_buy' in adapter.manual_approval_operations`` — so the
+    adapter mock must also list the operation.
+    """
+    ctx["env"].set_review_requirement(ctx["tenant"], required=True)
+    adapter_mock = ctx["env"].mock["adapter"].return_value
+    adapter_mock.manual_approval_operations = ["create_media_buy"]
+
+
+def _resolve_submitted_media_buy_id(ctx: dict, task_id: str) -> str:
+    """Resolve the persisted media_buy_id behind a submitted (pending-approval) create.
+
+    The 3.1.1 CreateMediaBuySubmitted envelope exposes only ``task_id`` (the workflow
+    step id). The create tool links that step to the buy via
+    ``ObjectWorkflowMapping(object_type="media_buy", step_id=task_id)`` — read that
+    mapping back on the harness's bound session (READ COMMITTED sees the create's
+    committed rows, same as the sibling get_by_id read-backs in this module).
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import ObjectWorkflowMapping
+
+    session = ctx["env"]._session
+    mapping = session.scalars(select(ObjectWorkflowMapping).filter_by(step_id=task_id, object_type="media_buy")).first()
+    assert mapping is not None, f"no media_buy workflow mapping for submitted task {task_id!r}"
+    return mapping.object_id
+
+
+@given(parsers.parse('the Buyer Agent has created media buy "{mb_id}" awaiting seller approval'))
+def given_created_awaiting_approval(ctx: dict, mb_id: str) -> None:
+    """Drive a real create that lands on the submitted (manual-approval) arm.
+
+    Same canonical request shape as ``create_default_buy`` (single source:
+    ``default_create_kwargs``); only the expected arm differs — manual
+    approval means submitted, not the synchronous success arm the shared
+    wrapper asserts.
+    """
+    env = ctx["env"]
+    _register_principal(ctx, "buyer-001")
+    # TRANSPORT-BYPASS: Given plumbing — the create seeds the pending buy; the
+    # graded read-back (get_media_buys) runs through the parametrized transport
+    result = env.call_impl(**env.default_create_kwargs(ctx["default_product"], brand_domain="manual-approval.example"))
+    status = getattr(result, "status", None)
+    assert status == "submitted", f"expected the submitted (manual-approval) arm, got status {status!r}"
+    # The 3.1.1 CreateMediaBuySubmitted arm carries ONLY task_id (the workflow step id);
+    # media_buy_id/packages land on the task's completion artifact, not this envelope
+    # (adcp 6.6 create-media-buy-response oneOf). Resolve the persisted buy via the
+    # workflow->object mapping the create linked (object_type="media_buy",
+    # step_id=task_id) — the same authoritative link the admin approval flow acts on.
+    media_buy_id = _resolve_submitted_media_buy_id(ctx, result.response.task_id)
+    media_buy = _media_buy_repo(ctx).get_by_id(media_buy_id)
+    assert media_buy is not None, f"created media buy {media_buy_id} not found in DB"
+    assert media_buy.status == "pending_approval", f"expected pending_approval, got {media_buy.status!r}"
+    ctx["revision_at_creation"] = media_buy.revision or 1
+    _register_media_buy(ctx, mb_id, media_buy)
+
+
+# ---- When -------------------------------------------------------------
+
+
+def _query_seeded_buys(ctx: dict, read_key: str) -> None:
+    """Read the seeded buys back through the parametrized transport.
+
+    Queries by the seeded real ids: the reads compare per-buy fields across
+    time, so they must return the seeded buys regardless of lifecycle status
+    (a bare no-filter query defaults to active-only).
+    """
+    labels = ctx.get("media_buy_labels", {})
+    assert labels, "no seeded media buy to read"
+    _dispatch_query(ctx, media_buy_ids=list(labels.values()))
+    ctx[read_key] = ctx.pop("response", None)
+    # Relocate the WIRE body alongside the typed response. ``wire_response`` is a
+    # single slot the next read overwrites, so a cross-read oracle could not read
+    # per-read wire and had to fall back to the reconstructed typed object — which
+    # Pydantic lax-coerces, making those oracles blind to serialization regressions
+    # their single-read siblings catch. Popping BOTH slots together also keeps
+    # ``wire_dict``'s missing-wire guard honest: a stale t1 body left in the slot
+    # would silently satisfy a wire step that ran after the response moved. #1544.
+    ctx[f"{read_key}_wire"] = ctx.pop("wire_response", None)
+    assert ctx[read_key] is not None, f"{read_key} read failed: {ctx.get('error')!r}"
+
+
+@when("the Buyer Agent sends a get_media_buys request at time t1")
+def when_query_at_t1(ctx: dict) -> None:
+    """First read — stash the response for cross-read comparison."""
+    _query_seeded_buys(ctx, "read_t1")
+
+
+@when("the Buyer Agent sends a get_media_buys request at time t2 (t1 < t2)")
+@when("the Buyer Agent sends a get_media_buys request at time t2")
+def when_query_at_t2(ctx: dict) -> None:
+    """Second read — stash the response for cross-read comparison."""
+    _query_seeded_buys(ctx, "read_t2")
+
+
+@when("one successful update_media_buy lands between t1 and t2")
+@when("one successful update_media_buy lands between t1 and t2 (t1 < t2)")
+def when_update_lands_between_reads(ctx: dict) -> None:
+    """Drive a real update_media_buy through the impl between the two reads."""
+    from src.core.schemas import UpdateMediaBuyRequest
+    from src.core.schemas._base import UpdateMediaBuySuccess
+
+    env = ctx["env"]
+    labels = ctx.get("media_buy_labels", {})
+    assert labels, "no seeded media buy to update between the reads"
+    media_buy_id = next(iter(labels.values()))
+    # TRANSPORT-BYPASS: the intervening write is scenario plumbing; the graded
+    # t1/t2 reads run through the parametrized transport
+    result = env.call_impl(req=UpdateMediaBuyRequest(media_buy_id=media_buy_id, budget=6100.0))
+    # _update_media_buy_impl returns UpdateMediaBuyResult wrapping the success
+    # response (upstream #1417 unified the return type).
+    assert isinstance(result.response, UpdateMediaBuySuccess), f"the intervening update must succeed, got {result!r}"
+
+
+@when(parsers.parse('the seller approves media buy "{label}"'))
+def when_seller_approves(ctx: dict, label: str) -> None:
+    """Repository-transition + readback: NOT a drive through a real approve route.
+
+    This UC-019 scenario grades the QUERY side — that revision/confirmed_at read
+    back correctly on the wire once a buy has been approved — not the approval
+    ROUTE's wiring. It calls MediaBuyRepository.update_status_or_raise directly,
+    bypassing the admin blueprint/workflow entry points (session auth, the
+    single-winner claim, FinalizeOutcome orchestration). Every production approve
+    path is guard-enforced to route through this same repository seam
+    (test_architecture_media_buy_status_writes, #1544), so a broken CALLER (e.g.
+    a route that forgets to pass approved_at=) would NOT be caught here — that
+    risk is covered by a dedicated route-level test instead:
+    tests/admin/test_workflows_blueprint.py::
+    test_approve_stamps_confirmed_at_and_bumps_revision_through_the_route drives
+    the real Flask approve route end-to-end and reddens on exactly that class of
+    regression.
+    """
+    from datetime import UTC, datetime
+
+    env = ctx["env"]
+    real_id = resolve_media_buy_id(ctx, label)
+    approval_instant = datetime.now(UTC)
+    _media_buy_repo(ctx).update_status_or_raise(
+        real_id, "scheduled", approved_at=approval_instant, approved_by="seller-admin@example.com"
+    )
+    env._commit_factory_data()
+    ctx["approval_instant"] = approval_instant
+
+
+# ---- Then -------------------------------------------------------------
+
+
+def _wire_buys(ctx: dict) -> list[dict]:
+    """The queried media buys as dicts on the serialized wire (``wire_dict``).
+
+    Wire-graded on purpose: the reconstructed typed payload re-defaults absent
+    fields, so serialization regressions (an ``exclude_none`` omission, a wrong
+    JSON type) are only observable here. #1544.
+    """
+    from tests.bdd.steps._outcome_helpers import wire_dict
+
+    wire = wire_dict(ctx)
+    media_buys = wire.get("media_buys")
+    assert isinstance(media_buys, list) and media_buys, f"serialized query response missing media_buys: {wire!r}"
+    return media_buys
+
+
+def _wire_buy(ctx: dict, label: str) -> dict:
+    """The labeled media buy as a dict on the serialized wire."""
+    expected_id = resolve_media_buy_id(ctx, label)
+    buy = next((item for item in _wire_buys(ctx) if item.get("media_buy_id") == expected_id), None)
+    assert isinstance(buy, dict), f"media buy {label!r} missing from serialized response"
+    return buy
+
+
+def _wire_buy_at_read(ctx: dict, read_key: str, label: str) -> dict:
+    """The labeled buy on the wire captured for ONE specific read (t1 / t2).
+
+    The cross-read analogue of :func:`_wire_buy`. Carries the same loud guard as
+    ``wire_dict``: a real-wire transport (REST/A2A/MCP) that stashed no wire for
+    this read raises rather than quietly grading a reconstructed object; IMPL (and
+    the non-parametrized ``None`` default) has no wire by construction and
+    serializes the typed payload through the production serializer.
+    """
+    from tests.harness.transport import Transport
+
+    wire = ctx.get(f"{read_key}_wire")
+    transport = ctx.get("transport")
+    if wire is None and transport not in (None, Transport.IMPL):
+        raise AssertionError(f"{transport}: no wire stashed for {read_key} — cross-read oracle cannot grade the wire")
+    if wire is None:
+        response = ctx.get(read_key)
+        assert response is not None, f"{read_key} missing from ctx"
+        wire = response.model_dump(mode="json")
+
+    media_buys = wire.get("media_buys")
+    assert isinstance(media_buys, list) and media_buys, f"{read_key} wire missing media_buys: {wire!r}"
+    expected_id = resolve_media_buy_id(ctx, label)
+    buy = next((item for item in media_buys if item.get("media_buy_id") == expected_id), None)
+    assert isinstance(buy, dict), f"media buy {label!r} missing from the {read_key} wire body"
+    return buy
+
+
+@then("every returned media buy should include an integer revision field")
+def then_every_buy_has_integer_revision(ctx: dict) -> None:
+    """Every buy on the serialized WIRE carries revision as an integer (3.1.1 required key)."""
+    from tests.bdd.steps._outcome_helpers import wire_integer
+
+    for buy in _wire_buys(ctx):
+        wire_integer(ctx, buy, "revision")
+
+
+@then("every revision should be >= 1")
+def then_every_revision_at_least_1(ctx: dict) -> None:
+    """Every wire revision respects the schema minimum (integer >= 1)."""
+    from tests.bdd.steps._outcome_helpers import wire_integer
+
+    revisions = [(buy.get("media_buy_id"), wire_integer(ctx, buy, "revision")) for buy in _wire_buys(ctx)]
+    below_minimum = [(mb_id, rev) for mb_id, rev in revisions if rev < 1]
+    assert not below_minimum, f"media buys with revision below the schema minimum 1: {below_minimum}"
+
+
+@then(parsers.parse('the media buy "{label}" revision should be {revision:d}'))
+def then_media_buy_revision_equals(ctx: dict, label: str, revision: int) -> None:
+    """The serialized WIRE returns the revision produced by repository mutations.
+
+    Wire-graded (not the reconstructed payload) so a serialization regression of
+    the optimistic-concurrency token goes red across a2a/mcp/rest; the A2A
+    whole-number-float nuance lives in ``wire_integer`` (#1583).
+    """
+    from tests.bdd.steps._outcome_helpers import wire_integer
+
+    actual = wire_integer(ctx, _wire_buy(ctx, label), "revision")
+    assert actual == revision, f"expected revision {revision} on the wire, got {actual!r}"
+
+
+@then("the revision at t1 should equal the revision at t2")
+def then_revision_stable_across_reads(ctx: dict) -> None:
+    """Both reads' WIRE revisions agree when no write landed between them.
+
+    Wire-graded per read (not the reconstructed object): Pydantic lax-coerces on
+    reconstruction, so a serialization regression that emits ``revision`` as a
+    string would still compare equal here. #1544.
+    """
+    from tests.bdd.steps._outcome_helpers import wire_integer
+
+    r1 = wire_integer(ctx, _wire_buy_at_read(ctx, "read_t1", "mb-001"), "revision")
+    r2 = wire_integer(ctx, _wire_buy_at_read(ctx, "read_t2", "mb-001"), "revision")
+    assert r1 == r2, f"revision drifted across reads with no intervening write: t1={r1}, t2={r2}"
+
+
+@then("the revision at t2 should be strictly greater than the revision at t1")
+def then_revision_increased_across_reads(ctx: dict) -> None:
+    """A successful intervening write advances the WIRE revision between reads."""
+    from tests.bdd.steps._outcome_helpers import wire_integer
+
+    r1 = wire_integer(ctx, _wire_buy_at_read(ctx, "read_t1", "mb-001"), "revision")
+    r2 = wire_integer(ctx, _wire_buy_at_read(ctx, "read_t2", "mb-001"), "revision")
+    assert r2 > r1, f"a successful intervening write must increase revision: t1={r1}, t2={r2}"
+
+
+@then(parsers.parse('the media buy "{label}" should include a confirmed_at field'))
+def then_buy_includes_confirmed_at(ctx: dict, label: str) -> None:
+    """The serialized WIRE carries a non-null confirmed_at for a confirmed buy."""
+    buy = _wire_buy(ctx, label)
+    assert buy.get("confirmed_at") is not None, f"media buy {label!r} is missing confirmed_at on the wire"
+
+
+@then(parsers.parse('the media buy "{label}" wire body should carry "confirmed_at" as null'))
+def then_wire_confirmed_at_present_as_null(ctx: dict, label: str) -> None:
+    """A provisional (unconfirmed) buy serializes confirmed_at PRESENT-as-null.
+
+    3.1.1 get-media-buys-response lists confirmed_at in ``media_buys[].required``
+    typed ``["string","null"]`` — null until seller commitment on the
+    deferred/manual-approval path. The inherited ``exclude_none`` serialization
+    would DROP the key entirely, emitting a body missing a REQUIRED key; the
+    production serializer re-injects it as null
+    (``GetMediaBuysMediaBuy.model_dump``), and this step is that fix's wire
+    oracle — key PRESENCE is the claim, so it must read the wire, never the
+    reconstructed payload (which re-defaults an absent key to None). #1544.
+    """
+    buy = _wire_buy(ctx, label)
+    assert "confirmed_at" in buy, f"confirmed_at key MISSING from the wire body (3.1.1 required-nullable): {buy!r}"
+    assert buy["confirmed_at"] is None, (
+        f"expected confirmed_at null for an unconfirmed buy, got {buy['confirmed_at']!r}"
+    )
+
+
+@then(parsers.parse('the media buy "{label}" wire body should carry "revision" as an integer of at least 1'))
+def then_wire_revision_present_min_1(ctx: dict, label: str) -> None:
+    """The wire carries revision as a non-null integer >= 1 even for a provisional buy."""
+    from tests.bdd.steps._outcome_helpers import wire_integer
+
+    revision = wire_integer(ctx, _wire_buy(ctx, label), "revision")
+    assert revision >= 1, f"revision must be >= 1 on the wire, got {revision!r}"
+
+
+@then(parsers.parse('the media buy "{label}" confirmed_at should be an ISO 8601 timestamp'))
+def then_buy_confirmed_at_is_iso_timestamp(ctx: dict, label: str) -> None:
+    """Validate the production-created timestamp on the serialized response wire."""
+    from tests.bdd.steps._outcome_helpers import parse_iso_8601
+
+    buy = _wire_buy(ctx, label)
+    confirmed_at = buy.get("confirmed_at")
+    assert isinstance(confirmed_at, str), (
+        f"confirmed_at must be an ISO 8601 string on the wire, got {type(confirmed_at).__name__}: {confirmed_at!r}"
+    )
+    parsed = parse_iso_8601(confirmed_at)
+    assert parsed.tzinfo is not None and parsed.utcoffset() is not None, (
+        f"confirmed_at must include a timezone designator, got {confirmed_at!r}"
+    )
+
+
+@then(parsers.parse('the confirmed_at value should be the ISO 8601 timestamp "{timestamp}"'))
+def then_confirmed_at_equals_literal(ctx: dict, timestamp: str) -> None:
+    """The serialized WIRE confirmed_at equals the seeded literal instant."""
+    buy = _wire_buy(ctx, "mb-001")
+    confirmed_at = buy.get("confirmed_at")
+    assert isinstance(confirmed_at, str), f"confirmed_at must be a string on the wire, got {confirmed_at!r}"
+    actual = _parse_iso_utc(confirmed_at)
+    expected = _parse_iso_utc(timestamp)
+    assert actual == expected, f"confirmed_at mismatch: expected {expected.isoformat()}, got {actual.isoformat()}"
+
+
+@then(parsers.parse('the confirmed_at at t{read_index:d} should equal "{timestamp}"'))
+def then_confirmed_at_at_read_equals(ctx: dict, read_index: int, timestamp: str) -> None:
+    """The write-once stamp on THIS read's wire body still carries the same instant.
+
+    Wire-graded per read: reading the reconstructed object would re-parse a
+    datetime the serializer might have emitted in a wrong JSON shape. #1544.
+    """
+    buy = _wire_buy_at_read(ctx, f"read_t{read_index}", "mb-001")
+    confirmed_at = buy.get("confirmed_at")
+    assert isinstance(confirmed_at, str), (
+        f"confirmed_at must be a string on the t{read_index} wire, got {confirmed_at!r}"
+    )
+    actual = _parse_iso_utc(confirmed_at)
+    expected = _parse_iso_utc(timestamp)
+    assert actual == expected, (
+        f"confirmed_at at t{read_index} drifted: expected {expected.isoformat()}, got {actual.isoformat()}"
+    )
+
+
+@then(parsers.parse('the media buy "{label}" revision should be greater than its revision at creation'))
+def then_revision_greater_than_at_creation(ctx: dict, label: str) -> None:
+    """The serialized WIRE revision advanced past its at-creation value (approval bumped it)."""
+    from tests.bdd.steps._outcome_helpers import wire_integer
+
+    revision = wire_integer(ctx, _wire_buy(ctx, label), "revision")
+    at_creation = ctx["revision_at_creation"]
+    assert revision > at_creation, f"revision did not advance at approval: read {revision}, at creation {at_creation}"
+
+
+@then(parsers.parse('the media buy "{label}" confirmed_at should equal the approval instant'))
+def then_confirmed_at_is_approval_instant(ctx: dict, label: str) -> None:
+    """The serialized WIRE confirmed_at is the seller's approval instant."""
+    buy = _wire_buy(ctx, label)
+    confirmed_at = buy.get("confirmed_at")
+    assert isinstance(confirmed_at, str), (
+        f"confirmed_at must be an ISO string on the wire after approval, got {confirmed_at!r}"
+    )
+    actual = _parse_iso_utc(confirmed_at)
+    expected = _parse_iso_utc(ctx["approval_instant"])
+    assert actual == expected, (
+        f"confirmed_at must be the approval instant: expected {expected.isoformat()}, got {actual.isoformat()}"
+    )
+
+
+@then(parsers.parse('the media buy "{label}" confirmed_at should not equal its created_at'))
+def then_confirmed_at_differs_from_created_at(ctx: dict, label: str) -> None:
+    """The serialized WIRE confirmed_at is not merely the buyer's request time."""
+    buy = _wire_buy(ctx, label)
+    confirmed_at = buy.get("confirmed_at")
+    created_at = buy.get("created_at")
+    assert isinstance(confirmed_at, str), f"media buy {label!r} is missing confirmed_at on the wire"
+    assert isinstance(created_at, str), f"media buy {label!r} is missing created_at on the wire"
+    confirmed = _parse_iso_utc(confirmed_at)
+    created = _parse_iso_utc(created_at)
+    assert confirmed != created, (
+        f"confirmed_at equals created_at ({confirmed.isoformat()}) — reports the buyer's request time, "
+        "not the seller's approval instant"
     )
