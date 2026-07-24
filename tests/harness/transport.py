@@ -154,6 +154,16 @@ class TransportResult:
     wire_response: dict[str, Any] | None = None
     wire_error_envelope: dict[str, Any] | None = None
     synthesized_error_envelope: dict[str, Any] | None = None
+    # True ONLY when the dispatcher can positively confirm this call's error
+    # path never had the opportunity to capture real wire — e.g. A2A's
+    # documented "direct raw" mode (env.call_a2a delegates to a *_raw()
+    # wrapper with no Task/Artifact framing to reconstruct from), or a failed
+    # envelope reconstruction. A `wire_error_envelope is None` result on a
+    # real-wire transport is a dispatcher-stashing BUG unless this flag says
+    # otherwise — see tests/bdd/steps/_outcome_helpers.wire_error_envelope,
+    # which uses this to distinguish "should have captured but didn't" from
+    # "this dispatch mode never promised to."
+    wire_capture_unavailable: bool = False
 
     @property
     def is_success(self) -> bool:

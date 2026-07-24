@@ -356,6 +356,11 @@ class TestBaseClassContract:
         assert result.wire_error_envelope is None, "raw path has no captured wire — must be None, not synthesized"
         assert result.synthesized_error_envelope is not None, "raw-path A2A error must expose a synthesized envelope"
         assert result.synthesized_error_envelope["adcp_error"]["code"] == "VALIDATION_ERROR"
+        # The raw path never had the opportunity to stash wire — a permanent,
+        # by-design None, not a transient dispatcher miss. See
+        # tests/bdd/steps/_outcome_helpers.wire_error_envelope, which relies on
+        # this flag to avoid misclassifying this env as a regression.
+        assert result.wire_capture_unavailable is True
 
         sentinel = {"adcp_error": {"code": "VALIDATION_ERROR", "message": "real-wire-sentinel"}}
 
@@ -367,6 +372,7 @@ class TestBaseClassContract:
 
         result = _StashedEnv().call_via(Transport.A2A)
         assert result.wire_error_envelope == sentinel, "stashed real wire must surface on wire_error_envelope"
+        assert result.wire_capture_unavailable is False, "the full pipeline promises captured wire"
 
     @pytest.mark.parametrize(
         ("rest_method", "payload_argument"),

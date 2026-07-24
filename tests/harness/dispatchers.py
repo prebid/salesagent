@@ -120,6 +120,16 @@ class A2ADispatcher:
         try:
             payload = env.call_a2a(**kwargs)
         except Exception as exc:
+            # `_wire_error_envelope` is set ONLY by the full-pipeline Task/
+            # Artifact reconstruction (tests.harness._base's envelope->
+            # exception helper) — a direct-raw exception (e.g. CreativeSyncEnv,
+            # which raises straight from *_raw()) never has the attribute at
+            # all. Its PRESENCE (not its value) is therefore the per-call
+            # signal for "this dispatch mode promised to capture wire" —
+            # exposed on TransportResult so callers like
+            # tests/bdd/steps/_outcome_helpers.wire_error_envelope can tell a
+            # legitimate no-wire dispatch apart from a stashing bug.
+            wire_capture_promised = hasattr(exc, "_wire_error_envelope")
             return TransportResult(
                 error=exc,
                 # Stash only — None on the raw path (no Task framing).
@@ -127,6 +137,7 @@ class A2ADispatcher:
                 # What production WOULD emit for the same exception; the only
                 # honest error envelope for raw-path envs (e.g. CreativeSyncEnv).
                 synthesized_error_envelope=_envelope_from_adcp_error(exc),
+                wire_capture_unavailable=not wire_capture_promised,
             )
         # Real A2A wire: the artifact DataPart dict stashed by _run_a2a_handler
         # (declared on BaseTestEnv, reset per call_via — read directly so a
