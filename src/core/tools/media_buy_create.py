@@ -2133,8 +2133,27 @@ async def _create_media_buy_impl(
         if push_notification_config:
             # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object (hoisting would bind the unpatched one at module load).
             from src.core.database.repositories import MediaBuyUoW
+            from src.core.log_safety import redact_push_notification_config
 
-            logger.info(f"[MCP/A2A] Registering push notification config from request: {push_notification_config}")
+            # Redacted: the config's authentication block carries the buyer's webhook
+            # credential — logging it raw leaks a replayable secret (#1617). The
+            # redactor takes a typed model, so reconstruct one from this wire dict.
+            # model_validate can RAISE — the A2A/MCP wire path delivers configs that
+            # never passed strict SDK validation (e.g. a sub-32-char credential the
+            # buyer's own endpoint accepts) — and a redaction for a LOG line must
+            # never break media-buy creation. Reconstruct defensively; if it can't be
+            # built, log the empty view rather than crash. The secret is withheld
+            # either way.
+            try:
+                _pnc_for_log: PushNotificationConfig | None = PushNotificationConfig.model_validate(
+                    push_notification_config
+                )
+            except ValidationError:
+                _pnc_for_log = None
+            logger.info(
+                "[MCP/A2A] Registering push notification config from request: %s",
+                redact_push_notification_config(_pnc_for_log),
+            )
 
             # Extract config details
             url = push_notification_config.get("url")
