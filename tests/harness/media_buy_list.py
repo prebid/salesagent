@@ -20,6 +20,12 @@ class MediaBuyListEnv(IntegrationEnv):
     """Integration test environment for _get_media_buys_impl.
 
     No patches — list is read-only, no external service calls.
+
+    REST note: ``REST_ENDPOINT`` is declared for harness symmetry with other
+    envs, but production ``src/routes/api_v1.py`` has no
+    ``POST /media-buys/query`` (create / update / delivery only). ``call_rest``
+    / ``Transport.REST`` will 404 until a query route lands — prefer MCP/A2A
+    for wire grading of get_media_buys (including advisory ``errors[]``).
     """
 
     EXTERNAL_PATCHES: dict[str, str] = {}
@@ -54,10 +60,14 @@ class MediaBuyListEnv(IntegrationEnv):
         return self._run_a2a_handler("get_media_buys", GetMediaBuysResponse, **kwargs)
 
     def call_mcp(self, **kwargs: Any) -> Any:
-        """Call get_media_buys MCP wrapper."""
-        from src.core.tools.media_buy_list import get_media_buys
+        """Dispatch get_media_buys through the real FastMCP ``Client`` pipeline.
 
-        return self._run_mcp_wrapper(get_media_buys, GetMediaBuysResponse, **kwargs)
+        Routes through ``_run_mcp_client`` (not the legacy ``_run_mcp_wrapper``)
+        so success-path ``structured_content`` is stashed as
+        ``_last_wire_response`` / ``TransportResult.wire_response`` for BDD
+        advisory ``errors[]`` asserts.
+        """
+        return self._run_mcp_client("get_media_buys", GetMediaBuysResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to GetMediaBuysBody shape for REST POST."""

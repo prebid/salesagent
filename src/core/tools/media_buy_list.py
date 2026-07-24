@@ -210,7 +210,7 @@ def _get_media_buys_impl(
             # before the targeting_overlay rename (see media_buy_create.py:638-642).
             # A single corrupted package_config row must not crash the whole tenant's
             # get_media_buys response — log the bad row, surface a non-fatal
-            # TARGETING_REHYDRATION_FAILED on the response's errors channel, and
+            # CONFIGURATION_ERROR (TARGETING_REHYDRATION_FAILED message) on errors[], and
             # set this package's targeting_overlay=None so the rest of the buy
             # still renders.
             #
@@ -235,15 +235,16 @@ def _get_media_buys_impl(
                         pkg_id,
                         exc,
                     )
-                    # Seller-side data-integrity failure (the buyer can't fix it),
-                    # surfaced with the standard ``SERVICE_UNAVAILABLE`` wire code —
-                    # matching the sibling per-creative advisory in
-                    # creatives/_processing.py — with the specific
-                    # ``TARGETING_REHYDRATION_FAILED`` shape in the message so
-                    # callers can grep/route on it.
+                    # Seller-side persisted-data integrity failure (buyer cannot
+                    # fix the row). Wire code ``CONFIGURATION_ERROR`` +
+                    # ``recovery="terminal"`` is the pinned AdCP enum pair for
+                    # seller-operator repair (MUST NOT auto-retry). Keep the
+                    # ``TARGETING_REHYDRATION_FAILED:`` message prefix as a
+                    # routing marker; creatives/_processing.py uses the same
+                    # terminal profile for admin-fixable defects.
                     hydration_errors.append(
                         Error(  # structural-guard: advisory per-package result in GetMediaBuysResponse.errors[]
-                            code="SERVICE_UNAVAILABLE",
+                            code="CONFIGURATION_ERROR",
                             message=(
                                 f"TARGETING_REHYDRATION_FAILED: targeting overlay for "
                                 f"package '{pkg_id}' on media buy '{buy.media_buy_id}' "
@@ -251,6 +252,15 @@ def _get_media_buys_impl(
                                 f"targeting_overlay=None for this package."
                             ),
                             field=f"media_buys[].packages[{pkg_id}].targeting_overlay",
+                            # Buyer hint for BR-RULE-294 / UC-019: seller-side
+                            # persisted-targeting corruption — buyer cannot fix
+                            # the row; contact seller to repair it.
+                            suggestion=(
+                                "Contact the seller to repair the stored package "
+                                "targeting data; this package's targeting_overlay "
+                                "stays null until then."
+                            ),
+                            recovery="terminal",
                         )
                     )
                     targeting_overlay = None
