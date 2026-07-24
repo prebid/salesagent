@@ -67,15 +67,18 @@ class PushNotificationConfigRepository:
         return self._session.scalars(stmt).first()
 
     def get_active_by_principal_and_url(self, principal_id: str, url: str) -> PushNotificationConfig | None:
-        """Get the active config matching a principal's webhook URL, if any.
+        """Get the active config matching a principal's webhook URL, if any — detached.
 
         Used by the delivery webhook scheduler to reuse a registered push config
         (its auth settings) for a buy whose ``reporting_webhook.url`` matches;
         returns None when the principal has no active config for that URL — the
         caller then uses the sibling ``build_detached`` to obtain a transient
-        carrier for the same auth policy.
+        carrier for the same auth policy. The returned instance is expunged from
+        the session before it's handed back, so both arms of that decision give
+        the caller a detached carrier — the caller never manages the identity
+        map itself.
         """
-        return self._session.scalars(
+        config = self._session.scalars(
             select(PushNotificationConfig).where(
                 PushNotificationConfig.tenant_id == self._tenant_id,
                 PushNotificationConfig.principal_id == principal_id,
@@ -83,6 +86,9 @@ class PushNotificationConfigRepository:
                 PushNotificationConfig.is_active.is_(True),
             )
         ).first()
+        if config is not None:
+            self._session.expunge(config)
+        return config
 
     def build_detached(
         self,

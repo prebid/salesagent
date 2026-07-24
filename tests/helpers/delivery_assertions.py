@@ -56,6 +56,49 @@ def assert_detached_push_config(
     assert cfg.is_active is True, f"{context}: expected is_active True, got {cfg.is_active!r}"
 
 
+class DetachedPushConfigMatcher:
+    """``==`` matcher delegating to ``assert_detached_push_config`` — no duplicated field logic.
+
+    Lets a mock-argument check (``mock.assert_awaited_once_with(push_notification_config=...)``)
+    verify call count and every carrier field in one atomic assertion, instead of a
+    count check followed by a separate ``.await_args`` read — the split shape this
+    module's callers were written to retire (see ``assert_detached_push_config``'s
+    docstring). On mismatch, ``__repr__`` surfaces the exact field that differed
+    (pytest prints the expected side's repr on an assertion failure).
+    """
+
+    def __init__(
+        self,
+        *,
+        tenant_id: str,
+        principal_id: str,
+        url: str,
+        config_id: str,
+        authentication_type: str | None,
+        authentication_token: str | None,
+    ) -> None:
+        self._kwargs = {
+            "tenant_id": tenant_id,
+            "principal_id": principal_id,
+            "url": url,
+            "config_id": config_id,
+            "authentication_type": authentication_type,
+            "authentication_token": authentication_token,
+        }
+        self._mismatch: str | None = None
+
+    def __eq__(self, other: object) -> bool:
+        try:
+            assert_detached_push_config(other, context="mock argument", **self._kwargs)  # type: ignore[arg-type]
+        except AssertionError as exc:
+            self._mismatch = str(exc)
+            return False
+        return True
+
+    def __repr__(self) -> str:
+        return self._mismatch or f"PushNotificationConfig(matching {self._kwargs!r})"
+
+
 def assert_omits_webhook_only_fields(payload: dict, *, context: str) -> None:
     """Assert a serialized delivery body omits ALL webhook-only fields (#1570).
 

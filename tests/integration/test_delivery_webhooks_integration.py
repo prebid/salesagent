@@ -7,7 +7,7 @@ These tests:
 """
 
 from datetime import UTC, datetime, time, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
 from freezegun import freeze_time
@@ -28,6 +28,7 @@ from src.core.tools._media_buy_status import SERVING_PERSISTED_STATUSES
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
 from tests.harness.delivery_poll import mock_webhook_post
 from tests.helpers.delivery_assertions import (
+    DetachedPushConfigMatcher,
     assert_detached_push_config,
     assert_next_expected_at_shape,
     assert_partial_data_pairing,
@@ -298,21 +299,22 @@ async def test_signed_reporting_webhook_carries_credentials_into_the_push_config
     ) as mock_send_notification:
         await scheduler._send_reports()
 
-        assert mock_send_notification.await_count == 1
-        cfg = mock_send_notification.await_args.kwargs.get("push_notification_config")
-
-        # Concrete literals, not re-derived from the fixture: the scheme->
-        # authentication_type and credentials->authentication_token mapping is
-        # exactly what is being graded here.
-        assert_detached_push_config(
-            cfg,
-            tenant_id=tenant_id,
-            principal_id=principal_id,
-            url="https://example.com/webhook",
-            config_id=f"temp_{media_buy_id}",
-            authentication_type="Bearer",
-            authentication_token="test-webhook-credential",
-            context="signed scheduler carrier",
+        # Count and config identity checked together: a count-less read of
+        # .await_args would ship a regressed duplicate send green as long as
+        # the LAST call still carried the right config. Concrete literals, not
+        # re-derived from the fixture: the scheme->authentication_type and
+        # credentials->authentication_token mapping is exactly what's graded.
+        mock_send_notification.assert_awaited_once_with(
+            push_notification_config=DetachedPushConfigMatcher(
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+                url="https://example.com/webhook",
+                config_id=f"temp_{media_buy_id}",
+                authentication_type="Bearer",
+                authentication_token="test-webhook-credential",
+            ),
+            payload=ANY,
+            metadata=ANY,
         )
 
 

@@ -16,9 +16,11 @@ Each test targets exactly one obligation ID and follows the 6 hard rules:
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
+from unittest.mock import ANY
 
 import pytest
+from sqlalchemy import inspect
 
 from src.core.exceptions import (
     AdCPAuthenticationError,
@@ -58,11 +60,7 @@ if TYPE_CHECKING:  # annotations only — the helpers below keep their lazy runt
 
 
 def _serving_webhook_buy(
-    # Left ``Any``: this helper's params/return are factory-boy products, and the
-    # factories are not typed as the ORM models they build (``MediaBuyFactory(...)``
-    # is not a ``MediaBuy`` to a type checker), so concrete annotations here fail
-    # rather than document. Typing it needs factory stubs, not a signature edit.
-    env: Any,
+    env: DeliveryPollEnv,
     *,
     flight: str = "live",
     mb_id: str | None = None,
@@ -98,7 +96,7 @@ def _serving_webhook_buy(
     }
     if mb_id is not None:
         kwargs["media_buy_id"] = mb_id
-    buy = MediaBuyFactory(**kwargs)
+    buy = cast("MediaBuy", MediaBuyFactory(**kwargs))
     env.set_adapter_response(buy.media_buy_id, impressions=5000)
     return buy
 
@@ -1052,19 +1050,13 @@ class TestPollOmitsWebhookOnlyFieldsOnEveryTransport:
             for transport in [Transport.MCP, Transport.A2A, Transport.REST, Transport.IMPL]:
                 result = env.call_via(transport, media_buy_ids=[buy.media_buy_id])
                 assert result.is_success, f"{transport}: {result.error}"
-                # Only IMPL legitimately lacks a real wire — serialize its payload
-                # through the production serializer. For MCP/A2A/REST require the
-                # actual stashed wire body; falling back to a model_dump() there
-                # would reserialize the parsed model and normalize away the very
-                # explicit-null / field-shape regression this test exists to catch
-                # (mirrors the BDD wire_dict guard).
-                if transport is Transport.IMPL:
-                    wire = result.payload.model_dump(mode="json")
-                else:
-                    assert result.wire_response is not None, (
-                        f"{transport}: env did not stash a success-path wire — cannot verify wire bytes"
-                    )
-                    wire = result.wire_response
+                # result.wire_dict() owns the anti-tautology guard (only IMPL
+                # legitimately has no wire; MCP/A2A/REST require the real stashed
+                # body, or this raises rather than silently reserializing the
+                # parsed model and normalizing away the exact wire-shape
+                # regression this test exists to catch) — the same rule BDD's
+                # wire_dict(ctx) delegates to, so there is one guard, not two.
+                wire = result.wire_dict()
                 # Anchor: the webhook-only fields only surface alongside deliveries,
                 # so an empty-deliveries response would pass the omission check vacuously.
                 assert wire.get("media_buy_deliveries"), f"{transport}: no deliveries — omission check is vacuous"
@@ -3775,6 +3767,33 @@ class TestStartTimeFallbackForStatus:
 # ---------------------------------------------------------------------------
 
 
+class _PushConfigMatcher:
+    """Matcher pinning the push config passed to the sender, by identity + credential.
+
+    A count-less ``.await_args`` read can't tell a single correct send from a
+    second, duplicate send with the same last call — this pairs with an
+    ``assert_awaited_once_with`` so count and argument shape are verified
+    together, the same atomic-assertion shape this file already uses via
+    ``_MediaBuyIdMatcher``/``_SessionMatcher`` in test_delivery_webhooks_force.py.
+    """
+
+    def __init__(self, config_id: str, authentication_token: str | None) -> None:
+        self._config_id = config_id
+        self._authentication_token = authentication_token
+
+    def __eq__(self, other: object) -> bool:
+        from src.core.database.models import PushNotificationConfig
+
+        return (
+            isinstance(other, PushNotificationConfig)
+            and other.id == self._config_id
+            and other.authentication_token == self._authentication_token
+        )
+
+    def __repr__(self) -> str:
+        return f"PushNotificationConfig(id={self._config_id!r}, authentication_token={self._authentication_token!r})"
+
+
 @pytest.mark.requires_db
 class TestRegisteredPushConfigLookup:
     """The lookup arm of the scheduler's push-config decision.
@@ -3828,6 +3847,12 @@ class TestRegisteredPushConfigLookup:
             assert found is not None
             assert found.id == "cfg-owned"
             assert found.authentication_token == "owner-secret"
+            # Both arms of the push-config decision hand the caller a detached
+            # carrier — the repository owns identity-map management, not the
+            # scheduler. (Detached, not transient: this row WAS in the session;
+            # build_detached's sibling carrier never was — see
+            # TestBuildDetachedIsNeverPersisted.test_instance_is_transient.)
+            assert inspect(found).detached is True
 
     @pytest.mark.asyncio
     async def test_scheduler_reuses_a_registered_config_instead_of_building_one(self, integration_db):
@@ -3863,8 +3888,13 @@ class TestRegisteredPushConfigLookup:
                     buy, buy.raw_request["reporting_webhook"], env.get_session(), force=True
                 )
 
-            cfg = mock_send.await_args.kwargs["push_notification_config"]
-            assert cfg.id == "cfg-registered", (
-                f"scheduler must reuse the registered config, got {cfg.id!r} (the transient carrier is 'temp_*')"
+            # Count and config identity checked together: a count-less read of
+            # .await_args would ship a regressed duplicate send green as long as
+            # the LAST call still carried the registered config.
+            mock_send.assert_awaited_once_with(
+                push_notification_config=_PushConfigMatcher(
+                    config_id="cfg-registered", authentication_token="registered-secret"
+                ),
+                payload=ANY,
+                metadata=ANY,
             )
-            assert cfg.authentication_token == "registered-secret"

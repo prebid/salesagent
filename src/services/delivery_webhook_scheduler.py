@@ -511,23 +511,18 @@ class DeliveryWebhookScheduler:
 
         # Reuse the principal's registered push config for this URL, if any
         # (tenant-scoped repository lookup — no raw ORM select in the scheduler).
+        # Both arms return an already-detached carrier; the scheduler never
+        # touches the session's identity map directly.
         push_config_repo = PushNotificationConfigRepository(session, media_buy.tenant_id)
-        push_notification_config = push_config_repo.get_active_by_principal_and_url(media_buy.principal_id, webhook_url)
-
-        # Extract webhook config data before session closes
-        if push_notification_config:
-            # Detach from session and extract data
-            session.expunge(push_notification_config)
-        else:
-            # No registered config for this URL: the repository builds the detached
-            # carrier so both arms stay in the data-access layer (never persisted).
-            push_notification_config = push_config_repo.build_detached(
-                media_buy.principal_id,
-                webhook_url,
-                config_id=f"temp_{media_buy.media_buy_id}",
-                authentication_type=auth_type,
-                authentication_token=auth_token,
-            )
+        push_notification_config = push_config_repo.get_active_by_principal_and_url(
+            media_buy.principal_id, webhook_url
+        ) or push_config_repo.build_detached(
+            media_buy.principal_id,
+            webhook_url,
+            config_id=f"temp_{media_buy.media_buy_id}",
+            authentication_type=auth_type,
+            authentication_token=auth_token,
+        )
 
         # Wire vs internal task_type distinction:
         # - metadata["task_type"] = "media_buy_delivery" -- internal logging/dedup label
