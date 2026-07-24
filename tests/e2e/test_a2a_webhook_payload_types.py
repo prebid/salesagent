@@ -627,15 +627,21 @@ class TestProtocolWebhookWireFormat:
     def _send_and_capture(self, payload) -> dict[str, Any]:
         """Send `payload` via the real service and return the classified capture."""
         import asyncio
+        from unittest.mock import patch
 
         from src.core.database.models import PushNotificationConfig
         from src.services.protocol_webhook_service import ProtocolWebhookService
 
         # host='127.0.0.1': this class is unit-style (no Docker) — the service
         # runs in-process, so loopback is always the right callback host.
-        with run_webhook_capture_server(
-            WebhookPayloadCapture, WebhookPayloadCapture.received_webhooks, host="127.0.0.1"
-        ) as info:
+        # Real outbound validator allows localhost when ADCP_TESTING=true
+        # (do not patch the SSRF gate — that would hide regressions).
+        with (
+            run_webhook_capture_server(
+                WebhookPayloadCapture, WebhookPayloadCapture.received_webhooks, host="127.0.0.1"
+            ) as info,
+            patch.dict("os.environ", {"ADCP_TESTING": "true"}),
+        ):
             config = PushNotificationConfig(
                 id="pnc-test",
                 tenant_id="t-test",

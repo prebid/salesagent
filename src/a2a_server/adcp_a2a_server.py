@@ -112,9 +112,48 @@ from src.core.validation_helpers import (
     adcp_validation_boundary,
 )
 from src.core.version import get_version
+from src.core.webhook_validator import (
+    reject_unsafe_webhook_registration_url,
+    webhook_ssrf_suggestion,
+    webhook_url_for_log,
+)
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
+
+
+def _invalid_params_from_ssrf_error(exc: Exception) -> InvalidParamsError:
+    """Wrap an SSRF rejection as A2A InvalidParamsError with AdCP ``data`` envelope."""
+    if isinstance(exc, AdCPValidationError):
+        adcp_err = exc
+    else:
+        adcp_err = AdCPValidationError(
+            str(exc),
+            field="push_notification_config.url",
+            suggestion=webhook_ssrf_suggestion(),
+            recovery="correctable",
+        )
+    return InvalidParamsError(
+        message=adcp_err.message,
+        data=build_two_layer_error_envelope(adcp_err),
+    )
+
+
+def _reject_unsafe_a2a_webhook_url(url: str) -> None:
+    """Raise InvalidParamsError when ``url`` fails the registration SSRF gate.
+
+    A2A push-config endpoints (message/send configuration, setTaskPushNotificationConfig)
+    translate SSRF failures to ``InvalidParamsError`` (-32602) while attaching the
+    two-layer AdCP envelope in ``data`` (``VALIDATION_ERROR`` / ``recovery=correctable``
+    + suggestion) — same pattern as the auth rejection on ``on_message_send``.
+    Delegates to ``reject_unsafe_webhook_registration_url`` so recovery/suggestion/field
+    cannot drift from the tool-path gate. AdCP tool wrappers raise ``AdCPValidationError``
+    directly for the same helper.
+    """
+    try:
+        reject_unsafe_webhook_registration_url(url, field="push_notification_config.url")
+    except AdCPValidationError as e:
+        raise _invalid_params_from_ssrf_error(e) from e
 
 
 def _dict_to_value(d: dict) -> struct_pb2.Value:
@@ -437,9 +476,14 @@ class AdCPRequestHandler(RequestHandler):
                 "task_type": skills[0] if skills else "unknown",
             }
 
-            await push_notification_service.send_notification(
+            sent = await push_notification_service.send_notification(
                 push_notification_config=push_notification_config, payload=payload, metadata=metadata
             )
+            if not sent:
+                logger.warning(
+                    "Protocol webhook not delivered for task %s (send_notification returned False)",
+                    task.id,
+                )
         except Exception as e:
             # Don't fail the task if webhook fails
             logger.warning("Failed to send protocol-level webhook for task %s: %s", task.id, e)
@@ -574,13 +618,17 @@ class AdCPRequestHandler(RequestHandler):
         msg_id = params.message.message_id or None
         context_id = params.message.context_id or msg_id or f"ctx_{task_id}"
 
-        # Extract push notification config from protocol layer (A2A SendMessageConfiguration)
+        # Extract push notification config from protocol layer (A2A SendMessageConfiguration).
+        # SSRF-reject unsafe URLs before stash / task creation.
         push_notification_config: TaskPushNotificationConfig | None = None
         if params.HasField("configuration") and params.configuration.HasField("task_push_notification_config"):
             push_notification_config = params.configuration.task_push_notification_config
             if push_notification_config.url:
+                _reject_unsafe_a2a_webhook_url(push_notification_config.url)
                 logger.info(
-                    f"Protocol-level push notification config provided for task {task_id}: {push_notification_config.url}"
+                    "Protocol-level push notification config provided for task %s: %s",
+                    task_id,
+                    webhook_url_for_log(push_notification_config.url),
                 )
 
         # Prepare task metadata (JSON-serializable only — protobuf Struct)
@@ -1204,23 +1252,30 @@ class AdCPRequestHandler(RequestHandler):
             if not url:
                 raise InvalidParamsError(message="Missing required parameter: url")
 
+            _reject_unsafe_a2a_webhook_url(url)
+
             auth_type = None
             auth_token_value = None
             if params.HasField("authentication"):
                 auth_type = params.authentication.scheme or None
                 auth_token_value = params.authentication.credentials or None
 
-            with PushNotificationConfigUoW(tool_context.tenant_id) as uow:
-                assert uow.push_notification_configs is not None
-                _config, created = uow.push_notification_configs.upsert(
-                    config_id=config_id,
-                    principal_id=tool_context.principal_id,
-                    url=url,
-                    authentication_type=auth_type,
-                    authentication_token=auth_token_value,
-                    validation_token=validation_token,
-                    session_id=None,
-                )
+            try:
+                with PushNotificationConfigUoW(tool_context.tenant_id) as uow:
+                    assert uow.push_notification_configs is not None
+                    _config, created = uow.push_notification_configs.upsert(
+                        config_id=config_id,
+                        principal_id=tool_context.principal_id,
+                        url=url,
+                        authentication_type=auth_type,
+                        authentication_token=auth_token_value,
+                        validation_token=validation_token,
+                        session_id=None,
+                    )
+            except ValueError as e:
+                # Repository SSRF gate (defense in depth) — same enveloped path as
+                # _reject_unsafe_a2a_webhook_url above.
+                raise _invalid_params_from_ssrf_error(e) from e
 
             logger.info(
                 f"Push notification config {'created' if created else 'updated'}: {config_id} for tenant {tool_context.tenant_id}"

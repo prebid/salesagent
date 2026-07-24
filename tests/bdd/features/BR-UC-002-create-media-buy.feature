@@ -429,6 +429,23 @@ Feature: BR-UC-002 Create Media Buy
     And the error should include "suggestion" field
     # --- ext-o: Creative Not Found in Library ---
 
+  @T-UC-002-ext-webhook-ssrf @extension @ext-webhook-ssrf @error @post-f1 @post-f2 @post-f3
+  Scenario: Reporting webhook URL targeting a blocked host is rejected
+    Given a valid create_media_buy request
+    And the request includes a reporting_webhook with url "http://169.254.169.254/latest/meta-data/"
+    When the Buyer Agent sends the create_media_buy request
+    Then the operation should fail
+    And the error code should be "VALIDATION_ERROR"
+    And the error recovery should be "correctable"
+    And the error should include "suggestion" field
+    # Repo-local SSRF policy (ungraded extension): reuses AdCP 3.1.1
+    # VALIDATION_ERROR / recovery=correctable enum values + suggestion on
+    # MCP/REST/A2A tool transports. Schema is silent on SSRF. A2A-native
+    # push-config endpoints (message/send configuration,
+    # setTaskPushNotificationConfig) map the same gate to InvalidParamsError
+    # with the AdCP VALIDATION_ERROR envelope in data= — unit-pinned, not this scenario.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json (recovery via enumMetadata)
+
   @T-UC-002-ext-o @extension @ext-o @error @post-f1 @post-f2 @post-f3
   Scenario: Creative IDs not found in library
     Given a valid create_media_buy request

@@ -33,6 +33,10 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.lifecycle import register_shutdown
+from src.core.webhook_validator import (
+    reject_unsafe_outbound_webhook_url,
+    webhook_url_for_log,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +162,17 @@ class ProtocolWebhookService:
             logger.debug(
                 f"No webhook URL configured in the push notification. Here's payload: {payload}, skipping notification"
             )
+            return False
+
+        # SSRF gate on the configured URL *before* docker localhost rewrite.
+        # Under ADCP_TESTING, localhost/loopback is allowed for capture servers;
+        # production uses the full DNS-backed check (HTTPS required).
+        rejected, _error_msg = reject_unsafe_outbound_webhook_url(
+            push_notification_config.url,
+            log=logger,
+            kind="Protocol",
+        )
+        if rejected:
             return False
 
         url = _normalize_localhost_for_docker(push_notification_config.url)
@@ -290,10 +305,19 @@ class ProtocolWebhookService:
 
         for attempt in range(max_attempts):
             try:
-                logger.info(f"Sending webhook for task {task_id} to {url} (attempt {attempt + 1}/{max_attempts})")
+                safe_url = webhook_url_for_log(url)
+                logger.info(
+                    "Sending webhook for task %s to %s (attempt %s/%s)",
+                    task_id,
+                    safe_url,
+                    attempt + 1,
+                    max_attempts,
+                )
 
                 def _post() -> requests.Response:
-                    return self._session.post(url, json=payload, headers=headers, timeout=10.0)
+                    # Never follow redirects: a 302 to metadata/private IPs would
+                    # bypass the pre-POST SSRF check (open-redirect SSRF).
+                    return self._session.post(url, json=payload, headers=headers, timeout=10.0, allow_redirects=False)
 
                 response = await asyncio.to_thread(_post)
                 response.raise_for_status()

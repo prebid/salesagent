@@ -363,6 +363,17 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the circuit breaker state should remain healthy
     # POST-F3: System has recovery path (retry for transient)
 
+  @T-UC-004-webhook-ssrf-blocked @async @extension @ext-g @webhook-reliability @webhook @error
+  Scenario: Blocked outbound webhook URL skips delivery without POST
+    # In-process only (a2a/mcp/rest): asserts env.mock post count + circuit-breaker
+    # failure_count — not e2e_rest-parametrized (no live-observable surface yet).
+    Given a media buy "mb-001" with an active reporting_webhook
+    And the outbound webhook URL is blocked by SSRF validation
+    When the system attempts to deliver a webhook report
+    Then the webhook delivery should be skipped without an HTTP POST
+    And the circuit breaker should record a failure
+    # Send-time SSRF gate: skip delivery + record_failure; no open-redirect POST
+
   @T-UC-004-webhook-creds-short @invariant @BR-RULE-029 @webhook @boundary @error
   Scenario: Webhook credentials too short - rejected at configuration
     Given a media buy webhook configuration with credentials of 31 characters

@@ -412,7 +412,19 @@ def then_error_format_id_structure(ctx: dict) -> None:
 
 @then(parsers.parse('the error recovery should be "{recovery}"'))
 def then_error_recovery(ctx: dict, recovery: str) -> None:
-    """Assert the error recovery hint matches."""
+    """Assert the error recovery hint matches — wire-first, reconstructed fallback.
+
+    On a wire transport the recovery is read from the real envelope via
+    ``assert_wire_error`` (the buyer-facing contract); IMPL/no-wire scenarios
+    fall back to the reconstructed ``ctx['error']``.
+    """
+    result = ctx.get("result")
+    envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
+    if envelope is not None:
+        wire_code = _wire_code(ctx)
+        assert wire_code, f"Expected wire error code when asserting recovery={recovery!r}: {envelope}"
+        result.assert_wire_error(wire_code, recovery=recovery)
+        return
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     from src.core.exceptions import AdCPError

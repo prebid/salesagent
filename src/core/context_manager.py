@@ -21,12 +21,29 @@ from src.core.database.database_session import DatabaseManager
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
 from src.core.exceptions import AdCPError, build_two_layer_error_envelope, normalize_to_adcp_error
-from src.core.webhook_validator import validate_webhook_task_type
+from src.core.webhook_validator import (
+    validate_webhook_task_type,
+    webhook_url_for_log,
+)
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
 
 console = Console()
+
+
+def _log_webhook_send_outcome(config_url: str, sent: bool) -> None:
+    """Log webhook delivery result; never treat ``False`` as success.
+
+    ``config_url`` is sanitized to ``scheme://host/path`` so credentials in
+    userinfo/query never reach the console (AdCP L1 SSRF log hygiene).
+    """
+    safe_url = webhook_url_for_log(config_url)
+    if sent:
+        console.print(f"[green]✅ Webhook sent successfully for {safe_url}[/green]")
+    else:
+        console.print(f"[red]❌ Webhook not delivered for {safe_url} (send_notification returned False)[/red]")
+
 
 # Fire-and-forget webhook tasks are pinned against asyncio's weak-ref GC via
 # the shared src.core.async_utils.pin_task helper (single source of truth;
@@ -846,8 +863,9 @@ class ContextManager(DatabaseManager):
 
                     service = get_protocol_webhook_service()
 
+                    safe_webhook_url = webhook_url_for_log(push_notification_config.url)
                     console.print(
-                        f"[cyan]📤 Sending webhook to {push_notification_config.url} for {mapping.object_type} {mapping.object_id}[/cyan]"
+                        f"[cyan]📤 Sending webhook to {safe_webhook_url} for {mapping.object_type} {mapping.object_id}[/cyan]"
                     )
 
                     # Build webhook payload based on protocol type.
@@ -901,15 +919,12 @@ class ContextManager(DatabaseManager):
                                 )
                             )
 
-                            def _log_task_result(
-                                t: asyncio.Task, config_url: str = push_notification_config.url
-                            ) -> None:
+                            def _log_task_result(t: asyncio.Task, config_url: str = safe_webhook_url) -> None:
                                 # Runs AFTER pin_task's discard (see pin_task
                                 # docstring), so this log-and-swallow can't hold
                                 # the strong ref past completion.
                                 try:
-                                    t.result()
-                                    console.print(f"[green]✅ Webhook sent successfully for {config_url}[/green]")
+                                    _log_webhook_send_outcome(config_url, t.result())
                                 except Exception as e:
                                     console.print(f"[red]❌ Webhook failed for {config_url}: {str(e)}[/red]")
 
@@ -918,21 +933,19 @@ class ContextManager(DatabaseManager):
                             pin_task(task, on_done=_log_task_result)
                         except RuntimeError:
                             # No running loop; safe to run synchronously
-                            asyncio.run(
+                            sent = asyncio.run(
                                 service.send_notification(
                                     push_notification_config=push_notification_config,
                                     payload=payload,
                                     metadata=metadata,
                                 )
                             )
-                            console.print(
-                                f"[green]✅ Webhook sent successfully for {push_notification_config.url}[/green]"
-                            )
+                            _log_webhook_send_outcome(safe_webhook_url, sent)
 
                     except requests.exceptions.Timeout:
-                        console.print(f"[red]❌ Webhook timeout for {push_notification_config.url}[/red]")
+                        console.print(f"[red]❌ Webhook timeout for {safe_webhook_url}[/red]")
                     except requests.exceptions.RequestException as e:
-                        console.print(f"[red]❌ Webhook failed for {push_notification_config.url}: {str(e)}[/red]")
+                        console.print(f"[red]❌ Webhook failed for {safe_webhook_url}: {str(e)}[/red]")
 
         except Exception as e:
             console.print(f"[red]Error sending push notifications: {e}[/red]")

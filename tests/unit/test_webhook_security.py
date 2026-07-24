@@ -69,31 +69,39 @@ class TestWebhookURLValidator:
         """Should block 127.0.0.1."""
         is_valid, error = WebhookURLValidator.validate_webhook_url("http://127.0.0.1:8080/webhook")
         assert not is_valid
-        assert "loopback" in error.lower() or "private" in error.lower() or "internal" in error.lower()
+        assert "127.0.0.0/8" in error
 
     def test_blocks_private_network_10(self):
         """Should block 10.0.0.0/8 private network."""
         is_valid, error = WebhookURLValidator.validate_webhook_url("http://10.0.0.5/webhook")
         assert not is_valid
-        assert "private" in error.lower() or "internal" in error.lower()
+        assert "10.0.0.0/8" in error
 
     def test_blocks_private_network_192(self):
         """Should block 192.168.0.0/16 private network."""
         is_valid, error = WebhookURLValidator.validate_webhook_url("http://192.168.1.1/webhook")
         assert not is_valid
-        assert "private" in error.lower() or "internal" in error.lower()
+        assert "192.168.0.0/16" in error
 
     def test_blocks_private_network_172(self):
         """Should block 172.16.0.0/12 private network."""
         is_valid, error = WebhookURLValidator.validate_webhook_url("http://172.16.0.1/webhook")
         assert not is_valid
-        assert "private" in error.lower() or "internal" in error.lower()
+        assert "172.16.0.0/12" in error
 
     def test_blocks_link_local(self):
         """Should block 169.254.0.0/16 link-local (AWS metadata service)."""
+        # Use a non-hostname-allowlist IP so the CIDR path is graded (169.254.169.254
+        # is also in BLOCKED_HOSTNAMES and short-circuits before network match).
+        is_valid, error = WebhookURLValidator.validate_webhook_url("http://169.254.1.1/webhook")
+        assert not is_valid
+        assert "169.254.0.0/16" in error
+
+    def test_blocks_aws_metadata_hostname(self):
+        """Literal metadata IP hostname is blocked by hostname allowlist."""
         is_valid, error = WebhookURLValidator.validate_webhook_url("http://169.254.169.254/latest/meta-data")
         assert not is_valid
-        assert "link" in error.lower() or "private" in error.lower() or "blocked" in error.lower()
+        assert "blocked" in error.lower()
 
     def test_blocks_metadata_hostname(self):
         """Should block cloud metadata hostnames."""
@@ -131,6 +139,41 @@ class TestWebhookURLValidator:
         """Testing mode should still block private networks even with allow_localhost."""
         is_valid, error = WebhookURLValidator.validate_for_testing("http://192.168.1.1/webhook", allow_localhost=True)
         assert not is_valid
+
+    def test_production_requires_https(self, monkeypatch):
+        """Production registration/outbound must reject plain HTTP."""
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.delenv("ADCP_TESTING", raising=False)
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration("http://buyer.example.com/hook")
+        assert not is_valid
+        assert "https" in error.lower()
+
+    def test_production_accepts_https_registration(self, monkeypatch):
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.delenv("ADCP_TESTING", raising=False)
+        is_valid, error = WebhookURLValidator.validate_webhook_url_registration("https://buyer.example.com/hook")
+        assert is_valid
+        assert error == ""
+
+    def test_blocks_cgnat_range(self):
+        is_valid, error = WebhookURLValidator.validate_webhook_url("http://100.64.1.1/webhook")
+        assert not is_valid
+        assert "100.64.0.0/10" in error
+
+    def test_blocks_multicast_range(self):
+        is_valid, error = WebhookURLValidator.validate_webhook_url("http://224.0.0.1/webhook")
+        assert not is_valid
+        assert "224.0.0.0/4" in error
+
+    def test_blocks_ipv6_multicast_range(self):
+        is_valid, error = WebhookURLValidator.validate_webhook_url("http://[ff02::1]/")
+        assert not is_valid
+        assert "ff00::/8" in error
+
+    def test_blocks_nat64_well_known_prefix(self):
+        is_valid, error = WebhookURLValidator.validate_webhook_url("http://[64:ff9b::a9fe:a9fe]/")
+        assert not is_valid
+        assert "64:ff9b::/96" in error
 
 
 class TestWebhookAuthenticator:
