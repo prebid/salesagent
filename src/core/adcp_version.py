@@ -37,6 +37,7 @@ echo remains an explicit residual for a later protocol-wide response change.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import threading
@@ -46,9 +47,12 @@ from functools import cache
 from typing import Any
 
 import adcp
+from packaging.version import InvalidVersion, Version
 
 from src.core.exceptions import AdCPConfigurationError, AdCPValidationError, AdCPVersionUnsupportedError
 from src.core.version import get_version
+
+logger = logging.getLogger(__name__)
 
 _RELEASE_PIN_RE = re.compile(r"^(?P<major>[0-9]+)\.(?P<minor>[0-9]+)(?:-(?P<prerelease>[a-zA-Z0-9.-]+))?$")
 _SEMVER_PRERELEASE_IDENTIFIER = r"(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
@@ -212,22 +216,81 @@ def derived_versions_from_sdk_pin() -> tuple[str, ...]:
     return (_release_precision_wire_value(major, minor, prerelease),)
 
 
-def adcp_build_version() -> str:
+def _semver_from_pep440(raw: str) -> str | None:
+    """Render a PEP 440 distribution version as semver, or ``None`` if it cannot be.
+
+    ``get_version()`` reads ``importlib.metadata``, which normalizes to PEP 440:
+    a release candidate is spelled ``2.0.0rc1``, never ``2.0.0-rc.1``, so NO
+    pre/post/dev spelling survives packaging as valid semver. Translating is
+    what keeps the advisory field populated for non-final builds instead of
+    silently dropping it the moment a release candidate ships.
+    """
+    try:
+        parsed = Version(raw)
+    except InvalidVersion:
+        return None
+
+    major, minor, patch = (tuple(parsed.release) + (0, 0, 0))[:3]
+    prerelease: list[str] = []
+    if parsed.pre is not None:
+        prerelease.append(f"{parsed.pre[0]}.{parsed.pre[1]}")
+    if parsed.post is not None:
+        prerelease.append(f"post.{parsed.post}")
+    if parsed.dev is not None:
+        prerelease.append(f"dev.{parsed.dev}")
+
+    rendered = f"{major}.{minor}.{patch}"
+    if prerelease:
+        rendered += "-" + ".".join(prerelease)
+    if parsed.local:
+        rendered += f"+{parsed.local}"
+    return rendered if _BUILD_VERSION_RE.fullmatch(rendered) else None
+
+
+def adcp_build_version() -> str | None:
     """Full-semver build identifier of the Sales Agent deployment lineage.
 
     ``supported_versions`` identifies the AdCP spec releases this seller can
     negotiate. ``build_version`` instead identifies the seller implementation
     for incident triage and buyers MUST NOT use it for negotiation, per the
     capabilities and VERSION_UNSUPPORTED schemas.
+
+    Returns ``None`` when the deployment version cannot be rendered as semver.
+    Both schemas mark this field OPTIONAL while
+    ``error-details/version-unsupported.json`` marks ``supported_versions``
+    REQUIRED, so an unrenderable advisory value is omitted and logged — raising
+    would replace a graded 400 VERSION_UNSUPPORTED carrying the buyer's
+    supported releases with a bare 500 that carries nothing.
     """
     testing_policy = _active_testing_policy()
     if testing_policy is not None:
         return testing_policy.build_version
-    raw, _major, _minor, _prerelease = _validate_full_semver(
-        get_version(),
-        subject="Sales Agent build version",
+
+    raw = get_version()
+    if isinstance(raw, str):
+        if _BUILD_VERSION_RE.fullmatch(raw):
+            return raw
+        normalized = _semver_from_pep440(raw)
+        if normalized is not None:
+            return normalized
+
+    logger.error(
+        "Sales Agent build version %r is not renderable as semver; omitting the advisory build_version",
+        raw,
     )
-    return raw
+    return None
+
+
+def advisory_build_version_field() -> dict[str, str]:
+    """Return the optional ``build_version`` member, or ``{}`` when unrenderable.
+
+    Single source of truth for "emit the advisory field only when we have one",
+    shared by the capabilities envelope and the VERSION_UNSUPPORTED details so
+    neither can regress into emitting a JSON ``null`` for a ``type: string``
+    field or into failing the whole payload over an advisory value.
+    """
+    version = adcp_build_version()
+    return {} if version is None else {"build_version": version}
 
 
 def _parse_release_pin(value: Any) -> _ReleasePin | None:
@@ -383,7 +446,7 @@ def _version_unsupported_error(
             **echoed_pins,
             "supported_versions": supported,
             "supported_majors": _supported_majors(releases),
-            "build_version": adcp_build_version(),
+            **advisory_build_version_field(),
         },
         suggestion="Re-pin adcp_version to a supported_versions entry and retry the request.",
         context=context if isinstance(context, dict) else None,

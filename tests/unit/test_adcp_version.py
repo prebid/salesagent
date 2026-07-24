@@ -9,6 +9,7 @@ import pytest
 from src.core.adcp_version import (
     adcp_build_version,
     adcp_major_version,
+    advisory_build_version_field,
     supported_adcp_versions,
     validate_adcp_version_pins,
 )
@@ -116,12 +117,54 @@ def test_build_version_is_sales_agent_deployment_semver():
     assert re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?", adcp_build_version())
 
 
-def test_malformed_sales_agent_build_version_raises_typed_configuration_error(monkeypatch):
-    """A non-semver seller deployment version cannot leak into capabilities."""
+@pytest.mark.parametrize(
+    "packaged,expected",
+    [
+        ("2.0.0rc1", "2.0.0-rc.1"),
+        ("2.0.0.post1", "2.0.0-post.1"),
+        ("2.0.0.dev3", "2.0.0-dev.3"),
+        ("2.0.0rc1+build.5", "2.0.0-rc.1+build.5"),
+        ("2.0", "2.0.0"),
+    ],
+)
+def test_pep440_deployment_versions_render_as_semver(monkeypatch, packaged, expected):
+    """importlib.metadata normalizes to PEP 440, which is never valid semver.
+
+    ``Version("2.0.0-rc.1")`` normalizes to ``2.0.0rc1``, so no pre/post/dev
+    spelling survives packaging — without translation the advisory field would
+    vanish the moment a release candidate ships.
+    """
+    monkeypatch.setattr("src.core.adcp_version.get_version", lambda: packaged)
+
+    assert adcp_build_version() == expected
+
+
+def test_unrenderable_build_version_is_omitted_not_raised(monkeypatch, caplog):
+    """An advisory field must never suppress the REQUIRED supported_versions.
+
+    ``error-details/version-unsupported.json`` (v3.1.1) marks
+    ``supported_versions`` required and ``build_version`` "Optional advisory";
+    raising here downgraded a graded 400 VERSION_UNSUPPORTED into a bare 500.
+    """
     monkeypatch.setattr("src.core.adcp_version.get_version", lambda: "not-semver")
 
-    with pytest.raises(AdCPConfigurationError, match="Sales Agent build version"):
-        adcp_build_version()
+    with caplog.at_level("ERROR", logger="src.core.adcp_version"):
+        assert adcp_build_version() is None
+        assert advisory_build_version_field() == {}
+
+    assert "not renderable as semver" in caplog.text
+
+
+def test_unrenderable_build_version_still_yields_the_required_details(monkeypatch):
+    """The graded VERSION_UNSUPPORTED payload survives an unusable advisory value."""
+    monkeypatch.setattr("src.core.adcp_version.get_version", lambda: "not-semver")
+
+    with pytest.raises(AdCPVersionUnsupportedError) as exc_info:
+        validate_adcp_version_pins({"adcp_version": "4.0"})
+
+    details = exc_info.value.details
+    assert details["supported_versions"] == list(supported_adcp_versions())
+    assert "build_version" not in details
 
 
 class TestTestingVersionPolicyControl:
@@ -572,6 +615,47 @@ class TestRESTVersionNegotiation:
         self._assert_version_unsupported(response)
         assert response.json()["context"] == request_context
 
+    def test_rest_deep_context_degrades_the_echo_not_the_envelope(self):
+        """A pathologically nested context must not collapse the error into a bare 500.
+
+        The body-read echo hands the raw ``context`` to the error constructor,
+        which detaches it while the request is already failing. An unbounded
+        detach raised ``RecursionError`` inside the exception handler, so the
+        buyer received ``Internal Server Error`` with no ``adcp_error`` at all —
+        unauthenticated, on both the auth and version paths.
+        """
+        from src.core.application_context import MAX_CONTEXT_DEPTH
+
+        deep = cursor = {}
+        for _ in range(MAX_CONTEXT_DEPTH * 6):
+            cursor["nested"] = {}
+            cursor = cursor["nested"]
+
+        response = self._client().post(
+            "/api/v1/products",
+            json={"brief": "ads", "adcp_version": "4.0", "context": deep},
+        )
+
+        self._assert_version_unsupported(response)
+        assert "context" not in response.json()
+
+    def test_rest_context_at_the_depth_bound_is_still_echoed(self):
+        """The bound is a stack guard, not a new rejection rule for real traffic."""
+        from src.core.application_context import MAX_CONTEXT_DEPTH
+
+        bounded = cursor = {}
+        for _ in range(MAX_CONTEXT_DEPTH - 1):
+            cursor["nested"] = {}
+            cursor = cursor["nested"]
+
+        response = self._client().post(
+            "/api/v1/products",
+            json={"brief": "ads", "adcp_version": "4.0", "context": bounded},
+        )
+
+        self._assert_version_unsupported(response)
+        assert response.json()["context"] == bounded
+
     def test_rest_query_major_pin_is_coerced_then_rejected(self):
         """The URL's textual integer representation reaches the strict core as an int."""
         response = self._client().get("/api/v1/capabilities", params={"adcp_major_version": 4})
@@ -617,6 +701,26 @@ class TestRESTVersionNegotiation:
         assert response.status_code == 400
         assert_envelope_shape(response.json(), "VALIDATION_ERROR", recovery="correctable")
         assert response.json()["context"]["correlation_id"] == "rest-duplicate-context"
+
+    def test_conflicting_pins_echo_a_query_supplied_context(self):
+        """The conflict error must echo the NEGOTIATED context, not just the body's.
+
+        ``_merge_rest_version_pins`` resolves context query-then-body, so reading
+        the body's copy when raising dropped a query-only context from the single
+        error the buyer receives.
+        """
+        from tests.helpers.envelope_assertions import assert_envelope_shape
+
+        request_context = {"correlation_id": "rest-query-only-context"}
+        response = self._client().post(
+            "/api/v1/products",
+            params={"adcp_version": "3.1", "context": json.dumps(request_context)},
+            json={"brief": "ads", "adcp_version": "4.0"},
+        )
+
+        assert response.status_code == 400
+        assert_envelope_shape(response.json(), "VALIDATION_ERROR", recovery="correctable")
+        assert response.json()["context"] == request_context
 
 
 class TestA2ADispatchMajorValidation:
