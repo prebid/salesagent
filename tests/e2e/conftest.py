@@ -24,6 +24,13 @@ _GETPID = os.getpid
 
 # Import contract validation - this automatically validates tool calls at test collection time
 from tests.e2e.conftest_contract_validation import pytest_collection_modifyitems  # noqa: F401
+from tests.e2e.stack_readiness import (
+    BASE_E2E_COMPOSE_FILE,
+    DEFAULT_E2E_COMPOSE_FILES,
+    compose_argv,
+    compose_available,
+    wait_for_e2e_stack,
+)
 
 
 def e2e_host() -> str:
@@ -159,30 +166,21 @@ def docker_services_e2e(request):
         admin_port = mcp_port  # Admin is on same port as MCP (unified FastAPI process)
         postgres_port = int(os.getenv("POSTGRES_PORT", "5435"))
 
+        # Export resolved ports so later wrappers (e.g. wait_for_server_readiness)
+        # see the same values the fixture used — same contract as standalone.
+        os.environ["ADCP_SALES_PORT"] = str(mcp_port)
+        os.environ["POSTGRES_PORT"] = str(postgres_port)
+
         print(f"✓ Using ports: Server={mcp_port} (MCP+A2A+Admin), Postgres={postgres_port}")
 
-        # Wait for server to be ready. /health is proxied to the upstream
-        # (not returned by nginx directly), so this confirms the app is serving.
-        # 60s budget covers: alembic migration run on a fresh schema (~5-15s
-        # in CI), MCP/A2A/REST router registration, and the first-call cold
-        # path through the import graph (typed creative-format registry +
-        # adcp library module load). Empirically 25-45s in CI; 60s leaves
-        # ~30% headroom. Drop only if the startup cold-path measurably
-        # shrinks — don't widen further without root-causing the slowness.
-        max_wait = 60
-        start_time = time.time()
-        for _ in range(max_wait // 2):
-            try:
-                response = requests.get(f"http://{e2e_host()}:{mcp_port}/health", timeout=2)
-                if response.status_code == 200:
-                    elapsed = int(time.time() - start_time)
-                    print(f"✓ Server is healthy ({elapsed}s)")
-                    break
-            except requests.RequestException:
-                pass
-            time.sleep(2)
-        else:
-            pytest.fail(f"Server not ready after {max_wait}s (port {mcp_port})")
+        # Shared ordered readiness (postgres → creative-agent → adcp /health).
+        # CI already compose --wait'd; 60s is a safety net, not a cold start budget.
+        wait_for_e2e_stack(
+            ports={"mcp": mcp_port, "postgres": postgres_port},
+            compose_files=DEFAULT_E2E_COMPOSE_FILES,
+            host=e2e_host(),
+            timeout_s=60,
+        )
 
     else:
         # Check if Docker is available
@@ -194,7 +192,9 @@ def docker_services_e2e(request):
         # Always clean up existing services and volumes to ensure fresh state
         print("Cleaning up any existing Docker services and volumes...")
         subprocess.run(
-            ["docker-compose", "-f", "docker-compose.e2e.yml", "down", "-v"], capture_output=True, check=False
+            [*compose_argv((BASE_E2E_COMPOSE_FILE,)), "down", "-v"],
+            capture_output=True,
+            check=False,
         )
 
         # Explicitly remove volumes in case docker-compose down -v didn't work
@@ -260,96 +260,27 @@ def docker_services_e2e(request):
             raise subprocess.CalledProcessError(agent_build.returncode, "creative-agent-stack.sh build")
 
         print("Step 1/2: Building Docker images...")
-        compose_files = ["-f", "docker-compose.e2e.yml", "-f", "docker-compose.e2e.ports.yml"]
+        # Same argv preference as readiness (`docker compose` plugin first).
+        compose_base = compose_argv(DEFAULT_E2E_COMPOSE_FILES)
         build_result = subprocess.run(
-            ["docker-compose", *compose_files, "build", "--progress=plain"],
+            [*compose_base, "build", "--progress=plain"],
             env=env,
             capture_output=False,  # Show build output
         )
         if build_result.returncode != 0:
             print(f"❌ Docker build failed with exit code {build_result.returncode}")
-            raise subprocess.CalledProcessError(build_result.returncode, "docker-compose build")
+            raise subprocess.CalledProcessError(build_result.returncode, [*compose_base, "build"])
 
         print("Step 2/2: Starting services...")
-        subprocess.run(["docker-compose", *compose_files, "up", "-d"], check=True, env=env)
+        subprocess.run([*compose_base, "up", "-d"], check=True, env=env)
 
-        # Wait for unified server to be healthy (MCP + A2A + Admin all on same port)
-        max_wait = 120  # Increased from 60 to 120 seconds for CI
-        start_time = time.time()
-
-        server_ready = False
-
-        print(f"Waiting for server (max {max_wait}s)...")
-        print(f"  Health: http://{e2e_host()}:{mcp_port}/health")
-
-        while time.time() - start_time < max_wait:
-            elapsed = int(time.time() - start_time)
-
-            # Show progress every 5 seconds
-            if elapsed > 0 and elapsed % 5 == 0 and not server_ready:
-                print(f"  ⏱️  Still waiting... ({elapsed}s / {max_wait}s)")
-                # Show container status for debugging
-                try:
-                    ps_result = subprocess.run(
-                        ["docker-compose", "-f", "docker-compose.e2e.yml", "ps", "--format", "table"],
-                        capture_output=True,
-                        text=True,
-                        timeout=2,
-                    )
-                    if ps_result.returncode == 0 and ps_result.stdout:
-                        print(f"  Container status:\n{ps_result.stdout}")
-                except:
-                    pass
-
-            # Check server health. /health is proxied to upstream, so it
-            # confirms the FastAPI app is actually serving (not just nginx).
-            if not server_ready:
-                try:
-                    response = requests.get(f"http://{e2e_host()}:{mcp_port}/health", timeout=2)
-                    if response.status_code == 200:
-                        print(f"✓ Server is ready (after {elapsed}s)")
-                        server_ready = True
-                except requests.RequestException as e:
-                    if elapsed % 10 == 0:  # Log every 10 seconds
-                        print(f"  Server not ready yet ({elapsed}s): {type(e).__name__}")
-
-            if server_ready:
-                break
-
-            time.sleep(2)
-        else:
-            # Timeout - try to get container logs for debugging
-            print("\n❌ Health check timeout. Attempting to get container logs...")
-
-            # Get logs from all services
-            for service in ["proxy", "adcp-server", "postgres"]:
-                try:
-                    print(f"\n📋 {service} logs (last 100 lines):")
-                    result = subprocess.run(
-                        ["docker-compose", "-f", "docker-compose.e2e.yml", "logs", "--tail=100", service],
-                        capture_output=True,
-                        text=True,
-                        timeout=5,
-                    )
-                    if result.stdout:
-                        print(result.stdout)
-                    if result.stderr:
-                        print(f"STDERR: {result.stderr}")
-                except Exception as e:
-                    print(f"Could not get {service} logs: {e}")
-
-            # Show container status
-            try:
-                print("\n📊 Container status:")
-                ps_result = subprocess.run(
-                    ["docker-compose", "-f", "docker-compose.e2e.yml", "ps"], capture_output=True, text=True, timeout=2
-                )
-                print(ps_result.stdout)
-            except Exception as e:
-                print(f"Could not get container status: {e}")
-
-            if not server_ready:
-                pytest.fail(f"Server did not become healthy in time (waited {max_wait}s, port {mcp_port})")
+        # Same ordered readiness helper as verify-only (migrations + creative-agent start_period).
+        wait_for_e2e_stack(
+            ports={"mcp": mcp_port, "postgres": postgres_port},
+            compose_files=DEFAULT_E2E_COMPOSE_FILES,
+            host=e2e_host(),
+            timeout_s=120,
+        )
 
     # Initialize CI test data now that services are healthy
     print("📦 Initializing CI test data (products, principals, etc.)...")
@@ -360,17 +291,13 @@ def docker_services_e2e(request):
     init_env["POSTGRES_PORT"] = str(postgres_port)
 
     # Seed CI test data. On the host we shell into the server container via
-    # docker-compose exec (the host process can't reach the container DB
-    # directly). In-network there is no docker-compose binary, but the runner
-    # already has DATABASE_URL=postgres:5432 and the source, so it runs the seed
-    # script itself — the script only needs a DB connection, not Docker.
-    import shutil
-
-    if shutil.which("docker-compose"):
+    # compose exec (the host process can't reach the container DB directly).
+    # In-network there is no compose CLI, but the runner already has
+    # DATABASE_URL=postgres:5432 and the source, so it runs the seed script
+    # itself — the script only needs a DB connection, not Docker.
+    if compose_available():
         init_cmd = [
-            "docker-compose",
-            "-f",
-            "docker-compose.e2e.yml",
+            *compose_argv((BASE_E2E_COMPOSE_FILE,)),
             "exec",
             "-T",
             "adcp-server",
@@ -496,7 +423,7 @@ def docker_services_e2e(request):
         try:
             # Stop and remove containers + volumes
             subprocess.run(
-                ["docker-compose", "-f", "docker-compose.e2e.yml", "down", "-v"],
+                [*compose_argv((BASE_E2E_COMPOSE_FILE,)), "down", "-v"],
                 capture_output=True,
                 check=False,
                 timeout=30,

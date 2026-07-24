@@ -16,6 +16,7 @@ The E2E tests exercise:
 ```
 tests/e2e/
 ├── conftest.py                        # Shared fixtures and test infrastructure
+├── stack_readiness.py                 # Shared wait_for_e2e_stack (ordered probes + log dump)
 ├── test_adcp_full_lifecycle.py        # Main comprehensive test suite
 ├── test_adcp_schema_compliance.py     # Schema validation compliance tests
 ├── test_schema_validation_standalone.py  # Standalone schema validation tests
@@ -25,6 +26,12 @@ tests/e2e/
 │   └── v1/                           # AdCP v1 schemas (37 files, ~160KB)
 └── README.md                          # This file
 ```
+
+**Stack readiness.** `docker_services_e2e` (verify-only when `ADCP_TESTING=true` /
+`--skip-docker`, and standalone after self-`up`) waits via
+`stack_readiness.wait_for_e2e_stack` with required order
+`postgres → creative-agent → adcp /health`. On timeout it dumps compose logs
+(including `creative-agent`) once and fails once.
 
 ## Running Tests
 

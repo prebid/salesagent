@@ -90,18 +90,28 @@ markers was 14 duplicate file assignments across shards 1–4.
 | infra | `(transport or auth or … or agent) and not creative and not product and not media_buy and not delivery` |
 | other | negation of all 15 markers above |
 
-Each shard runs against a GitHub Actions service container (Postgres 15).
+Each shard runs against a GitHub Actions service container (Postgres 17).
 
 **Admin UI** and **BDD** jobs also require the Postgres service container plus
 `_postgres` (wait + migrate) — admin blueprint tests use the `integration_db` fixture.
 
 ## E2E Tests
 
-The workflow sets `ADCP_TESTING: true` at the top level for integration/BDD/smoke
-jobs. The **E2E job overrides this to empty** so `tests/e2e/conftest.py` starts
-`docker-compose.e2e.yml` itself (same as legacy `test.yml`). Do not set
-`ADCP_TESTING=true` on the E2E pytest step — that path assumes an already-running
-stack on `ADCP_SALES_PORT` and fails with "Server not ready after 60s".
+The workflow sets `ADCP_TESTING: true` at the top level. The **E2E job**
+pre-starts the stack (pinned `creative-agent` build + `compose up -d --wait`
+with healthchecks and the host-ports overlay), then runs pytest with
+`ADCP_TESTING: "true"` set explicitly on the pytest step so
+`docker_services_e2e` is verify-only. Do **not** clear or omit it on that
+step — an empty/false value forces the fixture into the standalone cold-build
+path under `pytest --timeout=300` (setup timeouts / ENOSPC on cold runners).
+Local standalone runs (no pre-started stack) still clear or omit
+`ADCP_TESTING` so conftest owns build+up.
+
+**Shared readiness helper.** Both fixture branches (verify-only and standalone)
+call `tests.e2e.stack_readiness.wait_for_e2e_stack` with the ordered hard gate
+`postgres → creative-agent → adcp /health`. CI pre-start and the Python helper
+agree on that probe order; do not reintroduce inline `/health`-only poll loops
+in `conftest.py`.
 
 ## Reference Creative Agent
 

@@ -252,12 +252,16 @@ jobs:
         run: ./scripts/creative-agent-stack.sh down
 
   e2e-tests:
+    # #1667 / #1666: CI owns build+up (with healthchecks); pytest only verifies.
+    # Do NOT clear ADCP_TESTING — empty forces docker_services_e2e into the
+    # standalone cold-build path under pytest --timeout=300 (setup ENOSPC/timeouts).
     name: E2E Tests
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read # pull adcp-creative-agent from ghcr.io (publish runs on main via publish-creative-agent.yml)
-    timeout-minutes: 25
+    # 40m: pre-start compose --wait + migrations + pytest bodies (#1667); 25m too tight.
+    timeout-minutes: 40
     steps:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
@@ -278,42 +282,63 @@ jobs:
           echo '#!/bin/bash' | sudo tee /usr/local/bin/docker-compose
           echo 'exec docker compose "$@"' | sudo tee -a /usr/local/bin/docker-compose
           sudo chmod +x /usr/local/bin/docker-compose
+      # Image build + compose layers need headroom on ubuntu-latest (#1662 class).
+      - name: Free disk space
+        uses: ./.github/actions/_free-disk
       - name: Clean up lingering containers
         run: |
           docker ps -q | xargs -r docker kill || true
+          docker compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml down -v 2>/dev/null || true
           docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
           docker compose down -v 2>/dev/null || true
           docker container prune -f 2>/dev/null || true
           docker network prune -f 2>/dev/null || true
           docker volume prune -f 2>/dev/null || true
+      - name: Build and start E2E stack
+        env:
+          ADCP_SALES_PORT: 8080
+          POSTGRES_PORT: 5435
+          ADCP_TESTING: "true"
+          DELIVERY_WEBHOOK_INTERVAL: "5"
+          DOCKER_BUILDKIT: 1
+          COMPOSE_DOCKER_CLI_BUILD: 1
+          # Prefer pin-keyed GHCR pull in creative-agent-stack.sh build (CI owns
+          # the only cold-build path under ADCP_TESTING=true verify-only pytest).
+          CREATIVE_AGENT_GHCR_IMAGE: ghcr.io/${{ github.repository }}/adcp-creative-agent
+        run: |
+          set -eux
+          ./scripts/creative-agent-stack.sh build
+          docker compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml build
+          # --wait gates postgres, creative-agent, adcp-server, proxy healthchecks
+          # (creative-agent hard gate for all E2E — #1666). Budget covers migrations.
+          docker compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml \
+            up -d --wait --wait-timeout 600
+          curl -sf "http://127.0.0.1:${ADCP_SALES_PORT}/health"
+          docker compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml ps
       # No coverage: the server under test runs inside Docker, so host-side
       # coverage would measure the client harness, not src/.
+      # --timeout=300 + timeout_func_only=true: bodies only. CI pre-start above
+      # owns creative-agent build + compose up --wait + migrations; with
+      # ADCP_TESTING=true the session fixture is verify-only (no cold build).
+      # Job timeout-minutes covers a hung pre-start; do not resurrect fixture
+      # cold-build narratives here. Pin ADCP_TESTING on this step — do not rely
+      # on workflow-env inheritance alone (#1669).
       - uses: ./.github/actions/_pytest
         with:
           paths: tests/e2e/
-          # timeout_func_only: the 300s budget applies to TEST BODIES only.
-          # Since the pinned creative agent was un-gated, the first
-          # stack-needing test's session fixture does agent build/pull +
-          # compose up + migrations — >300s on a 4-core runner when the pin's
-          # ghcr tag isn't published yet (source-build fallback). With
-          # func_only=false that killed the fixture at exactly 300s and
-          # error-cascaded the remaining 40 tests. A genuinely hung bring-up
-          # now surfaces as the job timeout instead.
           extra_args: --timeout=300 -o timeout_func_only=true
         env:
-          # Override workflow env — conftest starts docker-compose.e2e.yml (legacy test.yml parity).
-          ADCP_TESTING: ""
           DATABASE_URL: ""
+          ADCP_TESTING: "true"
           ADCP_SALES_PORT: 8080
           POSTGRES_PORT: 5435
           DOCKER_BUILDKIT: 1
           COMPOSE_DOCKER_CLI_BUILD: 1
-          # conftest builds the pinned creative agent host-side; prefer the
-          # pin-keyed ghcr pull (~5m faster) over building from source.
-          CREATIVE_AGENT_GHCR_IMAGE: ghcr.io/${{ github.repository }}/adcp-creative-agent
       - name: Cleanup Docker services
         if: always()
-        run: docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
+        run: |
+          docker compose -f docker-compose.e2e.yml -f docker-compose.e2e.ports.yml down -v 2>/dev/null || true
+          docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
 
   bdd-in-network:
     # The 5th BDD transport (e2e_rest: real HTTP through nginx to the live
@@ -339,6 +364,10 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
+      # #1662: image build + /opt/venv + second full tox env under tox_data
+      # overflowed ubuntu-latest (~14GB free) → ENOSPC on uv sync into /app/.tox.
+      - name: Free disk space
+        uses: ./.github/actions/_free-disk
       - name: Clean up lingering containers
         run: |
           docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
@@ -362,6 +391,10 @@ jobs:
           # run_all_tests.sh builds the pinned creative agent host-side; prefer
           # the pin-keyed ghcr pull (~5m faster) over building from source.
           CREATIVE_AGENT_GHCR_IMAGE: ghcr.io/${{ github.repository }}/adcp-creative-agent
+          # Serial e2e_rest leg — no xdist fan-out; default 10g tmpfs wastes RAM
+          # on ubuntu-latest. Cap is a RAM ceiling (tmpfs size=), not host-disk
+          # headroom; ENOSPC on the runner is handled by _free-disk (#1662).
+          PGDATA_TMPFS_SIZE: 2g
           # No host uvx in this job (no _setup-env); the dedicated Security
           # Audit check owns the uv-secure scan.
           RUN_ALL_SKIP_AUDIT: 1
