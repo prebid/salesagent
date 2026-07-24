@@ -95,6 +95,11 @@ def test_redirects_and_client_errors_are_non_retryable(status_code):
         headers=ANY,
         timeout=10.0,
     )
+    # Its twin above pins this for the unsafe-target branch. Without it here,
+    # deleting record_failure() from the non-retryable status branch leaves the
+    # whole suite green: "returned False" alone does not prove the breaker
+    # counted the failure that opens the circuit.
+    assert breaker.failure_count == 1
 
 
 def test_hmac_covers_the_exact_transmitted_body_bytes():

@@ -15,7 +15,7 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
-from tests.bdd.steps._outcome_helpers import _require_response
+from tests.bdd.steps._outcome_helpers import wire_dict
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.given_media_buy import _resolve_date_token
@@ -117,8 +117,6 @@ def _assert_wire_field_equals(ctx: dict, field: str, expected: str) -> None:
 
     Reads ctx['wire_response'] (the buyer-facing body), not the reconstructed
     payload. Shared dumb value comparator for the wire value-pin steps."""
-    from tests.bdd.steps._outcome_helpers import wire_dict
-
     wire = wire_dict(ctx)
     actual = wire.get(field)
     assert actual == expected, f"Expected wire {field} '{expected}', got {actual!r} (wire keys: {sorted(wire)})"
@@ -152,8 +150,6 @@ def then_wire_valid_actions_include(ctx: dict, action: str) -> None:
     valid_actions must be derived from the NORMALIZED AdCP status, so a persisted
     'scheduled' buy reports pending_start's actions (not [] from the raw string)
     (#1417)."""
-    from tests.bdd.steps._outcome_helpers import wire_dict
-
     wire = wire_dict(ctx)
     actions = wire.get("valid_actions") or []
     assert action in actions, f"Expected '{action}' in wire valid_actions, got {actions!r}"
@@ -1141,23 +1137,13 @@ def then_response_has_errors_array(ctx: dict) -> None:
 def _submitted_wire_dict(ctx: dict) -> dict[str, Any]:
     """Return the success-path response as the buyer sees it on the serialized wire.
 
-    REST/A2A/MCP expose the real success-path wire dict via ``ctx["wire_response"]``
-    (stashed by the dispatcher). IMPL has no wire, so serialize the typed payload
-    through the production serializer — the same path that produces wire bytes for
-    the other transports. A real-wire transport that did NOT stash wire_response is
-    a loud failure, not a silent fallback to the typed model (which would let the
-    UpdateMediaBuySubmitted assertions pass vacuously). Mirrors
-    tests/bdd/steps/domain/uc005_format_id_shape.py::_serialized_formats.
+    Thin alias over the shared :func:`wire_dict` reader (single source of truth)
+    — REST/A2A/MCP read the real stashed wire and a real-wire transport that did
+    NOT stash raises loudly; IMPL serializes the typed payload through the
+    production serializer. This used to be a fourth hand-rolled copy of that
+    guard, which is exactly the shape that drifts silently.
     """
-    from tests.harness.transport import Transport
-
-    wire = ctx.get("wire_response")
-    transport = ctx.get("transport")
-    if wire is None and transport not in (None, Transport.IMPL):
-        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
-    if wire is not None:
-        return wire
-    return _require_response(ctx).model_dump(mode="json")
+    return wire_dict(ctx)
 
 
 @then("the response should contain a task_id")

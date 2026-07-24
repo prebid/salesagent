@@ -64,9 +64,8 @@ from typing import Any
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from tests.bdd.steps._outcome_helpers import _require_response
+from tests.bdd.steps._outcome_helpers import _require_response, wire_field
 from tests.bdd.steps.generic._auth import authenticate_env_as
-from tests.harness.transport import Transport
 from tests.helpers.pinned_schema import validate_against_pinned_schema
 
 # Three genuinely-different formats (display / video / audio) for the "three
@@ -345,17 +344,12 @@ def _wire_creatives(ctx: dict) -> list[dict[str, Any]]:
     Falls back to the production serializer only when no wire was captured (e.g. a
     non-stashing path), so the step still has data to assert on.
     """
-    wire = ctx.get("wire_response")
-    transport = ctx.get("transport")
-    # Loud guard (mirrors uc005_format_id_shape): a real-wire transport (a2a/mcp/rest/
-    # e2e_rest) that didn't stash wire_response must trip here, not silently fall back
-    # to a model_dump re-serialization and undercut the "real wire bytes" claim. IMPL
-    # (and the unparametrized None default) legitimately have no wire.
-    if wire is None and transport not in (None, Transport.IMPL):
-        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
-    if wire is not None:
-        return wire["creatives"]
-    return _serialized_response(ctx)["creatives"]
+    # Delegates to the shared wire reader (single source of truth) rather than
+    # re-implementing its loud guard: a real-wire transport (a2a/mcp/rest/
+    # e2e_rest) that didn't stash wire_response trips there, instead of silently
+    # falling back to a model_dump re-serialization and undercutting the "real
+    # wire bytes" claim. IMPL (and the unparametrized None default) have no wire.
+    return wire_field(ctx, "creatives")
 
 
 @then(parsers.parse('the creatives array should only include creatives belonging to concept "{concept_id}"'))

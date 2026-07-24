@@ -503,25 +503,66 @@ class TestStripUndeclaredEnvelopeFields:
         assert stripped == ["context"]
 
 
+def _sdk_read_only_tool_names() -> frozenset[str]:
+    """Tool names the pinned SDK annotates ``readOnlyHint: True``."""
+    from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
+
+    return frozenset(
+        definition["name"]
+        for definition in ADCP_TOOL_DEFINITIONS
+        if (definition.get("annotations") or {}).get("readOnlyHint")
+    )
+
+
+def _seller_registered_tool_names() -> frozenset[str]:
+    """Tool names this seller registers, read from the ``_register_tool`` calls in core.main.
+
+    Parsed rather than imported so the derivation costs nothing at collection
+    time and cannot be perturbed by server import side effects.
+    """
+    import ast
+    from pathlib import Path
+
+    main_py = Path(__file__).resolve().parents[2] / "src" / "core" / "main.py"
+    tree = ast.parse(main_py.read_text(encoding="utf-8"))
+    return frozenset(
+        node.args[0].id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_register_tool"
+        and node.args
+        and isinstance(node.args[0], ast.Name)
+    )
+
+
+def _derived_standard_reads() -> frozenset[str]:
+    """The standard reads: SDK-annotated read-only tools this seller actually exposes."""
+    return _sdk_read_only_tool_names() & _seller_registered_tool_names()
+
+
 class TestStandardReadIdempotencyEnvelope:
     """Pinned 3.1 reads validate a supplied key but accept omission."""
 
-    _EXPECTED_REGISTERED_READS = frozenset(
-        {
-            "get_adcp_capabilities",
-            "get_media_buy_delivery",
-            "get_media_buys",
-            "get_products",
-            "list_accounts",
-            "list_creative_formats",
-            "list_creatives",
-            "list_tasks",
-        }
-    )
+    _EXPECTED_REGISTERED_READS = _derived_standard_reads()
 
     def test_read_registry_is_exact_and_includes_registered_list_tasks(self):
-        """The ingress set mirrors the eight standard reads registered in core.main."""
-        assert STANDARD_ADCP_READ_TOOLS == self._EXPECTED_REGISTERED_READS
+        """The ingress set equals (SDK read-only tools) ∩ (tools this seller registers).
+
+        Derived from BOTH sources rather than compared against a second copy of
+        the same literal: a hand-maintained expectation in this file restates
+        the constant it is checking, so registering a ninth read — or the SDK
+        reclassifying one of the eight — moves nothing red.
+        """
+        assert STANDARD_ADCP_READ_TOOLS == self._EXPECTED_REGISTERED_READS, (
+            "STANDARD_ADCP_READ_TOOLS has drifted from the derivation. "
+            f"Missing from the constant: {sorted(self._EXPECTED_REGISTERED_READS - STANDARD_ADCP_READ_TOOLS)}; "
+            f"no longer derivable: {sorted(STANDARD_ADCP_READ_TOOLS - self._EXPECTED_REGISTERED_READS)}"
+        )
+
+    def test_the_derivation_itself_is_not_empty(self):
+        """An empty derivation would make the equality above trivially satisfiable."""
+        assert len(self._EXPECTED_REGISTERED_READS) >= 8
 
     @pytest.mark.parametrize("tool_name", sorted(_EXPECTED_REGISTERED_READS))
     def test_valid_supplied_key_is_accepted_for_every_registered_read(self, tool_name):
