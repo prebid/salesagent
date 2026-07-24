@@ -197,34 +197,36 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                 )
 
                 if media_buy and media_buy.status == "pending_approval":
-                    # Check if all required creatives are approved before executing adapter creation
-                    from src.core.database.models import Creative as CreativeModel
-                    from src.core.database.models import CreativeAssignment
+                    # Shared Hold predicate (#1696): zero assignments or unapproved creatives
+                    # → park at pending_creatives; do not finalize.
+                    from src.admin.services.media_buy_creative_readiness import (
+                        evaluate_creative_finalize_readiness,
+                    )
 
-                    stmt_assignments = select(CreativeAssignment).filter_by(media_buy_id=media_buy_id)
-                    assignments = db.scalars(stmt_assignments).all()
-
-                    if assignments:
-                        creative_ids = [a.creative_id for a in assignments]
-                        stmt_creatives = select(CreativeModel).filter(CreativeModel.creative_id.in_(creative_ids))
-                        creatives = db.scalars(stmt_creatives).all()
-
-                        unapproved_creatives = [
-                            c.creative_id for c in creatives if c.status not in ["approved", "active"]
-                        ]
-
-                        if unapproved_creatives:
+                    readiness = evaluate_creative_finalize_readiness(db, tenant_id=tenant_id, media_buy_id=media_buy_id)
+                    if not readiness.ready:
+                        if readiness.hold_reason == "no_assignments":
                             logger.warning(
                                 f"[APPROVAL] Cannot execute adapter creation yet - "
-                                f"{len(unapproved_creatives)} creatives not approved: {unapproved_creatives}"
+                                f"no creative assignments for media buy {media_buy_id}"
                             )
                             flash(
-                                f"Media buy approved! Waiting for {len(unapproved_creatives)} creative(s) to be approved before creating in GAM.",
+                                "Media buy approved! Waiting for creatives to be assigned and approved before creating in GAM.",
                                 "info",
                             )
-                            media_buy.status = "pending_creatives"
-                            db.commit()
-                            return jsonify({"success": True}), 200
+                        else:
+                            unapproved = readiness.unapproved_creative_ids
+                            logger.warning(
+                                f"[APPROVAL] Cannot execute adapter creation yet - "
+                                f"{len(unapproved)} creatives not approved: {unapproved}"
+                            )
+                            flash(
+                                f"Media buy approved! Waiting for {len(unapproved)} creative(s) to be approved before creating in GAM.",
+                                "info",
+                            )
+                        media_buy.status = "pending_creatives"
+                        db.commit()
+                        return jsonify({"success": True}), 200
 
                     # Execute adapter creation
                     from src.core.tools.media_buy_create import execute_approved_media_buy

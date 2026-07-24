@@ -30,11 +30,12 @@ def make_pending_media_buy(integration_db):
     """Factory for a pending-approval media buy wired for the admin approve/reject webhook path.
 
     Builds (via factories + ContextManager production APIs — no session.add in the
-    test body) a tenant + principal, a pending_approval media buy, an active
-    PushNotificationConfig at WEBHOOK_URL, and a tenant-scoped approval workflow step
-    whose ObjectWorkflowMapping ties it to the media buy with action "reject". All rows
-    are committed (factories persist on commit; ContextManager commits its own writes)
-    so the Flask route's separate get_db_session() sees them.
+    test body) a tenant + principal, a pending_approval media buy with an approved
+    CreativeAssignment (required for the approve finalize/webhook path after #1696),
+    an active PushNotificationConfig at WEBHOOK_URL, and a tenant-scoped approval
+    workflow step whose ObjectWorkflowMapping ties it to the media buy with action
+    "reject". All rows are committed (factories persist on commit; ContextManager
+    commits its own writes) so the Flask route's separate get_db_session() sees them.
 
     ``request_data_context``: optional dict stored as ``request_data["context"]`` on
     the workflow step — drives the approve webhook's context-echo branch.
@@ -48,6 +49,8 @@ def make_pending_media_buy(integration_db):
     from src.core.database.database_session import get_engine
     from tests.factories import (
         ALL_FACTORIES,
+        CreativeAssignmentFactory,
+        CreativeFactory,
         MediaBuyFactory,
         MediaPackageFactory,
         PricingOptionFactory,
@@ -103,6 +106,19 @@ def make_pending_media_buy(integration_db):
                 "budget": 5000.0,
                 "pricing_option_id": "cpm_usd_fixed",
             },
+        )
+        # Approved creative assignment required for finalize (#1696 Hold): zero
+        # assignments parks at pending_creatives and skips adapter + approve webhook.
+        creative = CreativeFactory(
+            tenant=tenant,
+            principal=principal,
+            creative_id="cre_reject_wh_1",
+            approved=True,
+        )
+        CreativeAssignmentFactory(
+            creative=creative,
+            media_buy=media_buy,
+            package_id="pkg_reject_wh_1",
         )
         PushNotificationConfigFactory(
             tenant=tenant,
@@ -308,7 +324,13 @@ class TestAdminMediaBuyRejectWebhook:
         tenant_id = pending_reject_media_buy["tenant_id"]
         media_buy_id = pending_reject_media_buy["media_buy_id"]
 
-        _post_approval_action(authenticated_admin_session, pending_reject_media_buy, {"action": "approve"})
+        # Adapter upload is out of scope for this webhook-shape pin; stub success
+        # after the shared creative-ready gate (#1696) so the webhook arm runs.
+        with patch(
+            "src.core.tools.media_buy_create.execute_approved_media_buy",
+            return_value=(True, None),
+        ):
+            _post_approval_action(authenticated_admin_session, pending_reject_media_buy, {"action": "approve"})
         body = _webhook_body(webhook_capture)
 
         assert body["status"] == "completed", f"outer status should be completed, got {body.get('status')!r}"
@@ -399,7 +421,11 @@ class TestAdminMediaBuyRejectWebhook:
         buyer_context = {"correlation_id": "corr-approve-echo-1", "buyer_ref": "buyer-ref-42"}
         ids = make_pending_media_buy(request_data_context=buyer_context)
 
-        _post_approval_action(authenticated_admin_session, ids, {"action": "approve"})
+        with patch(
+            "src.core.tools.media_buy_create.execute_approved_media_buy",
+            return_value=(True, None),
+        ):
+            _post_approval_action(authenticated_admin_session, ids, {"action": "approve"})
         body = _webhook_body(webhook_capture)
 
         embedded = body.get("result") or {}

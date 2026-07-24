@@ -603,25 +603,31 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} status: {media_buy.status}")
 
                 if media_buy.status in {"pending_creatives", "draft"}:
-                    # Get all creative assignments for this media buy
-                    all_assignments = uow.assignments.get_by_media_buy(media_buy_id)
-
-                    creative_ids = [a.creative_id for a in all_assignments]
-                    all_creatives = uow.creatives.admin_get_by_ids(creative_ids)
-
-                    unapproved_creatives = [
-                        c.creative_id for c in all_creatives if c.status not in ["approved", "active"]
-                    ]
-
-                    logger.info(
-                        f"[CREATIVE APPROVAL] Media buy {media_buy_id} has {len(unapproved_creatives)} unapproved creatives remaining"
+                    # Shared Hold / finalize predicate (#1696): empty assignments
+                    # are not ready (do not treat as "all approved").
+                    from src.admin.services.media_buy_creative_readiness import (
+                        evaluate_creative_finalize_readiness,
                     )
 
-                    if not unapproved_creatives:
+                    session = uow._session
+                    assert session is not None
+                    readiness = evaluate_creative_finalize_readiness(
+                        session, tenant_id=tenant_id, media_buy_id=media_buy_id
+                    )
+
+                    logger.info(
+                        f"[CREATIVE APPROVAL] Media buy {media_buy_id} readiness="
+                        f"ready={readiness.ready} reason={readiness.hold_reason} "
+                        f"unapproved={readiness.unapproved_creative_ids}"
+                    )
+
+                    if readiness.ready:
                         media_buy_actions.append({"media_buy_id": media_buy_id})
-                    else:
+                    elif readiness.unapproved_creative_ids:
                         logger.info(
-                            f"[CREATIVE APPROVAL] Media buy {media_buy_id} still waiting for {len(unapproved_creatives)} creatives: {unapproved_creatives}"
+                            f"[CREATIVE APPROVAL] Media buy {media_buy_id} still waiting for "
+                            f"{len(readiness.unapproved_creative_ids)} creatives: "
+                            f"{readiness.unapproved_creative_ids}"
                         )
 
             # UoW auto-commits here
