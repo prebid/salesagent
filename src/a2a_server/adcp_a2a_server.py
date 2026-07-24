@@ -300,7 +300,7 @@ def _validate_envelope_tolerant[RequestModelT: BaseModel](
     (``extra="forbid"`` in dev/CI) request model would otherwise reject the
     undeclared framing with extra_forbidden. Strip only the envelope fields this
     model does not declare — fields it does declare still flow through. Negotiation
-    fields are handled earlier in ``_handle_explicit_skill``. See #1512.
+    fields are handled earlier in ``_handle_explicit_skill``.
     """
     cleaned, dropped_env = strip_undeclared_envelope_fields(params, set(model.model_fields))
     _log_dropped_fields(operation, DROPPED_FIELDS_UNDECLARED_ENVELOPE, dropped_env)

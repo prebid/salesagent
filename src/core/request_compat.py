@@ -226,7 +226,7 @@ def normalize_request_params(
 # parameters and others don't (unlike ADCP_NEGOTIATION_FIELDS, which no tool
 # declares). Stripped from a request only when the target tool does not declare
 # them — so a conformant client's envelope doesn't trip strict per-tool
-# validation, while tools that use these fields still receive them. See #1512.
+# validation, while tools that use these fields still receive them.
 ADCP_ENVELOPE_FIELDS: frozenset[str] = frozenset(
     {
         "context",
