@@ -72,16 +72,7 @@ jobs:
           set -euo pipefail
           # shellcheck source=scripts/ci/ipr_gh_retry.sh
           . scripts/ci/ipr_gh_retry.sh
-
-          tmp="$(mktemp -d)"
-          trap 'rm -rf "${tmp}"' EXIT
-
-          ipr_fetch_sigs_and_commits "${tmp}" "${REPO}" "${PR_NUMBER}"
-
-          python3 scripts/ci/ipr_verify.py verify \
-            --sigs "${tmp}/sigs.json" \
-            --commits "${tmp}/commits.json" \
-            --pr-author "${PR_AUTHOR}"
+          ipr_verify_pr "${REPO}" "${PR_NUMBER}" "${PR_AUTHOR}"
 
   # ── B: record a new signature (comment path only) ─────────────────────────
   # Keep the standard CLA model: any commenter with the exact phrase may sign.
@@ -196,12 +187,7 @@ jobs:
           HEAD_SHA="$(cat "${tmp}/head_sha.txt")"
 
           echo "Post-sign verify for PR #${PR_NUMBER} head=${HEAD_SHA} author=${PR_AUTHOR}"
-          ipr_fetch_sigs_and_commits "${tmp}" "${REPO}" "${PR_NUMBER}"
-
-          python3 scripts/ci/ipr_verify.py verify \
-            --sigs "${tmp}/sigs.json" \
-            --commits "${tmp}/commits.json" \
-            --pr-author "${PR_AUTHOR}" \
+          ipr_verify_pr "${REPO}" "${PR_NUMBER}" "${PR_AUTHOR}" \
             --missing-message "IPR Policy still not signed by: {missing}" \
             --ok-message "Post-sign verify OK — all contributors signed."
 

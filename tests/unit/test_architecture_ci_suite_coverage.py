@@ -175,7 +175,8 @@ def _load_e2e_compose() -> dict:
 class TestCISuiteCoverage:
     """BDD and E2E suites must run in CI and gate the test summary."""
 
-    @pytest.mark.arch_guard
+    pytestmark = pytest.mark.arch_guard
+
     def test_shell_has_flag_rejects_wait_timeout_prefix(self):
         """``--wait`` must not match as a prefix of ``--wait-timeout`` (vacuous guard class)."""
         wait_timeout_only = "docker compose up -d --wait-timeout 600"
@@ -196,7 +197,6 @@ class TestCISuiteCoverage:
         assert _shell_has_non_comment_substr("curl -sf http://127.0.0.1:8080/health", "curl -sf", "/health")
         assert not _shell_has_non_comment_substr("# curl -sf /health\necho ok", "curl -sf", "/health")
 
-    @pytest.mark.arch_guard
     def test_free_disk_action_requires_run_step_body(self):
         """Tokens only in description must not satisfy the reclaim contract.
 
@@ -225,7 +225,6 @@ class TestCISuiteCoverage:
         # Production composite still passes the real assert.
         _assert_free_disk_action_reclaims_runner()
 
-    @pytest.mark.arch_guard
     def test_bdd_job_exists(self):
         """BDD aggregate + parallel shard jobs must exist in CI."""
         jobs = load_ci_workflow()["jobs"]
@@ -233,7 +232,6 @@ class TestCISuiteCoverage:
         assert "bdd-tests" in jobs, "No 'bdd-tests' aggregate job in .github/workflows/ci.yml."
         assert "bdd-tests-shard" in jobs, "No 'bdd-tests-shard' matrix job in .github/workflows/ci.yml."
 
-    @pytest.mark.arch_guard
     def test_bdd_shards_run_the_bdd_suite(self):
         """Each BDD shard must resolve paths via shard_paths and run pytest."""
         shard_job = load_ci_workflow()["jobs"]["bdd-tests-shard"]
@@ -249,14 +247,12 @@ class TestCISuiteCoverage:
             "bdd-tests-shard must invoke pytest (via _pytest composite or explicit run)."
         )
 
-    @pytest.mark.arch_guard
     def test_bdd_shards_have_postgres_service(self):
         """BDD harnesses use the integration_db fixture (real PostgreSQL)."""
         services = load_ci_workflow()["jobs"]["bdd-tests-shard"].get("services", {})
 
         assert "postgres" in services, "bdd-tests-shard has no postgres service."
 
-    @pytest.mark.arch_guard
     def test_bdd_aggregate_is_status_proxy_only(self):
         """Aggregate BDD job must gate shard status, not merge coverage."""
         aggregate = load_ci_workflow()["jobs"]["bdd-tests"]
@@ -266,7 +262,6 @@ class TestCISuiteCoverage:
             "bdd-tests aggregate must not merge coverage; that belongs in the Coverage job."
         )
 
-    @pytest.mark.arch_guard
     def test_admin_job_has_postgres_service(self):
         """Admin blueprint tests use integration_db and require PostgreSQL."""
         admin_job = load_ci_workflow()["jobs"]["admin-ui-tests"]
@@ -277,7 +272,6 @@ class TestCISuiteCoverage:
             "the integration_db fixture and require a real PostgreSQL instance."
         )
 
-    @pytest.mark.arch_guard
     def test_integration_job_uses_entity_shards(self):
         """Integration tests must run in parallel entity shards (legacy parity)."""
         integration_job = load_ci_workflow()["jobs"]["integration-tests"]
@@ -297,7 +291,6 @@ class TestCISuiteCoverage:
             "integration-tests must filter pytest with matrix.marker, not run the full suite serially."
         )
 
-    @pytest.mark.arch_guard
     def test_integration_shards_use_strict_partition(self):
         """Shards 2–4 must exclude earlier shard markers to avoid duplicate runs."""
         integration_job = load_ci_workflow()["jobs"]["integration-tests"]
@@ -312,7 +305,6 @@ class TestCISuiteCoverage:
         assert "and not media_buy" in markers["infra"]
         assert "and not delivery" in markers["infra"]
 
-    @pytest.mark.arch_guard
     def test_quality_gate_does_not_run_unit_tests(self):
         """Quality Gate runs static checks only; unit tests run once in unit-tests."""
         quality_job = load_ci_workflow()["jobs"]["quality-gate"]
@@ -321,7 +313,6 @@ class TestCISuiteCoverage:
         assert "make quality-ci" in run_steps, "quality-gate must invoke make quality-ci (no pytest)."
         assert "pytest" not in run_steps, "quality-gate must not re-run unit tests."
 
-    @pytest.mark.arch_guard
     def test_coverage_job_reuses_test_artifacts(self):
         """Coverage gate must not re-run pytest; it combines unit + BDD artifacts."""
         coverage_job = load_ci_workflow()["jobs"]["coverage"]
@@ -339,7 +330,6 @@ class TestCISuiteCoverage:
         assert "pytest" not in run_steps, "coverage job must not re-run tests."
         assert "coverage combine" in run_steps, "coverage job must combine unit and BDD coverage data."
 
-    @pytest.mark.arch_guard
     def test_coverage_gate_requires_all_bdd_shard_artifacts(self):
         """Coverage must fail on partial BDD shard artifact sets, not combine survivors."""
         coverage_job = load_ci_workflow()["jobs"]["coverage"]
@@ -360,7 +350,6 @@ class TestCISuiteCoverage:
             "BDD shard coverage artifacts must land under bdd-coverage-shards/."
         )
 
-    @pytest.mark.arch_guard
     def test_ci_jobs_declare_permissions_and_timeout(self):
         """Every CI job must declare permissions and timeout (workflow hygiene)."""
         jobs = load_ci_workflow()["jobs"]
@@ -372,8 +361,6 @@ class TestCISuiteCoverage:
                 missing.append(f"{job_name}: timeout-minutes")
         assert not missing, "CI jobs missing hygiene fields:\n" + "\n".join(f"  - {m}" for m in missing)
 
-    @pytest.mark.arch_guard
-    @pytest.mark.arch_guard
     def test_local_suites_map_or_explicit_exclusion(self):
         """ALL_SUITES must map to summary gates or UNGATED_LOCAL_SUITES (no silent drops)."""
         suites = _all_suites_from_runner()
@@ -404,14 +391,12 @@ class TestCISuiteCoverage:
                 f"A failing {required} job would not fail CI even though it is listed in needs[]."
             )
 
-    @pytest.mark.arch_guard
     def test_type_check_uses_make_target(self):
         """Type Check job must invoke the same entrypoint as local make typecheck."""
         type_check = load_ci_workflow()["jobs"]["type-check"]
         run_steps = " ".join(str(step.get("run", "")) for step in type_check.get("steps", []))
         assert "make typecheck" in run_steps, "type-check job must run make typecheck for CI/local parity."
 
-    @pytest.mark.arch_guard
     def test_smoke_tests_do_not_duplicate_skip_guard(self):
         """Skip-decorator enforcement belongs in the smoke suite, not a workflow grep step."""
         smoke_job = load_ci_workflow()["jobs"]["smoke-tests"]
@@ -422,7 +407,6 @@ class TestCISuiteCoverage:
             "TestNoSkippedTests is the single source of truth."
         )
 
-    @pytest.mark.arch_guard
     def test_skip_guard_single_source_of_truth_exists(self):
         """The SSoT the workflow delegates to must exist, or enforcement is unguarded."""
         from tests.smoke.test_smoke_basic import TestNoSkippedTests
@@ -431,7 +415,6 @@ class TestCISuiteCoverage:
             "TestNoSkippedTests.test_no_skip_decorators is the declared single source of truth for skip enforcement."
         )
 
-    @pytest.mark.arch_guard
     def test_e2e_job_prestarts_stack_with_adcp_testing(self):
         """E2E CI must pre-start compose; pytest must not cold-build under --timeout.
 
@@ -525,7 +508,6 @@ class TestCISuiteCoverage:
             f"Order must be Free disk → pre-start → pytest (got {free_idx}, {pre_idx}, {pytest_idx})."
         )
 
-    @pytest.mark.arch_guard
     def test_e2e_compose_proxy_waits_for_adcp_healthy(self):
         """Proxy must not race adcp start_period under ``compose up --wait``.
 
@@ -577,7 +559,6 @@ class TestCISuiteCoverage:
             f"creative-agent start_period must be positive (got {creative_hc.get('start_period')!r})."
         )
 
-    @pytest.mark.arch_guard
     def test_bdd_in_network_frees_disk_before_compose(self):
         """In-network e2e_rest must reclaim runner disk before image build.
 
@@ -609,7 +590,6 @@ class TestCISuiteCoverage:
             "bdd-in-network must invoke ./run_all_tests.sh bdd_e2e."
         )
 
-    @pytest.mark.arch_guard
     def test_bdd_and_e2e_run_on_pull_request(self):
         """The gate is worthless if it doesn't run on PRs.
 

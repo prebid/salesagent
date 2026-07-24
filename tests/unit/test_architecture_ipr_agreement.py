@@ -48,7 +48,8 @@ def _soft_swallow_suffix(line: str) -> bool:
 
 
 class TestIPRAgreementContract:
-    @pytest.mark.arch_guard
+    pytestmark = pytest.mark.arch_guard
+
     def test_ipr_workflow_has_no_pull_request_target(self):
         wf = load_yaml_mapping(_IPR_WORKFLOW)
         on = wf.get("on") or wf.get(True)  # YAML may parse `on` as True
@@ -63,7 +64,6 @@ class TestIPRAgreementContract:
         else:
             raise AssertionError(f"unexpected on: shape {type(on).__name__}")
 
-    @pytest.mark.arch_guard
     def test_ipr_bot_allowlist_is_ssot(self):
         wf = load_yaml_mapping(_IPR_WORKFLOW)
         env = wf.get("env") or {}
@@ -76,14 +76,24 @@ class TestIPRAgreementContract:
         assert "ipr-check" in jobs and "ipr-sign" in jobs, "both ipr-check and ipr-sign jobs required"
         check_run = _job_run_text(jobs["ipr-check"])
         sign_run = _job_run_text(jobs["ipr-sign"])
-        assert _VERIFY_SCRIPT in check_run, f"ipr-check must invoke {_VERIFY_SCRIPT}"
-        assert _VERIFY_SCRIPT in sign_run, f"ipr-sign post-sign verify must invoke {_VERIFY_SCRIPT}"
         assert _RETRY_SCRIPT in check_run and _RETRY_SCRIPT in sign_run, (
-            f"both jobs must source {_RETRY_SCRIPT} (single gh_retry_to)"
+            f"both jobs must source {_RETRY_SCRIPT} (shared ipr_verify_pr / gh_retry_to)"
         )
-        assert "ipr_fetch_sigs_and_commits" in check_run and "ipr_fetch_sigs_and_commits" in sign_run, (
-            "both jobs must call ipr_fetch_sigs_and_commits (shared sigs/commits fetch)"
+        assert "ipr_verify_pr" in check_run and "ipr_verify_pr" in sign_run, (
+            "both jobs must call ipr_verify_pr (shared verify orchestration)"
         )
+        # Leaf helpers live only in the shared shell — workflows must not re-copy glue.
+        retry_src = _RETRY_SH.read_text(encoding="utf-8")
+        assert "ipr_verify_pr()" in retry_src and "ipr_fetch_sigs_and_commits()" in retry_src, (
+            "ipr_gh_retry.sh must define ipr_verify_pr and ipr_fetch_sigs_and_commits"
+        )
+        assert _VERIFY_SCRIPT in retry_src, f"ipr_verify_pr must invoke {_VERIFY_SCRIPT}"
+        assert "ipr_fetch_sigs_and_commits" not in check_run and "ipr_fetch_sigs_and_commits" not in sign_run, (
+            "jobs must not inline ipr_fetch_sigs_and_commits (route via ipr_verify_pr)"
+        )
+        assert f"python3 {_VERIFY_SCRIPT} verify" not in check_run and (
+            f"python3 {_VERIFY_SCRIPT} verify" not in sign_run
+        ), "jobs must not inline ipr_verify.py verify (route via ipr_verify_pr)"
 
         # CLA Assistant allowlist must reference the SSOT env, not a forked literal.
         sign_steps = jobs["ipr-sign"].get("steps") or []
@@ -101,19 +111,17 @@ class TestIPRAgreementContract:
             "CLA Assistant allowlist must reference env.IPR_BOT_ALLOWLIST SSOT"
         )
 
-    @pytest.mark.arch_guard
     def test_path_b_post_sign_reverify_and_rerun(self):
         wf = load_yaml_mapping(_IPR_WORKFLOW)
         sign = (wf.get("jobs") or {}).get("ipr-sign") or {}
         run_text = _job_run_text(sign)
-        assert "ipr_verify.py verify" in run_text, "Path B must re-verify after CLA Assistant sign"
+        assert "ipr_verify_pr" in run_text, "Path B must re-verify after CLA Assistant sign via ipr_verify_pr"
         assert "rerun-failed-jobs" in run_text, "Path B must re-run failed ipr-check via rerun-failed-jobs"
         # Soft-swallow of re-run failure must not return (sign green / check red).
         for line in run_text.splitlines():
             if "rerun-failed-jobs" in line or ("actions/runs" in line and "/rerun" in line):
                 assert not _soft_swallow_suffix(line), f"re-run API line must not soft-swallow failures: {line!r}"
 
-    @pytest.mark.arch_guard
     def test_ipr_sign_checkouts_default_branch_not_pr_head(self):
         """Path B must checkout the repository default branch (ADR-003).
 
@@ -145,22 +153,22 @@ class TestIPRAgreementContract:
         assert all((s.get("with") or {}).get("persist-credentials") is False for s in checkouts), (
             "ipr-sign checkout must set persist-credentials: false"
         )
-        # The gate consumes ipr_verify.py's exit code; keep it fail-closed.
+        # The gate consumes ipr_verify_pr's exit code; keep it fail-closed.
         verify_steps = 0
         for step in steps:
             if not isinstance(step, dict):
                 continue
             run = step.get("run") or ""
-            if "ipr_verify.py verify" in run:
+            if "ipr_verify_pr" in run:
                 verify_steps += 1
                 assert "set -euo pipefail" in run, "verify step must keep set -euo pipefail"
                 assert step.get("continue-on-error") is not True, "verify step must not continue-on-error"
                 # Soft-swallow / set +e would mask a failed verify exit.
                 assert "set +e" not in run, "verify step must not disable errexit with set +e"
                 for line in run.splitlines():
-                    if "ipr_verify.py verify" in line:
+                    if "ipr_verify_pr" in line:
                         assert not _soft_swallow_suffix(line), f"verify invocation must not soft-swallow: {line!r}"
-        assert verify_steps >= 1, "ipr-sign must include a run step that invokes ipr_verify.py verify"
+        assert verify_steps >= 1, "ipr-sign must include a run step that invokes ipr_verify_pr"
 
         # Invisible PR-head checkout via shell (not actions/checkout).
         for step in steps:
@@ -172,7 +180,6 @@ class TestIPRAgreementContract:
                 "ipr-sign must not git fetch pull/N/head (would run PR-head code)"
             )
 
-    @pytest.mark.arch_guard
     def test_ipr_retry_constants_match_health_probe(self):
         """Path B health probe backoff must match ``gh_retry_to`` (same max / sleep factor)."""
         retry_src = _RETRY_SH.read_text(encoding="utf-8")
@@ -198,7 +205,6 @@ class TestIPRAgreementContract:
             f"health probe must use attempt*{_IPR_RETRY_SLEEP_FACTOR} (same as gh_retry_to)"
         )
 
-    @pytest.mark.arch_guard
     def test_path_a_uses_module_default_missing_message(self):
         """Path A must not fork ``--missing-message`` (module argparse default is SSOT)."""
         wf = load_yaml_mapping(_IPR_WORKFLOW)
@@ -207,7 +213,6 @@ class TestIPRAgreementContract:
             "Path A must omit --missing-message so ipr_verify.py argparse default cannot drift"
         )
 
-    @pytest.mark.arch_guard
     def test_ipr_sign_harden_runner_disables_sudo_and_containers(self):
         wf = load_yaml_mapping(_IPR_WORKFLOW)
         sign = (wf.get("jobs") or {}).get("ipr-sign") or {}
@@ -221,8 +226,6 @@ class TestIPRAgreementContract:
             "ipr-sign harden-runner must set disable-sudo-and-containers: true (write-token job)"
         )
 
-    @pytest.mark.arch_guard
-    @pytest.mark.arch_guard
     def test_ci_ipr_gate_reads_allowlist_ssot(self):
         """CI ipr-gate must extract IPR_BOT_ALLOWLIST from ipr-agreement.yml (no forked literal)."""
         from scripts.ci.workflow_helpers import load_ci_workflow
@@ -235,6 +238,14 @@ class TestIPRAgreementContract:
         )
         assert 'IPR_BOT_ALLOWLIST: "bot*' not in str(job), (
             "ipr-gate must not hardcode a forked IPR_BOT_ALLOWLIST env literal"
+        )
+        assert _RETRY_SCRIPT in run, f"ipr-gate must source {_RETRY_SCRIPT}"
+        assert "ipr_verify_pr" in run, "ipr-gate must call ipr_verify_pr (shared verify orchestration)"
+        assert "ipr_fetch_sigs_and_commits" not in run, (
+            "ipr-gate must not inline ipr_fetch_sigs_and_commits (route via ipr_verify_pr)"
+        )
+        assert f"python3 {_VERIFY_SCRIPT} verify" not in run, (
+            "ipr-gate must not inline ipr_verify.py verify (route via ipr_verify_pr)"
         )
 
     def test_zizmor_does_not_relist_ipr_for_dangerous_triggers(self):

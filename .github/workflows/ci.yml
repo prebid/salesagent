@@ -656,13 +656,7 @@ jobs:
           export IPR_BOT_ALLOWLIST
           # shellcheck source=scripts/ci/ipr_gh_retry.sh
           . scripts/ci/ipr_gh_retry.sh
-          tmp="$(mktemp -d)"
-          trap 'rm -rf "${tmp}"' EXIT
-          ipr_fetch_sigs_and_commits "${tmp}" "${REPO}" "${PR_NUMBER}"
-          python3 scripts/ci/ipr_verify.py verify \
-            --sigs "${tmp}/sigs.json" \
-            --commits "${tmp}/commits.json" \
-            --pr-author "${PR_AUTHOR}"
+          ipr_verify_pr "${REPO}" "${PR_NUMBER}" "${PR_AUTHOR}"
 
   summary:
     name: Summary

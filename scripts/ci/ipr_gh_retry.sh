@@ -23,6 +23,29 @@ ipr_fetch_sigs_and_commits() {
     "repos/${repository}/pulls/${pull_number}/commits"
 }
 
+# Shared verify orchestration for ipr-check / ipr-sign / ci.yml ipr-gate.
+# Args: repository, pull number, pr author login; remaining args forwarded to
+# ``ipr_verify.py verify`` (e.g. Path B ``--missing-message`` / ``--ok-message``).
+ipr_verify_pr() {
+  local repository="${1:?repository required}"
+  local pull_number="${2:?pull number required}"
+  local pr_author="${3:?pr author required}"
+  shift 3
+  local tmp rc=0
+  tmp="$(mktemp -d)"
+  if ! ipr_fetch_sigs_and_commits "${tmp}" "${repository}" "${pull_number}"; then
+    rm -rf "${tmp}"
+    return 1
+  fi
+  python3 scripts/ci/ipr_verify.py verify \
+    --sigs "${tmp}/sigs.json" \
+    --commits "${tmp}/commits.json" \
+    --pr-author "${pr_author}" \
+    "$@" || rc=$?
+  rm -rf "${tmp}"
+  return "${rc}"
+}
+
 gh_retry_to() {
   local dest="$1"
   shift
