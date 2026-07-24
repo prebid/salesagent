@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import execute_with_retry
 from src.core.database.models import Principal, Tenant
+from src.core.exceptions import INVALID_TOKEN_MESSAGE, AdCPAuthenticationError
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +28,6 @@ def reject_invalid_token(tenant_id: str | None) -> NoReturn:
     log-based detection — hand-copying the block is exactly what let the two log
     lines drift apart (``%r`` vs ``'%s'``) on the push that introduced them.
     """
-    # Local import: src.core.exceptions is imported lazily at the existing raise
-    # sites for the same reason (auth_utils is imported from the database layer).
-    from src.core.exceptions import INVALID_TOKEN_MESSAGE, AdCPAuthenticationError
-
     logger.warning("[AUTH] Invalid token presented for tenant %r", tenant_id or "any")
     raise AdCPAuthenticationError(INVALID_TOKEN_MESSAGE)
 

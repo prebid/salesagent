@@ -270,6 +270,14 @@ class RestE2EDispatcher:
             return TransportResult(error=RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)"))
 
         identity = kwargs.pop("identity", None)
+        # E2E REST's realization of the transport-blind invalid-token contract:
+        # the identity's (bad) auth_token is sent as a REAL x-adcp-auth header
+        # below and the live server runs the real auth chain against it, so the
+        # uniformly-forwarded ``_invalid_auth`` hint is discarded — only the
+        # in-process REST leg needs the special header route, because its dep
+        # override would otherwise inject a resolved identity and skip the raise
+        # (``_run_rest_request``).
+        kwargs.pop("_invalid_auth", None)
         base_url = env.e2e_config.base_url
 
         # identity=None means "send without auth headers" (no-auth test) — let the

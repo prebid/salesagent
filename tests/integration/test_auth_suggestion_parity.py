@@ -25,6 +25,12 @@ from tests.helpers import assert_envelope_shape
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
+# The tenant id under test is a fixed UUID, not a slug: in a host-routed deploy
+# the tenant id IS a UUID, and that is the internal identifier the invalid-token
+# redaction withholds — same declaration style as HOST_ROUTED_TENANT_UUID
+# (tests/bdd/steps/domain/uc002_create_media_buy.py) and the two isolation tests.
+HOST_ROUTED_TENANT_UUID = "5c1d2f6a-9b3e-4a71-8f04-2d6b7c9e1a35"
+
 
 def _assert_auth_required_with_suggestion(envelope: dict) -> None:
     from tests.harness.transport import extract_wire_suggestion
@@ -84,15 +90,14 @@ class TestInvalidTokenA2ANoDisclosure:
         from tests.harness.transport import Transport
         from tests.helpers import assert_no_tenant_disclosure
 
-        tenant_uuid = "5c1d2f6a-9b3e-4a71-8f04-2d6b7c9e1a35"
-        with MediaBuyListEnv(tenant_id=tenant_uuid, principal_id="p1") as env:
-            TenantFactory(tenant_id=tenant_uuid)
+        with MediaBuyListEnv(tenant_id=HOST_ROUTED_TENANT_UUID, principal_id="p1") as env:
+            TenantFactory(tenant_id=HOST_ROUTED_TENANT_UUID)
             # A token that resolves NO principal — the invalid-token rejection,
             # not the missing-token one (that gate fires earlier and is a
             # different raise site).
             identity = PrincipalFactory.make_identity(
                 principal_id="p1",
-                tenant_id=tenant_uuid,
+                tenant_id=HOST_ROUTED_TENANT_UUID,
                 auth_token="not-a-real-token",
             )
 
@@ -112,7 +117,7 @@ class TestInvalidTokenA2ANoDisclosure:
                 require_suggestion=True,
                 require_real_wire=True,
             )
-            assert_no_tenant_disclosure(result.wire_error_envelope, tenant_uuid)
+            assert_no_tenant_disclosure(result.wire_error_envelope, HOST_ROUTED_TENANT_UUID)
 
 
 class TestAuthHelperFamilySuggestion:
@@ -167,9 +172,8 @@ class TestAuthHelperFamilySuggestion:
         from tests.harness._base import BareIntegrationEnv
         from tests.helpers import assert_no_tenant_disclosure
 
-        tenant_uuid = "5c1d2f6a-9b3e-4a71-8f04-2d6b7c9e1a35"
-        with BareIntegrationEnv(tenant_id=tenant_uuid) as env:
-            TenantFactory(tenant_id=tenant_uuid)
+        with BareIntegrationEnv(tenant_id=HOST_ROUTED_TENANT_UUID) as env:
+            TenantFactory(tenant_id=HOST_ROUTED_TENANT_UUID)
             env.get_session()  # commit factory data
 
             class _HeaderCarrier:
@@ -179,7 +183,7 @@ class TestAuthHelperFamilySuggestion:
 
                 headers = {
                     "x-adcp-auth": "not-a-real-token",
-                    "x-adcp-tenant": tenant_uuid,
+                    "x-adcp-tenant": HOST_ROUTED_TENANT_UUID,
                 }
 
             with pytest.raises(AdCPError) as exc_info:
@@ -188,4 +192,4 @@ class TestAuthHelperFamilySuggestion:
         _assert_auth_required_with_suggestion(build_two_layer_error_envelope(exc_info.value))
         # Shared with the A2A wire pin and both tenant-isolation tests so all four
         # grade non-disclosure through one assertion instead of four copies.
-        assert_no_tenant_disclosure(exc_info.value, tenant_uuid)
+        assert_no_tenant_disclosure(exc_info.value, HOST_ROUTED_TENANT_UUID)

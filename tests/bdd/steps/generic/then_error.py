@@ -283,23 +283,6 @@ def then_error_code(ctx: dict, code: str) -> None:
     assert actual == code, f"Expected error code '{code}', got '{actual}'"
 
 
-@then(parsers.parse('the rejection reaches the buyer as a real "{code}" wire envelope'))
-def then_real_wire_rejection(ctx: dict, code: str) -> None:
-    """Assert *code* on the REAL wire, refusing a rebuilt envelope.
-
-    Stricter than ``the result should be error "<CODE>"``: it passes
-    ``require_real_wire=True``, so an A2A rejection raised with no envelope
-    attached fails here instead of quietly grading an envelope the harness
-    rebuilt from the reconstructed exception. Use it when the point of the
-    scenario is what the buyer actually receives — a disclosure or security
-    contract — rather than the error taxonomy.
-    """
-    result = ctx.get("result")
-    assert result is not None, "No TransportResult in ctx — the scenario did not dispatch through a wire transport"
-    assert result.is_error, f"Expected a {code} rejection, got a success response: {result.payload!r}"
-    result.assert_wire_error(code, require_suggestion=True, require_real_wire=True)
-
-
 @then("the invalid token is rejected without disclosing the tenant id")
 def then_invalid_token_rejected_no_disclosure(ctx: dict) -> None:
     """One transport-agnostic grade of the invalid-token non-disclosure contract.

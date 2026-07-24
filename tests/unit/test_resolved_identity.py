@@ -15,6 +15,12 @@ import pytest
 
 from src.core.resolved_identity import ResolvedIdentity, resolve_identity
 
+# The tenant id under test is a fixed UUID, not a slug: in a host-routed deploy
+# the tenant id IS a UUID, and that is the internal identifier the invalid-token
+# redaction withholds — same declaration style as HOST_ROUTED_TENANT_UUID
+# (tests/bdd/steps/domain/uc002_create_media_buy.py) and the two isolation tests.
+HOST_ROUTED_TENANT_UUID = "902c0725-ca84-44ca-be0b-c81d6f0f8689"
+
 
 class TestResolvedIdentityType:
     """Test the ResolvedIdentity type itself."""
@@ -177,8 +183,7 @@ class TestResolveIdentity:
 
         from src.core.exceptions import INVALID_TOKEN_MESSAGE, AdCPAuthenticationError
 
-        tenant_uuid = "902c0725-ca84-44ca-be0b-c81d6f0f8689"
-        mock_get_subdomain.return_value = {"tenant_id": tenant_uuid, "name": "Secret Tenant"}
+        mock_get_subdomain.return_value = {"tenant_id": HOST_ROUTED_TENANT_UUID, "name": "Secret Tenant"}
         mock_get_principal.return_value = (None, None)  # token does not resolve
 
         with (
@@ -188,7 +193,7 @@ class TestResolveIdentity:
             pytest.raises(AdCPAuthenticationError) as exc,
         ):
             resolve_identity(
-                headers={"x-adcp-tenant": tenant_uuid, "x-adcp-auth": "wrong-token"},
+                headers={"x-adcp-tenant": HOST_ROUTED_TENANT_UUID, "x-adcp-auth": "wrong-token"},
                 auth_token="wrong-token",
                 protocol="mcp",
                 require_valid_token=True,
@@ -201,10 +206,10 @@ class TestResolveIdentity:
         # also use — grading the message AND the full built envelope — so the sites
         # that pin non-disclosure cannot drift apart. (Was a hand-rolled
         # ``tenant_uuid not in message`` here, which only checked the message.)
-        assert_no_tenant_disclosure(exc.value, tenant_uuid)
+        assert_no_tenant_disclosure(exc.value, HOST_ROUTED_TENANT_UUID)
         assert message == INVALID_TOKEN_MESSAGE  # the shared constant — one wording, no drift
         # Compensating control: the tenant is still recorded in a server-side log.
-        assert any(tenant_uuid in r.getMessage() for r in caplog.records), (
+        assert any(HOST_ROUTED_TENANT_UUID in r.getMessage() for r in caplog.records), (
             "the rejected tenant should be logged server-side"
         )
 

@@ -154,7 +154,11 @@ def resolve_identity(
     Raises:
         AdCPAuthenticationError: If token is present but invalid and require_valid_token=True
     """
-    # Import here to avoid circular dependency (auth_utils imports from database)
+    # Deferred import — NOT for a cycle (nothing in the database layer imports
+    # back into auth_utils). It defends the test-patched binding: the unit tests
+    # patch ``src.core.auth_utils.get_principal_from_token``, and importing at
+    # call time reads the patched attribute instead of freezing the original
+    # into this module's namespace at import time.
     from src.core.auth_utils import get_principal_from_token, reject_invalid_token
 
     # Step 1: Detect tenant from headers

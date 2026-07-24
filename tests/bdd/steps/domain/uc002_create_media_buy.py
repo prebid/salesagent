@@ -281,10 +281,12 @@ def given_invalid_auth_token(ctx: dict) -> None:
     come back to the caller.
 
     Transport-agnostic: the paired When is transport-blind, so this runs across
-    a2a/mcp/rest under ``pytest_generate_tests``. A2A and MCP run the real auth
-    chain against the injected identity's bad token; REST authenticates by
-    dependency override, so its bad token is routed through the real REST dep as
-    headers instead (``invalid_auth_token`` is picked up in ``_dispatch_full_create``).
+    a2a/mcp/rest under ``pytest_generate_tests``. ``_dispatch_full_create``
+    forwards the bad token uniformly as ``_invalid_auth`` and each env realizes
+    it per its transport: A2A and MCP run the real auth chain against the
+    injected identity's bad token (and discard ``_invalid_auth``); in-process
+    REST authenticates by dependency override, so its env routes the bad token
+    through the real REST dep as headers instead (harness ``_run_rest_request``).
 
     ``undisclosed_tenant_id`` is a fixed UUID, not the env slug: in a host-routed
     deploy the tenant id IS a UUID, and that is the internal identifier the
@@ -819,14 +821,14 @@ def _dispatch_full_create(ctx: dict) -> None:
         ctx["error"] = e
         return
 
-    # Invalid-token scenario, REST leg only: A2A/MCP run the real auth chain
-    # against the injected identity's bad token, but in-process REST injects the
-    # identity by dependency override and would skip the raise. Route the bad
-    # token through the real REST dep as headers instead (harness _run_rest_request).
-    from tests.harness.transport import Transport
-
+    # Invalid-token scenario: forward the bad token uniformly and let each env
+    # realize it per its transport (the step stays transport-blind, BG-3). The
+    # in-process REST leg routes it through the real auth dep as headers
+    # (harness _run_rest_request); A2A/MCP discard it because the bad token
+    # already rides the dispatched identity's auth_token, and e2e REST sends
+    # the identity's token as real headers anyway.
     extra: dict = {}
-    if ctx.get("invalid_auth_token") and ctx.get("transport") == Transport.REST:
+    if ctx.get("invalid_auth_token"):
         extra["_invalid_auth"] = {"token": ctx["invalid_auth_token"], "tenant": ctx["undisclosed_tenant_id"]}
 
     # No-auth scenarios (#1417) stash an unauthenticated identity so the

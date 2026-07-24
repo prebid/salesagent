@@ -631,6 +631,14 @@ class BaseTestEnv:
 
         self._commit_factory_data()
 
+        # A2A's realization of the transport-blind invalid-token contract: the
+        # bad token already rides the dispatched identity's auth_token (the real
+        # auth chain below runs against it), so the uniformly-forwarded
+        # ``_invalid_auth`` hint is discarded — only REST needs the header route
+        # (``_run_rest_request``), because its dep override would otherwise
+        # inject a resolved identity and skip the raise.
+        kwargs.pop("_invalid_auth", None)
+
         # Pop identity — used for the handler mock, not sent as a skill parameter.
         _NO_OVERRIDE = object()
         identity = kwargs.pop("identity", _NO_OVERRIDE)
@@ -786,6 +794,13 @@ class BaseTestEnv:
         from tests.harness.transport import Transport
 
         self._commit_factory_data()
+
+        # MCP's realization of the transport-blind invalid-token contract: the
+        # bad token already rides the dispatched identity's auth_token (the real
+        # header→token→DB chain below runs against it), so the uniformly-forwarded
+        # ``_invalid_auth`` hint is discarded — see ``_run_a2a_handler`` /
+        # ``_run_rest_request`` for the sibling realizations.
+        kwargs.pop("_invalid_auth", None)
 
         # Pop identity — used for the auth mock, not sent as a tool argument.
         _NO_OVERRIDE = object()
