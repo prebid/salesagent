@@ -269,6 +269,18 @@ def _strip_fields(
     return cleaned, sorted(present)
 
 
+# Canonical ``kind`` labels for ``_log_dropped_fields``, shared by every
+# MCP/A2A call site so a field-drop event correlates by ONE label regardless
+# of transport or which specific envelope field(s) were involved — an
+# operator grepping/alerting on one label must see every occurrence. An
+# earlier revision hardcoded ``"inert read idempotency"`` at one A2A call
+# site instead of reusing DROPPED_FIELDS_UNDECLARED_ENVELOPE, splitting one
+# semantic event (an envelope field the tool doesn't declare, dropped before
+# dispatch) across two labels depending on which transport handled it.
+DROPPED_FIELDS_NEGOTIATION = "AdCP negotiation"
+DROPPED_FIELDS_UNDECLARED_ENVELOPE = "undeclared AdCP envelope"
+
+
 def _log_dropped_fields(operation: str, kind: str, dropped: list[str]) -> None:
     """Log dropped request fields with one cross-transport message shape."""
     if dropped:

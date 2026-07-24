@@ -72,6 +72,8 @@ from src.core.exceptions import (
 )
 from src.core.logging_config import scrub_control_chars
 from src.core.request_compat import (
+    DROPPED_FIELDS_NEGOTIATION,
+    DROPPED_FIELDS_UNDECLARED_ENVELOPE,
     STANDARD_ADCP_READ_TOOLS,
     _log_dropped_fields,
     normalize_request_params,
@@ -301,7 +303,7 @@ def _validate_envelope_tolerant[RequestModelT: BaseModel](
     fields are handled earlier in ``_handle_explicit_skill``. See #1512.
     """
     cleaned, dropped_env = strip_undeclared_envelope_fields(params, set(model.model_fields))
-    _log_dropped_fields(operation, "undeclared AdCP envelope", dropped_env)
+    _log_dropped_fields(operation, DROPPED_FIELDS_UNDECLARED_ENVELOPE, dropped_env)
     return model.model_validate(cleaned)
 
 
@@ -1733,7 +1735,7 @@ class AdCPRequestHandler(RequestHandler):
         # task-model validation; malformed supplied values were rejected above.
         if skill_name in STANDARD_ADCP_READ_TOOLS and "idempotency_key" in parameters:
             parameters = {key: value for key, value in parameters.items() if key != "idempotency_key"}
-            _log_dropped_fields(skill_name, "inert read idempotency", ["idempotency_key"])
+            _log_dropped_fields(skill_name, DROPPED_FIELDS_UNDECLARED_ENVELOPE, ["idempotency_key"])
 
         # Strip the negotiation envelope fields (adcp_version /
         # adcp_major_version) that every AdCP SDK client injects on each
@@ -1742,7 +1744,7 @@ class AdCPRequestHandler(RequestHandler):
         # raise extra_forbidden and make the agent uncallable by conformant
         # SDK clients (#1512).
         parameters, dropped_negotiation = strip_negotiation_fields(parameters)
-        _log_dropped_fields(skill_name, "AdCP negotiation", dropped_negotiation)
+        _log_dropped_fields(skill_name, DROPPED_FIELDS_NEGOTIATION, dropped_negotiation)
 
         # Inject push_notification_config into parameters for skills that need it
         # Serialize protobuf to dict at the transport boundary — _impl accepts dict

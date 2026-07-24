@@ -19,6 +19,8 @@ from pydantic import ValidationError
 from src.core.adcp_version import validate_adcp_version_pins
 from src.core.exceptions import AdCPError, normalize_to_adcp_error
 from src.core.request_compat import (
+    DROPPED_FIELDS_NEGOTIATION,
+    DROPPED_FIELDS_UNDECLARED_ENVELOPE,
     _log_dropped_fields,
     deep_strip_to_schema,
     normalize_request_params,
@@ -47,11 +49,11 @@ class RequestCompatMiddleware(Middleware):
        on reads it is validated inert metadata; omission is tolerated (3.1 grace).
     4. Drop AdCP version-negotiation envelope fields (adcp_version,
        adcp_major_version) via strip_negotiation_fields() — all environments,
-       since no tool wrapper declares them (issue #1512).
+       since no tool wrapper declares them.
     5. Drop standard AdCP envelope fields the tool doesn't declare
        (ADCP_ENVELOPE_FIELDS: context, ext, push_notification_config,
        idempotency_key) via strip_undeclared_envelope_fields() —
-       all environments (issue #1512).
+       all environments.
     6. Strip fields not in the tool's JSON Schema via strip_unknown_params()
        (production only).
     7. If TypeAdapter rejects the arguments, always translate and record the
@@ -116,12 +118,12 @@ class RequestCompatMiddleware(Middleware):
         # Step 4: Drop AdCP version-negotiation envelope fields (all environments).
         # Every AdCP SDK client injects adcp_version / adcp_major_version for
         # version negotiation; no tool wrapper declares them, so FastMCP's strict
-        # per-tool arg-validation would reject conformant clients (#1512). These
+        # per-tool arg-validation would reject conformant clients. These
         # are protocol envelope, not tool params — unlike Step 5's schema strip,
         # this runs in every environment.
         normalized, dropped = strip_negotiation_fields(normalized)
         modified = modified or bool(dropped)
-        _log_dropped_fields(tool_name, "AdCP negotiation", dropped)
+        _log_dropped_fields(tool_name, DROPPED_FIELDS_NEGOTIATION, dropped)
 
         # Resolve the tool's declared params once — used by the envelope strip
         # (all environments) and the production unknown-field strip below.
@@ -131,11 +133,11 @@ class RequestCompatMiddleware(Middleware):
         # (ADCP_ENVELOPE_FIELDS — context / ext / push_notification_config /
         # idempotency_key), all environments. SDK clients send
         # these on any request; a tool that declares one receives it, a tool
-        # that doesn't would otherwise reject it (#1512). Protocol envelope,
+        # that doesn't would otherwise reject it. Protocol envelope,
         # not business data — unlike Step 5's general unknown strip.
         normalized, dropped_env = strip_undeclared_envelope_fields(normalized, known_params)
         modified = modified or bool(dropped_env)
-        _log_dropped_fields(tool_name, "undeclared AdCP envelope", dropped_env)
+        _log_dropped_fields(tool_name, DROPPED_FIELDS_UNDECLARED_ENVELOPE, dropped_env)
 
         # Step 6: Strip unknown fields (schema-aware, production only)
         # In dev mode, unknown fields reach TypeAdapter and fail loudly —
