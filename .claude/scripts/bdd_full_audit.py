@@ -24,7 +24,18 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-TRANSPORTS = {"impl", "a2a", "mcp", "rest"}
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from bdd_audit_common import (  # noqa: E402
+    extract_longrepr_e_line,
+    extract_scenario_base,
+    extract_transport,
+    extract_uc,
+    grade_base,
+)
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 INSPECTOR_DIR = PROJECT_ROOT / ".claude" / "reports" / "inspect-all-steps"
 CONFTEST_PATH = PROJECT_ROOT / "tests" / "bdd" / "conftest.py"
@@ -46,7 +57,12 @@ STEPS_DIR = PROJECT_ROOT / "tests" / "bdd" / "steps"
 # FIX_NOW: test infrastructure we control
 FIX_NOW = {
     "STALE_STRICT_XFAIL": "Test passes but strict xfail tag rejects it — remove tag",
-    "GRADUATE": "All transports pass — remove xfail tag",
+    "GRADUATE": "All present transports pass — remove xfail tag",
+    "GRADUATE_CONFIRM": (
+        "All present transports pass, but the set is single-transport or "
+        "e2e_rest-only — confirm before removing xfail (e2e is environment-dependent)"
+    ),
+    "PARTIAL_XPASS": "Passes some transports — investigate remaining gaps before graduating",
     "FIXTURE_GAP": "Strengthened assertion exposes missing test fixture data — fix factory",
     "STEP_BUG": "Step implementation has a bug — fix step code",
     "WEAK_ASSERTION": "Inspector-flagged: assertion doesn't match scenario intent",
@@ -96,14 +112,8 @@ def parse_test_results(json_path: Path) -> list[TestEntry]:
     data = json.loads(json_path.read_text())
     entries = []
     for t in data["tests"]:
-        error = ""
         longrepr = t.get("call", {}).get("longrepr", "")
-        # Extract E-line from longrepr
-        for line in longrepr.split("\n"):
-            stripped = line.strip()
-            if stripped.startswith("E "):
-                error = stripped[2:].strip()
-                break
+        error = extract_longrepr_e_line(longrepr)
         entries.append(
             TestEntry(
                 nodeid=t["nodeid"],
@@ -114,25 +124,6 @@ def parse_test_results(json_path: Path) -> list[TestEntry]:
             )
         )
     return entries
-
-
-def extract_uc(nodeid: str) -> str:
-    """Extract use case from nodeid (e.g., 'UC-004')."""
-    m = re.search(r"test_uc(\d+)", nodeid)
-    return f"UC-{m.group(1)}" if m else "GENERIC"
-
-
-def extract_transport(nodeid: str) -> str | None:
-    """Extract transport from parametrized test nodeid."""
-    m = re.search(r"\[(impl|a2a|mcp|rest)", nodeid)
-    return m.group(1) if m else None
-
-
-def extract_scenario_base(nodeid: str) -> str:
-    """Strip transport suffix to get scenario base name."""
-    # Remove everything inside [...] brackets
-    base = re.sub(r"\[.*\]", "", nodeid)
-    return base
 
 
 def parse_inspector_reports() -> list[InspectorFlag]:
@@ -295,25 +286,39 @@ def classify_xfail(entry: TestEntry, tag_reasons: dict[str, str]) -> tuple[str, 
     return "XFAIL_IT", "NOT_IMPLEMENTED", reason
 
 
-def classify_xpass(entry: TestEntry, all_entries: list[TestEntry]) -> tuple[str, str, str]:
-    """Classify an xpassed test. Returns (bucket, category, detail).
+def classify_xpass(entry: TestEntry, all_entries: list[TestEntry]) -> tuple[str, str, str, int]:
+    """Classify an xpassed test. Returns (bucket, category, detail, present_count).
 
-    All xpasses are FIX_NOW — remove the stale xfail tag.
+    FIX_NOW either way: GRADUATE when every transport *present for this base*
+    passed (remove the stale xfail tag); GRADUATE_CONFIRM when that present
+    set is a single transport or e2e_rest-only (needs human confirmation —
+    e2e_rest xfails are non-strict because e2e is environment-dependent);
+    PARTIAL_XPASS when only a subset of the present transports passed.
     """
     base = extract_scenario_base(entry.nodeid)
-
-    passing_transports = set()
-    for e in all_entries:
-        if extract_scenario_base(e.nodeid) == base and e.outcome in ("xpassed", "passed"):
-            t = extract_transport(e.nodeid)
-            if t:
-                passing_transports.add(t)
-
-    if passing_transports >= TRANSPORTS:
-        return "FIX_NOW", "GRADUATE", f"All transports pass: {sorted(passing_transports)}"
-    else:
-        missing = TRANSPORTS - passing_transports
-        return "FIX_NOW", "GRADUATE", f"Passes: {sorted(passing_transports)}, missing: {sorted(missing)}"
+    graduates, passing, missing, present_n, needs_confirmation = grade_base(
+        base, ((e.nodeid, e.outcome) for e in all_entries)
+    )
+    if graduates:
+        if needs_confirmation:
+            return (
+                "FIX_NOW",
+                "GRADUATE_CONFIRM",
+                f"All {present_n} present transports pass (needs confirmation): {sorted(passing)}",
+                present_n,
+            )
+        return (
+            "FIX_NOW",
+            "GRADUATE",
+            f"All {present_n} present transports pass: {sorted(passing)}",
+            present_n,
+        )
+    return (
+        "FIX_NOW",
+        "PARTIAL_XPASS",
+        f"Passes: {sorted(passing)}, missing: {sorted(missing)}",
+        present_n,
+    )
 
 
 # ── Work item generation ─────────────────────────────────────────────
@@ -378,20 +383,25 @@ def generate_work_items(
                 )
             )
 
-    # ── 2. Xpassed tests → FIX_NOW (graduate) ───────────────────────
-    grad_groups: dict[str, list[TestEntry]] = defaultdict(list)
+    # ── 2. Xpassed tests → FIX_NOW (graduate when all present transports pass) ─
+    grad_groups: dict[tuple[str, str, int], list[TestEntry]] = defaultdict(list)
     for entry in xpassed:
-        _, _, detail = classify_xpass(entry, all_entries)
-        grad_groups[detail].append(entry)
+        _, cat, detail, present_n = classify_xpass(entry, all_entries)
+        grad_groups[(cat, detail, present_n)].append(entry)
 
-    for detail, entries in grad_groups.items():
+    for (cat, detail, present_n), entries in grad_groups.items():
         uc = extract_uc(entries[0].nodeid) if entries else "MIXED"
-        all_pass = "All transports pass" in detail
+        if cat == "GRADUATE_CONFIRM":
+            title = f"Graduate needs confirmation (all {present_n} present): {uc}"
+        elif cat == "GRADUATE":
+            title = f"Graduate (all {present_n} present): {uc}"
+        else:
+            title = f"Partial xpass (gaps remain): {uc}"
         items.append(
             WorkItem(
-                title=f"Graduate {'(all transports)' if all_pass else '(partial)'}: {uc}",
+                title=title,
                 bucket="FIX_NOW",
-                category="GRADUATE",
+                category=cat,
                 uc=uc,
                 test_count=len(entries),
                 details=detail,
@@ -424,9 +434,7 @@ def generate_work_items(
     if inspector_flags:
         by_uc: dict[str, list[InspectorFlag]] = defaultdict(list)
         for flag in inspector_flags:
-            m = re.search(r"uc(\d+)", flag.source_file)
-            uc = f"UC-{m.group(1)}" if m else "GENERIC"
-            by_uc[uc].append(flag)
+            by_uc[extract_uc(flag.source_file)].append(flag)
 
         for uc, flags in by_uc.items():
             items.append(
@@ -504,11 +512,12 @@ def generate_report(
         for item in fix_now:
             by_cat[item.category].append(item)
 
-        for cat in ["STALE_STRICT_XFAIL", "GRADUATE", "FIXTURE_GAP", "STEP_BUG", "WEAK_ASSERTION"]:
+        # Single source of truth: FIX_NOW insertion order (no parallel list).
+        for cat in FIX_NOW:
             cat_items = by_cat.get(cat, [])
             if not cat_items:
                 continue
-            cat_desc = FIX_NOW.get(cat, cat)
+            cat_desc = FIX_NOW[cat]
             total = sum(i.test_count for i in cat_items)
             lines.append(f"### {cat} ({len(cat_items)} items, {total} tests)")
             lines.append(f"*{cat_desc}*")

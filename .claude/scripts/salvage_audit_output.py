@@ -14,7 +14,9 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any, TextIO
 
 
 def parse_raw_output(raw_path: Path) -> dict:
@@ -53,95 +55,116 @@ def parse_raw_output(raw_path: Path) -> dict:
     }
 
 
+def _store_key(kind: str, step: dict, fallback_name: str = "") -> str:
+    """Kind-scoped dedupe key so triage and deep traces do not collide."""
+    name = step.get("function_name") or fallback_name
+    return f"{kind}:{name}:{step.get('line_number', 0)}"
+
+
+def _placeholder_step(func_name: str) -> dict:
+    """Minimal step record when the step index is unavailable."""
+    return {
+        "file_path": "unknown",
+        "line_number": 0,
+        "step_type": "then",
+        "step_text": "",
+        "function_name": func_name,
+        "source_text": "",
+    }
+
+
+def iter_jsonl_records(path: Path) -> Iterator[dict[str, Any]]:
+    """Yield parsed JSON objects from a JSONL file (skip blanks / bad lines)."""
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            yield json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+
+def _load_existing_keys(store_path: Path) -> set[str]:
+    """Load kind-scoped keys already present in the JSONL store."""
+    existing_keys: set[str] = set()
+    for obj in iter_jsonl_records(store_path):
+        step = obj.get("step", {})
+        existing_keys.add(_store_key(str(obj.get("kind")), step))
+    return existing_keys
+
+
+def _append_if_new(
+    f: TextIO,
+    kind: str,
+    r: dict[str, Any],
+    step_lookup: dict[str, dict[str, Any]],
+    existing_keys: set[str],
+    record: dict[str, Any],
+) -> bool:
+    """Write ``record`` once per kind-scoped key. Returns True if written."""
+    step_info = step_lookup.get(r["func_name"], _placeholder_step(r["func_name"]))
+    key = _store_key(kind, step_info, r["func_name"])
+    if key in existing_keys:
+        return False
+    payload = {**record, "kind": kind, "step": step_info}
+    f.write(json.dumps(payload) + "\n")
+    existing_keys.add(key)
+    return True
+
+
 def write_to_store(parsed: dict, store_path: Path, step_index_path: Path | None) -> None:
     """Write parsed results to the JSONL store.
 
     Since we only have function names (not full BddStepInfo), we write
     lightweight records that the resume logic can match against.
     """
-    # Load existing store to avoid duplicates
-    existing_keys = set()
-    if store_path.exists():
-        for line in store_path.read_text().splitlines():
-            if not line.strip():
-                continue
-            try:
-                obj = json.loads(line)
-                step = obj.get("step", {})
-                existing_keys.add(f"{step.get('function_name')}:{step.get('line_number', 0)}")
-            except json.JSONDecodeError:
-                continue
+    existing_keys = _load_existing_keys(store_path)
 
     # We need the step index to get file/line info.
     # If not available, write with func_name only (partial records).
     step_lookup = {}
-    if step_index_path and step_index_path.exists():
-        for line in step_index_path.read_text().splitlines():
-            if not line.strip():
-                continue
-            try:
-                obj = json.loads(line)
-                step = obj.get("step", {})
-                step_lookup[step.get("function_name")] = step
-            except json.JSONDecodeError:
-                continue
+    if step_index_path is not None:
+        for obj in iter_jsonl_records(step_index_path):
+            step = obj.get("step", {})
+            step_lookup[step.get("function_name")] = step
 
     new_triage = 0
     new_deep = 0
 
     store_path.parent.mkdir(parents=True, exist_ok=True)
     with open(store_path, "a") as f:
-        # Write Pass 1 results
         for r in parsed["pass1"]:
-            step_info = step_lookup.get(
-                r["func_name"],
+            if _append_if_new(
+                f,
+                "triage",
+                r,
+                step_lookup,
+                existing_keys,
                 {
-                    "file_path": "unknown",
-                    "line_number": 0,
-                    "step_type": "then",
-                    "step_text": "",
-                    "function_name": r["func_name"],
-                    "source_text": "",
-                },
-            )
-            key = f"{step_info.get('function_name', r['func_name'])}:{step_info.get('line_number', 0)}"
-            if key not in existing_keys:
-                record = {
-                    "kind": "triage",
-                    "step": step_info,
                     "verdict": r["verdict"],
                     "reason": "salvaged from raw output (original reason lost)",
                     "source": "pass1",
-                }
-                f.write(json.dumps(record) + "\n")
-                existing_keys.add(key)
+                },
+            ):
                 new_triage += 1
 
-        # Write Pass 2 results
         for r in parsed["pass2"]:
-            step_info = step_lookup.get(
-                r["func_name"],
+            if _append_if_new(
+                f,
+                "deep",
+                r,
+                step_lookup,
+                existing_keys,
                 {
-                    "file_path": "unknown",
-                    "line_number": 0,
-                    "step_type": "then",
-                    "step_text": "",
-                    "function_name": r["func_name"],
-                    "source_text": "",
+                    "claims": "salvaged — see full report for details",
+                    "actually_tests": "salvaged — see full report for details",
+                    "recommendation": "salvaged — see full report for details",
+                    "severity": r["severity"],
                 },
-            )
-            key = f"{step_info.get('function_name', r['func_name'])}:{step_info.get('line_number', 0)}"
-            # Only write deep trace if not already present
-            record = {
-                "kind": "deep",
-                "step": step_info,
-                "claims": "salvaged — see full report for details",
-                "actually_tests": "salvaged — see full report for details",
-                "recommendation": "salvaged — see full report for details",
-                "severity": r["severity"],
-            }
-            f.write(json.dumps(record) + "\n")
-            new_deep += 1
+            ):
+                new_deep += 1
 
     print(f"Salvaged to {store_path}:")
     print(f"  Pass 1: {new_triage} new triage results (of {len(parsed['pass1'])} total)")

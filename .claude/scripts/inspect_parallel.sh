@@ -14,18 +14,28 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-INSPECTOR="/Users/konst/.claude/plugins/cache/agentic-toolkit/qa-bdd/0.2.0/skills/inspect-steps/scripts/inspect_bdd_steps.py"
+# Prefer repo-local inspector; allow override for plugin/vendored copies.
+INSPECTOR="${INSPECT_BDD_STEPS:-$SCRIPT_DIR/inspect_bdd_steps.py}"
 FEATURES_DIR="$PROJECT_ROOT/tests/bdd/features"
 STEPS_DIR="$PROJECT_ROOT/tests/bdd/steps"
+
+if [ ! -f "$INSPECTOR" ]; then
+    echo "ERROR: inspector not found: $INSPECTOR" >&2
+    echo "Set INSPECT_BDD_STEPS to an alternate inspect_bdd_steps.py path." >&2
+    exit 1
+fi
 
 # Parse args
 OUTPUT_DIR="${1:-.claude/reports/inspect-parallel-$(date +%d%m%y_%H%M)}"
 mkdir -p "$OUTPUT_DIR"
 
-# Create patched inspector with timeout=600 and --then-only=False
+# Patch timeout=120 → 600 for long parallel slices. Do not try to flip
+# --then-only here: its argparse block is multiline, so a single-line sed
+# never matched. Parallel runs keep Then-only (inspector default=True) and
+# use --pass1-only below; Given/When would need --no-then-only or a
+# multiline-aware patch.
 PATCHED="/tmp/inspect_bdd_parallel.py"
-sed 's/timeout=180/timeout=600/;s/"--then-only", action="store_true", default=True/"--then-only", action="store_true", default=False/' \
-    "$INSPECTOR" > "$PATCHED"
+sed -E 's/timeout=[0-9]+/timeout=600/' "$INSPECTOR" > "$PATCHED"
 
 echo "=== Parallel BDD Step Inspection ==="
 echo "Inspector: $INSPECTOR"
