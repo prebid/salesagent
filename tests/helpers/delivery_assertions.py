@@ -8,7 +8,52 @@ once (avoids the drift where some sites silently dropped `sequence_number`).
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from src.core.tools._media_buy_status import WEBHOOK_ONLY_FIELDS
+
+if TYPE_CHECKING:
+    from src.core.database.models import PushNotificationConfig
+
+
+def assert_detached_push_config(
+    cfg: PushNotificationConfig | None,
+    *,
+    tenant_id: str,
+    principal_id: str,
+    url: str,
+    config_id: str,
+    authentication_type: str | None,
+    authentication_token: str | None,
+    context: str,
+) -> None:
+    """Assert every field of the transient push config handed to the webhook sender.
+
+    One home for the carrier's full field set. The three graders (the repository
+    unit test plus the signed and unsigned scheduler integration tests) previously
+    hand-rolled this block and had already drifted to three different subsets —
+    ``id`` was asserted at one site only and ``is_active`` at two, so a regression in
+    the scheduler-built ``config_id`` reddened nothing above the unit layer. Every
+    parameter is required precisely so a caller cannot quietly skip a field.
+
+    ``is_active`` is not a parameter: ``build_detached`` hardcodes True for parity
+    with the lookup arm, so it is an invariant of the carrier rather than a
+    per-caller expectation.
+    """
+    assert cfg is not None, f"{context}: expected a push config, got None"
+    assert cfg.id == config_id, f"{context}: expected id {config_id!r}, got {cfg.id!r}"
+    assert cfg.tenant_id == tenant_id, f"{context}: expected tenant_id {tenant_id!r}, got {cfg.tenant_id!r}"
+    assert cfg.principal_id == principal_id, (
+        f"{context}: expected principal_id {principal_id!r}, got {cfg.principal_id!r}"
+    )
+    assert cfg.url == url, f"{context}: expected url {url!r}, got {cfg.url!r}"
+    assert cfg.authentication_type == authentication_type, (
+        f"{context}: expected authentication_type {authentication_type!r}, got {cfg.authentication_type!r}"
+    )
+    assert cfg.authentication_token == authentication_token, (
+        f"{context}: expected authentication_token {authentication_token!r}, got {cfg.authentication_token!r}"
+    )
+    assert cfg.is_active is True, f"{context}: expected is_active True, got {cfg.is_active!r}"
 
 
 def assert_omits_webhook_only_fields(payload: dict, *, context: str) -> None:

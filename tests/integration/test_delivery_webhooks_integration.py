@@ -26,7 +26,12 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools._media_buy_status import SERVING_PERSISTED_STATUSES
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
-from tests.helpers.delivery_assertions import assert_next_expected_at_shape, assert_partial_data_pairing
+from tests.harness.delivery_poll import mock_webhook_post
+from tests.helpers.delivery_assertions import (
+    assert_detached_push_config,
+    assert_next_expected_at_shape,
+    assert_partial_data_pairing,
+)
 from tests.helpers.delivery_fixtures import DAILY_REPORTING_WEBHOOK, SIGNED_DAILY_REPORTING_WEBHOOK
 
 
@@ -245,14 +250,17 @@ async def test_delivery_webhook_sends_for_fresh_data(integration_db):
         # took the fallback arm (PushNotificationConfigRepository.build_detached).
         # Pin what that carrier hands the sender — it was previously extracted
         # into a local and never asserted, so a dropped field was invisible here.
-        assert push_notification_config is not None
-        assert push_notification_config.tenant_id == tenant_id
-        assert push_notification_config.principal_id == principal_id
-        assert push_notification_config.url == DAILY_REPORTING_WEBHOOK["url"]
-        assert push_notification_config.is_active is True
         # Unsigned webhook -> no credentials invented along the way.
-        assert push_notification_config.authentication_type is None
-        assert push_notification_config.authentication_token is None
+        assert_detached_push_config(
+            push_notification_config,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            url=DAILY_REPORTING_WEBHOOK["url"],
+            config_id=f"temp_{media_buy_id}",
+            authentication_type=None,
+            authentication_token=None,
+            context="unsigned scheduler carrier",
+        )
 
         yesterday = datetime.now(UTC).date() - timedelta(days=1)
 
@@ -274,7 +282,7 @@ async def test_signed_reporting_webhook_carries_credentials_into_the_push_config
     and no delivery fixture exercised the signed arm before this test.
     """
     tenant_id, principal_id = _create_test_tenant_and_principal()
-    _create_basic_media_buy_with_webhook(
+    media_buy_id = _create_basic_media_buy_with_webhook(
         tenant_id,
         principal_id,
         reporting_webhook=SIGNED_DAILY_REPORTING_WEBHOOK,
@@ -296,12 +304,51 @@ async def test_signed_reporting_webhook_carries_credentials_into_the_push_config
         # Concrete literals, not re-derived from the fixture: the scheme->
         # authentication_type and credentials->authentication_token mapping is
         # exactly what is being graded here.
-        assert cfg is not None
-        assert cfg.authentication_type == "Bearer"
-        assert cfg.authentication_token == "test-webhook-credential"
-        assert cfg.url == "https://example.com/webhook"
-        assert cfg.tenant_id == tenant_id
-        assert cfg.principal_id == principal_id
+        assert_detached_push_config(
+            cfg,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            url="https://example.com/webhook",
+            config_id=f"temp_{media_buy_id}",
+            authentication_type="Bearer",
+            authentication_token="test-webhook-credential",
+            context="signed scheduler carrier",
+        )
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_signed_reporting_webhook_puts_a_bearer_header_on_the_wire(integration_db):
+    """The carrier's credentials become a real outbound ``Authorization`` header.
+
+    The sibling test above stops at the config object handed to ``send_notification``;
+    this one lets ``send_notification`` run for real and mocks only the HTTP POST, so
+    the last hop — ``authentication_type == "Bearer"`` selecting the Bearer arm in
+    ``protocol_webhook_service.send_notification`` — is graded rather than assumed.
+    Without this, disabling that arm entirely left the whole delivery suite green
+    while every signed webhook shipped unauthenticated.
+
+    The header casing is load-bearing: the scheme is stored verbatim from
+    ``reporting_webhook["authentication"]["schemes"][0]``, and the spec enum value is
+    ``"Bearer"``, so a reader comparing a lowercased literal never matches.
+    """
+    tenant_id, principal_id = _create_test_tenant_and_principal()
+    _create_basic_media_buy_with_webhook(
+        tenant_id,
+        principal_id,
+        reporting_webhook=SIGNED_DAILY_REPORTING_WEBHOOK,
+    )
+
+    scheduler = DeliveryWebhookScheduler()
+
+    with mock_webhook_post(scheduler) as mock_post:
+        await scheduler._send_reports()
+
+        assert mock_post.call_count == 1
+        headers = mock_post.call_args.kwargs["headers"]
+        assert headers.get("Authorization") == "Bearer test-webhook-credential", (
+            f"signed reporting_webhook must produce a Bearer Authorization header, got {headers!r}"
+        )
 
 
 @pytest.mark.requires_db

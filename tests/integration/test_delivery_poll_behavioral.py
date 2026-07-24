@@ -26,17 +26,6 @@ from src.core.exceptions import (
 )
 from src.core.schemas import GetMediaBuyDeliveryResponse
 from tests.harness.delivery_poll import mock_send_notification
-
-if TYPE_CHECKING:
-    import threading
-    from collections.abc import Callable
-
-    from sqlalchemy.orm import Session
-
-    from src.core.database.models import MediaBuy
-    from src.core.database.repositories.delivery import DeliveryRepository
-    from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
-    from tests.harness import DeliveryPollEnv
 from tests.helpers.delivery_assertions import (
     assert_next_expected_at_shape,
     assert_omits_webhook_only_fields,
@@ -3779,3 +3768,103 @@ class TestStartTimeFallbackForStatus:
             # The media buy should be filtered out because start_time makes it "pending_start"
             returned_ids = {d.media_buy_id for d in result.media_buy_deliveries}
             assert "mb_time" not in returned_ids
+
+
+# ---------------------------------------------------------------------------
+# Push-config lookup arm — the sibling of build_detached
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestRegisteredPushConfigLookup:
+    """The lookup arm of the scheduler's push-config decision.
+
+    ``build_detached`` (the fallback arm) is graded by the repository unit test and
+    the signed/unsigned scheduler integration tests. This arm — which reads a
+    *stored* ``authentication_token`` out of the database and hands it to the
+    outbound sender — had no test at all: both its ``tenant_id`` and
+    ``principal_id`` predicates could be deleted with the whole unit suite still
+    green, and no test seeded a row that made the lookup return anything, so the
+    branch (including its ``session.expunge``) never executed.
+
+    The scope predicates are a credential boundary, not a filter: a cross-tenant
+    match would emit tenant A's stored bearer token to a URL supplied by tenant B's
+    media buy.
+    """
+
+    def test_lookup_is_scoped_to_the_repository_tenant(self, integration_db):
+        """A row owned by another tenant is invisible, even on an exact URL match."""
+        from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
+        from tests.factories import PrincipalFactory, PushNotificationConfigFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            owner = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=owner, principal_id="p1")
+            PushNotificationConfigFactory(
+                tenant=owner,
+                principal=principal,
+                id="cfg-owned",
+                url=DAILY_REPORTING_WEBHOOK["url"],
+                authentication_type="Bearer",
+                authentication_token="owner-secret",
+            )
+
+            session = env.get_session()
+
+            # Same principal id and same URL, but a foreign tenant scope.
+            foreign = PushNotificationConfigRepository(session, "other-tenant")
+            assert foreign.get_active_by_principal_and_url("p1", DAILY_REPORTING_WEBHOOK["url"]) is None
+
+            # Same tenant, but a principal that does not own the row.
+            other_principal = PushNotificationConfigRepository(session, "t1")
+            assert other_principal.get_active_by_principal_and_url("p2", DAILY_REPORTING_WEBHOOK["url"]) is None
+
+            # The owning (tenant, principal) pair does see it — otherwise the two
+            # assertions above would pass against a lookup that never matches.
+            found = PushNotificationConfigRepository(session, "t1").get_active_by_principal_and_url(
+                "p1", DAILY_REPORTING_WEBHOOK["url"]
+            )
+            assert found is not None
+            assert found.id == "cfg-owned"
+            assert found.authentication_token == "owner-secret"
+
+    @pytest.mark.asyncio
+    async def test_scheduler_reuses_a_registered_config_instead_of_building_one(self, integration_db):
+        """With a registered config for the URL, the scheduler sends ITS credentials.
+
+        Pins the arm choice, not just the query: a registered row must win over the
+        transient carrier, so the buyer's stored token reaches the wire and the
+        scheduler does not silently substitute an unsigned config. Mutating the
+        lookup to return None reddens this.
+        """
+        from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+        from tests.factories import PrincipalFactory, PushNotificationConfigFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            PushNotificationConfigFactory(
+                tenant=tenant,
+                principal=principal,
+                id="cfg-registered",
+                url=DAILY_REPORTING_WEBHOOK["url"],
+                authentication_type="Bearer",
+                authentication_token="registered-secret",
+            )
+            # The buy carries an UNSIGNED reporting_webhook for the same URL, so a
+            # token on the wire can only have come from the registered row.
+            buy = _serving_webhook_buy(env, tenant=tenant, principal=principal)
+
+            scheduler = DeliveryWebhookScheduler()
+            with mock_send_notification(scheduler) as mock_send:
+                await scheduler._send_report_for_media_buy(
+                    buy, buy.raw_request["reporting_webhook"], env.get_session(), force=True
+                )
+
+            cfg = mock_send.await_args.kwargs["push_notification_config"]
+            assert cfg.id == "cfg-registered", (
+                f"scheduler must reuse the registered config, got {cfg.id!r} (the transient carrier is 'temp_*')"
+            )
+            assert cfg.authentication_token == "registered-secret"

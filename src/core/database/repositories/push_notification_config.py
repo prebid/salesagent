@@ -100,8 +100,10 @@ class PushNotificationConfigRepository:
         webhook sender. Keeping the construction here means both arms of *that*
         decision come from the data-access layer, so the delivery-webhook path no
         longer builds the ORM model from raw kwargs in service code. This is scoped
-        to that path: other transient-carrier sites elsewhere in the codebase still
-        construct the model directly and are tracked separately.
+        to that path: three other sites still build a transient config directly —
+        ``src/a2a_server/adcp_a2a_server.py``, ``src/admin/blueprints/creatives.py``
+        and ``src/core/context_manager.py`` — and converting them rides with the
+        second-emitter reconciliation in #1624.
 
         The returned instance is deliberately NOT added to the session — it is a
         transient carrier, not a row, and must not be persisted. That is pinned by

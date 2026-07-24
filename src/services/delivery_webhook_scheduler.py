@@ -451,8 +451,11 @@ class DeliveryWebhookScheduler:
         # reconciliation tracked in #1624.
         #
         # The body emitted here is governed by media-buy-delivery-webhook-result.json
-        # (@ v3.1-04f59d2d5), which lists notification_type in `required` — the
-        # constraint the zero-deliveries note below reasons about.
+        # (@ 3.1.0, the release the schema entered — the v3.1-04f59d2d5 ref above
+        # predates it and does not contain that file, and it is not among the
+        # vendored fixtures under tests/fixtures/adcp_schemas_pinned/, so it is not
+        # graded offline). It lists notification_type in `required` — the constraint
+        # the zero-deliveries note below reasons about.
         #
         # notification_type: derived from the reported statuses — "final" when
         # every buy will never produce more data ("one final notification when

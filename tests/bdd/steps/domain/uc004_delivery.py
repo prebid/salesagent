@@ -1755,12 +1755,16 @@ def then_scheduler_omits_unavailable_count(ctx: dict) -> None:
     wire ``result``. Runs on both Examples rows, so the pairing is graded on the
     final path as well as the scheduled one.
 
-    The sentence deliberately names only the branch that is graded. The schema
-    (media-buy-delivery-webhook-result.json @ 3.1.1) makes `unavailable_count`
-    conditional on `partial_data` being true and permits `partial_data: true`,
-    but production hardcodes it false, so the helper pins that. Wording the step
-    as the general pairing rule would mis-attribute the failure the day real
-    partial-data reporting ships.
+    The sentence deliberately names only the branch that is graded. The presence
+    rule itself comes from the polling-response schema
+    (get-media-buy-delivery-response.json @ v3.1-04f59d2d5): `unavailable_count` is
+    "only present in webhook deliveries when partial_data is true". The dedicated
+    webhook-payload schema words the same rule in prose only — no `if`/`then`, and
+    `additionalProperties: true` — so omitting the field is conformant under both,
+    which is why the helper can assert the stricter polling reading. Both schemas
+    permit `partial_data: true`; production hardcodes it false, so the helper pins
+    that. Wording the step as the general pairing rule would mis-attribute the
+    failure the day real partial-data reporting ships.
     """
     assert_partial_data_pairing(_scheduler_result(ctx), context="scheduler wire result")
 

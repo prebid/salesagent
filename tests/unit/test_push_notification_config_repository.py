@@ -21,6 +21,7 @@ from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
+from tests.helpers.delivery_assertions import assert_detached_push_config
 
 _URL = "https://example.com/webhook"
 
@@ -49,13 +50,16 @@ class TestBuildDetachedCarriesEveryField:
             authentication_token="secret-token",
         )
 
-        assert cfg.id == "temp_mb-1"
-        assert cfg.tenant_id == "t1"
-        assert cfg.principal_id == "p1"
-        assert cfg.url == _URL
-        assert cfg.authentication_type == "Bearer"
-        assert cfg.authentication_token == "secret-token"
-        assert cfg.is_active is True
+        assert_detached_push_config(
+            cfg,
+            tenant_id="t1",
+            principal_id="p1",
+            url=_URL,
+            config_id="temp_mb-1",
+            authentication_type="Bearer",
+            authentication_token="secret-token",
+            context="build_detached carrier",
+        )
 
     def test_tenant_id_comes_from_repository_scope_not_an_argument(self):
         """The tenant is the repo's scope — callers cannot pass a foreign one."""
