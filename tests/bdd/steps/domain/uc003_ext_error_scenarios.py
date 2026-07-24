@@ -10,10 +10,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from pytest_bdd import given, parsers, then
+from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
-from tests.bdd.steps.domain.uc003_update_media_buy import _ensure_update_defaults
+from tests.bdd.steps.domain.uc003_update_media_buy import (
+    _ensure_update_defaults,
+    given_buyer_owns_media_buy,
+    when_send_update_request,
+)
 from tests.bdd.steps.generic._auth import authenticate_env_as
 
 
@@ -919,3 +923,79 @@ def then_suggestion_contains_either(ctx: dict, text1: str, text2: str) -> None:
     assert text1.lower() in suggestion or text2.lower() in suggestion, (
         f"Expected suggestion to contain '{text1}' or '{text2}', got: {suggestion}"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Storyboard v3.1: structured lookup errors (invalid_transitions)
+# ═══════════════════════════════════════════════════════════════════════
+
+_STORYBOARD_CORRELATION_ID = "corr-uc003-invalid-transitions"
+
+
+@given("the buyer fabricates a media_buy_id that does not exist in the seller catalog")
+def given_fabricated_media_buy_id(ctx: dict) -> None:
+    """Point the update at a media_buy_id absent from the seller catalog.
+
+    Verifies absence in the DB so the step's claim holds even if a factory
+    ever starts seeding similarly named buys.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import MediaBuy
+
+    kwargs = _ensure_update_defaults(ctx)
+    fabricated = "mb_fabricated_unknown"
+    with db_session(ctx) as session:
+        db_mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=fabricated)).first()
+        assert db_mb is None, f"Media buy '{fabricated}' unexpectedly exists — fabricated ID must be absent"
+    kwargs["media_buy_id"] = fabricated
+
+
+@given("the media buy exists in the seller catalog")
+def given_media_buy_exists_in_catalog(ctx: dict) -> None:
+    """Storyboard phrasing for the existing-buy precondition.
+
+    Delegates to the canonical 'Buyer owns an existing media buy' step so
+    both phrasings verify ctx state AND database persistence identically.
+    """
+    given_buyer_owns_media_buy(ctx)
+
+
+@given("the buyer references a package_id that does not belong to the media buy")
+def given_unrelated_package_reference(ctx: dict) -> None:
+    """Target a package_id that is not attached to the (existing) media buy."""
+    mb = ctx.get("existing_media_buy")
+    assert mb is not None, "No existing_media_buy in ctx — conftest setup_update_data() failed"
+    unknown_pkg = "pkg_not_in_this_buy"
+    # Reuse the parametrized absence guard rather than re-inlining the DB check.
+    given_package_not_in_media_buy(ctx, unknown_pkg)
+    kwargs = _ensure_update_defaults(ctx)
+    kwargs["media_buy_id"] = mb.media_buy_id
+    kwargs["packages"] = [{"package_id": unknown_pkg, "paused": True}]
+
+
+def _send_storyboard_update(ctx: dict, extra: dict[str, Any] | None = None) -> None:
+    """Attach a correlation context, then dispatch via the canonical When step.
+
+    The request carries context.correlation_id so the Then step can assert
+    the seller echoes it unchanged in the error envelope. Contract:
+    AdCP 3.1.0-beta.3, dist/compliance/3.1.0-beta.3/protocols/media-buy/
+    scenarios/invalid_transitions.yaml (``path: context.correlation_id``,
+    "returned unchanged").
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    if extra:
+        kwargs.update(extra)
+    kwargs["context"] = {"correlation_id": _STORYBOARD_CORRELATION_ID}
+    ctx["sent_correlation_id"] = _STORYBOARD_CORRELATION_ID
+    when_send_update_request(ctx)
+
+
+@when("the Buyer Agent sends update_media_buy with the unknown media_buy_id and paused true")
+def when_update_unknown_media_buy_paused(ctx: dict) -> None:
+    _send_storyboard_update(ctx, {"paused": True})
+
+
+@when("the Buyer Agent sends update_media_buy targeting the unknown package")
+def when_update_unknown_package(ctx: dict) -> None:
+    _send_storyboard_update(ctx)

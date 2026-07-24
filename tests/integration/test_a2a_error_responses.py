@@ -692,7 +692,7 @@ class TestA2AErrorPropagation:
         from datetime import UTC, datetime, timedelta
         from decimal import Decimal
 
-        from tests.factories import MediaBuyFactory
+        from tests.factories import MediaBuyFactory, MediaPackageFactory
 
         now = datetime.now(UTC)
         media_buy = MediaBuyFactory(
@@ -707,6 +707,11 @@ class TestA2AErrorPropagation:
             start_time=now,
             end_time=now + timedelta(days=30),
         )
+        # The package-existence guard in _update_media_buy_impl resolves
+        # referenced packages before the financial validators run; seed the
+        # package the budget test targets so the wire envelope pins
+        # BUDGET_TOO_LOW rather than PACKAGE_NOT_FOUND.
+        MediaPackageFactory(media_buy=media_buy, package_id="pkg-1")
         return media_buy.media_buy_id
 
     async def test_update_media_buy_campaign_budget_exceeded_wire_envelope(
@@ -787,6 +792,50 @@ class TestA2AErrorPropagation:
 
         artifact_data = self.extract_data_from_artifact(result.artifacts[0])
         assert_envelope_shape(artifact_data, "BUDGET_TOO_LOW", recovery="correctable")
+
+    async def test_update_media_buy_absent_package_preempts_budget_wire_envelope(
+        self, handler, test_tenant, test_principal, active_media_buy
+    ):
+        """An absent package + an under-minimum budget surfaces PACKAGE_NOT_FOUND, not BUDGET_TOO_LOW.
+
+        Pins the intentional precedence in ``_update_media_buy_impl``: the
+        package-existence guard runs before the financial validators, so when
+        a package reference is *both* unknown to the buy and carries an invalid
+        budget, the buyer gets PACKAGE_NOT_FOUND (fix the reference first), not
+        a field-level budget error against a package that does not exist. The
+        ``active_media_buy`` fixture seeds ``pkg-1``; this request targets the
+        unseeded ``pkg-absent`` with the same below-floor 0.50 budget that the
+        sibling test uses to drive BUDGET_TOO_LOW.
+        """
+        identity = PrincipalFactory.make_identity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(test_tenant)
+
+        skill_params = {
+            "media_buy_id": active_media_buy,
+            "packages": [{"package_id": "pkg-absent", "budget": 0.50}],
+        }
+        message = self.create_message_with_skill("update_media_buy", skill_params)
+        params = SendMessageRequest(message=message)
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.artifacts is not None
+        assert len(result.artifacts) > 0
+
+        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+        assert_envelope_shape(artifact_data, "PACKAGE_NOT_FOUND", recovery="correctable")
 
 
 @pytest.mark.integration

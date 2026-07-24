@@ -1,10 +1,12 @@
 """Then steps for error assertions (failure, error codes, messages, suggestions).
 
-These steps assert on ``ctx["error"]`` which is populated by When steps when
-an operation fails. Errors are real exceptions from production code:
-    - AdCPError subclasses (have .error_code, .message)
-    - pydantic.ValidationError (mapped to VALIDATION_ERROR)
-    - Other exceptions
+Error-path steps grade the WIRE contract (Error Verification Policy,
+tests/CLAUDE.md): ``dispatch_request`` stores the normalized ``TransportResult``
+on ``ctx['result']``, and its ``wire_error_envelope`` is the buyer-facing
+two-layer ``{adcp_error, errors[]}`` shape. Steps read that via the ``_wire_*``
+accessors (or ``TransportResult.assert_wire_error`` for a full code assertion),
+never the lossy reconstructed ``ctx['error']`` — which is only a fallback for
+the handful of message/existence steps that predate wire-first grading.
 """
 
 from __future__ import annotations
@@ -140,6 +142,24 @@ def _get_error_dict(error: object) -> dict:
     return {"code": _get_error_code(error), "message": _get_error_message(error)}
 
 
+def _require_wire_envelope(ctx: dict) -> dict:
+    """Return the two-layer wire error envelope off the dispatched result.
+
+    Single source of truth: ``dispatch_request`` stores the ``TransportResult``
+    on ``ctx['result']`` and exposes the real two-layer envelope on
+    ``wire_error_envelope`` — the same path the ``_wire_*`` accessors read.
+    Raises loudly (never falls back to the reconstructed exception) so a step
+    that means to grade the wire cannot silently pass without one; IMPL is out
+    of BDD parametrization (#1417), so every error scenario has a wire.
+    """
+    result = ctx.get("result")
+    envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
+    assert isinstance(envelope, dict), (
+        f"No wire error envelope captured for this transport — error: {ctx.get('error')!r}"
+    )
+    return envelope
+
+
 # ── Shared validation ───────────────────────────────────────────────
 
 
@@ -208,60 +228,13 @@ def then_operation_fails(ctx: dict) -> None:
     )
 
 
-@then("the entire sync operation fails")
-def then_entire_sync_operation_fails(ctx: dict) -> None:
-    """Assert the sync operation failed entirely -- no partial successes.
-
-    Stronger than "the operation should fail": this step additionally verifies
-    that the failure is total.  When a sync runs in strict validation mode
-    (BR-RULE-172 INV-5), a single invalid catalog must cause the entire
-    operation to be rejected -- the response must NOT contain any successfully
-    processed items alongside the error.
-
-    Asserts:
-    1. An error was recorded with meaningful error information.
-    2. If a response exists with a results/catalogs collection, NONE of the
-       items were processed successfully (no partial success).
-    """
-    # ── Resolve the error object ────────────────────────────────────
-    error = ctx.get("error")
-    resp = ctx.get("response")
-
-    # Promote response.errors if no top-level error was captured
-    if error is None and resp is not None and hasattr(resp, "errors") and resp.errors:
-        first_error = resp.errors[0]
-        assert first_error is not None, "response.errors[0] is None -- expected a concrete error"
-        ctx["error"] = first_error
-        error = first_error
-
-    assert error is not None, (
-        "Expected the entire sync operation to fail but no error was recorded. "
-        f"ctx keys: {list(ctx.keys())}, response: {resp!r}"
-    )
-
-    # ── Verify it carries meaningful error information ──────────────
-    _assert_meaningful_error(error)
-
-    # ── Verify NO partial successes ─────────────────────────────────
-    # "Entire sync fails" means the operation was rejected wholesale.
-    # If a response exists with item-level results, none may have succeeded.
-    if resp is not None:
-        for attr in ("catalogs", "results", "items"):
-            items = getattr(resp, attr, None)
-            if items is None:
-                continue
-            successful = [
-                item
-                for item in items
-                if getattr(item, "action", None) not in (None, "failed", "error", "rejected")
-                or getattr(item, "status", None) == "success"
-            ]
-            assert not successful, (
-                f"Expected entire sync to fail but found {len(successful)} "
-                f"successfully processed item(s) in response.{attr} -- "
-                f"this indicates partial success, not total failure. "
-                f"BR-RULE-172 INV-5 requires the ENTIRE operation to fail."
-            )
+# NOTE: a "the entire sync operation fails" step (BR-RULE-172 INV-5, no
+# partial successes) briefly lived here, but its consumer feature
+# (BR-UC-023) is not wired via ``scenarios()`` and the strict-mode failure
+# it targets raises before a response exists, so the no-partial-success
+# check could never execute. Add it together with the UC-023 wiring —
+# with a ``resp is None`` branch and enum-normalized item actions
+# (``enum_value``) — rather than shipping a step that grades nothing.
 
 
 # ── Error code ───────────────────────────────────────────────────────
@@ -281,6 +254,13 @@ def then_error_code(ctx: dict, code: str) -> None:
         assert error is not None, "No error recorded in ctx"
         actual = _get_error_code(error)
     assert actual == code, f"Expected error code '{code}', got '{actual}'"
+
+
+# NOTE: error-path scenarios grade the WIRE code (Error Verification Policy,
+# tests/CLAUDE.md) — the reconstructed exception collapses distinct wire codes
+# onto one exception class. ``then_error_code`` above is wire-first for every
+# transport (generalized in #1417); the reconstructed ``ctx['error']`` is only
+# a fallback for IMPL/no-wire scenarios.
 
 
 # ── Error message content (generic) ───────────────────────────────────
@@ -423,6 +403,36 @@ def then_error_recovery(ctx: dict, recovery: str) -> None:
         raise AssertionError(f"Cannot check recovery on non-AdCPError: {type(error).__name__}")
 
 
+@then("the error recovery hint should indicate correctable")
+def then_error_recovery_correctable(ctx: dict) -> None:
+    """Assert recovery=correctable on the wire envelope (both layers agree)."""
+    envelope = _require_wire_envelope(ctx)
+    ctx["result"].assert_wire_error(envelope["errors"][0]["code"], recovery="correctable")
+
+
+@then("the response should echo the context.correlation_id unchanged")
+def then_error_echoes_correlation_id(ctx: dict) -> None:
+    """Assert the wire envelope echoes the request's context.correlation_id."""
+    sent = ctx.get("sent_correlation_id")
+    assert sent, "When step did not record ctx['sent_correlation_id'] — cannot verify echo"
+    envelope = _require_wire_envelope(ctx)
+    context = envelope.get("context")
+    echoed = context.get("correlation_id") if isinstance(context, dict) else None
+    assert echoed == sent, f"Expected correlation_id '{sent}' echoed unchanged, got '{echoed}'"
+
+
+@then("the response should NOT be a 500 or non-AdCP error shape")
+def then_error_is_structured_adcp_shape(ctx: dict) -> None:
+    """Assert the failure surfaced as the two-layer AdCP envelope, not a 500.
+
+    A bare 500 / non-AdCP body has no ``wire_error_envelope`` and no
+    ``{adcp_error, errors[]}`` code, so grading the envelope's own code through
+    the canonical ``assert_wire_error`` is itself the "not a 500" assertion.
+    """
+    envelope = _require_wire_envelope(ctx)
+    ctx["result"].assert_wire_error(envelope["errors"][0]["code"], recovery=envelope["errors"][0].get("recovery"))
+
+
 @then('the error should include a "suggestion" field')
 @then('the error should include "suggestion" field')
 def then_error_has_suggestion(ctx: dict) -> None:
@@ -461,16 +471,21 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
 
         # Pydantic ValidationErrors carry the fix guidance inline in each field
         # error's ``msg`` (e.g. "Input should be 'operator', 'agent' or 'advertiser'")
-        # rather than a separate ``suggestion`` field. That inline message IS the
-        # actionable guidance, so accept it without the verb check below.
+        # rather than a separate ``suggestion`` field. That inline message counts
+        # as the actionable guidance only when it states an EXPECTATION the caller
+        # can act on — a bare non-empty msg is true by construction and would make
+        # this step tautological for every ValidationError.
         from pydantic import ValidationError
 
         if isinstance(error, ValidationError):
             details = error.errors()
             assert details, "ValidationError has no field-level details to guide a fix"
+            guidance_markers = ("should", "must", "required", "expected", "valid", "ensure", "at least", "at most")
             for detail in details:
-                msg = detail.get("msg", "")
-                assert isinstance(msg, str) and msg.strip(), f"ValidationError detail lacks fix guidance: {detail}"
+                msg = str(detail.get("msg", ""))
+                assert any(marker in msg.lower() for marker in guidance_markers), (
+                    f"ValidationError detail states a failure but no expectation the caller can act on: {detail}"
+                )
             return
 
         suggestion = _get_error_dict(error).get("suggestion")

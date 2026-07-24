@@ -2823,6 +2823,15 @@ def _is_brand_shorthand_media_buy(marker_names: set[str]) -> bool:
     return "brand_shorthand" in marker_names and "create_media_buy" in marker_names
 
 
+# UC-003 storyboard lookup-error scenarios wired to MediaBuyDualEnv (#1432):
+# unknown media_buy_id / unknown package_id must surface structured
+# MEDIA_BUY_NOT_FOUND / PACKAGE_NOT_FOUND on the wire. Unioned into the
+# UC-003 harness condition alongside #1417's ext-*/targeting-overlay sets.
+_UC003_STORYBOARD_WIRED: set[str] = {
+    "T-UC-003-storyboard-media-buy-not-found",
+    "T-UC-003-storyboard-package-not-found",
+}
+
 # Admin scenarios have their own transport (Flask test_client / requests.Session).
 # They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
@@ -3299,7 +3308,13 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-003-approval-tenant",
             "T-UC-003-approval-adapter",
         }
-        if any(t.startswith("T-UC-003-ext-") for t in marker_names) or (marker_names & _UC003_TARGETING_OVERLAY):
+        if (
+            any(t.startswith("T-UC-003-ext-") for t in marker_names)
+            or (marker_names & _UC003_TARGETING_OVERLAY)
+            # Storyboard lookup-error scenarios (#1432): same env, same seed —
+            # they exercise the MEDIA_BUY_NOT_FOUND / PACKAGE_NOT_FOUND guards.
+            or (marker_names & _UC003_STORYBOARD_WIRED)
+        ):
             # Extension/error scenarios: budget, currency, auth, creative,
             # placement, keyword, and immutable-field validation on the update
             # path. MediaBuyDualEnv extends MediaBuyCreateEnv with update-module

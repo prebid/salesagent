@@ -296,6 +296,29 @@ def _validate_creatives_for_assignment(
         )
 
 
+def _resolve_package_product(
+    uow: "MediaBuyUoW",
+    media_buy_id: str,
+    package_id: str,
+) -> "DBProduct | None":
+    """Resolve the product backing a package, tolerant of raw_request-only buys.
+
+    Reads the package config via ``get_package_config`` (DB row OR ``raw_request``
+    fallback), so a pre-dual-write legacy buy keeps format validation instead of
+    silently skipping it. Returns ``None`` when the package or its ``product_id``
+    can't be resolved — ``_validate_creatives_for_assignment`` treats that as
+    "no format constraint". Shared by the ``creative_ids`` and
+    ``creative_assignments`` update paths so both resolve identically.
+    """
+    assert uow.media_buys is not None
+    package_config = uow.media_buys.get_package_config(media_buy_id, package_id)
+    product_id = package_config.get("product_id") if package_config else None
+    if not product_id:
+        return None
+    assert uow.products is not None
+    return uow.products.get_by_id(product_id)
+
+
 def _verify_principal(
     media_buy_id: str,
     identity: "ResolvedIdentity",
@@ -433,6 +456,42 @@ def _update_media_buy_impl(
                         suggestion=(f"Valid actions for status '{_current_status}': {sorted(_allowed) or '[]'}."),
                     )
 
+            # Package-level lookup guard (AdCP 3.1 invalid_transitions Phase 3):
+            # every referenced package must belong to the resolved media buy,
+            # raising the typed PACKAGE_NOT_FOUND — distinct from
+            # MEDIA_BUY_NOT_FOUND so the buyer knows whether to fix the buy
+            # reference or the package reference. It extends the not-found
+            # family above (_verify_principal / get_by_id_or_raise), echoing
+            # req.context into the envelope, and runs before the dry_run early
+            # return so dry_run requests are also rejected.
+            #
+            # Precedence: the not-found family (MEDIA_BUY_NOT_FOUND) and the
+            # terminal-state check above (INVALID_STATE) run first, so they
+            # preempt this guard; PACKAGE_NOT_FOUND in turn preempts the
+            # budget / targeting validators below — a package's budget is
+            # meaningless if the package does not exist. (The PACKAGE-preempts-
+            # BUDGET ordering itself is a reasonable reading but ungraded — no
+            # storyboard pins it.) Spec grounding:
+            # invalid_transitions.yaml Phase 3 (unknown_package), storyboard
+            # scenario "unknown package_id returns PACKAGE_NOT_FOUND" in
+            # BR-UC-003-update-media-buy.feature (@source v3.1-04f59d2d5).
+            #
+            # The media_packages/raw_request duality (pre-dual-write buys;
+            # adapters returning empty response.packages) is tolerated here
+            # via the READ-ONLY package_exists_or_raise: this guard runs
+            # before the dry_run early return, so it must not write — a
+            # dry_run request that materialized a row here would commit it on
+            # the UoW's clean exit. Row-needing lookups past the dry_run gate
+            # use the materializing get_package_or_raise instead; both share
+            # one raise site, so legacy buys never get a spurious not-found.
+            # (Ungraded: no storyboard covers pre-dual-write data.)
+            if req.packages:
+                for pkg_update in req.packages:
+                    if pkg_update.package_id:
+                        uow.media_buys.package_exists_or_raise(
+                            media_buy_id_to_use, pkg_update.package_id, context=req.context
+                        )
+
             # Extract testing context early (needed for dry_run check)
             testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
 
@@ -511,13 +570,14 @@ def _update_media_buy_impl(
                         or not pkg_update.package_id
                     ):
                         continue
-                    media_package = uow.media_buys.get_package(req.media_buy_id, pkg_update.package_id)
-                    if media_package is None:
+                    # Read-only config access (row or raw_request) — this
+                    # validator runs before the dry_run gate, so no writes. Shared
+                    # helper (same as the creative_ids / creative_assignments
+                    # paths) so raw_request-tolerant resolution can't drift here;
+                    # req.media_buy_id, matching this validator's other reads.
+                    product = _resolve_package_product(uow, req.media_buy_id, pkg_update.package_id)
+                    if product is None:
                         continue
-                    package_product_id = (media_package.package_config or {}).get("product_id")
-                    if not package_product_id:
-                        continue
-                    product = uow.products.get_by_id(package_product_id)
                     violation = validate_property_targeting_allowed(product, pkg_update.targeting_overlay)
                     if violation:
                         property_targeting_violations.append(violation)
@@ -888,14 +948,7 @@ def _update_media_buy_impl(
 
                         # Validate creatives (existence, status, format) via the
                         # shared helper so the rules match the creative_assignments path.
-                        db_package = uow.media_buys.get_package(actual_media_buy_id, pkg_update.package_id)
-                        product_id = (
-                            db_package.package_config.get("product_id")
-                            if db_package and db_package.package_config
-                            else None
-                        )
-                        assert uow.products is not None
-                        product = uow.products.get_by_id(product_id) if product_id else None
+                        product = _resolve_package_product(uow, actual_media_buy_id, pkg_update.package_id)
                         _validate_creatives_for_assignment(
                             pkg_update.creative_ids,
                             uow=uow,
@@ -1037,16 +1090,9 @@ def _update_media_buy_impl(
 
                         # Validate referenced creatives (existence, status, format) BEFORE
                         # building any assignment rows — otherwise a not-found creative_id
-                        # would surface as a composite-FK IntegrityError. Same rules as the
-                        # creative_ids path via the shared helper.
-                        ca_package = uow.media_buys.get_package(actual_media_buy_id, pkg_update.package_id)
-                        ca_product_id = (
-                            ca_package.package_config.get("product_id")
-                            if ca_package and ca_package.package_config
-                            else None
-                        )
-                        assert uow.products is not None
-                        ca_product = uow.products.get_by_id(ca_product_id) if ca_product_id else None
+                        # would surface as a composite-FK IntegrityError. Same rules and same
+                        # raw_request-tolerant product resolution as the creative_ids path.
+                        ca_product = _resolve_package_product(uow, actual_media_buy_id, pkg_update.package_id)
                         _validate_creatives_for_assignment(
                             [ca.creative_id for ca in pkg_update.creative_assignments],
                             uow=uow,
