@@ -932,40 +932,38 @@ Feature: BR-UC-019 Query Media Buys
     And the suggestion should contain "omit" or "without the `account` filter"
     # BR-RULE-293 INV-5: validation fails -> no DB query; no partial result leak
 
-  # CORRECTED to AdCP 3.1.1 enums/error-code.json: SERVICE_UNAVAILABLE is on-wire;
-  # INTERNAL_ERROR is absent from the enum (off-wire). Implementation: src/core/exceptions.py
-  # INTERNAL_CODES collapses INTERNAL_ERROR -> SERVICE_UNAVAILABLE on the wire.
+  # Targeting rehydration advisories use platform code TARGETING_REHYDRATION_FAILED
+  # (error.json ``code`` is open vocabulary) + recovery=terminal (seller must repair).
   @T-UC-019-partition-targeting-rehydration @partition @targeting_overlay @schema-v3.1
   Scenario Outline: targeting_overlay rehydration - <partition>
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And package "pkg-001" persisted package_config has <persisted_state>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then <expected_outcome>
+    Then the package "pkg-001" targeting_overlay should be <overlay_outcome>
+    And <errors_outcome>
     # BR-RULE-294: per-package fail-soft; TypeError caught narrowly; ValidationError NOT caught
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
 
     Examples: Valid partitions
-      | partition                            | persisted_state                                       | expected_outcome                                                                                                                                                |
-      | no_targeting_persisted               | no targeting_overlay and no legacy targeting          | the package "pkg-001" targeting_overlay should be null and no error should appear in response.errors[] for "pkg-001"                                            |
-      | targeting_rehydrates_cleanly         | targeting_overlay {geo:['US']}                        | the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]                                                                            |
-      | legacy_targeting_key                 | no targeting_overlay but legacy targeting {geo:['US']} | the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]                                                                            |
-      | rehydration_typeerror_partial_success | targeting_overlay set to the string 'not a dict'      | the package "pkg-001" targeting_overlay should be null and response.errors[] should include a SERVICE_UNAVAILABLE entry with message starting "TARGETING_REHYDRATION_FAILED:" |
+      | partition                             | persisted_state                                              | overlay_outcome                                      | errors_outcome                                                                                      |
+      | no_targeting_persisted                | no targeting_overlay and no legacy targeting                 | null                                                 | no error should appear in response.errors[] for "pkg-001"                                           |
+      | targeting_rehydrates_cleanly          | targeting_overlay {geo_countries:['US']}                     | a Targeting object with geo_countries ["US"]         | no error should appear in response.errors[] for "pkg-001"                                           |
+      | legacy_targeting_key                  | no targeting_overlay but legacy targeting {geo_countries:['US']} | a Targeting object with geo_countries ["US"]     | no error should appear in response.errors[] for "pkg-001"                                           |
+      | rehydration_typeerror_partial_success | targeting_overlay set to the string 'not a dict'             | null                                                 | response.errors[] should include an entry with code "TARGETING_REHYDRATION_FAILED"                  |
 
-  # CORRECTED to AdCP 3.1.1 enums/error-code.json: SERVICE_UNAVAILABLE is on-wire;
-  # INTERNAL_ERROR is absent from the enum (off-wire). Implementation: src/core/exceptions.py
-  # INTERNAL_CODES collapses INTERNAL_ERROR -> SERVICE_UNAVAILABLE on the wire.
+  # Targeting rehydration advisories: TARGETING_REHYDRATION_FAILED + recovery=terminal.
   @T-UC-019-inv-294-3 @invariant @BR-RULE-294 @error @schema-v3.1
-  Scenario: INV-3 holds - TypeError during Targeting instantiation yields non-fatal SERVICE_UNAVAILABLE + null overlay
+  Scenario: INV-3 holds - TypeError during Targeting instantiation yields non-fatal TARGETING_REHYDRATION_FAILED + null overlay
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And package "pkg-001" persisted targeting_overlay is a string (will raise TypeError on Targeting(**str))
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then response.errors[] should include an entry with code "SERVICE_UNAVAILABLE"
+    Then response.errors[] should include an entry with code "TARGETING_REHYDRATION_FAILED"
     And that errors[] entry message should start with "TARGETING_REHYDRATION_FAILED:"
     And that errors[] entry field selector should be "media_buys[].packages[pkg-001].targeting_overlay"
     And the package "pkg-001" targeting_overlay should be null
     And the error should include a "suggestion" field
     And the suggestion should contain "seller" or "repair"
-    And that errors[] entry recovery should be "transient"
+    And that errors[] entry recovery should be "terminal"
     # BR-RULE-294 INV-3: narrow TypeError catch -> warn + non-fatal Error + null overlay
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
 
@@ -973,10 +971,10 @@ Feature: BR-UC-019 Query Media Buys
   Scenario: INV-5 holds - one corrupted package does not break sibling packages in the same buy
     Given the principal "buyer-001" owns media buy "mb-001" with packages "pkg-001" and "pkg-002"
     And package "pkg-001" persisted targeting_overlay is corrupted (will raise TypeError)
-    And package "pkg-002" persisted targeting_overlay is a valid dict {geo:["US"]}
+    And package "pkg-002" persisted targeting_overlay is a valid dict {geo_countries:["US"]}
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the package "pkg-001" targeting_overlay should be null
-    And the package "pkg-002" targeting_overlay should be a Targeting object with geo ["US"]
+    And the package "pkg-002" targeting_overlay should be a Targeting object with geo_countries ["US"]
     And response.errors[] should include exactly one TARGETING_REHYDRATION_FAILED entry for ("mb-001", "pkg-001")
     # BR-RULE-294 INV-5: per-package failure isolation
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
@@ -996,9 +994,9 @@ Feature: BR-UC-019 Query Media Buys
   @T-UC-019-inv-294-8 @invariant @BR-RULE-294 @schema-v3.1
   Scenario: INV-8 holds - legacy targeting key consulted only when modern key absent
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
-    And package "pkg-001" persisted package_config has no targeting_overlay key but has legacy targeting {geo:["US"]}
+    And package "pkg-001" persisted package_config has no targeting_overlay key but has legacy targeting {geo_countries:["US"]}
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]
+    Then the package "pkg-001" targeting_overlay should be a Targeting object with geo_countries ["US"]
     # BR-RULE-294 INV-8: pre-rename data compatibility through legacy `targeting` key fallback
 
   @T-UC-019-partition-delivery-status @partition @delivery_status @snapshot @schema-v3.1
@@ -1209,26 +1207,37 @@ Feature: BR-UC-019 Query Media Buys
       | sandbox absent in response (production account)         | targets a production account            | should not include a sandbox field         |
       | sandbox: false in response (explicit production)        | targets an explicit production account  | should include sandbox equals false        |
 
-  # CORRECTED to AdCP 3.1.1 enums/error-code.json: SERVICE_UNAVAILABLE is on-wire;
-  # INTERNAL_ERROR is absent from the enum (off-wire). Implementation: src/core/exceptions.py
-  # INTERNAL_CODES collapses INTERNAL_ERROR -> SERVICE_UNAVAILABLE on the wire.
+  # Targeting rehydration BVA: TARGETING_REHYDRATION_FAILED + terminal; clean paths stay quiet.
+  # Complex multi-package / multi-buy rows use atomic Thens (not dormant composite strings).
   @T-UC-019-boundary-targeting-overlay @boundary @targeting_overlay @br-rule-294 @schema-v3.1
   Scenario Outline: targeting_overlay rehydration boundary - <boundary_point>
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And package "pkg-001" persisted package_config has <persisted_state>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
-    Then <expected_outcome>
+    Then the package "pkg-001" targeting_overlay should be <overlay_outcome>
+    And <errors_outcome>
     # BR-RULE-294 BVA: per-package fail-soft on TypeError; clean rehydration otherwise
 
     Examples: Boundary values
-      | boundary_point                                                                 | persisted_state                                              | expected_outcome                                                                                                                                                                                                                       |
-      | targeting_overlay key absent, targeting key absent                             | no targeting_overlay and no legacy targeting                  | the package "pkg-001" targeting_overlay should be null and no error should appear in response.errors[] for "pkg-001"                                                                                                                    |
-      | targeting_overlay key present and parseable                                    | targeting_overlay {geo:['US']}                                | the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]                                                                                                                                                    |
-      | targeting_overlay key absent, targeting key present                            | no targeting_overlay but legacy targeting {geo:['US']}        | the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]                                                                                                                                                    |
-      | targeting_overlay is a string (TypeError on Targeting(**str))                  | targeting_overlay set to the string 'not a dict'              | the package "pkg-001" targeting_overlay should be null and response.errors[] should include a SERVICE_UNAVAILABLE entry with message starting "TARGETING_REHYDRATION_FAILED:" and a "suggestion" field referencing "seller"          |
-      | targeting_overlay is a list (TypeError on Targeting(**list))                   | targeting_overlay set to the list ['not','a','dict']          | the package "pkg-001" targeting_overlay should be null and response.errors[] should include a SERVICE_UNAVAILABLE entry with message starting "TARGETING_REHYDRATION_FAILED:" and a "suggestion" field referencing "seller"          |
-      | two packages in same buy both raise TypeError                                  | two packages "pkg-001" and "pkg-002" both with corrupted targeting_overlay strings | both packages' targeting_overlay should be null and response.errors[] should include two SERVICE_UNAVAILABLE entries (one per package) each with a "suggestion" field referencing "seller"                              |
-      | one of N buys has one bad package                                              | one of two buys "mb-001"/"mb-002" has package "pkg-001" with corrupted targeting_overlay and the other buy is clean | the corrupted package's targeting_overlay should be null, sibling buys should render normally, and response.errors[] should include exactly one SERVICE_UNAVAILABLE entry with a "suggestion" field referencing "seller"             |
+      | boundary_point                                                                 | persisted_state                                                                                          | overlay_outcome                                      | errors_outcome                                                                                                         |
+      | targeting_overlay key absent, targeting key absent                             | no targeting_overlay and no legacy targeting                                                             | null                                                 | no error should appear in response.errors[] for "pkg-001"                                                              |
+      | targeting_overlay key present and parseable                                    | targeting_overlay {geo_countries:['US']}                                                                 | a Targeting object with geo_countries ["US"]         | no error should appear in response.errors[] for "pkg-001"                                                              |
+      | targeting_overlay key absent, targeting key present                            | no targeting_overlay but legacy targeting {geo_countries:['US']}                                         | a Targeting object with geo_countries ["US"]         | no error should appear in response.errors[] for "pkg-001"                                                              |
+      | targeting_overlay is a string (TypeError on Targeting(**str))                  | targeting_overlay set to the string 'not a dict'                                                         | null                                                 | response.errors[] should include a TARGETING_REHYDRATION_FAILED entry with suggestion referencing "seller"           |
+      | targeting_overlay is a list (TypeError on Targeting(**list))                   | targeting_overlay set to the list ['not','a','dict']                                                     | null                                                 | response.errors[] should include a TARGETING_REHYDRATION_FAILED entry with suggestion referencing "seller"           |
+
+  @T-UC-019-boundary-targeting-overlay-multi @boundary @targeting_overlay @br-rule-294 @schema-v3.1
+  Scenario Outline: targeting_overlay rehydration multi-entity boundary - <boundary_point>
+    Given package "pkg-001" persisted package_config has <persisted_state>
+    When the Buyer Agent sends a get_media_buys request
+    Then <overlay_outcome>
+    And <errors_outcome>
+    # BR-RULE-294 BVA: multi-package / multi-buy isolation (seeds entities inside the Given)
+
+    Examples: Multi-entity boundary values
+      | boundary_point                        | persisted_state                                                                                                      | overlay_outcome                                                      | errors_outcome                                                                                                                    |
+      | two packages in same buy both raise TypeError | two packages "pkg-001" and "pkg-002" both with corrupted targeting_overlay strings                             | both packages "pkg-001" and "pkg-002" targeting_overlay should be null | response.errors[] should include two TARGETING_REHYDRATION_FAILED entries each with suggestion referencing "seller"             |
+      | one of N buys has one bad package     | one of two buys "mb-001"/"mb-002" has package "pkg-001" with corrupted targeting_overlay and the other buy is clean | the corrupted package's targeting_overlay should be null and sibling buys should render normally | response.errors[] should include exactly one TARGETING_REHYDRATION_FAILED entry with suggestion referencing "seller" |
 
   @T-UC-019-storyboard-post-create-status-poll @storyboard-v3.1 @v3-1 @post-create-poll
   Scenario: get_media_buys called immediately after create_media_buy resolves the freshly-created buy by media_buy_id

@@ -235,15 +235,19 @@ def _get_media_buys_impl(
                         pkg_id,
                         exc,
                     )
-                    # Seller-side data-integrity failure (the buyer can't fix it),
-                    # surfaced with the standard ``SERVICE_UNAVAILABLE`` wire code —
-                    # matching the sibling per-creative advisory in
-                    # creatives/_processing.py — with the specific
-                    # ``TARGETING_REHYDRATION_FAILED`` shape in the message so
-                    # callers can grep/route on it.
+                    # Seller-side persisted-data integrity failure (buyer cannot
+                    # fix the row). Platform code is open-vocabulary on
+                    # error.json ``code`` (string, not a closed enum) — emit
+                    # ``TARGETING_REHYDRATION_FAILED`` so callers can route on
+                    # the code, not message grepping. ``recovery="terminal"``
+                    # matches AdCP error.json (terminal = human/seller action)
+                    # and the creatives/_processing.py pattern for
+                    # admin-fixable defects (``AdCPConfigurationError`` →
+                    # ``recovery="terminal"``); retrying get_media_buys cannot
+                    # repair a corrupt package_config row.
                     hydration_errors.append(
                         Error(  # structural-guard: advisory per-package result in GetMediaBuysResponse.errors[]
-                            code="SERVICE_UNAVAILABLE",
+                            code="TARGETING_REHYDRATION_FAILED",
                             message=(
                                 f"TARGETING_REHYDRATION_FAILED: targeting overlay for "
                                 f"package '{pkg_id}' on media buy '{buy.media_buy_id}' "
@@ -253,15 +257,13 @@ def _get_media_buys_impl(
                             field=f"media_buys[].packages[{pkg_id}].targeting_overlay",
                             # Buyer hint for BR-RULE-294 / UC-019: seller-side
                             # persisted-targeting corruption — buyer cannot fix
-                            # the row; contact seller to repair it. recovery=
-                            # transient matches the sibling per-creative advisory
-                            # in creatives/_processing.py.
+                            # the row; contact seller to repair it.
                             suggestion=(
                                 "Contact the seller to repair the stored package "
                                 "targeting data; this package's targeting_overlay "
                                 "stays null until then."
                             ),
-                            recovery="transient",
+                            recovery="terminal",
                         )
                     )
                     targeting_overlay = None

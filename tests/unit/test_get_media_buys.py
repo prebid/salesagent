@@ -647,13 +647,13 @@ class TestTargetingOverlayRoundTrip:
         assert good_response_pkg.targeting_overlay.property_list.list_id == "v1"
 
         # Failure surfaced via the response errors channel — buyer can reconcile.
-        # Uses the standard ``SERVICE_UNAVAILABLE`` wire code (seller-side data
-        # integrity, matching the sibling per-creative advisory) with the
-        # rehydration detail in the message.
+        # Platform code ``TARGETING_REHYDRATION_FAILED`` (open vocabulary) +
+        # ``recovery="terminal"`` (seller/admin must repair the row; retrying
+        # cannot help — creatives/_processing.py admin-fixable-defect pattern).
         assert response.errors is not None
         assert len(response.errors) == 1
         err = response.errors[0]
-        assert err.code == "SERVICE_UNAVAILABLE"
+        assert err.code == "TARGETING_REHYDRATION_FAILED"
         assert "TARGETING_REHYDRATION_FAILED" in err.message
         assert err.field is not None and "targeting_overlay" in err.field
         # BR-RULE-294 / UC-019: seller-side imperative suggestion (buyer cannot
@@ -663,7 +663,7 @@ class TestTargetingOverlayRoundTrip:
         assert "seller" in suggestion_lower
         assert "repair" in suggestion_lower
         assert "package_config" not in suggestion_lower
-        assert err.recovery == "transient"
+        assert err.recovery == "terminal"
 
 
 class TestGetMediaBuysResponseStructure:

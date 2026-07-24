@@ -524,14 +524,132 @@ def given_principal_owns_mb_with_two_packages(ctx: dict, principal_id: str, mb_i
         'package "{pkg_id}" persisted targeting_overlay is a string (will raise TypeError on Targeting(**str))'
     )
 )
+@given(parsers.parse('package "{pkg_id}" persisted targeting_overlay is corrupted (will raise TypeError)'))
 def given_package_targeting_overlay_is_string(ctx: dict, pkg_id: str) -> None:
     """Corrupt persisted targeting_overlay to a string (BR-RULE-294 INV-3).
 
     ``Targeting(**"not a dict")`` raises ``TypeError``; production catches that
-    narrowly, nulls the overlay, and appends a non-fatal ``SERVICE_UNAVAILABLE``
-    advisory. Buyer-facing INV-3 is graded on the wire ``errors[]`` Thens, not
-    server-side logs.
+    narrowly, nulls the overlay, and appends a non-fatal
+    ``TARGETING_REHYDRATION_FAILED`` advisory (``recovery=terminal``). Buyer-facing
+    INV-3 is graded on the wire ``errors[]`` Thens, not server-side logs.
     """
+    _mutate_package_targeting(ctx, pkg_id, overlay="not a dict", legacy=None, clear_modern=False)
+
+
+@given(
+    parsers.re(r'package "(?P<pkg_id>[^"]+)" persisted targeting_overlay is a valid dict \{geo_countries:\["US"\]\}')
+)
+def given_package_targeting_overlay_valid_geo(ctx: dict, pkg_id: str) -> None:
+    """Seed a valid Targeting dict under targeting_overlay (BR-RULE-294 INV-5)."""
+    _mutate_package_targeting(ctx, pkg_id, overlay={"geo_countries": ["US"]}, legacy=None, clear_modern=False)
+
+
+@given(parsers.parse('package "{pkg_id}" persisted package_config has {persisted_state}'))
+def given_package_persisted_package_config_state(ctx: dict, pkg_id: str, persisted_state: str) -> None:
+    """Apply outline / INV persisted_state to package_config (BR-RULE-294).
+
+    Mirrors ``given_package_targeting_overlay_is_string`` for outline rows that
+    expect seller suggestion (string/list corruption, two-packages, one-of-N).
+    Multi-entity states seed the extra packages/buys themselves.
+    """
+    state = persisted_state.strip()
+
+    if state == "no targeting_overlay and no legacy targeting":
+        _ensure_principal_and_package(ctx, pkg_id)
+        _mutate_package_targeting(ctx, pkg_id, overlay=None, legacy=None, clear_modern=True)
+        return
+
+    if state.startswith("targeting_overlay {geo_countries:"):
+        _ensure_principal_and_package(ctx, pkg_id)
+        _mutate_package_targeting(ctx, pkg_id, overlay={"geo_countries": ["US"]}, legacy=None, clear_modern=False)
+        return
+
+    if "no targeting_overlay" in state and "legacy targeting" in state:
+        _ensure_principal_and_package(ctx, pkg_id)
+        _mutate_package_targeting(ctx, pkg_id, overlay=None, legacy={"geo_countries": ["US"]}, clear_modern=True)
+        return
+
+    if state == "targeting_overlay set to the string 'not a dict'":
+        _ensure_principal_and_package(ctx, pkg_id)
+        _mutate_package_targeting(ctx, pkg_id, overlay="not a dict", legacy=None, clear_modern=False)
+        return
+
+    if state == "targeting_overlay set to the list ['not','a','dict']":
+        _ensure_principal_and_package(ctx, pkg_id)
+        _mutate_package_targeting(ctx, pkg_id, overlay=["not", "a", "dict"], legacy=None, clear_modern=False)
+        return
+
+    if state.startswith('two packages "pkg-001" and "pkg-002"'):
+        _seed_buy_with_two_corrupted_packages(ctx)
+        return
+
+    if state.startswith('one of two buys "mb-001"/"mb-002"'):
+        _seed_two_buys_one_corrupted(ctx)
+        return
+
+    raise AssertionError(f"Unrecognized persisted_state for package_config: {persisted_state!r}")
+
+
+@given(parsers.parse('the principal "{principal_id}" owns media buys "{mb1}" and "{mb2}"'))
+def given_principal_owns_two_media_buys(ctx: dict, principal_id: str, mb1: str, mb2: str) -> None:
+    """Seed two media buys each with a default package (BR-RULE-294 INV-6)."""
+    _register_principal(ctx, principal_id)
+    env = ctx["env"]
+    for label, pkg_id in ((mb1, "pkg-001"), (mb2, "pkg-001")):
+        real_id = _generate_unique_id(label)
+        mb = MediaBuyFactory(
+            tenant=ctx["tenant"],
+            principal=ctx["principal"],
+            media_buy_id=real_id,
+            status="active",
+        )
+        MediaPackageFactory(
+            media_buy=mb,
+            package_id=pkg_id,
+            package_config={
+                "package_id": pkg_id,
+                "product_id": "guaranteed_display",
+                "budget": 5000.0,
+                "status": "active",
+            },
+        )
+        env._commit_factory_data()
+        _register_media_buy(ctx, label, mb)
+        ctx.setdefault("seeded_packages", {})[f"{label}:{pkg_id}"] = mb
+
+
+@given(parsers.parse('media buy "{mb_id}" package "{pkg_id}" has corrupted targeting_overlay (will raise TypeError)'))
+def given_media_buy_package_corrupted_targeting(ctx: dict, mb_id: str, pkg_id: str) -> None:
+    """Corrupt targeting_overlay on a package owned by the named buy (INV-6)."""
+    _mutate_package_targeting(ctx, pkg_id, overlay="not a dict", legacy=None, clear_modern=False, mb_label=mb_id)
+
+
+@given(parsers.parse('media buy "{mb_id}" has valid persisted state'))
+def given_media_buy_valid_persisted_state(ctx: dict, mb_id: str) -> None:
+    """No-op marker: sibling buy was seeded clean by the owns-buys Given (INV-6)."""
+    assert mb_id in ctx.get("media_buy_labels", {}), f"Media buy '{mb_id}' not seeded — run owns-buys Given first"
+
+
+def _ensure_principal_and_package(ctx: dict, pkg_id: str) -> None:
+    """Ensure principal is registered and ``pkg_id`` exists (outline may rely on prior Given)."""
+    if "principal" in ctx and "buyer-001" not in ctx.get("principal_labels", {}):
+        _register_principal(ctx, "buyer-001")
+    if pkg_id not in ctx.get("seeded_packages", {}):
+        # Outline rows that only run the persisted_state Given (multi-entity) seed themselves.
+        # Single-package outlines seed via owns media buy … with package first.
+        return
+
+
+def _mutate_package_targeting(
+    ctx: dict,
+    pkg_id: str,
+    *,
+    overlay: object | None,
+    legacy: object | None,
+    clear_modern: bool,
+    mb_label: str | None = None,
+) -> None:
+    """Mutate package_config targeting keys on the named package row."""
     from sqlalchemy import select
     from sqlalchemy.orm.attributes import flag_modified
 
@@ -539,13 +657,80 @@ def given_package_targeting_overlay_is_string(ctx: dict, pkg_id: str) -> None:
 
     env = ctx["env"]
     assert env._session is not None, "Expected an active DB session for package_config mutation"
-    pkg_row = env._session.scalars(select(DBMediaPackage).filter_by(package_id=pkg_id)).first()
+    stmt = select(DBMediaPackage).filter_by(package_id=pkg_id)
+    if mb_label is not None:
+        real_mb_id = _resolve_media_buy_id(ctx, mb_label)
+        stmt = stmt.filter_by(media_buy_id=real_mb_id)
+    pkg_row = env._session.scalars(stmt).first()
     assert pkg_row is not None, f"Package '{pkg_id}' not found in DB — seed the media buy first"
     config = dict(pkg_row.package_config or {})
-    config["targeting_overlay"] = "not a dict"
+    if clear_modern or overlay is None:
+        config.pop("targeting_overlay", None)
+    if overlay is not None:
+        config["targeting_overlay"] = overlay
+    if legacy is None:
+        config.pop("targeting", None)
+    else:
+        config["targeting"] = legacy
     pkg_row.package_config = config
     flag_modified(pkg_row, "package_config")
     env._session.commit()
+
+
+def _seed_buy_with_two_corrupted_packages(ctx: dict) -> None:
+    """Seed mb-001 with pkg-001/pkg-002 both carrying corrupt targeting_overlay strings."""
+    _register_principal(ctx, "buyer-001")
+    env = ctx["env"]
+    real_id = _generate_unique_id("mb-001")
+    mb = MediaBuyFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        media_buy_id=real_id,
+        status="active",
+    )
+    for pkg_id in ("pkg-001", "pkg-002"):
+        MediaPackageFactory(
+            media_buy=mb,
+            package_id=pkg_id,
+            package_config={
+                "package_id": pkg_id,
+                "product_id": "guaranteed_display",
+                "budget": 3000.0,
+                "status": "active",
+                "targeting_overlay": "not a dict",
+            },
+        )
+        ctx.setdefault("seeded_packages", {})[pkg_id] = mb
+    env._commit_factory_data()
+    _register_media_buy(ctx, "mb-001", mb)
+
+
+def _seed_two_buys_one_corrupted(ctx: dict) -> None:
+    """Seed mb-001 (corrupt pkg-001) + mb-002 (clean) for one-of-N boundary."""
+    _register_principal(ctx, "buyer-001")
+    env = ctx["env"]
+    for label, corrupt in (("mb-001", True), ("mb-002", False)):
+        real_id = _generate_unique_id(label)
+        mb = MediaBuyFactory(
+            tenant=ctx["tenant"],
+            principal=ctx["principal"],
+            media_buy_id=real_id,
+            status="active",
+        )
+        config: dict[str, Any] = {
+            "package_id": "pkg-001",
+            "product_id": "guaranteed_display",
+            "budget": 5000.0,
+            "status": "active",
+        }
+        if corrupt:
+            config["targeting_overlay"] = "not a dict"
+        else:
+            config["targeting_overlay"] = {"geo_countries": ["US"]}
+        MediaPackageFactory(media_buy=mb, package_id="pkg-001", package_config=config)
+        env._commit_factory_data()
+        _register_media_buy(ctx, label, mb)
+        ctx.setdefault("seeded_packages", {})[f"{label}:pkg-001"] = mb
 
 
 @given(parsers.parse('package "{pkg_id}" has a creative with internal status "{status}"'))
@@ -1182,12 +1367,15 @@ def when_query_a2a_no_filters(ctx: dict) -> None:
 def when_query_mcp_no_filters(ctx: dict) -> None:
     """Send get_media_buys with no filters via MCP (transport-specific).
 
-    env.call_mcp() dispatches to the get_media_buys MCP wrapper — the tool name
-    is baked into MediaBuyListEnv, matching the step text's 'get_media_buys' claim.
+    env.call_mcp() dispatches through MediaBuyListEnv.call_mcp → _run_mcp_client
+    (real FastMCP Client; stashes wire_response). The tool name is baked into
+    MediaBuyListEnv, matching the step text's 'get_media_buys' claim.
     """
     env = ctx["env"]
     try:
         ctx["response"] = env.call_mcp()
+        # Mirror dispatch_request success-path stash when calling env directly.
+        ctx["wire_response"] = getattr(env, "_last_wire_response", None)
     except Exception as exc:
         ctx["error"] = exc
 
@@ -1581,11 +1769,10 @@ def then_no_error_in_response(ctx: dict) -> None:
 def then_fail_with_code(ctx: dict, code: str) -> None:
     """Assert operation failed with specific error code — wire-first, typed fallback.
 
-    On a wire transport (A2A here; MCP wire capture is pending the
-    _run_mcp_client upgrade of MediaBuyListEnv) the code is read from the real
-    two-layer envelope, and BOTH layers must agree (envelope-level
-    ``adcp_error.code`` and payload-level ``errors[0].code``). No-wire runs
-    fall back to the typed production exception. Cannot use
+    On a wire transport (A2A/MCP via ``_run_a2a_handler`` / ``_run_mcp_client``)
+    the code is read from the real two-layer envelope, and BOTH layers must agree
+    (envelope-level ``adcp_error.code`` and payload-level ``errors[0].code``).
+    No-wire runs fall back to the typed production exception. Cannot use
     ``result.assert_wire_error`` unconditionally: this step also grades
     locally-tracked non-canonical codes (e.g. ACCOUNT_FILTER_NOT_SUPPORTED)
     absent from the pinned error-code enum.
@@ -2569,12 +2756,13 @@ def then_unavailable_reason_shorthand(ctx: dict, reason: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _response_errors(ctx: dict) -> list:
+def _response_errors(ctx: dict) -> list[dict | Any]:
     """Return advisory ``errors[]`` — prefer serialized wire body over typed payload.
 
-    Fall back to the typed ``response.errors`` only when ``wire_response is None``
-    (IMPL / no-wire). An empty wire ``errors[]`` must surface as empty — never
-    silently substitute the parsed typed payload.
+    Elements are wire ``dict``s when ``wire_response`` is present, otherwise typed
+    ``Error``-like objects from the reconstructed payload. Fall back to typed
+    ``response.errors`` only when ``wire_response is None``. An empty wire
+    ``errors[]`` must surface as empty — never silently substitute the typed payload.
     """
     wire = ctx.get("wire_response")
     if wire is not None:
@@ -2585,11 +2773,34 @@ def _response_errors(ctx: dict) -> list:
     return list(getattr(resp, "errors", None) or [])
 
 
-def _error_attr(err: object, key: str) -> object:
-    """Read a field from a dict or Error-like object."""
+def _response_media_buys(ctx: dict) -> list[Any]:
+    """Return media_buys — prefer serialized wire body over typed payload."""
+    wire = ctx.get("wire_response")
+    if wire is not None:
+        assert isinstance(wire, dict), f"Expected dict wire_response, got {type(wire)}"
+        return list(wire.get("media_buys") or [])
+    return _get_media_buys(ctx)
+
+
+def _error_attr(err: dict | Any, key: str) -> Any | None:
+    """Read a field from a dict or Error-like object (wire or typed)."""
     if isinstance(err, dict):
         return err.get(key)
     return getattr(err, key, None)
+
+
+def _require_matched(ctx: dict) -> dict | Any:
+    """Return the stashed ``matched_response_error`` or fail loudly."""
+    matched = ctx.get("matched_response_error")
+    assert matched is not None, "No matched_response_error — run the errors[] code step first"
+    return matched
+
+
+def _assert_matched_error_attr(ctx: dict, attr: str, value: str) -> None:
+    """Assert a stashed ``errors[]`` entry attribute equals ``value``."""
+    key = "field" if attr in {"field", "field selector"} else attr
+    actual = _error_attr(_require_matched(ctx), key)
+    assert actual == value, f"Expected errors[] {key} {value!r}, got {actual!r}"
 
 
 @then(parsers.parse('response.errors[] should include an entry with code "{code}"'))
@@ -2610,42 +2821,184 @@ def then_response_errors_include_code(ctx: dict, code: str) -> None:
 @then(parsers.parse('that errors[] entry message should start with "{prefix}"'))
 def then_matched_error_message_starts_with(ctx: dict, prefix: str) -> None:
     """Assert the stashed ``errors[]`` entry message starts with ``prefix``."""
-    matched = ctx.get("matched_response_error")
-    assert matched is not None, "No matched_response_error — run the errors[] code step first"
-    message = _error_attr(matched, "message")
+    message = _error_attr(_require_matched(ctx), "message")
     assert isinstance(message, str) and message.startswith(prefix), (
         f"Expected errors[] message to start with {prefix!r}, got {message!r}"
     )
 
 
-@then(parsers.parse('that errors[] entry field selector should be "{field}"'))
-def then_matched_error_field_selector(ctx: dict, field: str) -> None:
-    """Assert the stashed ``errors[]`` entry ``field`` selector equals ``field``."""
-    matched = ctx.get("matched_response_error")
-    assert matched is not None, "No matched_response_error — run the errors[] code step first"
-    actual = _error_attr(matched, "field")
-    assert actual == field, f"Expected errors[] field {field!r}, got {actual!r}"
+@then(parsers.parse('that errors[] entry {attr} should be "{value}"'))
+def then_matched_error_attr_equals(ctx: dict, attr: str, value: str) -> None:
+    """Parametrized equality for stashed ``errors[]`` entry attrs (field/recovery/…)."""
+    _assert_matched_error_attr(ctx, attr, value)
 
 
-@then(parsers.parse('that errors[] entry recovery should be "{recovery}"'))
-def then_matched_error_recovery(ctx: dict, recovery: str) -> None:
-    """Assert the stashed ``errors[]`` entry ``recovery`` equals ``recovery``."""
-    matched = ctx.get("matched_response_error")
-    assert matched is not None, "No matched_response_error — run the errors[] code step first"
-    actual = _error_attr(matched, "recovery")
-    assert actual == recovery, f"Expected errors[] recovery {recovery!r}, got {actual!r}"
+@then(parsers.parse('that errors[] entry field selector should be "{value}"'))
+def then_matched_error_field_selector(ctx: dict, value: str) -> None:
+    """Alias: field selector → ``field`` equality via shared helper."""
+    _assert_matched_error_attr(ctx, "field", value)
 
 
 @then(parsers.parse('the package "{pkg_id}" targeting_overlay should be null'))
 def then_package_targeting_overlay_null(ctx: dict, pkg_id: str) -> None:
     """Assert the named package's ``targeting_overlay`` is null after fail-soft rehydration."""
-    buys = _get_media_buys(ctx)
-    for buy in buys:
-        for pkg in getattr(buy, "packages", []) or []:
-            if getattr(pkg, "package_id", None) == pkg_id:
-                overlay = getattr(pkg, "targeting_overlay", None)
-                if overlay is None and isinstance(pkg, dict):
-                    overlay = pkg.get("targeting_overlay")
+    for buy in _response_media_buys(ctx):
+        packages = _error_attr(buy, "packages") or []
+        for pkg in packages:
+            if _error_attr(pkg, "package_id") == pkg_id:
+                overlay = _error_attr(pkg, "targeting_overlay")
                 assert overlay is None, f"Expected package '{pkg_id}' targeting_overlay to be null, got {overlay!r}"
                 return
     raise AssertionError(f"Package '{pkg_id}' not found in response media_buys")
+
+
+@then(
+    parsers.re(
+        r'the package "(?P<pkg_id>[^"]+)" targeting_overlay should be a Targeting object with geo_countries \["US"\]'
+    )
+)
+def then_package_targeting_overlay_geo_us(ctx: dict, pkg_id: str) -> None:
+    """Assert the named package rehydrated targeting_overlay.geo_countries == ['US']."""
+    for buy in _response_media_buys(ctx):
+        packages = _error_attr(buy, "packages") or []
+        for pkg in packages:
+            if _error_attr(pkg, "package_id") == pkg_id:
+                overlay = _error_attr(pkg, "targeting_overlay")
+                assert overlay is not None, f"Expected package '{pkg_id}' targeting_overlay to be present"
+                geo = _error_attr(overlay, "geo_countries")
+                assert list(geo or []) == ["US"], f"Expected geo_countries ['US'] on package '{pkg_id}', got {geo!r}"
+                return
+    raise AssertionError(f"Package '{pkg_id}' not found in response media_buys")
+
+
+@then(parsers.parse('no error should appear in response.errors[] for "{pkg_id}"'))
+def then_no_rehydration_error_for_package(ctx: dict, pkg_id: str) -> None:
+    """Assert no targeting-rehydration advisory mentions the named package."""
+    errors = _response_errors(ctx)
+    for err in errors:
+        field = str(_error_attr(err, "field") or "")
+        message = str(_error_attr(err, "message") or "")
+        assert pkg_id not in field and pkg_id not in message, (
+            f"Expected no errors[] entry for package '{pkg_id}', got {_error_attr(err, 'code')!r}: {message!r}"
+        )
+
+
+@then(
+    parsers.parse(
+        'response.errors[] should include a TARGETING_REHYDRATION_FAILED entry with suggestion referencing "{token}"'
+    )
+)
+def then_errors_include_rehydration_with_suggestion(ctx: dict, token: str) -> None:
+    """Assert a TARGETING_REHYDRATION_FAILED advisory carries a seller-facing suggestion."""
+    then_response_errors_include_code(ctx, "TARGETING_REHYDRATION_FAILED")
+    suggestion = str(_error_attr(_require_matched(ctx), "suggestion") or "").lower()
+    assert token.lower() in suggestion, f"Expected suggestion to reference {token!r}, got {suggestion!r}"
+
+
+@then(parsers.parse('both packages "{pkg1}" and "{pkg2}" targeting_overlay should be null'))
+def then_both_packages_targeting_null(ctx: dict, pkg1: str, pkg2: str) -> None:
+    """Assert two packages both have null targeting_overlay."""
+    then_package_targeting_overlay_null(ctx, pkg1)
+    then_package_targeting_overlay_null(ctx, pkg2)
+
+
+@then(
+    parsers.parse(
+        'response.errors[] should include two TARGETING_REHYDRATION_FAILED entries each with suggestion referencing "{token}"'
+    )
+)
+def then_two_rehydration_errors_with_suggestion(ctx: dict, token: str) -> None:
+    """Assert exactly two TARGETING_REHYDRATION_FAILED advisories, each with suggestion."""
+    errors = [e for e in _response_errors(ctx) if _error_attr(e, "code") == "TARGETING_REHYDRATION_FAILED"]
+    assert len(errors) == 2, f"Expected 2 TARGETING_REHYDRATION_FAILED entries, got {len(errors)}"
+    for err in errors:
+        suggestion = str(_error_attr(err, "suggestion") or "").lower()
+        assert token.lower() in suggestion, f"Expected suggestion to reference {token!r}, got {suggestion!r}"
+
+
+@then("the corrupted package's targeting_overlay should be null and sibling buys should render normally")
+def then_corrupted_null_siblings_ok(ctx: dict) -> None:
+    """One-of-N: corrupt pkg null; sibling buy still present."""
+    # Corrupt buy uses pkg-001; overlay null is asserted on that package id.
+    # Prefer matching via mb-001 when labels are registered.
+    real_mb1 = _resolve_media_buy_id(ctx, "mb-001")
+    found_null = False
+    for buy in _response_media_buys(ctx):
+        if _error_attr(buy, "media_buy_id") != real_mb1:
+            continue
+        for pkg in _error_attr(buy, "packages") or []:
+            if _error_attr(pkg, "package_id") == "pkg-001":
+                overlay = _error_attr(pkg, "targeting_overlay")
+                assert overlay is None, f"Expected null targeting_overlay on corrupt package, got {overlay!r}"
+                found_null = True
+                break
+    assert found_null, "Corrupt package pkg-001 on mb-001 not found"
+    real_mb2 = _resolve_media_buy_id(ctx, "mb-002")
+    mb2 = next((b for b in _response_media_buys(ctx) if _error_attr(b, "media_buy_id") == real_mb2), None)
+    assert mb2 is not None, f"Expected sibling media buy mb-002 ({real_mb2}) in response"
+    assert _error_attr(mb2, "packages"), "Expected sibling buy to render with packages"
+
+
+@then(
+    parsers.parse(
+        'response.errors[] should include exactly one TARGETING_REHYDRATION_FAILED entry with suggestion referencing "{token}"'
+    )
+)
+def then_exactly_one_rehydration_with_suggestion(ctx: dict, token: str) -> None:
+    """Assert exactly one TARGETING_REHYDRATION_FAILED advisory with suggestion token."""
+    errors = [e for e in _response_errors(ctx) if _error_attr(e, "code") == "TARGETING_REHYDRATION_FAILED"]
+    assert len(errors) == 1, f"Expected 1 TARGETING_REHYDRATION_FAILED entry, got {len(errors)}"
+    ctx["matched_response_error"] = errors[0]
+    suggestion = str(_error_attr(errors[0], "suggestion") or "").lower()
+    assert token.lower() in suggestion, f"Expected suggestion to reference {token!r}, got {suggestion!r}"
+
+
+@then(
+    parsers.parse(
+        'response.errors[] should include exactly one TARGETING_REHYDRATION_FAILED entry for ("{mb_id}", "{pkg_id}")'
+    )
+)
+def then_exactly_one_rehydration_for_pair(ctx: dict, mb_id: str, pkg_id: str) -> None:
+    """Assert exactly one TARGETING_REHYDRATION_FAILED advisory for the (buy, package) pair."""
+    real_mb = _resolve_media_buy_id(ctx, mb_id)
+    errors = [e for e in _response_errors(ctx) if _error_attr(e, "code") == "TARGETING_REHYDRATION_FAILED"]
+    assert len(errors) == 1, f"Expected 1 TARGETING_REHYDRATION_FAILED entry, got {len(errors)}"
+    err = errors[0]
+    message = str(_error_attr(err, "message") or "")
+    field = str(_error_attr(err, "field") or "")
+    assert pkg_id in field or pkg_id in message, (
+        f"Expected package '{pkg_id}' in error, got field={field!r} message={message!r}"
+    )
+    assert real_mb in message or mb_id in message, (
+        f"Expected media buy '{mb_id}' ({real_mb}) in error message, got {message!r}"
+    )
+    ctx["matched_response_error"] = err
+
+
+@then(parsers.parse('the response should include media buy "{mb_id}" with package "{pkg_id}" targeting_overlay null'))
+def then_response_mb_pkg_overlay_null(ctx: dict, mb_id: str, pkg_id: str) -> None:
+    """Assert named buy/package appears with null targeting_overlay."""
+    real_mb = _resolve_media_buy_id(ctx, mb_id)
+    for buy in _response_media_buys(ctx):
+        if _error_attr(buy, "media_buy_id") != real_mb:
+            continue
+        packages = _error_attr(buy, "packages") or []
+        for pkg in packages:
+            if _error_attr(pkg, "package_id") == pkg_id:
+                overlay = _error_attr(pkg, "targeting_overlay")
+                assert overlay is None, f"Expected null targeting_overlay, got {overlay!r}"
+                return
+        raise AssertionError(f"Package '{pkg_id}' not found on media buy '{mb_id}'")
+    raise AssertionError(f"Media buy '{mb_id}' not found in response")
+
+
+@then(parsers.parse('the response should include media buy "{mb_id}" rendered normally'))
+def then_response_mb_rendered_normally(ctx: dict, mb_id: str) -> None:
+    """Assert the named media buy is present with at least one package."""
+    real_mb = _resolve_media_buy_id(ctx, mb_id)
+    for buy in _response_media_buys(ctx):
+        if _error_attr(buy, "media_buy_id") == real_mb:
+            packages = _error_attr(buy, "packages") or []
+            assert packages, f"Expected media buy '{mb_id}' to render with packages"
+            return
+    raise AssertionError(f"Media buy '{mb_id}' not found in response")
