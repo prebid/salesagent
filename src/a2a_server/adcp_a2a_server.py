@@ -176,7 +176,6 @@ def _dict_to_struct(d: dict) -> struct_pb2.Struct:
 DISCOVERY_SKILLS = frozenset(
     {
         "get_adcp_capabilities",  # Agent capabilities (always public per AdCP spec)
-        "list_accounts",  # Account discovery (public, returns empty for unauthed per BR-RULE-055)
         "list_creative_formats",  # Creative specifications (always public)
         "list_authorized_properties",  # Property catalog (always public)
         "get_products",  # Conditional: depends on tenant brand_manifest_policy setting
@@ -737,8 +736,14 @@ class AdCPRequestHandler(RequestHandler):
                         # Support both "input" (A2A spec) and "parameters" (legacy) for skill params
                         params_data = data.get("input") or data.get("parameters", {})
                         skill_invocations.append({"skill": data["skill"], "parameters": params_data})
+                        # Reached BEFORE the auth gate below, so both the skill
+                        # name and the parameter keys are unauthenticated,
+                        # attacker-chosen strings — scrub them or a DataPart can
+                        # forge adjacent records in plain-text log mode.
                         logger.info(
-                            f"Found explicit skill invocation: {data['skill']} with params: {list(params_data.keys())}"
+                            "Found explicit skill invocation: %s with params: %s",
+                            scrub_control_chars(data["skill"]),
+                            scrub_control_chars(list(params_data.keys())),
                         )
 
         # Combine text for natural language fallback
@@ -1977,10 +1982,11 @@ class AdCPRequestHandler(RequestHandler):
 
     async def _handle_sync_creatives_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit sync_creatives skill invocation (AdCP spec endpoint)."""
-        # DEBUG: Log incoming parameters
-        logger.info("[A2A sync_creatives] Received parameters keys: %s", list(parameters.keys()))
-        logger.info("[A2A sync_creatives] assignments param: %s", parameters.get("assignments"))
-        logger.info("[A2A sync_creatives] creatives count: %s", len(parameters.get("creatives", [])))
+        logger.debug(
+            "[A2A sync_creatives] parameter keys: %s, creatives: %d",
+            scrub_control_chars(sorted(parameters.keys())),
+            len(parameters.get("creatives", [])),
+        )
 
         # Create ToolContext from A2A auth info and resolve identity
         tool_context = self._make_tool_context(identity, "sync_creatives")
@@ -2208,8 +2214,14 @@ class AdCPRequestHandler(RequestHandler):
     async def _handle_list_accounts_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit list_accounts skill invocation.
 
-        Authentication is OPTIONAL per BR-RULE-055 — unauthenticated calls
-        return an empty account list.
+        Authentication is REQUIRED. ``dist/docs/3.1.0/accounts/tasks/list_accounts.mdx``
+        (v3.1.1) defines the task as returning "all accounts the authenticated
+        agent can operate on" — every row is scoped to the calling credential,
+        so there is no unauthenticated projection of this task. The skill is
+        therefore absent from ``DISCOVERY_SKILLS``: leaving it there let an
+        unauthenticated caller reach the version check first and learn
+        ``supported_versions`` from a VERSION_UNSUPPORTED rejection, while the
+        ``_impl`` it fronts raises AUTH_REQUIRED regardless.
         """
         from src.core.schemas.account import ListAccountsRequest
 

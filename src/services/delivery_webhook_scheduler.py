@@ -114,7 +114,7 @@ class DeliveryWebhookScheduler:
 
                     except Exception as e:
                         logger.error(
-                            f"Error sending report for media buy {media_buy.media_buy_id}: "
+                            f"Error sending report for media buy {scrub_control_chars(media_buy.media_buy_id)}: "
                             f"{scrub_control_chars(str(e))}",
                             exc_info=True,
                         )
@@ -143,14 +143,17 @@ class DeliveryWebhookScheduler:
                 media_buy = repo.get_by_id(media_buy_id)
 
                 if not media_buy:
-                    logger.warning(f"Cannot trigger report: Media buy {media_buy_id} not found")
+                    logger.warning(f"Cannot trigger report: Media buy {scrub_control_chars(media_buy_id)} not found")
                     return False
 
                 raw_request = media_buy.raw_request or {}
                 reporting_webhook = raw_request.get("reporting_webhook")
 
                 if not reporting_webhook:
-                    logger.warning(f"Cannot trigger report: No reporting_webhook configured for {media_buy_id}")
+                    logger.warning(
+                        f"Cannot trigger report: No reporting_webhook configured for "
+                        f"{scrub_control_chars(media_buy_id)}"
+                    )
                     return False
 
                 # Force sending even if already sent today (for testing)
@@ -158,7 +161,7 @@ class DeliveryWebhookScheduler:
                 return True
         except Exception as e:
             logger.error(
-                f"Error manually triggering report for {media_buy_id}: {scrub_control_chars(str(e))}",
+                f"Error manually triggering report for {scrub_control_chars(media_buy_id)}: {scrub_control_chars(str(e))}",
                 exc_info=True,
             )
             return False
@@ -183,7 +186,7 @@ class DeliveryWebhookScheduler:
                     "Skipping reporting webhook with frequency '%s' for media buy %s – "
                     "only 'daily' frequency is supported for delivery webhooks at this time",
                     raw_freq,
-                    media_buy.media_buy_id,
+                    scrub_control_chars(media_buy.media_buy_id),
                 )
                 return
 
@@ -207,7 +210,7 @@ class DeliveryWebhookScheduler:
                 if existing_log:
                     logger.info(
                         "Skipping daily delivery webhook for media buy %s and date %s – already sent (log id %s)",
-                        media_buy.media_buy_id,
+                        scrub_control_chars(media_buy.media_buy_id),
                         end_date_obj,
                         existing_log.id,
                     )
@@ -244,13 +247,16 @@ class DeliveryWebhookScheduler:
 
             if not isinstance(delivery_response, GetMediaBuyDeliveryResponse):
                 logger.warning(
-                    f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. Result is {delivery_response.model_dump()}"
+                    f"`Couldn't get media_delivery` for {scrub_control_chars(media_buy.media_buy_id)}. "
+                    f"Result is {scrub_control_chars(delivery_response.model_dump())}"
                 )
                 return
 
             if delivery_response.errors is not None:
                 logger.warning(
-                    f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. We have recieved error in the result. Result is {delivery_response.model_dump()}"
+                    f"`Couldn't get media_delivery` for {scrub_control_chars(media_buy.media_buy_id)}. "
+                    f"We have received an error in the result. "
+                    f"Result is {scrub_control_chars(delivery_response.model_dump())}"
                 )
                 return
 
@@ -265,7 +271,7 @@ class DeliveryWebhookScheduler:
                 sequence_number = (max_seq or 0) + 1
             except Exception as e:
                 logger.warning(
-                    f"Could not get sequence number for media buy {media_buy.media_buy_id}: "
+                    f"Could not get sequence number for media buy {scrub_control_chars(media_buy.media_buy_id)}: "
                     f"{scrub_control_chars(str(e))}"
                 )
 
@@ -283,7 +289,7 @@ class DeliveryWebhookScheduler:
             # Extract webhook URL and authentication
             webhook_url = reporting_webhook.get("url")
             if not webhook_url:
-                logger.warning(f"No webhook URL configured for media buy {media_buy.media_buy_id}")
+                logger.warning(f"No webhook URL configured for media buy {scrub_control_chars(media_buy.media_buy_id)}")
                 return
 
             # Try to find existing push notification config or create a temporary one
@@ -353,11 +359,12 @@ class DeliveryWebhookScheduler:
                 push_notification_config=push_notification_config, payload=media_buy_delivery_payload, metadata=metadata
             )
 
-            logger.info(f"Sent delivery report webhook for media buy {media_buy.media_buy_id}")
+            logger.info(f"Sent delivery report webhook for media buy {scrub_control_chars(media_buy.media_buy_id)}")
 
         except Exception as e:
             logger.error(
-                f"Error sending delivery report for media buy {media_buy.media_buy_id}: {scrub_control_chars(str(e))}",
+                f"Error sending delivery report for media buy {scrub_control_chars(media_buy.media_buy_id)}: "
+                f"{scrub_control_chars(str(e))}",
                 exc_info=True,
             )
             raise

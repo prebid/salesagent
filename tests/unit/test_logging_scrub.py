@@ -159,7 +159,13 @@ class TestStructuredLoggingSeam:
 # Names that carry buyer-controlled text into a log record.
 _EXCEPTION_NAMES = frozenset({"e", "exc", "err", "ex", "error", "exception"})
 _PAYLOAD_NAMES = frozenset({"payload", "parameters", "params", "body", "assignments", "detail"})
-_BUYER_ATTRS = frozenset({"url", "text", "body"})
+# Entity identifiers that arrive as percent-decoded request path segments or
+# buyer-supplied request fields. ``/media-buy/abc%0AFAKE/trigger-delivery-webhook``
+# binds ``media_buy_id`` to ``"abc\nFAKE"``, and the not-found branch logs it
+# BEFORE any lookup validates it — so these are attacker-chosen strings, read as
+# either a bare name or an attribute of a fetched row.
+_BUYER_ID_NAMES = frozenset({"media_buy_id", "buyer_ref", "creative_id", "package_id", "account_id"})
+_BUYER_ATTRS = frozenset({"url", "text", "body"}) | _BUYER_ID_NAMES
 # Calls whose result cannot carry raw buyer bytes into the record.
 _SANITIZING_OR_SAFE_CALLS = frozenset(
     {"scrub_control_chars", "log_safe", "len", "type", "id", "bool", "int", "float", "sorted", "list"}
@@ -201,15 +207,19 @@ def _raw_buyer_channel_hits(tree) -> list[str]:
         if isinstance(expr, ast.Call):
             func = expr.func
             name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
-            # A sanitizing/shape-only call is clean; any other call is opaque to
-            # this matcher and is deliberately not flagged (it would be noise).
-            return None if name in _SANITIZING_OR_SAFE_CALLS else None
+            # A sanitizing/shape-only call is clean. Anything else renders a
+            # value this matcher cannot vouch for — ``.model_dump()`` and
+            # ``params.get("assignments")`` both put raw buyer bytes in the
+            # record — so it is flagged. Both arms previously returned None,
+            # which made this branch dead and the whole guard blind to every
+            # call-shaped interpolation.
+            return None if name in _SANITIZING_OR_SAFE_CALLS else f"{name}()"
         if isinstance(expr, ast.Attribute):
             return f"<...>.{expr.attr}" if expr.attr in _BUYER_ATTRS else None
         if isinstance(expr, ast.Name):
             if expr.id in exception_bindings or expr.id in _EXCEPTION_NAMES:
                 return expr.id
-            if expr.id in _PAYLOAD_NAMES:
+            if expr.id in _PAYLOAD_NAMES or expr.id in _BUYER_ID_NAMES:
                 return expr.id
         return None
 
@@ -352,6 +362,17 @@ class TestWebhookLogScrubCoverage:
                 "except-as binding with an unconventional name",
                 'try:\n    pass\nexcept Exception as boom:\n    logger.error("failed: %s", boom)',
                 1,
+            ),
+            # Call-shaped and path-segment interpolations. Both arms of the call
+            # branch used to return None, so every one of these read as clean.
+            ("model_dump() render", 'logger.warning(f"result is {response.model_dump()}")', 1),
+            ("params.get() render", 'logger.info("assignments: %s", parameters.get("assignments"))', 1),
+            ("percent-decoded path segment", 'logger.warning(f"media buy {media_buy_id} not found")', 1),
+            ("path segment as a row attribute", 'logger.info(f"sent for {media_buy.media_buy_id}")', 1),
+            (
+                "scrubbed path segment",
+                'logger.warning(f"media buy {scrub_control_chars(media_buy_id)} not found")',
+                0,
             ),
             # Clean forms must NOT be flagged, or the guard becomes unusable.
             (
