@@ -42,6 +42,7 @@ ROOTS = [
     "/schemas/media-buy/get-media-buy-delivery-request.json",
     "/schemas/creative/sync-creatives-request.json",
     "/schemas/creative/list-creatives-request.json",
+    "/schemas/account/sync-governance-request.json",
     # Response schemas grounding specific contract tests:
     "/schemas/media-buy/create-media-buy-response.json",  # test_adcp_contract F4 (valid_actions/context)
     "/schemas/account/sync-accounts-response.json",  # test_sync_response_account_contract F5 (required fields)
@@ -54,6 +55,7 @@ ROOTS = [
     "/schemas/creative/list-creatives-response.json",
     "/schemas/creative/list-creative-formats-response.json",
     "/schemas/account/list-accounts-response.json",
+    "/schemas/account/sync-governance-response.json",  # #1329: sync_governance response alignment
     "/schemas/signals/get-signals-response.json",
     "/schemas/signals/activate-signal-response.json",
     # Standalone enum vendored for the BDD error-code guard (verify_feature_error_codes.py).

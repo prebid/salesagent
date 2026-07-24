@@ -12,18 +12,21 @@ SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
   Architectural; permanent.
 """
 
-from typing import Any
+from typing import Any, Literal
 
 from adcp.types import Account as LibraryAccountDomain
+from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import ContextObject as LibraryContextObject
 from adcp.types import Error as LibraryError
 from adcp.types import ListAccountsRequest as LibraryListAccountsRequest
 from adcp.types import ListAccountsResponse as LibraryListAccountsResponse
 from adcp.types import Setup as LibrarySetup
 from adcp.types import SyncAccountsRequest as LibrarySyncAccountsRequest
+from adcp.types import SyncGovernanceRequest as LibrarySyncGovernanceRequest
+from adcp.types import SyncGovernanceResponse as LibrarySyncGovernanceResponse
 from adcp.types.aliases import SyncAccountsSuccessResponse as LibrarySyncAccountsSuccess
 from adcp.types.generated_poc.core.brand_ref import BrandReference as LibraryBrandReference
-from pydantic import ConfigDict
+from pydantic import ConfigDict, model_validator
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import NestedModelSerializerMixin, SalesAgentBaseModel
@@ -170,11 +173,114 @@ class SyncAccountsResponse(NestedModelSerializerMixin, LibrarySyncAccountsSucces
         return f"Synced {count} account{'s' if count != 1 else ''}{dry_run_note}."
 
 
+# ---------------------------------------------------------------------------
+# sync_governance — bind a governance agent per account (UC-030, #1329)
+# ---------------------------------------------------------------------------
+
+
+class SyncGovernanceRequest(LibrarySyncGovernanceRequest):
+    """Extends library SyncGovernanceRequest.
+
+    Library provides: idempotency_key (required), accounts, context, ext.
+    Per the pinned 3.1.1 schema (account/sync-governance-request.json),
+    ``idempotency_key`` is REQUIRED (``x-mutates-state: true``) and each
+    ``accounts[]`` entry pairs an ``AccountReference`` with a ``governance_agents``
+    array of ``maxItems: 1``. Unlike SyncAccountsRequest, we do NOT relax
+    ``idempotency_key`` to optional: UC-030 grades rejection when it is absent,
+    so a missing key must surface as a validation error, not be auto-generated.
+    """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    @model_validator(mode="after")
+    def _require_https_agent_urls(self) -> "SyncGovernanceRequest":
+        """Enforce the schema's ``url: ^https://`` constraint on governance agents.
+
+        The pinned 3.1.1 request schema marks the agent ``url`` ``pattern: ^https://``,
+        but the generated ``AnyUrl`` field does not carry that constraint (SDK codegen
+        gap) — an ``http://`` url would otherwise slip through. The spec is
+        authoritative, so we enforce it here at construction, uniformly across every
+        transport (MCP/A2A/REST all build this type).
+        """
+        for account in self.accounts:
+            for agent in account.governance_agents:
+                if not str(agent.url).startswith("https://"):
+                    raise ValueError(
+                        f"governance agent url must use https:// (field: governance_agents[].url, got '{agent.url}')"
+                    )
+        return self
+
+
+class SyncedGovernanceAgent(SalesAgentBaseModel):
+    """A governance agent as echoed on the sync_governance response.
+
+    URL-only by construction. The request-side agent carries ``authentication``
+    (schemes + credentials); the response MUST NOT echo credentials
+    (sync-governance-response.json success ``governance_agents.items`` requires
+    only ``url``). Modelling the echo with a url-only type makes that a
+    structural guarantee, not a call-site discipline.
+
+    Deliberately a parallel, minimal SDK-decoupled type rather than reusing the
+    library ``GovernanceAgent`` (which also models the response as url-only): the
+    echo contract is a bare ``{url}`` and owning it keeps the response shape
+    independent of SDK codegen churn on the request-side agent type.
+    """
+
+    url: str
+
+
+class SyncGovernanceResponseAccount(SalesAgentBaseModel):
+    """Per-account result in a sync_governance response.
+
+    The SDK collapsed the response ``oneOf`` into a flat envelope with a bare
+    ``payload`` dict (no typed ``accounts``), so — mirroring SyncResponseAccount
+    — we own this model. Shape from the pinned 3.1.1 success variant
+    (sync-governance-response.json ``accounts.items``): ``account`` echoed,
+    ``status`` in {synced, failed}, ``governance_agents`` present on synced
+    entries (url only), per-account ``errors`` present on failed entries.
+    """
+
+    account: LibraryAccountReference
+    # Two-member enum per the pinned sync-governance-response.json (status.enum
+    # ["synced","failed"]); a Literal makes the constraint structural rather than
+    # call-site discipline (mirrors the SyncedGovernanceAgent url-only rationale).
+    status: Literal["synced", "failed"]
+    governance_agents: list[SyncedGovernanceAgent] | None = None
+    errors: list[LibraryError] | None = None
+
+
+class SyncGovernanceResponse(NestedModelSerializerMixin, LibrarySyncGovernanceResponse):
+    """Extends library SyncGovernanceResponse (success variant).
+
+    The library type is the flattened protocol envelope; ``accounts`` is
+    re-declared locally (Pattern #4 nested serialization) and is REQUIRED on
+    the success variant (sync-governance-response.json ``oneOf`` requires
+    ``accounts`` on success | ``errors`` on error). ``status`` defaults to
+    ``completed`` on the library base — the synchronous success path — so it is
+    not set here. ``context`` (inherited from the protocol envelope) is echoed
+    unchanged, which the specialism storyboards grade.
+    """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    accounts: list[SyncGovernanceResponseAccount]
+
+    def __str__(self) -> str:
+        """Return human-readable summary message for protocol envelope."""
+        synced = sum(1 for a in self.accounts if a.status == "synced")
+        total = len(self.accounts)
+        return f"Synced governance for {synced}/{total} account{'s' if total != 1 else ''}."
+
+
 __all__ = [
     "Account",
     "ListAccountsRequest",
     "ListAccountsResponse",
     "SyncAccountsRequest",
     "SyncAccountsResponse",
+    "SyncedGovernanceAgent",
+    "SyncGovernanceRequest",
+    "SyncGovernanceResponse",
+    "SyncGovernanceResponseAccount",
     "SyncResponseAccount",
 ]

@@ -8,6 +8,8 @@ beads: salesagent-8n4
 
 from __future__ import annotations
 
+from typing import Any
+
 from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey
 
 from src.core.database.repositories.account import AccountRepository
@@ -20,6 +22,35 @@ from src.core.exceptions import (
     AdCPAuthorizationError,
 )
 from src.core.resolved_identity import ResolvedIdentity
+
+
+def serialize_governance_agents(agents: Any) -> list[dict[str, Any]] | None:
+    """Project governance agents to the url-only ``accounts.governance_agents`` JSON shape.
+
+    Single serializer for every writer of the ``accounts.governance_agents`` column
+    (sync_accounts change-detection + sync_governance persist/echo). The DB column
+    model (``core.account.GovernanceAgent``) is url-only BY DESIGN: credentials are
+    write-only and MUST NEVER be persisted or echoed (sync_governance.mdx;
+    sync-governance-response.json ``governance_agents.items`` = url only). The
+    request-side ``GovernanceAgent`` carries ``authentication`` (schemes +
+    credentials); this helper projects to url-only for *both* dict and model inputs,
+    so the credential-strip is a structural guarantee for every writer rather than
+    inline call-site discipline.
+
+    Only the ``url`` is read (never re-validating the full request model through the
+    url-only DB model, which would ``extra="forbid"``-reject ``authentication`` in
+    dev/CI). ``AnyUrl`` is normalized to ``str`` via ``model_dump(mode="json")``.
+    Returns ``None`` for ``None`` input (unset field), mirroring the prior behavior.
+    """
+    from adcp.types.generated_poc.core.account import GovernanceAgent  # url-only DB column model
+
+    if agents is None:
+        return None
+    result: list[dict[str, Any]] = []
+    for agent in agents:
+        url = agent["url"] if isinstance(agent, dict) else agent.url
+        result.append(GovernanceAgent(url=url).model_dump(mode="json"))
+    return result
 
 
 def resolve_account(
