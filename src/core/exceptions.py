@@ -1094,4 +1094,10 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
         return AdCPValidationError(str(exc))
     if isinstance(exc, PermissionError):
         return AdCPAuthorizationError(str(exc))
-    return AdCPError(str(exc) or type(exc).__name__)
+    # An untyped exception's str() can carry SQL fragments, table names, or
+    # filesystem paths (SQLAlchemy/OS errors). build_two_layer_error_envelope
+    # forwards the message verbatim to the wire envelope and the A2A failed-Task
+    # webhook body, so only a generic message may reach the buyer. Log the raw
+    # detail server-side; return the wire-standard message for the code.
+    logger.error("Unhandled %s normalized to INTERNAL_ERROR", type(exc).__name__, exc_info=exc)
+    return AdCPError(WIRE_STANDARD_CODES[to_wire_error_code("INTERNAL_ERROR")]["message"])

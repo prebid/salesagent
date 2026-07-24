@@ -420,21 +420,28 @@ class TestA2ADispatcherFailedSkillResult:
         # Wire code is translated via ERROR_CODE_MAPPING
         assert env["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
         assert env["errors"][0]["code"] == "SERVICE_UNAVAILABLE"
-        # The original RuntimeError message is preserved verbatim
-        assert "unexpected boom" in env["errors"][0]["message"]
+        # The raw RuntimeError text must NOT reach the buyer (#1587): the wire
+        # carries the generic wire-standard message, never str(exc).
+        from src.core.exceptions import WIRE_STANDARD_CODES, to_wire_error_code
 
-    def test_exception_with_empty_message_falls_back_to_type_name(self):
-        """Untyped exceptions with no string content get the exception class name.
+        generic = WIRE_STANDARD_CODES[to_wire_error_code("INTERNAL_ERROR")]["message"]
+        assert env["errors"][0]["message"] == generic
+        assert "unexpected boom" not in env["errors"][0]["message"]
 
-        Avoids emitting an empty ``message`` field that violates the spec's
-        non-empty-message expectation on the wire envelope.
+    def test_exception_with_empty_message_uses_generic_wire_message(self):
+        """An untyped exception with no string content still yields a non-empty wire
+        message — the generic wire-standard message — rather than leaking the
+        exception class name (#1587). Preserves the spec's non-empty-message guarantee.
         """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+        from src.core.exceptions import WIRE_STANDARD_CODES, to_wire_error_code
 
         result = AdCPRequestHandler._build_failed_skill_result("get_products", RuntimeError())
 
         env = result["error_envelope"]
-        assert env["errors"][0]["message"] == "RuntimeError"
+        generic = WIRE_STANDARD_CODES[to_wire_error_code("INTERNAL_ERROR")]["message"]
+        assert env["errors"][0]["message"] == generic
+        assert env["errors"][0]["message"]  # non-empty
 
     def test_envelope_shape_matches_typed_branch(self):
         """Untyped fallthrough produces the SAME envelope shape as the typed branch.
