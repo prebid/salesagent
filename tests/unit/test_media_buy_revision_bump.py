@@ -132,19 +132,8 @@ class TestLifecycleRefreshExcludesRevision:
         )
 
 
-class TestRevisionNumericStringCoercionDivergence:
-    """#1582: a numeric-string revision like ``"7"`` diverges by transport.
-
-    JSON Schema declares ``revision`` as ``type: integer``, so ``"7"`` is a
-    wrong-TYPE value. The A2A raw-dict path (``UpdateMediaBuyRequest``) enforces
-    that in a before-validator and rejects it; the REST body
-    (``UpdateMediaBuyBody``) and the MCP typed param instead lax-coerce ``"7" ->
-    7`` before the request model runs, so they accept it. This case has no single
-    cross-transport outcome, which is why the BDD ``wrong_type`` partition uses
-    ``"not-an-int"`` (rejected everywhere) — a Scenario Outline row grades one
-    outcome per transport. This test is where the numeric-string coercion
-    divergence itself stays exercised. Deferred, tracked in #1582.
-    """
+class TestRevisionNumericStringValidationParity:
+    """A numeric-string revision remains raw until the shared request boundary."""
 
     def test_a2a_raw_dict_rejects_numeric_string_revision(self):
         from pydantic import ValidationError
@@ -154,13 +143,20 @@ class TestRevisionNumericStringCoercionDivergence:
         with pytest.raises(ValidationError, match="revision"):
             UpdateMediaBuyRequest(media_buy_id="mb-1", revision="7")
 
-    def test_rest_body_lax_coerces_numeric_string_revision(self):
+    def test_rest_body_preserves_numeric_string_revision_for_shared_validation(self):
         # media_buy_id is a PATH parameter on PUT /media-buys/{id}, not a body field;
         # UpdateMediaBuyBody (SalesAgentBaseModel, extra="forbid" in dev/CI) carries
-        # only the updatable fields. The body still LAX-coerces a numeric string "7" -> 7.
+        # only the updatable fields.
         from src.routes.api_v1 import UpdateMediaBuyBody
 
-        assert UpdateMediaBuyBody.model_validate({"revision": "7"}).revision == 7
+        assert UpdateMediaBuyBody.model_validate({"revision": "7"}).revision == "7"
+
+    def test_shared_boundary_rejects_numeric_string_as_invalid_request(self):
+        from src.core.exceptions import AdCPInvalidRequestError
+        from src.core.tools.media_buy_update import _build_update_request
+
+        with pytest.raises(AdCPInvalidRequestError, match="revision"):
+            _build_update_request(media_buy_id="mb-1", paused=True, revision="7")
 
 
 class TestRevisionSuccessFieldConstraint:

@@ -85,7 +85,7 @@ def resolve_identity_from_context(
         # No headers available — return minimal identity
         return ResolvedIdentity(protocol=protocol)
 
-    # Extract testing context from headers if present
+    # Resolve the default protocol context. Proprietary X-* headers are ignored.
     testing_context = None
     try:
         from src.core.testing_hooks import TestContext

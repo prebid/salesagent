@@ -3689,16 +3689,10 @@ async def _create_media_buy_impl(
                 valid_actions=valid_actions_for_status(simulated_lifecycle),
                 context=req.context,
                 errors=property_list_unsupported_advisories(req.packages, adapter),
-                # X-Dry-Run is proprietary internal tooling, NOT an AdCP concept:
-                # the spec's only sanctioned test mode is the account-level
-                # ``sandbox`` (dist/docs/3.1.1/media-buy/advanced-topics/
-                # sandbox.mdx — resolves @main, not at tag v3.1.1: the 3.1.1
-                # prose snapshot was published after the tag; simulated data,
-                # no real spend/side effects). Mark
-                # the simulated response ``sandbox=True`` so it is honestly labelled
-                # as simulated rather than masquerading as a real create.
-                # spec-introduced: 3.0.0 (sandbox.mdx first per-version snapshot)
-                sandbox=True,
+                # Internal implementation tests may inject ``AdCPTestContext``
+                # directly. This is not protocol sandbox mode: buyer-controlled
+                # X-* headers are ignored and only account resolution may set the
+                # response's sandbox flag.
                 # 3.1.1 create-media-buy-response.json oneOf[0] (CreateMediaBuySuccess)
                 # required = [media_buy_id, confirmed_at, revision, packages] (verified
                 # against authoritative dist/schemas/3.1.1/media-buy/

@@ -20,7 +20,12 @@ construction and are out of scope for this text-level guard.
 
 import ast
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, repo_root, safe_parse
+from tests.unit._architecture_helpers import (
+    assert_violations_match_allowlist,
+    iter_call_expressions,
+    repo_root,
+    safe_parse,
+)
 
 _REQUESTS_METHODS = {"post", "get", "put", "delete", "patch", "request", "head", "options"}
 
@@ -45,6 +50,34 @@ def _requests_module_names(tree: ast.AST) -> set[str]:
     return names
 
 
+def _requests_function_names(tree: ast.AST) -> tuple[set[str], set[str]]:
+    """Directly imported request methods and Session constructor names."""
+    methods: set[str] = set()
+    sessions: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or node.module not in {"requests", "requests.sessions"}:
+            continue
+        for alias in node.names:
+            bound = alias.asname or alias.name
+            if node.module == "requests" and alias.name in _REQUESTS_METHODS:
+                methods.add(bound)
+            if alias.name == "Session":
+                sessions.add(bound)
+    return methods, sessions
+
+
+def _attribute_chain(node: ast.expr) -> list[str] | None:
+    """Flatten ``requests.sessions.Session``-style attribute chains."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    return list(reversed(parts))
+
+
 def _is_none_literal(value: ast.expr) -> bool:
     """True for a literal ``None`` (``timeout=None`` is as unbounded as no timeout)."""
     return isinstance(value, ast.Constant) and value.value is None
@@ -60,18 +93,24 @@ def _unbounded_requests_calls(tree: ast.AST) -> list[int]:
     docstring). Recognizes aliased ``requests`` imports.
     """
     module_names = _requests_module_names(tree)
+    direct_methods, direct_sessions = _requests_function_names(tree)
     hits: list[int] = []
-    for node in ast.walk(tree):
-        if not (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id in module_names
-        ):
+    for node in iter_call_expressions(tree):
+        if isinstance(node.func, ast.Name):
+            if node.func.id in direct_sessions:
+                hits.append(node.lineno)
+            elif node.func.id in direct_methods:
+                timeout_kw = next((kw for kw in node.keywords if kw.arg == "timeout"), None)
+                if timeout_kw is None or _is_none_literal(timeout_kw.value):
+                    hits.append(node.lineno)
             continue
-        if node.func.attr == "Session":
+
+        chain = _attribute_chain(node.func)
+        if not chain or chain[0] not in module_names:
+            continue
+        if chain[-1] == "Session" and chain[1:-1] in ([], ["sessions"]):
             hits.append(node.lineno)
-        elif node.func.attr in _REQUESTS_METHODS:
+        elif len(chain) == 2 and chain[-1] in _REQUESTS_METHODS:
             timeout_kw = next((kw for kw in node.keywords if kw.arg == "timeout"), None)
             if timeout_kw is None or _is_none_literal(timeout_kw.value):
                 hits.append(node.lineno)
@@ -129,6 +168,16 @@ def test_guard_detects_aliased_requests_call():
     """Known-bad: an aliased ``import requests as r`` call without a timeout is flagged —
     the module-name anchor must follow the alias, not just the literal ``requests``."""
     assert _snippet_hits("import requests as r\n\n\ndef f(url):\n    return r.get(url)\n") == [5]
+
+
+def test_guard_detects_directly_imported_request_call():
+    """Known-bad: ``from requests import get`` cannot evade the timeout guard."""
+    assert _snippet_hits("from requests import get\n\n\ndef f(url):\n    return get(url)\n") == [5]
+
+
+def test_guard_detects_nested_session_constructor():
+    """Known-bad: ``requests.sessions.Session`` is the same escape hatch."""
+    assert _snippet_hits("import requests\n\n\ndef f():\n    return requests.sessions.Session()\n") == [5]
 
 
 def test_guard_accepts_bounded_requests_call():

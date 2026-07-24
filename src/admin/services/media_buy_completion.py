@@ -867,7 +867,10 @@ def _run_adapter_and_finalize(
         expected_status=MEDIA_BUY_FINALIZING_STATUS,
         expected_lease_id=lease_id,
         clear_finalize_state=True,
-        bump=False,
+        # ``finalizing`` is exposed to buyers as ``pending_start``. Publishing
+        # changes both the buyer-visible status and the write-once confirmation
+        # timestamp, so AdCP requires a fresh optimistic-concurrency revision.
+        bump=True,
     )
     if published is None:
         # The adapter RAN this attempt but a newer owner (W2) took the row over before this

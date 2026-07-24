@@ -44,11 +44,13 @@ IMPL_REGISTRY = [
 # Format: "module::impl_name::wrapper_kind::param_name"
 KNOWN_VIOLATIONS: set[str] = set()
 
-# Parameters resolved at the boundary, not forwarded from the caller.
-# ``external_task_id`` is the transport's own outer async-task id (only the A2A
-# boundary has one — the ``task_*`` it returns to the buyer); MCP/REST have no such
-# concept, so like ``identity`` it is resolved per-transport, not forwarded. #1544 B6.
-BOUNDARY_RESOLVED_PARAMS = {"identity", "external_task_id"}
+# Parameters resolved by every transport boundary rather than forwarded.
+BOUNDARY_RESOLVED_PARAMS = {"identity"}
+
+# Parameters resolved only by a particular wrapper kind. ``external_task_id`` is
+# absent from MCP, but the A2A boundary must forward its outer task id so durable
+# task correlation survives the wrapper chain.
+WRAPPER_RESOLVED_PARAMS = {"mcp": {"external_task_id"}, "a2a": set()}
 
 
 def _module_to_filepath(module_path: str) -> Path:
@@ -65,7 +67,7 @@ def _module_to_filepath(module_path: str) -> Path:
 
 
 def _get_impl_params(module_path: str, func_name: str) -> list[str]:
-    """Get parameter names for an _impl function (excluding boundary-resolved)."""
+    """Get parameter names for an _impl function (excluding universally resolved ones)."""
     mod = importlib.import_module(module_path)
     func = getattr(mod, func_name)
     sig = inspect.signature(func)
@@ -159,7 +161,7 @@ def _check_wrapper_completeness(
     violations = []
     for kwargs, n_positional in call_arg_sets:
         for i, param in enumerate(impl_params):
-            if param in BOUNDARY_RESOLVED_PARAMS:
+            if param in WRAPPER_RESOLVED_PARAMS[wrapper_kind]:
                 continue
             key = f"{module_path}::{impl_name}::{wrapper_kind}::{param}"
             if param not in kwargs and i >= n_positional:

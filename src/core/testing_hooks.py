@@ -4,13 +4,10 @@ AdCP Testing Hooks Implementation
 Implements the full AdCP testing specification for comprehensive test backend support:
 https://adcontextprotocol.org/docs/media-buy/testing/
 
-This module handles all testing headers and provides isolated test execution:
-- X-Dry-Run: Execute without affecting production
-- X-Mock-Time: Control simulated time progression
-- X-Jump-To-Event: Jump to specific campaign lifecycle events
-- X-Test-Session-ID: Isolate test sessions
-- X-Auto-Advance: Automatically advance through events
-- X-Simulated-Spend: Track simulated spending without real money
+This module provides internal simulation helpers for conformance and integration
+tests. Buyer-controlled proprietary X-* headers are deliberately ignored at
+every protocol boundary; tests opt into simulation by constructing an
+``AdCPTestContext`` directly.
 """
 
 import logging
@@ -34,16 +31,12 @@ _TEST_HOOKS_DEV_ENVIRONMENTS = frozenset({"development", "test"})
 
 
 def test_hooks_enabled() -> bool:
-    """Fail-CLOSED gate for the proprietary X-* test headers (#1544).
+    """Report whether internal test-hook diagnostics are enabled (#1544).
 
-    Production SUBTRACTS, it does not merely fail to add: ``is_production()``
-    is the union of both deployment conventions (``ENVIRONMENT=production`` OR
-    ``PRODUCTION=true``), and a process that matches EITHER can never honor the
-    headers — not even with ``ADCP_TEST_HOOKS_ENABLED=true``. Keying the gate
-    on ``ENVIRONMENT`` alone left ``PRODUCTION=true`` + ``ENVIRONMENT=development``
-    honoring buyer-supplied ``X-Dry-Run`` / ``X-Force-Error`` against a live
-    seller, which is precisely the two-convention divergence ``is_production()``
-    exists to close.
+    This compatibility flag no longer controls protocol-header parsing:
+    ``AdCPTestContext.from_headers`` always ignores proprietary X-* headers.
+    It remains fail-closed in production for callers that use it to enable
+    internal diagnostics.
 
     Absent production, the headers are honored only on explicit operator
     opt-in: ``ENVIRONMENT`` set to a dev value (``development`` / ``test``), or
@@ -134,103 +127,23 @@ class AdCPTestContext(BaseModel):
 
     @classmethod
     def from_headers(cls, headers: dict[str, str]) -> "AdCPTestContext | None":
-        """Extract testing context from a raw HTTP headers dict.
+        """Ignore deprecated protocol headers.
 
-        Returns None if no test headers are present (avoids creating an empty
-        AdCPTestContext that would be truthy and activate testing behavior).
-
-        Works with both canonical (X-Dry-Run) and lowercase (x-dry-run) keys,
-        since ASGI/FastAPI normalizes headers to lowercase.
+        AdCP 3.1.1 requires sellers not to alter behavior based on
+        ``X-Dry-Run``, ``X-Test-Session-ID``, ``X-Mock-Time``, or related
+        headers. Tests that need simulation construct ``AdCPTestContext``
+        directly at an internal implementation boundary; protocol transports
+        never derive it from buyer-controlled headers.
         """
-        if not headers:
-            return None
-
-        # Proprietary X-* test headers (X-Dry-Run, X-Mock-Time, X-Force-Error,
-        # X-Simulated-Spend, …) are INTERNAL tooling, not an AdCP concept. The
-        # pinned sandbox guidance
-        # (dist/docs/3.1.1/media-buy/advanced-topics/sandbox.mdx — resolves
-        # @main, not at tag v3.1.1: the 3.1.1 prose snapshot was published
-        # after the tag) is explicit
-        # that sellers MUST NOT alter behavior based on these headers — the
-        # sanctioned test mode is the account-level ``sandbox``. So they are
-        # honored ONLY on explicit dev/test opt-in (fail-CLOSED: an unset
-        # ENVIRONMENT disables them), so no external MCP/A2A caller can activate
-        # dry-run / mock-time / forced errors against a live seller. #1544 (P1).
-        # spec-introduced: 3.0.0 (sandbox.mdx first per-version snapshot; absent 2.5.3)
-        if not test_hooks_enabled():
-            return None
-
-        # Normalize to case-insensitive lookup
-        lower_headers = {k.lower(): v for k, v in headers.items()}
-
-        # Extract all testing headers
-        test_session_id = lower_headers.get("x-test-session-id")
-        dry_run = lower_headers.get("x-dry-run", "").lower() == "true"
-        auto_advance = lower_headers.get("x-auto-advance", "").lower() == "true"
-        simulated_spend = lower_headers.get("x-simulated-spend", "").lower() == "true"
-        force_error = lower_headers.get("x-force-error")
-        slow_mode = lower_headers.get("x-slow-mode", "").lower() == "true"
-        debug_mode = lower_headers.get("x-debug-mode", "").lower() == "true"
-
-        # Parse mock time
-        mock_time = None
-        mock_time_header = lower_headers.get("x-mock-time")
-        if mock_time_header:
-            try:
-                if mock_time_header.isdigit():
-                    # Epoch seconds are UTC-anchored: parse directly to an aware
-                    # UTC datetime. A naive fromtimestamp() would yield *local*
-                    # time, which the mock_time validator would then mislabel UTC.
-                    mock_time = datetime.fromtimestamp(int(mock_time_header), tz=UTC)
-                else:
-                    # A naive result (offset omitted, or Z stripped) is coerced
-                    # to UTC-aware by the mock_time field validator.
-                    time_str = mock_time_header.rstrip("Z")
-                    mock_time = datetime.fromisoformat(time_str)
-            except (ValueError, OverflowError):
-                pass
-
-        # Parse jump to event
-        jump_to_event = None
-        jump_event_header = lower_headers.get("x-jump-to-event")
-        if jump_event_header:
-            try:
-                jump_to_event = CampaignEvent(jump_event_header)
-            except ValueError:
-                pass
-
-        # Return None if no test headers were actually set
-        has_any_test_header = any(
-            [
-                test_session_id,
-                dry_run,
-                auto_advance,
-                simulated_spend,
-                force_error,
-                slow_mode,
-                debug_mode,
-                mock_time,
-                jump_to_event,
-            ]
-        )
-        if not has_any_test_header:
-            return None
-
-        return cls(
-            test_session_id=test_session_id,
-            dry_run=dry_run,
-            mock_time=mock_time,
-            auto_advance=auto_advance,
-            jump_to_event=jump_to_event,
-            simulated_spend=simulated_spend,
-            force_error=force_error,
-            slow_mode=slow_mode,
-            debug_mode=debug_mode,
-        )
+        return None
 
     @classmethod
     def from_context(cls, context: Context) -> "TestContext":
-        """Extract testing context from FastMCP context headers."""
+        """Return the default context for an MCP request.
+
+        Header lookup remains for backwards-compatible Context handling, but
+        ``from_headers`` intentionally discards every buyer-controlled value.
+        """
         if not context:
             return cls()
 
@@ -616,7 +529,7 @@ def get_testing_context(context: "Context | ToolContext") -> TestContext:
     if isinstance(context, ToolContext):
         return context.testing_context or TestContext()
 
-    # Handle FastMCP Context (extract from headers)
+    # Protocol headers are ignored; this returns the default context.
     return TestContext.from_context(context)
 
 
@@ -734,15 +647,12 @@ def apply_testing_hooks(
     return result
 
 
-# Startup visibility: honoring X-* test headers changes spend-committing
-# behavior, so an open gate must be loud in the process log. Import-time is
-# the right instant — every transport that honors the headers imports this
-# module at startup.
+# Startup visibility for internal test diagnostics. Protocol X-* headers remain
+# ignored regardless of this flag.
 if test_hooks_enabled():
     logger.warning(
-        "AdCP test hooks are ENABLED (ENVIRONMENT=%r, ADCP_TEST_HOOKS_ENABLED=%r): "
-        "proprietary X-* test headers (X-Dry-Run, X-Mock-Time, X-Force-Error, ...) "
-        "will be honored. This must never be the case in a production deployment.",
+        "Internal AdCP test-hook diagnostics are ENABLED "
+        "(ENVIRONMENT=%r, ADCP_TEST_HOOKS_ENABLED=%r); protocol X-* headers remain ignored.",
         os.getenv("ENVIRONMENT"),
         os.getenv("ADCP_TEST_HOOKS_ENABLED"),
     )

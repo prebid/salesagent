@@ -155,7 +155,7 @@ class TestA2AParameterMapping:
         assert result.artifacts, "failed skill must still return a Task with an artifact"
         envelope = extract_data_from_artifact(result.artifacts[0])
         # Assert on the actual wire envelope the buyer receives, not exc.error_code.
-        assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
+        assert_envelope_shape(envelope, "INVALID_REQUEST", recovery="correctable")
 
     def test_update_media_buy_backward_compatibility_with_updates(self):
         """

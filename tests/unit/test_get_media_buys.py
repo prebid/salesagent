@@ -37,30 +37,18 @@ from src.core.tools.media_buy_list import (
     _map_creative_status,
     _resolve_status_filter,
 )
+from tests.harness import make_identity
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def make_identity(
-    tenant_id="tenant_1",
-    principal_id="principal_1",
-    tenant=None,
-    testing_context=None,
-):
-    """Create a ResolvedIdentity for testing."""
-    from tests.factories import PrincipalFactory
-
-    if tenant is None:
-        tenant = {"tenant_id": tenant_id, "adapter_type": "mock"}
-    return PrincipalFactory.make_identity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant=tenant,
-        protocol="mcp",
-        testing_context=testing_context,
-    )
+_IDENTITY_DEFAULTS = {
+    "tenant_id": "tenant_1",
+    "principal_id": "principal_1",
+    "tenant": {"tenant_id": "tenant_1", "adapter_type": "mock"},
+}
 
 
 def make_media_buy(
@@ -347,14 +335,18 @@ class TestGetMediaBuysImpl:
         patched_internals.packages.return_value = {"buy_active": [make_package(media_buy_id="buy_active")]}
 
         req = self._make_request()
-        response = _get_media_buys_impl(req, identity=make_identity())
+        response = _get_media_buys_impl(req, identity=make_identity(**_IDENTITY_DEFAULTS))
 
         assert len(response.media_buys) == 1
         assert response.media_buys[0].media_buy_id == "buy_active"
 
     def test_missing_principal_returns_error(self):
         """If principal ID not in identity, return empty list with error."""
-        identity = make_identity(principal_id=None)
+        identity = make_identity(
+            tenant_id="tenant_1",
+            principal_id=None,
+            tenant=_IDENTITY_DEFAULTS["tenant"],
+        )
 
         req = self._make_request()
         response = _get_media_buys_impl(req, identity=identity)
@@ -375,7 +367,7 @@ class TestGetMediaBuysImpl:
 
         with patch("src.core.tools.media_buy_list.get_adapter", return_value=mock_adapter):
             req = self._make_request()
-            _get_media_buys_impl(req, identity=make_identity(), include_snapshot=False)
+            _get_media_buys_impl(req, identity=make_identity(**_IDENTITY_DEFAULTS), include_snapshot=False)
 
         mock_adapter.get_packages_snapshot.assert_not_called()
 
@@ -399,7 +391,7 @@ class TestGetMediaBuysImpl:
 
         with patch("src.core.tools.media_buy_list.get_adapter", return_value=mock_adapter):
             req = self._make_request()
-            response = _get_media_buys_impl(req, identity=make_identity(), include_snapshot=True)
+            response = _get_media_buys_impl(req, identity=make_identity(**_IDENTITY_DEFAULTS), include_snapshot=True)
 
         mock_adapter.get_packages_snapshot.assert_called_once()
         # The package_refs passed should include the platform_line_item_id
@@ -421,7 +413,7 @@ class TestGetMediaBuysImpl:
 
         with patch("src.core.tools.media_buy_list.get_adapter", return_value=mock_adapter):
             req = self._make_request()
-            response = _get_media_buys_impl(req, identity=make_identity(), include_snapshot=True)
+            response = _get_media_buys_impl(req, identity=make_identity(**_IDENTITY_DEFAULTS), include_snapshot=True)
 
         pkg_response = response.media_buys[0].packages[0]
         assert pkg_response.snapshot is None
@@ -464,7 +456,7 @@ class TestTargetingOverlayRoundTrip:
         patched_internals.packages.return_value = {"buy_1": [pkg]}
 
         req = self._make_request()
-        response = _get_media_buys_impl(req, identity=make_identity())
+        response = _get_media_buys_impl(req, identity=make_identity(**_IDENTITY_DEFAULTS))
 
         # Storyboard validation: literal field path must match
         targeting = response.media_buys[0].packages[0].targeting_overlay
@@ -490,7 +482,7 @@ class TestTargetingOverlayRoundTrip:
         patched_internals.packages.return_value = {"buy_1": [pkg]}
 
         req = self._make_request()
-        response = _get_media_buys_impl(req, identity=make_identity())
+        response = _get_media_buys_impl(req, identity=make_identity(**_IDENTITY_DEFAULTS))
 
         targeting = response.media_buys[0].packages[0].targeting_overlay
         assert targeting is not None
@@ -519,7 +511,7 @@ class TestTargetingOverlayRoundTrip:
         patched_internals.packages.return_value = {"buy_1": [pkg]}
 
         req = self._make_request()
-        response = _get_media_buys_impl(req, identity=make_identity())
+        response = _get_media_buys_impl(req, identity=make_identity(**_IDENTITY_DEFAULTS))
 
         # Round-trip via model_dump (the wire-format path)
         dumped = response.model_dump(exclude_none=True)
@@ -545,7 +537,7 @@ class TestTargetingOverlayRoundTrip:
         patched_internals.packages.return_value = {"buy_1": [pkg]}
 
         req = self._make_request()
-        response = _get_media_buys_impl(req, identity=make_identity())
+        response = _get_media_buys_impl(req, identity=make_identity(**_IDENTITY_DEFAULTS))
 
         targeting = response.media_buys[0].packages[0].targeting_overlay
         assert targeting is not None
@@ -559,7 +551,7 @@ class TestTargetingOverlayRoundTrip:
         patched_internals.packages.return_value = {"buy_1": [pkg]}
 
         req = self._make_request()
-        response = _get_media_buys_impl(req, identity=make_identity())
+        response = _get_media_buys_impl(req, identity=make_identity(**_IDENTITY_DEFAULTS))
 
         assert response.media_buys[0].packages[0].targeting_overlay is None
 
@@ -592,7 +584,7 @@ class TestTargetingOverlayRoundTrip:
         patched_internals.packages.return_value = {"buy_1": [pkg]}
 
         req = self._make_request()
-        response = _get_media_buys_impl(req, identity=make_identity())
+        response = _get_media_buys_impl(req, identity=make_identity(**_IDENTITY_DEFAULTS))
 
         dumped = response.model_dump(exclude_none=True)
         targeting = dumped["media_buys"][0]["packages"][0]["targeting_overlay"]
@@ -636,7 +628,7 @@ class TestTargetingOverlayRoundTrip:
         patched_internals.packages.return_value = {"buy_1": [bad_pkg, good_pkg]}
 
         req = self._make_request()
-        response = _get_media_buys_impl(req, identity=make_identity())
+        response = _get_media_buys_impl(req, identity=make_identity(**_IDENTITY_DEFAULTS))
 
         # Both packages survive — the bad one gets targeting_overlay=None.
         assert len(response.media_buys[0].packages) == 2

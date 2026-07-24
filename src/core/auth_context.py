@@ -67,24 +67,17 @@ get_auth_context: Any = Depends(_get_auth_context)
 
 
 def _resolve_rest_identity(auth_ctx: AuthContext, *, require_valid_token: bool) -> "ResolvedIdentity | None":
-    """Resolve a ResolvedIdentity at the REST boundary, honoring X-* test headers.
+    """Resolve a ResolvedIdentity at the REST boundary.
 
     Shared by _resolve_auth_dep (auth-optional) and _require_auth_dep
     (auth-required). Returns None when no token is present or the resolved
     identity carries no principal (so both callers apply their own missing-auth
     policy: None vs. raise).
 
-    Crucially, this extracts the proprietary testing context (X-Dry-Run,
-    X-Mock-Time, X-Force-Error, …) from the request headers via
-    ``AdCPTestContext.from_headers`` — exactly as the A2A boundary does
-    (adcp_a2a_server.py) and the MCP boundary does (resolve_identity_from_context).
-    Without this, the live REST server silently dropped x-dry-run and executed a
-    REAL create/booking instead of a simulation, breaking transport parity for
-    BR-RULE-020 INV-5 (only the e2e_rest transport exercises this path; the
-    in-process rest dispatch injects testing_context directly). ``from_headers``
-    itself is fail-closed (honored only with an explicit dev ENVIRONMENT or
-    ADCP_TEST_HOOKS_ENABLED=true), so these internal headers can never activate
-    dry-run/mock-time against a live seller.
+    ``AdCPTestContext.from_headers`` is called consistently at all transports,
+    but deliberately returns ``None``: AdCP 3.1.1 forbids proprietary X-*
+    headers from changing seller behavior. Internal tests inject a context
+    directly instead.
     """
     if not auth_ctx.auth_token:
         return None

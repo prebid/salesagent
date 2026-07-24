@@ -1,13 +1,4 @@
-"""Regression tests for A2A testing context extraction from headers.
-
-Bug: A2A transport doesn't extract testing context (X-Dry-Run, X-Test-Session-ID,
-etc.) from HTTP request headers. MCP correctly extracts via TestContext.from_context(),
-but A2A has no equivalent extraction path. This means test headers sent to A2A
-endpoints are silently ignored.
-
-Regression prevention: https://github.com/prebid/salesagent/pull/1066
-Beads: salesagent-2yt6
-"""
+"""Deprecated testing headers are ignored consistently by A2A."""
 
 from unittest.mock import patch
 
@@ -17,14 +8,9 @@ from tests.factories.principal import PrincipalFactory
 
 
 class TestA2ATestingContextExtraction:
-    """A2A transport should extract testing context from HTTP headers."""
+    """A2A transport must not derive behavior from deprecated X-* headers."""
 
-    def test_dry_run_header_passed_to_resolve_identity(self):
-        """X-Dry-Run header should be extracted and passed to resolve_identity.
-
-        Verifies _resolve_a2a_identity calls resolve_identity with testing_context
-        that has dry_run=True when X-Dry-Run: true header is present.
-        """
+    def test_dry_run_header_is_ignored(self):
         handler = AdCPRequestHandler()
 
         headers = {
@@ -44,16 +30,15 @@ class TestA2ATestingContextExtraction:
         with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity) as mock_resolve:
             handler._resolve_a2a_identity("test-token", require_valid_token=True, context=ctx)
 
-        mock_resolve.assert_called_once()
-        call_kwargs = mock_resolve.call_args.kwargs
-        testing_ctx = call_kwargs.get("testing_context")
-        assert testing_ctx is not None, (
-            "_resolve_a2a_identity should pass testing_context to resolve_identity when test headers are present."
+        mock_resolve.assert_called_once_with(
+            headers=headers,
+            auth_token="test-token",
+            require_valid_token=True,
+            protocol="a2a",
+            testing_context=None,
         )
-        assert testing_ctx.dry_run is True, "X-Dry-Run: true header should set testing_context.dry_run=True"
 
-    def test_test_session_id_passed_to_resolve_identity(self):
-        """X-Test-Session-ID header should be extracted and passed to resolve_identity."""
+    def test_test_session_id_header_is_ignored(self):
         handler = AdCPRequestHandler()
 
         headers = {
@@ -74,11 +59,7 @@ class TestA2ATestingContextExtraction:
             handler._resolve_a2a_identity("test-token", require_valid_token=True, context=ctx)
 
         call_kwargs = mock_resolve.call_args.kwargs
-        testing_ctx = call_kwargs.get("testing_context")
-        assert testing_ctx is not None, "_resolve_a2a_identity should pass testing_context to resolve_identity."
-        assert testing_ctx.test_session_id == "session-abc-123", (
-            "X-Test-Session-ID header should be extracted by A2A transport."
-        )
+        assert call_kwargs.get("testing_context") is None
 
     def test_no_test_headers_passes_none_context(self):
         """When no test headers are present, testing_context=None should be passed."""
@@ -124,8 +105,7 @@ class TestAdCPTestContextFromHeaders:
             "testing context from a raw headers dict (for A2A transport)."
         )
 
-    def test_from_headers_extracts_dry_run(self):
-        """from_headers should extract X-Dry-Run from raw headers dict."""
+    def test_from_headers_ignores_dry_run(self):
         from src.core.testing_hooks import AdCPTestContext
 
         if not hasattr(AdCPTestContext, "from_headers"):
@@ -133,8 +113,7 @@ class TestAdCPTestContextFromHeaders:
 
             pytest.skip("from_headers not yet implemented")
 
-        ctx = AdCPTestContext.from_headers({"x-dry-run": "true"})
-        assert ctx.dry_run is True
+        assert AdCPTestContext.from_headers({"x-dry-run": "true"}) is None
 
     def test_from_headers_empty_dict_returns_none(self):
         """from_headers with empty dict should return None (no testing enabled)."""
@@ -164,35 +143,10 @@ class TestMockTimeIsAlwaysAware:
     normalized once at the AdCPTestContext construction boundary.
     """
 
-    def test_from_headers_iso_z_is_utc_aware(self):
-        from datetime import UTC, datetime
-
+    def test_from_headers_ignores_mock_time(self):
         from src.core.testing_hooks import AdCPTestContext
 
-        ctx = AdCPTestContext.from_headers({"x-mock-time": "2025-06-01T00:00:00Z"})
-        assert ctx.mock_time == datetime(2025, 6, 1, tzinfo=UTC)
-        assert ctx.mock_time.tzinfo is not None
-
-    def test_from_headers_iso_without_offset_is_utc_aware(self):
-        from datetime import UTC, datetime
-
-        from src.core.testing_hooks import AdCPTestContext
-
-        ctx = AdCPTestContext.from_headers({"x-mock-time": "2025-06-01T12:30:00"})
-        assert ctx.mock_time == datetime(2025, 6, 1, 12, 30, tzinfo=UTC)
-
-    def test_from_headers_epoch_is_utc_aware_and_utc_anchored(self):
-        """Epoch seconds are UTC-anchored — 1748736000 is 2025-06-01T00:00:00Z.
-
-        A naive fromtimestamp() would return *local* time; labeling that UTC
-        would shift the simulated clock by the host's UTC offset.
-        """
-        from datetime import UTC, datetime
-
-        from src.core.testing_hooks import AdCPTestContext
-
-        ctx = AdCPTestContext.from_headers({"x-mock-time": "1748736000"})
-        assert ctx.mock_time == datetime(2025, 6, 1, tzinfo=UTC)
+        assert AdCPTestContext.from_headers({"x-mock-time": "2025-06-01T00:00:00Z"}) is None
 
     def test_direct_construction_with_naive_datetime_is_coerced_to_utc(self):
         from datetime import UTC, datetime

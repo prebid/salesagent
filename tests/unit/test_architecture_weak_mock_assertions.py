@@ -49,7 +49,6 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_a2a_parameter_mapping.py", "test_update_media_buy_backward_compatibility_with_updates"),
     ("tests/unit/test_a2a_parameter_mapping.py", "test_update_media_buy_uses_packages_parameter"),
     ("tests/unit/test_a2a_tenant_detection_order.py", "test_a2a_delegates_to_resolve_identity"),
-    ("tests/unit/test_a2a_testing_context_extraction.py", "test_dry_run_header_passed_to_resolve_identity"),
     ("tests/unit/test_auth_bearer_header.py", "test_x_adcp_auth_takes_precedence_over_authorization_bearer"),
     ("tests/unit/test_authorized_properties_behavioral.py", "test_audit_called_on_failure"),
     ("tests/unit/test_authorized_properties_behavioral.py", "test_audit_called_on_success"),

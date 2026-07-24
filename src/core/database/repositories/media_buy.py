@@ -663,10 +663,6 @@ class MediaBuyRepository:
         mutate(media_buy)
         self._stamp_confirmation_if_needed(media_buy)
         if bump:
-            # ``bump=False`` is the crash-recoverable finalize (#1637): the
-            # approval already bumped revision when it claimed ``finalizing``, so
-            # the deferred ``finalizing`` -> serving transition (and any reconciler
-            # retry of it) must NOT advance the token again.
             self._bump_revision(media_buy)
         self._session.flush()
         return media_buy
@@ -790,7 +786,8 @@ class MediaBuyRepository:
         expiry), stamps ``approved_at``/``approved_by`` when supplied, and RESETS the
         adapter-invoked marker + recovery disposition — a fresh claim (e.g. an
         operator re-approval after manual reconciliation) starts with a clean
-        operation state. Bumps revision (the approval's single token advance).
+        operation state. Bumps revision for the buyer-visible approval claim;
+        publishing the later serving/confirmed state advances it again.
         Returns ``(row, lease_id)`` for phase 2, or ``None`` on a lost claim. #1637.
         """
         lease_id = self._new_finalize_lease()

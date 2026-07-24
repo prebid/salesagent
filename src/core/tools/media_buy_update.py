@@ -1547,7 +1547,7 @@ def _build_update_request(
     reporting_webhook: Any = None,
     ext: Any = None,
     idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
-    revision: int | None = None,
+    revision: Any = None,
 ) -> UpdateMediaBuyRequest:
     """Build UpdateMediaBuyRequest from flat parameters.
 
@@ -1606,12 +1606,10 @@ def _build_update_request(
     if revision is not None:
         request_params["revision"] = revision
 
-    # The ONE sanctioned ValidationError→AdCPValidationError translation point
-    # (#1417): a schema-invalid update request (e.g. revision below its minimum)
-    # emits VALIDATION_ERROR with the error.json top-level suggestion + field.
-    # PR1544's earlier INVALID_REQUEST variant was reverted on merge to comply
-    # with the no-handrolled-boundary guard.
-    with adcp_validation_boundary(context="update_media_buy request"):
+    # The generated UC-003 contract grades request-schema violations as
+    # INVALID_REQUEST. Keep translation at the shared boundary while selecting
+    # the scenario's typed error class.
+    with adcp_validation_boundary(context="update_media_buy request", error_type=AdCPInvalidRequestError):
         req = UpdateMediaBuyRequest(**request_params)
 
     # BR-RULE-022: reject empty updates (no updatable fields beyond identifier).
@@ -1654,7 +1652,7 @@ async def update_media_buy(
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
     revision: Annotated[
-        int | None,
+        Any,
         Field(description="Expected current revision for optimistic concurrency (CONFLICT on mismatch)"),
     ] = None,
     ctx: Context | ToolContext | None = None,
@@ -1738,7 +1736,7 @@ def update_media_buy_raw(
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     idempotency_key: str | None = None,  # AdCP idempotency key for retry safety
-    revision: int | None = None,  # AdCP optimistic-concurrency token (CONFLICT on mismatch)
+    revision: object = None,  # Validated once by UpdateMediaBuyRequest at the shared boundary.
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):

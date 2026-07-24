@@ -8,7 +8,7 @@ that the DB-side ``platform_order_id`` guard cannot.
 """
 
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.adapters.gam.managers.orders import GAMOrdersManager
 
@@ -79,3 +79,29 @@ def test_gam_does_not_claim_full_create_replay():
     from src.adapters.google_ad_manager import GoogleAdManager
 
     assert GoogleAdManager.capabilities.supports_full_create_replay is False
+
+
+def test_production_replay_resolver_uses_the_resolved_adapter_capability():
+    """Pin the decision the scheduler actually consumes, not only class constants."""
+    from src.core.tools.media_buy_create import adapter_supports_full_create_replay
+
+    uow = MagicMock()
+    uow.__enter__.return_value = uow
+    uow.media_buys.get_by_id.return_value = MagicMock(principal_id="principal_1")
+    principal = MagicMock()
+    tenant = {"tenant_id": "tenant_1"}
+    adapter = MagicMock()
+
+    with (
+        patch("src.core.database.repositories.MediaBuyUoW", return_value=uow),
+        patch("src.core.config_loader.get_tenant_by_id", return_value=tenant),
+        patch("src.core.tools.media_buy_create.get_principal_object", return_value=principal),
+        patch("src.core.tools.media_buy_create.get_adapter", return_value=adapter),
+    ):
+        adapter.capabilities.supports_full_create_replay = False
+        assert adapter_supports_full_create_replay("mb_1", "tenant_1") is False
+
+        adapter.capabilities.supports_full_create_replay = True
+        assert adapter_supports_full_create_replay("mb_1", "tenant_1") is True
+
+    uow.media_buys.get_by_id.assert_called_with("mb_1")

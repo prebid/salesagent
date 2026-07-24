@@ -1151,11 +1151,12 @@ class TestApprovalCrashRecovery:
             "re-approval must be permitted once the cool-down and grace elapse"
         )
 
-    def test_happy_path_bumps_revision_once_and_stamps_confirmed_at(
+    def test_happy_path_bumps_revision_for_claim_and_publish_and_stamps_confirmed_at(
         self, integration_db, sample_tenant, sample_principal, context_manager
     ):
         """No crash: pending_approval → finalizing → active in one call; adapter exactly
-        once; revision advances exactly one (claim bumps; owned publish does not); all
+        once; revision advances for the approval claim and again when the buyer-visible
+        serving/confirmed state is published; all
         finalize state cleared."""
         tenant_id = sample_tenant["tenant_id"]
         step_id, step_data = self._seed_pending(
@@ -1176,7 +1177,7 @@ class TestApprovalCrashRecovery:
         buy = _buy_snapshot(tenant_id, "mb_happy")
         assert buy.status == "active"
         assert buy.confirmed_at is not None
-        assert buy.revision == before + 1  # exactly one advance for the whole approval
+        assert buy.revision == before + 2
         assert buy.finalize_lease_id is None
         assert buy.finalize_adapter_invoked_at is None
         assert buy.finalize_recovery_mode is None

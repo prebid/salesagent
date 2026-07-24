@@ -111,10 +111,12 @@ def create_app(config=None):
     app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
     app.logger.setLevel(logging.INFO)
 
-    # Configure session cookies for EventSource compatibility
+    # Configure session cookies. HttpOnly remains enabled in every environment:
+    # browsers attach same-origin cookies to polling/EventSource requests without
+    # exposing the admin session token to JavaScript.
     if is_admin_production():
         app.config["SESSION_COOKIE_SECURE"] = True  # Required for SameSite=None over HTTPS
-        app.config["SESSION_COOKIE_HTTPONLY"] = False  # Allow EventSource to access cookies
+        app.config["SESSION_COOKIE_HTTPONLY"] = True
         app.config["SESSION_COOKIE_SAMESITE"] = "None"  # Required for EventSource cross-origin requests
         # Use root path so session works for both /admin/* and /auth/* (OAuth callbacks)
         app.config["SESSION_COOKIE_PATH"] = "/"

@@ -274,7 +274,7 @@ class AdCPRequestHandler(RequestHandler):
         if require_valid_token and not auth_token:
             raise InvalidRequestError(message="Missing authentication token")
 
-        # Extract testing context from A2A request headers (same as MCP does)
+        # Keep transport handling uniform; proprietary X-* headers are ignored.
         testing_context = AdCPTestContext.from_headers(headers)
 
         try:

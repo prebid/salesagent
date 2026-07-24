@@ -2722,28 +2722,10 @@ _UC002_CREATE_WIRED: set[str] = {
 _UC003_WIRED: set[str] = {
     # AdCP 3.1.1 revision counter: successful update increments and returns it (#1544)
     "T-UC-003-revision-success-increments",
-    # NOTE: T-UC-003-partition-revision / T-UC-003-boundary-revision are NOT wired.
-    # Their schema-invalid rows (revision below minimum / wrong type) grade
-    # error "INVALID_REQUEST", but production emits VALIDATION_ERROR for a
-    # schema-invalid revision on ALL transports (A2A/REST via the sanctioned
-    # adcp_validation_boundary; MCP via the FastMCP TypeAdapter layer for
-    # wrong-TYPE values, while below-minimum ints pass the TypeAdapter and
-    # reach the shared boundary) — with one
-    # documented per-transport nuance: a wrong-TYPE revision on REST is rejected
-    # by FastAPI body parsing as INVALID_REQUEST before the shared boundary
-    # (the cross-transport classification policy is tracked in #1604).
-    # The storyboard/production reconciliation (regenerate the outlines to grade
-    # VALIDATION_ERROR) is tracked in #1694; these generated outlines are not
-    # patched locally to match production (xpass-graduation anti-pattern), so
-    # they stay xfailed until reconciled. The emission itself is NOT ungraded:
-    # tests/integration/test_update_media_buy_revision_validation_wire.py pins
-    # the wire code per transport (below-min -> VALIDATION_ERROR x3; wrong-type
-    # -> VALIDATION_ERROR on A2A/MCP, INVALID_REQUEST on REST) with
-    # assert_envelope_shape, and reddens if the boundary emission reverts. The
-    # success/CONFLICT behavior the outlines also cover is graded live by
-    # T-UC-003-revision-success-increments and T-UC-003-v31-error-conflict-version.
-    # v3.1 CONFLICT details shape (error-details/conflict.json: resource_id /
-    # expected_version / current_version) — #1544 round 7.
+    # Canonical schema-invalid rows now converge on INVALID_REQUEST at the shared
+    # request boundary across A2A/MCP/REST, so both generated outlines are live.
+    "T-UC-003-partition-revision",
+    "T-UC-003-boundary-revision",
     "T-UC-003-v31-error-conflict-version",
     # BR-RULE-215 INV-6: idempotency_key and revision are evaluated independently —
     # a valid update carrying BOTH (matching revision + an idempotency_key) still
@@ -2751,57 +2733,6 @@ _UC003_WIRED: set[str] = {
     # (T-UC-003-revision-success-increments); the request-builder step already
     # supports the idempotency_key field. #1544.
     "T-UC-003-revision-and-idempotency-independent",
-}
-
-# Xfail reasons for the UC-003 revision outlines that are deliberately NOT wired.
-# Without an entry a scenario falls back to the generic "harness not yet wired"
-# message, which reports a deliberate, tracked divergence as a wiring TODO.
-#
-# Keep these strings factual and non-directional -- they are the only rationale a
-# reader sees in a test report, and an inaccurate one is worse than the generic
-# message. Two constraints learned the hard way:
-#   * The outlines are NOT symmetric. T-UC-003-partition-revision carries a
-#     below-minimum AND a wrong-type row; T-UC-003-boundary-revision carries
-#     below-minimum only. A shared string claiming both kinds is false for the
-#     boundary outline, so the per-outline clause is appended separately.
-#   * Do not restate the per-transport MECHANISM here. It lives in the
-#     _UC003_WIRED NOTE above and in the integration test's docstring; a third
-#     paraphrase drifted from both (it attributed MCP's wrong-type rejection to
-#     the shared boundary, when the FastMCP TypeAdapter rejects it earlier).
-#
-# Direction matters: per dist/schemas/3.1.1/enums/error-code.json,
-# INVALID_REQUEST covers "violates schema constraints" and VALIDATION_ERROR
-# covers "business rules beyond schema validation". ``revision`` is
-# type: integer / minimum: 1 -- a pure schema constraint -- so the code the
-# outlines already assert is the canonical one. Production's VALIDATION_ERROR is
-# permitted (the graded 3.1.1 storyboards accept either code for a
-# schema-invalid rejection) but non-canonical, so this is a divergence within
-# spec latitude, NOT a conformance failure and NOT a storyboard defect.
-_UC003_REVISION_XFAIL_COMMON: str = (
-    "Deliberate, tracked divergence -- not a wiring TODO. These rows assert "
-    "INVALID_REQUEST, which per the pinned 3.1.1 error-code enum is the canonical code "
-    "for a schema-constraint violation; production instead emits VALIDATION_ERROR on the "
-    "paths that reach the shared validation boundary. Both codes are accepted by the "
-    "graded 3.1.1 storyboards, so production is conformant, just non-canonical. No "
-    "storyboard grades this validation at all, which is the real reason these rows stay "
-    "unwired -- wiring them would pin an ungraded code (graduation: #1694; "
-    "classification policy: #1604; the separate numeric-string coercion divergence: "
-    "#1582). Production's emission is already wire-graded per transport by "
-    "tests/integration/test_update_media_buy_revision_validation_wire.py. Only the "
-    "schema-invalid rows are affected: the success/CONFLICT rows in this outline are "
-    "simply unwired, and that behavior is graded live by "
-    "T-UC-003-revision-success-increments and T-UC-003-v31-error-conflict-version. "
-    "Per-transport mechanism: see the _UC003_WIRED NOTE in this file."
-)
-
-_UC003_UNWIRED_REASONS: dict[str, str] = {
-    "T-UC-003-partition-revision": (
-        f"{_UC003_REVISION_XFAIL_COMMON} Schema-invalid rows in this outline: below-minimum and wrong-type."
-    ),
-    "T-UC-003-boundary-revision": (
-        f"{_UC003_REVISION_XFAIL_COMMON} Schema-invalid row in this outline: "
-        "below-minimum only (it has no wrong-type row)."
-    ),
 }
 
 # UC-019 scenarios wired to MediaBuyLifecycleEnv (create/update/get composite;
@@ -3386,15 +3317,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["existing_media_buy"] = existing_media_buy
                 yield
         else:
-            # Same shape as the file's other tag->reason lookups (_XFAIL_TAGS,
-            # _UC006_SPECGAP_XFAIL_TAGS): first matching tag wins. The two keys
-            # tag disjoint Scenario Outlines, so at most one ever matches.
-            reason = "UC-003 harness not yet wired for these scenarios"
-            for tag, specific_reason in _UC003_UNWIRED_REASONS.items():
-                if tag in marker_names:
-                    reason = specific_reason
-                    break
-            pytest.xfail(reason)
+            pytest.xfail("UC-003 harness not yet wired for these scenarios")
 
     elif uc == "UC-019":
         marker_names = {m.name for m in request.node.iter_markers()}

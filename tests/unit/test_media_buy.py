@@ -1668,7 +1668,9 @@ class TestCreateMediaBuyAdapterInteraction:
             assert "confirmed_at" in wire
             assert wire["confirmed_at"] is None
             assert wire["revision"] == 1
-            assert wire["sandbox"] is True
+            # ``sandbox`` is an account-level capability, not a marker for a
+            # buyer-requested simulation response.
+            assert "sandbox" not in wire
 
 
 # ===========================================================================

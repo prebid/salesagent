@@ -2474,26 +2474,16 @@ class TestTimeSimulationReachesFinalNotification:
         assert response.media_buy_deliveries[0].status == "completed"
         assert enum_value(response.notification_type) == "final"
 
-    def test_mid_flight_mock_time_via_from_headers_does_not_raise(self):
-        """A mid-flight X-Mock-Time through the real header boundary succeeds.
-
-        Regression (#1545 K1 follow-up review): from_headers minted mock_time
-        NAIVE, and a *mid-flight* clock (0 < progress < 1) is the one that
-        reaches NextEventCalculator.calculate_next_event_time — whose
-        'next_event_time <= current_time' comparison against the aware flight
-        datetimes raised TypeError and 500'd the whole request. (A past-flight
-        clock never got there: progress 1.0 makes get_next_event return None.)
-        mock_time is now normalized to UTC-aware at the AdCPTestContext
-        construction boundary.
-        """
+    def test_mock_time_protocol_header_is_ignored(self):
+        """Buyer-controlled X-Mock-Time cannot alter delivery simulation."""
         buy = _make_mock_media_buy(
             media_buy_id="mb_midflight",
             status="active",
             start_date=date(2025, 1, 1),
             end_date=date(2025, 12, 31),
         )
-        # The REAL header boundary — not a directly-constructed aware datetime.
         ctx = AdCPTestContext.from_headers({"x-mock-time": "2025-06-01T00:00:00Z"})
+        assert ctx is None
         identity = _make_identity(testing_context=ctx)
 
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_midflight"])
@@ -2504,8 +2494,8 @@ class TestTimeSimulationReachesFinalNotification:
             target_buys=[("mb_midflight", buy)],
         )
 
-        assert response.media_buy_deliveries[0].status == "active"
-        assert enum_value(response.notification_type) == "scheduled"
+        assert response.media_buy_deliveries[0].status == "completed"
+        assert enum_value(response.notification_type) == "final"
 
     def test_jump_to_event_only_does_not_raise(self):
         """jump_to_event with no mock_time hits the real hook without a TypeError.

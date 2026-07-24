@@ -25,7 +25,12 @@ logger = logging.getLogger(__name__)
 
 
 @contextmanager
-def adcp_validation_boundary(context: str = "parameters", field: str | None = None) -> Iterator[None]:
+def adcp_validation_boundary(
+    context: str = "parameters",
+    field: str | None = None,
+    *,
+    error_type: type[AdCPValidationError] = AdCPValidationError,
+) -> Iterator[None]:
     """Translate a Pydantic ``ValidationError`` into a typed ``AdCPValidationError``.
 
     Transport wrappers and skill handlers validate buyer parameters at the
@@ -51,7 +56,7 @@ def adcp_validation_boundary(context: str = "parameters", field: str | None = No
         yield
     except ValidationError as e:
         errors = e.errors()
-        raise AdCPValidationError(
+        raise error_type(
             format_validation_error(e, context=context),
             field=field if field is not None else first_validation_error_field(e),
             suggestion=suggest_validation_fix(e),
