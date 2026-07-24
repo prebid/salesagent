@@ -15,6 +15,12 @@ import pytest
 
 from src.core.resolved_identity import ResolvedIdentity, resolve_identity
 
+# The tenant id under test is a fixed UUID, not a slug: in a host-routed deploy
+# the tenant id IS a UUID, and that is the internal identifier the invalid-token
+# redaction withholds — same declaration style as HOST_ROUTED_TENANT_UUID
+# (tests/bdd/steps/domain/uc002_create_media_buy.py) and the two isolation tests.
+HOST_ROUTED_TENANT_UUID = "902c0725-ca84-44ca-be0b-c81d6f0f8689"
+
 
 class TestResolvedIdentityType:
     """Test the ResolvedIdentity type itself."""
@@ -153,6 +159,59 @@ class TestResolveIdentity:
         )
 
         assert identity.tenant_id == "default"
+
+    @patch("src.core.auth_utils.get_principal_from_token")
+    @patch("src.core.resolved_identity.get_tenant_by_virtual_host", return_value=None)
+    @patch("src.core.resolved_identity.get_tenant_by_subdomain")
+    def test_invalid_token_error_does_not_disclose_tenant_id(
+        self, mock_get_subdomain, mock_get_vhost, mock_get_principal, caplog
+    ):
+        """An invalid-token rejection must not echo the resolved tenant id back to
+        the (unauthenticated) caller — the tenant is resolved from headers before
+        the token is validated, so leaking it discloses an internal identifier
+        (the tenant UUID in a host-routed deploy). The tenant is still captured
+        server-side (the compensating control), so add the WARNING assertion too.
+
+        FAST GUARD, not the wire pin. This mocks the tenant/principal lookups and
+        grades the raised exception in-process; non-disclosure is a contract about
+        what the BUYER receives, and that is pinned on the real A2A wire by
+        test_auth_suggestion_parity.py::TestInvalidTokenA2ANoDisclosure (which
+        asserts through ``assert_wire_error(..., require_real_wire=True)`` so a
+        rebuilt envelope cannot stand in for the wire). This test stays because it
+        is the only one that can assert the compensating log line cheaply."""
+        import logging
+
+        from src.core.exceptions import INVALID_TOKEN_MESSAGE, AdCPAuthenticationError
+
+        mock_get_subdomain.return_value = {"tenant_id": HOST_ROUTED_TENANT_UUID, "name": "Secret Tenant"}
+        mock_get_principal.return_value = (None, None)  # token does not resolve
+
+        with (
+            # The warn-then-raise lives in the shared auth_utils.reject_invalid_token
+            # both resolvers route through, so the compensating log rides its logger.
+            caplog.at_level(logging.WARNING, logger="src.core.auth_utils"),
+            pytest.raises(AdCPAuthenticationError) as exc,
+        ):
+            resolve_identity(
+                headers={"x-adcp-tenant": HOST_ROUTED_TENANT_UUID, "x-adcp-auth": "wrong-token"},
+                auth_token="wrong-token",
+                protocol="mcp",
+                require_valid_token=True,
+            )
+
+        from tests.helpers import assert_no_tenant_disclosure
+
+        message = str(exc.value)
+        # The one shared assertion the BDD scenarios and the two isolation tests
+        # also use — grading the message AND the full built envelope — so the sites
+        # that pin non-disclosure cannot drift apart. (Was a hand-rolled
+        # ``tenant_uuid not in message`` here, which only checked the message.)
+        assert_no_tenant_disclosure(exc.value, HOST_ROUTED_TENANT_UUID)
+        assert message == INVALID_TOKEN_MESSAGE  # the shared constant — one wording, no drift
+        # Compensating control: the tenant is still recorded in a server-side log.
+        assert any(HOST_ROUTED_TENANT_UUID in r.getMessage() for r in caplog.records), (
+            "the rejected tenant should be logged server-side"
+        )
 
 
 class TestAuthConsolidation:

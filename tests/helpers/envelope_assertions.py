@@ -25,6 +25,74 @@ def assert_no_raw_validation_leak(message: str) -> None:
     assert "errors.pydantic.dev" not in message, f"Pydantic documentation URL leaked into message: {message!r}"
 
 
+def assert_no_tenant_disclosure(target: Any, tenant_id: str) -> None:
+    """Assert an auth rejection discloses *tenant_id* nowhere the buyer can see it.
+
+    The tenant is resolved from request headers BEFORE the token is validated, so
+    echoing it back to a caller whose token was rejected hands an unauthenticated
+    party an internal identifier (the tenant UUID in a host-routed deploy). This
+    is the single assertion for that contract, so the sites grading it cannot
+    drift apart: the unit test (``test_resolved_identity``), both isolation
+    integration tests, and the A2A + MCP BDD no-disclosure scenarios all route
+    through here.
+
+    Args:
+        target: What the buyer receives. Accepts:
+            - a two-layer envelope ``dict`` (the wire body);
+            - an ``AdCPError`` exception, whose two-layer envelope is built here
+              so the message AND every envelope field are graded;
+            - any other ``Exception`` (e.g. a raw fastmcp ``ToolError`` from an
+              MCP auth rejection, which has no envelope) — graded on its message
+              alone, the only buyer-facing surface it carries.
+        tenant_id: The internal tenant identifier that must not appear. Use a
+            UUID: a slug can collide with unrelated envelope text and make the
+            check pass or fail for the wrong reason.
+
+    Checks BOTH the rendered message and the FULL serialized envelope — a
+    message-only check passes while the id sits in ``details``/``context``.
+    """
+    import json
+
+    if isinstance(target, BaseException):
+        rendered = str(target)
+        if hasattr(target, "wire_error_code"):
+            from src.core.exceptions import build_two_layer_error_envelope
+
+            envelope = build_two_layer_error_envelope(target)
+        else:
+            # A non-AdCP exception — a raw fastmcp ``ToolError`` — has no two-layer
+            # envelope to build: MCP raises the rejection outside the tool boundary
+            # that would wrap it, so the message is the only buyer-facing surface.
+            # Grade the message alone; the MCP no-disclosure scenario documents this
+            # as the weaker, message-only half of the same contract.
+            envelope = {"errors": [{"message": rendered}]}
+    else:
+        envelope = target.envelope if hasattr(target, "envelope") else target
+        assert isinstance(envelope, dict), f"envelope target must resolve to dict, got {type(envelope).__name__}"
+        rendered = str((envelope.get("errors") or [{}])[0].get("message", ""))
+
+    assert tenant_id not in rendered, f"auth error message disclosed the tenant id {tenant_id!r}: {rendered!r}"
+
+    serialized = json.dumps(envelope, default=str)
+    if tenant_id in serialized:
+        leaking = [key for key, value in _flatten_envelope(envelope) if tenant_id in json.dumps(value, default=str)]
+        raise AssertionError(
+            f"tenant id {tenant_id!r} leaked into the error envelope (field(s): {leaking or ['<unknown>']}): {envelope}"
+        )
+
+
+def _flatten_envelope(envelope: dict, prefix: str = "") -> list[tuple[str, Any]]:
+    """Yield (dotted-path, value) leaf pairs so a leak names its own field."""
+    pairs: list[tuple[str, Any]] = []
+    for key, value in envelope.items():
+        path = f"{prefix}{key}"
+        if isinstance(value, dict):
+            pairs.extend(_flatten_envelope(value, prefix=f"{path}."))
+        else:
+            pairs.append((path, value))
+    return pairs
+
+
 def assert_envelope_shape(
     target: Any,
     code: str,

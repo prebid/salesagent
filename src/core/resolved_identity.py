@@ -154,8 +154,12 @@ def resolve_identity(
     Raises:
         AdCPAuthenticationError: If token is present but invalid and require_valid_token=True
     """
-    # Import here to avoid circular dependency (auth_utils imports from database)
-    from src.core.auth_utils import get_principal_from_token
+    # Deferred import — NOT for a cycle (nothing in the database layer imports
+    # back into auth_utils). It defends the test-patched binding: the unit tests
+    # patch ``src.core.auth_utils.get_principal_from_token``, and importing at
+    # call time reads the patched attribute instead of freezing the original
+    # into this module's namespace at import time.
+    from src.core.auth_utils import get_principal_from_token, reject_invalid_token
 
     # Step 1: Detect tenant from headers
     tenant_id, tenant_context = _detect_tenant(headers)
@@ -171,12 +175,12 @@ def resolve_identity(
 
         if principal_id is None:
             if require_valid_token:
-                from src.core.exceptions import AdCPAuthenticationError
-
-                raise AdCPAuthenticationError(
-                    f"Authentication token is invalid for tenant '{tenant_id or 'any'}'. "
-                    f"The token may be expired, revoked, or associated with a different tenant.",
-                )
+                # Keep the resolved tenant in server logs only — echoing it back to
+                # an unauthenticated (invalid-token) caller discloses an internal
+                # identifier (the tenant id/UUID in a host-routed deploy). Shared
+                # with get_principal_from_context so the message and its
+                # compensating log line cannot drift.
+                reject_invalid_token(tenant_id)
             # For discovery endpoints, continue without auth
         elif not tenant_context and token_tenant:
             # Tenant discovered from token lookup (no headers matched)

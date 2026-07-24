@@ -32,3 +32,29 @@ Feature: BR-UC-002 Account access scoping
     And the Buyer Agent's token resolves no principal
     When the Buyer Agent sends the create_media_buy request
     Then the result should be error "AUTH_REQUIRED"
+
+  # A present-but-invalid token is rejected with a GENERIC message: the tenant id
+  # is resolved from the request headers BEFORE the token is validated, so echoing
+  # it back hands an unauthenticated caller an internal identifier (the tenant
+  # UUID in a host-routed deploy). Non-disclosure is a contract about what the
+  # BUYER receives, so it is graded on the real wire, not on an envelope rebuilt
+  # in-process from a caught exception.
+  #
+  # ONE transport-agnostic scenario, swept across a2a/mcp/rest (+e2e_rest) by
+  # pytest_generate_tests. Each transport reaches the same production
+  # reject_invalid_token raise; what it can carry back differs, and the single
+  # Then step grades accordingly:
+  #   - a2a / rest return a real two-layer envelope -> the Then asserts AUTH_REQUIRED
+  #     on the real wire (require_real_wire) plus non-disclosure on the envelope.
+  #     (REST authenticates in-process by dependency override, which would skip the
+  #     raise; the harness routes the bad token through the REAL dep as headers so
+  #     REST reaches it — see _dispatch_full_create / _run_rest_request.)
+  #   - mcp raises a bare ToolError with no two-layer envelope -> the Then asserts
+  #     the message equals INVALID_TOKEN_MESSAGE plus non-disclosure on the message.
+  #     That missing MCP auth envelope is a separate production gap, tracked in #1704.
+  @T-UC-002-invalid-token-no-disclosure @account @error
+  Scenario: An invalid token is rejected without disclosing the tenant id
+    Given a valid create_media_buy request with account natural key brand "leak-brand.com" operator "leak-agency.com"
+    And the Buyer Agent presents an invalid authentication token
+    When the Buyer Agent sends the create_media_buy request
+    Then the invalid token is rejected without disclosing the tenant id

@@ -631,6 +631,14 @@ class BaseTestEnv:
 
         self._commit_factory_data()
 
+        # A2A's realization of the transport-blind invalid-token contract: the
+        # bad token already rides the dispatched identity's auth_token (the real
+        # auth chain below runs against it), so the uniformly-forwarded
+        # ``_invalid_auth`` hint is discarded — only REST needs the header route
+        # (``_run_rest_request``), because its dep override would otherwise
+        # inject a resolved identity and skip the raise.
+        kwargs.pop("_invalid_auth", None)
+
         # Pop identity — used for the handler mock, not sent as a skill parameter.
         _NO_OVERRIDE = object()
         identity = kwargs.pop("identity", _NO_OVERRIDE)
@@ -787,6 +795,13 @@ class BaseTestEnv:
 
         self._commit_factory_data()
 
+        # MCP's realization of the transport-blind invalid-token contract: the
+        # bad token already rides the dispatched identity's auth_token (the real
+        # header→token→DB chain below runs against it), so the uniformly-forwarded
+        # ``_invalid_auth`` hint is discarded — see ``_run_a2a_handler`` /
+        # ``_run_rest_request`` for the sibling realizations.
+        kwargs.pop("_invalid_auth", None)
+
         # Pop identity — used for the auth mock, not sent as a tool argument.
         _NO_OVERRIDE = object()
         identity = kwargs.pop("identity", _NO_OVERRIDE)
@@ -903,8 +918,23 @@ class BaseTestEnv:
         - identity is ResolvedIdentity → dep returns it (valid token)
         - identity absent → uses default self.identity_for(Transport.REST)
         """
+        invalid_auth = kwargs.pop("_invalid_auth", None)
         client, identity = self._prepare_rest_request(kwargs)
         body = self.build_rest_body(**kwargs)
+        if invalid_auth is not None:
+            # Invalid-token path. In-process REST authenticates by dependency
+            # override, which would inject a resolved identity and skip the raise
+            # entirely. Instead run the REAL auth dependency and carry the bad
+            # token plus a tenant hint as headers, so resolve_identity detects the
+            # tenant and rejects — the same production 401 the A2A/MCP transports
+            # reach against the injected identity's token. _prepare_rest_request
+            # already installed the identity override; drop it so the real dep runs.
+            self._configure_rest_auth_override(None)
+            return client.post(
+                endpoint,
+                json=body,
+                headers={"x-adcp-auth": invalid_auth["token"], "x-adcp-tenant": invalid_auth["tenant"]},
+            )
         return client.post(endpoint, json=body)
 
     def _prepare_rest_request(self, kwargs: dict[str, Any]) -> tuple[Any, Any]:

@@ -16,6 +16,13 @@ import pytest
 
 from src.core.auth import get_principal_from_context
 from src.core.config_loader import get_current_tenant, set_current_tenant
+from tests.helpers import assert_no_tenant_disclosure
+
+# UUID tenant ids for the cross-tenant rejection: the buyer routes by subdomain
+# (host header), so the id is purely the internal identifier the redaction
+# protects — the host-routed deploy shape. See the breach-fix sibling.
+WONDERSTRUCK_TENANT_ID = "c40b8e21-6f7a-4d35-b912-8e5c31a70df6"
+TEST_AGENT_TENANT_ID = "1f8d90b5-3c46-42ae-9d07-b28fa5e61c94"
 
 
 @pytest.mark.requires_db
@@ -25,6 +32,11 @@ def test_tenant_isolation_with_subdomain_and_cross_tenant_token(integration_db):
     When accessing a tenant via subdomain (e.g., wonderstruck.sales-agent.example.com),
     tokens from a different tenant should be rejected, not accepted with overridden context.
     This prevents principals from one tenant accessing another tenant's resources.
+
+    In-process guard: this calls ``get_principal_from_context`` directly, so there
+    is no wire here and the envelope is the one production WOULD build at the
+    boundary. The buyer-facing wire is pinned by
+    test_auth_suggestion_parity.py::TestInvalidTokenA2ANoDisclosure.
     """
 
     from fastmcp.exceptions import ToolError
@@ -32,13 +44,16 @@ def test_tenant_isolation_with_subdomain_and_cross_tenant_token(integration_db):
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Principal as ModelPrincipal
     from src.core.database.models import Tenant
-    from src.core.exceptions import AdCPAuthenticationError
+    from src.core.exceptions import (
+        INVALID_TOKEN_MESSAGE,
+        AdCPAuthenticationError,
+    )
 
     # Create two tenants
     with get_db_session() as session:
         # Tenant 1: Wonderstruck (accessed via subdomain)
         wonderstruck = Tenant(
-            tenant_id="tenant_wonderstruck",
+            tenant_id=WONDERSTRUCK_TENANT_ID,
             name="Wonderstruck",
             subdomain="wonderstruck",
             ad_server="mock",
@@ -49,7 +64,7 @@ def test_tenant_isolation_with_subdomain_and_cross_tenant_token(integration_db):
 
         # Tenant 2: Test Agent (principal's token belongs to this tenant)
         test_agent = Tenant(
-            tenant_id="tenant_test_agent",
+            tenant_id=TEST_AGENT_TENANT_ID,
             name="Test Agent",
             subdomain="test-agent",
             ad_server="mock",
@@ -61,7 +76,7 @@ def test_tenant_isolation_with_subdomain_and_cross_tenant_token(integration_db):
         # Create a principal in test-agent tenant
         principal = ModelPrincipal(
             principal_id="principal_test_agent",
-            tenant_id="tenant_test_agent",
+            tenant_id=TEST_AGENT_TENANT_ID,
             name="Test Agent Principal",
             access_token="test_agent_principal_token",
             platform_mappings={"mock": {"id": "principal_test_agent"}},
@@ -87,9 +102,17 @@ def test_tenant_isolation_with_subdomain_and_cross_tenant_token(integration_db):
         with pytest.raises((ToolError, AdCPAuthenticationError)) as exc_info:
             get_principal_from_context(mock_context)
 
-        # Verify the error message mentions the tenant
-        error_str = str(exc_info.value)
-        assert "tenant_wonderstruck" in error_str
+        # Neither tenant id may ride back to the caller: not the one detected from
+        # the host, nor the token's own. Graded on the WHOLE envelope, not just the
+        # message, so an id re-added under details/context cannot slip through.
+        # (The sibling breach-fix test already checked both; this one checked only
+        # the detected tenant.)
+        # Pass the exception straight in — the helper builds the envelope — so this
+        # matches the other three grading sites and drops the extra import.
+        assert_no_tenant_disclosure(exc_info.value, WONDERSTRUCK_TENANT_ID)
+        assert_no_tenant_disclosure(exc_info.value, TEST_AGENT_TENANT_ID)
+        # Positive pin: the rejection still happened, with the shared wording.
+        assert INVALID_TOKEN_MESSAGE in str(exc_info.value)
 
 
 @pytest.mark.requires_db

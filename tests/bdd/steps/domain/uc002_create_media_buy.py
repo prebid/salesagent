@@ -26,6 +26,13 @@ from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 # GIVEN steps — request setup and account state
 # ═══════════════════════════════════════════════════════════════════════
 
+# The tenant id the invalid-token no-disclosure scenarios must never echo back.
+# A UUID, not the harness slug: in a host-routed deploy the tenant id IS a UUID,
+# and that is the internal identifier the redaction exists to withhold from an
+# unauthenticated caller. Grading a slug would be a weaker check for the same
+# contract.
+HOST_ROUTED_TENANT_UUID = "f3d2c1b0-a9e8-7654-3210-fedcba987654"
+
 
 def _attach_account_to_full_request(ctx: dict) -> None:
     """Build a complete, valid create request carrying the account reference.
@@ -258,6 +265,48 @@ def given_unauthenticated_principal(ctx: dict) -> None:
     ctx["dispatch_identity"] = PrincipalFactory.make_identity(
         principal_id=None,
         tenant_id=env._tenant_id,
+    )
+
+
+@given("the Buyer Agent presents an invalid authentication token")
+def given_invalid_auth_token(ctx: dict) -> None:
+    """Dispatch with a token that resolves to no principal — a PRESENT but invalid token.
+
+    Distinct from ``the Buyer Agent's token resolves no principal`` (which forces
+    an already-resolved identity with ``principal_id=None``) and from the no-auth
+    steps (which send no token at all). Carrying a real-looking token is what
+    routes the request down the production invalid-token branch: ``resolve_identity``
+    detects the tenant from the headers FIRST, then fails to resolve the token, and
+    rejects. The tenant it had already detected is the identifier that must not
+    come back to the caller.
+
+    Transport-agnostic: the paired When is transport-blind, so this runs across
+    a2a/mcp/rest under ``pytest_generate_tests``. ``_dispatch_full_create``
+    forwards the bad token uniformly as ``_invalid_auth`` and each env realizes
+    it per its transport: A2A and MCP run the real auth chain against the
+    injected identity's bad token (and discard ``_invalid_auth``); in-process
+    REST authenticates by dependency override, so its env routes the bad token
+    through the real REST dep as headers instead (harness ``_run_rest_request``).
+
+    ``undisclosed_tenant_id`` is a fixed UUID, not the env slug: in a host-routed
+    deploy the tenant id IS a UUID, and that is the internal identifier the
+    redaction withholds. Grading the slug would be a weaker check for the same
+    contract. resolve_identity detects this value as the tenant (from the injected
+    identity on a2a/mcp, from the x-adcp-tenant header on rest), so the
+    pre-redaction message echoes exactly it — confirmed by the deletion oracle on
+    reject_invalid_token. No DB tenant row is needed: the invalid token fails at
+    token resolution, before principal lookup.
+    """
+    from tests.factories.principal import PrincipalFactory
+
+    env = ctx["env"]
+    ctx["undisclosed_tenant_id"] = HOST_ROUTED_TENANT_UUID
+    ctx["invalid_auth_token"] = "not-a-real-token"  # the REST leg sends this as a header
+    ctx["dispatch_identity"] = PrincipalFactory.make_identity(
+        principal_id=env._principal_id,
+        tenant_id=HOST_ROUTED_TENANT_UUID,
+        auth_token="not-a-real-token",
+        # protocol is cosmetic here — dispatch is chosen by ctx["transport"].
     )
 
 
@@ -772,12 +821,22 @@ def _dispatch_full_create(ctx: dict) -> None:
         ctx["error"] = e
         return
 
+    # Invalid-token scenario: forward the bad token uniformly and let each env
+    # realize it per its transport (the step stays transport-blind, BG-3). The
+    # in-process REST leg routes it through the real auth dep as headers
+    # (harness _run_rest_request); A2A/MCP discard it because the bad token
+    # already rides the dispatched identity's auth_token, and e2e REST sends
+    # the identity's token as real headers anyway.
+    extra: dict = {}
+    if ctx.get("invalid_auth_token"):
+        extra["_invalid_auth"] = {"token": ctx["invalid_auth_token"], "tenant": ctx["undisclosed_tenant_id"]}
+
     # No-auth scenarios (#1417) stash an unauthenticated identity so the
     # transport-boundary account-resolution guard is exercised on the wire.
     if "dispatch_identity" in ctx:
-        dispatch_request(ctx, req=req, identity=ctx["dispatch_identity"])
+        dispatch_request(ctx, req=req, identity=ctx["dispatch_identity"], **extra)
     else:
-        dispatch_request(ctx, req=req)
+        dispatch_request(ctx, req=req, **extra)
 
 
 def _dispatch_raw_create(ctx: dict) -> None:

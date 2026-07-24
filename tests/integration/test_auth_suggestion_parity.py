@@ -25,6 +25,12 @@ from tests.helpers import assert_envelope_shape
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
+# The tenant id under test is a fixed UUID, not a slug: in a host-routed deploy
+# the tenant id IS a UUID, and that is the internal identifier the invalid-token
+# redaction withholds — same declaration style as HOST_ROUTED_TENANT_UUID
+# (tests/bdd/steps/domain/uc002_create_media_buy.py) and the two isolation tests.
+HOST_ROUTED_TENANT_UUID = "5c1d2f6a-9b3e-4a71-8f04-2d6b7c9e1a35"
+
 
 def _assert_auth_required_with_suggestion(envelope: dict) -> None:
     from tests.harness.transport import extract_wire_suggestion
@@ -65,6 +71,55 @@ class TestRequirePrincipalIdA2ASuggestion:
             )
 
 
+class TestInvalidTokenA2ANoDisclosure:
+    """A present-but-invalid token rejected on the REAL A2A wire discloses no tenant id.
+
+    Non-disclosure is a WIRE contract — what the buyer actually receives — so it
+    is graded here on ``result.wire_error_envelope`` (the A2A rejection's
+    ``data``), not on an envelope rebuilt in-process from a caught exception.
+    ``get_media_buys`` is not a DISCOVERY_SKILL, so ``on_message_send`` requires
+    auth and ``_run_a2a_handler`` takes its real-token branch: the AuthContext
+    state is populated from the identity's token and the production chain runs
+    for real (``_get_auth_token`` → ``_resolve_a2a_identity`` →
+    ``resolve_identity`` → ``reject_invalid_token``). No identity monkeypatch.
+    """
+
+    def test_invalid_token_a2a_envelope_does_not_disclose_tenant(self, integration_db):
+        from tests.factories import PrincipalFactory, TenantFactory
+        from tests.harness.media_buy_list import MediaBuyListEnv
+        from tests.harness.transport import Transport
+        from tests.helpers import assert_no_tenant_disclosure
+
+        with MediaBuyListEnv(tenant_id=HOST_ROUTED_TENANT_UUID, principal_id="p1") as env:
+            TenantFactory(tenant_id=HOST_ROUTED_TENANT_UUID)
+            # A token that resolves NO principal — the invalid-token rejection,
+            # not the missing-token one (that gate fires earlier and is a
+            # different raise site).
+            identity = PrincipalFactory.make_identity(
+                principal_id="p1",
+                tenant_id=HOST_ROUTED_TENANT_UUID,
+                auth_token="not-a-real-token",
+            )
+
+            result = env.call_via(Transport.A2A, identity=identity)
+
+            assert result.is_error, (
+                f"An invalid token must be rejected on the A2A wire, got success payload: {result.payload!r}"
+            )
+            # require_real_wire: without it the A2A dispatcher would REBUILD an
+            # envelope from the reconstructed exception and this would pass even
+            # though the buyer received a bare protocol error with no AdCP
+            # envelope — a synthesized envelope masquerading as the wire, which
+            # is the same in-process grading the review flagged.
+            result.assert_wire_error(
+                "AUTH_REQUIRED",
+                recovery="correctable",
+                require_suggestion=True,
+                require_real_wire=True,
+            )
+            assert_no_tenant_disclosure(result.wire_error_envelope, HOST_ROUTED_TENANT_UUID)
+
+
 class TestAuthHelperFamilySuggestion:
     """The remaining AUTH_REQUIRED raise sites in src/core/auth.py carry a suggestion.
 
@@ -101,13 +156,24 @@ class TestAuthHelperFamilySuggestion:
     def test_invalid_token_carries_suggestion(self, integration_db):
         """get_principal_from_context with an invalid token (require_valid_token=True)
         raises AUTH_REQUIRED whose envelope must carry the top-level suggestion.
+
+        FAST IN-PROCESS GUARD, not the wire pin. ``get_principal_from_context`` is
+        the ``auth.py`` sibling of ``resolve_identity``: it is called directly by
+        sync MCP tools and has no transport of its own here, so this test can only
+        grade the envelope ``build_two_layer_error_envelope`` rebuilds from the
+        caught exception. That is one step removed from what a buyer receives.
+        The buyer-facing contract is pinned on the REAL A2A wire by
+        ``TestInvalidTokenA2ANoDisclosure`` above; this covers the second raise
+        site cheaply so a regression in it is caught without a transport round
+        trip.
         """
         from src.core.auth import get_principal_from_context
         from tests.factories import TenantFactory
         from tests.harness._base import BareIntegrationEnv
+        from tests.helpers import assert_no_tenant_disclosure
 
-        with BareIntegrationEnv(tenant_id="auth_sugg_t2") as env:
-            TenantFactory(tenant_id="auth_sugg_t2")
+        with BareIntegrationEnv(tenant_id=HOST_ROUTED_TENANT_UUID) as env:
+            TenantFactory(tenant_id=HOST_ROUTED_TENANT_UUID)
             env.get_session()  # commit factory data
 
             class _HeaderCarrier:
@@ -117,10 +183,13 @@ class TestAuthHelperFamilySuggestion:
 
                 headers = {
                     "x-adcp-auth": "not-a-real-token",
-                    "x-adcp-tenant": "auth_sugg_t2",
+                    "x-adcp-tenant": HOST_ROUTED_TENANT_UUID,
                 }
 
             with pytest.raises(AdCPError) as exc_info:
                 get_principal_from_context(_HeaderCarrier())
 
         _assert_auth_required_with_suggestion(build_two_layer_error_envelope(exc_info.value))
+        # Shared with the A2A wire pin and both tenant-isolation tests so all four
+        # grade non-disclosure through one assertion instead of four copies.
+        assert_no_tenant_disclosure(exc_info.value, HOST_ROUTED_TENANT_UUID)

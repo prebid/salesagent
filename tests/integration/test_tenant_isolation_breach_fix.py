@@ -8,7 +8,16 @@ from unittest.mock import Mock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
-from src.core.exceptions import AdCPAuthenticationError
+from src.core.exceptions import INVALID_TOKEN_MESSAGE, AdCPAuthenticationError
+from tests.helpers import assert_no_tenant_disclosure
+
+# Cross-tenant rejection is graded with UUID tenant ids, the shape a host-routed
+# deploy actually has: the buyer routes by subdomain and the id stays purely
+# internal, which is exactly what the redaction protects. A slug can also collide
+# with unrelated envelope text and make a non-disclosure check pass or fail for
+# the wrong reason.
+WONDERSTRUCK_TENANT_ID = "b7f1c3a4-2e58-4d90-9c31-5a0e6d8f2b17"
+TEST_AGENT_TENANT_ID = "e39a5c02-71bd-4f16-8a44-c6d2e017f3ba"
 
 
 @pytest.mark.requires_db
@@ -101,7 +110,13 @@ def test_tenant_isolation_with_valid_subdomain(integration_db):
 
 @pytest.mark.requires_db
 def test_cross_tenant_token_rejected(integration_db):
-    """Test that using tenant1's token with tenant2's subdomain is rejected."""
+    """Test that using tenant1's token with tenant2's subdomain is rejected.
+
+    In-process guard: this calls ``get_principal_from_context`` directly, so there
+    is no wire here and the envelope is the one production WOULD build at the
+    boundary. The buyer-facing wire is pinned by
+    test_auth_suggestion_parity.py::TestInvalidTokenA2ANoDisclosure.
+    """
     from src.core.auth import get_principal_from_context
     from src.core.config_loader import current_tenant
     from src.core.database.database_session import get_db_session
@@ -113,13 +128,13 @@ def test_cross_tenant_token_rejected(integration_db):
     # Create two tenants
     with get_db_session() as session:
         tenant1 = Tenant(
-            tenant_id="tenant_wonderstruck",
+            tenant_id=WONDERSTRUCK_TENANT_ID,
             name="Wonderstruck",
             subdomain="wonderstruck",
             is_active=True,
         )
         tenant2 = Tenant(
-            tenant_id="tenant_test_agent",
+            tenant_id=TEST_AGENT_TENANT_ID,
             name="Test Agent",
             subdomain="test-agent",
             is_active=True,
@@ -130,7 +145,7 @@ def test_cross_tenant_token_rejected(integration_db):
         # Create principal for tenant1 only
         principal1 = Principal(
             principal_id="adv_wonderstruck",
-            tenant_id="tenant_wonderstruck",
+            tenant_id=WONDERSTRUCK_TENANT_ID,
             name="Wonderstruck Advertiser",
             access_token="wonderstruck_token_abc123",
             platform_mappings={"mock": {"id": "adv_wonderstruck"}},
@@ -152,8 +167,16 @@ def test_cross_tenant_token_rejected(integration_db):
         with pytest.raises((ToolError, AdCPAuthenticationError)) as exc_info:
             get_principal_from_context(context)
 
-        error_str = str(exc_info.value)
-        assert "tenant_test_agent" in error_str
+        # The cross-tenant token is rejected, but neither tenant id (the detected
+        # one nor the token's own) may ride back to the caller. Graded on the WHOLE
+        # envelope, not just the message: a serializer that re-added the id under
+        # details/context would sail past a message-only check.
+        # Pass the exception straight in — the helper builds the envelope — so this
+        # matches the other three grading sites and drops the extra import.
+        assert_no_tenant_disclosure(exc_info.value, TEST_AGENT_TENANT_ID)
+        assert_no_tenant_disclosure(exc_info.value, WONDERSTRUCK_TENANT_ID)
+        # Positive pin: the rejection still happened, with the shared wording.
+        assert INVALID_TOKEN_MESSAGE in str(exc_info.value)
 
 
 @pytest.mark.requires_db
