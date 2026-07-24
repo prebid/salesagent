@@ -14,6 +14,7 @@ from googleads import ad_manager
 
 from src.adapters.gam.utils.timeout_handler import timeout
 from src.core.exceptions import AdCPAdapterError, AdCPNotFoundError
+from src.core.logging_utils import sanitize_log_value
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +125,9 @@ class GAMOrdersManager:
             existing_order_id = self._find_existing_order_id(order_service, order_name)
             if existing_order_id is not None:
                 logger.info(
-                    f"✓ Reusing existing GAM Order ID {existing_order_id} for '{order_name}' (idempotent create)"
+                    "✓ Reusing existing GAM Order ID %s for '%s' (idempotent create)",
+                    sanitize_log_value(existing_order_id),
+                    sanitize_log_value(order_name),
                 )
                 return existing_order_id
             created_orders = order_service.createOrders([order])

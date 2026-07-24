@@ -310,6 +310,19 @@ def create_app(config=None):
 
         context["script_name"] = request.script_root or request.environ.get("SCRIPT_NAME", "")
 
+        # Single-winner finalize copy, shared with the server routes so a client-side
+        # fallback cannot drift from what the 409/202 response body would have said.
+        # These fallbacks fire exactly when the response body fails to parse — the one
+        # case where the operator has no server text — so a hand-copied literal there
+        # reported a different entity/wording than the server. #1544.
+        from src.admin.services.media_buy_completion import (
+            MEDIA_BUY_FINALIZE_IN_PROGRESS_MESSAGE,
+            WORKFLOW_STEP_ALREADY_DECIDED_MESSAGE,
+        )
+
+        context["workflow_step_already_decided_message"] = WORKFLOW_STEP_ALREADY_DECIDED_MESSAGE
+        context["media_buy_finalize_in_progress_message"] = MEDIA_BUY_FINALIZE_IN_PROGRESS_MESSAGE
+
         # Inject support email (configurable via SUPPORT_EMAIL env var)
         context["support_email"] = get_support_email()
 

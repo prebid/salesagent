@@ -43,10 +43,21 @@ def upgrade() -> None:
     # ``draft`` is otherwise an unconfirmed status. (Going forward the route holds
     # such buys at ``pending_creatives``, so this only reaches pre-fix rows.)
     #
-    # Batched by primary key so a large media_buys table is never locked in a
-    # single wide write: each statement claims at most _BATCH_ROWS not-yet-set
-    # rows (``confirmed_at IS NULL`` makes every batch make progress and the loop
-    # terminate), bounding the lock footprint per statement.
+    # Batched to bound the DURATION and WAL/memory burst of each individual
+    # statement on a large media_buys table. It does NOT bound the held-lock
+    # footprint: alembic/env.py runs all migrations inside ONE transaction
+    # (no transaction_per_migration), and op.get_bind() returns that same
+    # connection, so every batch's row locks accumulate until the migration
+    # commits. Nor is it batched by primary key — the CTE takes an unordered
+    # LIMIT over the not-yet-set rows.
+    #
+    # TERMINATION: the loop advances only if each claimed row leaves the
+    # ``confirmed_at IS NULL`` predicate, so the SET must never evaluate to
+    # NULL. ``media_buys.created_at`` is nullable in the DDL (initial_schema.py;
+    # the ORM's nullable=False is ORM-only and does not constrain rows already
+    # in the table), so COALESCE(approved_at, created_at) alone can yield NULL
+    # and re-claim the same batch forever. now() is the terminating floor: a row
+    # with neither instant recorded is confirmed as of this backfill.
     connection = op.get_bind()
     while True:
         result = connection.execute(
@@ -63,7 +74,7 @@ def upgrade() -> None:
                     LIMIT :batch_rows
                 )
                 UPDATE media_buys AS mb
-                SET confirmed_at = COALESCE(mb.approved_at, mb.created_at)
+                SET confirmed_at = COALESCE(mb.approved_at, mb.created_at, now())
                 FROM batch
                 WHERE mb.media_buy_id = batch.media_buy_id
                 """

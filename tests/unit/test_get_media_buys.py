@@ -832,6 +832,23 @@ class TestGetMediaBuysRequestRejectsInternalFlags:
             GetMediaBuysRequest(include_snapshot=False)
 
 
+def _confirmed_statuses() -> list[str]:
+    """Every persisted status that IS seller-confirmed, derived from the canonical
+    vocabulary rather than hand-copied.
+
+    The production guard is ``status not in MEDIA_BUY_UNCONFIRMED_STATUSES``, so
+    the confirmed set is exactly the complement over the persisted-status
+    vocabulary. A hand-copied literal here silently dropped ``pending_activation``,
+    ``ready`` and ``scheduled`` — all three seller-confirmed and all three actively
+    driven by the status scheduler — leaving the write-once stamp ungraded for
+    them. Deriving means a status added to the vocabulary is graded on arrival.
+    """
+    from src.core.database.models import MEDIA_BUY_UNCONFIRMED_STATUSES
+    from src.core.tools._media_buy_status import PERSISTED_STATUS_TO_CANONICAL
+
+    return sorted(set(PERSISTED_STATUS_TO_CANONICAL) - set(MEDIA_BUY_UNCONFIRMED_STATUSES))
+
+
 class TestConfirmedAtStamping:
     """The write-once confirmed_at stamp must fire exactly once the seller has
     committed to the buy. ``MediaBuyRepository._stamp_confirmation_if_needed`` is
@@ -866,7 +883,7 @@ class TestConfirmedAtStamping:
         from src.core.database.repositories.media_buy import MediaBuyRepository
 
         created = datetime(2026, 1, 1, tzinfo=UTC)
-        for status in ("pending_creatives", "pending_start", "active", "paused", "completed", "approved", "canceled"):
+        for status in _confirmed_statuses():
             buy = MediaBuy(status=status, created_at=created, approved_at=None, confirmed_at=None)
             MediaBuyRepository._stamp_confirmation_if_needed(buy)
             assert buy.confirmed_at == created, f"{status} must stamp confirmed_at=created_at"
@@ -881,7 +898,7 @@ class TestConfirmedAtStamping:
 
         created = datetime(2026, 1, 1, tzinfo=UTC)
         approved = datetime(2026, 1, 5, tzinfo=UTC)
-        for status in ("pending_creatives", "pending_start", "active", "paused", "completed", "approved", "canceled"):
+        for status in _confirmed_statuses():
             buy = MediaBuy(status=status, created_at=created, approved_at=approved, confirmed_at=None)
             MediaBuyRepository._stamp_confirmation_if_needed(buy)
             assert buy.confirmed_at == approved, f"{status} must stamp confirmed_at=approved_at"

@@ -2732,6 +2732,14 @@ def _query_seeded_buys(ctx: dict, read_key: str) -> None:
     assert labels, "no seeded media buy to read"
     _dispatch_query(ctx, media_buy_ids=list(labels.values()))
     ctx[read_key] = ctx.pop("response", None)
+    # Relocate the WIRE body alongside the typed response. ``wire_response`` is a
+    # single slot the next read overwrites, so a cross-read oracle could not read
+    # per-read wire and had to fall back to the reconstructed typed object — which
+    # Pydantic lax-coerces, making those oracles blind to serialization regressions
+    # their single-read siblings catch. Popping BOTH slots together also keeps
+    # ``wire_dict``'s missing-wire guard honest: a stale t1 body left in the slot
+    # would silently satisfy a wire step that ran after the response moved. #1544.
+    ctx[f"{read_key}_wire"] = ctx.pop("wire_response", None)
     assert ctx[read_key] is not None, f"{read_key} read failed: {ctx.get('error')!r}"
 
 
@@ -2814,6 +2822,34 @@ def _wire_buy(ctx: dict, label: str) -> dict:
     return buy
 
 
+def _wire_buy_at_read(ctx: dict, read_key: str, label: str) -> dict:
+    """The labeled buy on the wire captured for ONE specific read (t1 / t2).
+
+    The cross-read analogue of :func:`_wire_buy`. Carries the same loud guard as
+    ``wire_dict``: a real-wire transport (REST/A2A/MCP) that stashed no wire for
+    this read raises rather than quietly grading a reconstructed object; IMPL (and
+    the non-parametrized ``None`` default) has no wire by construction and
+    serializes the typed payload through the production serializer.
+    """
+    from tests.harness.transport import Transport
+
+    wire = ctx.get(f"{read_key}_wire")
+    transport = ctx.get("transport")
+    if wire is None and transport not in (None, Transport.IMPL):
+        raise AssertionError(f"{transport}: no wire stashed for {read_key} — cross-read oracle cannot grade the wire")
+    if wire is None:
+        response = ctx.get(read_key)
+        assert response is not None, f"{read_key} missing from ctx"
+        wire = response.model_dump(mode="json")
+
+    media_buys = wire.get("media_buys")
+    assert isinstance(media_buys, list) and media_buys, f"{read_key} wire missing media_buys: {wire!r}"
+    expected_id = resolve_media_buy_id(ctx, label)
+    buy = next((item for item in media_buys if item.get("media_buy_id") == expected_id), None)
+    assert isinstance(buy, dict), f"media buy {label!r} missing from the {read_key} wire body"
+    return buy
+
+
 @then("every returned media buy should include an integer revision field")
 def then_every_buy_has_integer_revision(ctx: dict) -> None:
     """Every buy on the serialized WIRE carries revision as an integer (3.1.1 required key)."""
@@ -2849,15 +2885,26 @@ def then_media_buy_revision_equals(ctx: dict, label: str, revision: int) -> None
 
 @then("the revision at t1 should equal the revision at t2")
 def then_revision_stable_across_reads(ctx: dict) -> None:
-    r1 = _labeled_buy_from_response(ctx, ctx.get("read_t1"), "mb-001").revision
-    r2 = _labeled_buy_from_response(ctx, ctx.get("read_t2"), "mb-001").revision
+    """Both reads' WIRE revisions agree when no write landed between them.
+
+    Wire-graded per read (not the reconstructed object): Pydantic lax-coerces on
+    reconstruction, so a serialization regression that emits ``revision`` as a
+    string would still compare equal here. #1544.
+    """
+    from tests.bdd.steps._outcome_helpers import wire_integer
+
+    r1 = wire_integer(ctx, _wire_buy_at_read(ctx, "read_t1", "mb-001"), "revision")
+    r2 = wire_integer(ctx, _wire_buy_at_read(ctx, "read_t2", "mb-001"), "revision")
     assert r1 == r2, f"revision drifted across reads with no intervening write: t1={r1}, t2={r2}"
 
 
 @then("the revision at t2 should be strictly greater than the revision at t1")
 def then_revision_increased_across_reads(ctx: dict) -> None:
-    r1 = _labeled_buy_from_response(ctx, ctx.get("read_t1"), "mb-001").revision
-    r2 = _labeled_buy_from_response(ctx, ctx.get("read_t2"), "mb-001").revision
+    """A successful intervening write advances the WIRE revision between reads."""
+    from tests.bdd.steps._outcome_helpers import wire_integer
+
+    r1 = wire_integer(ctx, _wire_buy_at_read(ctx, "read_t1", "mb-001"), "revision")
+    r2 = wire_integer(ctx, _wire_buy_at_read(ctx, "read_t2", "mb-001"), "revision")
     assert r2 > r1, f"a successful intervening write must increase revision: t1={r1}, t2={r2}"
 
 
@@ -2926,9 +2973,17 @@ def then_confirmed_at_equals_literal(ctx: dict, timestamp: str) -> None:
 
 @then(parsers.parse('the confirmed_at at t{read_index:d} should equal "{timestamp}"'))
 def then_confirmed_at_at_read_equals(ctx: dict, read_index: int, timestamp: str) -> None:
-    read = ctx.get(f"read_t{read_index}")
-    buy = _labeled_buy_from_response(ctx, read, "mb-001")
-    actual = _parse_iso_utc(buy.confirmed_at)
+    """The write-once stamp on THIS read's wire body still carries the same instant.
+
+    Wire-graded per read: reading the reconstructed object would re-parse a
+    datetime the serializer might have emitted in a wrong JSON shape. #1544.
+    """
+    buy = _wire_buy_at_read(ctx, f"read_t{read_index}", "mb-001")
+    confirmed_at = buy.get("confirmed_at")
+    assert isinstance(confirmed_at, str), (
+        f"confirmed_at must be a string on the t{read_index} wire, got {confirmed_at!r}"
+    )
+    actual = _parse_iso_utc(confirmed_at)
     expected = _parse_iso_utc(timestamp)
     assert actual == expected, (
         f"confirmed_at at t{read_index} drifted: expected {expected.isoformat()}, got {actual.isoformat()}"

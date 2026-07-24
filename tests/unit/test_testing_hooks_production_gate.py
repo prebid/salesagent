@@ -1,7 +1,8 @@
 """P1 (#1544): proprietary X-* test headers are gated fail-CLOSED.
 
 The pinned AdCP sandbox guidance
-(dist/docs/3.1.1/media-buy/advanced-topics/sandbox.mdx) says sellers MUST NOT
+(dist/docs/3.1.1/media-buy/advanced-topics/sandbox.mdx — resolves @main, not at
+tag v3.1.1: the 3.1.1 prose snapshot was published after the tag) says MUST NOT
 alter behavior based on X-Dry-Run / X-Mock-Time. Those headers are internal
 tooling, so ``AdCPTestContext.from_headers`` honors them ONLY on explicit
 opt-in: ``ENVIRONMENT`` set to a dev value (``development``/``test``) or
@@ -22,6 +23,10 @@ _HEADERS = {"x-dry-run": "true", "x-force-error": "budget_exceeded", "x-simulate
 def _clear_gate_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ENVIRONMENT", raising=False)
     monkeypatch.delenv("ADCP_TEST_HOOKS_ENABLED", raising=False)
+    # PRODUCTION is the SECOND production convention (is_production() is the
+    # union of the two). Clearing it keeps every case below hermetic against an
+    # ambient PRODUCTION=true, and makes the two cases that set it deliberate.
+    monkeypatch.delenv("PRODUCTION", raising=False)
 
 
 def test_test_headers_ignored_when_environment_unset(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -43,6 +48,41 @@ def test_test_headers_ignored_for_unknown_environment(monkeypatch: pytest.Monkey
     """Any non-dev ENVIRONMENT value (e.g. staging) keeps the gate closed."""
     _clear_gate_env(monkeypatch)
     monkeypatch.setenv("ENVIRONMENT", "staging")
+    assert test_hooks_enabled() is False
+    assert AdCPTestContext.from_headers(_HEADERS) is None
+
+
+def test_test_headers_ignored_when_production_flag_set_with_dev_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PRODUCTION=true wins over a dev ENVIRONMENT.
+
+    ``is_production()`` is the union of the two deployment conventions, so a
+    deploy that marks production with PRODUCTION=true while ENVIRONMENT still
+    reads ``development`` IS production. Keying this gate on ENVIRONMENT alone
+    honored buyer-supplied X-Dry-Run / X-Force-Error against a live seller.
+    """
+    _clear_gate_env(monkeypatch)
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("PRODUCTION", "true")
+    assert test_hooks_enabled() is False
+    assert AdCPTestContext.from_headers(_HEADERS) is None
+
+
+def test_explicit_opt_in_cannot_reopen_the_gate_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Production SUBTRACTS: even the explicit opt-in cannot re-enable hooks.
+
+    The headers alter spend-committing behavior, so there is no escape hatch
+    that survives production detection by either convention.
+    """
+    _clear_gate_env(monkeypatch)
+    monkeypatch.setenv("ADCP_TEST_HOOKS_ENABLED", "true")
+    monkeypatch.setenv("PRODUCTION", "true")
+    assert test_hooks_enabled() is False
+    assert AdCPTestContext.from_headers(_HEADERS) is None
+
+    monkeypatch.setenv("PRODUCTION", "false")
+    monkeypatch.setenv("ENVIRONMENT", "production")
     assert test_hooks_enabled() is False
     assert AdCPTestContext.from_headers(_HEADERS) is None
 

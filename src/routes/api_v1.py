@@ -144,11 +144,14 @@ class GetMediaBuysBody(SalesAgentBaseModel):
     # Preserve the raw wire value until the shared GetMediaBuysRequest validation
     # boundary. Typing this as list[str] here makes FastAPI reject wrong types before
     # that boundary, producing INVALID_REQUEST while MCP/A2A produce VALIDATION_ERROR.
+    # This deviation governs the two FILTER fields only — they are what the shared
+    # boundary classifies. ``account`` and ``context`` carry no such cross-transport
+    # split, so they keep the concrete typing every sibling *Body model uses.
     media_buy_ids: Any = None
     status_filter: Any = None
     include_snapshot: bool = False
     account: dict[str, Any] | None = None  # AccountReference; coerced downstream
-    context: Any = None  # ContextObject; coerced by GetMediaBuysRequest
+    context: dict[str, Any] | None = None  # ContextObject; coerced by GetMediaBuysRequest
     adcp_version: str = "1.0.0"
 
 
@@ -409,7 +412,7 @@ async def get_media_buys(body: GetMediaBuysBody, identity: ResolvedIdentity = re
         status_filter=body.status_filter,
         include_snapshot=body.include_snapshot,
         account=to_account_reference(body.account),
-        context=body.context,
+        context=to_context_object(body.context),
         identity=identity,
     )
     return response.model_dump(mode="json")

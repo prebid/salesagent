@@ -3692,7 +3692,9 @@ async def _create_media_buy_impl(
                 # X-Dry-Run is proprietary internal tooling, NOT an AdCP concept:
                 # the spec's only sanctioned test mode is the account-level
                 # ``sandbox`` (dist/docs/3.1.1/media-buy/advanced-topics/
-                # sandbox.mdx — simulated data, no real spend/side effects). Mark
+                # sandbox.mdx — resolves @main, not at tag v3.1.1: the 3.1.1
+                # prose snapshot was published after the tag; simulated data,
+                # no real spend/side effects). Mark
                 # the simulated response ``sandbox=True`` so it is honestly labelled
                 # as simulated rather than masquerading as a real create.
                 # spec-introduced: 3.0.0 (sandbox.mdx first per-version snapshot)

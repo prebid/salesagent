@@ -46,7 +46,7 @@ class MediaBuyStatusScheduler:
 
             self.is_running = True
             self._task = asyncio.create_task(self._run_scheduler())
-            logger.info(f"Media buy status scheduler started (checking every {STATUS_CHECK_INTERVAL_SECONDS}s)")
+            logger.info("Media buy status scheduler started (checking every %ss)", STATUS_CHECK_INTERVAL_SECONDS)
 
     async def stop(self) -> None:
         """Stop the scheduler background task."""
@@ -74,7 +74,7 @@ class MediaBuyStatusScheduler:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Error in media buy status scheduler: {e}", exc_info=True)
+                logger.error("Error in media buy status scheduler: %s", sanitize_log_value(e), exc_info=True)
             finally:
                 # Wait before next check
                 await asyncio.sleep(STATUS_CHECK_INTERVAL_SECONDS)
@@ -118,10 +118,10 @@ class MediaBuyStatusScheduler:
 
                 if updated_count > 0:
                     session.commit()
-                    logger.info(f"Updated {updated_count} media buy status(es)")
+                    logger.info("Updated %d media buy status(es)", updated_count)
 
         except Exception as e:
-            logger.error(f"Failed to update media buy statuses: {e}", exc_info=True)
+            logger.error("Failed to update media buy statuses: %s", sanitize_log_value(e), exc_info=True)
 
     async def _reconcile_finalizing_buys(self) -> None:
         """Re-drive media buys stranded in ``finalizing`` by a mid-finalize crash.
@@ -140,7 +140,7 @@ class MediaBuyStatusScheduler:
         """
         from functools import partial
 
-        from src.admin.services.media_buy_completion import resume_finalizing_media_buy
+        from src.admin.services.media_buy_completion import resume_finalizing_media_buy, workflow_step_snapshot
         from src.core.tools.media_buy_create import adapter_supports_full_create_replay, execute_approved_media_buy
 
         try:
@@ -160,16 +160,7 @@ class MediaBuyStatusScheduler:
                     mapping = wf_repo.get_latest_mapping_for_object("media_buy", media_buy_id)
                     step = wf_repo.get_by_step_id(mapping.step_id) if mapping else None
                     step_id = step.step_id if step else None
-                    step_data = (
-                        {
-                            "step_id": step.step_id,
-                            "context_id": step.context_id,
-                            "tool_name": step.tool_name,
-                            "request_data": step.request_data or {},
-                        }
-                        if step
-                        else None
-                    )
+                    step_data = workflow_step_snapshot(step) if step else None
                     outcome, _ = resume_finalizing_media_buy(
                         session,
                         tenant_id,
@@ -246,7 +237,10 @@ class MediaBuyStatusScheduler:
         this scheduler only flips an already-finalized buy to ``active`` when
         its window opens.
 
-        Spec tension (deliberate, ungraded): specification.mdx@v3.1.1 line 141
+        Spec tension (deliberate, ungraded):
+        dist/docs/3.1.1/media-buy/specification.mdx:141 (resolves @main, not at
+        tag v3.1.1: the 3.1.1 prose snapshot was published after the tag; eight
+        files share the ``specification.mdx`` basename, so the full path matters)
         says sellers MUST transition ``pending_start`` -> ``active`` when the
         flight date arrives, while this check holds a buy with
         assigned-but-unapproved creatives past that date — serving unapproved

@@ -2,29 +2,26 @@
 
 import asyncio
 import logging
-from typing import Any
 
 from flask import Blueprint, request
 from sqlalchemy import select
 
 from src.admin.services.media_buy_completion import (
     MEDIA_BUY_ALREADY_DECIDED_MESSAGE,
+    MEDIA_BUY_FINALIZE_IN_PROGRESS_MESSAGE,
     FinalizeOutcome,
     claim_pending_creatives_hold,
     creatives_ready_for_finalize,
     finalize_media_buy_rejection,
     finalize_pending_media_buy_approval,
+    require_finalize_applied,
+    workflow_step_snapshot,
 )
 from src.admin.utils import require_auth, require_tenant_access
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.logging_utils import sanitize_log_value
 
 logger = logging.getLogger(__name__)
-
-
-def _as_request_dict(value: dict[str, Any] | str | None) -> dict[str, Any]:
-    """Narrow JSONType (dict|str|None) to a dict for .get() / echo_context."""
-    return value if isinstance(value, dict) else {}
 
 
 # Create blueprint
@@ -374,15 +371,8 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 flash("No pending approval found for this media buy", "warning")
                 return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
-            # Extract step data to dict to avoid detached instance errors after commit/nested sessions.
-            # JSONType columns are typed as dict|str|None; narrow before echo_context / .get().
-            request_data = _as_request_dict(step.request_data)
-            step_data = {
-                "step_id": step.step_id,
-                "context_id": step.context_id,
-                "tool_name": step.tool_name,
-                "request_data": request_data,
-            }
+            step_data = workflow_step_snapshot(step)
+            request_data = step_data["request_data"]
 
             # Get user info for audit
             from flask import session as flask_session
@@ -460,14 +450,11 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         if outcome is FinalizeOutcome.RETRYING:
                             # #1637: the ad server could not be safely reached right now;
                             # the approval is claimed and completes automatically.
-                            flash(
-                                "Media buy approval is in progress — the ad-server order will be "
-                                "created automatically shortly",
-                                "info",
-                            )
+                            flash(MEDIA_BUY_FINALIZE_IN_PROGRESS_MESSAGE, "info")
                             return redirect(
                                 url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
                             )
+                        require_finalize_applied(outcome)
                         flash("Media buy approved and order created successfully", "success")
                     # Creatives not yet approved (or none assigned yet) → hold at
                     # pending_creatives (a SELLER-CONFIRMED status so confirmed_at
@@ -491,10 +478,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # discard the pre-claim "Approved by" comment and report the
                     # in-progress state instead of claiming success. #1544.
                     db_session.rollback()
-                    flash(
-                        "Media buy approval is in progress — the ad-server order will be created automatically shortly",
-                        "info",
-                    )
+                    flash(MEDIA_BUY_FINALIZE_IN_PROGRESS_MESSAGE, "info")
                 else:
                     # Already-decided (terminal) replay or buy gone — no claim was won:
                     # discard the pre-claim "Approved by" comment rather than committing
@@ -544,6 +528,9 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     if outcome is FinalizeOutcome.NOT_CLAIMED:
                         flash(MEDIA_BUY_ALREADY_DECIDED_MESSAGE, "warning")
                     else:
+                        # finalize_media_buy_rejection returns only NOT_CLAIMED or
+                        # APPLIED today; pin that rather than assuming it.
+                        require_finalize_applied(outcome)
                         flash("Media buy rejected", "info")
                 else:
                     # The mapped buy is already decided / not rejectable — do NOT force the

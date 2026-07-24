@@ -36,15 +36,25 @@ _TEST_HOOKS_DEV_ENVIRONMENTS = frozenset({"development", "test"})
 def test_hooks_enabled() -> bool:
     """Fail-CLOSED gate for the proprietary X-* test headers (#1544).
 
-    The headers are honored ONLY on explicit operator opt-in: ``ENVIRONMENT``
-    set to a dev value (``development`` / ``test``), or
+    Production SUBTRACTS, it does not merely fail to add: ``is_production()``
+    is the union of both deployment conventions (``ENVIRONMENT=production`` OR
+    ``PRODUCTION=true``), and a process that matches EITHER can never honor the
+    headers — not even with ``ADCP_TEST_HOOKS_ENABLED=true``. Keying the gate
+    on ``ENVIRONMENT`` alone left ``PRODUCTION=true`` + ``ENVIRONMENT=development``
+    honoring buyer-supplied ``X-Dry-Run`` / ``X-Force-Error`` against a live
+    seller, which is precisely the two-convention divergence ``is_production()``
+    exists to close.
+
+    Absent production, the headers are honored only on explicit operator
+    opt-in: ``ENVIRONMENT`` set to a dev value (``development`` / ``test``), or
     ``ADCP_TEST_HOOKS_ENABLED=true``. An UNSET ``ENVIRONMENT`` disables the
     hooks — a deployment must not depend on remembering to set
-    ``ENVIRONMENT=production`` to be safe. ``is_production()`` (schema
-    strictness) is intentionally unchanged: it defaults OPEN for validation
-    ergonomics; this gate defaults CLOSED because the headers alter
-    spend-committing behavior.
+    ``ENVIRONMENT=production`` to be safe.
     """
+    from src.core.config import is_production
+
+    if is_production():
+        return False
     if os.getenv("ADCP_TEST_HOOKS_ENABLED", "").strip().lower() == "true":
         return True
     return (os.getenv("ENVIRONMENT") or "").strip().lower() in _TEST_HOOKS_DEV_ENVIRONMENTS
@@ -138,7 +148,9 @@ class AdCPTestContext(BaseModel):
         # Proprietary X-* test headers (X-Dry-Run, X-Mock-Time, X-Force-Error,
         # X-Simulated-Spend, …) are INTERNAL tooling, not an AdCP concept. The
         # pinned sandbox guidance
-        # (dist/docs/3.1.1/media-buy/advanced-topics/sandbox.mdx) is explicit
+        # (dist/docs/3.1.1/media-buy/advanced-topics/sandbox.mdx — resolves
+        # @main, not at tag v3.1.1: the 3.1.1 prose snapshot was published
+        # after the tag) is explicit
         # that sellers MUST NOT alter behavior based on these headers — the
         # sanctioned test mode is the account-level ``sandbox``. So they are
         # honored ONLY on explicit dev/test opt-in (fail-CLOSED: an unset

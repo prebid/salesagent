@@ -8,12 +8,15 @@ from sqlalchemy import select
 
 from src.admin.services.media_buy_completion import (
     MEDIA_BUY_ALREADY_DECIDED_MESSAGE,
+    MEDIA_BUY_FINALIZE_IN_PROGRESS_MESSAGE,
     WORKFLOW_STEP_ALREADY_DECIDED_MESSAGE,
     FinalizeOutcome,
     claim_pending_creatives_hold,
     creatives_ready_for_finalize,
     finalize_media_buy_rejection,
     finalize_pending_media_buy_approval,
+    require_finalize_applied,
+    workflow_step_snapshot,
 )
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
@@ -169,7 +172,7 @@ def _approval_in_progress_response():
         {
             "success": True,
             "pending": True,
-            "message": "Approval in progress — completes automatically",
+            "message": MEDIA_BUY_FINALIZE_IN_PROGRESS_MESSAGE,
         }
     ), 202
 
@@ -272,6 +275,7 @@ def _finalize_and_render(db, tenant_id: str, *, media_buy_id: str, step_data: di
         )
         return _approval_in_progress_response()
 
+    require_finalize_applied(outcome)
     logger.info("[APPROVAL] Media buy %s successfully created in adapter", sanitize_log_value(media_buy_id))
     flash("Workflow step approved and media buy created successfully", "success")
     return None
@@ -306,12 +310,7 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
 
             # Snapshot step fields to a dict before commit (the ORM instance may
             # expire after commit/nested sessions). Used for the completion webhook.
-            step_data = {
-                "step_id": step.step_id,
-                "context_id": step.context_id,
-                "tool_name": step.tool_name,
-                "request_data": step.request_data or {},
-            }
+            step_data = workflow_step_snapshot(step)
 
             # Check if this is a media buy creation workflow step
             mappings = workflow_repo.get_mappings_for_step(step_id)
@@ -342,7 +341,9 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                 media_buy = media_buy_repo.get_by_id(media_buy_id)
 
                 logger.info(
-                    f"[APPROVAL] Media buy lookup: found={media_buy is not None}, status={media_buy.status if media_buy else 'N/A'}"
+                    "[APPROVAL] Media buy lookup: found=%s, status=%s",
+                    media_buy is not None,
+                    sanitize_log_value(media_buy.status if media_buy else "N/A"),
                 )
 
                 if media_buy and is_media_buy_approvable(media_buy):
@@ -376,7 +377,9 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
                     # gone). Do NOT write the step — the step follows the buy decision and
                     # must not be reverted. Idempotent success. #1544.
                     logger.warning(
-                        f"[APPROVAL] Media buy not executed: media_buy={media_buy is not None}, status={media_buy.status if media_buy else 'N/A'}"
+                        "[APPROVAL] Media buy not executed: media_buy=%s, status=%s",
+                        media_buy is not None,
+                        sanitize_log_value(media_buy.status if media_buy else "N/A"),
                     )
                     flash("Workflow step approved successfully", "success")
             else:
@@ -419,12 +422,7 @@ def reject_workflow_step(tenant_id, workflow_id, step_id):
 
             # Snapshot step fields to a dict before commit (the rejection webhook
             # reads them post-commit, when the ORM instance may have expired).
-            step_data = {
-                "step_id": step.step_id,
-                "context_id": step.context_id,
-                "tool_name": step.tool_name,
-                "request_data": step.request_data or {},
-            }
+            step_data = workflow_step_snapshot(step)
 
             mappings = workflow_repo.get_mappings_for_step(step_id)
             mapping = next((m for m in mappings if m.object_type == "media_buy"), None)
@@ -449,6 +447,9 @@ def reject_workflow_step(tenant_id, workflow_id, step_id):
                 )
                 if outcome is FinalizeOutcome.NOT_CLAIMED:
                     return jsonify({"success": False, "error": MEDIA_BUY_ALREADY_DECIDED_MESSAGE}), 409
+                # finalize_media_buy_rejection returns only NOT_CLAIMED or APPLIED
+                # today; pin that rather than assuming it.
+                require_finalize_applied(outcome)
             else:
                 # No mapped media buy — a plain workflow step; record the rejection only.
                 workflow_repo.update_status(step_id, status="rejected", error_message=reason)

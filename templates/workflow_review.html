@@ -137,10 +137,10 @@ async function approveStep() {
 
         const data = await response.json().catch(() => null);
         if (response.status === 409) {
-            alert((data && data.error) || 'This workflow step was already decided by another request');
+            alert((data && data.error) || {{ workflow_step_already_decided_message | tojson }});
             window.location.reload();
         } else if (response.status === 202) {
-            alert((data && data.message) || 'Approval in progress — completes automatically');
+            alert((data && data.message) || {{ media_buy_finalize_in_progress_message | tojson }});
             window.location.href = '{{ script_name }}/tenant/{{ tenant_id }}';
         } else if (response.ok) {
             alert('Workflow step approved successfully!');
@@ -173,7 +173,7 @@ async function rejectStep(reason) {
 
         const data = await response.json().catch(() => null);
         if (response.status === 409) {
-            alert((data && data.error) || 'This workflow step was already decided by another request');
+            alert((data && data.error) || {{ workflow_step_already_decided_message | tojson }});
             window.location.reload();
         } else if (response.ok) {
             alert('Workflow step rejected successfully!');

@@ -643,9 +643,19 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                     sanitize_log_value(media_buy_id),
                     sanitize_log_value(error_msg),
                 )
-            else:
+            elif outcome is FinalizeOutcome.ADAPTER_FAILED:
                 logger.error(
                     "[CREATIVE APPROVAL] Adapter creation failed for %s: %s",
+                    sanitize_log_value(media_buy_id),
+                    sanitize_log_value(error_msg),
+                )
+            else:
+                # A FinalizeOutcome member with no branch above. Naming it keeps this
+                # ladder exhaustive instead of filing an unknown member under the
+                # adapter-failure message. #1544.
+                logger.error(
+                    "[CREATIVE APPROVAL] Unhandled FinalizeOutcome %s for media buy %s: %s",
+                    sanitize_log_value(outcome),
                     sanitize_log_value(media_buy_id),
                     sanitize_log_value(error_msg),
                 )

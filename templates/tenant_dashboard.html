@@ -1256,7 +1256,7 @@ async function quickRejectWorkflow(workflowId, stepId) {
 
         const data = await response.json().catch(() => null);
         if (response.status === 409) {
-            alert((data && data.error) || 'This workflow step was already decided by another request');
+            alert((data && data.error) || {{ workflow_step_already_decided_message | tojson }});
             window.location.reload();
         } else if (response.ok) {
             alert('Workflow step rejected successfully!');

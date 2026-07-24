@@ -44,7 +44,7 @@ from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 if TYPE_CHECKING:
-    from src.core.database.models import MediaBuy, MediaPackage
+    from src.core.database.models import MediaBuy, MediaPackage, WorkflowStep
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +88,57 @@ class FinalizeOutcome(StrEnum):
 # has exactly one home. #1544.
 MEDIA_BUY_ALREADY_DECIDED_MESSAGE = "This media buy was already decided by another request"
 WORKFLOW_STEP_ALREADY_DECIDED_MESSAGE = "This workflow step was already decided"
+
+# Sibling of the two above: the single-winner finalize is claimed and in flight
+# (RETRYING, or a plain in-flight ``finalizing`` row), and the reconciler completes
+# it automatically. One logical event, so one wording — it was previously spelled
+# three different ways across the two admin blueprints and the review template,
+# which reported the same state to operators differently. #1544.
+MEDIA_BUY_FINALIZE_IN_PROGRESS_MESSAGE = (
+    "Media buy approval is in progress — the ad-server order will be created automatically shortly"
+)
+
+
+def workflow_step_snapshot(step: WorkflowStep) -> dict[str, Any]:
+    """Snapshot the fields a finalize/webhook call needs from a WorkflowStep row.
+
+    The ORM instance may expire/detach after the caller's commit (nested
+    sessions, the post-commit webhook read), so every finalize seam takes this
+    dict instead of the live row. ``request_data`` is JSONType (``dict|str|None``)
+    — narrowed to a dict here so every consumer's ``.get()`` is safe, rather than
+    each of the five call sites narrowing (or forgetting to narrow) it themselves.
+    #1544.
+    """
+    request_data = step.request_data
+    return {
+        "step_id": step.step_id,
+        "context_id": step.context_id,
+        "tool_name": step.tool_name,
+        "request_data": request_data if isinstance(request_data, dict) else {},
+    }
+
+
+def require_finalize_applied(outcome: FinalizeOutcome) -> None:
+    """Guard a success branch against a silently mis-rendered ``FinalizeOutcome``.
+
+    Every admin surface hand-rolls its own ``if outcome is …`` ladder and then
+    falls through to a terminal branch. Those fall-throughs disagreed: the two
+    approve routes reported an unmatched member to the operator as "order created
+    successfully" while the creative route logged it as an error. ``FinalizeOutcome``
+    is a StrEnum designed to grow (the #1637 lease states), so a member added later
+    would be rendered as SUCCESS on the surfaces the operator actually sees.
+
+    Calling this immediately before a success branch makes each ladder exhaustive
+    by construction: anything that is not ``APPLIED`` raises rather than being
+    reported as a completed booking. The routes keep their own wording and
+    modality (flash vs jsonify); only the "is this actually success?" decision is
+    single-sourced. #1544.
+    """
+    if outcome is not FinalizeOutcome.APPLIED:
+        raise ValueError(
+            f"Unhandled FinalizeOutcome at a success branch: {outcome!r}. "
+            "Add an explicit branch for it before the success path."
+        )
 
 
 def _positive_duration_from_env(name: str, default: int) -> int:
@@ -1070,12 +1121,7 @@ def finalize_unblocked_media_buy(tenant_id: str, media_buy_id: str) -> tuple[Fin
                 expected_status="pending_creatives",
             )
 
-        step_data = {
-            "step_id": step.step_id,
-            "context_id": step.context_id,
-            "tool_name": step.tool_name,
-            "request_data": step.request_data or {},
-        }
+        step_data = workflow_step_snapshot(step)
         return finalize_media_buy_approval(
             session,
             tenant_id,

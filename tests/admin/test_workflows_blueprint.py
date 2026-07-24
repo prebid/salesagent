@@ -589,3 +589,42 @@ class TestAdapterFailedBodyGeneric:
         body = response.get_json()
         assert body["error"] == "Media buy creation failed — see server logs for details"
         assert secret not in response.get_data(as_text=True)
+
+
+class TestApprovalInProgressResponse:
+    """A claimed-but-in-flight finalize is reported as PENDING, never as success.
+
+    Red oracle for the 202 contract the review template branches on: the route
+    returns 202 + ``pending: true`` so the JS reports "in progress" and the
+    operator waits for the reconciler. Downgrading it to 200 makes the template
+    fall into its ``response.ok`` arm and tell the operator the step was
+    "approved successfully" while no ad-server order exists. #1544/#1637.
+    """
+
+    def test_workflow_approve_retrying_returns_202_pending(self, client, test_tenant, factory_session):
+        from unittest.mock import patch
+
+        from src.admin.services.media_buy_completion import (
+            MEDIA_BUY_FINALIZE_IN_PROGRESS_MESSAGE,
+            FinalizeOutcome,
+        )
+
+        _auth_session(client, test_tenant)
+        _, context_id, step_id = _setup_mapped_media_buy_step(factory_session, test_tenant)
+
+        with patch(
+            "src.admin.blueprints.workflows.finalize_pending_media_buy_approval",
+            return_value=(FinalizeOutcome.RETRYING, "adapter unreachable"),
+        ):
+            response = client.post(
+                f"/tenant/{test_tenant}/workflows/{context_id}/steps/{step_id}/approve",
+                content_type="application/json",
+                json={},
+            )
+
+        assert response.status_code == 202
+        body = response.get_json()
+        assert body["pending"] is True
+        # The operator-facing copy comes from the shared constant, so this also
+        # pins the template fallback and the operations-route flash to one wording.
+        assert body["message"] == MEDIA_BUY_FINALIZE_IN_PROGRESS_MESSAGE
