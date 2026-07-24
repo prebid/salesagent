@@ -24,14 +24,32 @@ _SRC_DIR = _REPO_ROOT / "src"
 _CANONICAL_LABEL_NAMES = {"DROPPED_FIELDS_NEGOTIATION", "DROPPED_FIELDS_UNDECLARED_ENVELOPE"}
 
 
+def _kind_argument(call: ast.Call) -> ast.expr | None:
+    """Return the AST node bound to ``_log_dropped_fields``'s ``kind`` parameter.
+
+    ``kind`` is positional-or-keyword (``def _log_dropped_fields(operation, kind,
+    dropped)``), so a call site can supply it as the 2nd positional arg OR as a
+    ``kind=`` keyword — ``_log_dropped_fields(op, kind="literal", dropped=x)`` is
+    valid Python and reaches production identically to the positional form. A
+    matcher that only inspected ``call.args[1]`` silently passed every
+    keyword-argument call, whichever form it took.
+    """
+    if len(call.args) >= 2:
+        return call.args[1]
+    for keyword in call.keywords:
+        if keyword.arg == "kind":
+            return keyword.value
+    return None
+
+
 def _literal_kind_sites_in(path: Path) -> list[str]:
-    """Return ``line`` markers for ``_log_dropped_fields(...)`` calls whose 2nd arg is a bare literal."""
+    """Return ``line`` markers for ``_log_dropped_fields(...)`` calls whose kind is a bare literal."""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     offenders: list[str] = []
     for call in iter_call_expressions(tree, "_log_dropped_fields"):
-        if len(call.args) < 2:
+        kind_arg = _kind_argument(call)
+        if kind_arg is None:
             continue
-        kind_arg = call.args[1]
         if not (isinstance(kind_arg, ast.Name) and kind_arg.id in _CANONICAL_LABEL_NAMES):
             offenders.append(f"{path}:{kind_arg.lineno}")
     return offenders
@@ -70,6 +88,22 @@ class TestMatcherModelsTheForm:
     def test_canonical_name_passes(self, tmp_path):
         src = tmp_path / "clean.py"
         src.write_text("_log_dropped_fields(tool_name, DROPPED_FIELDS_UNDECLARED_ENVELOPE, dropped)")
+        assert not _literal_kind_sites_in(src)
+
+    def test_keyword_literal_is_flagged(self, tmp_path):
+        """``kind`` is positional-or-keyword; a keyword-form bare literal must not slip past."""
+        src = tmp_path / "offender.py"
+        src.write_text('_log_dropped_fields(tool_name, kind="inert read idempotency", dropped=fields)')
+        assert _literal_kind_sites_in(src)
+
+    def test_keyword_off_catalog_name_is_flagged(self, tmp_path):
+        src = tmp_path / "offender.py"
+        src.write_text("_log_dropped_fields(tool_name, kind=SOME_OTHER_CONSTANT, dropped=fields)")
+        assert _literal_kind_sites_in(src)
+
+    def test_keyword_canonical_name_passes(self, tmp_path):
+        src = tmp_path / "clean.py"
+        src.write_text("_log_dropped_fields(tool_name, kind=DROPPED_FIELDS_UNDECLARED_ENVELOPE, dropped=fields)")
         assert not _literal_kind_sites_in(src)
 
     def test_unrelated_call_ignored(self, tmp_path):
