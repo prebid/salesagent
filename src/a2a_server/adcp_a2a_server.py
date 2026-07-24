@@ -1689,6 +1689,18 @@ class AdCPRequestHandler(RequestHandler):
         # Pre-process format_id: upgrade legacy strings to FormatId models.
         from src.core.format_cache import upgrade_legacy_format_id
 
+        # Upgrade legacy string format_ids, then construct each creative STRICTLY at
+        # the boundary. `assets` is required on CreativeAsset in AdCP 3.1.1 and the
+        # creative's url lives inside that map (there is no top-level `url`), so a
+        # creative omitting it is malformed and is refused here as a two-layer
+        # VALIDATION_ERROR. MCP rejects the same shape via its typed
+        # `list[CreativeAsset]` signature, so constructing strictly keeps A2A aligned
+        # with both MCP and the schema instead of silently injecting a required
+        # field. (The impl still defaults `assets` on the REST path; that divergence
+        # is removable once the REST boundary constructs CreativeAsset strictly too.
+        # Whether a schema-invalid item in a batch should fail the whole request or
+        # ride back as a per-item failure is a separate axis, and one the 3.1.1
+        # conformance storyboard does not grade.)
         with adcp_validation_boundary(context="sync_creatives request"):
             creatives = []
             for c in parameters["creatives"]:
