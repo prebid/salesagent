@@ -1,18 +1,40 @@
 """Capability + storyboard applicability guard for the UC-002 idempotency phases.
 
-``create_media_buy`` implements verbatim replay, so the seller advertises the
-``supported=true`` discriminant with its replay window. The generated UC-002
-feature keeps the upstream replay scenario LIVE (graded against production —
-the proof that restoring replay cannot silently regress), the boundary outline
-uses the exact-length fixture token instead of a hand-counted literal, and the
-remaining supported=true phases production does not yet implement (in-flight
-tracking and its error-detail siblings) stay visible but unwired.
+``idempotency.supported`` is ONE agent-wide claim, not per-tool
+(``get-adcp-capabilities-response.json`` v3.1.1 models it as a discriminated
+union on a single boolean). ``create_media_buy`` implements verbatim replay,
+but the other twelve ``require_idempotency_key(`` call sites — including
+``update_media_buy`` — validate and accept the key without deduplicating, so
+the seller advertises ``supported=false`` as the honest blanket declaration;
+advertising ``true`` would tell every buyer, for every mutating call, that a
+blind retry is safe, which is false for twelve of thirteen call sites.
+
+This DOES cost real external conformance credit: the published storyboard
+(``dist/compliance/3.1.1/universal/idempotency.yaml``) grades its replay /
+changed-payload-conflict / fresh-key phases only for sellers declaring
+``supported: true``, and a future conformance runner implementing that
+precondition gate will skip grading create_media_buy's real replay behavior
+here. That is accepted deliberately — a false blanket promise across twelve
+sites is a worse defect than an accurate but conservative one on the
+thirteenth — and is tracked at #1607 (extend dedupe through the same
+``IdempotencyAttemptRepository`` to the remaining call sites, at which point
+``true`` becomes accurate again).
+
+The generated UC-002 feature keeps the upstream replay scenario LIVE
+regardless: it drives a real ``create_media_buy`` call twice through
+``MediaBuyCreateEnv`` and grades the actual replay behavior directly (see
+``_UC002_IDEMPOTENCY_WIRED`` in ``tests/bdd/conftest.py``), not the
+capabilities declaration — so it stays a true claim about production
+independent of what this file pins for the capability block. The boundary
+outline uses the exact-length fixture token instead of a hand-counted
+literal, and the remaining supported=true phases production does not yet
+implement (in-flight tracking and its error-detail siblings) stay visible but
+unwired.
 """
 
 from pathlib import Path
 
 from src.core.config_loader import current_tenant
-from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -39,15 +61,21 @@ REMAINING_UNWIRED_SCENARIOS = frozenset(
 )
 
 
-def test_advertised_idempotency_matches_the_implemented_replay():
-    """Pin the supported=true discriminant to the implemented replay window."""
+def test_advertised_idempotency_is_the_honest_blanket_declaration():
+    """The capability block must not claim a guarantee twelve of thirteen sites don't keep.
+
+    Regression guard for the reviewed defect: an agent-wide ``supported=true``
+    was previously justified purely by create_media_buy's real replay, while
+    update_media_buy/sync_accounts/sync_creatives silently re-execute a
+    retried request. Flip this back to ``True`` only alongside evidence that
+    every ``require_idempotency_key(`` call site actually deduplicates.
+    """
     current_tenant.set(None)
     capability = _get_adcp_capabilities_impl(None, None).adcp.idempotency
 
-    assert capability.supported is True
-    dumped = capability.model_dump(mode="json", exclude_none=True)
-    assert dumped["replay_ttl_seconds"] == int(DEFAULT_REPLAY_TTL.total_seconds()), (
-        "The advertised replay window must equal the window the replay cache actually enforces"
+    assert capability.supported is False
+    assert not hasattr(capability, "replay_ttl_seconds"), (
+        "IdempotencyUnsupported must not carry replay_ttl_seconds — the discriminated union forbids it"
     )
 
 
@@ -73,6 +101,9 @@ def test_generated_replay_scenario_is_live_and_boundary_fixture_durable():
     local_text = LOCAL_OVERLAYS.read_text()
     assert f"@{BOUNDARY_SCENARIO}" in local_text
     assert "| <256 chars>" in local_text
-    # The supported=false replay reconciliation was removed with the restore;
-    # its return would silently un-grade production replay.
+    # This scenario grades create_media_buy's real replay behavior directly
+    # (via MediaBuyCreateEnv), independent of what the capabilities block
+    # advertises — a local overlay removing it here because the agent-wide
+    # capability now declares `false` would silently un-grade a real,
+    # verified behavior for the wrong reason.
     assert f"@{LIVE_REPLAY_SCENARIO}" not in local_text

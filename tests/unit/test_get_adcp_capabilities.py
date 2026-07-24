@@ -16,8 +16,6 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     SupportedProtocol,
 )
 
-from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
-
 if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
 
@@ -172,10 +170,15 @@ class TestGetAdcpCapabilitiesImpl:
         assert response.adcp is not None
         assert response.adcp.major_versions[0].root == 3
         assert SupportedProtocol.media_buy in response.supported_protocols
-        # create_media_buy implements verbatim replay, so the seller advertises
-        # the supported=true discriminant with the enforced replay window.
-        assert response.adcp.idempotency.supported is True
-        assert response.adcp.idempotency.replay_ttl_seconds == int(DEFAULT_REPLAY_TTL.total_seconds())
+        # `supported` is one agent-wide claim, not per-tool: only
+        # create_media_buy deduplicates today, while update_media_buy/
+        # sync_accounts/sync_creatives validate-and-reexecute. False is the
+        # accurate blanket declaration under the binary discriminated union.
+        assert response.adcp.idempotency.supported is False
+        assert not hasattr(response.adcp.idempotency, "replay_ttl_seconds"), (
+            "IdempotencyUnsupported must not carry replay_ttl_seconds — the discriminated "
+            "union forbids it ('they have no meaning without replay support')"
+        )
         # Specialism declaration activates storyboard scenarios bundled under
         # sales-non-guaranteed (inventory_list_*, delivery_reporting, etc.).
         assert response.specialisms is not None
@@ -415,8 +418,8 @@ class TestGetAdcpCapabilitiesWithTenant:
                 assert response.adcp.major_versions[0].root == 3
                 assert SupportedProtocol.media_buy in response.supported_protocols
                 # Full response carries the same seller-wide replay posture.
-                assert response.adcp.idempotency.supported is True
-                assert response.adcp.idempotency.replay_ttl_seconds == int(DEFAULT_REPLAY_TTL.total_seconds())
+                assert response.adcp.idempotency.supported is False
+                assert not hasattr(response.adcp.idempotency, "replay_ttl_seconds")
                 # Specialism declaration must be consistent across minimal and full paths.
                 assert response.specialisms is not None
                 assert AdcpSpecialism.sales_non_guaranteed in response.specialisms

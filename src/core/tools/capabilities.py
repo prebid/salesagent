@@ -20,7 +20,6 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Adcp,
     Execution,
     GeoMetros,
-    Idempotency,
     MajorVersion,
     MediaBuy,
     Portfolio,
@@ -30,6 +29,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     # FIXME(#1388): Targeting has a local subclass; import from src.core.schemas (Pattern #7/#4).
     Targeting,
 )
+from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import Idempotency3 as IdempotencyUnsupported
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
@@ -38,11 +38,10 @@ from fastmcp.tools.tool import ToolResult
 # single canonical attribute on src.core.adcp_version. A by-name import binds a
 # private copy at import time, which a testing policy override (or a test patch)
 # applied at src.core.adcp_version.* would not reach — splitting what capabilities
-# advertises from what validate_adcp_version_pins negotiates (#1512).
+# advertises from what validate_adcp_version_pins negotiates.
 from src.core import adcp_version
 from src.core.application_context import dump_adcp_response
 from src.core.auth import get_principal_object, require_identity
-from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
@@ -124,13 +123,27 @@ def _build_adcp_block() -> Adcp:
         # semver: the schema types it ``string`` and marks it optional, so an
         # absent advisory field is conformant where a null would not be.
         **adcp_version.advisory_build_version_field(),
-        # The official 3.1.1 schema models this as a discriminated union.
-        # create_media_buy implements verbatim replay (same key replays the
-        # stored success; a conflicting payload rejects), so the seller
-        # advertises supported=true with the replay window. Keys on the other
-        # mutating tools are validated and accepted but not yet deduplicated —
-        # dedupe extends through the same repository under #1607.
-        idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
+        # The official 3.1.1 schema models this as a discriminated union, and
+        # `supported` is a single agent-wide claim, not per-tool: "a repeat of
+        # the same idempotency_key ... returns the cached response without
+        # re-executing side effects." Only create_media_buy honors that today
+        # (verbatim replay of the stored success; a conflicting payload
+        # rejects) — every other mutating tool (update_media_buy,
+        # sync_accounts, sync_creatives) validates and accepts the key but
+        # performs no cache read, so a retry re-executes and can double-spend
+        # or double-sync. Advertising supported=true would tell every buyer,
+        # for every mutating call, that retries are safe to send blind — false
+        # for twelve of thirteen call sites. `supported=false` is the accurate
+        # blanket claim under the binary schema; flip back to true once dedupe
+        # covers the remaining call sites (tracked at #1607) rather than
+        # advertising a guarantee most of the surface doesn't keep.
+        # The SDK generates the discriminated union as two classes named
+        # ``Idempotency`` (supported=True) and ``Idempotency3`` (supported=False)
+        # — the numeric suffix is a codegen artifact of the schema's own
+        # generation note ("code generators produce two named types
+        # (IdempotencySupported, IdempotencyUnsupported)"), imported here under
+        # a readable alias since the generated name carries no meaning.
+        idempotency=IdempotencyUnsupported(supported=False),
     )
 
 
@@ -178,13 +191,13 @@ def _get_adcp_capabilities_impl(
     principal_id = identity.principal_id if identity else None
     tenant = identity.tenant if identity else None
 
-    # Echo the buyer's request context unchanged on the response (#1512). The
+    # Echo the buyer's request context unchanged on the response. The
     # version-negotiation storyboard grades ``field_present: context`` with an
     # unchanged value; the error path (_version_unsupported_error) already echoes
     # it, so the success path must too or context silently vanishes.
     request_context = req.context if req else None
 
-    # Honor the buyer's `protocols` filter on EVERY transport (#1546): return only the
+    # Honor the buyer's `protocols` filter on every transport: return only the
     # requested domains' DETAILS. `supported_protocols` stays the agent's own
     # declaration — it commits this agent to each listed protocol's compliance
     # storyboard, so it cannot be narrowed to whatever the buyer happened to ask
@@ -403,10 +416,10 @@ async def get_adcp_capabilities(
     Args:
         protocols: Specific protocols to filter by (optional). The impl returns only
             these domains' capabilities; an unknown enum value or an empty array is a
-            VALIDATION_ERROR (#1546).
+            VALIDATION_ERROR.
         context: AdCP request context echoed unchanged on the response. Declared
             here so the envelope-tolerance middleware does not strip it before it
-            reaches the request (#1512).
+            reaches the request.
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -457,8 +470,8 @@ async def get_adcp_capabilities_raw(
     Args:
         protocols: Specific protocols to filter by (optional). The impl returns only
             these domains' capabilities; an unknown enum value or an empty array is a
-            VALIDATION_ERROR (#1546).
-        context: AdCP request context echoed unchanged on the response (#1512).
+            VALIDATION_ERROR.
+        context: AdCP request context echoed unchanged on the response.
         ctx: FastMCP context (automatically provided)
         identity: Pre-resolved identity (preferred over ctx)
 

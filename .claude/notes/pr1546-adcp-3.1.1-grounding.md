@@ -238,18 +238,23 @@ comparison. Every transport must preserve field presence and route any supplied
 `revision` to the shared fail-loud guard, which rejects the request without
 applying the update.
 
-Omission remains valid, and explicit JSON `null` is treated AS omission — it
-proceeds rather than rejecting. Grounding for that: the pinned
+Omission remains valid and proceeds. Explicit JSON `null` is REJECTED as
+schema-invalid (`INVALID_REQUEST`) — it is not treated as a spelling of
+omission. Grounding: the pinned
 `dist/schemas/3.1.1/media-buy/update-media-buy-request.json` defines `revision`
-as `{"type": "integer", "minimum": 1}` and does not list it as required, with no
-`anyOf`-null member — so `null` is not a value the schema contemplates at all.
-Rejecting it would be a stricter-than-spec reading that penalizes a client
-serializing an unset optional field, while accepting it is safe precisely
-because no precondition is applied either way. (An earlier draft grounded this
-in the SDK's `int | None = None` model shape; the SDK is a cross-check, not the
-authority, and the schema is what settles it.) This
-is a safety posture that prevents an unprotected lost update; it is an explicit
-implementation gap, not a claim of full revision conformance.
+as `{"type": "integer", "minimum": 1}`, with no `anyOf`-null member, so a JSON
+`null` violates the type constraint outright; it is schema-invalid, not merely
+uncontemplated. An earlier draft of this decision reasoned the opposite way —
+that null should be accepted as equivalent to omission because "the SDK models
+revision as `int | None = None`, so a conformant client that never set it
+serializes null." That premise is false: at the pinned adcp 6.6.0,
+`UpdateMediaBuyRequest(...).model_dump()` OMITS an unset `revision` entirely
+rather than serializing it as `null`, so no conformant client emits `null` in
+the first place, and there is no compatibility reason to accept it. `null`
+therefore falls through to the same `INVALID_REQUEST` branch as `0` / `"7"` /
+`7.5`, consistently across MCP, A2A, and REST. This is a safety posture that
+prevents an unprotected lost update; it is an explicit implementation gap, not
+a claim of full revision conformance.
 
 ## Push-notification and reporting webhook delivery
 
