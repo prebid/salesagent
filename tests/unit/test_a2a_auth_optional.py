@@ -485,23 +485,49 @@ class TestAuthOptionalSkills:
             await self.handler._send_protocol_webhook(task, status="completed")
             mock_service.return_value.send_notification.assert_not_awaited()
 
-    @pytest.mark.asyncio
-    async def test_discovery_skills_accept_anonymous_identity(self):
-        """Discovery skills should accept anonymous identity (no principal_id)."""
-        discovery_skills = {
-            "list_creative_formats": "src.a2a_server.adcp_a2a_server.core_list_creative_formats_tool",
-            "list_authorized_properties": "src.a2a_server.adcp_a2a_server.core_list_authorized_properties_tool",
-            "get_products": "src.a2a_server.adcp_a2a_server.core_get_products_tool",
-        }
+    # Derived from DISCOVERY_SKILLS below, so a skill added to the registry
+    # without a mapping here fails the completeness test rather than silently
+    # skipping the anonymous-identity check.
+    _DISCOVERY_TOOL_PATCHES = {
+        "list_creative_formats": "src.a2a_server.adcp_a2a_server.core_list_creative_formats_tool",
+        "list_authorized_properties": "src.a2a_server.adcp_a2a_server.core_list_authorized_properties_tool",
+        "get_products": "src.a2a_server.adcp_a2a_server.core_get_products_tool",
+        "get_adcp_capabilities": "src.core.tools.capabilities.get_adcp_capabilities_raw",
+    }
 
-        for skill_name, mock_path in discovery_skills.items():
-            with patch(mock_path) as mock_tool:
-                mock_tool.return_value = {}
-                await self.handler._handle_explicit_skill(
-                    skill_name=skill_name,
-                    parameters={"brief": "test"} if skill_name == "get_products" else {},
-                    identity=self.anon_identity,
-                )
+    def test_every_discovery_skill_is_covered_by_the_anonymous_identity_check(self):
+        """An unmapped registry entry would make the check below silently partial."""
+        from src.a2a_server.adcp_a2a_server import DISCOVERY_SKILLS
+
+        assert set(DISCOVERY_SKILLS) == set(self._DISCOVERY_TOOL_PATCHES), (
+            "DISCOVERY_SKILLS and _DISCOVERY_TOOL_PATCHES disagree; add the new skill's core-tool "
+            f"patch target. Unmapped: {sorted(set(DISCOVERY_SKILLS) - set(self._DISCOVERY_TOOL_PATCHES))}, "
+            f"stale: {sorted(set(self._DISCOVERY_TOOL_PATCHES) - set(DISCOVERY_SKILLS))}"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("skill_name", sorted(_DISCOVERY_TOOL_PATCHES))
+    async def test_discovery_skills_accept_anonymous_identity(self, skill_name):
+        """A discovery skill runs for a principal-less identity and forwards it.
+
+        The previous version called each handler and asserted nothing, so it
+        proved only "did not raise" — it would still pass if the handler
+        silently dropped the identity or never reached the core tool at all.
+        """
+        with patch(self._DISCOVERY_TOOL_PATCHES[skill_name]) as mock_tool:
+            mock_tool.return_value = {}
+            result = await self.handler._handle_explicit_skill(
+                skill_name=skill_name,
+                parameters={"brief": "test"} if skill_name == "get_products" else {},
+                identity=self.anon_identity,
+            )
+
+        assert mock_tool.call_count == 1, f"{skill_name} never reached its core tool"
+        forwarded = mock_tool.call_args.kwargs.get("identity", ...)
+        assert forwarded is self.anon_identity, (
+            f"{skill_name} did not forward the anonymous identity to the core tool; got {forwarded!r}"
+        )
+        assert result is not None
 
     @pytest.mark.asyncio
     async def test_natural_language_without_auth(self):
@@ -532,4 +558,8 @@ class TestAuthOptionalSkills:
                     mock_products.return_value = {"products": []}
 
                     result = await self.handler.on_message_send(params, context=ServerCallContext())
-                    assert result is not None
+
+        # "not None" would also hold for an AUTH_REQUIRED failure Task, which is
+        # exactly what this test exists to rule out: the NL path must have RUN.
+        mock_products.assert_awaited_once()
+        assert result is not None

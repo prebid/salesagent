@@ -23,7 +23,6 @@ AUTH_OPTIONAL_TOOLS = frozenset(
     {
         "get_adcp_capabilities",
         "get_products",
-        "list_accounts",
         "list_creative_formats",
         "list_authorized_properties",
     }
