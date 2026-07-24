@@ -123,20 +123,32 @@ def _build_adcp_block() -> Adcp:
         # semver: the schema types it ``string`` and marks it optional, so an
         # absent advisory field is conformant where a null would not be.
         **adcp_version.advisory_build_version_field(),
-        # The official 3.1.1 schema models this as a discriminated union, and
-        # `supported` is a single agent-wide claim, not per-tool: "a repeat of
-        # the same idempotency_key ... returns the cached response without
-        # re-executing side effects." Only create_media_buy honors that today
-        # (verbatim replay of the stored success; a conflicting payload
-        # rejects) — every other mutating tool (update_media_buy,
+        # FIXME(#1607): the schema models `supported` as ONE agent-wide binary
+        # claim, but this agent's real behavior is genuinely mixed — neither
+        # value is fully truthful, and `false` below is the lesser-wrong
+        # choice, not a resolved one. `IdempotencyUnsupported`'s own semantics
+        # ("sending a key is a no-op ... the seller will NOT return
+        # IDEMPOTENCY_CONFLICT or IDEMPOTENCY_EXPIRED, and a naive retry WILL
+        # double-process") are FALSE for create_media_buy specifically: it
+        # still deduplicates a repeated key (verbatim replay of the stored
+        # success), still raises IDEMPOTENCY_CONFLICT on a same-key
+        # different-payload retry, and still raises IDEMPOTENCY_EXPIRED past
+        # the replay window. Every OTHER mutating tool (update_media_buy,
         # sync_accounts, sync_creatives) validates and accepts the key but
         # performs no cache read, so a retry re-executes and can double-spend
-        # or double-sync. Advertising supported=true would tell every buyer,
-        # for every mutating call, that retries are safe to send blind — false
-        # for twelve of thirteen call sites. `supported=false` is the accurate
-        # blanket claim under the binary schema; flip back to true once dedupe
-        # covers the remaining call sites (tracked at #1607) rather than
-        # advertising a guarantee most of the surface doesn't keep.
+        # or double-sync — which is what `supported=true` would have falsely
+        # promised was safe, for twelve of thirteen call sites. `false` was
+        # chosen as the narrower defect (create_media_buy behaving BETTER
+        # than advertised is safer than the other twelve behaving WORSE than
+        # advertised), not as a truthful declaration. Resolving this for real
+        # means either extending genuine replay/conflict/expired handling to
+        # every mutating tool (then flipping to true) or removing
+        # create_media_buy's dedup so false becomes wire-accurate — both are
+        # deliberately deferred: the first is a substantial feature build with
+        # real regression risk on spend-affecting update_media_buy, the second
+        # is an active regression of a working duplicate-booking safety net.
+        # Do not treat this line as closed by future drive-by cleanup without
+        # picking one of those two.
         # The SDK generates the discriminated union as two classes named
         # ``Idempotency`` (supported=True) and ``Idempotency3`` (supported=False)
         # — the numeric suffix is a codegen artifact of the schema's own

@@ -136,23 +136,43 @@ actually exposes; `list_tasks` remains intentionally MCP-only as documented in
 it is a local, ungraded consistency rule using the same 16–255 character
 constraint.
 
-### Dedupe scope of `idempotency.supported: true` (residual, #1607)
+### Idempotency capability contradiction — neither value is fully truthful (open, #1607)
 
-The agent-wide capability block advertises `idempotency.supported: true`, and
-the spec defines `supported` as whether the seller deduplicates replays. Today
-exactly ONE tool deduplicates: `create_media_buy` (verbatim replay of the
-stored success; a conflicting payload rejects). The other twelve
-`require_idempotency_key(` call sites — including the spend-affecting
-`update_media_buy`, plus `sync_accounts` and `sync_creatives` — VALIDATE and
-accept the key but perform no cache read, so a retried request re-executes.
+The agent-wide capability block models `idempotency.supported` as ONE
+discriminated-union boolean covering every mutating tool at once. This
+agent's real behavior does not fit that shape: `create_media_buy` deduplicates
+(verbatim replay of the stored success; a same-key different-payload retry
+rejects with `IDEMPOTENCY_CONFLICT`; a retry past the replay window raises
+`IDEMPOTENCY_EXPIRED`), while the other twelve `require_idempotency_key(` call
+sites — including the spend-affecting `update_media_buy`, plus
+`sync_accounts` and `sync_creatives` — VALIDATE and accept the key but perform
+no cache read, so a retried request re-executes.
 
-The advertised value is therefore broader than the implemented behavior, and
-the hazard the spec names for that gap is buyer double-spend on a retried
-mutation. This is a known, accepted residual for this PR, tracked at #1607
-(extend dedupe through the same repository seam); it is recorded here and in
-the Scope section of the PR description rather than being narrowed to
-`supported: false`, which would understate `create_media_buy` and turn off the
-graded replay phases it does satisfy.
+Neither discriminant value is truthful for this mix:
+
+- `supported: true` claims every mutating call is safe to retry blind — false
+  for twelve of thirteen call sites, and the hazard the spec names for that
+  gap is buyer double-spend/double-sync on a retried mutation. This is what an
+  earlier revision of this PR advertised.
+- `supported: false` claims (per `IdempotencyUnsupported`'s own schema text)
+  that "sending a key is a no-op ... the seller will NOT return
+  IDEMPOTENCY_CONFLICT or IDEMPOTENCY_EXPIRED, and a naive retry WILL
+  double-process" — false for `create_media_buy` specifically, which still
+  deduplicates, still conflicts, still expires.
+
+The current code declares `false`. That is a deliberate choice of the
+NARROWER defect, not a resolved, truthful one: `create_media_buy` behaving
+BETTER than advertised (a buyer might not realize a retry is safe and send an
+unnecessary natural-key check) is a materially smaller hazard than the other
+twelve behaving WORSE than advertised (a buyer trusting `true` and retrying
+blind causes a real double-spend). Resolving this for real requires either (a)
+extending genuine replay/conflict/expired handling to every mutating tool,
+then flipping to `true`, or (b) removing `create_media_buy`'s dedup so `false`
+becomes wire-accurate — (a) is a substantial feature build with real
+regression risk on spend-affecting `update_media_buy`; (b) is an active
+regression of a working duplicate-booking safety net. Both are deliberately
+deferred, tracked at #1607 — this is an open contradiction, not a closed one,
+and should not be read as fixed by the choice of `false` alone.
 
 Grading status:
 
@@ -163,25 +183,26 @@ Grading status:
   `supported: true`. Its capability check explicitly treats `supported: false`
   as a valid, advisory declaration for which replay-window phases are not
   applicable; the published file notes that a complete storyboard precondition
-  gate is still pending runner support.
+  gate is still pending runner support. Under the current `false` declaration,
+  a future runner implementing that precondition gate will skip grading
+  `create_media_buy`'s real replay behavior — an accepted cost of choosing the
+  narrower defect over the false blanket promise.
 
-Decision for this PR: `create_media_buy` implements verbatim replay, so the
-seller advertises the `supported: true` discriminant with `replay_ttl_seconds`.
-A repeated `idempotency_key` on create replays the stored success verbatim
-(`replayed: true`); a same-key different-canonical-payload request rejects with
-`IDEMPOTENCY_CONFLICT`; errors are never cached (a retry after an error
-re-executes); the `media_buys` unique index remains the dup-booking backstop
-with a fail-closed degraded path; the per-scope insert ceiling guards
-admission. The required key is validated on every create/update/sync-creatives/
-sync-accounts boundary; on those OTHER writes it is accepted but **not yet
-deduplicated** — the partial-dedupe gap is tracked in #1607, which extends
-dedupe through the same `IdempotencyAttemptRepository`. On registered standard
-reads, omission is accepted under the 3.1 grace and a valid supplied key is
-validated inert metadata.
+`create_media_buy`'s own implementation, independent of what the capability
+block advertises: a repeated `idempotency_key` replays the stored success
+verbatim (`replayed: true`); a same-key different-canonical-payload request
+rejects with `IDEMPOTENCY_CONFLICT`; errors are never cached (a retry after an
+error re-executes); the `media_buys` unique index remains the dup-booking
+backstop with a fail-closed degraded path; the per-scope insert ceiling guards
+admission. On registered standard reads, omission is accepted under the 3.1
+grace and a valid supplied key is validated inert metadata — that read-side
+behavior is unaffected by this section and not part of the contradiction.
 
 The `dist/compliance/3.1.1/universal/idempotency.yaml` replay / changed-payload
-conflict / fresh-key phases now grade against this seller's live create
-behavior under the advertised `supported: true`.
+conflict / fresh-key phases grade against this seller's live create behavior
+regardless of what the capability block currently declares (see "Generated
+UC-002 status" below — the scenario dispatches a real `create_media_buy` call
+and does not read the capabilities response).
 
 The concurrent-first-insert-wins phase grades what the BUYER observes — one
 `media_buy_id` across both responses — and that holds: the unique index makes
