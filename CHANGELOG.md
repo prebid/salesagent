@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0](https://github.com/prebid/salesagent/compare/v2.0.0...v2.1.0) (2026-07-24)
+
+
+### Features
+
+* 1407 list creatives concept ids ([#1493](https://github.com/prebid/salesagent/issues/1493)) ([b46d824](https://github.com/prebid/salesagent/commit/b46d8243759b1286fcca1bc12fa74896fd6e491b))
+* populate concept_id/concept_name from GAM order ([#1506](https://github.com/prebid/salesagent/issues/1506)) ([#1509](https://github.com/prebid/salesagent/issues/1509)) ([c30e86e](https://github.com/prebid/salesagent/commit/c30e86e42d3c5b28cbde9863a3cf8fc391d4e0d5))
+* UC-002/003 validation wiring + canonical error-code reconciliation on adcp 5.7 ([#1417](https://github.com/prebid/salesagent/issues/1417)) ([9ac08da](https://github.com/prebid/salesagent/commit/9ac08dad3860819ca758109037706e229bb16a5a))
+* validation-harness base — adcp 6.6 consolidation, e2e fixture dedup, CI e2e_rest hardening (stacked on [#1417](https://github.com/prebid/salesagent/issues/1417)/[#1430](https://github.com/prebid/salesagent/issues/1430)/[#1567](https://github.com/prebid/salesagent/issues/1567)) ([#1585](https://github.com/prebid/salesagent/issues/1585)) ([c45b0b1](https://github.com/prebid/salesagent/commit/c45b0b1f0c37274175cf04b79145600c7e3a2d61))
+
+
+### Bug Fixes
+
+* **a2a:** return TaskNotFoundError (-32001) for an unknown task id ([#1648](https://github.com/prebid/salesagent/issues/1648)) ([8cb8d0e](https://github.com/prebid/salesagent/commit/8cb8d0ed6a48d77b51082596ca2190e6c16215fe))
+* advertise only backed creative-agent capabilities (drop unbacked 'delivery') ([#1543](https://github.com/prebid/salesagent/issues/1543)) ([c0b447b](https://github.com/prebid/salesagent/commit/c0b447b6a359a2354660e66a4c35cd7d6860359a))
+* bump pillow&gt;=12.3.0 and pin click&gt;=8.3.3 for CVE fixes ([#1599](https://github.com/prebid/salesagent/issues/1599)) ([0c8c923](https://github.com/prebid/salesagent/commit/0c8c923edadaf7b7ddffa8fd5abbbb503a4131d9))
+* expect SERVICE_UNAVAILABLE for UC-019 targeting rehydration BDD ([#1649](https://github.com/prebid/salesagent/issues/1649)) ([40aacea](https://github.com/prebid/salesagent/commit/40aacea1d7bd0aebde756330d51886272176062e)), closes [#1571](https://github.com/prebid/salesagent/issues/1571)
+* **get_products:** coerce string brand URL shorthand to BrandReference ([#1324](https://github.com/prebid/salesagent/issues/1324)) ([#1537](https://github.com/prebid/salesagent/issues/1537)) ([fd4a5d1](https://github.com/prebid/salesagent/commit/fd4a5d141263ff50bd6410f8b42db4c79c3a2fbb))
+* map ADCP exceptions to specific types in signals_agent_registry ([#1483](https://github.com/prebid/salesagent/issues/1483)) ([d441d4c](https://github.com/prebid/salesagent/commit/d441d4c3ba9c00f87c447659bd0071b462c857a9))
+* spec delivery wire — completed_views rename and media-buy status taxonomy ([#1545](https://github.com/prebid/salesagent/issues/1545)) ([5618240](https://github.com/prebid/salesagent/commit/5618240aaf31ee1660309517b43a1b038d1fc62c))
+* upgrade mcp for CVE-2026-59950 ([#1674](https://github.com/prebid/salesagent/issues/1674)) ([324e0c1](https://github.com/prebid/salesagent/commit/324e0c14b130fc396fa5a667150b35cf5b9d01fc))
+* wrap MCP TypeAdapter validation errors ([#1534](https://github.com/prebid/salesagent/issues/1534)) ([61d6399](https://github.com/prebid/salesagent/commit/61d6399fa81c6802467a79b9b483d08a515dd69f))
+
+
+### Performance Improvements
+
+* parallelize the test suite — scenario-level BDD distribution, tmpfs test DB, opt-in xdist ([#1572](https://github.com/prebid/salesagent/issues/1572)) ([2b487cc](https://github.com/prebid/salesagent/commit/2b487cc47e2100d3dcec371c2cdb0312aa29e65f))
+
+
+### Code Refactoring
+
+* **test:** drop on-disk probe in allowlist-diff self-tests ([#1541](https://github.com/prebid/salesagent/issues/1541)) ([941061d](https://github.com/prebid/salesagent/commit/941061d4c2d8aa39e237373c60a7c8b9e46551fd)), closes [#1467](https://github.com/prebid/salesagent/issues/1467)
+
+
+### Documentation
+
+* **adr:** honest [#1228](https://github.com/prebid/salesagent/issues/1228) F1/F2/G2 quality-amnesty policy (ADR-009) ([#1579](https://github.com/prebid/salesagent/issues/1579)) ([06f8987](https://github.com/prebid/salesagent/commit/06f89876ed9eb08a03d3c2b3b220de5e037d25b5))
+* **bdd:** annotate UC-019 SERVICE_UNAVAILABLE wire-code rationale ([#1656](https://github.com/prebid/salesagent/issues/1656)) ([6dd3137](https://github.com/prebid/salesagent/commit/6dd3137d5b6b16b8bd534574ab7e47b67d1f3277))
+* correct G2 obligation-allowlist docstring ([#1609](https://github.com/prebid/salesagent/issues/1609)) ([#1612](https://github.com/prebid/salesagent/issues/1612)) ([2aaca62](https://github.com/prebid/salesagent/commit/2aaca623bf5b59949001418d78a8a29e95afb9c4))
+* correct README and CLAUDE.md accuracy and state alpha status ([#1542](https://github.com/prebid/salesagent/issues/1542)) ([6cb8567](https://github.com/prebid/salesagent/commit/6cb85676842ab0a2f615c753e92de1ec3a6419a4))
+* Note Code Quality path exclusion unavailable ([#1422](https://github.com/prebid/salesagent/issues/1422)) ([#1562](https://github.com/prebid/salesagent/issues/1562)) ([39f5a79](https://github.com/prebid/salesagent/commit/39f5a7956d37caa290b493983324d345908c372e))
+
 ## [2.0.0](https://github.com/prebid/salesagent/compare/v1.7.0...v2.0.0) (2026-07-01)
 
 
