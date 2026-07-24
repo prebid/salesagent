@@ -241,9 +241,31 @@ class TestA2AWebhookPayloadTypes:
         while elapsed < 15.0 and not webhook_capture_server["received"]:
             sleep(0.5)
             elapsed += 0.5
-        # Grace window: a regression re-adding on_message_send's immediate-terminal
-        # webhook would deliver a SECOND completed webhook shortly after the first.
-        sleep(2.0)
+        # Quiescence poll, NOT a fixed grace window: a regression re-adding
+        # on_message_send's immediate-terminal webhook would deliver a SECOND
+        # completed webhook — but a single hard-coded sleep only catches it if it
+        # happens to arrive inside that window; under load (or a slower duplicate
+        # path) it could arrive later and slip past a fixed-window check. Instead,
+        # keep polling until the received count is STABLE across several consecutive
+        # checks: any new arrival — including a late duplicate — resets the stability
+        # counter, so the "no second delivery" signal holds independent of delivery
+        # latency (bounded by max_wait as a safety net against a genuinely stuck test,
+        # not as the correctness mechanism).
+        stable_polls_required = 4  # 4 * 0.5s = 2s of observed stability
+        poll_interval = 0.5
+        max_wait = 30.0
+        stable_polls = 0
+        waited = 0.0
+        last_count = len(webhook_capture_server["received"])
+        while stable_polls < stable_polls_required and waited < max_wait:
+            sleep(poll_interval)
+            waited += poll_interval
+            current_count = len(webhook_capture_server["received"])
+            if current_count == last_count:
+                stable_polls += 1
+            else:
+                stable_polls = 0
+                last_count = current_count
         received = webhook_capture_server["received"]
         assert received, "Expected an async workflow completion webhook"
         assert_no_classification_errors(received)

@@ -253,6 +253,33 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     return InternalError(message=message, data=envelope)
 
 
+def _boundary_internal_error(
+    op_key: str, op_label: str, identity: ResolvedIdentity | None, exc: Exception
+) -> InternalError:
+    """THE single untyped-crash boundary arm shared by ``on_message_send``,
+    ``on_get_task``, and ``on_cancel_task``: log server-side (``record_boundary_error``)
+    using ONE canonical identity-scope sentinel, then build the sanitized JSON-RPC
+    ``InternalError`` (``_internal_error_for``).
+
+    Each of the three handlers previously open-coded this arm; ``on_message_send``'s
+    copy had already drifted onto a different missing-identity sentinel
+    (``"unknown"``/``"unknown"``) from ``on_get_task``/``on_cancel_task``'s
+    (``None``/``"anonymous"``), so the SAME unresolved-identity event logged under two
+    different sentinels — un-greppable, and the tenant column swung by handler. This
+    is the single edit that keeps the sentinel from drifting again on the next handler.
+
+    Returns (never raises) so each caller keeps its own ``raise ... from exc`` chaining.
+    """
+    record_boundary_error(
+        "a2a",
+        op_key,
+        exc,
+        tenant_id=getattr(identity, "tenant_id", None),
+        principal_id=getattr(identity, "principal_id", None) or "anonymous",
+    )
+    return _internal_error_for(op_label, exc)
+
+
 class AdCPRequestHandler(RequestHandler):
     """Request handler for AdCP A2A operations supporting JSON-RPC 2.0."""
 
@@ -1225,21 +1252,12 @@ class AdCPRequestHandler(RequestHandler):
             # task-layer outcome (the dispatch loop wraps it via
             # ``_build_failed_skill_result`` → sanitized failed Task), while a crash in
             # THIS boundary — before/after dispatch — is transport-layer (JSON-RPC).
-            err_tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
-            err_principal_id = (identity.principal_id or "unknown") if identity else "unknown"
-            record_boundary_error(
-                "a2a",
-                "message_processing",
-                e,
-                tenant_id=err_tenant_id,
-                principal_id=err_principal_id,
-            )
             # This path yields a JSON-RPC InternalError (transport-layer), NOT a
             # Task-layer outcome — so the provisional WORKING task stored before
             # dispatch must not survive as a retrievable orphan. Drop it (and its
             # push config) before raising so ``tasks/get`` returns nothing.
             self._forget_task(task_id)
-            raise _internal_error_for("message processing", e) from e
+            raise _boundary_internal_error("message_processing", "message processing", identity, e) from e
 
         self._remember_task(task_id, task, identity)
         return task
@@ -1287,6 +1305,12 @@ class AdCPRequestHandler(RequestHandler):
 
     _TERMINAL_TASK_STATES = frozenset(_STEP_STATUS_TO_TASK_STATE.values())
 
+    # Reverse of the mapping above, for rendering an in-memory Task's terminal
+    # TaskState back into the same lowercase vocabulary the durable leg's step-status
+    # string already uses — so a cancel refusal reads identically ("current state:
+    # completed") regardless of which leg (in-memory vs durable) refused it.
+    _TASK_STATE_TO_STEP_STATUS = {v: k for k, v in _STEP_STATUS_TO_TASK_STATE.items()}
+
     async def on_get_task(
         self,
         params: GetTaskRequest,
@@ -1330,14 +1354,7 @@ class AdCPRequestHandler(RequestHandler):
             # The durable lookup touches the DB; an untyped failure here must not
             # escape to the SDK dispatcher, which would echo str(exc) verbatim on
             # the JSON-RPC wire. Mirror every sibling handler's boundary arm.
-            record_boundary_error(
-                "a2a",
-                "get_task",
-                e,
-                tenant_id=getattr(identity, "tenant_id", None),
-                principal_id=getattr(identity, "principal_id", None) or "anonymous",
-            )
-            raise _internal_error_for("get task", e) from e
+            raise _boundary_internal_error("get_task", "get task", identity, e) from e
 
     def _durable_lookup_identity(self, context: ServerCallContext | None) -> ResolvedIdentity | None:
         """Resolve the caller's identity for a durable (cross-process) task lookup.
@@ -1468,7 +1485,8 @@ class AdCPRequestHandler(RequestHandler):
             identity = self._durable_lookup_identity(context)
             owned = self._authorized_in_memory_task(task_id, identity)
             if owned is not None and owned.status.state in self._TERMINAL_TASK_STATES:
-                raise TaskNotCancelableError(message=f"Task cannot be canceled - current state: {owned.status.state}")
+                current_status = self._TASK_STATE_TO_STEP_STATUS.get(owned.status.state, "unknown")
+                raise TaskNotCancelableError(message=f"Task cannot be canceled - current state: {current_status}")
             durable = self._durable_cancel_step(task_id, identity)
             if owned is not None:
                 owned.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_CANCELED))
@@ -1480,14 +1498,7 @@ class AdCPRequestHandler(RequestHandler):
         except Exception as e:
             # The durable cancel touches the DB; an untyped failure must not escape
             # to the SDK dispatcher (which echoes str(exc) on the JSON-RPC wire).
-            record_boundary_error(
-                "a2a",
-                "cancel_task",
-                e,
-                tenant_id=getattr(identity, "tenant_id", None),
-                principal_id=getattr(identity, "principal_id", None) or "anonymous",
-            )
-            raise _internal_error_for("cancel task", e) from e
+            raise _boundary_internal_error("cancel_task", "cancel task", identity, e) from e
 
     def _durable_cancel_step(self, task_id: str, identity: ResolvedIdentity | None) -> Task | None:
         """Durably cancel the workflow step carrying this outer task id.

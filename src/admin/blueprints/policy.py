@@ -256,7 +256,7 @@ def review_task(tenant_id, task_id):
 
                 # Log the action (AuditLogger requires adapter_name; the method is
                 # log_operation, not a nonexistent .log — the prior call 500'd the route).
-                reviewer = session_user_email(default="admin")
+                reviewer = session_user_email(default="system")
                 AuditLogger(adapter_name="AdminUI", tenant_id=tenant_id).log_operation(
                     operation="policy_review",
                     principal_name=reviewer,

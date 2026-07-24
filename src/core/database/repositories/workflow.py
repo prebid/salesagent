@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import ColumnExpressionArgument, func, select, update
 from sqlalchemy.orm import Session
 
 from src.core.database.models import Context as DBContext
@@ -407,7 +407,7 @@ class WorkflowRepository:
         step_id: str,
         *,
         status: str,
-        status_guard: Any,
+        status_guard: ColumnExpressionArgument[bool],
         completed_at: datetime | None = None,
         response_data: dict[str, Any] | None = None,
         error_message: str | None = None,

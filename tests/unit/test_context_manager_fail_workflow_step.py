@@ -15,6 +15,7 @@ Validates the two contracts the helper exists to enforce:
    failure.
 """
 
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -43,8 +44,8 @@ def _new_ctx_manager_with_mocked_update() -> tuple[ContextManager, MagicMock]:
 
 
 def _expected_response_data(
-    code: str, message: str, *, recovery: str, field: str | None = None, details: dict | None = None
-) -> dict:
+    code: str, message: str, *, recovery: str, field: str | None = None, details: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Build the two-layer wire-shape ``response_data`` the helper must emit.
 
     Constructs a temporary ``AdCPError`` and calls
@@ -59,7 +60,7 @@ def _expected_response_data(
     return build_two_layer_error_envelope(exc)
 
 
-def _scrubbed_response_data(exc: Exception) -> dict:
+def _scrubbed_response_data(exc: Exception) -> dict[str, Any]:
     """The scrubbed two-layer ``response_data`` the audit helper must emit for an INTERNAL
     error — built through the exact production policy (``safe_adcp_error`` →
     ``build_two_layer_error_envelope``, on the ORIGINAL exception, NOT pre-normalized). If the

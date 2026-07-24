@@ -263,6 +263,50 @@ async def test_unknown_skill_records_boundary_error_exactly_once():
     )
 
 
+@pytest.mark.parametrize(
+    ("identity", "expected_tenant_id", "expected_principal_id"),
+    [
+        pytest.param(None, None, "anonymous", id="no-identity"),
+        pytest.param(
+            PrincipalFactory.make_identity(tenant_id="t_boundary", principal_id="p_boundary", protocol="a2a"),
+            "t_boundary",
+            "p_boundary",
+            id="resolved-identity",
+        ),
+    ],
+)
+def test_boundary_internal_error_uses_one_sentinel_regardless_of_caller(
+    identity, expected_tenant_id, expected_principal_id
+):
+    """``_boundary_internal_error`` — the single home shared by ``on_message_send``,
+    ``on_get_task``, and ``on_cancel_task`` — logs the SAME identity-scope sentinel no
+    matter which of the three callers it serves.
+
+    Regression: ``on_message_send``'s boundary arm used to open-code
+    ``(identity.tenant_id or "unknown") if identity else "unknown"`` while
+    ``on_get_task``/``on_cancel_task`` open-coded
+    ``getattr(identity, "tenant_id", None)`` / ``getattr(..., "principal_id", None) or
+    "anonymous"`` — the SAME unresolved-identity event logged under two different
+    sentinels (``"unknown"``/``"unknown"`` vs ``None``/``"anonymous"``), un-greppable
+    across handlers. All three now delegate to this one function, so there is exactly
+    one sentinel definition to test.
+    """
+    from src.a2a_server.adcp_a2a_server import _boundary_internal_error
+
+    exc = RuntimeError("boom")
+    with patch("src.a2a_server.adcp_a2a_server.record_boundary_error") as mock_record:
+        result = _boundary_internal_error("some_op", "some operation", identity, exc)
+
+    mock_record.assert_called_once_with(
+        "a2a",
+        "some_op",
+        exc,
+        tenant_id=expected_tenant_id,
+        principal_id=expected_principal_id,
+    )
+    assert isinstance(result, InternalError)
+
+
 @pytest.mark.asyncio
 async def test_typed_adcp_error_keeps_its_own_wire_code_on_failed_task():
     """A typed AdCPError escaping to the outer handler keeps its own wire code.

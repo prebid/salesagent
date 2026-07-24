@@ -8,6 +8,7 @@ to ensure our A2A server properly handles the evolving AdCP spec.
 
 import logging
 import uuid
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -394,7 +395,13 @@ class TestA2ASkillInvocation:
     @pytest.mark.asyncio
     async def test_cancel_of_terminal_in_memory_task_is_not_cancelable(self, handler, mock_identity):
         """A2A spec tasks/cancel: the OWNER canceling an already-terminal in-memory task
-        gets TaskNotCancelableError, not a silent overwrite to CANCELED."""
+        gets TaskNotCancelableError, not a silent overwrite to CANCELED.
+
+        The refusal message must name the state in the SAME lowercase vocabulary the
+        durable leg's step-status string uses ("completed"), not the raw protobuf
+        TaskState enum (which renders as its integer value, e.g. "4") — a buyer hitting
+        the same terminal outcome must not see an integer on one cancel leg and a word
+        on the other."""
         task_id = "task_inmem_terminal"
         handler._remember_task(
             task_id,
@@ -403,9 +410,10 @@ class TestA2ASkillInvocation:
         )
         handler._get_auth_token = MagicMock(return_value="owner-token")
         with patch.object(handler, "_resolve_a2a_identity", return_value=mock_identity):
-            with pytest.raises(TaskNotCancelableError):
+            with pytest.raises(TaskNotCancelableError) as exc_info:
                 await handler.on_cancel_task(CancelTaskRequest(id=task_id), context=None)
 
+        assert "current state: completed" in str(exc_info.value)
         assert handler.tasks[task_id].status.state == TaskState.TASK_STATE_COMPLETED
 
     @pytest.mark.asyncio
@@ -638,7 +646,7 @@ class TestA2ASkillInvocation:
         assert refused3 is None, "approval must refuse after a cancel committed, even from a stale read (TOCTOU)"
         assert self._step_status(tenant_id, step3) == "canceled"
 
-    def _step_response_data(self, tenant_id: str, step_id: str) -> dict | None:
+    def _step_response_data(self, tenant_id: str, step_id: str) -> dict[str, Any] | None:
         """Read a step's committed response_data in its own fresh UoW session."""
         from src.core.database.repositories import WorkflowUoW
 
