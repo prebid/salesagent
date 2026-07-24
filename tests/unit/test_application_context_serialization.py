@@ -5,6 +5,7 @@ from typing import Any
 from adcp.types import ContextObject
 
 from src.core.application_context import dump_adcp_response, serialize_application_context
+from src.core.schemas._base import CreateMediaBuyResult, CreateMediaBuySuccess
 from src.core.schemas.product import GetProductsResponse
 
 
@@ -76,3 +77,54 @@ def test_response_dump_restores_lossless_context_and_omits_absence() -> None:
 
     assert dump_adcp_response(with_context)["context"] == raw
     assert "context" not in dump_adcp_response(without_context)
+
+
+def test_deeply_nested_context_on_a_successful_direct_response_survives_intact() -> None:
+    """A SUCCESS path must not crash just because the ERROR path was fixed.
+
+    ``dump_adcp_response`` used to call ``response.model_dump()`` on the whole
+    model BEFORE this module's own safe iterative serialization ever ran —
+    Pydantic's own recursion guard trips walking the deep context field before
+    the safe path is reached, regardless of how deep-context handling was
+    fixed elsewhere. Reproduced directly against ``GetProductsResponse``.
+    """
+    raw = _nested_context(3000)
+    response = GetProductsResponse(products=[], context=ContextObject.model_validate(raw))
+
+    assert dump_adcp_response(response)["context"] == raw
+
+
+def test_mocked_response_still_uses_its_own_configured_model_dump() -> None:
+    """A bare ``MagicMock()`` response must not be silently swapped out.
+
+    Regression guard: ``getattr(mock, "context", None)`` never legitimately
+    returns ``None`` on an unconfigured ``MagicMock`` — every attribute access
+    auto-creates a truthy child mock — so an unguarded "clear context, then
+    model_copy" step took the clear branch, called the mock's own auto-mocked
+    ``model_copy()``, and returned a DIFFERENT child mock whose
+    ``model_dump()`` no longer carried the value the test configured. Many
+    transport-wrapper tests in this codebase stub ``_impl`` with a bare
+    ``MagicMock`` this way.
+    """
+    from unittest.mock import MagicMock
+
+    mock_response = MagicMock()
+    mock_response.model_dump.return_value = {"products": [], "metadata": {}}
+
+    assert dump_adcp_response(mock_response) == {"products": [], "metadata": {}}
+
+
+def test_deeply_nested_context_on_a_flattened_wrapper_response_survives_intact() -> None:
+    """The flattened-wrapper shape needs its own oracle: ``exclude=`` cannot reach it.
+
+    ``CreateMediaBuyResult`` (and its update sibling) flatten their typed
+    ``response`` via a custom ``model_serializer(mode="wrap")`` that calls
+    ``self.response.model_dump()`` directly, without forwarding an externally
+    supplied ``exclude=`` into that nested call — so a fix that only excludes
+    a top-level ``context`` field would silently fail to protect this shape.
+    """
+    raw = _nested_context(3000)
+    success = CreateMediaBuySuccess(media_buy_id="mb-1", packages=[], context=ContextObject.model_validate(raw))
+    result = CreateMediaBuyResult(response=success, status="completed")
+
+    assert dump_adcp_response(result)["context"] == raw
