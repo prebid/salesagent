@@ -13,7 +13,6 @@ Application-level webhooks are configured via:
 """
 
 import asyncio
-import json
 import logging
 import time
 from collections.abc import Mapping
@@ -24,7 +23,7 @@ from uuid import uuid4
 
 import requests
 from a2a.types import Task, TaskStatusUpdateEvent
-from adcp import extract_webhook_result_data, get_adcp_signed_headers_for_webhook
+from adcp import extract_webhook_result_data, sign_legacy_webhook
 from adcp.types import McpWebhookPayload
 from google.protobuf.json_format import MessageToDict
 
@@ -33,6 +32,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.lifecycle import register_shutdown
+from src.core.webhook_body import compact_webhook_body
 
 logger = logging.getLogger(__name__)
 
@@ -182,24 +182,31 @@ class ProtocolWebhookService:
         # lowercase enum values; Pydantic -> model_dump; Mapping -> dict.
         payload_dict: dict[str, Any] = _to_wire_dict(payload)
 
-        # Apply authentication based on schemes
+        # Serialize ONCE at the delivery boundary, before the retry loop. The
+        # AdCP legacy-HMAC rule is byte-equality: the signature covers
+        # ``{timestamp}.{raw_http_body}``, so the exact bytes that are signed
+        # MUST be the exact bytes that go on the wire — signing one
+        # serialization and letting the HTTP client re-serialize another
+        # (the old ``json=payload`` path) invalidates every signature.
         if (
             push_notification_config.authentication_type == "HMAC-SHA256"
             and push_notification_config.authentication_token
         ):
-            # Sign payload with HMAC-SHA256
-            timestamp = str(int(time.time()))
-            get_adcp_signed_headers_for_webhook(
-                headers, push_notification_config.authentication_token, timestamp, payload_dict
+            signed_headers, body_bytes = sign_legacy_webhook(
+                push_notification_config.authentication_token, payload_dict
             )
-
-        elif push_notification_config.authentication_type == "Bearer" and push_notification_config.authentication_token:
-            # Use Bearer token authentication
-            headers["Authorization"] = f"Bearer {push_notification_config.authentication_token}"
+            headers.update(signed_headers)
+        else:
+            body_bytes = compact_webhook_body(payload_dict)
+            if (
+                push_notification_config.authentication_type == "Bearer"
+                and push_notification_config.authentication_token
+            ):
+                headers["Authorization"] = f"Bearer {push_notification_config.authentication_token}"
 
         # Send notification with retry logic and logging
         return await self._send_with_retry_and_logging(
-            url=url, payload=payload_dict, headers=headers, metadata=metadata
+            url=url, payload=payload_dict, body_bytes=body_bytes, headers=headers, metadata=metadata
         )
 
     @staticmethod
@@ -251,13 +258,18 @@ class ProtocolWebhookService:
         self,
         url: str,
         payload: dict[str, Any],
+        body_bytes: bytes,
         headers: dict,
         metadata: dict[str, Any],
         max_attempts: int = 3,
     ) -> bool:
-        """Send webhook with exponential backoff retry logic, logging, and audit trail."""
-        # Calculate payload size for metrics
-        payload_size_bytes = len(json.dumps(payload).encode("utf-8"))
+        """Send webhook with exponential backoff retry logic, logging, and audit trail.
+
+        ``payload`` is used only for metadata extraction (task ids, result
+        data); ``body_bytes`` is the single serialization that was signed and
+        is what actually goes on the wire.
+        """
+        payload_size_bytes = len(body_bytes)
 
         task_type = metadata["task_type"] if "task_type" in metadata else None
         tenant_id = metadata["tenant_id"] if "tenant_id" in metadata else None
@@ -293,7 +305,8 @@ class ProtocolWebhookService:
                 logger.info(f"Sending webhook for task {task_id} to {url} (attempt {attempt + 1}/{max_attempts})")
 
                 def _post() -> requests.Response:
-                    return self._session.post(url, json=payload, headers=headers, timeout=10.0)
+                    # data= (not json=) so the signed bytes ARE the sent bytes
+                    return self._session.post(url, data=body_bytes, headers=headers, timeout=10.0)
 
                 response = await asyncio.to_thread(_post)
                 response.raise_for_status()

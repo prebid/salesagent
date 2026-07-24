@@ -1,14 +1,22 @@
 """Webhook signature verification utilities for AdCP webhook receivers.
 
-This module provides utilities for webhook receivers to verify HMAC-SHA256 signatures
-and validate timestamps to prevent replay attacks per AdCP webhook spec.
+This module provides utilities for webhook receivers to verify HMAC-SHA256
+signatures and validate timestamps to prevent replay attacks per the AdCP
+webhook spec.
+
+The signed message is ``{timestamp}.{raw_http_body}`` — the RAW bytes exactly
+as received. Verifiers must never re-parse and re-serialize the JSON before
+verifying: key order and separators are not canonicalized by the spec, so a
+re-serialization can (and in practice does) differ from the transmitted bytes
+and reject valid signatures (#1441).
 """
 
 import hashlib
 import hmac
-import json
 from datetime import UTC, datetime
 from typing import Any
+
+from src.core.webhook_body import compact_webhook_body
 
 
 class WebhookVerificationError(Exception):
@@ -35,16 +43,22 @@ class WebhookVerifier:
 
     def verify_webhook(
         self,
-        payload: dict[str, Any] | str,
+        payload: str | bytes | dict[str, Any],
         signature: str,
         timestamp: str,
     ) -> bool:
         """Verify webhook signature and timestamp.
 
         Args:
-            payload: Webhook payload (dict or JSON string)
-            signature: HMAC signature from X-ADCP-Signature header
-            timestamp: ISO format timestamp from X-ADCP-Timestamp header
+            payload: The RAW request body (str or bytes) exactly as received.
+                Passing a dict is supported only as a deprecated convenience —
+                it re-serializes compactly (the sender's canonical form) and
+                will reject any payload whose wire bytes differ, which is
+                exactly why raw-body verification is the contract.
+            signature: HMAC signature from the X-AdCP-Signature header
+                (``sha256=`` prefix accepted)
+            timestamp: Timestamp from the X-AdCP-Timestamp header — unix
+                seconds per spec; a non-numeric timestamp is rejected
 
         Returns:
             True if webhook is valid
@@ -64,19 +78,20 @@ class WebhookVerifier:
         """Verify timestamp is recent (within replay window).
 
         Args:
-            timestamp: ISO format timestamp
+            timestamp: Unix seconds, per spec
 
         Raises:
             WebhookVerificationError: If timestamp is too old or invalid
         """
+        # Unix seconds only ("1720000000"). The ISO-8601 fallback that used to
+        # live here accepted a timestamp the spec says to reject, and made this
+        # verifier disagree with WebhookAuthenticator (int() only), so the two
+        # in-repo references graded the same webhook differently. Every sender
+        # in this repo emits unix seconds, and nothing depended on the fallback.
         try:
-            webhook_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        except ValueError as e:
-            raise WebhookVerificationError(f"Invalid timestamp format: {e}")
-
-        # Ensure timezone-aware
-        if webhook_time.tzinfo is None:
-            raise WebhookVerificationError("Timestamp must be timezone-aware (UTC)")
+            webhook_time = datetime.fromtimestamp(int(timestamp), tz=UTC)
+        except (ValueError, TypeError, OverflowError, OSError) as e:
+            raise WebhookVerificationError(f"Invalid timestamp format, expected unix seconds: {e}")
 
         # Check age
         age_seconds = (datetime.now(UTC) - webhook_time).total_seconds()
@@ -91,27 +106,38 @@ class WebhookVerifier:
 
     def _verify_signature(
         self,
-        payload: dict[str, Any] | str,
+        payload: str | bytes | dict[str, Any],
         provided_signature: str,
         timestamp: str,
     ):
-        """Verify HMAC-SHA256 signature.
+        """Verify HMAC-SHA256 over ``{timestamp}.{raw_body}``.
 
         Args:
-            payload: Webhook payload
-            provided_signature: Signature from header
-            timestamp: ISO format timestamp
+            payload: Raw request body (str/bytes); dict accepted as a
+                deprecated convenience (compact re-serialization)
+            provided_signature: Signature from header (``sha256=`` prefix ok)
+            timestamp: Timestamp header value, exactly as received
 
         Raises:
             WebhookVerificationError: If signature doesn't match
         """
-        # Convert payload to JSON string if needed
-        if isinstance(payload, dict):
-            payload_str = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        if isinstance(payload, bytes):
+            payload_str = payload.decode("utf-8")
+        elif isinstance(payload, dict):
+            # Deprecated dict path: reconstruct the sender's canonical compact
+            # form through the same helper the senders use, so the two cannot
+            # drift. Only correct when the sender serialized compactly
+            # (insertion order, compact separators) — raw-body input is the
+            # reliable contract.
+            payload_str = compact_webhook_body(payload).decode("utf-8")
         else:
             payload_str = payload
 
-        # Create signature input: timestamp + json payload
+        # Accept the sha256= prefix the spec's header format carries
+        if provided_signature.startswith("sha256="):
+            provided_signature = provided_signature[7:]
+
+        # Create signature input: timestamp + raw body
         message = f"{timestamp}.{payload_str}"
 
         # Generate expected signature
@@ -155,15 +181,16 @@ class WebhookVerifier:
 
 def verify_adcp_webhook(
     webhook_secret: str,
-    payload: dict[str, Any],
+    payload: str | bytes | dict[str, Any],
     request_headers: dict[str, str],
     replay_window_seconds: int = 300,
 ) -> bool:
-    """Convenience function to verify AdCP webhook in one call.
+    """Convenience function to verify an AdCP webhook in one call.
 
     Args:
         webhook_secret: Shared secret for HMAC verification
-        payload: Webhook payload dictionary
+        payload: RAW request body (str/bytes) exactly as received — preferred.
+            A dict is accepted only as a deprecated convenience.
         request_headers: HTTP request headers
         replay_window_seconds: Maximum age of webhook (default: 300s = 5 min)
 
@@ -177,7 +204,7 @@ def verify_adcp_webhook(
         try:
             verify_adcp_webhook(
                 webhook_secret=os.environ["WEBHOOK_SECRET"],
-                payload=request.json(),
+                payload=request.body,          # RAW bytes, not request.json()
                 request_headers=dict(request.headers)
             )
             # Process webhook

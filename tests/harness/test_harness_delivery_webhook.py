@@ -86,8 +86,10 @@ class TestWebhookEnvContract:
 
             assert success is True
             # Verify POST was called with the empty dict, not the default
+            import json as json_mod
+
             call_kwargs = env.mock["post"].call_args.kwargs
-            assert call_kwargs["json"] == {}
+            assert json_mod.loads(call_kwargs["data"]) == {}
 
     def test_signing_secret_flows_through(self):
         """Signing secret parameter reaches the delivery function."""
@@ -97,4 +99,5 @@ class TestWebhookEnvContract:
             assert success is True
             # Verify POST was called with signature headers
             call_kwargs = env.mock["post"].call_args.kwargs
-            assert "X-Webhook-Signature" in call_kwargs["headers"]
+            headers_lower = {k.lower(): v for k, v in call_kwargs["headers"].items()}
+            assert "x-adcp-signature" in headers_lower

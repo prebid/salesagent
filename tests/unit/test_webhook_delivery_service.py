@@ -3,6 +3,7 @@
 Tests the thread-safe webhook delivery service that's shared by all adapters.
 """
 
+import json
 import threading
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
@@ -10,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.services.webhook_delivery_service import CircuitState, WebhookDeliveryService
+from tests.helpers.webhook_mocks import make_webhook_config, mock_httpx_post, serve_webhook_configs
 
 
 @pytest.fixture
@@ -95,19 +97,8 @@ def test_adcp_payload_structure(webhook_service, mock_db_session):
 
     # Mock httpx to capture the payload
     with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
-
-        # Mock webhook config
-        mock_config = MagicMock()
-        mock_config.url = "https://example.com/webhook"
-        mock_config.authentication_type = None
-        mock_config.validation_token = None
-        mock_config.webhook_secret = None  # No HMAC for this test
-
-        # Update mock to return config for SQLAlchemy 2.0
-        mock_db_session.scalars.return_value.all.return_value = [mock_config]
+        mock_httpx_post(mock_client)
+        serve_webhook_configs(mock_db_session, make_webhook_config())  # unsigned: no HMAC for this test
 
         # Send webhook
         webhook_service.send_delivery_webhook(
@@ -132,7 +123,7 @@ def test_adcp_payload_structure(webhook_service, mock_db_session):
         # Version should match what's reported by the adcp library
         from adcp import get_adcp_spec_version
 
-        payload = call_args.kwargs["json"]
+        payload = json.loads(call_args.kwargs["content"])  # wire bytes, not a re-serializable dict
         assert payload["adcp_version"] == get_adcp_spec_version()
         assert payload["notification_type"] == "scheduled"
         assert payload["is_adjusted"] is False  # NEW in PR #86
@@ -158,16 +149,8 @@ def test_final_notification_type(webhook_service, mock_db_session):
     start_time = datetime.now(UTC)
 
     with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
-
-        mock_config = MagicMock()
-        mock_config.url = "https://example.com/webhook"
-        mock_config.authentication_type = None
-        mock_config.validation_token = None
-        mock_config.webhook_secret = None
-        mock_db_session.scalars.return_value.all.return_value = [mock_config]
+        mock_httpx_post(mock_client)
+        serve_webhook_configs(mock_db_session, make_webhook_config())
 
         # Send final webhook
         webhook_service.send_delivery_webhook(
@@ -183,7 +166,7 @@ def test_final_notification_type(webhook_service, mock_db_session):
         )
 
         # Check notification_type (direct payload structure in PR #86)
-        payload = mock_client.return_value.__enter__.return_value.post.call_args.kwargs["json"]
+        payload = json.loads(mock_client.return_value.__enter__.return_value.post.call_args.kwargs["content"])
         assert payload["notification_type"] == "final"
         assert payload["is_adjusted"] is False
         assert "next_expected_at" not in payload
@@ -237,12 +220,7 @@ def test_failure_tracking(mock_sleep, webhook_service, mock_db_session):
             mock_response_fail,  # Second webhook attempt 3 fails (retry)
         ]
 
-        mock_config = MagicMock()
-        mock_config.url = "https://example.com/webhook"
-        mock_config.authentication_type = None
-        mock_config.validation_token = None
-        mock_config.webhook_secret = None
-        mock_db_session.scalars.return_value.all.return_value = [mock_config]
+        serve_webhook_configs(mock_db_session, make_webhook_config())
 
         # First webhook - success
         result1 = webhook_service.send_delivery_webhook(
@@ -286,18 +264,15 @@ def test_authentication_headers(webhook_service, mock_db_session):
     start_time = datetime.now(UTC)
 
     with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
-
-        # Test bearer auth
-        mock_config = MagicMock()
-        mock_config.url = "https://example.com/webhook"
-        mock_config.authentication_type = "bearer"
-        mock_config.authentication_token = "secret_token"
-        mock_config.validation_token = "validation_token"
-        mock_config.webhook_secret = None
-        mock_db_session.scalars.return_value.all.return_value = [mock_config]
+        mock_httpx_post(mock_client)
+        serve_webhook_configs(
+            mock_db_session,
+            make_webhook_config(
+                authentication_type="bearer",
+                authentication_token="secret_token",
+                validation_token="validation_token",
+            ),
+        )
 
         webhook_service.send_delivery_webhook(
             media_buy_id=media_buy_id,
@@ -309,11 +284,19 @@ def test_authentication_headers(webhook_service, mock_db_session):
             spend=100.0,
         )
 
-        # Verify headers (PR #86 added X-ADCP-Timestamp, no longer uses X-Webhook-Token)
+        # Verify headers (no longer uses X-Webhook-Token)
         call_args = mock_client.return_value.__enter__.return_value.post.call_args
         headers = call_args.kwargs["headers"]
         assert headers["Authorization"] == "Bearer secret_token"
-        assert "X-ADCP-Timestamp" in headers  # NEW in PR #86
+
+        # This branch is UNSIGNED (webhook_secret is None), and replay prevention
+        # is a property of the signature — an unsigned timestamp is unverifiable
+        # decoration a receiver cannot act on. It also spelled the header
+        # X-ADCP-Timestamp, diverging from the SDK's X-AdCP-Timestamp emitted on
+        # the signed branch, and neither of the other two senders emits one.
+        # Asserted absent (not merely unasserted) so it cannot quietly return.
+        assert "X-ADCP-Timestamp" not in headers
+        assert "X-AdCP-Timestamp" not in headers
 
 
 def test_no_webhooks_configured(webhook_service, mock_db_session):

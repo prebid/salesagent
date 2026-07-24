@@ -11,6 +11,8 @@ Each test targets exactly one obligation ID and follows the 6 hard rules.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from src.services.webhook_delivery_service import (
@@ -278,24 +280,25 @@ class TestSendWebhookEnhancedHmacSigning:
             post_mock = env.mock["client"].return_value.__enter__.return_value.post
             post_mock.assert_called_once()
             sent_headers = post_mock.call_args.kwargs["headers"]
-            assert "X-ADCP-Signature" in sent_headers
-            assert len(sent_headers["X-ADCP-Signature"]) > 0
+            # HTTP headers are case-insensitive on the wire; the adcp signer
+            # emits X-AdCP-* casing.
+            headers_lower = {k.lower(): v for k, v in sent_headers.items()}
+            assert "x-adcp-signature" in headers_lower
+            assert headers_lower["x-adcp-signature"].startswith("sha256=")
+            assert headers_lower["x-adcp-timestamp"].isdigit()  # unix seconds per spec
 
     def test_hmac_signature_valid_reproduces_from_payload(self, integration_db):
         """The HMAC signature can be reproduced using the same secret and payload.
 
         Covers: UC-004-EXT-G-06
         """
-        import hashlib
-        import hmac
-        import json
-
         from tests.factories import (
             PrincipalFactory,
             PushNotificationConfigFactory,
             TenantFactory,
         )
         from tests.harness import CircuitBreakerEnv
+        from tests.helpers.webhook_hmac import assert_hmac_over_transmitted_bytes
 
         secret = "b" * 32
         payload = {"media_buy_id": "mb_001", "impressions": 5000}
@@ -320,16 +323,20 @@ class TestSendWebhookEnhancedHmacSigning:
             )
 
             post_mock = env.mock["client"].return_value.__enter__.return_value.post
-            sent_headers = post_mock.call_args.kwargs["headers"]
-            sent_signature = sent_headers["X-ADCP-Signature"]
-            sent_timestamp = sent_headers["X-ADCP-Timestamp"]
 
-            # Reproduce the signature
-            payload_str = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-            message = f"{sent_timestamp}.{payload_str}"
-            expected = hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
-
-            assert sent_signature == expected
+            # Reproduce the signature over the LITERAL transmitted bytes —
+            # the AdCP byte-equality contract. (The old version of this test
+            # re-serialized the payload dict to recompute, which is exactly
+            # the receiver bug #1441 fixes: it only passed because sender and
+            # test shared the same wrong re-serialization.) Graded at the
+            # transport mock, so no receiver cross-check; the real-socket leg
+            # for this sender is test_webhook_wire_signature.py.
+            assert_hmac_over_transmitted_bytes(
+                secret,
+                post_mock.call_args.kwargs["content"],
+                post_mock.call_args.kwargs["headers"],
+                cross_check_receivers=False,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -432,7 +439,7 @@ class TestSendWebhookEnhancedHappyPath:
             post_mock = env.mock["client"].return_value.__enter__.return_value.post
             post_mock.assert_called_once()
             assert post_mock.call_args.args[0] == "https://happy.example.com/webhook"
-            assert post_mock.call_args.kwargs["json"] == payload
+            assert json.loads(post_mock.call_args.kwargs["content"]) == payload
 
     def test_no_configs_returns_false(self, integration_db):
         """When no PushNotificationConfig exists, _send_webhook_enhanced returns False.
@@ -682,7 +689,7 @@ class TestIsAdjustedNotificationType:
 
             assert result is True
             post_mock = env.mock["client"].return_value.__enter__.return_value.post
-            sent_payload = post_mock.call_args.kwargs["json"]
+            sent_payload = json.loads(post_mock.call_args.kwargs["content"])
             assert sent_payload["notification_type"] == "adjusted"
             assert sent_payload["is_adjusted"] is True
 

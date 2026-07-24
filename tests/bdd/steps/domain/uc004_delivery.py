@@ -21,6 +21,7 @@ from pytest_bdd import given, parsers, then, when
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
+from tests.helpers.webhook_hmac import assert_hmac_over_transmitted_bytes
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -39,12 +40,40 @@ def _parse_json_list(text: str) -> list[str]:
     return json.loads(text)
 
 
+def _parse_call_payload(call) -> dict:
+    """Parse one mocked POST call's payload from its wire bytes (or legacy json=)."""
+    kwargs = call[1]
+    payload = kwargs.get("json")
+    if payload is None:
+        raw = kwargs.get("data") or kwargs.get("content")
+        if raw is None:
+            return {}
+        payload = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+    return payload
+
+
+def _get_last_webhook_body_bytes(ctx: dict) -> bytes:
+    """Extract the RAW body bytes from the most recent webhook POST call.
+
+    Senders POST pre-serialized bytes (``data=``/``content=``) so the signed
+    bytes are the transmitted bytes — these are what HMAC assertions must use.
+    """
+    mock_post = ctx["env"].mock["post"]
+    assert mock_post.called, "No webhook POST was made"
+    call_kwargs = mock_post.call_args_list[-1][1]
+    raw = call_kwargs.get("data") or call_kwargs.get("content")
+    assert raw is not None, f"Webhook POST had no body bytes: {call_kwargs}"
+    return raw.encode("utf-8") if isinstance(raw, str) else bytes(raw)
+
+
 def _get_last_webhook_payload(ctx: dict) -> dict[str, Any]:
-    """Extract the JSON payload from the most recent webhook POST call."""
+    """Extract the JSON payload (parsed) from the most recent webhook POST call."""
     mock_post = ctx["env"].mock["post"]
     assert mock_post.called, "No webhook POST was made"
     call_kwargs = mock_post.call_args_list[-1][1]  # kwargs of last call
-    payload = call_kwargs.get("json") or call_kwargs.get("data") or {}
+    payload = call_kwargs.get("json")
+    if payload is None:
+        payload = json.loads(_get_last_webhook_body_bytes(ctx))
     assert payload, f"Webhook POST had no JSON payload: {call_kwargs}"
     return payload
 
@@ -1612,7 +1641,7 @@ def then_sequence_ascending(ctx: dict) -> None:
     """Assert sequence numbers are strictly increasing across consecutive POST calls."""
     calls = ctx["env"].mock["post"].call_args_list
     assert len(calls) >= 2, f"Expected at least 2 webhook POSTs for sequence check, got {len(calls)}"
-    seq_nums = [call[1].get("json", {}).get("sequence_number") for call in calls]
+    seq_nums = [_parse_call_payload(call).get("sequence_number") for call in calls]
     for i in range(1, len(seq_nums)):
         assert seq_nums[i] is not None, f"POST call {i} payload missing sequence_number"
         assert seq_nums[i] > seq_nums[i - 1], (
@@ -1625,7 +1654,7 @@ def then_first_sequence(ctx: dict) -> None:
     """Assert first webhook POST has sequence_number >= 1."""
     calls = ctx["env"].mock["post"].call_args_list
     assert calls, "No webhook POSTs were made"
-    first_payload = calls[0][1].get("json", {})
+    first_payload = _parse_call_payload(calls[0])
     seq = first_payload.get("sequence_number")
     assert seq is not None, f"First webhook POST payload missing sequence_number: {list(first_payload.keys())}"
     assert seq >= 1, f"Expected sequence_number >= 1, got {seq}"
@@ -1901,48 +1930,55 @@ def then_config_accepted(ctx: dict) -> None:
 
 @then(parsers.parse('the request should include header "{header}" with hex-encoded HMAC'))
 def then_hmac_header(ctx: dict, header: str) -> None:
-    """Assert HMAC header is present and contains a hex-encoded signature."""
-    headers = _get_last_webhook_headers(ctx)
-    assert header in headers, f"Expected header {header!r} but got: {list(headers.keys())}"
-    value = headers[header]
-    # Value may be bare hex or prefixed with "sha256="
+    """Assert HMAC header is present (case-insensitive) with a hex signature."""
+    headers = {k.lower(): v for k, v in _get_last_webhook_headers(ctx).items()}
+    value = headers.get(header.lower())
+    assert value is not None, f"Expected header {header!r} but got: {list(_get_last_webhook_headers(ctx))}"
+    # The spec header format is ``sha256=<hex>``. ``removeprefix`` alone (the
+    # earlier version) silently no-ops on a bare-hex value, so this scenario
+    # accepted a signature the three helper-based suites reject — the BDD
+    # layer graded the same contract more loosely than the unit layer.
+    assert value.startswith("sha256="), f"spec signature header is sha256=-prefixed, got {value!r}"
     stripped = value.removeprefix("sha256=")
-    assert re.match(r"^[0-9a-f]{1,}$", stripped), f"Header {header!r} is not a hex-encoded HMAC: {value!r}"
+    # {64}, not {1,}: HMAC-SHA256 is a fixed-width 64-char hex digest, so a
+    # truncated or malformed signature must not satisfy this step.
+    assert re.match(r"^[0-9a-f]{64}$", stripped), f"Header {header!r} is not a hex-encoded HMAC: {value!r}"
 
 
-@then(parsers.parse('the request should include header "{header}" with ISO timestamp'))
+@then(parsers.parse('the request should include header "{header}" with unix timestamp'))
 def then_timestamp_header(ctx: dict, header: str) -> None:
-    """Assert timestamp header is present and contains a valid ISO 8601 datetime."""
-    from datetime import datetime as _dt
+    """Assert timestamp header is present and is unix seconds (AdCP spec).
 
-    headers = _get_last_webhook_headers(ctx)
-    assert header in headers, f"Expected header {header!r} but got: {list(headers.keys())}"
-    value = headers[header]
-    try:
-        _dt.fromisoformat(value)
-    except (ValueError, TypeError) as exc:
-        raise AssertionError(f"Header {header!r} is not a valid ISO 8601 timestamp: {value!r}") from exc
+    The legacy-HMAC signed message is ``{unix_timestamp}.{raw_body}``, so the
+    header carries unix seconds — the earlier ISO form never matched a
+    spec-compliant verifier (#1441).
+    """
+    headers = {k.lower(): v for k, v in _get_last_webhook_headers(ctx).items()}
+    value = headers.get(header.lower())
+    assert value is not None, f"Expected header {header!r} but got: {list(_get_last_webhook_headers(ctx))}"
+    assert value.isdigit(), f"Header {header!r} is not a unix-seconds timestamp: {value!r}"
 
 
 @then('the HMAC should be computed over "timestamp.payload" concatenation')
 def then_hmac_computation(ctx: dict) -> None:
-    """Assert HMAC signature is reproduced by signing timestamp.payload with the secret."""
-    import hashlib
-    import hmac as hmac_lib
-    import json as json_lib
+    """Assert the HMAC reproduces over the RAW transmitted bytes.
 
-    headers = _get_last_webhook_headers(ctx)
-    payload = _get_last_webhook_payload(ctx)
-    timestamp = headers.get("X-ADCP-Timestamp") or headers.get("X-Webhook-Timestamp", "")
-    raw_sig = headers.get("X-ADCP-Signature") or headers.get("X-Webhook-Signature", "")
-    signature = raw_sig.removeprefix("sha256=")
-    assert signature, "Expected HMAC signature header to be present and non-empty"
+    Byte-equality is the AdCP contract: the signature covers
+    ``{timestamp}.{raw_http_body}``. Recomputing over a re-serialization of
+    the parsed payload (the old version of this step) only ever passed
+    because sender and step shared the same wrong re-serialization (#1441).
+    """
     signing_secret: str = ctx.get("webhook_secret", "")
     assert signing_secret, "Test setup must store webhook_secret in ctx['webhook_secret']"
-    payload_str = json_lib.dumps(payload, sort_keys=True, separators=(",", ":"))
-    message = f"{timestamp}.{payload_str}".encode()
-    expected = hmac_lib.new(signing_secret.encode(), message, hashlib.sha256).hexdigest()
-    assert signature == expected, f"HMAC signature mismatch: got {signature!r}, expected {expected!r}"
+    # Graded by the same helper the unit and integration suites use, so the BDD
+    # layer cannot drift looser than they are. Transport is mocked here, so the
+    # receiver cross-check has nothing real to read.
+    assert_hmac_over_transmitted_bytes(
+        signing_secret,
+        _get_last_webhook_body_bytes(ctx),
+        _get_last_webhook_headers(ctx),
+        cross_check_receivers=False,
+    )
 
 
 @then(parsers.parse('the request should include header "{header}" with the bearer token'))
@@ -2078,7 +2114,7 @@ def then_skip_no_webhook(ctx: dict, mb_id: str) -> None:
     post_mock = env.mock["post"]
     # Collect all media_buy_ids that received webhook POSTs
     posted_mb_ids = [
-        call[1].get("json", {}).get("media_buy_id") for call in post_mock.call_args_list if call[1].get("json")
+        _parse_call_payload(call).get("media_buy_id") for call in post_mock.call_args_list if _parse_call_payload(call)
     ]
     assert real_id not in posted_mb_ids, (
         f"Webhook POST was made for '{real_id}' but it should have been skipped "
@@ -3305,7 +3341,7 @@ def _get_webhook_payload(ctx: dict) -> dict:
     env = ctx["env"]
     call_args = env.mock["post"].call_args
     assert call_args is not None, "No POST call recorded"
-    return call_args.kwargs.get("json") or call_args[1].get("json", {})
+    return _parse_call_payload(call_args)
 
 
 _DEFAULT_PLACEMENT_DATA: list[dict[str, Any]] = [
