@@ -793,6 +793,19 @@ def runtime_user_directives(lines: Iterable[str]) -> list[str]:
 _PRE_COMMIT_CONFIG_PATH = Path(".pre-commit-config.yaml")
 
 
+def load_yaml_mapping(path: Path) -> dict[str, Any]:
+    """Read a YAML file and require a top-level mapping (shared guard preamble)."""
+    assert path.is_file(), f"missing {path}"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert isinstance(data, dict), f"{path} must parse to a mapping"
+    return data
+
+
+def ipr_agreement_workflow_path(repo: Path | None = None) -> Path:
+    """Canonical path to ``.github/workflows/ipr-agreement.yml``."""
+    return (repo or repo_root()) / ".github" / "workflows" / "ipr-agreement.yml"
+
+
 def load_pre_commit_config(path: Path | None = None, repo: Path | None = None) -> dict[str, Any]:
     """Load ``.pre-commit-config.yaml`` anchored to *repo* (default: repo root)."""
     root = repo or repo_root()

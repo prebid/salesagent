@@ -27,7 +27,28 @@ with write access to the base repo.
 Current approved uses:
 - `.github/workflows/pr-title-check.yml` — reads `github.event.pull_request.title`, writes a
   PR status check. No code checkout.
-- `.github/workflows/ipr-agreement.yml` — reads PR author info, posts a comment. No code checkout.
+
+**IPR Agreement is no longer a `pull_request_target` consumer:**
+- Path A (verify) uses `pull_request` with a read-only check against
+  `signatures/ipr-signatures.json` via `scripts/ci/ipr_verify.py` (no PR-comments
+  API). Tip checkout under `pull_request` is allowed — ADR-003 forbids PR-head
+  checkout only under `pull_request_target`. Tip workflow durability requires
+  `pull_request` — PRT always loads the base-branch workflow copy.
+- Path B (sign) uses `issue_comment` → CLA Assistant (write) after API health wait,
+  then the same verify module and re-triggers failed `ipr-check` jobs on the PR
+  head SHA. Path B checkouts the default branch for scripts (never PR head).
+- Residual trust note: because verify YAML comes from the PR tip, a hostile tip
+  could gut the job while keeping the check name. Accepted for now for the
+  standalone `IPR Agreement / ipr-check` workflow check.
+- **Merge-gate confirmation (2026-07-23 / #1669):** the `main` repository
+  ruleset `required_status_checks` contexts are exactly `E2E Tests`,
+  `Unit Tests`, and `Summary` — **not** `ipr-check` / `IPR Agreement`. A fresh
+  unsigned PR is therefore **not** blocked by the IPR workflow job alone.
+  Mitigation: CI job `ipr-gate` (`CI / IPR Gate`) runs the same
+  `scripts/ci/ipr_verify.py` verify on `pull_request` and is listed in
+  `summary.needs`, so an unsigned head fails the required `Summary` check.
+  Tip-YAML residual remains (hostile tip can gut `ipr-gate` the same way);
+  org owners may additionally add `ipr-check` to the ruleset later.
 
 Future `pull_request_target` additions require a separate ADR entry and @chrishuie review.
 
@@ -40,7 +61,8 @@ Future `pull_request_target` additions require a separate ADR entry and @chrishu
 **Bad / tradeoffs:**
 - Workflow authors must consciously opt into the trust boundary rule.
   Enforced by zizmor's `pull-request-target` finding and the `.github/zizmor.yml` allowlist
-  (which only allows the two workflows above).
+  (currently `pr-title-check.yml` only for PRT; IPR verify moved off PRT).
+- IPR tip-YAML residual (hostile gut of `ipr-check`) — see approved-uses note above.
 
 ## Alternatives considered
 

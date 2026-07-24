@@ -15,12 +15,12 @@ rules:
   # ─────────────────────────────────────────────────────────────────────────────
   # dangerous-triggers — pull_request_target permitted ONLY for metadata-only
   # workflows that do NOT check out PR source code (ADR-003).
-  # ipr-agreement.yml: reads PR author/comment, writes CLA status — no checkout.
   # pr-title-check.yml: reads PR title metadata only — no checkout.
+  # ipr-agreement.yml: verify uses pull_request (read-only); sign uses
+  # issue_comment only — no pull_request_target (removed).
   # ─────────────────────────────────────────────────────────────────────────────
   dangerous-triggers:
     ignore:
-      - ipr-agreement.yml
       - pr-title-check.yml
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -36,9 +36,8 @@ rules:
   # ─────────────────────────────────────────────────────────────────────────────
   # excessive-permissions:
   #
-  # ipr-agreement.yml: requires contents/pull-requests/statuses: write for the
-  # CLA-assistant action to commit signatures and post status checks.
-  # Minimum required permissions; no narrowing possible without breaking the action.
+  # ipr-agreement.yml: ipr-sign job needs contents/pull-requests/statuses: write
+  # for CLA-assistant to commit signatures (verify job is read-only).
   #
   # release-please.yml: job-level permissions only (workflow default is contents +
   # pull-requests). No workflow-level packages: write — excessive-permissions no

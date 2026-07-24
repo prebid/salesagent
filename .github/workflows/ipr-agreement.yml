@@ -1,32 +1,140 @@
 name: IPR Agreement
 
+# Two paths (durability under GitHub API Unicorn/HTML 503s):
+#   A) pull_request → read-only check against signatures/ipr-signatures.json
+#      (no PR-comments API; that is what CLA Assistant was dying on).
+#      Uses pull_request (not pull_request_target) so the tip workflow file runs
+#      on synchronize — PRT always loads the base-branch copy. Verify checkouts
+#      the PR tip (safe under pull_request; ADR-003 forbids PR-head checkout only
+#      under PRT) and runs scripts/ci/ipr_verify.py.
+#   B) issue_comment sign → wait for API health, CLA Assistant, then the same
+#      read-only verify + re-run failed ipr-check on the PR head SHA so the
+#      Actions check can turn green without a new push. Path B loads the
+#      default-branch workflow copy and checkouts that branch for scripts
+#      (never PR head).
+#
+# Bot allowlist SSOT: IPR_BOT_ALLOWLIST (env) — consumed by ipr_verify.py and
+# CLA Assistant `allowlist` (comma-separated globs).
+
 on:
   issue_comment:
     types: [created]
-  pull_request_target:
-    types: [opened, closed, synchronize]
+  pull_request:
+    types: [opened, synchronize, reopened]
 
-permissions:
-  actions: write
-  contents: write
-  pull-requests: write
-  statuses: write
+permissions: {}
+
+# Serialize Path A/B work per PR so comment storms cannot race the
+# ipr-signatures branch commit (ChrisHuie #1669 NIT).
+concurrency:
+  group: ipr-agreement-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+env:
+  # Single canonical bot allowlist (glob syntax). Contract for both consumers
+  # (ipr_verify.py and CLA Assistant `allowlist`):
+  #   - lowercase tokens (matching is case-insensitive in verify; CLA may differ)
+  #   - trailing-* prefix globs only (e.g. bot*, not *bot); verify expands * → .*
+  #     with ^…$ anchors so exact entries cannot suffix-overmatch
+  # Keep CLA Assistant and ipr_verify in lockstep — do not fork a second literal.
+  # Authors whose commit email is not linked to a GitHub account (null login) are
+  # not required to sign — login-based CLA matching; fail-safe because the PR
+  # author login is always included in the author set.
+  IPR_BOT_ALLOWLIST: "bot*,dependabot*,renovate*,github-actions*"
 
 jobs:
+  # ── A: verify already-signed contributors (push / open) ───────────────────
   ipr-check:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
-      - name: CLA Assistant
-        if: (github.event.comment.body == 'I have read the IPR Policy' || github.event_name == 'pull_request_target')
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+          disable-sudo-and-containers: true
+      # pull_request (not PRT): tip checkout is the trust model; ADR-003 only
+      # forbids PR-head checkout under pull_request_target.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Verify IPR signatures (read-only, with retries)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          IPR_BOT_ALLOWLIST: ${{ env.IPR_BOT_ALLOWLIST }}
+        run: |
+          set -euo pipefail
+          # shellcheck source=scripts/ci/ipr_gh_retry.sh
+          . scripts/ci/ipr_gh_retry.sh
+          ipr_verify_pr "${REPO}" "${PR_NUMBER}" "${PR_AUTHOR}"
+
+  # ── B: record a new signature (comment path only) ─────────────────────────
+  # Keep the standard CLA model: any commenter with the exact phrase may sign.
+  # Do NOT gate on author_association — FIRST_TIMER / NONE fork contributors
+  # must be able to sign; exposure is runner-minutes only (Path B checkouts
+  # default branch and never executes PR-head code; CLA records real identity).
+  ipr-sign:
+    if: >-
+      github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
+      && github.event.comment.body == 'I have read the IPR Policy'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+      statuses: write
+    steps:
+      - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
+        with:
+          egress-policy: audit
+          disable-sudo-and-containers: true
+      - name: Wait for GitHub API (retry on Unicorn/503)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Cannot reuse gh_retry_to: the probe needs the raw HTTP status that
+          # `gh api` hides; same attempt*15 backoff and max=5 as ipr_gh_retry.sh.
+          attempt=1
+          max=5
+          while true; do
+            code="$(curl -sS -o /tmp/gh_api_body -w "%{http_code}" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/rate_limit" || true)"
+            if [ "${code}" = "200" ]; then
+              if head -c 15 /tmp/gh_api_body | grep -q '{'; then
+                echo "GitHub API healthy (HTTP ${code})"
+                exit 0
+              fi
+            fi
+            if [ "${attempt}" -ge "${max}" ]; then
+              echo "GitHub API still unhealthy after ${max} attempts (last HTTP ${code})" >&2
+              head -c 200 /tmp/gh_api_body >&2 || true
+              exit 1
+            fi
+            sleep_s=$((attempt * 15))
+            echo "API not ready (HTTP ${code}); retry ${attempt}/${max} in ${sleep_s}s..." >&2
+            sleep "${sleep_s}"
+            attempt=$((attempt + 1))
+          done
+
+      - name: CLA Assistant (record signature)
         uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          path-to-signatures: 'signatures/ipr-signatures.json'
-          path-to-document: 'https://github.com/prebid/salesagent/blob/main/IPR_POLICY.md'
-          branch: 'ipr-signatures'
-          allowlist: 'bot*,dependabot*,renovate*,github-actions*'
-
+          path-to-signatures: "signatures/ipr-signatures.json"
+          path-to-document: "https://github.com/prebid/salesagent/blob/main/IPR_POLICY.md"
+          branch: "ipr-signatures"
+          allowlist: ${{ env.IPR_BOT_ALLOWLIST }}
           custom-notsigned-prcomment: |
             ## IPR Policy Agreement Required
 
@@ -44,11 +152,60 @@ jobs:
             ```
 
             You can read the full [IPR Policy here](https://github.com/prebid/salesagent/blob/main/IPR_POLICY.md).
-
-          custom-pr-sign-comment: 'I have read the IPR Policy'
-
+          custom-pr-sign-comment: "I have read the IPR Policy"
           custom-allsigned-prcomment: |
             All contributors have agreed to the [IPR Policy](https://github.com/prebid/salesagent/blob/main/IPR_POLICY.md). Thank you!
-
           lock-pullrequest-aftermerge: false
           use-dco-flag: false
+
+      # After a successful sign, the prior pull_request ipr-check on this head SHA
+      # stays red until re-verified. Re-run verify here, then re-run failed
+      # ipr-check jobs for the PR head so the Actions check can clear.
+      # Checkout default branch only (Path B never trusts PR head — ADR-003).
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Re-verify IPR and re-run failed ipr-check on PR head
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          IPR_BOT_ALLOWLIST: ${{ env.IPR_BOT_ALLOWLIST }}
+        run: |
+          set -euo pipefail
+          # shellcheck source=scripts/ci/ipr_gh_retry.sh
+          . scripts/ci/ipr_gh_retry.sh
+
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "${tmp}"' EXIT
+
+          gh_retry_to "${tmp}/pr_author.txt" gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.user.login'
+          gh_retry_to "${tmp}/head_sha.txt" gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq '.head.sha'
+          PR_AUTHOR="$(cat "${tmp}/pr_author.txt")"
+          HEAD_SHA="$(cat "${tmp}/head_sha.txt")"
+
+          echo "Post-sign verify for PR #${PR_NUMBER} head=${HEAD_SHA} author=${PR_AUTHOR}"
+          ipr_verify_pr "${REPO}" "${PR_NUMBER}" "${PR_AUTHOR}" \
+            --missing-message "IPR Policy still not signed by: {missing}" \
+            --ok-message "Post-sign verify OK — all contributors signed."
+
+          echo "Looking up IPR Agreement runs for head ${HEAD_SHA}..."
+          RUNS_JSON="$(mktemp)"
+          gh_retry_to "${RUNS_JSON}" gh api \
+            "repos/${REPO}/actions/workflows/ipr-agreement.yml/runs?event=pull_request&per_page=30"
+          mapfile -t RUN_IDS < <(python3 scripts/ci/ipr_verify.py failed-run-ids \
+            --runs "${RUNS_JSON}" \
+            --head-sha "${HEAD_SHA}")
+          if [ "${#RUN_IDS[@]}" -eq 0 ]; then
+            echo "No failed completed IPR runs for this head — nothing to re-run."
+          else
+            for run_id in "${RUN_IDS[@]}"; do
+              [ -n "${run_id}" ] || continue
+              echo "Re-running failed jobs for workflow run ${run_id}..."
+              # Fail the step if both re-run endpoints fail (do not soft-swallow).
+              gh api -X POST "repos/${REPO}/actions/runs/${run_id}/rerun-failed-jobs" || \
+                gh api -X POST "repos/${REPO}/actions/runs/${run_id}/rerun"
+            done
+          fi

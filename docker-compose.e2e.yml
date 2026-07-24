@@ -89,26 +89,34 @@ services:
       - single-request-reopen
     volumes:
       - .:/app
+    # Tighter probes + start_period so `compose up --wait` (CI) survives
+    # alembic + cold import without waiting a full 30s interval before first check.
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      interval: 5s
+      timeout: 5s
+      retries: 36
+      start_period: 60s
 
   proxy:
     image: nginx:stable
     volumes:
       - ./config/nginx/nginx-development.conf:/etc/nginx/nginx.conf:ro
+    # Wait for adcp healthy before starting nginx — otherwise /health → 502 while
+    # adcp is still in its 60s start_period and `compose up --wait` can flake
+    # (proxy: 12×5s + start_period 15s after adcp is healthy; CI).
     depends_on:
-      - adcp-server
+      adcp-server:
+        condition: service_healthy
     # NO host port here either — see the postgres note above. Publishing for the
     # host paths is in docker-compose.e2e.ports.yml; the in-network runner reaches
     # the proxy by service name (proxy:8000).
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 12
+      start_period: 15s
 
   # In-network test runner (Option 1). Reaches Postgres/the server by SERVICE
   # NAME on the compose network — postgres:5432, proxy:8000 — so it needs NO

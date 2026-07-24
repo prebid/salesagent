@@ -33,6 +33,7 @@ REQUIRED_RENDERED_CHECKS = {
     "CI / BDD In-Network (e2e_rest)",
     "CI / Migration Roundtrip",
     "CI / Coverage",
+    "CI / IPR Gate",
     "CI / Summary",
 }
 
