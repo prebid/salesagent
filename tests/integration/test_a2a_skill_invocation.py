@@ -1148,8 +1148,13 @@ class TestA2ASkillInvocation:
             )
             assert "multiple skills" in envelope["errors"][0]["message"].lower()
 
-    # TODO: Add test_missing_authentication once we understand how A2A server handles auth errors
-    # TODO: Needs investigation of proper error handling approach (A2AError not in current a2a library)
+    # Missing/invalid authentication for tasks/get, tasks/cancel, and every other
+    # auth-guarded method is covered at the real JSON-RPC transport altitude by
+    # tests/unit/test_a2a_transport_contract.py::TestA2AAuthContract
+    # (test_task_management_auth_errors_use_json_rpc_dispatcher drives the real
+    # SDK dispatcher via TestClient(app).post("/a2a", ...); the auth-required vs.
+    # discovery matrix is covered by test_auth_required_skills_reject_no_auth /
+    # test_discovery_skills_accept_no_auth).
 
     @pytest.mark.asyncio
     async def test_adcp_schema_validation_integration(self, validator):

@@ -18,12 +18,12 @@ from contextlib import nullcontext
 from unittest.mock import patch
 
 import pytest
-from a2a.types import InvalidRequestError
 from starlette.testclient import TestClient
 
 from src.a2a_server.adcp_a2a_server import DISCOVERY_SKILLS as _PROD_DISCOVERY_SKILLS
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.app import app
+from src.core.exceptions import AdCPAuthenticationError
 from tests.utils.a2a_helpers import make_test_a2a_identity
 
 _TEST_IDENTITY = make_test_a2a_identity()
@@ -263,13 +263,25 @@ class TestA2AAuthContract:
         ids=["missing-token", "invalid-token"],
     )
     def test_task_management_auth_errors_use_json_rpc_dispatcher(self, client, method, headers, resolver_error):
-        """The real dispatcher must serialize task auth failures as JSON-RPC errors."""
+        """The real dispatcher must serialize task auth failures as JSON-RPC errors carrying the
+        full two-layer AUTH_REQUIRED envelope in ``error.data`` — not just a bare message.
+
+        Drives the ACTUAL SDK ``JsonRpcDispatcher`` via a real HTTP POST (not a direct handler
+        call), so this catches regressions in dispatcher routing, request parsing, and response
+        serialization that a unit test calling the handler method directly cannot see.
+
+        The invalid-token case patches ``resolve_identity`` at its SOURCE module (not
+        ``_resolve_a2a_identity`` itself) so the REAL ``_resolve_a2a_identity`` exception
+        handling — and its own enveloping via ``_auth_required_error`` — actually runs. An
+        earlier version of this test patched ``_resolve_a2a_identity`` with a bare
+        ``InvalidRequestError`` side effect, which bypassed that enveloping entirely and made
+        the invalid-token case silently untested for ``error.data``.
+        """
         payload = {"jsonrpc": "2.0", "id": "task-auth-request", "method": method, "params": {"id": "task_auth"}}
         resolver_patch = (
-            patch.object(
-                AdCPRequestHandler,
-                "_resolve_a2a_identity",
-                side_effect=InvalidRequestError(message=resolver_error),
+            patch(
+                "src.core.resolved_identity.resolve_identity",
+                side_effect=AdCPAuthenticationError(resolver_error),
             )
             if resolver_error
             else nullcontext()
@@ -285,6 +297,14 @@ class TestA2AAuthContract:
         assert body["error"]["code"] == -32600
         assert "auth" in body["error"]["message"].lower()
         assert "task_auth" not in json.dumps(body)
+        # The two-layer envelope must ALSO reach the real wire, not just a bare JSON-RPC message —
+        # a buyer branches on error.data.adcp_error.code, and this is what previously required a
+        # separate unit test calling the handler directly (which cannot prove the real dispatcher
+        # actually places the envelope in the serialized HTTP response body).
+        adcp_error = body["error"]["data"]["adcp_error"]
+        assert adcp_error["code"] == "AUTH_REQUIRED"
+        assert adcp_error["recovery"] == "correctable"
+        assert body["error"]["message"] == adcp_error["message"]
 
 
 # ---------------------------------------------------------------------------
