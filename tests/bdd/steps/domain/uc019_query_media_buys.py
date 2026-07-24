@@ -2777,12 +2777,21 @@ def when_update_lands_between_reads(ctx: dict) -> None:
 
 @when(parsers.parse('the seller approves media buy "{label}"'))
 def when_seller_approves(ctx: dict, label: str) -> None:
-    """Drive the approval transition through the production seam.
+    """Repository-transition + readback: NOT a drive through a real approve route.
 
-    Every production approve path (admin blueprint, workflow) routes through
-    MediaBuyRepository.update_status — guard-enforced by
-    test_architecture_media_buy_status_writes (#1544). The step drives that
-    seam: status transition + approved_at/approved_by stamp + revision bump.
+    This UC-019 scenario grades the QUERY side — that revision/confirmed_at read
+    back correctly on the wire once a buy has been approved — not the approval
+    ROUTE's wiring. It calls MediaBuyRepository.update_status_or_raise directly,
+    bypassing the admin blueprint/workflow entry points (session auth, the
+    single-winner claim, FinalizeOutcome orchestration). Every production approve
+    path is guard-enforced to route through this same repository seam
+    (test_architecture_media_buy_status_writes, #1544), so a broken CALLER (e.g.
+    a route that forgets to pass approved_at=) would NOT be caught here — that
+    risk is covered by a dedicated route-level test instead:
+    tests/admin/test_workflows_blueprint.py::
+    test_approve_stamps_confirmed_at_and_bumps_revision_through_the_route drives
+    the real Flask approve route end-to-end and reddens on exactly that class of
+    regression.
     """
     from datetime import UTC, datetime
 

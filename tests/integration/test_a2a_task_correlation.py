@@ -169,31 +169,106 @@ class TestA2ATaskCorrelation:
         assert len(task.artifacts) == 1
         assert task.artifacts[0].name == "media_buy_result"
 
-    def test_on_get_task_terminal_in_memory_task_short_circuits(
+    def test_on_get_task_terminal_in_memory_task_short_circuits_for_the_owner(
         self, integration_db, sample_tenant, sample_principal, context_manager
     ):
-        """A TERMINAL in-memory task is authoritative — served directly, without a DB lookup."""
+        """An OWNED terminal in-memory task is authoritative — served without a DB lookup.
+
+        The poller still authenticates (fixing the bypass below); the short-circuit
+        is that an owned, already-terminal hit skips the durable read, not that it
+        skips authorization.
+        """
         from a2a.types import Task, TaskStatus
 
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
+        tenant_id = sample_tenant["tenant_id"]
+        principal_id = sample_principal["principal_id"]
+        identity = PrincipalFactory.make_identity(principal_id=principal_id, tenant_id=tenant_id, protocol="a2a")
+
         handler = AdCPRequestHandler.__new__(AdCPRequestHandler)
         done = Task(id="task_done", status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED))
         handler.tasks = {"task_done": done}
+        handler._task_owners = {"task_done": (tenant_id, principal_id)}
 
-        with patch.object(handler, "_get_auth_token") as mock_auth:
+        with (
+            patch.object(handler, "_get_auth_token", return_value="tok") as mock_auth,
+            patch.object(handler, "_resolve_a2a_identity", return_value=identity),
+            patch("src.a2a_server.adcp_a2a_server.resolve_durable_task_outcome") as mock_durable,
+        ):
             task = asyncio.run(handler.on_get_task(GetTaskRequest(id="task_done"), context=None))
 
         assert task is done
-        mock_auth.assert_not_called()  # terminal in-memory hit short-circuits before any auth/DB work
+        # The poller IS authenticated even for a fast-path hit — the same
+        # ``context`` on_get_task received (None, from this call) is what it
+        # forwards to _get_auth_token.
+        mock_auth.assert_called_once_with(None)
+        mock_durable.assert_not_called()  # ...but an OWNED terminal hit still skips the DB round-trip
+
+    def test_on_get_task_terminal_in_memory_task_denies_a_non_owner(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """A terminal in-memory task is NOT served to a caller who doesn't own it.
+
+        The red oracle for the auth bypass: before authorization was added, ANY
+        caller who supplied this task_id got the owner's terminal artifacts back,
+        with zero authentication. A sibling buyer authenticating as themselves
+        must get ``None`` instead — identical to an unknown task_id, so this
+        cannot be used as an existence oracle either.
+        """
+        from a2a.types import Task, TaskStatus
+
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        tenant_id = sample_tenant["tenant_id"]
+        owner_id = sample_principal["principal_id"]
+        sibling = PrincipalFactory.make_identity(
+            principal_id=_SIBLING_PRINCIPAL_ID, tenant_id=tenant_id, protocol="a2a"
+        )
+
+        handler = AdCPRequestHandler.__new__(AdCPRequestHandler)
+        done = Task(id="task_owned", status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED))
+        handler.tasks = {"task_owned": done}
+        handler._task_owners = {"task_owned": (tenant_id, owner_id)}
+
+        with (
+            patch.object(handler, "_get_auth_token", return_value="tok"),
+            patch.object(handler, "_resolve_a2a_identity", return_value=sibling),
+        ):
+            task = asyncio.run(handler.on_get_task(GetTaskRequest(id="task_owned"), context=None))
+
+        assert task is None
+
+    def test_on_get_task_denies_an_unauthenticated_poller(
+        self, integration_db, sample_tenant, sample_principal, context_manager
+    ):
+        """A poller who cannot authenticate at all gets ``None``, even for a terminal
+        in-memory hit — no anonymous existence or content oracle survives the fix."""
+        from a2a.types import Task, TaskStatus
+
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        tenant_id = sample_tenant["tenant_id"]
+        owner_id = sample_principal["principal_id"]
+
+        handler = AdCPRequestHandler.__new__(AdCPRequestHandler)
+        done = Task(id="task_owned", status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED))
+        handler.tasks = {"task_owned": done}
+        handler._task_owners = {"task_owned": (tenant_id, owner_id)}
+
+        with patch.object(handler, "_get_auth_token", return_value=None):
+            task = asyncio.run(handler.on_get_task(GetTaskRequest(id="task_owned"), context=None))
+
+        assert task is None
 
     def _poll_with_stale_in_memory(self, handler, tenant_id, principal_id, external_task_id):
-        """Seed a SUBMITTED in-memory task for external_task_id, then poll on_get_task."""
+        """Seed a SUBMITTED in-memory task OWNED by (tenant_id, principal_id), then poll on_get_task."""
         from a2a.types import Task, TaskStatus
 
         handler.tasks = {
             external_task_id: Task(id=external_task_id, status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED))
         }
+        handler._task_owners = {external_task_id: (tenant_id, principal_id)}
         identity = PrincipalFactory.make_identity(principal_id=principal_id, tenant_id=tenant_id, protocol="a2a")
         with (
             patch.object(handler, "_get_auth_token", return_value="tok"),

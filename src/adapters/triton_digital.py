@@ -4,7 +4,7 @@ from typing import Any
 
 import requests
 
-from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
+from src.adapters.base import AdapterPostMutationIncomplete, AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import ADAPTER_HTTP_TIMEOUT, REQUIRED_UPDATE_ACTIONS
 from src.core.exceptions import (
     AdCPAdapterError,
@@ -243,40 +243,57 @@ class TritonDigital(AdServerAdapter):
             campaign_data = response.json()
             campaign_id = campaign_data["id"]
 
-            # Create flights for each package
-            for package in packages:
-                # Get pricing for this package
-                pricing_info = package_pricing_info.get(package.package_id) if package_pricing_info else None
-                if pricing_info:
-                    rate = (
-                        pricing_info["rate"] if pricing_info["is_fixed"] else pricing_info.get("bid_price", package.cpm)
+            # ── POST-MUTATION BOUNDARY (#1637 parity with GAM) ──────────────────
+            # The remote campaign now EXISTS. A failure creating any package's
+            # flight from here on leaves a partial remote graph (campaign +
+            # possibly some flights) — it must surface as
+            # AdapterPostMutationIncomplete so the approval finalizer preserves
+            # the manual-reconciliation state instead of terminal-failing the buy
+            # and erasing the only signal that a real campaign was created.
+            try:
+                # Create flights for each package
+                for package in packages:
+                    # Get pricing for this package
+                    pricing_info = package_pricing_info.get(package.package_id) if package_pricing_info else None
+                    if pricing_info:
+                        rate = (
+                            pricing_info["rate"]
+                            if pricing_info["is_fixed"]
+                            else pricing_info.get("bid_price", package.cpm)
+                        )
+                    else:
+                        rate = package.cpm
+
+                    flight_payload = {
+                        "name": package.name,
+                        "campaignId": campaign_id,
+                        "type": "STANDARD",
+                        "goal": {"type": "IMPRESSIONS", "value": package.impressions},
+                        "rate": rate,  # Use pricing from pricing option or fallback
+                        "rateType": "CPM",
+                        "startDate": start_time.date().isoformat(),
+                        "endDate": end_time.date().isoformat(),
+                    }
+
+                    # Add targeting if provided (from package-level targeting_overlay per AdCP spec)
+                    if package.targeting_overlay:
+                        targeting = self._build_targeting(package.targeting_overlay)
+                        if targeting and "targeting" in targeting:
+                            flight_payload["targeting"] = targeting["targeting"]
+                        if targeting and "stationIds" in targeting:
+                            flight_payload["stationIds"] = targeting["stationIds"]
+
+                    flight_response = requests.post(
+                        f"{self.base_url}/flights",
+                        headers=self.headers,
+                        json=flight_payload,
+                        timeout=ADAPTER_HTTP_TIMEOUT,
                     )
-                else:
-                    rate = package.cpm
-
-                flight_payload = {
-                    "name": package.name,
-                    "campaignId": campaign_id,
-                    "type": "STANDARD",
-                    "goal": {"type": "IMPRESSIONS", "value": package.impressions},
-                    "rate": rate,  # Use pricing from pricing option or fallback
-                    "rateType": "CPM",
-                    "startDate": start_time.date().isoformat(),
-                    "endDate": end_time.date().isoformat(),
-                }
-
-                # Add targeting if provided (from package-level targeting_overlay per AdCP spec)
-                if package.targeting_overlay:
-                    targeting = self._build_targeting(package.targeting_overlay)
-                    if targeting and "targeting" in targeting:
-                        flight_payload["targeting"] = targeting["targeting"]
-                    if targeting and "stationIds" in targeting:
-                        flight_payload["stationIds"] = targeting["stationIds"]
-
-                flight_response = requests.post(
-                    f"{self.base_url}/flights", headers=self.headers, json=flight_payload, timeout=ADAPTER_HTTP_TIMEOUT
-                )
-                flight_response.raise_for_status()
+                    flight_response.raise_for_status()
+            except Exception as post_campaign_error:
+                raise AdapterPostMutationIncomplete(
+                    f"Triton campaign {campaign_id} was created but flight creation failed: {post_campaign_error}"
+                ) from post_campaign_error
 
             # Use the actual campaign ID from Triton
             media_buy_id = f"triton_{campaign_id}"

@@ -190,6 +190,10 @@ class AdCPRequestHandler(RequestHandler):
         """Initialize the AdCP A2A request handler."""
         self.tasks: dict[str, Task] = {}  # In-memory task storage
         self._task_push_configs: dict[str, TaskPushNotificationConfig] = {}
+        # (tenant_id, principal_id) recorded when the task was created, so
+        # on_get_task can authorize an in-memory hit instead of serving it to
+        # anyone who learned the task_id. See on_get_task's docstring.
+        self._task_owners: dict[str, tuple[str | None, str | None]] = {}
         logger.info("AdCP Request Handler initialized for direct function calls")
 
     @staticmethod
@@ -645,6 +649,17 @@ class AdCPRequestHandler(RequestHandler):
                 # Unauthenticated discovery request — resolve tenant from headers only
                 identity = self._resolve_a2a_identity(None, require_valid_token=False, context=context)
 
+            # Record the owner now, before any skill dispatch can raise — on_get_task
+            # authorizes an in-memory hit against this. An identity resolved without
+            # require_valid_token can carry a None principal_id, which can never match
+            # a later poll authenticated with require_valid_token=True (that path
+            # always has a non-None principal_id — see _resolve_a2a_identity), so an
+            # anonymously-created task simply becomes unpollable via the in-memory
+            # path rather than owned by nobody-in-particular.
+            self._task_owners[task_id] = (
+                (identity.tenant_id, identity.principal_id) if identity is not None else (None, None)
+            )
+
             # Route: Handle explicit skill invocations first, then natural language fallback
             if skill_invocations:
                 # Process explicit skill invocations
@@ -1061,55 +1076,69 @@ class AdCPRequestHandler(RequestHandler):
     ) -> Task | None:
         """Handle 'tasks/get' method to retrieve task status.
 
-        Prefers the TERMINAL decision, wherever it lives. The in-memory ``self.tasks``
-        snapshot for an async media-buy task stays ``SUBMITTED``/``WORKING`` — the
-        admin approve/reject that terminalizes the persisted workflow step runs in a
-        DIFFERENT process and never mutates this map. So a bare in-memory hit would
-        keep reporting ``SUBMITTED`` after the buy is decided (until restart/eviction).
-        Instead: an already-terminal in-memory task is authoritative; otherwise consult
-        the persisted step and return it when IT is terminal (the out-of-band
-        decision); only when neither is terminal fall back to the in-flight in-memory
-        task (or the durable non-terminal view). See #1544 (B6/P1).
+        Authenticates the poller and checks OWNERSHIP before returning anything —
+        terminal or not, in-memory or persisted. A task_id is unguessable but not
+        secret once known (it can surface in webhook payloads, logs, or a shared
+        support channel); serving an in-memory hit unconditionally let any caller
+        who learned it read a sibling principal's terminal result artifacts with
+        no authentication at all. Ownership for the in-memory path is checked
+        against ``self._task_owners`` (the (tenant_id, principal_id) recorded when
+        the task was created); the persisted path is scoped inside
+        ``resolve_durable_task_outcome`` itself. A poller who fails to
+        authenticate, or who authenticates as someone else, gets ``None`` either
+        way — identical to an unknown task_id, so this cannot be used as an
+        existence oracle.
+
+        Once ownership is established, prefers the TERMINAL decision, wherever it
+        lives. The in-memory ``self.tasks`` snapshot for an async media-buy task
+        stays ``SUBMITTED``/``WORKING`` — the admin approve/reject that
+        terminalizes the persisted workflow step runs in a DIFFERENT process and
+        never mutates this map. So a bare in-memory hit would keep reporting
+        ``SUBMITTED`` after the buy is decided (until restart/eviction). Instead:
+        an already-terminal OWNED in-memory task is authoritative; otherwise
+        consult the persisted step and return it when IT is terminal (the
+        out-of-band decision); only when neither is terminal fall back to the
+        OWNED in-flight in-memory task (or the durable non-terminal view).
+        See #1544 (B6/P1).
         """
         task_id = params.id
-        in_memory = self.tasks.get(task_id)
-        if in_memory is not None and in_memory.status.state in self._TERMINAL_TASK_STATES:
-            return in_memory
-        durable = self._durable_task_from_step(task_id, context)
-        if durable is not None and durable.status.state in self._TERMINAL_TASK_STATES:
-            return durable
-        return in_memory if in_memory is not None else durable
-
-    def _durable_task_from_step(self, task_id: str, context: ServerCallContext | None) -> Task | None:
-        """Rebuild a terminal Task from the workflow step that stored this transport id.
-
-        A cross-process/restart-surviving lookup needs a tenant scope, so identity is
-        resolved from the poll's own auth (the buyer who created the task
-        authenticated). Without a resolvable tenant the task cannot be safely served.
-
-        This handler owns only the transport concerns — identity resolution and
-        A2A Task/Artifact framing; the DB read (session + tenant-scoped step
-        lookup + error/result classification) lives in the transport-neutral
-        ``resolve_durable_task_outcome`` service. #1544.
-        """
         try:
             auth_token = self._get_auth_token(context)
-            identity = (
-                self._resolve_a2a_identity(auth_token, require_valid_token=True, context=context)
-                if auth_token
-                else None
-            )
+            identity = self._resolve_a2a_identity(auth_token, require_valid_token=True, context=context)
         except Exception as e:
             logger.warning(
-                "Failed to resolve identity while rebuilding durable task %s: %s",
+                "Denying task poll %s — identity resolution failed: %s",
                 sanitize_log_value(task_id),
                 sanitize_log_value(e),
             )
             return None
-        if identity is None or not identity.tenant_id:
+        if not identity.tenant_id:
             return None
 
-        outcome = resolve_durable_task_outcome(identity.tenant_id, task_id, principal_id=identity.principal_id)
+        in_memory = self.tasks.get(task_id)
+        owns_in_memory = in_memory is not None and self._task_owners.get(task_id) == (
+            identity.tenant_id,
+            identity.principal_id,
+        )
+        if owns_in_memory and in_memory is not None and in_memory.status.state in self._TERMINAL_TASK_STATES:
+            return in_memory
+        durable = self._durable_task_from_step(task_id, identity.tenant_id, identity.principal_id)
+        if durable is not None and durable.status.state in self._TERMINAL_TASK_STATES:
+            return durable
+        return in_memory if owns_in_memory else durable
+
+    def _durable_task_from_step(self, task_id: str, tenant_id: str, principal_id: str | None) -> Task | None:
+        """Rebuild a terminal Task from the workflow step that stored this transport id.
+
+        The caller (``on_get_task``) has already authenticated the poller; ``tenant_id``
+        and ``principal_id`` are that resolved identity, so this only needs to run the
+        tenant/principal-scoped lookup.
+
+        This handler owns only the transport concerns — A2A Task/Artifact framing; the
+        DB read (session + tenant-scoped step lookup + error/result classification)
+        lives in the transport-neutral ``resolve_durable_task_outcome`` service. #1544.
+        """
+        outcome = resolve_durable_task_outcome(tenant_id, task_id, principal_id=principal_id)
         if outcome is None:
             return None
         state = self._STEP_STATUS_TO_TASK_STATE.get(outcome.step_status, TaskState.TASK_STATE_WORKING)

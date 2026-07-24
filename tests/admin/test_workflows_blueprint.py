@@ -5,7 +5,6 @@ Requires PostgreSQL (integration_db fixture).
 """
 
 import uuid
-from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import delete, select
@@ -85,55 +84,34 @@ def _auth_session(client, tenant_id):
 
 
 def _add_context_and_step(
-    session,
+    factory_session,
     tenant_id: str,
     *,
     status: str = "pending_approval",
     request_data: dict | None = None,
     response_data: dict | None = None,
 ) -> tuple[str, str]:
-    """Build a Context + WorkflowStep on ``session`` and return (context_id, step_id).
+    """Build a Context + WorkflowStep via factories, attached to the existing
+    ``test_tenant``/``wf_test_principal`` rows, and return (context_id, step_id).
 
-    The ONE construction site for this pair in this module: both the plain helper
-    (which owns its own session) and the mapped-media-buy helper (which writes on
-    the factory session) route through it, so the two cannot drift apart. Does not
-    commit — the caller owns the transaction.
+    The ONE construction site for this pair in this module — every caller routes
+    through it, so the two cannot drift apart. Requires ``factory_session`` bound
+    (i.e. called from a test that takes the ``factory_session`` fixture).
     """
-    context_id = f"ctx_{uuid.uuid4().hex[:12]}"
-    step_id = f"step_{uuid.uuid4().hex[:12]}"
-    now = datetime.now(UTC)
-    session.add(
-        Context(
-            context_id=context_id,
-            tenant_id=tenant_id,
-            principal_id="wf_test_principal",
-            conversation_history=[],
-            created_at=now,
-            last_activity_at=now,
-        )
-    )
-    session.add(
-        WorkflowStep(
-            step_id=step_id,
-            context_id=context_id,
-            step_type="approval",
-            tool_name="create_media_buy",
-            status=status,
-            owner="principal",
-            request_data=request_data or {},
-            response_data=response_data,
-            created_at=now,
-        )
-    )
-    return context_id, step_id
+    from src.core.database.models import Principal as P
+    from src.core.database.models import Tenant as T
+    from tests.factories import ContextFactory, WorkflowStepFactory
 
-
-def _create_context_and_step(tenant_id: str, status: str = "pending_approval") -> tuple[str, str]:
-    """Create a Context + WorkflowStep and return (context_id, step_id)."""
-    with get_db_session() as session:
-        context_id, step_id = _add_context_and_step(session, tenant_id, status=status)
-        session.commit()
-    return context_id, step_id
+    tenant_obj = factory_session.get(T, tenant_id)
+    principal_obj = factory_session.get(P, (tenant_id, "wf_test_principal"))
+    context = ContextFactory(tenant=tenant_obj, principal=principal_obj)
+    step = WorkflowStepFactory(
+        context=context,
+        status=status,
+        request_data=request_data or {},
+        response_data=response_data,
+    )
+    return context.context_id, step.step_id
 
 
 class TestWorkflowsList:
@@ -145,10 +123,10 @@ class TestWorkflowsList:
         response = client.get(f"/tenant/{test_tenant}/workflows")
         assert response.status_code == 200
 
-    def test_list_shows_pending_steps(self, client, test_tenant):
+    def test_list_shows_pending_steps(self, client, test_tenant, factory_session):
         """After creating a pending step, the list page shows it."""
         _auth_session(client, test_tenant)
-        _create_context_and_step(test_tenant, status="pending_approval")
+        _add_context_and_step(factory_session, test_tenant, status="pending_approval")
 
         response = client.get(f"/tenant/{test_tenant}/workflows")
         html = response.data.decode()
@@ -158,10 +136,10 @@ class TestWorkflowsList:
 class TestWorkflowApproval:
     """Test workflow step approval."""
 
-    def test_approve_step_sets_status_approved(self, client, test_tenant):
+    def test_approve_step_sets_status_approved(self, client, test_tenant, factory_session):
         """POST approve sets the step status to 'approved'."""
         _auth_session(client, test_tenant)
-        context_id, step_id = _create_context_and_step(test_tenant, status="pending_approval")
+        context_id, step_id = _add_context_and_step(factory_session, test_tenant, status="pending_approval")
 
         response = client.post(
             f"/tenant/{test_tenant}/workflows/{context_id}/steps/{step_id}/approve",
@@ -226,7 +204,7 @@ class TestWorkflowApproval:
         CreativeAssignmentFactory(creative=creative, media_buy=buy)
 
         # The pending approval workflow step + a mapping tying it to the buy.
-        context_id, step_id = _create_context_and_step(test_tenant, status="pending_approval")
+        context_id, step_id = _add_context_and_step(factory_session, test_tenant, status="pending_approval")
         WorkflowRepository(factory_session, test_tenant).add_mapping(
             step_id=step_id, object_type="media_buy", object_id=buy.media_buy_id, action="create"
         )
@@ -298,10 +276,10 @@ class TestWorkflowApproval:
 class TestWorkflowRejection:
     """Test workflow step rejection."""
 
-    def test_reject_step_sets_status_rejected(self, client, test_tenant):
+    def test_reject_step_sets_status_rejected(self, client, test_tenant, factory_session):
         """POST reject sets the step status to 'rejected'."""
         _auth_session(client, test_tenant)
-        context_id, step_id = _create_context_and_step(test_tenant, status="pending_approval")
+        context_id, step_id = _add_context_and_step(factory_session, test_tenant, status="pending_approval")
 
         response = client.post(
             f"/tenant/{test_tenant}/workflows/{context_id}/steps/{step_id}/reject",
@@ -318,10 +296,10 @@ class TestWorkflowRejection:
         assert step.status == "rejected"
         assert step.error_message == "Does not meet requirements"
 
-    def test_reject_step_without_reason_uses_default(self, client, test_tenant):
+    def test_reject_step_without_reason_uses_default(self, client, test_tenant, factory_session):
         """POST reject without a reason body still succeeds (uses default message)."""
         _auth_session(client, test_tenant)
-        context_id, step_id = _create_context_and_step(test_tenant, status="pending_approval")
+        context_id, step_id = _add_context_and_step(factory_session, test_tenant, status="pending_approval")
 
         response = client.post(
             f"/tenant/{test_tenant}/workflows/{context_id}/steps/{step_id}/reject",

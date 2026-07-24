@@ -11,7 +11,7 @@ from typing import Any
 import requests
 from dateutil import parser as dateutil_parser
 
-from src.adapters.base import AdServerAdapter
+from src.adapters.base import AdapterPostMutationIncomplete, AdServerAdapter
 from src.adapters.constants import ADAPTER_HTTP_TIMEOUT
 from src.core.retry_utils import api_retry
 from src.core.schemas import (
@@ -539,48 +539,75 @@ class XandrAdapter(AdServerAdapter):
             io_response = self._make_request("POST", "/insertion-order", io_data)
             io_id = io_response["response"]["insertion-order"]["id"]
 
-            # Create line items for each package
-            for _idx, package in enumerate(packages):
-                if not self.advertiser_id:
-                    raise ValueError("Advertiser ID is required for creating line items")
-
-                # Get pricing for this package
-                pricing_info = package_pricing_info.get(package.package_id) if package_pricing_info else None
-                if pricing_info:
-                    rate = (
-                        pricing_info["rate"] if pricing_info["is_fixed"] else pricing_info.get("bid_price", package.cpm)
-                    )
-                else:
-                    rate = package.cpm
-
-                li_data = {
-                    "line-item": {
-                        "name": package.name,
-                        "insertion_order_id": io_id,
-                        "advertiser_id": int(self.advertiser_id),
-                        "start_date": start_time.date().isoformat(),
-                        "end_date": end_time.date().isoformat(),
-                        "revenue_type": "cpm",
-                        "revenue_value": rate,  # Use pricing from pricing option or fallback
-                        "lifetime_budget": float(rate * package.impressions / 1000),
-                        "daily_budget": float(rate * package.impressions / 1000 / days),
-                        "currency": "USD",
-                        "state": "inactive",  # Start inactive
-                        "inventory_type": "display",
-                    }
-                }
-
-                # Apply targeting (from package-level targeting_overlay per AdCP spec)
-                if package.targeting_overlay:
-                    li_data["line-item"]["profile_id"] = self._create_targeting_profile(package.targeting_overlay)
-
-                self._make_request("POST", "/line-item", li_data)
+            # ── POST-MUTATION BOUNDARY (#1637 parity with GAM) ──────────────────
+            # The remote insertion order now EXISTS. A failure creating any
+            # package's line item from here on leaves a partial remote graph (IO +
+            # possibly some line items) — it must surface as
+            # AdapterPostMutationIncomplete so the approval finalizer preserves
+            # the manual-reconciliation state instead of terminal-failing the buy
+            # and erasing the only signal that a real IO was created. (The bare
+            # ``raise`` in this method's own except-Exception below passes this
+            # exception type through unchanged.)
+            try:
+                self._create_xandr_line_items(packages, package_pricing_info, io_id, start_time, end_time, days)
+            except Exception as post_io_error:
+                raise AdapterPostMutationIncomplete(
+                    f"Xandr insertion order {io_id} was created but line-item creation failed: {post_io_error}"
+                ) from post_io_error
 
             return self._build_create_success(request, f"xandr_io_{io_id}", packages)
 
         except Exception as e:
             logger.error(f"Failed to create Xandr media buy: {e}")
             raise
+
+    def _create_xandr_line_items(
+        self,
+        packages: list[MediaPackage],
+        package_pricing_info: dict[str, dict] | None,
+        io_id: str,
+        start_time: datetime,
+        end_time: datetime,
+        days: int,
+    ) -> None:
+        """POST one line item per package under insertion order ``io_id``.
+
+        Runs strictly INSIDE create_media_buy's post-mutation boundary — any
+        exception here is converted to AdapterPostMutationIncomplete by the caller.
+        """
+        for _idx, package in enumerate(packages):
+            if not self.advertiser_id:
+                raise ValueError("Advertiser ID is required for creating line items")
+
+            # Get pricing for this package
+            pricing_info = package_pricing_info.get(package.package_id) if package_pricing_info else None
+            if pricing_info:
+                rate = pricing_info["rate"] if pricing_info["is_fixed"] else pricing_info.get("bid_price", package.cpm)
+            else:
+                rate = package.cpm
+
+            li_data = {
+                "line-item": {
+                    "name": package.name,
+                    "insertion_order_id": io_id,
+                    "advertiser_id": int(self.advertiser_id),
+                    "start_date": start_time.date().isoformat(),
+                    "end_date": end_time.date().isoformat(),
+                    "revenue_type": "cpm",
+                    "revenue_value": rate,  # Use pricing from pricing option or fallback
+                    "lifetime_budget": float(rate * package.impressions / 1000),
+                    "daily_budget": float(rate * package.impressions / 1000 / days),
+                    "currency": "USD",
+                    "state": "inactive",  # Start inactive
+                    "inventory_type": "display",
+                }
+            }
+
+            # Apply targeting (from package-level targeting_overlay per AdCP spec)
+            if package.targeting_overlay:
+                li_data["line-item"]["profile_id"] = self._create_targeting_profile(package.targeting_overlay)
+
+            self._make_request("POST", "/line-item", li_data)
 
     def _map_inventory_type(self, product_id: str) -> str:
         """Map product ID to Xandr inventory type."""

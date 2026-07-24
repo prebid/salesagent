@@ -5,67 +5,15 @@ Tests that Kevel, Triton, and Xandr adapters all return packages with package_id
 fixing the "Adapter did not return package_id" error.
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
-
-import pytest
 
 from src.adapters.kevel import Kevel
 from src.adapters.triton_digital import TritonDigital
-from src.adapters.xandr import XandrAdapter
-from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage
 
-
-@pytest.fixture
-def mock_principal():
-    """Mock principal for testing."""
-    principal = Mock()
-    principal.name = "test_principal"
-    principal.principal_id = "principal_123"
-    return principal
-
-
-@pytest.fixture
-def sample_request():
-    """Sample CreateMediaBuyRequest."""
-    from tests.helpers.adcp_factories import create_test_package_request
-
-    start_time = datetime.now(UTC)
-    end_time = start_time + timedelta(days=30)
-    # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
-    return CreateMediaBuyRequest(
-        brand={"domain": "testbrand.com"},
-        idempotency_key="unit-test-key-adapters-0001",
-        packages=[
-            create_test_package_request(product_id="prod_123"),
-            create_test_package_request(product_id="prod_456"),
-        ],
-        start_time=start_time,
-        end_time=end_time,
-    )
-
-
-@pytest.fixture
-def sample_packages():
-    """Sample packages list."""
-    return [
-        MediaPackage(
-            package_id="pkg_001",
-            name="Package 1",
-            delivery_type="guaranteed",
-            impressions=10000,
-            cpm=5.0,
-            format_ids=[FormatId(agent_url="https://test.com", id="display_300x250")],
-        ),
-        MediaPackage(
-            package_id="pkg_002",
-            name="Package 2",
-            delivery_type="guaranteed",
-            impressions=20000,
-            cpm=7.5,
-            format_ids=[FormatId(agent_url="https://test.com", id="display_728x90")],
-        ),
-    ]
+# mock_principal / sample_request / sample_packages / make_xandr_test_adapter
+# fixtures are shared with test_adapter_post_mutation_boundary.py via
+# tests/unit/conftest.py.
 
 
 class TestKevelAdapterPackages:
@@ -267,71 +215,41 @@ class TestXandrAdapterPackages:
     """
 
     def test_xandr_returns_packages_with_package_ids_and_line_item_ids(
-        self, mock_principal, sample_request, sample_packages
+        self, mock_principal, sample_request, sample_packages, make_xandr_test_adapter
     ):
         """Xandr adapter must return packages with package_id and platform_line_item_id."""
-        # Arrange
-        config = {
-            "api_endpoint": "https://api.appnexus.com",
-            "username": "test_user",
-            "password": "test_pass",
-            "member_id": "123",
-        }
+        adapter = make_xandr_test_adapter(mock_principal)
 
-        # Mock principal platform_mappings
-        mock_principal.platform_mappings = {"xandr": {"advertiser_id": "789"}}
+        # Mock _make_request to simulate IO and line item creation
+        with patch.object(adapter, "_make_request") as mock_request:
+            # Mock insertion order creation
+            io_response = {"response": {"insertion-order": {"id": 555}}}
 
-        # Create adapter - need to mock abstract methods to allow instantiation
-        with patch.multiple(
-            "src.adapters.xandr.XandrAdapter",
-            __abstractmethods__=set(),  # Allow instantiation of abstract class
-        ):
-            adapter = XandrAdapter(config=config, principal=mock_principal, tenant_id="test_tenant")
-            # advertiser_id is set automatically from platform_mappings
+            # Mock line item creation (one per package)
+            li_response_1 = {"response": {"line-item": {"id": 666}}}
+            li_response_2 = {"response": {"line-item": {"id": 777}}}
 
-            # Mock abstract methods
-            adapter.add_creative_assets = Mock()
-            adapter.associate_creatives = Mock()
-            adapter.check_media_buy_status = Mock()
-            adapter.update_media_buy_performance_index = Mock()
-            adapter._log_operation = Mock()  # Mock logging method
+            # Return IO response first, then line item responses
+            mock_request.side_effect = [io_response, li_response_1, li_response_2]
 
-            # Mock authentication
-            adapter.token = "test_token"
-            adapter.token_expiry = datetime.now() + timedelta(hours=2)
+            # Act
+            start_time = datetime.now()
+            end_time = start_time + timedelta(days=30)
+            response = adapter.create_media_buy(
+                request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
+            )
 
-            # Mock _make_request to simulate IO and line item creation
-            with patch.object(adapter, "_make_request") as mock_request:
-                # Mock insertion order creation
-                io_response = {"response": {"insertion-order": {"id": 555}}}
+        # Assert - Response must have packages field
+        assert response.packages is not None, "Xandr response must have packages field"
+        assert isinstance(response.packages, list), "Xandr packages must be a list"
 
-                # Mock line item creation (one per package)
-                li_response_1 = {"response": {"line-item": {"id": 666}}}
-                li_response_2 = {"response": {"line-item": {"id": 777}}}
+        # Assert - Must have same number of packages as input
+        assert len(response.packages) == len(sample_packages), f"Expected {len(sample_packages)} packages"
 
-                # Return IO response first, then line item responses
-                mock_request.side_effect = [io_response, li_response_1, li_response_2]
-
-                # Act
-                start_time = datetime.now()
-                end_time = start_time + timedelta(days=30)
-                response = adapter.create_media_buy(
-                    request=sample_request, packages=sample_packages, start_time=start_time, end_time=end_time
-                )
-
-            # Assert - Response must have packages field
-            assert response.packages is not None, "Xandr response must have packages field"
-            assert isinstance(response.packages, list), "Xandr packages must be a list"
-
-            # Assert - Must have same number of packages as input
-            assert len(response.packages) == len(sample_packages), f"Expected {len(sample_packages)} packages"
-
-            # Assert - Each package must have package_id (AdCP spec requirement)
-            # Note: platform_line_item_id is internal tracking data, not part of AdCP Package spec
-            for i, pkg in enumerate(response.packages):
-                assert hasattr(pkg, "package_id") and pkg.package_id is not None, (
-                    f"Xandr package {i} missing package_id"
-                )
+        # Assert - Each package must have package_id (AdCP spec requirement)
+        # Note: platform_line_item_id is internal tracking data, not part of AdCP Package spec
+        for i, pkg in enumerate(response.packages):
+            assert hasattr(pkg, "package_id") and pkg.package_id is not None, f"Xandr package {i} missing package_id"
 
             # Assert - Package IDs must match input packages
             returned_ids = {pkg.package_id for pkg in response.packages}

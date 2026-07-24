@@ -25,11 +25,13 @@ from src.core.tools.creatives.listing import list_creatives_raw
 from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
 from src.core.tools.media_buy_create import create_media_buy_raw
 from src.core.tools.media_buy_delivery import get_media_buy_delivery_raw
+from src.core.tools.media_buy_list import get_media_buys_raw
 from src.core.tools.media_buy_update import update_media_buy_raw
 from src.core.tools.performance import update_performance_index_raw
 from src.routes.api_v1 import (
     CreateMediaBuyBody,
     GetMediaBuyDeliveryBody,
+    GetMediaBuysBody,
     ListCreativesBody,
     SyncCreativesBody,
     UpdateMediaBuyBody,
@@ -68,6 +70,7 @@ _PAIRS = [
     (CreateMediaBuyBody, create_media_buy_raw),
     (UpdateMediaBuyBody, update_media_buy_raw),
     (GetMediaBuyDeliveryBody, get_media_buy_delivery_raw),
+    (GetMediaBuysBody, get_media_buys_raw),
     (SyncCreativesBody, sync_creatives_raw),
     (ListCreativesBody, list_creatives_raw),
     (UpdatePerformanceIndexBody, update_performance_index_raw),

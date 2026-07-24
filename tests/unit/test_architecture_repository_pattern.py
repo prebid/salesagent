@@ -498,9 +498,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/admin/test_product_creation_integration.py", "test_list_products_json_parsing"),
     # tests/admin/test_workflows_blueprint.py
     ("tests/admin/test_workflows_blueprint.py", "test_tenant"),
-    # The module's single Context+WorkflowStep construction site (both helpers
-    # route through it); no Context/WorkflowStep factories exist yet.
-    ("tests/admin/test_workflows_blueprint.py", "_add_context_and_step"),
     # ── tests/e2e/ — pre-existing violations from e2e lifecycle test ──
     # FIXME(salesagent-e2e-admin-factories): migrate e2e seed helpers to factories.
     ("tests/e2e/test_gam_lifecycle.py", "_seed_lifecycle_test_data"),
@@ -695,7 +692,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/admin/test_product_creation_integration.py", "test_add_product_postgresql_validation"),
     ("tests/admin/test_product_creation_integration.py", "test_list_products_json_parsing"),
     ("tests/admin/test_product_creation_integration.py", "test_tenant"),
-    ("tests/admin/test_workflows_blueprint.py", "_create_context_and_step"),
     ("tests/admin/test_workflows_blueprint.py", "test_approve_step_sets_status_approved"),
     ("tests/admin/test_workflows_blueprint.py", "test_reject_step_sets_status_rejected"),
     ("tests/admin/test_workflows_blueprint.py", "test_reject_step_without_reason_uses_default"),

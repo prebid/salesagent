@@ -38,6 +38,7 @@ from tests.factories.targeting import (
 )
 from tests.factories.user import TenantAuthConfigFactory, UserFactory
 from tests.factories.webhook import PushNotificationConfigFactory
+from tests.factories.workflow import ContextFactory, WorkflowStepFactory
 
 ALL_FACTORIES = [
     TenantFactory,
@@ -50,6 +51,8 @@ ALL_FACTORIES = [
     PublisherPartnerFactory,
     AuthorizedPropertyFactory,
     PrincipalFactory,
+    ContextFactory,
+    WorkflowStepFactory,
     InventoryProfileFactory,
     ProductFactory,
     PricingOptionFactory,
@@ -71,6 +74,7 @@ __all__ = [
     "AuthorizedPropertyFactory",
     "AgentAccountAccessFactory",
     "CollectionListReferenceFactory",
+    "ContextFactory",
     "CreativeAssetFactory",
     "CreativeAssignmentFactory",
     "CreativeFactory",
@@ -94,4 +98,5 @@ __all__ = [
     "TenantAuthConfigFactory",
     "TenantFactory",
     "UserFactory",
+    "WorkflowStepFactory",
 ]

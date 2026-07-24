@@ -5,6 +5,7 @@ workflow transitions, while AdCP's confirmed_at is the instant the seller
 committed to the buy.
 """
 
+import os
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -16,9 +17,13 @@ down_revision: str | Sequence[str] | None = "1497aa06013c"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-# Rows updated per statement in the confirmed_at backfill (bounds the write-lock
-# footprint of each batch on a large media_buys table).
-_BATCH_ROWS = 1000
+# Rows updated per statement in the confirmed_at backfill. Bounds the DURATION
+# and WAL/memory burst of each individual UPDATE, NOT the accumulated lock
+# footprint — see the upgrade() docstring below. Override with
+# MEDIA_BUYS_CONFIRMED_AT_BACKFILL_BATCH_ROWS for a specific deployment (e.g.
+# smaller on a table with heavy concurrent write traffic, to shorten how long
+# any one statement holds new locks before the next batch begins).
+_BATCH_ROWS = int(os.getenv("MEDIA_BUYS_CONFIRMED_AT_BACKFILL_BATCH_ROWS", "1000"))
 
 
 def upgrade() -> None:
@@ -48,8 +53,20 @@ def upgrade() -> None:
     # footprint: alembic/env.py runs all migrations inside ONE transaction
     # (no transaction_per_migration), and op.get_bind() returns that same
     # connection, so every batch's row locks accumulate until the migration
-    # commits. Nor is it batched by primary key — the CTE takes an unordered
-    # LIMIT over the not-yet-set rows.
+    # commits — this remains a single long transaction, not an online/chunked
+    # backfill, and it CAN block concurrent writers to already-processed rows
+    # for its full duration. Nor is it batched by primary key — the CTE takes
+    # an unordered LIMIT over the not-yet-set rows.
+    #
+    # OPERATOR GUIDANCE: on a media_buys table with a large historical backlog
+    # of not-yet-confirmed rows AND concurrent production write traffic,
+    # estimate the row count before deploying —
+    #   SELECT count(*) FROM media_buys WHERE confirmed_at IS NULL AND status
+    #     NOT IN ('draft','pending','pending_approval','rejected','failed');
+    # — and schedule a maintenance window sized to that count divided by your
+    # batch throughput, or tune MEDIA_BUYS_CONFIRMED_AT_BACKFILL_BATCH_ROWS
+    # down first to trade migration duration for shorter per-statement lock
+    # windows on a live table.
     #
     # TERMINATION: the loop advances only if each claimed row leaves the
     # ``confirmed_at IS NULL`` predicate, so the SET must never evaluate to
