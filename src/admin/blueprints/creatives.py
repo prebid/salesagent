@@ -22,7 +22,7 @@ from src.core.database.models import (
 )
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
-from src.core.webhook_validator import validate_webhook_task_type
+from src.core.webhook_validator import resolve_webhook_task_id, validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 # TODO: Missing module - these functions need to be implemented
@@ -241,10 +241,14 @@ async def _call_webhook_for_creative_status(
             # (salesagent-yi3s, salesagent-yk7o).
             wire_task_type = validate_webhook_task_type(step_tool_name or "sync_creatives")
 
+            # Send the buyer-facing correlation id (the id they hold), falling back to the
+            # step id — same resolution the media-buy approve webhook / context_manager use.
+            correlation_task_id = resolve_webhook_task_id(step_request_data, step_step_id)
+
             payload: Task | TaskStatusUpdateEvent | McpWebhookPayload
             if protocol == "a2a":
                 payload = create_a2a_webhook_payload(
-                    task_id=step_step_id,
+                    task_id=correlation_task_id,
                     status=GeneratedTaskStatus.completed,
                     result=result_dict,
                     context_id=step_context_id,
@@ -252,7 +256,7 @@ async def _call_webhook_for_creative_status(
             else:
                 # SDK 5.7: returns McpWebhookPayload directly
                 payload = create_mcp_webhook_payload(
-                    task_id=step_step_id,
+                    task_id=correlation_task_id,
                     status=GeneratedTaskStatus.completed,
                     task_type=wire_task_type,
                     result=result_dict,

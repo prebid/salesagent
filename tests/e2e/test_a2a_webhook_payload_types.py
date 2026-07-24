@@ -175,11 +175,13 @@ class TestA2AWebhookPayloadTypes:
         webhook_capture_server,
     ):
         """
-        Test that completed status sends a Task payload (not TaskStatusUpdateEvent).
+        Test that the completed-status webhook is a Task payload with artifacts.
 
-        Per AdCP spec:
-        - Completed is a final state
-        - Final states should send Task object with artifacts
+        `on_message_send` sends no webhook for its immediate-terminal response
+        (a2a-guide.mdx; unit-pinned separately). The completed *Task* webhook a
+        buyer receives comes from the async workflow-step completion (context
+        manager). Per AdCP spec a final-state webhook carries the full Task with
+        artifacts — this validates that payload shape.
         """
         # Enable auto-approval so create_media_buy completes immediately
         set_live_adapter_behavior(live_server, manual_approval_required=False)
@@ -223,48 +225,80 @@ class TestA2AWebhookPayloadTypes:
             result = response.json()
             assert "error" not in result, f"A2A error: {result.get('error')}"
 
-        # Wait for webhook to be delivered
-        timeout_seconds = 15
+        # The A2A message Task completes SYNCHRONOUSLY (auto-approval) and is returned
+        # in this response; per a2a-guide.mdx `on_message_send` sends NO webhook for
+        # that immediate-terminal response (unit-pinned in
+        # test_immediate_completed_task_sends_no_webhook). The completed *Task* webhook
+        # observed here is the LEGITIMATE async workflow-step completion emitted by the
+        # context manager (create_a2a_webhook_payload with status=completed), which is
+        # what a buyer subscribes to — this test verifies THAT payload's shape.
+        sync_task = result.get("result", {})
+        sync_task = sync_task.get("task", sync_task)
+        assert sync_task.get("id"), "Sync response must be a Task with an 'id'"
+
+        # Wait for the async workflow completion webhook.
+        elapsed = 0.0
+        while elapsed < 15.0 and not webhook_capture_server["received"]:
+            sleep(0.5)
+            elapsed += 0.5
+        # Quiescence poll, NOT a fixed grace window: a regression re-adding
+        # on_message_send's immediate-terminal webhook would deliver a SECOND
+        # completed webhook — but a single hard-coded sleep only catches it if it
+        # happens to arrive inside that window; under load (or a slower duplicate
+        # path) it could arrive later and slip past a fixed-window check. Instead,
+        # keep polling until the received count is STABLE across several consecutive
+        # checks: any new arrival — including a late duplicate — resets the stability
+        # counter, so the "no second delivery" signal holds independent of delivery
+        # latency (bounded by max_wait as a safety net against a genuinely stuck test,
+        # not as the correctness mechanism).
+        stable_polls_required = 4  # 4 * 0.5s = 2s of observed stability
         poll_interval = 0.5
-        elapsed = 0
-
-        while elapsed < timeout_seconds and not webhook_capture_server["received"]:
+        max_wait = 30.0
+        stable_polls = 0
+        waited = 0.0
+        last_count = len(webhook_capture_server["received"])
+        while stable_polls < stable_polls_required and waited < max_wait:
             sleep(poll_interval)
-            elapsed += poll_interval
-
-        # Verify webhook was received
+            waited += poll_interval
+            current_count = len(webhook_capture_server["received"])
+            if current_count == last_count:
+                stable_polls += 1
+            else:
+                stable_polls = 0
+                last_count = current_count
         received = webhook_capture_server["received"]
-        assert received, "Expected at least one webhook delivery"
-
-        # No received webhook may carry a snake_case wire violation (gh-#1299).
+        assert received, "Expected an async workflow completion webhook"
         assert_no_classification_errors(received)
 
-        # The completed-status webhook MUST be present and MUST be a Task. No
-        # `if completed_webhooks:` guard — a missing or misclassified webhook is
-        # a failure, not a silent pass.
         completed_webhooks = [w for w in received if w["status"] == "completed"]
         assert completed_webhooks, (
             f"Expected a 'completed' status webhook. Received statuses: {[w['status'] for w in received]}"
         )
-
-        webhook = completed_webhooks[0]
-        # Per AdCP spec: completed status should send Task (has 'id' field)
-        assert webhook["payload_type"] == "Task", (
-            f"Completed status should send Task payload, not {webhook['payload_type']}. "
-            f"Payload has 'id': {'id' in webhook['payload']}, 'taskId': {'taskId' in webhook['payload']}"
+        # a2a-guide.mdx terminal-state rule: an already-terminal initial response must
+        # NOT trigger its own webhook — the buyer receives exactly ONE completed
+        # webhook (the async workflow-step completion), never an on_message_send
+        # duplicate. (Unit pin: test_immediate_completed_task_sends_no_webhook.)
+        assert len(completed_webhooks) == 1, (
+            f"Expected exactly one completed webhook (the async workflow completion); "
+            f"a second one means on_message_send webhooked its immediate-terminal "
+            f"response. Received: {[(w['status'], w['payload'].get('id')) for w in received]}"
         )
-
-        # Verify Task structure
-        payload = webhook["payload"]
-        assert "id" in payload, "Task payload must have 'id' field"
-        assert "status" in payload, "Task payload must have 'status' field"
-
-        # Per AdCP spec: completed status MUST have result in artifacts[0].parts[]
-        assert "artifacts" in payload, "Completed Task must have 'artifacts' field"
-        assert len(payload["artifacts"]) > 0, "Completed Task must have at least one artifact"
-        artifact = payload["artifacts"][0]
-        assert "parts" in artifact, "Artifact must have 'parts' field"
-        assert len(artifact["parts"]) > 0, "Artifact must have at least one part"
+        webhook = completed_webhooks[0]
+        assert webhook["payload_type"] == "Task", (
+            f"completed status must send a Task payload, got {webhook['payload_type']}"
+        )
+        wpayload = webhook["payload"]
+        assert "id" in wpayload, "Task payload must have 'id'"
+        assert "status" in wpayload, "Task payload must have 'status'"
+        assert wpayload.get("artifacts"), "completed Task must carry artifacts"
+        assert wpayload["artifacts"][0].get("parts"), "artifact must have parts"
+        # #1544 B6: the completion webhook must correlate to the id the BUYER holds —
+        # the outer task_* returned in the sync response — NOT the internal step_id.
+        # (Pre-fix this sent task_id=step_id, which the buyer never saw.)
+        assert wpayload["id"] == sync_task["id"], (
+            f"webhook task id {wpayload['id']!r} must equal the returned Task id "
+            f"{sync_task['id']!r} (buyer correlation), not the internal step_id"
+        )
 
     @pytest.mark.asyncio
     async def test_submitted_status_sends_task_status_update_event(
@@ -383,8 +417,11 @@ class TestA2AWebhookPayloadTypes:
         - Final states (completed, failed, canceled): Task
         - Intermediate states (working, input-required, submitted): TaskStatusUpdateEvent
         """
-        # Enable auto-approval
-        set_live_adapter_behavior(live_server, manual_approval_required=False)
+        # Manual approval → submitted (a non-terminal initial response that DOES webhook), so a
+        # real wire webhook is delivered to classify. This PR stops immediate terminal A2A tasks
+        # from webhooking, so auto-approval would deliver nothing and `assert received` below would
+        # fail — manual approval is required to exercise the payload-type classification.
+        set_live_adapter_behavior(live_server, manual_approval_required=True)
 
         a2a_url = f"{live_server['a2a']}/a2a"
         context_id = str(uuid.uuid4())
@@ -501,41 +538,33 @@ class TestWebhookPayloadStructure:
         }
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            await client.post(a2a_url, json=message, headers=headers)
+            response = await client.post(a2a_url, json=message, headers=headers)
+            assert response.status_code == 200, f"A2A request failed: {response.text}"
+            result = response.json()
+            assert "error" not in result, f"A2A error: {result.get('error')}"
 
-        # Wait for webhook
-        timeout_seconds = 15
-        elapsed = 0
-        while elapsed < timeout_seconds and not webhook_capture_server["received"]:
+        # `on_message_send` sends no webhook for the immediate-terminal response;
+        # the Task webhook comes from the async workflow-step completion (context
+        # manager). Validate its required A2A Task fields.
+        elapsed = 0.0
+        while elapsed < 15.0 and not webhook_capture_server["received"]:
             sleep(0.5)
             elapsed += 0.5
-
         received = webhook_capture_server["received"]
-        assert received, "Expected at least one webhook delivery"
+        assert received, "Expected an async workflow completion webhook"
         assert_no_classification_errors(received)
 
         task_webhooks = [w for w in received if w["payload_type"] == "Task"]
         assert task_webhooks, (
             f"Expected at least one Task webhook. Received payload types: {[w['payload_type'] for w in received]}"
         )
-
         for webhook in task_webhooks:
             payload = webhook["payload"]
-
-            # Required Task fields per A2A spec
             assert "id" in payload, "Task must have 'id' field"
-            assert "status" in payload, "Task must have 'status' field"
-
-            status = payload["status"]
-            assert "state" in status, "Task.status must have 'state' field"
-
-            # Per AdCP spec: completed/failed MUST have result in artifacts[0].parts[]
-            if status["state"] in ("completed", "failed"):
-                assert "artifacts" in payload, f"Task with status '{status['state']}' must have 'artifacts'"
-                assert isinstance(payload["artifacts"], list), "artifacts must be a list"
-                assert len(payload["artifacts"]) > 0, "artifacts must have at least one item"
-                assert "parts" in payload["artifacts"][0], "artifact must have 'parts'"
-                assert len(payload["artifacts"][0]["parts"]) > 0, "artifact.parts must have at least one part"
+            assert "status" in payload and "state" in payload["status"], "Task.status must have 'state'"
+            if payload["status"]["state"] in ("completed", "failed"):
+                assert isinstance(payload.get("artifacts"), list) and payload["artifacts"], "must have artifacts"
+                assert payload["artifacts"][0].get("parts"), "artifact must have parts"
 
     @pytest.mark.asyncio
     async def test_task_status_update_event_has_required_fields(

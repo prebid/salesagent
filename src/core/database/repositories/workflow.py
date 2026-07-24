@@ -19,11 +19,49 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnExpressionArgument, func, select, update
 from sqlalchemy.orm import Session
 
 from src.core.database.models import Context as DBContext
 from src.core.database.models import ObjectWorkflowMapping, Principal, WorkflowStep
+
+# Workflow-step statuses that are final outcomes. Single source of truth for the
+# repository's atomic terminal-transition guard and the A2A boundary's step→TaskState map.
+TERMINAL_STEP_STATUSES = frozenset({"completed", "rejected", "failed", "canceled"})
+
+# Statuses from which a buyer cancel is still safe — i.e. states where NO irreversible
+# external (ad-server) work has begun. Deliberately EXCLUDES both ``approved`` and
+# ``in_progress``:
+#   * ``approved`` — the admin-approve path commits it BEFORE execute_approved_media_buy,
+#     so cancelling it would leave a real order behind a canceled task.
+#   * ``in_progress`` — the create/update execution paths set it BEFORE running their
+#     adapter/business side-effects (media_buy_create.py, media_buy_update.py), so it marks
+#     that irreversible work is already underway; cancelling then would strand external
+#     state behind a canceled task.
+# ``approval`` is the legacy adapter-emitted awaiting-decision alias of ``requires_approval``
+# (GAM/Broadstreet/base_workflow — see APPROVABLE_STEP_STATUSES below): a pre-side-effect state,
+# so it is cancellable for the same reason ``requires_approval`` is. (Normalizing the alias away
+# is tracked in #1659; until then it is carried in BOTH the cancellable and approvable sets.)
+# Terminal statuses are (trivially) excluded too. A cancel is only accepted while the step is
+# still purely pending human/forecasting action, before any side-effects have run.
+CANCELLABLE_STEP_STATUSES = frozenset({"pending", "requires_approval", "pending_approval", "approval"})
+
+# Statuses a step can be approved or rejected FROM — i.e. it is still awaiting a human
+# decision and no irreversible execution has started. Approval/rejection is a compare-and-set
+# from one of these to a decided status. Because ``approved`` is (deliberately) NON-terminal,
+# a broad "not terminal" guard would let a SECOND concurrent approver win an ``approved →
+# approved`` no-op and also run the irreversible adapter creation (duplicate order), and would
+# let a reject run ``approved → rejected`` (stranding a live order behind a rejected workflow).
+# Restricting the source states to this set makes exactly one decider win.
+#
+# ``approval`` is the LEGACY awaiting-decision status emitted by the adapter workflow managers
+# (base_workflow.py default; GAM order-activation / manual-order / creative-approval steps;
+# Broadstreet via the base manager). It is semantically identical to ``requires_approval`` —
+# a step a publisher must approve/reject — so it MUST be approvable, otherwise those live human
+# workflows can never be actioned. Normalizing every producer to the canonical
+# ``requires_approval`` (+ a migration for existing ``approval`` rows) is tracked in #1659;
+# until then this set carries the legacy alias.
+APPROVABLE_STEP_STATUSES = frozenset({"requires_approval", "pending_approval", "approval"})
 
 
 class WorkflowRepository:
@@ -57,6 +95,80 @@ class WorkflowRepository:
             .where(
                 WorkflowStep.step_id == step_id,
                 DBContext.tenant_id == self._tenant_id,
+            )
+        ).first()
+
+    def get_policy_review_step(self, step_id: str) -> WorkflowStep | None:
+        """A tenant-scoped ``policy_review`` step by id, or None.
+
+        The ``step_type`` guard is load-bearing, not cosmetic: the policy review route drives a
+        step terminal, so without it an arbitrary step id (e.g. a media-buy approval) could be
+        finalized here with a fabricated ``{"approved": true}`` artifact. Keeping both the
+        tenant-scoping join and the type predicate in the repository means the POST and GET legs
+        — and any future caller — share one definition instead of re-inlining the query.
+        """
+        step = self.get_by_step_id(step_id)
+        if step is None or step.step_type != "policy_review":
+            return None
+        return step
+
+    def get_approvable_step_for_object(
+        self, object_type: str, object_id: str, *, step_id: str | None = None
+    ) -> WorkflowStep | None:
+        """The workflow step awaiting a decision for a mapped business object (tenant-scoped).
+
+        Joins ObjectWorkflowMapping and filters status to APPROVABLE_STEP_STATUSES — the
+        canonical awaiting-decision set (including the legacy ``approval`` alias emitted by the
+        adapter workflow producers). The admin media-buy detail approve/reject route uses this
+        so its prefilter matches the ``claim_approval`` / ``reject_if_approvable`` source-state
+        guard; an inline ``{requires_approval, pending_approval}`` filter previously dropped
+        legacy ``approval`` steps before they could reach the CAS.
+
+        When ``step_id`` is supplied, the step must also be the exact decision rendered to the
+        administrator. This prevents a stale form from approving a different mapped workflow
+        when several approval operations exist for one media buy. Without ``step_id`` (the GET
+        page), the oldest mapped approval is selected deterministically.
+        """
+        stmt = (
+            select(WorkflowStep)
+            .join(ObjectWorkflowMapping, WorkflowStep.step_id == ObjectWorkflowMapping.step_id)
+            .join(DBContext, WorkflowStep.context_id == DBContext.context_id)
+            .where(
+                DBContext.tenant_id == self._tenant_id,
+                ObjectWorkflowMapping.object_type == object_type,
+                ObjectWorkflowMapping.object_id == object_id,
+                WorkflowStep.status.in_(APPROVABLE_STEP_STATUSES),
+            )
+        )
+        if step_id is not None:
+            stmt = stmt.where(WorkflowStep.step_id == step_id)
+        return self._session.scalars(
+            stmt.order_by(ObjectWorkflowMapping.created_at, WorkflowStep.created_at, WorkflowStep.step_id)
+        ).first()
+
+    def get_by_external_task_id(self, external_task_id: str, *, principal_id: str) -> WorkflowStep | None:
+        """Get the workflow step carrying a given transport outer task id.
+
+        The A2A boundary persists its outer ``task_*`` id (the id returned to the
+        buyer) on the create step's ``request_data.external_task_id`` (see
+        ``_create_media_buy_impl``), so a durable ``tasks/get`` poll can resolve the
+        buyer's id → step → terminal status + stored ``response_data`` artifact,
+        surviving a server restart (the admin approval that terminalized the step runs
+        in a different process, so the in-memory task map is not enough).
+
+        Scoped to BOTH the tenant (Context join, like every read) AND the owning
+        ``principal_id``: task ids are bearer-ish identifiers, and the durable
+        get/cancel must authorize the CALLER — another principal in the same tenant
+        who learns a task id must be able to neither read its stored response_data
+        nor cancel its workflow. Keyword-required so no call site can omit the scope.
+        """
+        return self._session.scalars(
+            select(WorkflowStep)
+            .join(DBContext)
+            .where(
+                WorkflowStep.request_data["external_task_id"].as_string() == external_task_id,
+                DBContext.tenant_id == self._tenant_id,
+                DBContext.principal_id == principal_id,
             )
         ).first()
 
@@ -275,7 +387,79 @@ class WorkflowRepository:
     # WorkflowStep writes
     # ------------------------------------------------------------------
 
-    def update_status(
+    @staticmethod
+    def resolve_tenant_for_step(session: Session, step_id: str) -> str | None:
+        """Resolve a step's tenant from its Context (repository owns this join).
+
+        Lets callers that lack a tenant scope up front (e.g. ContextManager) build a
+        tenant-scoped repository without issuing a raw ``WorkflowStep``/``DBContext``
+        query outside the repository layer. Returns None when the step (or its
+        context) does not exist. Read-only; does not commit.
+        """
+        return session.scalar(
+            select(DBContext.tenant_id)
+            .join(WorkflowStep, WorkflowStep.context_id == DBContext.context_id)
+            .where(WorkflowStep.step_id == step_id)
+        )
+
+    def _atomic_transition(
+        self,
+        step_id: str,
+        *,
+        status: str,
+        status_guard: ColumnExpressionArgument[bool],
+        completed_at: datetime | None = None,
+        response_data: dict[str, Any] | None = None,
+        error_message: str | None = None,
+    ) -> WorkflowStep | None:
+        """Shared atomic conditional transition: set ``status`` IFF ``status_guard`` holds.
+
+        ONE conditional UPDATE (tenant-scoped ``WHERE step_id … AND <status_guard>``)
+        with ``RETURNING`` — the single-statement re-evaluation against committed state
+        is what makes competing writers safe in either ordering. ``status_guard`` is a
+        SQLAlchemy predicate on ``WorkflowStep.status`` (e.g. NOT IN terminal, or IN
+        cancellable). Returns the re-loaded step, or None when no row matched (step
+        absent or its status failed the guard). Does NOT commit.
+        """
+        values: dict[str, Any] = {"status": status}
+        if completed_at is not None:
+            values["completed_at"] = completed_at
+        if response_data is not None:
+            values["response_data"] = response_data
+        if error_message is not None:
+            values["error_message"] = error_message
+        elif status == "completed":
+            # Clear error message on successful completion.
+            values["error_message"] = None
+
+        scoped_step_ids = (
+            select(WorkflowStep.step_id)
+            .join(DBContext)
+            .where(
+                WorkflowStep.step_id == step_id,
+                DBContext.tenant_id == self._tenant_id,
+            )
+        )
+        # returning() makes the DML yield rows, so success is observable without
+        # the CursorResult.rowcount attribute (untyped on Session.execute's Result).
+        # synchronize_session="fetch" keeps any already-loaded ORM copy consistent
+        # so callers that further mutate the returned step see the new status.
+        updated = (
+            self._session.execute(
+                update(WorkflowStep)
+                .where(WorkflowStep.step_id.in_(scoped_step_ids), status_guard)
+                .values(**values)
+                .returning(WorkflowStep.step_id)
+                .execution_options(synchronize_session="fetch")
+            )
+            .scalars()
+            .first()
+        )
+        if updated is None:
+            return None
+        return self.get_by_step_id(step_id)
+
+    def transition_if_nonterminal(
         self,
         step_id: str,
         *,
@@ -284,25 +468,86 @@ class WorkflowRepository:
         response_data: dict[str, Any] | None = None,
         error_message: str | None = None,
     ) -> WorkflowStep | None:
-        """Update the status of a workflow step.
+        """Atomically set a step's status IFF it is not already terminal.
 
-        Returns the updated step, or None if not found.
-        Does NOT commit — the caller handles that.
+        The SINGLE terminal-transition primitive shared by every competing writer
+        (admin approve/reject, background approval, manual complete): a terminal
+        workflow step (completed/rejected/failed/canceled) is IMMUTABLE. The FIRST
+        committed writer wins and no later writer — in either ordering — can
+        overwrite a committed terminal decision.
+
+        Returns the updated step (re-loaded) or None when it does not exist OR is
+        already terminal (write refused). Does NOT commit.
         """
-        step = self.get_by_step_id(step_id)
-        if step is None:
-            return None
+        return self._atomic_transition(
+            step_id,
+            status=status,
+            status_guard=WorkflowStep.status.not_in(TERMINAL_STEP_STATUSES),
+            completed_at=completed_at,
+            response_data=response_data,
+            error_message=error_message,
+        )
 
-        step.status = status
-        if completed_at is not None:
-            step.completed_at = completed_at
-        if response_data is not None:
-            step.response_data = response_data
-        if error_message is not None:
-            step.error_message = error_message
-        elif status == "completed":
-            # Clear error message on successful completion
-            step.error_message = None
+    def claim_approval(self, step_id: str) -> WorkflowStep | None:
+        """Atomically claim a step for approval: requires_approval/pending_approval → approved.
 
-        self._session.flush()
-        return step
+        A compare-and-set restricted to APPROVABLE_STEP_STATUSES. Because ``approved`` is
+        (deliberately) NON-terminal, the broad ``transition_if_nonterminal`` guard would let a
+        SECOND concurrent approver win an ``approved → approved`` no-op and also run
+        ``execute_approved_media_buy`` — duplicating irreversible adapter work. This narrower
+        source-state guard makes exactly ONE approver win; a later approver sees ``approved``
+        (not in the source set) and gets None. Returns the updated step, or None when the step
+        is absent OR not in an approvable status (already approved/executing/terminal). Does
+        NOT commit.
+        """
+        return self._atomic_transition(
+            step_id,
+            status="approved",
+            status_guard=WorkflowStep.status.in_(APPROVABLE_STEP_STATUSES),
+        )
+
+    def reject_if_approvable(
+        self,
+        step_id: str,
+        *,
+        error_message: str | None = None,
+        response_data: dict[str, Any] | None = None,
+    ) -> WorkflowStep | None:
+        """Atomically reject a step awaiting a decision: requires_approval/pending_approval → rejected.
+
+        Mirror of ``claim_approval`` with the SAME source-state guard, so a step that has
+        already been ``approved`` (irreversible execution underway) cannot be rejected — which
+        would otherwise strand a live ad-server order behind a rejected workflow. Returns the
+        updated step, or None when the step is absent OR not in an approvable status. Does NOT
+        commit.
+        """
+        return self._atomic_transition(
+            step_id,
+            status="rejected",
+            status_guard=WorkflowStep.status.in_(APPROVABLE_STEP_STATUSES),
+            error_message=error_message,
+            response_data=response_data,
+        )
+
+    def cancel_if_cancellable(self, step_id: str, *, completed_at: datetime) -> bool:
+        """Atomically cancel a step IFF it is in a CANCELLABLE status.
+
+        The buyer-facing cancel primitive (A2A ``tasks/cancel``). It refuses to cancel a step
+        once irreversible external work has begun — CANCELLABLE_STEP_STATUSES excludes both
+        ``approved`` (admin-approve commits it before order creation) and ``in_progress`` (the
+        create/update paths persist it before their adapter side-effects), as well as all
+        terminal states — so a cancel can never strand a real order behind a canceled task. The
+        atomicity is a single conditional UPDATE (``_atomic_transition``): the guard is
+        re-evaluated against committed state, so competing writers are safe in either ordering.
+        Returns True when canceled, False when the step is absent or not in a cancellable status.
+        Does NOT commit.
+        """
+        return (
+            self._atomic_transition(
+                step_id,
+                status="canceled",
+                status_guard=WorkflowStep.status.in_(CANCELLABLE_STEP_STATUSES),
+                completed_at=completed_at,
+            )
+            is not None
+        )

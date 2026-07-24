@@ -6,11 +6,12 @@ import logging
 from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import select
 
-from src.admin.utils import get_tenant_config_from_db, require_auth
+from src.admin.utils import get_tenant_config_from_db, require_tenant_access, session_user_email
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.audit_logger import AuditLogger
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AuditLog, Context, Tenant, WorkflowStep
+from src.core.database.models import AuditLog, Tenant, WorkflowStep
+from src.core.database.repositories.workflow import WorkflowRepository
 
 logger = logging.getLogger(__name__)
 
@@ -19,14 +20,11 @@ policy_bp = Blueprint("policy", __name__)
 
 
 @policy_bp.route("/", methods=["GET"])
-@require_auth()
+@require_tenant_access()
 def index(tenant_id):
     """View and manage policy settings for the tenant."""
-    # Check access
+    # Tenant membership is enforced by require_tenant_access; viewers stay read-blocked.
     if session.get("role") == "viewer":
-        return "Access denied", 403
-
-    if session.get("role") == "tenant_admin" and session.get("tenant_id") != tenant_id:
         return "Access denied", 403
 
     with get_db_session() as db_session:
@@ -138,15 +136,12 @@ def index(tenant_id):
 
 
 @policy_bp.route("/update", methods=["POST"])
-@require_auth()
+@require_tenant_access()
 @log_admin_action("update_policy")
 def update(tenant_id):
     """Update policy settings for the tenant."""
-    # Check access - only admins can update policy
+    # Tenant membership is enforced by require_tenant_access; role gate stays for test-mode.
     if session.get("role") not in ["super_admin", "tenant_admin"]:
-        return "Access denied", 403
-
-    if session.get("role") == "tenant_admin" and session.get("tenant_id") != tenant_id:
         return "Access denied", 403
 
     try:
@@ -208,22 +203,19 @@ def update(tenant_id):
 
 
 @policy_bp.route("/rules", methods=["GET", "POST"])
-@require_auth()
+@require_tenant_access()
 def rules(tenant_id):
     """Redirect old policy rules URL to new comprehensive policy settings page."""
     return redirect(url_for("policy.index", tenant_id=tenant_id))
 
 
 @policy_bp.route("/review/<task_id>", methods=["GET", "POST"])
-@require_auth()
+@require_tenant_access()
 @log_admin_action("review_policy_task")
 def review_task(tenant_id, task_id):
     """Review and approve/reject a policy review task."""
-    # Check access
+    # Tenant membership is enforced by require_tenant_access; viewers stay read-blocked.
     if session.get("role") == "viewer":
-        return "Access denied", 403
-
-    if session.get("role") == "tenant_admin" and session.get("tenant_id") != tenant_id:
         return "Access denied", 403
 
     with get_db_session() as db_session:
@@ -233,33 +225,43 @@ def review_task(tenant_id, task_id):
             notes = request.form.get("notes", "")
 
             try:
-                # Get the workflow step (tenant-scoped via Context join)
-                stmt = (
-                    select(WorkflowStep)
-                    .join(Context, WorkflowStep.context_id == Context.context_id)
-                    .filter(Context.tenant_id == tenant_id, WorkflowStep.step_id == task_id)
-                )
-                step = db_session.scalars(stmt).first()
+                # Read AND mutate through the same repository: the tenant-scoping join and the
+                # policy_review type guard live in one place (get_policy_review_step) for both the
+                # POST and GET legs, so the mutation route can't drift from a hand-rolled read.
+                repo = WorkflowRepository(db_session, tenant_id)
+                step = repo.get_policy_review_step(task_id)
 
                 if not step:
                     return "Task not found", 404
 
-                # Update status based on action
+                # Atomic terminal-safe transition via the shared conditional-UPDATE
+                # primitive — a concurrent cancel/terminal decision makes it return
+                # None → the review is refused (409) rather than overwriting.
                 if action == "approve":
-                    step.status = "completed"
-                    step.response_data = {"approved": True, "notes": notes}
+                    transitioned = repo.transition_if_nonterminal(
+                        task_id, status="completed", response_data={"approved": True, "notes": notes}
+                    )
                 elif action == "reject":
-                    step.status = "failed"
-                    step.response_data = {"approved": False, "notes": notes}
+                    transitioned = repo.transition_if_nonterminal(
+                        task_id, status="failed", response_data={"approved": False, "notes": notes}
+                    )
+                else:
+                    # An unknown/missing action is a bad request, not a finalized-task conflict.
+                    return "Invalid action", 400
+
+                if transitioned is None:
+                    return "Task was already finalized (e.g. canceled) and cannot be reviewed", 409
 
                 db_session.commit()
 
-                # Log the action
-                audit_logger = AuditLogger()
-                audit_logger.log(
-                    tenant_id=tenant_id,
+                # Log the action (AuditLogger requires adapter_name; the method is
+                # log_operation, not a nonexistent .log — the prior call 500'd the route).
+                reviewer = session_user_email(default="system")
+                AuditLogger(adapter_name="AdminUI", tenant_id=tenant_id).log_operation(
                     operation="policy_review",
-                    principal_id=session.get("user"),
+                    principal_name=reviewer,
+                    principal_id=reviewer,
+                    adapter_id="AdminUI",
                     success=True,
                     details={"task_id": task_id, "action": action, "notes": notes},
                 )
@@ -272,12 +274,7 @@ def review_task(tenant_id, task_id):
 
         # GET request - show review form
         try:
-            stmt = (
-                select(WorkflowStep)
-                .join(Context, WorkflowStep.context_id == Context.context_id)
-                .filter(Context.tenant_id == tenant_id, WorkflowStep.step_id == task_id)
-            )
-            step = db_session.scalars(stmt).first()
+            step = WorkflowRepository(db_session, tenant_id).get_policy_review_step(task_id)
 
             if not step:
                 return "Task not found", 404

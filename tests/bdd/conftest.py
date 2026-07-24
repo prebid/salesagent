@@ -2807,7 +2807,6 @@ _UC002_IDEMPOTENCY_WIRED: set[str] = {
     "T-UC-002-v31-idempotency-replay",
     "T-UC-002-v31-idempotency-missing",
 }
-
 # UC-002 manual-approval scenario wired to MediaBuyCreateEnv (PR #1567 round-2 item 2):
 # grades the spec-3.1.1 CreateMediaBuySubmitted envelope (status="submitted" +
 # task_id, no media_buy_id/confirmed_at/revision) across all 4 transports —

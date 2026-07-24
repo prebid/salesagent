@@ -7,11 +7,16 @@ Updated for a2a-sdk 1.0 (protobuf API).
 
 import json
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import ANY
 
-from a2a.types import Artifact, Message, Part, Role
+from a2a.types import Artifact, Message, Part, Role, SendMessageRequest, Task, TaskState
 from google.protobuf import json_format, struct_pb2
+
+from tests.helpers.envelope_assertions import assert_envelope_shape
+
+if TYPE_CHECKING:
+    from src.core.resolved_identity import ResolvedIdentity
 
 
 def assert_delivery_forwarded_account(mock_delivery, expected_account) -> None:
@@ -55,6 +60,122 @@ def extract_data_from_artifact(artifact: Artifact) -> dict[str, Any]:
         if part.HasField("data"):
             return json.loads(json_format.MessageToJson(part.data))
     return {}
+
+
+def _locate_failed_task_artifact(task: Task, artifact_name: str) -> Artifact:
+    """THE single locator of a failed Task's error artifact — presence + NAME.
+
+    Split from the strict reader so the reader and the leak oracle share one definition of
+    "which artifact carries the failure"; a change to how it is located (position, naming) is
+    then a single edit rather than two that can drift.
+    """
+    assert task.artifacts, "failed Task must carry the error envelope artifact"
+    artifact = task.artifacts[0]
+    assert artifact.name == artifact_name, f"expected {artifact_name!r} artifact, got {artifact.name!r}"
+    return artifact
+
+
+def _artifact_texts(artifact: Artifact) -> list[str]:
+    """The human-readable TextPart strings of ``artifact``.
+
+    One definition of "which parts are the readable text", shared by the strict reader (which
+    counts them) and the leak oracle (which scans them) — the same reason the locator above is
+    shared. If A2A ever changes how text is carried, this is the single edit.
+    """
+    return [p.text for p in artifact.parts if p.HasField("text")]
+
+
+def _read_failed_task_artifact(task: Task, artifact_name: str) -> dict[str, Any]:
+    """THE single strict reader of a failed Task's error artifact.
+
+    Pins the artifact NAME (via the shared locator), exactly one authoritative DataPart, AND
+    exactly one human-readable TextPart (the A2A error binding: a FAILED artifact carries the
+    error message as its TextPart, never a DataPart alone), then decodes the
+    DataPart. Both public entries (``extract_processing_error_envelope`` and
+    ``assert_failed_task_envelope``) route through here so the shape contract has
+    exactly one home.
+    """
+    artifact = _locate_failed_task_artifact(task, artifact_name)
+    data_parts = [p for p in artifact.parts if p.HasField("data")]
+    text_parts = _artifact_texts(artifact)
+    assert len(data_parts) == 1, f"error artifact must carry exactly one authoritative DataPart, got {len(data_parts)}"
+    assert len(text_parts) == 1, (
+        f"error artifact must carry a human-readable TextPart (A2A error binding), got {len(text_parts)}"
+    )
+    return extract_data_from_artifact(artifact)
+
+
+def extract_processing_error_envelope(task: Task) -> dict[str, Any]:
+    """Read the two-layer AdCP envelope from a failed Task's ``processing_error`` artifact.
+
+    ``on_message_send``'s outer error handler attaches the envelope built by
+    ``AdCPRequestHandler._build_error_envelope`` to the failed Task as a
+    ``processing_error`` artifact. Thin wrapper over the shared strict reader.
+    """
+    return _read_failed_task_artifact(task, "processing_error")
+
+
+def assert_failed_task_envelope(
+    task: Task, *, code: str, recovery: str, artifact_name: str = "error_result"
+) -> dict[str, Any]:
+    """Assert a synchronously-returned failed A2A Task carries the two-layer AdCP envelope with the
+    given wire ``code`` and ``recovery``.
+
+    Pins the FAILED state and the A2A ARTIFACT framing (name, single DataPart, single TextPart)
+    via the shared strict reader, then delegates the ENVELOPE assertion to the canonical
+    ``assert_envelope_shape`` — so both layers (``adcp_error`` and ``errors[0]``) are required to
+    agree here exactly as they are at every other transport boundary. Asserting only
+    ``adcp_error`` would let a divergence between the two layers pass every call site.
+    ``recovery`` is REQUIRED: silent drift between a typed exception's recovery and the wire is
+    exactly the regression this helper exists to catch. The artifact NAME differs by path: a
+    per-skill failure emits ``error_result`` (the default), while a top-level rejection (e.g. the
+    multi-skill guard) emits ``processing_error`` — pass ``artifact_name`` for the latter.
+    Returns the decoded envelope for any test-specific follow-up assertions.
+    """
+    assert isinstance(task, Task), f"expected a failed Task, got {type(task).__name__}"
+    assert task.status.state == TaskState.TASK_STATE_FAILED, f"expected FAILED task, got {task.status.state!r}"
+    envelope = _read_failed_task_artifact(task, artifact_name)
+    assert_envelope_shape(envelope, code, recovery=recovery)
+    return envelope
+
+
+def assert_failed_task_no_secret_leak(task: Task, *, artifact_name: str = "error_result") -> None:
+    """Assert NO secret fragment leaks on ANY client-facing carrier of a failed Task.
+
+    One home for "which bytes of a failed Task are the buyer-facing surface": the structured
+    DataPart envelope AND every human-readable TextPart. If a failed artifact ever grows a third
+    client-visible carrier (a new part type, a status message, metadata), it is added here once
+    and every scrub test tightens in lockstep — rather than each test hand-rolling the surface
+    definition and silently under-covering the new carrier when one copy is missed.
+    """
+    from tests.helpers.secret_scrub import assert_no_secret_leak
+
+    artifact = _locate_failed_task_artifact(task, artifact_name)
+    envelope = extract_data_from_artifact(artifact)
+    text_parts = _artifact_texts(artifact)
+    client_facing = json.dumps(envelope) + " " + " ".join(text_parts)
+    assert_no_secret_leak(client_facing, context=f"failed Task {artifact_name!r} artifact")
+
+
+def make_test_a2a_identity() -> "ResolvedIdentity":
+    """Standard factory-built ResolvedIdentity for A2A handler unit tests.
+
+    Not a ``unittest.mock`` object — a real identity from
+    ``PrincipalFactory.make_identity`` with canned A2A test values.
+    """
+    from tests.factories import PrincipalFactory
+
+    return PrincipalFactory.make_identity(
+        principal_id="test-principal",
+        tenant_id="test-tenant",
+        tenant={"tenant_id": "test-tenant"},
+        protocol="a2a",
+    )
+
+
+def make_nl_send_message_request(text: str) -> SendMessageRequest:
+    """Build a minimal A2A SendMessageRequest carrying NL text (no skills)."""
+    return SendMessageRequest(message=create_a2a_text_message(text))
 
 
 def _dict_to_value(d: dict) -> struct_pb2.Value:

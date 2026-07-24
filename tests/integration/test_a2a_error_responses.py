@@ -12,18 +12,24 @@ through the A2A wrapper layer, including:
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from a2a.server.routes.common import ServerCallContext
-from a2a.types import Message, SendMessageRequest, Task
+from a2a.types import Message, SendMessageRequest, Task, TaskState
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape, assert_no_raw_validation_leak
 from tests.helpers.adcp_factories import create_test_package_request_dict
+from tests.helpers.secret_scrub import SECRET_BEARING_MESSAGE, assert_no_secret_leak
 from tests.integration.conftest import seed_error_test_tenant
-from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
+from tests.utils.a2a_helpers import (
+    create_a2a_message_with_skill,
+    extract_data_from_artifact,
+    extract_processing_error_envelope,
+    make_nl_send_message_request,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -105,6 +111,7 @@ class TestA2AErrorPropagation:
         )
         handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
         handler._resolve_a2a_identity = MagicMock(return_value=identity)
+        handler._send_protocol_webhook = AsyncMock()
 
         from src.core.config_loader import set_current_tenant
 
@@ -141,6 +148,11 @@ class TestA2AErrorPropagation:
             message_substr="Missing required AdCP parameters",
             recovery="correctable",
         )
+
+        # Immediate terminal failure returned synchronously → no protocol webhook
+        # (AdCP 3.1.1 a2a-guide.mdx terminal-state rule); the failure rides
+        # in the Task body as the two-layer envelope asserted above.
+        handler._send_protocol_webhook.assert_not_awaited()
 
     async def test_create_media_buy_auth_error_includes_errors_field(self, handler, test_tenant):
         """Principal-not-found surfaces AUTH_REQUIRED as a two-layer envelope on the A2A wire."""
@@ -342,6 +354,46 @@ class TestA2AErrorPropagation:
         # vs the rendered message substring) — both envelope layers carry it.
         wire_field = artifact_data["errors"][0].get("field") or ""
         assert "budget" in wire_field, f"expected a budget field path on the wire, got {wire_field!r}"
+
+    async def test_nl_create_media_buy_unsupported_returns_failed_task_envelope(
+        self, handler, test_tenant, test_principal
+    ):
+        """NL create-media-buy is an application failure in a failed Task, not JSON-RPC.
+
+        Grounding: AdCP 3.1.1
+        ``building/operating/transport-errors.mdx`` "Layer Separation";
+        storyboard: ungraded, pending upstream obligation (#1574).
+        """
+        identity = PrincipalFactory.make_identity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        from src.core.config_loader import set_current_tenant
+
+        set_current_tenant(test_tenant)
+
+        params = make_nl_send_message_request("create a media buy")
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.status.state == TaskState.TASK_STATE_FAILED
+
+        # Strict reader pins the outer-handler artifact contract (processing_error
+        # name + single DataPart) at integration altitude, same as the unit tests.
+        artifact_data = extract_processing_error_envelope(result)
+        assert_envelope_shape(
+            artifact_data,
+            "UNSUPPORTED_FEATURE",
+            recovery="correctable",
+            message_substr="Natural-language create_media_buy is not supported",
+        )
 
     async def test_create_media_buy_success_has_no_errors_field(self, handler, test_tenant, test_principal):
         """Test that successful responses don't have errors field (or it's None/empty)."""
@@ -874,24 +926,30 @@ class TestA2AErrorResponseStructure:
 
         from src.core.exceptions import (
             AdCPAdapterError,
+            AdCPError,
             AdCPValidationError,
             build_two_layer_error_envelope,
         )
 
-        # Test transient recovery (AdCPAdapterError)
+        # Internal AdCPAdapterError is scrubbed at the seam (its raise sites can interpolate a
+        # secret) — re-raised as a wire-safe base AdCPError; recovery stays transient (canonical).
         async def mock_adapter_fail(params, token):
-            raise AdCPAdapterError("GAM timeout")
+            raise AdCPAdapterError(f"GAM timeout: {SECRET_BEARING_MESSAGE}")
 
         with patch.object(handler, "_handle_get_products_skill", mock_adapter_fail):
-            with pytest.raises(AdCPAdapterError) as exc_info:
+            with pytest.raises(AdCPError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
             error = exc_info.value
             assert error.recovery == "transient", "AdCPAdapterError must have transient recovery"
+            assert error.wire_error_code == "SERVICE_UNAVAILABLE"
+            assert "GAM timeout" not in error.message
+            assert_no_secret_leak(error.message, context="seam-scrubbed adapter message")
             # Envelope built from the propagated exception preserves recovery.
             envelope = build_two_layer_error_envelope(error)
             assert envelope["adcp_error"]["recovery"] == "transient"
             assert envelope["errors"][0]["recovery"] == "transient"
+            assert_no_secret_leak(envelope, context="full adapter-failure envelope")
 
         # Test correctable recovery (AdCPValidationError)
         async def mock_validation_fail(params, token):
@@ -930,56 +988,57 @@ class TestA2AErrorResponseStructure:
             envelope = build_two_layer_error_envelope(error)
             assert envelope["adcp_error"]["recovery"] == "transient"
 
-    async def test_valueerror_wraps_to_adcp_validation_error(self, integration_db, handler):
-        """ValueError in a skill handler propagates as AdCPValidationError.
+    async def test_valueerror_keeps_validation_code_but_scrubs_message(self, integration_db, handler):
+        """ValueError in a skill handler → wire-safe error keeping the SEMANTIC code but scrubbed.
 
-        ``_handle_explicit_skill`` wraps the ValueError as a synthetic
-        ``AdCPValidationError`` and re-raises, so the outer dispatcher
-        catches it via ``except AdCPError`` and produces a failed Task
-        with a two-layer envelope — same wire shape as natively-raised
-        AdCPErrors. No JSON-RPC ``InvalidParamsError`` translation.
+        The seam keeps VALIDATION_ERROR + correctable recovery (the same the synchronous boundaries
+        emit for a ValueError), so a buyer watching the webhook and the synchronous response sees
+        ONE code — but the untrusted ``str(e)`` is SCRUBBED (a raw ValueError can bear a connection
+        string). Before the provenance-vs-semantics split this re-raised a *trusted*
+        ``AdCPValidationError`` whose raw message reached the wire. ``__cause__`` chains the original.
         """
         from unittest.mock import patch
 
-        from src.core.exceptions import AdCPValidationError
+        from src.core.exceptions import AdCPError
 
         async def mock_valueerror(params, identity):
-            raise ValueError("missing required field")
+            raise ValueError(f"missing field {SECRET_BEARING_MESSAGE}")
 
         with patch.object(handler, "_handle_get_products_skill", mock_valueerror):
-            with pytest.raises(AdCPValidationError) as exc_info:
+            with pytest.raises(AdCPError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, None)
 
-            assert "missing required field" in str(exc_info.value)
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
-            # AdCPValidationError class default — preserved through the wrap.
-            assert exc_info.value.recovery == "correctable"
-            # Original ValueError is chained via __cause__ for traceability.
-            assert isinstance(exc_info.value.__cause__, ValueError)
+            error = exc_info.value
+            assert error.wire_error_code == "VALIDATION_ERROR"
+            assert error.recovery == "correctable"
+            assert "missing field" not in error.message
+            assert_no_secret_leak(error.message, context="seam-scrubbed ValueError message")
+            # Original ValueError is chained via __cause__ for traceability (server-side only).
+            assert isinstance(error.__cause__, ValueError)
 
-    async def test_permissionerror_wraps_to_adcp_authorization_error(self, integration_db, handler):
-        """PermissionError in a skill handler propagates as AdCPAuthorizationError.
+    async def test_permissionerror_keeps_auth_code_but_scrubs_message(self, integration_db, handler):
+        """PermissionError in a skill handler → AUTH_REQUIRED + correctable, message scrubbed.
 
-        Symmetric with ValueError handling. Outer dispatcher produces a failed
-        Task with envelope (AUTH_REQUIRED, recovery=correctable).
+        Symmetric with the ValueError case: semantic code kept for webhook↔sync parity, untrusted
+        ``str(e)`` (which can bear a token) scrubbed.
         """
         from unittest.mock import patch
 
-        from src.core.exceptions import AdCPAuthorizationError
+        from src.core.exceptions import AdCPError
 
         async def mock_permerror(params, identity):
-            raise PermissionError("tenant scope mismatch")
+            raise PermissionError(f"tenant scope mismatch {SECRET_BEARING_MESSAGE}")
 
         with patch.object(handler, "_handle_get_products_skill", mock_permerror):
-            with pytest.raises(AdCPAuthorizationError) as exc_info:
+            with pytest.raises(AdCPError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, None)
 
-            assert "tenant scope mismatch" in str(exc_info.value)
-            assert exc_info.value.error_code == "AUTH_REQUIRED"
-            # AdCPAuthorizationError default recovery is correctable per the pinned AUTH_REQUIRED
-            # enum (#1417), preserved through the PermissionError wrap.
-            assert exc_info.value.recovery == "correctable"
-            assert isinstance(exc_info.value.__cause__, PermissionError)
+            error = exc_info.value
+            assert error.wire_error_code == "AUTH_REQUIRED"
+            assert error.recovery == "correctable"
+            assert "tenant scope mismatch" not in error.message
+            assert_no_secret_leak(error.message, context="seam-scrubbed PermissionError message")
+            assert isinstance(error.__cause__, PermissionError)
 
     async def test_untyped_exception_falls_through_to_dispatcher(self, integration_db, handler):
         """Untyped exceptions from a skill handler are no longer caught locally.

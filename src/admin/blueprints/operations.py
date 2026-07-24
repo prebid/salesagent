@@ -12,12 +12,13 @@ from adcp.types import Package
 from flask import Blueprint, request
 from sqlalchemy import select
 
-from src.admin.utils import echo_context, require_auth, require_tenant_access
+from src.admin.utils import echo_context, require_auth, require_tenant_access, session_user_email
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.database.repositories.workflow import WorkflowRepository
 from src.core.exceptions import AdCPMediaBuyRejectedError
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess
-from src.core.webhook_validator import validate_webhook_task_type
+from src.core.webhook_validator import resolve_webhook_task_id, validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -109,7 +110,6 @@ def media_buy_detail(tenant_id, media_buy_id):
         CreativeAssignment,
         Principal,
         Product,
-        WorkflowStep,
     )
 
     try:
@@ -179,20 +179,14 @@ def media_buy_detail(tenant_id, media_buy_id):
             ctx_manager = ContextManager()
             workflow_steps = ctx_manager.get_object_lifecycle("media_buy", media_buy_id, tenant_id=tenant_id)
 
-            # Find if there's a pending approval step
-            pending_approval_step = None
-            for step in workflow_steps:
-                if step.get("status") in ["requires_approval", "pending_approval"]:
-                    # Get the full workflow step for approval actions (tenant-scoped via Context join)
-                    from src.core.database.models import Context as DBContext
-
-                    stmt = (
-                        select(WorkflowStep)
-                        .join(DBContext)
-                        .where(DBContext.tenant_id == tenant_id, WorkflowStep.step_id == step["step_id"])
-                    )
-                    pending_approval_step = db_session.scalars(stmt).first()
-                    break
+            # Find the step awaiting a decision for this media buy, via the repository so the
+            # canonical APPROVABLE_STEP_STATUSES (incl. the legacy ``approval`` alias) is used —
+            # the same set the approve/reject route and the atomic claim/reject methods use.
+            # An inline {requires_approval, pending_approval} filter here would hide the approval
+            # UI for legacy ``approval`` steps that the POST route can in fact action.
+            pending_approval_step = WorkflowRepository(db_session, tenant_id).get_approvable_step_for_object(
+                "media_buy", media_buy_id
+            )
 
             # Get computed readiness state (not just raw database status)
             from src.admin.services.media_buy_readiness_service import MediaBuyReadinessService
@@ -312,6 +306,19 @@ def _media_buy_webhook_metadata(step_data: dict, tenant_id: str, media_buy_id: s
     }
 
 
+def _refused_media_buy_redirect(tenant_id: str, media_buy_id: str, message: str):
+    """Flash ``message`` and redirect back to the media-buy detail page.
+
+    The approve and reject routes both refuse an atomic claim/reject the same way — flash an
+    error, then redirect to the detail page — differing only in wording. One home so the
+    redirect target can't drift between the two branches.
+    """
+    from flask import flash, redirect, url_for
+
+    flash(message, "error")
+    return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
+
+
 @operations_bp.route("/media-buy/<media_buy_id>/approve", methods=["POST"])
 @require_tenant_access()
 def approve_media_buy(tenant_id, media_buy_id, **kwargs):
@@ -322,30 +329,29 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
     from sqlalchemy.orm import attributes
 
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import Context as DBContext
-    from src.core.database.models import ObjectWorkflowMapping, WorkflowStep
 
     try:
         action = request.form.get("action")  # "approve" or "reject"
         reason = request.form.get("reason", "")
+        requested_step_id = request.form.get("workflow_step_id")
 
         with get_db_session() as db_session:
-            # Find the pending approval workflow step for this media buy (tenant-scoped via Context join)
-            stmt = (
-                select(WorkflowStep)
-                .join(ObjectWorkflowMapping, WorkflowStep.step_id == ObjectWorkflowMapping.step_id)
-                .join(DBContext)
-                .filter(
-                    DBContext.tenant_id == tenant_id,
-                    ObjectWorkflowMapping.object_type == "media_buy",
-                    ObjectWorkflowMapping.object_id == media_buy_id,
-                    WorkflowStep.status.in_(["requires_approval", "pending_approval"]),
+            # Find the workflow step awaiting a decision for this media buy, via the repository
+            # so the lookup uses the CANONICAL APPROVABLE_STEP_STATUSES (incl. the legacy
+            # ``approval`` alias GAM/Broadstreet emit) — the same source set the atomic
+            # claim_approval/reject_if_approvable methods guard on. An inline
+            # {requires_approval, pending_approval} filter here would drop legacy ``approval``
+            # steps before they ever reached the claim/reject below.
+            step = (
+                WorkflowRepository(db_session, tenant_id).get_approvable_step_for_object(
+                    "media_buy", media_buy_id, step_id=requested_step_id
                 )
+                if requested_step_id
+                else None
             )
-            step = db_session.scalars(stmt).first()
 
             if not step:
-                flash("No pending approval found for this media buy", "warning")
+                flash("The selected approval is missing or no longer pending for this media buy", "warning")
                 return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
             # Extract step data to dict to avoid detached instance errors after commit/nested sessions.
@@ -359,10 +365,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
             }
 
             # Get user info for audit
-            from flask import session as flask_session
-
-            user_info = flask_session.get("user", {})
-            user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
+            user_email = session_user_email(default="system")
 
             approve_repo = MediaBuyRepository(db_session, tenant_id)
             media_buy = approve_repo.get_by_id(media_buy_id)
@@ -378,7 +381,19 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 }
 
             if action == "approve":
-                step.status = "approved"
+                # Atomic compare-and-set claim: requires_approval/pending_approval → approved
+                # via the source-state-guarded primitive. Because ``approved`` is non-terminal,
+                # a broad terminal-guard would let a second concurrent approver win an
+                # approved→approved no-op and ALSO run the irreversible adapter creation below
+                # (duplicate order). claim_approval admits exactly one approver; a loser (already
+                # approved, canceled, or otherwise not awaiting approval) returns None → refuse
+                # and DO NOT run the irreversible adapter creation.
+                if WorkflowRepository(db_session, tenant_id).claim_approval(step.step_id) is None:
+                    return _refused_media_buy_redirect(
+                        tenant_id,
+                        media_buy_id,
+                        "This step is no longer awaiting approval (already approved or finalized).",
+                    )
                 step.updated_at = datetime.now(UTC)
 
                 if not step.comments:
@@ -516,11 +531,12 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         protocol = step_data["request_data"].get(
                             "protocol", "mcp"
                         )  # Default to MCP for backward compatibility
+                        correlation_task_id = resolve_webhook_task_id(step_data["request_data"], step_data["step_id"])
 
                         # Create appropriate webhook payload based on protocol
                         if protocol == "a2a":
                             create_media_buy_approved_payload = create_a2a_webhook_payload(
-                                task_id=step_data["step_id"],
+                                task_id=correlation_task_id,
                                 status=AdcpTaskStatus.completed,
                                 result=create_media_buy_approved_result,
                                 context_id=step_data["context_id"],
@@ -530,7 +546,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                             # Validate a COPY for the SDK payload; metadata keeps
                             # the original label (salesagent-yi3s, salesagent-yk7o).
                             create_media_buy_approved_payload = create_mcp_webhook_payload(
-                                task_id=step_data["step_id"],
+                                task_id=correlation_task_id,
                                 task_type=validate_webhook_task_type(step_data.get("tool_name", "create_media_buy")),
                                 result=create_media_buy_approved_result,
                                 status=AdcpTaskStatus.completed,
@@ -555,8 +571,21 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     flash("Media buy approved successfully", "success")
 
             elif action == "reject":
-                step.status = "rejected"
-                step.error_message = reason or "Rejected by administrator"
+                # Atomic compare-and-set with the SAME source-state guard as approve (mirror):
+                # a step already approved (execution underway), canceled, or otherwise not
+                # awaiting a decision returns None → refuse the reject. This prevents rejecting
+                # an approved step and stranding a live ad-server order behind a rejected workflow.
+                if (
+                    WorkflowRepository(db_session, tenant_id).reject_if_approvable(
+                        step.step_id, error_message=reason or "Rejected by administrator"
+                    )
+                    is None
+                ):
+                    return _refused_media_buy_redirect(
+                        tenant_id,
+                        media_buy_id,
+                        "This step is no longer awaiting a decision (already approved or finalized).",
+                    )
                 step.updated_at = datetime.now(UTC)
 
                 if not step.comments:
@@ -611,11 +640,12 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     protocol = step_data["request_data"].get(
                         "protocol", "mcp"
                     )  # Default to MCP for backward compatibility
+                    correlation_task_id = resolve_webhook_task_id(step_data["request_data"], step_data["step_id"])
 
                     # Create appropriate webhook payload based on protocol
                     if protocol == "a2a":
                         create_media_buy_rejected_payload = create_a2a_webhook_payload(
-                            task_id=step_data["step_id"],
+                            task_id=correlation_task_id,
                             status=AdcpTaskStatus.rejected,
                             result=create_media_buy_rejected_result,
                             context_id=step_data["context_id"],
@@ -625,7 +655,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         # Validate a COPY for the SDK payload; metadata keeps the
                         # original label (salesagent-yi3s, salesagent-yk7o).
                         create_media_buy_rejected_payload = create_mcp_webhook_payload(
-                            task_id=step_data["step_id"],
+                            task_id=correlation_task_id,
                             task_type=validate_webhook_task_type(step_data.get("tool_name", "create_media_buy")),
                             result=create_media_buy_rejected_result,
                             status=AdcpTaskStatus.rejected,
@@ -646,6 +676,11 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         logger.warning(f"Failed to send webhook notification: {webhook_err}")
 
                 flash("Media buy rejected", "info")
+
+            else:
+                # Neither approve nor reject (unknown/missing action) — a no-op would be
+                # indistinguishable from success to the operator. Flash and redirect.
+                flash(f"Unknown action: {action!r}", "error")
 
             return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 

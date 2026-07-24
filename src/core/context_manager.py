@@ -20,8 +20,9 @@ from src.core.async_utils import pin_task
 from src.core.database.database_session import DatabaseManager
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
-from src.core.exceptions import AdCPError, build_two_layer_error_envelope, normalize_to_adcp_error
-from src.core.webhook_validator import validate_webhook_task_type
+from src.core.database.repositories.workflow import WorkflowRepository
+from src.core.exceptions import build_two_layer_error_envelope
+from src.core.webhook_validator import resolve_webhook_task_id, validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -282,72 +283,73 @@ class ContextManager(DatabaseManager):
             response_data = response_data.model_dump(mode="json")
         session = self.session
         try:
-            stmt = select(WorkflowStep).filter_by(step_id=step_id)
-            if tenant_id:
-                stmt = stmt.join(DBContext).where(DBContext.tenant_id == tenant_id)
+            # Resolve the tenant scope the repository primitive needs. Most callers
+            # pass it; when absent, the repository derives it from the step's context
+            # (data access stays in the repository — no raw query here).
+            scoped_tenant = tenant_id or WorkflowRepository.resolve_tenant_for_step(session, step_id)
+            if scoped_tenant is None:
+                return  # step (or its context) not found
+            repo = WorkflowRepository(session, scoped_tenant)
 
-            step = session.scalars(stmt).first()
-            if step:
-                old_status = step.status  # Capture old status before changing
-
-                if status:
-                    step.status = status
-                    if status in ["completed", "failed"] and not step.completed_at:
-                        step.completed_at = datetime.now(UTC)
-
+            if status:
+                # ATOMIC terminal-safe status write via the SHARED conditional-UPDATE
+                # primitive (WHERE status NOT IN terminal). This closes the cancellation
+                # TOCTOU even when update_workflow_step runs concurrently with a buyer
+                # cancel — e.g. MockAdServer._schedule_async_completion() fires this from
+                # a delayed background thread. A refused transition (None) means the step
+                # was concurrently terminalized (canceled) or is gone: apply NOTHING and
+                # send NO webhook, so we never report a completion that lost the race.
+                completed_at = datetime.now(UTC) if status in ("completed", "failed") else None
+                step = repo.transition_if_nonterminal(
+                    step_id,
+                    status=status,
+                    completed_at=completed_at,
+                    response_data=response_data,
+                    error_message=error_message,
+                )
+                if step is None:
+                    console.print(
+                        f"[yellow]⚠️ Status change to '{status}' refused for step {step_id} "
+                        f"(already terminal or not found) — no webhook[/yellow]"
+                    )
+                    return
+                if transaction_details is not None:
+                    step.transaction_details = transaction_details
+                self._apply_comment(step, add_comment)
+                session.commit()
+                # Webhook fires ONLY because the status transition actually applied.
+                self._send_push_notifications(step, status, session)
+            else:
+                # No status change → plain field update; no terminal concern, no webhook
+                # (webhooks fire on status changes only, matching prior behavior).
+                step = repo.get_by_step_id(step_id)
+                if step is None:
+                    return
                 if response_data is not None:
                     step.response_data = response_data
                 if error_message is not None:
                     step.error_message = error_message
                 if transaction_details is not None:
                     step.transaction_details = transaction_details
-
-                if add_comment:
-                    # Ensure comments is a list
-                    if not isinstance(step.comments, list):
-                        step.comments = []
-                    # Create a new list to trigger SQLAlchemy change detection
-                    new_comments = list(step.comments)
-                    new_comments.append(
-                        {
-                            "user": add_comment.get("user", "system"),
-                            "timestamp": datetime.now(UTC).isoformat(),
-                            "text": add_comment.get("text", add_comment.get("comment", "")),
-                        }
-                    )
-                    step.comments = new_comments
-
-                # DEBUG: Log the condition check values BEFORE commit
-                console.print("[magenta]🔍 PRE-COMMIT WEBHOOK DEBUG:[/magenta]")
-                console.print("[magenta]   update_workflow_step called with:[/magenta]")
-                console.print(f"[magenta]     step_id={step_id}[/magenta]")
-                console.print(f"[magenta]     status parameter={status}[/magenta]")
-                console.print("[magenta]   Database state BEFORE commit:[/magenta]")
-                console.print(f"[magenta]     old_status={old_status}[/magenta]")
-                console.print(f"[magenta]     new step.status={step.status}[/magenta]")
-                console.print("[magenta]   Condition evaluation:[/magenta]")
-                console.print(f"[magenta]     status parameter truthy? {bool(status)}[/magenta]")
-                console.print(f"[magenta]     step object exists? {step is not None}[/magenta]")
-                console.print(f"[magenta]     Will trigger webhook? {status and step}[/magenta]")
-
+                self._apply_comment(step, add_comment)
                 session.commit()
-                console.print(f"[green]✅ Updated workflow step {step_id} (committed to database)[/green]")
-
-                # DEBUG: Log the condition check values AFTER commit
-                console.print("[yellow]🔍 POST-COMMIT WEBHOOK DEBUG:[/yellow]")
-                console.print(f"[yellow]   status={status}[/yellow]")
-                console.print(f"[yellow]   old_status={old_status}[/yellow]")
-                console.print(f"[yellow]   step exists={step is not None}[/yellow]")
-                console.print(f"[yellow]   Webhook trigger condition (status and step): {status and step}[/yellow]")
-
-                # Send push notifications if status changed
-                if status and step:
-                    console.print(f"[blue]🚀 WEBHOOK: Calling _send_push_notifications for step {step_id}[/blue]")
-                    self._send_push_notifications(step, status, session)
-                else:
-                    console.print(f"[yellow]⚠️ WEBHOOK SKIPPED: status={status}, step={step is not None}[/yellow]")
         finally:
             session.close()
+
+    @staticmethod
+    def _apply_comment(step: WorkflowStep, add_comment: dict[str, str] | None) -> None:
+        """Append a comment to a step's comments list (new list → change detection)."""
+        if not add_comment:
+            return
+        comments = list(step.comments) if isinstance(step.comments, list) else []
+        comments.append(
+            {
+                "user": add_comment.get("user", "system"),
+                "timestamp": datetime.now(UTC).isoformat(),
+                "text": add_comment.get("text", add_comment.get("comment", "")),
+            }
+        )
+        step.comments = comments
 
     def audit_workflow_step_failure(self, step_id: str, exc: Exception) -> None:
         """Mark a workflow step failed with the spec two-layer envelope as ``response_data``.
@@ -359,38 +361,25 @@ class ContextManager(DatabaseManager):
         (``adcp_error`` + ``errors[]``) via ``build_two_layer_error_envelope``
         so async and sync paths see the same wire shape.
 
-        Untyped exceptions are normalized to ``AdCPError`` via
-        ``normalize_to_adcp_error``. Wire-code enforcement ensures webhook
-        subscribers only see codes in ``WIRE_STANDARD_CODES``.
+        The shared ``safe_adcp_error`` policy (``src/core/exceptions.py``) does the whole job and
+        must receive the ORIGINAL exception: it scrubs the message for internal/infra errors (the
+        SERVICE_UNAVAILABLE family + terminal CONFIGURATION_ERROR) AND for every UNTYPED exception
+        (``ValueError``, ``PermissionError``, adapter ``RuntimeError``…), so a raw interpolated
+        ``str(exc)`` — e.g. a connection string — never reaches the buyer's webhook; it coerces any
+        non-standard code to ``SERVICE_UNAVAILABLE`` and passes only TYPED client-correctable
+        ``AdCPError`` subclasses through with their buyer-facing message intact. Do NOT pre-wrap
+        with ``normalize_to_adcp_error`` — that would map an untyped ``ValueError`` to a *trusted*
+        ``AdCPValidationError`` whose raw message (the secret) then passes through the scrub. This
+        is the async twin of the synchronous re-raise scrub; both share one definition.
 
         Wraps the ``update_workflow_step`` call in ``try/except`` so a DB
         hiccup during audit doesn't replace the original exception that the
         caller is about to re-raise.
         """
-        from src.core.exceptions import WIRE_STANDARD_CODES
+        from src.core.exceptions import safe_adcp_error
 
         try:
-            source = normalize_to_adcp_error(exc)
-
-            # Defensive wire-code enforcement: webhook subscribers must only
-            # see codes in ``WIRE_STANDARD_CODES``. If the wire code falls
-            # outside the standard set, override with SERVICE_UNAVAILABLE
-            # so async subscribers never receive an internal-only code.
-            # Structured fields (details/field/suggestion/context) carry
-            # forward so buyer agents and webhook subscribers retain
-            # machine-actionable correction context across the rewrite.
-            wire_code = source.wire_error_code
-            if wire_code not in WIRE_STANDARD_CODES:
-                source = AdCPError.synthesize(
-                    source.message or str(source),
-                    error_code="SERVICE_UNAVAILABLE",
-                    recovery="terminal",
-                    details=source.details,
-                    field=source.field,
-                    suggestion=source.suggestion,
-                    context=source.context,
-                )
-
+            source = safe_adcp_error(exc)
             response_data = build_two_layer_error_envelope(source)
             error_message = source.message or str(source)
 
@@ -808,131 +797,141 @@ class ContextManager(DatabaseManager):
 
             console.print(f"[cyan]🔍 Found {len(webhooks)} active webhook configs for principal {principal_id}[/cyan]")
 
-            # Send notifications for each mapping (media buy, creative, etc.)
-            for mapping in mappings:
-                console.print(
-                    f"[cyan]📦 Processing mapping: {mapping.object_type} {mapping.object_id} action={mapping.action}[/cyan]"
+            # ONE webhook per step status change. The payload depends only on
+            # (step, new_status): the delivery URL comes from the step's own
+            # ``request_data.push_notification_config``, so ``mappings`` and
+            # ``webhooks`` are opt-in gates, not per-item delivery targets.
+            # Looping over them multiplied identical sends (mappings x configs)
+            # — a buyer's auto-approved create_media_buy received duplicate
+            # ``completed`` webhooks. E2E pin:
+            # test_a2a_webhook_payload_types::test_completed_status_sends_task_payload.
+            if not webhooks:
+                console.print(f"[yellow]No active webhook configs for principal {principal_id}; skipping[/yellow]")
+                return
+            mapping = mappings[0]
+            console.print(
+                f"[cyan]📦 Processing mapping: {mapping.object_type} {mapping.object_id} action={mapping.action}[/cyan]"
+            )
+            # build push notification config from step request data
+            from uuid import uuid4
+
+            cfg_dict = (step.request_data or {}).get("push_notification_config") or {}
+            url = cfg_dict.get("url")
+            if not url:
+                console.print("[red]No push notification URL present; skipping webhook[/red]")
+                return
+
+            authentication = cfg_dict.get("authentication") or {}
+            schemes = authentication.get("schemes") or []
+            auth_type = schemes[0] if isinstance(schemes, list) and schemes else None
+            auth_token = authentication.get("credentials")
+
+            # Derive principal/tenant from the step context if available
+            context_obj = getattr(step, "context", None)
+            derived_tenant_id = tenant_id or (getattr(context_obj, "tenant_id", None))
+            derived_principal_id = getattr(context_obj, "principal_id", None)
+
+            push_notification_config = PushNotificationConfig(
+                id=cfg_dict.get("id") or f"pnc_{uuid4().hex[:16]}",
+                tenant_id=derived_tenant_id,
+                principal_id=derived_principal_id,
+                url=url,
+                authentication_type=auth_type,
+                authentication_token=auth_token,
+                is_active=True,
+            )
+
+            service = get_protocol_webhook_service()
+
+            console.print(
+                f"[cyan]📤 Sending webhook to {push_notification_config.url} for {mapping.object_type} {mapping.object_id}[/cyan]"
+            )
+
+            # Build webhook payload based on protocol type.
+            # task_type_str is the ORIGINAL action label — it keys the
+            # delivery-webhook guards + audit log and must NOT be rewritten
+            # by the SDK fallback. wire_task_type is the
+            # validated COPY passed to the SDK payload builder.
+            task_type_str = step.tool_name or mapping.action or "unknown"
+            protocol = (step.request_data or {}).get("protocol", "mcp")  # Default to MCP
+            # Correlate to the id the BUYER holds. The A2A boundary persisted its
+            # outer transport ``task_*`` id on the step's request_data
+            # (external_task_id) at create time; the buyer polls / receives the
+            # webhook against THAT id, not the internal step_id. MCP/REST have no
+            # outer id, so they fall back to step_id (unchanged behavior).
+            correlation_task_id = resolve_webhook_task_id(step.request_data, step.step_id)
+            try:
+                status_enum = GeneratedTaskStatus(new_status)
+            except ValueError:
+                status_enum = GeneratedTaskStatus.unknown
+
+            # SDK 5.7 validates task_type against TaskType enum; coerce a
+            # COPY for the payload while leaving task_type_str untouched.
+            wire_task_type = validate_webhook_task_type(task_type_str)
+
+            payload: Task | TaskStatusUpdateEvent | McpWebhookPayload
+            if protocol == "a2a":
+                payload = create_a2a_webhook_payload(
+                    task_id=correlation_task_id,
+                    status=status_enum,
+                    context_id=step.context_id,
+                    result=step.response_data or {},
+                )
+            else:
+                # SDK 5.7: returns McpWebhookPayload directly
+                payload = create_mcp_webhook_payload(
+                    task_id=correlation_task_id,
+                    status=status_enum,
+                    task_type=wire_task_type,
+                    result=step.response_data,
                 )
 
-                for _webhook_config in webhooks:
-                    # build push notification config from step request data
-                    from uuid import uuid4
+            metadata: dict[str, Any] = {
+                "task_type": task_type_str,
+                "tenant_id": derived_tenant_id,
+                "principal_id": derived_principal_id,
+            }
 
-                    cfg_dict = (step.request_data or {}).get("push_notification_config") or {}
-                    url = cfg_dict.get("url")
-                    if not url:
-                        console.print("[red]No push notification URL present; skipping webhook[/red]")
-                        continue
-
-                    authentication = cfg_dict.get("authentication") or {}
-                    schemes = authentication.get("schemes") or []
-                    auth_type = schemes[0] if isinstance(schemes, list) and schemes else None
-                    auth_token = authentication.get("credentials")
-
-                    # Derive principal/tenant from the step context if available
-                    context_obj = getattr(step, "context", None)
-                    derived_tenant_id = tenant_id or (getattr(context_obj, "tenant_id", None))
-                    derived_principal_id = getattr(context_obj, "principal_id", None)
-
-                    push_notification_config = PushNotificationConfig(
-                        id=cfg_dict.get("id") or f"pnc_{uuid4().hex[:16]}",
-                        tenant_id=derived_tenant_id,
-                        principal_id=derived_principal_id,
-                        url=url,
-                        authentication_type=auth_type,
-                        authentication_token=auth_token,
-                        is_active=True,
+            try:
+                # If we're already in an event loop, schedule the send; otherwise run it directly
+                try:
+                    loop = asyncio.get_running_loop()
+                    task = loop.create_task(
+                        service.send_notification(
+                            push_notification_config=push_notification_config,
+                            payload=payload,
+                            metadata=metadata,
+                        )
                     )
 
-                    service = get_protocol_webhook_service()
-
-                    console.print(
-                        f"[cyan]📤 Sending webhook to {push_notification_config.url} for {mapping.object_type} {mapping.object_id}[/cyan]"
-                    )
-
-                    # Build webhook payload based on protocol type.
-                    # task_type_str is the ORIGINAL action label — it keys the
-                    # delivery-webhook guards + audit log and must NOT be rewritten
-                    # by the SDK fallback (salesagent-yi3s). wire_task_type is the
-                    # validated COPY passed to the SDK payload builder.
-                    task_type_str = step.tool_name or mapping.action or "unknown"
-                    protocol = (step.request_data or {}).get("protocol", "mcp")  # Default to MCP
-                    try:
-                        status_enum = GeneratedTaskStatus(new_status)
-                    except ValueError:
-                        status_enum = GeneratedTaskStatus.unknown
-
-                    # SDK 5.7 validates task_type against TaskType enum; coerce a
-                    # COPY for the payload while leaving task_type_str untouched.
-                    wire_task_type = validate_webhook_task_type(task_type_str)
-
-                    payload: Task | TaskStatusUpdateEvent | McpWebhookPayload
-                    if protocol == "a2a":
-                        payload = create_a2a_webhook_payload(
-                            task_id=step.step_id,
-                            status=status_enum,
-                            context_id=step.context_id,
-                            result=step.response_data or {},
-                        )
-                    else:
-                        # SDK 5.7: returns McpWebhookPayload directly
-                        payload = create_mcp_webhook_payload(
-                            task_id=step.step_id,
-                            status=status_enum,
-                            task_type=wire_task_type,
-                            result=step.response_data,
-                        )
-
-                    metadata: dict[str, Any] = {
-                        "task_type": task_type_str,
-                        "tenant_id": derived_tenant_id,
-                        "principal_id": derived_principal_id,
-                    }
-
-                    try:
-                        # If we're already in an event loop, schedule the send; otherwise run it directly
+                    def _log_task_result(t: asyncio.Task, config_url: str = push_notification_config.url) -> None:
+                        # Runs AFTER pin_task's discard (see pin_task
+                        # docstring), so this log-and-swallow can't hold
+                        # the strong ref past completion.
                         try:
-                            loop = asyncio.get_running_loop()
-                            task = loop.create_task(
-                                service.send_notification(
-                                    push_notification_config=push_notification_config,
-                                    payload=payload,
-                                    metadata=metadata,
-                                )
-                            )
+                            t.result()
+                            console.print(f"[green]✅ Webhook sent successfully for {config_url}[/green]")
+                        except Exception as e:
+                            console.print(f"[red]❌ Webhook failed for {config_url}: {str(e)}[/red]")
 
-                            def _log_task_result(
-                                t: asyncio.Task, config_url: str = push_notification_config.url
-                            ) -> None:
-                                # Runs AFTER pin_task's discard (see pin_task
-                                # docstring), so this log-and-swallow can't hold
-                                # the strong ref past completion.
-                                try:
-                                    t.result()
-                                    console.print(f"[green]✅ Webhook sent successfully for {config_url}[/green]")
-                                except Exception as e:
-                                    console.print(f"[red]❌ Webhook failed for {config_url}: {str(e)}[/red]")
+                    # Strong-ref pin against asyncio's weak-ref task
+                    # tracker; discard runs before _log_task_result.
+                    pin_task(task, on_done=_log_task_result)
+                except RuntimeError:
+                    # No running loop; safe to run synchronously
+                    asyncio.run(
+                        service.send_notification(
+                            push_notification_config=push_notification_config,
+                            payload=payload,
+                            metadata=metadata,
+                        )
+                    )
+                    console.print(f"[green]✅ Webhook sent successfully for {push_notification_config.url}[/green]")
 
-                            # Strong-ref pin against asyncio's weak-ref task
-                            # tracker; discard runs before _log_task_result.
-                            pin_task(task, on_done=_log_task_result)
-                        except RuntimeError:
-                            # No running loop; safe to run synchronously
-                            asyncio.run(
-                                service.send_notification(
-                                    push_notification_config=push_notification_config,
-                                    payload=payload,
-                                    metadata=metadata,
-                                )
-                            )
-                            console.print(
-                                f"[green]✅ Webhook sent successfully for {push_notification_config.url}[/green]"
-                            )
-
-                    except requests.exceptions.Timeout:
-                        console.print(f"[red]❌ Webhook timeout for {push_notification_config.url}[/red]")
-                    except requests.exceptions.RequestException as e:
-                        console.print(f"[red]❌ Webhook failed for {push_notification_config.url}: {str(e)}[/red]")
+            except requests.exceptions.Timeout:
+                console.print(f"[red]❌ Webhook timeout for {push_notification_config.url}[/red]")
+            except requests.exceptions.RequestException as e:
+                console.print(f"[red]❌ Webhook failed for {push_notification_config.url}: {str(e)}[/red]")
 
         except Exception as e:
             console.print(f"[red]Error sending push notifications: {e}[/red]")

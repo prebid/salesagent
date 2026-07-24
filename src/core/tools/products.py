@@ -409,8 +409,10 @@ async def _get_products_impl(
         except AdCPError:
             raise
         except Exception as e:
+            # Log the raw exception server-side only — it may carry DB/connection
+            # detail. The client-facing message must not interpolate str(e).
             logger.error(f"Property list resolution failed: {e}")
-            raise AdCPValidationError(f"Failed to resolve property list: {e}", recovery="transient") from e
+            raise AdCPValidationError("Failed to resolve property list.", recovery="transient") from e
 
     # Generate dynamic product variants from signals agents
     try:
@@ -816,8 +818,11 @@ async def get_products(
             )
     except ValueError as e:
         # Helper raises ValueError for semantic (non-Pydantic) input problems.
+        # Log the raw exception server-side; do not interpolate str(e) into the
+        # wire message (boundary sanitization — the raw text may carry internals).
+        logger.warning("Invalid get_products request: %s", e)
         raise AdCPValidationError(
-            f"Invalid get_products request: {e}",
+            "Invalid get_products request.",
             suggestion="Correct the get_products request per the AdCP specification and resend.",
         ) from e
 

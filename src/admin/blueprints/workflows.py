@@ -4,16 +4,16 @@ import json
 import logging
 from datetime import UTC, datetime
 
-from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, Response, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import select
 
-from src.admin.utils import require_tenant_access
+from src.admin.utils import require_tenant_access, session_user_email
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.repositories import MediaBuyRepository
-from src.core.database.repositories.workflow import WorkflowRepository
+from src.core.database.repositories.workflow import APPROVABLE_STEP_STATUSES, WorkflowRepository
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +36,10 @@ def list_workflows(tenant_id, **kwargs):
         workflow_repo = WorkflowRepository(db, tenant_id)
         all_steps = workflow_repo.get_all_steps()
 
-        # Separate pending approval steps for summary
-        pending_steps = [s for s in all_steps if s.status == "pending_approval"]
+        # Separate pending approval steps for summary. Uses the canonical approvable set, not an
+        # inline literal: a subset literal here undercounts (it would drop ``requires_approval``
+        # and the legacy ``approval`` alias) and drifts the moment the set changes.
+        pending_steps = [s for s in all_steps if s.status in APPROVABLE_STEP_STATUSES]
 
         # Get media buys for context
         media_buy_repo = MediaBuyRepository(db, tenant_id)
@@ -149,26 +151,51 @@ def review_workflow_step(tenant_id, workflow_id, step_id):
         )
 
 
+def _refused_decision_response(
+    workflow_repo: WorkflowRepository, step_id: str, awaiting_desc: str
+) -> tuple[Response, int]:
+    """Map a refused approval/rejection compare-and-set to the right HTTP error.
+
+    ``claim_approval`` / ``reject_if_approvable`` return None for EITHER a step that does not
+    exist (404) OR one that exists but is no longer in an approvable status (409 Conflict —
+    e.g. already approved by a concurrent request, or canceled). Distinguish via a tenant-scoped
+    fetch so a genuine concurrency conflict returns 409, not a misleading 404.
+    """
+    existing = workflow_repo.get_by_step_id(step_id)
+    if existing is None:
+        return jsonify({"error": "Workflow step not found"}), 404
+    return jsonify({"error": f"Workflow step is not {awaiting_desc} (status: {existing.status})"}), 409
+
+
 @workflows_bp.route("/<tenant_id>/workflows/<workflow_id>/steps/<step_id>/approve", methods=["POST"])
 @require_tenant_access()
 @log_admin_action("approve_workflow_step")
 def approve_workflow_step(tenant_id, workflow_id, step_id):
-    """Approve a workflow step."""
+    """Approve a workflow step.
+
+    ``workflow_id`` is a cosmetic path segment only: WorkflowStep has no workflow_id
+    column and the value is never populated (an unwired stub — see the TODO at
+    mcp_context_wrapper). The step is a tenant-scoped primary key, so authorization is
+    complete at (tenant, step_id); there is nothing to scope against the URL's workflow.
+    Wiring a real workflow grouping (and validating the step against it) is separate work.
+    """
+    del workflow_id  # cosmetic; see docstring
     try:
         with get_db_session() as db:
             # Get and update the workflow step via repository (tenant-scoped)
             workflow_repo = WorkflowRepository(db, tenant_id)
 
-            user_info = session.get("user", {})
-            user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
+            user_email = session_user_email(default="system")
 
-            step = workflow_repo.update_status(
-                step_id,
-                status="approved",
-            )
+            # Atomic compare-and-set: requires_approval/pending_approval → approved. Because
+            # ``approved`` is non-terminal, a broad terminal-guard would let a second concurrent
+            # approver win an approved→approved no-op and ALSO run execute_approved_media_buy
+            # below (duplicate adapter work). claim_approval admits exactly one approver; a
+            # loser gets None → 409 Conflict (not 404) and does NOT execute.
+            step = workflow_repo.claim_approval(step_id)
 
             if not step:
-                return jsonify({"error": "Workflow step not found"}), 404
+                return _refused_decision_response(workflow_repo, step_id, "awaiting approval")
 
             db.commit()
 
@@ -264,7 +291,12 @@ def approve_workflow_step(tenant_id, workflow_id, step_id):
 @require_tenant_access()
 @log_admin_action("reject_workflow_step")
 def reject_workflow_step(tenant_id, workflow_id, step_id):
-    """Reject a workflow step with a reason."""
+    """Reject a workflow step with a reason.
+
+    ``workflow_id`` is a cosmetic path segment only (see ``approve_workflow_step``): no
+    backing column, never populated; authorization is complete at (tenant, step_id).
+    """
+    del workflow_id  # cosmetic; see approve_workflow_step
     try:
         data = request.get_json() or {}
         reason = data.get("reason", "No reason provided")
@@ -273,17 +305,16 @@ def reject_workflow_step(tenant_id, workflow_id, step_id):
             # Get and update the workflow step via repository (tenant-scoped)
             workflow_repo = WorkflowRepository(db, tenant_id)
 
-            user_info = session.get("user", {})
-            user_email = user_info.get("email", "system") if isinstance(user_info, dict) else str(user_info)
+            user_email = session_user_email(default="system")
 
-            step = workflow_repo.update_status(
-                step_id,
-                status="rejected",
-                error_message=reason,
-            )
+            # Atomic compare-and-set with the SAME source-state guard as approve: a step that
+            # has already been approved (execution underway) cannot be rejected — that would
+            # strand a live ad-server order behind a rejected workflow. A loser gets None →
+            # 409 Conflict (not 404).
+            step = workflow_repo.reject_if_approvable(step_id, error_message=reason)
 
             if not step:
-                return jsonify({"error": "Workflow step not found"}), 404
+                return _refused_decision_response(workflow_repo, step_id, "awaiting a decision")
 
             db.commit()
 

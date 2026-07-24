@@ -2,7 +2,8 @@
 
 Provides make_a2a_context() to build a ServerCallContext the same way
 AdCPCallContextBuilder.build() does in production, but without needing
-a Starlette request object.
+a Starlette request object. Message builders and envelope readers live
+with the rest of the A2A helper family in tests/utils/a2a_helpers.py.
 """
 
 from a2a.server.context import ServerCallContext

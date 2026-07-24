@@ -15,7 +15,7 @@ from collections.abc import Callable
 from functools import wraps
 from typing import Any
 
-from flask import g, request, session
+from flask import g, request
 
 logger = logging.getLogger(__name__)
 
@@ -166,11 +166,9 @@ def log_admin_action(
         @wraps(f)
         def decorated_function(*args: Any, **kwargs: Any) -> Any:
             # Get user from session
-            user_info = session.get("user", {})
-            if isinstance(user_info, dict):
-                user_email: str = user_info.get("email", "unknown")
-            else:
-                user_email = str(user_info) if user_info else "unknown"
+            from src.admin.utils.helpers import session_user_email
+
+            user_email: str = session_user_email()
 
             # Get tenant_id from kwargs (most admin routes have this)
             tenant_id: str | None = kwargs.get("tenant_id")

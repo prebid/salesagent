@@ -8,33 +8,19 @@ queries via resolve_identity(). Fix: reuse the identity from the handler call.
 This test verifies resolve_identity() is called at most once per NL request.
 """
 
-import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from tests.a2a_helpers import make_a2a_context
-from tests.factories.principal import PrincipalFactory
-
-_MOCK_IDENTITY = PrincipalFactory.make_identity(
-    principal_id="test-principal",
-    tenant_id="test-tenant",
-    tenant={"tenant_id": "test-tenant"},
-    protocol="a2a",
+from tests.utils.a2a_helpers import (
+    extract_processing_error_envelope,
+    make_nl_send_message_request,
+    make_test_a2a_identity,
 )
 
-
-def _make_nl_message(text: str):
-    """Build a minimal A2A SendMessageRequest with NL text (no skills)."""
-    from a2a.types import Message, Part, Role, SendMessageRequest
-
-    message = Message(
-        message_id=str(uuid.uuid4()),
-        role=Role.ROLE_USER,
-    )
-    message.parts.append(Part(text=text))
-    return SendMessageRequest(message=message)
+_TEST_IDENTITY = make_test_a2a_identity()
 
 
 @pytest.mark.asyncio
@@ -51,9 +37,9 @@ async def test_nl_product_query_calls_resolve_identity_once():
     handler._get_auth_token = MagicMock(return_value="test-token")
     ctx = make_a2a_context(auth_token="test-token", headers={"host": "test.example.com"})
 
-    params = _make_nl_message("Show me available products in the catalog")
+    params = make_nl_send_message_request("Show me available products in the catalog")
 
-    with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY) as mock_resolve:
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY) as mock_resolve:
         with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_products:
             # core_get_products_tool returns a Pydantic GetProductsResponse;
             # NL _get_products iterates response.products so the mock must
@@ -79,9 +65,9 @@ async def test_nl_pricing_query_calls_resolve_identity_once():
     handler._get_auth_token = MagicMock(return_value="test-token")
     ctx = make_a2a_context(auth_token="test-token", headers={"host": "test.example.com"})
 
-    params = _make_nl_message("What is the pricing for CPM ads?")
+    params = make_nl_send_message_request("What is the pricing for CPM ads?")
 
-    with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY) as mock_resolve:
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY) as mock_resolve:
         with patch("src.a2a_server.adcp_a2a_server.core_get_products_tool") as mock_products:
             # Return a dict to bypass model_dump() path
             mock_products.return_value = {"products": [], "message": "No products found"}
@@ -104,9 +90,9 @@ async def test_nl_targeting_query_calls_resolve_identity_once():
     handler._get_auth_token = MagicMock(return_value="test-token")
     ctx = make_a2a_context(auth_token="test-token", headers={"host": "test.example.com"})
 
-    params = _make_nl_message("Show me audience targeting options")
+    params = make_nl_send_message_request("Show me audience targeting options")
 
-    with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY) as mock_resolve:
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY) as mock_resolve:
         # Mock the core capabilities function (not the handler — to expose both calls)
         with patch("src.core.tools.capabilities.get_adcp_capabilities_raw") as mock_caps:
             mock_caps.return_value = {"protocols": [], "targeting": {}}
@@ -119,7 +105,7 @@ async def test_nl_targeting_query_calls_resolve_identity_once():
 
 
 @pytest.mark.asyncio
-async def test_nl_media_buy_raises_capability_not_supported():
+async def test_nl_media_buy_returns_failed_task_with_envelope():
     """NL media buy is not supported — invocation must surface a typed AdCPError.
 
     Pre-fix the NL stub returned ``{"success": False, "message": "use explicit"}``
@@ -127,32 +113,38 @@ async def test_nl_media_buy_raises_capability_not_supported():
     parsed the artifact as ``MCP_ERROR``. The handler now raises
     ``AdCPCapabilityNotSupportedError`` which propagates to the outer
     ``on_message_send`` error handler that attaches a spec-compliant
-    envelope to the failed Task artifact.
+    envelope to the failed Task artifact and RETURNS the failed Task
+    (per AdCP 3.1.x transport-errors.mdx "Layer Separation" — JSON-RPC
+    errors are reserved for transport faults, never application failures).
 
     Pin: identity resolution still runs once (the route dispatch happens
     before ``_create_media_buy`` raises), and the failed Task must surface
-    a wire envelope (not a fake-success dict).
+    a wire envelope (not a fake-success dict, not a raised InternalError).
     """
+    from a2a.types import TaskState
+
+    from tests.helpers import assert_envelope_shape
+
     handler = AdCPRequestHandler()
     handler._get_auth_token = MagicMock(return_value="test-token")
     ctx = make_a2a_context(auth_token="test-token", headers={"host": "test.example.com"})
 
-    params = _make_nl_message("Create a campaign for Nike")
+    params = make_nl_send_message_request("Create a campaign for Nike")
 
-    with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY) as mock_resolve:
-        # NL media buy raises AdCPCapabilityNotSupportedError; outer
-        # on_message_send catches and surfaces it as InternalError after
-        # attaching the envelope to the failed Task artifact.
-        from a2a.utils.errors import InternalError
-
-        with pytest.raises(InternalError) as exc_info:
-            await handler.on_message_send(params, context=ctx)
+    with patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY) as mock_resolve:
+        task = await handler.on_message_send(params, context=ctx)
 
     # Identity is resolved once during route dispatch before the raise.
     assert mock_resolve.call_count == 1, (
         f"resolve_identity called {mock_resolve.call_count} times for media buy NL request. Expected 1."
     )
-    # InternalError message names the original capability failure (sanity check).
-    assert "create_media_buy" in str(exc_info.value).lower() or "explicit" in str(exc_info.value).lower(), (
-        f"InternalError should reference the unsupported capability; got: {exc_info.value}"
+    assert task.status.state == TaskState.TASK_STATE_FAILED, f"Expected failed Task, got state {task.status.state!r}"
+    envelope = extract_processing_error_envelope(task)
+    # AdCPCapabilityNotSupportedError → UNSUPPORTED_FEATURE (correctable —
+    # matches AdCP error-code.json enumMetadata).
+    assert_envelope_shape(
+        envelope,
+        "UNSUPPORTED_FEATURE",
+        recovery="correctable",
+        message_substr="create_media_buy",
     )

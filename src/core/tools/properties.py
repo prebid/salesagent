@@ -187,9 +187,12 @@ def _list_authorized_properties_impl(
             error=str(e),
         )
 
+        # Raw exception already logged/audited above; keep str(e) off the client
+        # message (it may carry adapter/DB internals). The A2A boundary also scrubs
+        # this SERVICE_UNAVAILABLE-class message, but MCP/REST rely on this source scrub.
         raise AdCPAdapterError(
-            f"Failed to list authorized properties: {str(e)}",
-        )
+            "Failed to list authorized properties.",
+        ) from e
 
 
 async def list_authorized_properties(

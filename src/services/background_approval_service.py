@@ -199,7 +199,7 @@ def _mark_approval_complete(
     try:
         with WorkflowUoW(tenant_id) as uow:
             assert uow.workflows is not None
-            step = uow.workflows.update_status(
+            step = uow.workflows.transition_if_nonterminal(
                 workflow_step_id,
                 status="completed",
                 completed_at=datetime.now(UTC),
@@ -227,7 +227,7 @@ def _mark_approval_failed(tenant_id: str, workflow_step_id: str, error_message: 
     try:
         with WorkflowUoW(tenant_id) as uow:
             assert uow.workflows is not None
-            step = uow.workflows.update_status(
+            step = uow.workflows.transition_if_nonterminal(
                 workflow_step_id,
                 status="failed",
                 error_message=error_message,

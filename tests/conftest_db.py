@@ -694,3 +694,41 @@ def inspect(engine):
     from sqlalchemy import inspect as sqlalchemy_inspect
 
     return sqlalchemy_inspect(engine)
+
+
+@pytest.fixture
+def factory_session(integration_db):
+    """Bind all factory_boy factories to the isolated integration PostgreSQL session.
+
+    Shared home (star-imported into the root conftest, so it is available to every suite —
+    admin, integration, bdd). Depends on ``integration_db`` so the bound session points at a
+    migrated, per-test-isolated database, NOT the runner's base DB. Use it in tests that create
+    data via factories (e.g. ``MediaBuyFactory(...)``) instead of inline ``session.add()``.
+
+    Returns the bound session for post-write DB state assertions.
+
+    Note: the binding lives on each factory's class attributes, i.e. process-wide state. The
+    ``assert ... is None`` precondition catches nested/concurrent use within a worker; factories
+    are unbound on teardown so the binding never leaks. (pytest-xdist ``--dist=load`` is fine;
+    avoid ``--dist=each``.)
+    """
+    from sqlalchemy.orm import Session as SASession
+
+    from src.core.database.database_session import get_engine
+    from tests.factories import ALL_FACTORIES
+
+    for f in ALL_FACTORIES:
+        assert f._meta.sqlalchemy_session is None, (
+            f"Factory {f.__name__} session already bound — nested factory_session fixtures are not supported"
+        )
+
+    session = SASession(bind=get_engine())
+    for f in ALL_FACTORIES:
+        f._meta.sqlalchemy_session = session
+
+    try:
+        yield session
+    finally:
+        for f in ALL_FACTORIES:
+            f._meta.sqlalchemy_session = None
+        session.close()

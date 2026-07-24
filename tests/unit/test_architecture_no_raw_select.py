@@ -174,7 +174,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/operations.py", "media_buy_detail"),
     ("src/admin/blueprints/operations.py", "reporting"),
     ("src/admin/blueprints/policy.py", "index"),
-    ("src/admin/blueprints/policy.py", "review_task"),
     ("src/admin/blueprints/policy.py", "update"),
     ("src/admin/blueprints/principals.py", "create_principal"),
     ("src/admin/blueprints/principals.py", "delete_principal"),
@@ -288,7 +287,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/core/context_manager.py", "get_pending_steps"),
     ("src/core/context_manager.py", "link_workflow_to_object"),
     ("src/core/context_manager.py", "update_activity"),
-    ("src/core/context_manager.py", "update_workflow_step"),
     ("src/core/database/queries.py", "get_ai_accuracy_metrics"),
     ("src/core/database/queries.py", "get_ai_review_stats"),
     ("src/core/database/queries.py", "get_creative_reviews"),
@@ -392,6 +390,45 @@ def _find_raw_selects() -> list[tuple[str, str, str, int]]:
 
 
 # ── Tests ───────────────────────────────────────────────────────────
+
+
+class TestColumnSelectDetection:
+    """Known-bad case: a column-select of an ORM model is a raw model query too.
+
+    Documents (and locks) the blind spot that let round-14's
+    ``select(DBContext.tenant_id)`` in ContextManager slip the guard: the bare
+    ``select_call_model_name`` resolves ``select(Model.column)`` to the column name,
+    so matching against ORM model names misses it. ``select_target_model_name``
+    closes that gap. (The actual violation was removed by moving tenant resolution
+    into ``WorkflowRepository.resolve_tenant_for_step``; enabling this detector across
+    all of src/ requires migrating ~30 pre-existing column-selects and is tracked in
+    issue #1654.)
+    """
+
+    def _select_call(self, expr: str) -> ast.Call:
+        node = ast.parse(expr, mode="eval").body
+        assert isinstance(node, ast.Call)
+        return node
+
+    def test_bare_resolver_misses_column_select(self):
+        from tests.unit._architecture_helpers import select_call_model_name
+
+        call = self._select_call("select(DBContext.tenant_id)")
+        # The bare resolver returns the COLUMN name, so an ORM-model-name match misses it.
+        assert select_call_model_name(call) == "tenant_id"
+        assert select_call_model_name(call) not in ORM_MODEL_NAMES
+
+    def test_column_aware_resolver_flags_column_select_of_model(self):
+        from tests.unit._architecture_helpers import select_target_model_name
+
+        models = {"DBContext", "WorkflowStep"}
+        # select(Model.column) → the MODEL is flagged (a raw model query).
+        assert select_target_model_name(self._select_call("select(DBContext.tenant_id)"), models) == "DBContext"
+        # select(Model) and select(pkg.Model) still resolve to the model.
+        assert select_target_model_name(self._select_call("select(WorkflowStep)"), models) == "WorkflowStep"
+        assert select_target_model_name(self._select_call("select(mod.WorkflowStep)"), models) == "WorkflowStep"
+        # A non-model column select is not flagged.
+        assert select_target_model_name(self._select_call("select(func.count())"), models) is None
 
 
 class TestNoRawSelectOutsideRepositories:

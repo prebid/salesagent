@@ -7,9 +7,9 @@ Validates that:
 - ValueError and PermissionError are caught at boundaries
 - extract_error_info handles AdCPError instances
 
-beads: salesagent-pyeu, salesagent-d50c
 """
 
+import json
 from unittest.mock import patch
 
 import pytest
@@ -28,6 +28,7 @@ from src.core.exceptions import (
 # the envelope is now a one-place update.
 # ---------------------------------------------------------------------------
 from tests.helpers import assert_envelope_shape  # noqa: E402
+from tests.helpers.secret_scrub import SECRET_BEARING_MESSAGE, assert_no_secret_leak
 
 # Per-boundary assertion wrappers were removed in favor of the canonical
 # `assert_envelope_shape` helper. Call sites use keyword flags directly:
@@ -57,7 +58,7 @@ class TestExtractErrorInfoAdCPError:
     def test_adcp_not_found_extracts_code_and_message(self):
         """AdCPNotFoundError → ('NOT_FOUND', 'resource missing', 'correctable').
 
-        Recovery follows the wire code INVALID_REQUEST=correctable (salesagent-nr2q).
+        Recovery follows the wire code INVALID_REQUEST=correctable.
         """
         from src.core.tool_error_logging import extract_error_info
 
@@ -111,7 +112,7 @@ class TestExtractErrorInfoAdCPError:
     def test_adcp_base_error_extracts_code_and_message(self):
         """AdCPError base → ('INTERNAL_ERROR', 'something broke', 'transient').
 
-        Recovery follows the wire code SERVICE_UNAVAILABLE=transient (salesagent-nr2q).
+        Recovery follows the wire code SERVICE_UNAVAILABLE=transient.
         """
         from src.core.tool_error_logging import extract_error_info
 
@@ -303,25 +304,305 @@ class TestMCPBoundaryAdCPErrorTranslation:
         )
 
 
+def _uncovered_correctable_targets(registry, sanitized_by_code, internal_codes, standard_codes):
+    """Registry semantic targets lacking a sanitized client-correctable category.
+
+    ``adcp_class`` is the single authority read here and instantiated by production. Projectors
+    provide kwargs only, so they cannot make runtime emit a different wire code. Pure over its
+    inputs so the same logic grades the real registry and a known-bad synthetic registry.
+    """
+    uncovered = []
+    for _exc_type, adcp_class, _kwargs_projector in registry:
+        wire_code = adcp_class("probe").wire_error_code
+        if wire_code in internal_codes or wire_code not in standard_codes:
+            continue
+        if wire_code not in sanitized_by_code:
+            uncovered.append((adcp_class.__name__, wire_code))
+    return uncovered
+
+
+class TestSafeAdcpErrorSuggestionMatchesRecovery:
+    """``safe_adcp_error``'s sanitized suggestion must not contradict the preserved recovery.
+
+    The sanitizer scrubs the (possibly secret-bearing) message on every internal error but keeps
+    the wire code + recovery. A terminal ``CONFIGURATION_ERROR`` (per 3.1.1 the buyer MUST NOT
+    auto-retry; a seller operator must resolve it) paired with a "retry the request later"
+    suggestion is a self-contradictory envelope. These pins are authored independently of the
+    module's suggestion CONSTANTS — they assert the semantic ``retry`` property directly — so they
+    are not tautological with the sanitizer that produces the value (the config webhook payload
+    test derives its expected envelope through ``safe_adcp_error`` itself and only checks the
+    generic message, so it can't see this).
+    """
+
+    def test_terminal_config_error_suggestion_does_not_advise_retry(self):
+        from src.core.exceptions import AdCPConfigurationError, safe_adcp_error
+
+        # A raise site that interpolates a secret into a CONFIGURATION_ERROR (recovery=terminal).
+        safe = safe_adcp_error(AdCPConfigurationError(f"decrypt failed: {SECRET_BEARING_MESSAGE}"))
+
+        assert safe.recovery == "terminal", "CONFIGURATION_ERROR recovery must be preserved as terminal"
+        assert "retry" not in safe.suggestion.lower(), (
+            f"a terminal error must not advise the buyer to retry, got: {safe.suggestion!r}"
+        )
+        # The secret is still scrubbed from BOTH message and suggestion (shared leak oracle).
+        assert_no_secret_leak(safe.suggestion, context="suggestion")
+        assert_no_secret_leak(safe.message, context="message")
+
+    def test_transient_service_unavailable_suggestion_advises_retry(self):
+        from src.core.exceptions import AdCPServiceUnavailableError, safe_adcp_error
+
+        safe = safe_adcp_error(AdCPServiceUnavailableError("db connection pool exhausted"))
+
+        assert safe.recovery == "transient", "SERVICE_UNAVAILABLE recovery must be preserved as transient"
+        assert "retry" in safe.suggestion.lower(), (
+            f"a transient error should advise the buyer to retry, got: {safe.suggestion!r}"
+        )
+
+    def test_untyped_internal_error_advises_retry(self):
+        """An untyped crash sanitizes to a transient base error, so retry guidance is correct."""
+        from src.core.exceptions import safe_adcp_error
+
+        safe = safe_adcp_error(RuntimeError(f"kaboom {SECRET_BEARING_MESSAGE}"))
+
+        assert safe.recovery == "transient"
+        assert "retry" in safe.suggestion.lower()
+        assert_no_secret_leak(safe.suggestion, context="suggestion")
+        assert_no_secret_leak(safe.message, context="message")
+
+    def test_unknown_internal_code_coerces_to_transient_service_unavailable(self):
+        """An internal code the wire doesn't model coerces to SERVICE_UNAVAILABLE — whose canonical
+        recovery is transient. The fallback must NOT emit SERVICE_UNAVAILABLE paired with terminal
+        (the code and recovery would disagree); it emits transient + retry guidance."""
+        from src.core.exceptions import AdCPError, safe_adcp_error
+
+        safe = safe_adcp_error(
+            AdCPError.synthesize(SECRET_BEARING_MESSAGE, error_code="UNKNOWN_INTERNAL", recovery="correctable")
+        )
+
+        assert safe.wire_error_code == "SERVICE_UNAVAILABLE"
+        assert safe.recovery == "transient", "SERVICE_UNAVAILABLE's canonical recovery is transient, not terminal"
+        assert "retry" in safe.suggestion.lower()
+        assert_no_secret_leak(safe.message, context="message")
+        assert_no_secret_leak(safe.suggestion, context="suggestion")
+
+    def test_internal_error_recovery_normalized_to_canonical_not_instance_override(self):
+        """A raise site can tag an internal error with a recovery that contradicts its wire code
+        (AdCPAdapterError → SERVICE_UNAVAILABLE, but recovery='correctable'). The sanitizer
+        NORMALIZES recovery to the code's canonical value so code + recovery + suggestion agree —
+        the buyer never sees SERVICE_UNAVAILABLE + correctable + a 'retry later' suggestion."""
+        from src.core.exceptions import AdCPAdapterError, safe_adcp_error
+
+        safe = safe_adcp_error(AdCPAdapterError(f"db pool: {SECRET_BEARING_MESSAGE}", recovery="correctable"))
+
+        assert safe.wire_error_code == "SERVICE_UNAVAILABLE"
+        assert safe.recovery == "transient", "recovery must be normalized to the code's canonical value"
+        assert "retry" in safe.suggestion.lower()
+        assert_no_secret_leak(safe.message, context="message")
+        assert_no_secret_leak(safe.suggestion, context="suggestion")
+
+    def test_suggestion_table_covers_all_recovery_hints(self):
+        """The suggestion table must be exhaustive over RecoveryHint — a new recovery value added
+        without a suggestion would KeyError at runtime instead of silently mis-guiding."""
+        from typing import get_args
+
+        from src.core.exceptions import RecoveryHint, _sanitized_suggestion_for
+
+        for recovery in get_args(RecoveryHint):
+            assert _sanitized_suggestion_for(recovery), f"no sanitized suggestion for recovery={recovery!r}"
+
+    def test_three_way_suggestion_semantics(self):
+        """Each recovery class gets guidance matching its semantics: transient→retry,
+        correctable→adjust/resubmit (NOT retry-later), terminal→no-retry."""
+        from src.core.exceptions import _sanitized_suggestion_for
+
+        assert "retry" in _sanitized_suggestion_for("transient").lower()
+        assert "retry" not in _sanitized_suggestion_for("terminal").lower()
+        correctable = _sanitized_suggestion_for("correctable").lower()
+        assert "retry" not in correctable, "correctable is not a retry-later case"
+        assert any(word in correctable for word in ("adjust", "resubmit", "review")), (
+            "correctable must give correction guidance, not silence"
+        )
+
+    def test_sanitized_suggestions_match_pinned_spec_enum(self):
+        """The category suggestion a scrub emits IS the code's canonical spec text.
+
+        Grounds ``_SANITIZED_BY_WIRE_CODE``'s suggestion legs (and the shared spec-derived
+        constants they source from) in the PINNED enum fixture — the independent authority —
+        so a hand-edited suggestion that drifts from ``error-code.json`` enumMetadata reddens
+        here. This is the oracle that caught the AUTH_REQUIRED suggestion advising retry while
+        the spec enum says "do NOT auto-retry rejected credentials".
+        """
+        from pathlib import Path
+
+        from src.core.exceptions import _SANITIZED_BY_WIRE_CODE, safe_adcp_error
+
+        fixture = Path(__file__).resolve().parents[1] / "fixtures" / "adcp_schemas_pinned" / "enums" / "error-code.json"
+        enum_meta = json.loads(fixture.read_text())["enumMetadata"]
+
+        for wire_code, (_message, suggestion) in _SANITIZED_BY_WIRE_CODE.items():
+            assert suggestion == enum_meta[wire_code]["suggestion"], (
+                f"{wire_code} sanitized suggestion drifted from the pinned spec enum"
+            )
+        # And on the emitted error itself, not just the table.
+        assert safe_adcp_error(ValueError("x")).suggestion == enum_meta["VALIDATION_ERROR"]["suggestion"]
+        assert safe_adcp_error(PermissionError("x")).suggestion == enum_meta["AUTH_REQUIRED"]["suggestion"]
+
+    def test_scrubbed_message_and_suggestion_match_semantic_category(self):
+        """A scrubbed error's MESSAGE and SUGGESTION match its wire code — the machine field and
+        the human guidance must not contradict. A VALIDATION_ERROR must not read "internal error",
+        and an AUTH_REQUIRED must say authenticate/credentials, not "adjust the request". All are
+        static and secret-free."""
+        from src.core.exceptions import safe_adcp_error
+
+        # VALIDATION_ERROR (raw ValueError): about the submitted fields, not an internal error.
+        v = safe_adcp_error(ValueError(SECRET_BEARING_MESSAGE))
+        assert v.wire_error_code == "VALIDATION_ERROR"
+        assert "internal error" not in v.message.lower()
+        assert "validate" in v.message.lower()
+        assert "retry" not in v.suggestion.lower()
+        assert "field" in v.suggestion.lower()
+
+        # AUTH_REQUIRED (raw PermissionError): about credentials/permissions, not field correction.
+        a = safe_adcp_error(PermissionError(SECRET_BEARING_MESSAGE))
+        assert a.wire_error_code == "AUTH_REQUIRED"
+        assert "internal error" not in a.message.lower()
+        assert any(w in a.message.lower() for w in ("authenticat", "authoriz", "credential"))
+        assert any(w in a.suggestion.lower() for w in ("credential", "permission"))
+
+        # SERVICE_UNAVAILABLE (untyped internal): the generic internal message + retry IS correct.
+        s = safe_adcp_error(RuntimeError(SECRET_BEARING_MESSAGE))
+        assert s.wire_error_code == "SERVICE_UNAVAILABLE"
+        assert "internal error" in s.message.lower()
+        assert "retry" in s.suggestion.lower()
+
+        for e in (v, a, s):
+            assert_no_secret_leak(e.message, context=f"{e.wire_error_code} message")
+            assert_no_secret_leak(e.suggestion, context=f"{e.wire_error_code} suggestion")
+
+    def test_sanitized_category_registry_covers_all_correctable_builtin_targets(self):
+        """Completeness guard reconciling ``_BUILTIN_NORMALIZATION`` with ``_SANITIZED_BY_WIRE_CODE``.
+
+        Production instantiates each entry's ``adcp_class`` directly; the kwargs projector cannot
+        select another semantic class. The guard reads that same single authority. Every correctable
+        standard target must have a category entry; internal/non-standard targets are exempt.
+        """
+        from src.core.exceptions import (
+            _BUILTIN_NORMALIZATION,
+            _SANITIZED_BY_WIRE_CODE,
+            INTERNAL_WIRE_CODES,
+            WIRE_STANDARD_CODES,
+        )
+
+        uncovered = _uncovered_correctable_targets(
+            _BUILTIN_NORMALIZATION, _SANITIZED_BY_WIRE_CODE, INTERNAL_WIRE_CODES, WIRE_STANDARD_CODES
+        )
+        assert uncovered == [], (
+            f"raw-exception normalizers whose client-correctable target lacks a "
+            f"_SANITIZED_BY_WIRE_CODE entry (a scrubbed built-in would read 'An internal error "
+            f"occurred'): {uncovered}. Add a category (message, suggestion) for each code."
+        )
+
+    def test_uncovered_detector_flags_special_projector_target(self):
+        """Known-bad: a custom structured projector targeting an uncovered class is flagged.
+
+        Projectors return constructor kwargs, not errors, so even input-dependent projector logic
+        cannot vary the semantic target behind the guard's back.
+        """
+        from src.core.exceptions import (
+            _SANITIZED_BY_WIRE_CODE,
+            INTERNAL_WIRE_CODES,
+            WIRE_STANDARD_CODES,
+            AdCPNotFoundError,
+            AdCPValidationError,
+        )
+
+        def _special_kwargs(exc):
+            return {"message": "resource missing", "field": "id", "details": {"probe": str(exc)}}
+
+        assert "INVALID_REQUEST" not in _SANITIZED_BY_WIRE_CODE, "test premise: INVALID_REQUEST is uncovered"
+        known_bad_registry = (
+            (KeyError, AdCPNotFoundError, _special_kwargs),
+            (LookupError, AdCPValidationError, _special_kwargs),  # covered control
+        )
+
+        uncovered = _uncovered_correctable_targets(
+            known_bad_registry, _SANITIZED_BY_WIRE_CODE, INTERNAL_WIRE_CODES, WIRE_STANDARD_CODES
+        )
+        assert ("AdCPNotFoundError", "INVALID_REQUEST") in uncovered, (
+            "detector must flag a special projector whose target is an uncovered correctable code"
+        )
+        assert all(code != "VALIDATION_ERROR" for _name, code in uncovered), (
+            "a factory returning a covered code must NOT be flagged"
+        )
+
+    def test_normalization_projector_cannot_override_semantic_identity(self):
+        """Known-bad: a projector emitting semantic overrides is caught at import time.
+
+        ``AdCPError`` constructors accept ``error_code``/``status_code``/``recovery`` overrides.
+        Without the allowlist gate, a projector could declare ``AdCPValidationError`` to the
+        completeness guard but emit ``INVALID_REQUEST`` at runtime via ``error_code='NOT_FOUND'``.
+        Enforcement moved OUT of the hot exception path (a raise inside a boundary translator
+        shadows the original exception and fails open with no envelope) to a module-import gate;
+        this drives the gate's shared detector with known-bad registries so a degraded matcher
+        reddens here.
+        """
+        from src.core.exceptions import (
+            AdCPValidationError,
+            _build_normalized_error,
+            _projector_key_violations,
+        )
+
+        bad_error_code = ((ValueError, AdCPValidationError, lambda e: {"message": str(e), "error_code": "NOT_FOUND"}),)
+        findings = _projector_key_violations(bad_error_code)
+        assert findings and "error_code" in findings[0], findings
+
+        bad_context = (
+            (
+                ValueError,
+                AdCPValidationError,
+                lambda e: {"message": str(e), "context": {"debug": "postgresql://svc:TOPSECRET@db/prod"}},
+            ),
+        )
+        findings = _projector_key_violations(bad_context)
+        assert findings and "context" in findings[0], findings
+
+        # The shipped registry passes the gate (the module imported), and presentation-only
+        # kwargs construct the fixed semantic class.
+        assert _projector_key_violations(()) == []
+        built = _build_normalized_error(
+            AdCPValidationError,
+            {"message": "bad field", "field": "packages[0].budget", "details": {"safe": True}},
+        )
+        assert built.wire_error_code == "VALIDATION_ERROR"
+        assert built.field == "packages[0].budget"
+        assert built.details == {"safe": True}
+
+
 # ---------------------------------------------------------------------------
 # A2A Boundary: AdCPError → A2AError with proper JSON-RPC error code
 # ---------------------------------------------------------------------------
 
 
 class TestA2AHandlerExplicitSkillReraises:
-    """``_handle_explicit_skill`` re-raises typed AdCPError verbatim.
+    """``_handle_explicit_skill`` re-raises a WIRE-SAFE error (provenance decided at the seam).
 
-    This class verifies the handler-internal contract: the skill dispatcher
-    catches the typed exception, audits the workflow step, and re-raises so
-    the OUTER ``on_message_send`` boundary wraps the failure into a Task
-    artifact carrying the two-layer envelope DataPart.
+    This class verifies the handler-internal contract: the skill dispatcher catches the
+    exception, audits, and re-raises via ``safe_adcp_error`` so the OUTER ``on_message_send``
+    boundary wraps a failure that is ALREADY sanitized:
+
+    - CLIENT-CORRECTABLE typed errors (``AdCPValidationError``, ``AdCPNotFoundError``, …) re-raise
+      VERBATIM — their controlled buyer-facing message is preserved.
+    - INTERNAL typed errors (``AdCPAdapterError``/``AdCPServiceUnavailableError`` → SERVICE_UNAVAILABLE,
+      terminal ``CONFIGURATION_ERROR``) are SCRUBBED at the seam — re-raised as a wire-safe base
+      ``AdCPError`` with a generic message (a raise site can interpolate a secret).
+    - RAW built-ins (``ValueError``/``PermissionError``) keep their SEMANTIC code (VALIDATION_ERROR /
+      AUTH_REQUIRED — the same the synchronous boundaries emit) but their untrusted ``str(e)`` is
+      scrubbed. Re-raising the *normalized typed* error here instead would hand the outer sanitizer
+      a trusted ``AdCPValidationError`` and let the secret survive.
 
     Wire-envelope coverage for the A2A boundary lives in
-    ``tests/integration/test_a2a_error_responses.py`` — those tests drive
-    ``handler.on_message_send(...)`` and assert on ``result.artifacts[0]``
-    (the gold-standard pattern). The tests in this class stop at the
-    handler-internal re-raise so they're cheap unit-level pins for the
-    re-raise contract; they do NOT validate the envelope reaches the wire.
+    ``tests/integration/test_a2a_error_responses.py`` and the public failed-Task tests in
+    ``tests/unit/test_a2a_error_routing.py``.
     """
 
     @pytest.mark.asyncio
@@ -343,22 +624,57 @@ class TestA2AHandlerExplicitSkillReraises:
             assert exc_info.value.recovery == "correctable"
 
     @pytest.mark.asyncio
-    @pytest.mark.asyncio
-    async def test_adcp_adapter_propagates_for_dispatcher_wrap(self):
-        """AdCPAdapterError propagates with transient recovery."""
+    async def test_adcp_adapter_scrubbed_at_seam(self):
+        """AdCPAdapterError (internal → SERVICE_UNAVAILABLE) is scrubbed at the seam.
+
+        Its raise sites do ``AdCPAdapterError(f"...: {e}")`` where ``e`` can bear a connection
+        string, so the seam must not re-raise the raw message. Recovery stays transient (the
+        code's canonical value)."""
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+        from src.core.exceptions import AdCPError
 
         handler = AdCPRequestHandler()
 
         async def mock_skill(params, token):
-            raise AdCPAdapterError("GAM down")
+            raise AdCPAdapterError(f"GAM down: {SECRET_BEARING_MESSAGE}")
 
         with patch.object(handler, "_handle_get_products_skill", mock_skill):
-            with pytest.raises(AdCPAdapterError) as exc_info:
+            with pytest.raises(AdCPError) as exc_info:
                 await handler._handle_explicit_skill("get_products", {}, "token")
 
-            assert "GAM down" in exc_info.value.message
+            assert_no_secret_leak(exc_info.value.message, context="seam-scrubbed message")
+            assert "GAM down" not in exc_info.value.message
+            assert exc_info.value.wire_error_code == "SERVICE_UNAVAILABLE"
             assert exc_info.value.recovery == "transient"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("exc_factory", "expected_code"),
+        [
+            pytest.param(lambda s: ValueError(s), "VALIDATION_ERROR", id="ValueError"),
+            pytest.param(lambda s: PermissionError(s), "AUTH_REQUIRED", id="PermissionError"),
+        ],
+    )
+    async def test_raw_builtin_keeps_semantic_code_but_scrubs_message(self, exc_factory, expected_code):
+        """A raw ``ValueError``/``PermissionError`` raised in a skill keeps the SEMANTIC code the
+        synchronous boundaries emit (VALIDATION_ERROR / AUTH_REQUIRED) but has its untrusted
+        ``str(e)`` scrubbed — the seam must not re-raise a normalized typed error carrying the
+        secret."""
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+        from src.core.exceptions import AdCPError
+
+        handler = AdCPRequestHandler()
+        secret = SECRET_BEARING_MESSAGE
+
+        async def mock_skill(params, token):
+            raise exc_factory(secret)
+
+        with patch.object(handler, "_handle_get_products_skill", mock_skill):
+            with pytest.raises(AdCPError) as exc_info:
+                await handler._handle_explicit_skill("get_products", {}, "token")
+
+            assert exc_info.value.wire_error_code == expected_code
+            assert_no_secret_leak(exc_info.value.message, context="seam-scrubbed builtin message")
 
     @pytest.mark.asyncio
     async def test_server_error_still_passes_through(self):
@@ -404,37 +720,206 @@ class TestA2ADispatcherFailedSkillResult:
         assert env["errors"][0]["code"] == "VALIDATION_ERROR"
         assert env["errors"][0]["recovery"] == "correctable"
 
-    def test_untyped_exception_wrapped_in_synthetic_adcp_error(self):
-        """Bare ``Exception`` is wrapped in a synthetic AdCPError with wire-safe code.
+    def test_untyped_exception_wrapped_in_sanitized_adcp_error(self):
+        """Bare ``Exception`` is wrapped in a SANITIZED synthetic AdCPError.
 
-        ``AdCPError`` defaults to ``INTERNAL_ERROR`` which lives in
-        ``INTERNAL_CODES`` — ``wire_error_code`` translates it to
-        ``SERVICE_UNAVAILABLE`` so buyer agents only see standard codes.
+        Per the A2A boundary security policy (``safe_adcp_error``), an untyped
+        exception must NOT expose its raw ``str(exc)`` — which may carry credentials,
+        connection strings, SQL, or hostnames. The message is replaced with a generic
+        internal error, and the wire code is the safe ``SERVICE_UNAVAILABLE``
+        (``AdCPError`` defaults to ``INTERNAL_ERROR`` → translated by ``wire_error_code``).
         """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
-        result = AdCPRequestHandler._build_failed_skill_result("get_products", RuntimeError("unexpected boom"))
+        result = AdCPRequestHandler._build_failed_skill_result(
+            "get_products", RuntimeError(f"{SECRET_BEARING_MESSAGE} unexpected boom")
+        )
 
         assert result["success"] is False
         env = result["error_envelope"]
         # Wire code is translated via ERROR_CODE_MAPPING
         assert env["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
         assert env["errors"][0]["code"] == "SERVICE_UNAVAILABLE"
-        # The original RuntimeError message is preserved verbatim
-        assert "unexpected boom" in env["errors"][0]["message"]
+        # The raw exception text is NEVER on the wire — only a generic internal message.
+        assert_no_secret_leak(env, context="full failed-skill envelope")
+        message = env["errors"][0]["message"]
+        assert "unexpected boom" not in message
+        assert "internal error" in message.lower()
 
-    def test_exception_with_empty_message_falls_back_to_type_name(self):
-        """Untyped exceptions with no string content get the exception class name.
-
-        Avoids emitting an empty ``message`` field that violates the spec's
-        non-empty-message expectation on the wire envelope.
+    def test_untyped_exception_with_empty_message_still_sanitized(self):
+        """An untyped exception with no string content still yields the generic sanitized
+        message — never an empty ``message`` (spec requires non-empty) and never the raw
+        exception class name (which could itself hint at internals).
         """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
         result = AdCPRequestHandler._build_failed_skill_result("get_products", RuntimeError())
 
         env = result["error_envelope"]
-        assert env["errors"][0]["message"] == "RuntimeError"
+        message = env["errors"][0]["message"]
+        assert message, "wire envelope message must be non-empty"
+        assert message != "RuntimeError", "must not fall back to the exception class name"
+        assert "internal error" in message.lower()
+
+    def test_internal_bucket_typed_error_message_is_scrubbed(self):
+        """A TYPED internal/infra error (SERVICE_UNAVAILABLE bucket) that interpolated a
+        secret into its message is scrubbed at the boundary — code + recovery preserved.
+
+        Reachable handlers build e.g. ``AdCPAdapterError(f"...: {e}")`` where ``e`` carries a
+        DB connection string. Because it is already an ``AdCPError`` a naive sanitizer would
+        trust it; ``safe_adcp_error`` instead replaces the message for the
+        ``wire_error_code == "SERVICE_UNAVAILABLE"`` bucket while keeping the wire code and the
+        buyer-facing retry semantics (``recovery``).
+        """
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        secret = SECRET_BEARING_MESSAGE
+        result = AdCPRequestHandler._build_failed_skill_result(
+            "create_media_buy", AdCPAdapterError(f"Failed to create media buy: {secret}")
+        )
+
+        env = result["error_envelope"]
+        blob = json.dumps(env)
+        assert_no_secret_leak(blob)
+        # Wire code preserved (adapter → SERVICE_UNAVAILABLE); recovery preserved (transient).
+        assert env["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
+        assert env["errors"][0]["code"] == "SERVICE_UNAVAILABLE"
+        assert env["errors"][0]["recovery"] == "transient"
+        assert "internal error" in env["errors"][0]["message"].lower()
+
+    def test_internal_error_for_scrubs_full_jsonrpc_wire(self):
+        """[Round-12 B1] Helper-level: a typed internal-bucket error must not leak through the
+        JSON-RPC ``error.message`` even while ``error.data`` is scrubbed.
+
+        ``_internal_error_for`` previously built the top-level JSON-RPC message from the
+        ORIGINAL ``exc.message`` — so an ``AdCPAdapterError(f"...{e}")`` carrying a DB URL
+        had a sanitized envelope in ``error.data`` while the URL stayed visible in
+        ``error.message``. Both layers of the FULL wire object must be clean. (The
+        REACHABLE-handler proof — that a real push-config handler produces this scrubbed
+        InternalError — is ``test_push_config_handler_scrubs_secret_on_full_wire`` below.)
+        """
+        from src.a2a_server.adcp_a2a_server import _internal_error_for
+
+        secret = SECRET_BEARING_MESSAGE
+        err = _internal_error_for(
+            "set_task_push_notification_config", AdCPAdapterError(f"Failed to store config: {secret}")
+        )
+
+        full_wire = json.dumps({"message": err.message, "data": err.data})
+        assert_no_secret_leak(full_wire)
+        # Wire code + recovery still accurate in the envelope.
+        assert err.data["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
+        assert err.data["errors"][0]["recovery"] == "transient"
+
+    @pytest.mark.asyncio
+    async def test_push_config_handler_scrubs_secret_on_full_wire(self):
+        """[Round-14 SHOULD-FIX] REACHABLE-path + SERIALIZED-WIRE proof: a real push-config
+        handler whose backing store raises a secret-bearing internal error produces a
+        JSON-RPC error whose full serialized wire (``{jsonrpc, id, error:{code,message,data}}``)
+        leaks nothing.
+
+        Drives the actual ``on_get_task_push_notification_config`` handler (one of the four
+        push-config methods that surface through ``_internal_error_for``), captures the REAL
+        raised ``InternalError``, and serializes it through the a2a SDK's own
+        ``build_error_response`` — the exact function ``JsonRpcDispatcher._generate_error_response``
+        uses to produce the wire — so the assertion is on the actual serialized JSON-RPC
+        output, not a hand-built ``{message, data}`` dict.
+        """
+        from types import SimpleNamespace
+
+        from a2a.server.request_handlers.response_helpers import build_error_response
+        from a2a.types import InternalError
+
+        import src.a2a_server.adcp_a2a_server as a2a_mod
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        secret = SECRET_BEARING_MESSAGE
+
+        handler = AdCPRequestHandler()
+        handler._get_auth_token = lambda context: "tok"  # noqa: ARG005
+        # Identity object is irrelevant — _make_tool_context is stubbed to the scope the
+        # handler actually reads. This keeps the test at unit altitude (no DB).
+        handler._resolve_a2a_identity = lambda *a, **k: object()
+        handler._make_tool_context = lambda *a, **k: SimpleNamespace(tenant_id="t", principal_id="p")
+
+        class _BoomUoW:
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                raise AdCPAdapterError(f"Config store unavailable: {secret}")
+
+            def __exit__(self, *a):
+                return False
+
+        with patch.object(a2a_mod, "PushNotificationConfigUoW", _BoomUoW):
+            with pytest.raises(InternalError) as exc_info:
+                await handler.on_get_task_push_notification_config({"id": "cfg_1"}, context=None)
+
+        err = exc_info.value
+        # Serialize through the SDK's real JSON-RPC error builder (the dispatcher's path).
+        wire_dict = build_error_response("req-1", err)
+        serialized = json.dumps(wire_dict if isinstance(wire_dict, dict) else wire_dict.model_dump(), default=str)
+        assert_no_secret_leak(serialized)
+        assert wire_dict["error"]["data"]["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("method_name", ["on_get_task", "on_cancel_task"])
+    async def test_durable_task_handlers_scrub_secret_on_full_wire(self, method_name):
+        """A DB failure inside tasks/get or tasks/cancel must surface as a sanitized
+        JSON-RPC InternalError, never the raw exception text. These two handlers gained
+        durable DB access without the boundary arm their siblings have — an untyped
+        escape reached the SDK dispatcher, which echoes ``str(exc)`` verbatim on the
+        wire. Serializes through the SDK's own ``build_error_response`` (the dispatcher's
+        path) and asserts the full wire via the shared leak oracle."""
+        from types import SimpleNamespace
+
+        from a2a.server.request_handlers.response_helpers import build_error_response
+        from a2a.types import GetTaskRequest, InternalError
+
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        handler = AdCPRequestHandler()
+        handler._get_auth_token = lambda context: "tok"  # noqa: ARG005
+        handler._resolve_a2a_identity = lambda *a, **k: SimpleNamespace(tenant_id="t", principal_id="p")
+
+        def _boom_db():
+            raise RuntimeError(SECRET_BEARING_MESSAGE)
+
+        # No owned in-memory task, so both handlers fall through to the durable
+        # (DB-touching) path, which is where the untyped failure fires.
+        with patch("src.core.database.database_session.get_db_session", _boom_db):
+            with pytest.raises(InternalError) as exc_info:
+                await getattr(handler, method_name)(GetTaskRequest(id="task_x"), context=None)
+
+        err = exc_info.value
+        wire_dict = build_error_response("req-1", err)
+        serialized = json.dumps(wire_dict if isinstance(wire_dict, dict) else wire_dict.model_dump(), default=str)
+        assert_no_secret_leak(serialized, context=f"{method_name} JSON-RPC wire")
+        assert wire_dict["error"]["data"]["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
+
+    def test_internal_error_for_preserves_correctable_message(self):
+        """[Round-12 B1] The JSON-RPC message keeps the controlled text of a
+        client-correctable typed error — the fix must not over-sanitize."""
+        from src.a2a_server.adcp_a2a_server import _internal_error_for
+
+        err = _internal_error_for("set_task_push_notification_config", AdCPValidationError("url is required"))
+        assert "url is required" in err.message
+
+    def test_client_correctable_typed_error_message_is_preserved(self):
+        """A client-correctable typed error keeps its controlled message — the boundary must
+        NOT over-sanitize. Buyers need the specific guidance to fix their request.
+        """
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        result = AdCPRequestHandler._build_failed_skill_result(
+            "get_products", AdCPValidationError("brief must not be empty")
+        )
+
+        env = result["error_envelope"]
+        assert env["errors"][0]["code"] == "VALIDATION_ERROR"
+        assert env["errors"][0]["recovery"] == "correctable"
+        assert env["errors"][0]["message"] == "brief must not be empty"
 
     def test_envelope_shape_matches_typed_branch(self):
         """Untyped fallthrough produces the SAME envelope shape as the typed branch.
@@ -448,7 +933,11 @@ class TestA2ADispatcherFailedSkillResult:
         """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
-        typed = AdCPRequestHandler._build_failed_skill_result("s", AdCPValidationError("bad"))
+        # Conformant raise sites carry a top-level suggestion (#1417); the untyped
+        # branch synthesizes one, so the typed sample must too for shape parity.
+        typed = AdCPRequestHandler._build_failed_skill_result(
+            "s", AdCPValidationError("bad", suggestion="Correct the request and resend.")
+        )
         untyped = AdCPRequestHandler._build_failed_skill_result("s", RuntimeError("boom"))
 
         assert set(typed.keys()) == set(untyped.keys())
@@ -512,7 +1001,7 @@ class TestRESTBoundaryAdCPErrorTranslation:
         """AdCPNotFoundError raised in _impl → REST returns 404 with correctable recovery.
 
         Recovery matches the pinned enumMetadata of the WIRE code:
-        INVALID_REQUEST=correctable (salesagent-nr2q).
+        INVALID_REQUEST=correctable.
         """
         from starlette.testclient import TestClient
 
@@ -798,7 +1287,7 @@ class TestToDictRecoveryField:
         )
 
         cases = [
-            # Recovery follows the wire code (salesagent-nr2q): base
+            # Recovery follows the wire code: base
             # AdCPError→SERVICE_UNAVAILABLE=transient,
             # AdCPNotFoundError→INVALID_REQUEST=correctable.
             (AdCPError("internal"), "transient"),
@@ -822,7 +1311,7 @@ class TestToDictRecoveryField:
         """Custom recovery= kwarg overrides class default in to_dict() output."""
         from src.core.exceptions import AdCPNotFoundError
 
-        # Default is "correctable" (wire INVALID_REQUEST, salesagent-nr2q)
+        # Default is "correctable" (wire INVALID_REQUEST)
         default_exc = AdCPNotFoundError("gone")
         assert default_exc.to_dict()["recovery"] == "correctable"
 
@@ -959,7 +1448,7 @@ class TestRecoveryRoundtrip:
         # and INVALID_REQUEST respectively). Other subclasses already use STANDARD codes.
         cases = [
             # Recovery matches the pinned classification of the WIRE code
-            # (salesagent-nr2q): SERVICE_UNAVAILABLE=transient, INVALID_REQUEST=correctable.
+            #: SERVICE_UNAVAILABLE=transient, INVALID_REQUEST=correctable.
             (AdCPError, "internal", "SERVICE_UNAVAILABLE", "transient"),
             (AdCPValidationError, "bad", "VALIDATION_ERROR", "correctable"),
             (AdCPNotFoundError, "missing", "INVALID_REQUEST", "correctable"),
@@ -998,15 +1487,17 @@ class TestRecoveryRoundtrip:
 
     @pytest.mark.asyncio
     async def test_a2a_handler_explicit_skill_reraises_all_subclasses(self):
-        """All 11 AdCPError subclasses propagate verbatim from ``_handle_explicit_skill``.
+        """Recovery is preserved for every AdCPError subclass through ``_handle_explicit_skill``,
+        but INTERNAL subclasses are scrubbed at the seam (generic message, wire SERVICE_UNAVAILABLE)
+        while CLIENT-CORRECTABLE subclasses re-raise verbatim (original type + message).
 
-        Scope: handler-internal re-raise. The outer ``on_message_send``
-        boundary wraps the propagated exception into a Task artifact
-        carrying the two-layer envelope; that wire-level coverage is in
+        Scope: handler-internal re-raise. The outer ``on_message_send`` boundary wraps the
+        propagated exception into a Task artifact; wire-level coverage is in
         ``tests/integration/test_a2a_error_responses.py``.
         """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
         from src.core.exceptions import (
+            _SANITIZED_INTERNAL_MESSAGE,
             AdCPAdapterError,
             AdCPBudgetExhaustedError,
             AdCPConflictError,
@@ -1018,30 +1509,39 @@ class TestRecoveryRoundtrip:
             AdCPValidationError,
         )
 
+        # Recovery matches the pinned classification of the WIRE code. The
+        # SERVICE_UNAVAILABLE trio is the internal bucket — scrubbed at the seam; the rest are
+        # client-correctable and re-raise verbatim.
         cases = [
-            # Recovery matches the pinned classification of the WIRE code (salesagent-nr2q).
-            (AdCPError, "internal", "transient"),
-            (AdCPValidationError, "bad", "correctable"),
-            (AdCPNotFoundError, "missing", "correctable"),
-            (AdCPConflictError, "dup", "transient"),
-            (AdCPGoneError, "expired", "correctable"),
-            (AdCPBudgetExhaustedError, "broke", "terminal"),
-            (AdCPRateLimitError, "slow", "transient"),
-            (AdCPAdapterError, "down", "transient"),
-            (AdCPServiceUnavailableError, "offline", "transient"),
+            (AdCPError, "internal", "transient", True),
+            (AdCPValidationError, "bad", "correctable", False),
+            (AdCPNotFoundError, "missing", "correctable", False),
+            (AdCPConflictError, "dup", "transient", False),
+            (AdCPGoneError, "expired", "correctable", False),
+            (AdCPBudgetExhaustedError, "broke", "terminal", False),
+            (AdCPRateLimitError, "slow", "transient", False),
+            (AdCPAdapterError, "down", "transient", True),
+            (AdCPServiceUnavailableError, "offline", "transient", True),
         ]
 
         handler = AdCPRequestHandler()
 
-        for exc_class, msg, expected_recovery in cases:
+        for exc_class, msg, expected_recovery, scrubbed in cases:
 
             async def mock_skill(params, token, klass=exc_class, message=msg):
                 raise klass(message)
 
             with patch.object(handler, "_handle_get_products_skill", mock_skill):
-                with pytest.raises(exc_class) as exc_info:
+                with pytest.raises(AdCPError) as exc_info:
                     await handler._handle_explicit_skill("get_products", {}, "token")
-                assert exc_info.value.recovery == expected_recovery
+                raised = exc_info.value
+                assert raised.recovery == expected_recovery, f"{exc_class.__name__}: recovery"
+                if scrubbed:
+                    assert raised.message == _SANITIZED_INTERNAL_MESSAGE, f"{exc_class.__name__}: not scrubbed"
+                    assert raised.wire_error_code == "SERVICE_UNAVAILABLE", f"{exc_class.__name__}: wire code"
+                else:
+                    assert isinstance(raised, exc_class), f"{exc_class.__name__}: client-correctable must be verbatim"
+                    assert raised.message == msg, f"{exc_class.__name__}: message must be preserved"
 
     def test_rest_roundtrip_all_subclasses(self):
         """All 11 AdCPError subclasses: raise -> REST handler -> JSON body -> verify recovery."""
@@ -1064,7 +1564,7 @@ class TestRecoveryRoundtrip:
         # tests above. HTTP status_code is preserved (it comes from the exception
         # class directly, not from the wire code translation).
         cases = [
-            # Recovery matches the pinned classification of the WIRE code (salesagent-nr2q).
+            # Recovery matches the pinned classification of the WIRE code.
             (AdCPError, "internal", 500, "SERVICE_UNAVAILABLE", "transient"),
             (AdCPValidationError, "bad", 400, "VALIDATION_ERROR", "correctable"),
             (AdCPNotFoundError, "missing", 404, "INVALID_REQUEST", "correctable"),

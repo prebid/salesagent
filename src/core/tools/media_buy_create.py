@@ -1577,8 +1577,12 @@ async def _validate_and_convert_format_ids(
         try:
             validated_fmt = FormatId.model_validate(fmt_id, from_attributes=True)
         except (ValueError, ValidationError) as e:
+            # Raw validation error logged server-side; the client message states the
+            # required structure without interpolating str(e).
+            logger.warning("Package %s, format_ids[%s]: invalid format_id structure: %s", package_idx + 1, idx, e)
             raise AdCPValidationError(
-                f"Package {package_idx + 1}, format_ids[{idx}]: Invalid format_id structure: {e}",
+                f"Package {package_idx + 1}, format_ids[{idx}]: Invalid format_id structure. "
+                f"Per AdCP spec, each format_id must be a FormatId object with {{agent_url, id}}.",
             ) from e
         agent_url = str(validated_fmt.agent_url).rstrip("/")
         format_id = validated_fmt.id
@@ -1611,11 +1615,13 @@ async def _validate_and_convert_format_ids(
         except AdCPError:
             raise
         except Exception as e:
+            # Raw fetch error logged server-side only (may carry upstream/network
+            # detail); the client message drops "Error: {e}" to avoid leaking it.
             logger.exception(f"Error fetching format {format_id} from {agent_url}: {e}")
             raise AdCPAdapterError(
                 f"Package {package_idx + 1}, format_ids[{idx}]: Failed to verify format on agent. "
-                f"agent_url={agent_url}, format_id={format_id!r}. Error: {e}",
-            )
+                f"agent_url={agent_url}, format_id={format_id!r}.",
+            ) from e
 
         # Format validated - add to results
         validated_format_ids.append({"agent_url": str(agent_url), "id": format_id})
@@ -2010,6 +2016,7 @@ async def _create_media_buy_impl(
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
     raw_wire_payload: dict[str, Any] | None = None,
+    external_task_id: str | None = None,
 ) -> CreateMediaBuyResult:
     """Create a media buy with the specified parameters.
 
@@ -2117,6 +2124,12 @@ async def _create_media_buy_impl(
         workflow_metadata: dict[str, Any] = {"protocol": identity.protocol}
         if push_notification_config:
             workflow_metadata["push_notification_config"] = push_notification_config
+        # Persist the transport's outer async task id (opaque here — set only by the
+        # A2A boundary from the Task returned to the buyer) so the completion webhook
+        # and tasks/get can correlate to the id the BUYER holds, not the internal
+        # step_id. Durable so a poll survives a server restart.
+        if external_task_id:
+            workflow_metadata["external_task_id"] = external_task_id
 
         step = ctx_manager.create_workflow_step(
             context_id=persistent_ctx.context_id,
@@ -4316,7 +4329,10 @@ async def _create_media_buy_impl(
             # Audit logging failure is non-critical, but we should log it
             logger.warning(f"Failed to log failed media buy creation to audit: {audit_error}")
 
-        raise AdCPAdapterError(f"Failed to create media buy: {str(e)}")
+        # Raw exception already logged/audited above; keep str(e) off the client
+        # message (may carry adapter/DB internals). A2A boundary also scrubs this
+        # SERVICE_UNAVAILABLE-class message; MCP/REST rely on this source scrub.
+        raise AdCPAdapterError("Failed to create media buy.") from e
 
 
 def _build_create_media_buy_request(
@@ -4510,6 +4526,7 @@ async def create_media_buy_raw(
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
     raw_wire_payload: dict[str, Any] | None = None,
+    external_task_id: str | None = None,
 ):
     """Create a new media buy with specified parameters (raw function for A2A server use).
 
@@ -4582,6 +4599,7 @@ async def create_media_buy_raw(
         identity=identity,
         context_id=_ctx_id,
         raw_wire_payload=raw_wire_payload,
+        external_task_id=external_task_id,
     )
 
 

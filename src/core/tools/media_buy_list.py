@@ -451,18 +451,29 @@ def _resolve_status_filter(
     else:
         raw = [status_filter]
 
-    try:
-        return {MediaBuyStatus(s) for s in raw}
-    except ValueError as e:
-        # An unknown status string is a bad request, not a server fault — surface
-        # a clean VALIDATION_ERROR instead of letting the ValueError escape as a
-        # 500. (A dedicated STATUS_FILTER_INVALID_VALUE code is a separate,
-        # unimplemented gap; see the xfailed boundary-status-filter rows.)
+    # An unknown status string is a bad request, not a server fault — surface a
+    # clean VALIDATION_ERROR instead of letting a ValueError escape as a 500.
+    # (A dedicated STATUS_FILTER_INVALID_VALUE code is a separate, unimplemented
+    # gap; see the xfailed boundary-status-filter rows.) The message echoes the
+    # buyer's OWN invalid value (safe — it is client-provided input, not a server
+    # internal) so the error is correctable, but never interpolates a raw caught
+    # exception (str(e)), which could carry internals.
+    resolved: set[MediaBuyStatus] = set()
+    invalid: list[str] = []
+    for s in raw:
+        try:
+            resolved.add(MediaBuyStatus(s))
+        except ValueError:
+            invalid.append(s)
+    if invalid:
+        logger.warning("Invalid status_filter value(s): %s", invalid)
+        invalid_str = ", ".join(repr(v) for v in invalid)
         raise AdCPValidationError(
-            f"Invalid status_filter value: {e}",
+            f"Invalid status_filter value: {invalid_str} is not a valid MediaBuyStatus.",
             field="status_filter",
             suggestion="status_filter values must be valid media-buy statuses",
-        ) from e
+        )
+    return resolved
 
 
 # Persisted MediaBuy.status -> AdCP MediaBuyStatus wire enum, DERIVED from the

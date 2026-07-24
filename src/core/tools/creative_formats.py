@@ -208,9 +208,11 @@ def _list_creative_formats_impl(
     except AdCPError:
         raise
     except Exception as e:
+        # Raw exception logged server-side only — registry init failures may carry
+        # infra detail (hosts, connection strings). Keep str(e) off the wire.
         logger.error(f"Failed to create creative agent registry: {e}", exc_info=True)
         raise AdCPServiceUnavailableError(
-            f"Creative agent registry initialization failed: {e}",
+            "Failed to initialize creative agent registry.",
             context=req.context,
         ) from e
 

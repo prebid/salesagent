@@ -11,7 +11,7 @@ This test validates the actual HTTP endpoints that our A2A server exposes.
 import json
 import os
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
@@ -310,25 +310,40 @@ class TestA2ARequestHandler:
     async def test_unknown_task_id_raises_task_not_found(self, request_cls, method_name):
         """An unknown task id raises TaskNotFoundError, not the generic internal
         error a bare None return produces — cancel is the same not-found condition
-        as get, and both route through the shared ``_get_task_or_raise``.
+        as get. Both ``on_get_task`` and ``on_cancel_task`` raise it identically
+        when neither the in-memory nor the durable store has the task.
 
         Fast smoke check on the raise only. It does NOT prove the wire code: the
         exception carries no code, and the client actually sees -32603 — see
-        ``_get_task_or_raise`` (src/a2a_server/adcp_a2a_server.py) and #1670 for
-        why, plus the xfail'd live-server test in TestA2AServerIntegration that
-        grades the code on the wire. Assert on str(exc), not exc.code — there is
-        none.
+        #1670 for why, plus the xfail'd live-server test in
+        TestA2AServerIntegration that grades the code on the wire. Assert on
+        str(exc), not exc.code — there is none.
 
         Parametrized over both entry points so the shared assertion cannot drift
-        between two byte-identical copies.
+        between the two.
+
+        Identity resolves successfully (both handlers need tenant+principal scope
+        before consulting either store) but neither store has anything for this
+        id: the in-memory map is empty, and the durable lookup is mocked to
+        return None — keeping this a fast unit-altitude smoke check with no real
+        DB, per the test's own intent, rather than the durable-lookup path itself
+        (that's covered at integration altitude elsewhere).
 
         Both halves of the raise are pinned: the human-readable message AND the
         structured ``data`` payload clients actually parse. Asserting the message
         alone would let ``data={"task_id": ...}`` be deleted with the suite still
         green, since the id appears in the message either way.
         """
-        with pytest.raises(TaskNotFoundError) as exc:
-            await getattr(self.handler, method_name)(request_cls(id="task_does_not_exist"), MagicMock())
+        from tests.utils.a2a_helpers import make_test_a2a_identity
+
+        identity = make_test_a2a_identity()
+        with (
+            patch.object(self.handler, "_resolve_a2a_identity", return_value=identity),
+            patch.object(self.handler, "_durable_task_from_step", return_value=None),
+            patch.object(self.handler, "_durable_cancel_step", return_value=None),
+        ):
+            with pytest.raises(TaskNotFoundError) as exc:
+                await getattr(self.handler, method_name)(request_cls(id="task_does_not_exist"), MagicMock())
         assert "task_does_not_exist" in str(exc.value)  # the requested id is surfaced
         assert exc.value.data == {"task_id": "task_does_not_exist"}  # ...and machine-readable
 

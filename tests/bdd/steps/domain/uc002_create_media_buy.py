@@ -12,9 +12,10 @@ beads: salesagent-2rq, salesagent-zh85
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
-from unittest.mock import ANY
+from unittest.mock import ANY, MagicMock
 
 from pytest_bdd import given, parsers, then, when
 
@@ -114,6 +115,12 @@ def given_valid_request(ctx: dict) -> None:
 
     ctx.setdefault("account_ref", None)
     _ensure_request_defaults(ctx)
+
+
+@given("an authenticated buyer")
+def given_authenticated_buyer(ctx: dict) -> None:
+    """Record that this scenario uses the harness-created buyer identity."""
+    ctx["has_auth"] = True
 
 
 @given(parsers.parse('a valid create_media_buy request with account "{account_id}"'))
@@ -304,6 +311,48 @@ def given_account_active(ctx: dict) -> None:
         operator=f"{account_id}.com",
     )
     AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+
+
+@when(parsers.parse('the buyer sends a natural-language "{request_text}" request'))
+def when_buyer_sends_nl_a2a_request(ctx: dict, request_text: str) -> None:
+    """Drive real A2A ``on_message_send`` with a natural-language text part."""
+    from a2a.server.routes.common import ServerCallContext
+    from a2a.types import Task, TaskState
+
+    from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+    from src.core.config_loader import set_current_tenant
+    from tests.harness._base import _read_failed_a2a_task
+    from tests.harness.transport import Transport
+    from tests.utils.a2a_helpers import make_nl_send_message_request
+
+    env = ctx["env"]
+    identity = env.identity_for(Transport.A2A)
+    set_current_tenant(identity.tenant)
+
+    handler = AdCPRequestHandler()
+    handler._get_auth_token = MagicMock(return_value=identity.auth_token)
+    handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+    async def _call() -> Task:
+        return await handler.on_message_send(make_nl_send_message_request(request_text), ServerCallContext())
+
+    try:
+        result = asyncio.run(_call())
+    except Exception as exc:
+        ctx["error"] = exc
+        return
+
+    ctx["response"] = result
+    if result.status.state == TaskState.TASK_STATE_FAILED:
+        # Strict mode always yields an envelope (or raises AssertionError on a
+        # violated processing_error artifact contract), so no None-guard needed.
+        envelope, error = _read_failed_a2a_task(
+            result,
+            fallback_message="A2A natural-language request failed",
+            expect_processing_error=True,
+        )
+        ctx["wire_error_envelope"] = envelope
+        ctx["error"] = error
 
 
 @given(parsers.parse("a create_media_buy request with account configuration {partition}"))

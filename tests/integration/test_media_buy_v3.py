@@ -320,6 +320,48 @@ class TestCreateMediaBuyManualApproval:
             assert mb.raw_request is not None, "raw_request should be stored"
 
     @pytest.mark.asyncio
+    async def test_a2a_external_task_id_forwarded_to_persisted_step(
+        self, mb_tenant_with_approval, mb_principal, mb_products
+    ):
+        """The A2A raw wrapper must FORWARD its outer ``external_task_id`` all the way into the
+        persisted workflow step's ``request_metadata`` — this is what lets ``tasks/get`` correlate
+        a durable poll to the id the buyer holds. Drives the real ``create_media_buy_raw`` (not the
+        hand-written metadata the durable-lookup tests use), so deleting the wrapper's forwarding
+        reddens this test as well as the boundary guard."""
+        from src.core.tools.media_buy_create import create_media_buy_raw
+
+        identity = _make_identity(
+            principal_id=mb_principal["principal_id"],
+            tenant_id=mb_tenant_with_approval["tenant_id"],
+            tenant=mb_tenant_with_approval,
+        )
+        outer_task_id = f"task_{uuid.uuid4().hex[:12]}"
+
+        result = await create_media_buy_raw(
+            brand={"domain": "testbrand.com"},
+            packages=[{"product_id": "guaranteed_display", "budget": 4000.0, "pricing_option_id": "cpm_usd_fixed"}],
+            start_time=datetime.now(UTC) + timedelta(days=1),
+            end_time=datetime.now(UTC) + timedelta(days=8),
+            idempotency_key=f"int-key-{uuid.uuid4().hex}",
+            identity=identity,
+            external_task_id=outer_task_id,
+        )
+        assert result.status == "submitted"
+
+        # The submitted response's task_id IS the persisted workflow step id — read it back
+        # through the repository (no raw session), and assert the outer task id was forwarded.
+        # request_metadata is merged into request_data at the persistence boundary.
+        from src.core.database.repositories import WorkflowUoW
+
+        with WorkflowUoW(mb_tenant_with_approval["tenant_id"]) as uow:
+            step = uow.workflows.get_by_step_id(result.response.task_id)
+            assert step is not None, "manual-approval create must persist a workflow step"
+            forwarded = (step.request_data or {}).get("external_task_id")
+        assert forwarded == outer_task_id, (
+            "the A2A outer task id must be forwarded into the persisted step's request_data"
+        )
+
+    @pytest.mark.asyncio
     async def test_execute_approved_calls_adapter(self, mb_tenant_with_approval, mb_principal, mb_products):
         """UC-002-MA03: approved buy triggers adapter creation.
 
@@ -439,8 +481,14 @@ class TestCreateMediaBuyAdapterAtomicity:
         with patch("src.core.tools.media_buy_create._execute_adapter_media_buy_creation") as mock_adapter_call:
             mock_adapter_call.side_effect = RuntimeError("Simulated adapter failure")
 
-            with pytest.raises(AdCPAdapterError, match="Simulated adapter failure"):
+            # The client-facing message is sanitized — the raw adapter exception text
+            # ("Simulated adapter failure") is logged server-side only, not interpolated
+            # into the AdCPAdapterError message. The original
+            # RuntimeError is still chained via __cause__ for server-side traceability.
+            with pytest.raises(AdCPAdapterError, match="Failed to create media buy") as exc_info:
                 await _create_media_buy_impl(req=req, identity=mb_identity)
+            assert "Simulated adapter failure" not in str(exc_info.value)
+            assert isinstance(exc_info.value.__cause__, RuntimeError)
 
         # Verify NO media buy record persisted (workflow step may exist, that's OK)
         with get_db_session() as session:

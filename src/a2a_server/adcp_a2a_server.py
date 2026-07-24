@@ -8,11 +8,12 @@ import copy
 import json
 import logging
 import uuid
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator
+from contextlib import contextmanager
 
 # Import core functions for direct calls (raw functions without FastMCP decorators)
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from a2a.server.context import ServerCallContext
 from a2a.server.events.event_queue import Event
@@ -36,11 +37,11 @@ from a2a.types import (
     ListTasksRequest,
     ListTasksResponse,
     Message,
-    MethodNotFoundError,
     Part,
     SendMessageRequest,
     SubscribeToTaskRequest,
     Task,
+    TaskNotCancelableError,
     TaskNotFoundError,
     TaskPushNotificationConfig,
     TaskState,
@@ -54,19 +55,21 @@ from google.protobuf import json_format, struct_pb2
 from pydantic import BaseModel
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import AUTH_REQUIRED_SUGGESTION
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.repositories import PushNotificationConfigUoW
+from src.core.database.repositories.workflow import TERMINAL_STEP_STATUSES, WorkflowRepository
 from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthRequiredError,
     AdCPCapabilityNotSupportedError,
+    AdCPConfigurationError,
     AdCPError,
     AdCPValidationError,
     build_two_layer_error_envelope,
     normalize_to_adcp_error,
+    safe_adcp_error,
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import coerce_creative_filters, to_account_reference, to_brand_reference
@@ -114,6 +117,11 @@ from src.core.validation_helpers import (
 from src.core.version import get_version
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+    from src.core.database.models import WorkflowStep
+
 logger = logging.getLogger(__name__)
 
 
@@ -150,35 +158,127 @@ DISCOVERY_SKILLS = frozenset(
 )
 
 
-def _internal_error_for(operation: str, exc: Exception) -> InternalError:
-    """Canonical InternalError shape for non-skill A2A boundary failures.
+def _sanitized_envelope(exc: Exception) -> tuple[AdCPError, dict[str, Any]]:
+    """THE A2A sanitize→envelope composition: ``(safe_adcp_error(exc), its two-layer envelope)``.
 
-    Skill handlers raise typed ``AdCPError`` (or untyped exceptions that the
-    dispatcher normalizes), and ``_handle_explicit_skill`` → ``on_message_send``
-    surface those as a two-layer envelope on a failed Task's DataPart. Non-skill
-    paths (``on_message_send`` fallthrough, NL handlers) historically picked their
-    own prefixes (``"Message processing failed: "``, ``"Error in ..."``)
-    for semantically identical untyped failures — divergence on the buyer-
-    facing wire message for the same condition.
-
-    Use this helper at every non-skill ``InternalError(...)`` raise site that
-    is NOT a deliberate protocol-level convention (see push-notif handlers
-    below). The canonical prefix is ``"{operation} failed: {exc}"`` so
-    storyboard runners can parse the failure uniformly.
-
-    The four ``on_*_task_push_notification_config`` JSON-RPC protocol methods use
-    this helper too — they have no async Task to carry a DataPart, so the two-layer
-    envelope rides in the error's ``data`` field (``error.data["errors"][0]["code"]``
-    / ``error.data["adcp_error"]``). ``InternalError`` stays an ``A2AError`` so the
-    SDK's ``JsonRpcDispatcher`` serializes it as a structured JSON-RPC error; raising
-    a non-``A2AError`` (e.g. ``AdCPAdapterError``) would hit the dispatcher's
-    ``except Exception`` branch and be flattened to a bare ``InternalError`` with no
-    envelope.
+    Single home for the pipeline every A2A error surface uses — the top-level
+    ``_internal_error_for`` (→ JSON-RPC ``InternalError``), the per-skill
+    ``_build_error_envelope`` (→ failed-Task artifact), and the per-skill seam (which
+    re-raises the sanitized error and lets the dispatcher envelope it). Internal/infra
+    errors — the SERVICE_UNAVAILABLE family AND terminal ``CONFIGURATION_ERROR`` (whose
+    secret-decryption raise sites can interpolate a connection string) — are scrubbed to
+    a generic message with wire code/recovery preserved; client-correctable typed errors
+    pass through unchanged. The policy lives in ``src/core/exceptions.py`` so the webhook
+    push path (``ContextManager.audit_workflow_step_failure``) shares one definition
+    (MCP/REST adoption tracked in #1587). Do NOT reintroduce a normalizer that trusts a
+    typed message verbatim.
     """
-    return InternalError(
-        message=f"{operation} failed: {exc}",
-        data=build_two_layer_error_envelope(normalize_to_adcp_error(exc)),
+    sanitized = safe_adcp_error(exc)
+    return sanitized, build_two_layer_error_envelope(sanitized)
+
+
+def _enveloped_invalid_request(exc: AdCPError) -> InvalidRequestError:
+    """JSON-RPC ``InvalidRequestError`` carrying ``exc``'s sanitized two-layer envelope in ``data``.
+
+    Spec (AdCP 3.1.1 ``building/operating/transport-errors.mdx``): JSON-RPC ``error.data`` is a
+    sanctioned transport-envelope location, and ``error.data.adcp_error`` is a MUST-check in the
+    client detection order — so a protocol-level rejection can stay a JSON-RPC error AND still let
+    a buyer branch on the AdCP code. "Stays on the JSON-RPC wire" and "carries the envelope in
+    ``data``" are orthogonal; every AdCP-layer rejection routed through this helper does both.
+    Protocol-native JSON-RPC errors — ``UnsupportedOperationError`` (task listing/subscription,
+    the extended agent card) and ``TaskNotFoundError`` (an unknown/unowned task id on
+    tasks/get, tasks/cancel, and push-config lookups) — are correctly envelope-free: they
+    signal a transport-protocol condition with no corresponding AdCP wire code, not an escape
+    from this helper.
+
+    Both wire layers carry the SAME sanitized message — the JSON-RPC ``message`` is taken from the
+    envelope — so ``error.message`` and ``error.data.adcp_error.message`` can never disagree.
+    """
+    sanitized, envelope = _sanitized_envelope(exc)
+    return InvalidRequestError(message=sanitized.message, data=envelope)
+
+
+def _auth_required_error(auth_error: AdCPAuthenticationError) -> InvalidRequestError:
+    """THE single source for every A2A auth rejection — AUTH_REQUIRED envelope in ``data``.
+
+    Covers five auth raises: the missing-token, resolution-failure, and invalid-principal arms of
+    ``_resolve_a2a_identity`` (inherited by tasks/get, tasks/cancel and the four
+    push-notification-config methods), the ``message/send`` pre-dispatch check, and the standalone
+    ``_handle_explicit_skill`` identity guard. Before this, only ``message/send`` carried the
+    envelope, so a buyer branching on ``error.data.adcp_error.code == "AUTH_REQUIRED"`` got it
+    there and nowhere else. (``_resolve_a2a_identity`` has a SIXTH raise — no resolvable tenant for
+    an otherwise-authenticated principal — that is a seller-side config failure, not an auth
+    failure, and deliberately routes through ``_enveloped_invalid_request`` with
+    ``AdCPConfigurationError`` instead; it is excluded from this helper by design, not by omission.)
+
+    Takes the TYPED error rather than a message + optional cause: the wire code, recovery, and the
+    graded ``suggestion`` then all come from the class defaults (one definition, never re-specified
+    per raise site), no argument can be silently discarded, and a non-auth ``AdCPError`` cannot be
+    adopted by a function documented as the AUTH_REQUIRED source — that would emit a different wire
+    code from here. Non-auth rejections use ``_enveloped_invalid_request`` directly.
+    """
+    return _enveloped_invalid_request(auth_error)
+
+
+def _internal_error_for(operation: str, exc: Exception) -> InternalError:
+    """Canonical JSON-RPC ``InternalError`` for A2A boundary failures — SANITIZED.
+
+    Security (transport-errors.mdx "Security Considerations" § Seller Requirements): raw exception text may
+    contain credentials, connection strings, SQL, hostnames, filesystem paths, or
+    upstream responses and MUST NOT reach the client. So:
+
+    - A TYPED ``AdCPError`` passes through with its own wire code, but the message
+      placed on the JSON-RPC layer is the SANITIZED one from ``_sanitized_envelope`` —
+      a typed internal-bucket error (``AdCPAdapterError`` et al.) can interpolate
+      ``str(e)`` into its message, so the ORIGINAL ``exc.message`` must never be
+      used here (it would leak through ``error.message`` even while ``error.data``
+      is scrubbed).
+    - Any UNTYPED exception is replaced with a generic message and a base
+      ``SERVICE_UNAVAILABLE`` envelope; the raw ``str(exc)`` is NEVER placed on the
+      wire (callers log it server-side via ``record_boundary_error``).
+
+    ``InternalError`` stays an ``A2AError`` so the SDK's ``JsonRpcDispatcher``
+    serializes it as a structured JSON-RPC error (the four
+    ``on_*_task_push_notification_config`` methods, the durable ``on_get_task`` /
+    ``on_cancel_task`` boundaries, and the untyped-crash branch of
+    ``on_message_send``, all raise through here). The two-layer envelope rides in the
+    error's ``data`` field (``error.data["adcp_error"]`` / ``error.data["errors"][0]``).
+    """
+    adcp_error, envelope = _sanitized_envelope(exc)
+    if isinstance(exc, AdCPError):
+        # adcp_error.message, NOT exc.message: the sanitized message (identical for
+        # client-correctable errors, scrubbed for the internal bucket).
+        message = f"{operation} failed: {adcp_error.message}"
+    else:
+        message = f"Internal error during {operation}"
+    return InternalError(message=message, data=envelope)
+
+
+def _boundary_internal_error(
+    op_key: str, op_label: str, identity: ResolvedIdentity | None, exc: Exception
+) -> InternalError:
+    """THE single untyped-crash boundary arm shared by ``on_message_send``,
+    ``on_get_task``, and ``on_cancel_task``: log server-side (``record_boundary_error``)
+    using ONE canonical identity-scope sentinel, then build the sanitized JSON-RPC
+    ``InternalError`` (``_internal_error_for``).
+
+    Each of the three handlers previously open-coded this arm; ``on_message_send``'s
+    copy had already drifted onto a different missing-identity sentinel
+    (``"unknown"``/``"unknown"``) from ``on_get_task``/``on_cancel_task``'s
+    (``None``/``"anonymous"``), so the SAME unresolved-identity event logged under two
+    different sentinels — un-greppable, and the tenant column swung by handler. This
+    is the single edit that keeps the sentinel from drifting again on the next handler.
+
+    Returns (never raises) so each caller keeps its own ``raise ... from exc`` chaining.
+    """
+    record_boundary_error(
+        "a2a",
+        op_key,
+        exc,
+        tenant_id=getattr(identity, "tenant_id", None),
+        principal_id=getattr(identity, "principal_id", None) or "anonymous",
     )
+    return _internal_error_for(op_label, exc)
 
 
 class AdCPRequestHandler(RequestHandler):
@@ -187,27 +287,93 @@ class AdCPRequestHandler(RequestHandler):
     def __init__(self):
         """Initialize the AdCP A2A request handler."""
         self.tasks: dict[str, Task] = {}  # In-memory task storage
+        # Owner (tenant_id, principal_id) of each in-memory task. tasks/get and
+        # tasks/cancel authorize the CALLER against this before serving or mutating
+        # an in-memory entry — the map key (task id) is bearer-ish and must not by
+        # itself grant a same-tenant sibling principal access. See
+        # _authorized_in_memory_task / _remember_task.
+        self._task_owner: dict[str, tuple[str, str]] = {}
         self._task_push_configs: dict[str, TaskPushNotificationConfig] = {}
         logger.info("AdCP Request Handler initialized for direct function calls")
+
+    def _remember_task(self, task_id: str, task: Task, identity: ResolvedIdentity | None) -> None:
+        """Store an in-memory task together with its owner (tenant, principal).
+
+        Only records an owner when identity carries BOTH tenant and principal. An
+        ownerless task is never served through the memory path (fail closed), which
+        is correct for synchronous discovery responses that are returned inline and
+        never polled.
+        """
+        self.tasks[task_id] = task
+        if identity is not None and identity.tenant_id and identity.principal_id:
+            self._task_owner[task_id] = (identity.tenant_id, identity.principal_id)
+        else:
+            self._task_owner.pop(task_id, None)
+
+    def _forget_task(self, task_id: str) -> None:
+        """Drop an in-memory task and all its side state (owner + push config)."""
+        self.tasks.pop(task_id, None)
+        self._task_owner.pop(task_id, None)
+        self._task_push_configs.pop(task_id, None)
+
+    def _authorized_in_memory_task(self, task_id: str, identity: ResolvedIdentity | None) -> Task | None:
+        """Return the in-memory task ONLY when ``identity`` is its recorded owner.
+
+        Fails closed: an unresolved identity, an ownerless task, or an owner
+        mismatch (a same-tenant sibling principal, or a cross-tenant caller) all
+        yield None so the caller can neither read nor mutate another principal's
+        in-memory task.
+        """
+        task = self.tasks.get(task_id)
+        if task is None or identity is None:
+            return None
+        owner = self._task_owner.get(task_id)
+        if owner is None:
+            return None
+        if (identity.tenant_id, identity.principal_id) != owner:
+            return None
+        return task
 
     @staticmethod
     def _build_error_envelope(exc: Exception) -> dict[str, Any]:
         """Build a spec-compliant two-layer envelope for any exception.
 
-        Single source of truth for "wrap-arbitrary-exception → wire envelope"
-        used by both the per-skill dispatcher (``_build_failed_skill_result``)
-        and the top-level ``on_message_send`` error handler. Delegates to
-        ``normalize_to_adcp_error`` for the type→AdCPError mapping
-        (``ValueError → AdCPValidationError``, ``PermissionError →
-        AdCPAuthorizationError``, arbitrary ``Exception →
-        AdCPError(INTERNAL_ERROR)``) so the wire output stays in
-        ``WIRE_STANDARD_CODES`` (SDK ``STANDARD_ERROR_CODES`` plus the
-        pinned-spec supplement) and the envelope shape never degrades to a
-        flat ``{"error": "..."}`` dict the storyboard runner would synthesize
-        as ``MCP_ERROR``.
+        The failed-Task-artifact entry into the shared ``_sanitized_envelope``
+        composition (consumed by ``_failed_task_artifact`` and
+        ``_build_failed_skill_result``); the JSON-RPC entry is
+        ``_internal_error_for``. Same policy on both: a TYPED ``AdCPError`` keeps
+        its controlled message + wire code, while any UNTYPED exception becomes a
+        generic ``AdCPError`` and its raw ``str(exc)`` is NEVER placed on the wire.
+        (It deliberately does NOT use ``normalize_to_adcp_error``, which maps
+        ``Exception → AdCPError(str(exc))`` and would leak credentials/SQL/hostnames
+        through the per-skill failed-Task artifact.) The wire output stays in
+        ``WIRE_STANDARD_CODES`` (SDK ``STANDARD_ERROR_CODES`` plus the pinned-spec
+        supplement) and the envelope shape stays a two-layer ``errors[]`` structure,
+        never a flat ``{"error": "..."}`` dict the storyboard runner would treat as
+        ``MCP_ERROR``.
         """
 
-        return build_two_layer_error_envelope(normalize_to_adcp_error(exc))
+        _sanitized, envelope = _sanitized_envelope(exc)
+        return envelope
+
+    @staticmethod
+    def _failed_task_artifact(exc: Exception) -> "Artifact":
+        """The ``processing_error`` artifact for a failed Task.
+
+        Per the A2A binding for errors, a failed artifact carries BOTH a
+        human-readable TextPart and the authoritative structured DataPart (the
+        two-layer AdCP envelope) — not a DataPart alone. The strict reader REQUIRES
+        exactly that shape (one DataPart AND one TextPart), and every failed-artifact
+        emitter — this one, the per-skill ``error_result``, and the durable rebuild in
+        ``_durable_result_artifact`` — must satisfy it."""
+        envelope = AdCPRequestHandler._build_error_envelope(exc)
+        errors = envelope.get("errors") or []
+        text = errors[0].get("message") if errors else "Request failed."
+        return Artifact(
+            artifact_id="error_1",
+            name="processing_error",
+            parts=[Part(text=text), Part(data=_dict_to_value(envelope))],
+        )
 
     @staticmethod
     def _build_failed_skill_result(skill_name: str, exc: Exception) -> dict[str, Any]:
@@ -224,6 +390,49 @@ class AdCPRequestHandler(RequestHandler):
             "error_envelope": AdCPRequestHandler._build_error_envelope(exc),
             "success": False,
         }
+
+    def _mark_task_failed(self, task: Task) -> None:
+        """Mark a task FAILED. No webhook — the caller returns this terminal Task
+        synchronously in the response, and AdCP 3.1.1 a2a-guide.mdx
+        ("Webhook Trigger Rules") says a push notification is
+        NOT sent when the initial response is already terminal (the buyer already
+        has the result). Webhooks fire only for genuinely async transitions
+        (initial response ``working``/``submitted`` → later terminal); those must
+        carry the Task's structured artifacts (see ``_send_protocol_webhook``)."""
+        task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
+
+    @staticmethod
+    def _task_artifacts_data(task: Task) -> list[tuple[str, dict[str, Any]]]:
+        """Every artifact DataPart as an ordered ``(artifact_name, decoded_data)``.
+
+        Single decoder for A2A DataPart → dict (protobuf ``Value`` → JSON), shared
+        by completed-status detection and the webhook payload builder. Returns a
+        LIST, not a name-keyed dict, as a general safety property: identically-named
+        artifacts are all preserved — none silently overwrites another. (The explicit-
+        skill path emits one artifact per Task under the single-skill gate; the
+        general shape guards any other producer.)"""
+        pairs: list[tuple[str, dict[str, Any]]] = []
+        for artifact in task.artifacts:
+            for part in artifact.parts:
+                if part.HasField("data"):
+                    pairs.append((artifact.name, json.loads(json_format.MessageToJson(part.data))))
+        return pairs
+
+    @staticmethod
+    def _webhook_result_data(task: Task) -> dict[str, Any]:
+        """Pack all artifact data into one dict for ``create_a2a_webhook_payload``.
+
+        The library renders a single artifact from this dict, so we key by artifact
+        name but DE-COLLIDE duplicates (``name``, ``name#2``, …) as a general safety
+        property — preserving every artifact's data on the wire rather than
+        overwriting, whatever the producing path."""
+        result_data: dict[str, Any] = {}
+        for name, data in AdCPRequestHandler._task_artifacts_data(task):
+            key, n = name, 2
+            while key in result_data:
+                key, n = f"{name}#{n}", n + 1
+            result_data[key] = data
+        return result_data
 
     def _get_auth_token(self, context: ServerCallContext | None = None) -> str | None:
         """Extract Bearer token from ServerCallContext.
@@ -266,7 +475,7 @@ class AdCPRequestHandler(RequestHandler):
         headers = auth_ctx.headers if auth_ctx else {}
 
         if require_valid_token and not auth_token:
-            raise InvalidRequestError(message="Missing authentication token")
+            raise _auth_required_error(AdCPAuthRequiredError("Missing authentication token"))
 
         # Extract testing context from A2A request headers (same as MCP does)
         testing_context = AdCPTestContext.from_headers(headers)
@@ -280,15 +489,27 @@ class AdCPRequestHandler(RequestHandler):
                 testing_context=testing_context,
             )
         except AdCPAuthenticationError as e:
-            raise InvalidRequestError(message=str(e)) from e
+            # One source for the enveloped auth error (sanitized message, AUTH_REQUIRED in
+            # ``data``) so every A2A method surfaces it identically — not just message/send.
+            raise _auth_required_error(e) from e
 
         if require_valid_token:
             if not identity.principal_id:
-                raise InvalidRequestError(message="Authentication token is invalid or expired.")
+                raise _auth_required_error(AdCPAuthenticationError("Authentication token is invalid or expired."))
 
             if not identity.tenant:
-                raise InvalidRequestError(
-                    message=f"Unable to determine tenant from authentication. Principal: {identity.principal_id}"
+                # The credentials were VALID — the principal authenticated and only the tenant
+                # lookup failed. That is a seller-side configuration failure, not a buyer auth
+                # problem, so it must NOT emit AUTH_REQUIRED (which tells the buyer to fix its
+                # credentials). CONFIGURATION_ERROR is terminal per the pinned 3.1.1 enum, and
+                # being an internal wire code its message is scrubbed at the boundary — which is
+                # also what keeps the principal id off the wire, so it is logged here instead.
+                logger.error(
+                    "[A2A AUTH] authenticated principal has no resolvable tenant: principal=%s",
+                    identity.principal_id,
+                )
+                raise _enveloped_invalid_request(
+                    AdCPConfigurationError("Unable to determine tenant for the authenticated principal.")
                 )
 
             tenant_id = identity.tenant_id or identity.tenant.get("tenant_id", "unknown")
@@ -303,6 +524,18 @@ class AdCPRequestHandler(RequestHandler):
             set_current_tenant(identity.tenant)
 
         return identity
+
+    def _authenticated_tool_context(self, context: ServerCallContext | None, tool_name: str) -> ToolContext:
+        """Auth preamble shared by the four push-notification-config methods.
+
+        ``token → identity → ToolContext`` was byte-identical in all four. No missing-token
+        pre-check: ``_resolve_a2a_identity`` (``require_valid_token=True`` by default) already
+        raises the single enveloped auth error for exactly that condition, so each of these
+        methods inherits the AUTH_REQUIRED envelope from one source.
+        """
+        auth_token = self._get_auth_token(context)
+        identity = self._resolve_a2a_identity(auth_token, context=context)
+        return self._make_tool_context(identity, tool_name)
 
     def _make_tool_context(
         self, identity: ResolvedIdentity, tool_name: str, context_id: str | None = None
@@ -366,8 +599,6 @@ class AdCPRequestHandler(RequestHandler):
         self,
         task: Task,
         status: str,
-        result: dict[str, Any] | None = None,
-        error: str | None = None,
     ):
         """Send protocol-level push notification if configured.
 
@@ -376,6 +607,13 @@ class AdCPRequestHandler(RequestHandler):
         - Intermediate states (working, input-required, submitted): Send TaskStatusUpdateEvent
 
         Uses create_a2a_webhook_payload from adcp library to automatically select correct type.
+
+        In-process callers notify only the non-terminal ``submitted`` transition
+        (immediate terminal responses are returned synchronously and do not notify —
+        see ``_mark_task_failed``; the later async terminal transition is notified by
+        the durable workflow path in ``ContextManager``). The payload's result data is
+        always read off the Task's own artifacts (``_webhook_result_data``), never a
+        caller-supplied dict — one source for what a subscriber sees.
         """
         try:
             # Check if task has push notification config stored
@@ -414,11 +652,12 @@ class AdCPRequestHandler(RequestHandler):
                 logger.warning("Unknown status '%s', defaulting to 'working'", status)
                 status_enum = GeneratedTaskStatus.working
 
-            # Build result data for the webhook payload
-            # Include error information in result if status is failed
-            result_data: dict[str, Any] = result or {}
-            if error and status == "failed":
-                result_data["error"] = error
+            # Build result data for the webhook payload. ``create_a2a_webhook_payload``
+            # renders its artifact FROM this dict, so we pass the Task's own structured
+            # artifact data — EVERY artifact, de-colliding duplicate names — never a
+            # lossy ``{"error": "..."}``, a single stale DataPart, an empty dict, or a
+            # name-overwritten sibling.
+            result_data: dict[str, Any] = self._webhook_result_data(task)
 
             # Use create_a2a_webhook_payload to get the correct payload type:
             # - Task for final states (completed, failed, canceled)
@@ -602,6 +841,11 @@ class AdCPRequestHandler(RequestHandler):
             self._task_push_configs[task_id] = push_notification_config
         self.tasks[task_id] = task
 
+        # Initialized before the try so the outer error handler can always read
+        # it — a failure during auth-token extraction (before resolution) must
+        # not turn into a NameError inside the except block.
+        identity: ResolvedIdentity | None = None
+
         try:
             # Get authentication token
             auth_token = self._get_auth_token(context)
@@ -616,27 +860,19 @@ class AdCPRequestHandler(RequestHandler):
                 if non_discovery_skills:
                     requires_auth = True
 
-            # Require authentication for non-public skills. Stay a JSON-RPC
-            # InvalidRequestError (protocol-level rejection, top-level error), but
-            # carry the two-layer envelope in ``data`` so the buyer-facing
-            # AUTH_REQUIRED code + AUTH_REQUIRED_SUGGESTION reach the A2A wire —
-            # matching REST's no-identity envelope (auth_context.py), which the
-            # bare A2AError previously dropped. (#1417)
+            # Require authentication for non-public skills. Stays a JSON-RPC
+            # InvalidRequestError (protocol-level rejection) while carrying the two-layer
+            # envelope in ``data`` — via the same _auth_required_error source every other
+            # A2A auth raise uses, so the code/recovery/suggestion and both layers' message
+            # cannot drift between message/send and the rest. (#1417)
             if requires_auth and not auth_token:
-                raise InvalidRequestError(
-                    message="Missing authentication token - Bearer token required in Authorization header",
-                    data=build_two_layer_error_envelope(
-                        AdCPAuthRequiredError(
-                            "Authentication required - Bearer token required in Authorization header",
-                            suggestion=AUTH_REQUIRED_SUGGESTION,
-                        )
-                    ),
+                raise _auth_required_error(
+                    AdCPAuthRequiredError("Authentication required - Bearer token required in Authorization header")
                 )
 
             # ── Transport boundary: resolve identity ONCE ──
             # Like REST's _resolve_auth(), identity is resolved here and passed
             # to all downstream handlers. No handler should call resolve_identity().
-            identity: ResolvedIdentity | None = None
             if auth_token:
                 identity = self._resolve_a2a_identity(auth_token, require_valid_token=requires_auth, context=context)
             elif not requires_auth:
@@ -645,7 +881,23 @@ class AdCPRequestHandler(RequestHandler):
 
             # Route: Handle explicit skill invocations first, then natural language fallback
             if skill_invocations:
-                # Process explicit skill invocations
+                # Reject a multi-skill batch BEFORE executing ANY skill. Aggregating
+                # divergent per-skill outcomes into one Task is incoherent when a skill
+                # has real side effects: e.g. create_media_buy persists a pending
+                # (submitted) workflow while a sibling fails, which would terminalize
+                # the Task as failed even though the accepted work keeps running. Until
+                # per-skill child Tasks exist (tracked as a follow-up), one skill per
+                # message is the contract. Raised as a typed application error →
+                # failed Task (UNSUPPORTED_FEATURE); no skill runs, so no side effects.
+                if len(skill_invocations) > 1:
+                    raise AdCPCapabilityNotSupportedError(
+                        message=(
+                            "Batching multiple skills in one message is not supported "
+                            f"({[inv['skill'] for inv in skill_invocations]}); send one skill per message."
+                        )
+                    )
+
+                # Process the single explicit skill invocation.
                 results = []
                 for invocation in skill_invocations:
                     skill_name = invocation["skill"]
@@ -658,6 +910,7 @@ class AdCPRequestHandler(RequestHandler):
                             parameters,
                             identity,
                             push_notification_config=push_notification_config,
+                            task_id=task_id,
                         )
                         results.append({"skill": skill_name, "result": result, "success": True})
                     except A2AError:
@@ -697,22 +950,9 @@ class AdCPRequestHandler(RequestHandler):
                         )
                         results.append(self._build_failed_skill_result(skill_name, e))
 
-                # Check for submitted status (manual approval required) - return early without artifacts
-                # Per AdCP spec, async operations should return Task with status=submitted and no artifacts
-                for res in results:
-                    if res["success"] and isinstance(res["result"], dict):
-                        result_status = res["result"].get("status")
-                        if result_status == "submitted":
-                            task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_SUBMITTED))
-                            del task.artifacts[:]  # No artifacts for pending tasks
-                            logger.info(
-                                f"Task {task_id} requires manual approval, returning status=submitted with no artifacts"
-                            )
-                            # Send protocol-level webhook notification
-                            await self._send_protocol_webhook(task, status="submitted")
-                            self.tasks[task_id] = task
-                            return task
-
+                # Create artifacts for ALL skill results FIRST, before any status
+                # decision. A mixed submitted+failed batch must never lose a failure
+                # envelope to an early return — status is decided below by precedence.
                 # Create artifacts for all skill results with human-readable text
                 for i, res in enumerate(results):
                     if res["success"]:
@@ -732,7 +972,9 @@ class AdCPRequestHandler(RequestHandler):
                         )
 
                     # Generate human-readable text from response __str__()
-                    # Per A2A spec, use TextPart + DataPart pattern (not description field)
+                    # Per A2A spec, use TextPart + DataPart pattern (not description field).
+                    # A FAILED artifact carries the error message as its TextPart (A2A
+                    # error binding: TextPart + DataPart), never a DataPart alone.
                     text_message = None
                     if res["success"] and isinstance(artifact_data, dict):
                         try:
@@ -741,6 +983,9 @@ class AdCPRequestHandler(RequestHandler):
                                 text_message = str(response_obj)
                         except Exception:
                             logger.debug("Response reconstruction failed, skipping text part", exc_info=True)
+                    elif not res["success"] and isinstance(artifact_data, dict):
+                        errors = artifact_data.get("errors") or []
+                        text_message = errors[0].get("message") if errors else "Skill invocation failed."
 
                     # Build parts list per A2A spec: optional text Part + required data Part
                     parts = []
@@ -756,64 +1001,70 @@ class AdCPRequestHandler(RequestHandler):
                         )
                     )
 
-                # Check if any skills failed and determine task status
-                failed_skills = [res["skill"] for res in results if not res["success"]]
-                successful_skills = [res["skill"] for res in results if res["success"]]
+                # The single-skill gate above guarantees exactly one result; route its
+                # outcome: failed → submitted → completed.
+                outcome = results[0]
 
-                if failed_skills and not successful_skills:
-                    # All skills failed - mark task as failed
-                    task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
-
-                    # Send protocol-level webhook notification for failure
-                    error_messages = [
-                        res["error_envelope"]["errors"][0]["message"] for res in results if not res["success"]
-                    ]
-                    await self._send_protocol_webhook(task, status="failed", error="; ".join(error_messages))
-
+                if not outcome["success"]:
+                    # Terminal-failed: the failed skill's two-layer envelope rides in the
+                    # Task body. Immediate terminal response returned synchronously → no
+                    # webhook (a2a-guide.mdx terminal-state rule). Remember the task
+                    # under its owner (like the submitted/successful branches) so the
+                    # buyer can poll tasks/get on a failed explicit skill — a failed Task
+                    # is a Task-layer outcome, and leaving it unremembered both diverges
+                    # from the NL-failed path and strands an ownerless entry in the
+                    # in-memory maps.
+                    self._mark_task_failed(task)
+                    self._remember_task(task_id, task, identity)
                     return task
-                elif successful_skills:
-                    # Log successful skill invocations with rich context
-                    try:
-                        tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
-                        principal_id = (identity.principal_id or "unknown") if identity else "unknown"
 
-                        # Extract meaningful details from results
-                        log_details = {"skills": successful_skills, "count": len(successful_skills)}
+                if isinstance(outcome["result"], dict) and outcome["result"].get("status") == "submitted":
+                    # Pending approval → non-terminal SUBMITTED. An async op keeps the
+                    # "no artifacts until approved" convention. Non-terminal initial
+                    # response → notify.
+                    task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_SUBMITTED))
+                    del task.artifacts[:]
+                    await self._send_protocol_webhook(task, status="submitted")
+                    self._remember_task(task_id, task, identity)
+                    return task
 
-                        # Add context from the first successful skill
-                        first_result = next((r for r in results if r["success"]), None)
-                        if first_result and "result" in first_result:
-                            result_data = first_result["result"]
+                # Completed synchronously — log the successful invocation with rich context.
+                try:
+                    tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
+                    principal_id = (identity.principal_id or "unknown") if identity else "unknown"
 
-                            # Extract budget and package info for create_media_buy
-                            if "create_media_buy" in first_result["skill"]:
-                                if isinstance(result_data, dict):
-                                    if "total_budget" in result_data:
-                                        log_details["total_budget"] = result_data["total_budget"]
-                                    if "packages" in result_data:
-                                        log_details["package_count"] = len(result_data["packages"])
-                                    if "media_buy_id" in result_data:
-                                        log_details["media_buy_id"] = result_data["media_buy_id"]
+                    log_details = {"skills": [outcome["skill"]], "count": 1}
+                    result_data = outcome.get("result")
 
-                            # Extract product count for get_products
-                            elif "get_products" in first_result["skill"]:
-                                if isinstance(result_data, dict) and "products" in result_data:
-                                    log_details["product_count"] = len(result_data["products"])
+                    # Extract budget and package info for create_media_buy
+                    if "create_media_buy" in outcome["skill"]:
+                        if isinstance(result_data, dict):
+                            if "total_budget" in result_data:
+                                log_details["total_budget"] = result_data["total_budget"]
+                            if "packages" in result_data:
+                                log_details["package_count"] = len(result_data["packages"])
+                            if "media_buy_id" in result_data:
+                                log_details["media_buy_id"] = result_data["media_buy_id"]
 
-                            # Extract creative count for sync_creatives
-                            elif "sync_creatives" in first_result["skill"]:
-                                if isinstance(result_data, dict) and "creatives" in result_data:
-                                    log_details["creative_count"] = len(result_data["creatives"])
+                    # Extract product count for get_products
+                    elif "get_products" in outcome["skill"]:
+                        if isinstance(result_data, dict) and "products" in result_data:
+                            log_details["product_count"] = len(result_data["products"])
 
-                        self._log_a2a_operation(
-                            "explicit_skill_invocation",
-                            tenant_id,
-                            principal_id,
-                            True,
-                            log_details,
-                        )
-                    except Exception as e:
-                        logger.warning("Could not log skill invocations: %s", e)
+                    # Extract creative count for sync_creatives
+                    elif "sync_creatives" in outcome["skill"]:
+                        if isinstance(result_data, dict) and "creatives" in result_data:
+                            log_details["creative_count"] = len(result_data["creatives"])
+
+                    self._log_a2a_operation(
+                        "explicit_skill_invocation",
+                        tenant_id,
+                        principal_id,
+                        True,
+                        log_details,
+                    )
+                except Exception as e:
+                    logger.warning("Could not log skill invocations: %s", e)
 
             # Natural language fallback (existing keyword-based routing)
             elif any(word in combined_text for word in ["product", "inventory", "available", "catalog"]):
@@ -895,9 +1146,10 @@ class AdCPRequestHandler(RequestHandler):
                 # ``_create_media_buy`` is an NL stub that always raises
                 # ``AdCPCapabilityNotSupportedError`` — the explicit-skill
                 # path is the spec contract for media buy creation. The
-                # outer error handler at on_message_send catches the raise
-                # and attaches a spec-compliant two-layer envelope to the
-                # failed Task artifact.
+                # outer error handler at on_message_send catches the raise,
+                # attaches a spec-compliant two-layer envelope to the failed
+                # Task artifact, and returns that failed Task (never a
+                # JSON-RPC error).
                 await self._create_media_buy(combined_text, identity)
             else:
                 # General help response
@@ -939,76 +1191,76 @@ class AdCPRequestHandler(RequestHandler):
             task_state = TaskState.TASK_STATE_COMPLETED
             task_status_str = "completed"
 
-            result_data = {}
-            if task.artifacts:
-                # Extract result from artifacts — part.data is a protobuf Value
-                for artifact in task.artifacts:
-                    if artifact.parts:
-                        for part in artifact.parts:
-                            if part.HasField("data"):
-                                data_dict = json.loads(json_format.MessageToJson(part.data))
-                                result_data[artifact.name] = data_dict
+            # Single DataPart decode via the shared helper (consolidated decoder).
+            for artifact_name, data_dict in self._task_artifacts_data(task):
+                # sync_creatives returns a "result" artifact whose creatives may be
+                # pending review → the task is non-terminal (submitted), not completed.
+                if artifact_name == "result" and isinstance(data_dict, dict):
+                    creatives = data_dict.get("creatives", [])
+                    if any(
+                        c.get("status") == CreativeStatusEnum.pending_review.value
+                        for c in creatives
+                        if isinstance(c, dict)
+                    ):
+                        task_state = TaskState.TASK_STATE_SUBMITTED
+                        task_status_str = "submitted"
 
-                                # Check if this is a sync_creatives response with pending creatives
-                                if artifact.name == "result" and isinstance(data_dict, dict):
-                                    creatives = data_dict.get("creatives", [])
-                                    if any(
-                                        c.get("status") == CreativeStatusEnum.pending_review.value
-                                        for c in creatives
-                                        if isinstance(c, dict)
-                                    ):
-                                        task_state = TaskState.TASK_STATE_SUBMITTED
-                                        task_status_str = "submitted"
-
-                                    # Check for explicit status field (e.g., create_media_buy returns this)
-                                    result_status = data_dict.get("status")
-                                    if result_status == "submitted":
-                                        task_state = TaskState.TASK_STATE_SUBMITTED
-                                        task_status_str = "submitted"
+                    # Explicit status field (e.g. create_media_buy returns this).
+                    if data_dict.get("status") == "submitted":
+                        task_state = TaskState.TASK_STATE_SUBMITTED
+                        task_status_str = "submitted"
 
             # Mark task with appropriate status
             task.status.CopyFrom(TaskStatus(state=task_state))
 
-            # Send protocol-level webhook notification if configured
-            await self._send_protocol_webhook(task, status=task_status_str)
+            # Notify ONLY for a non-terminal (submitted) initial response. An
+            # immediately-completed task is returned synchronously in this response,
+            # and AdCP 3.1.1 a2a-guide.mdx ("Webhook Trigger Rules") says no webhook is
+            # sent when the initial response is already terminal — the buyer already
+            # has the result. Only the
+            # sync_creatives-pending → submitted transition reaches here as
+            # non-terminal (create_media_buy submitted returns earlier).
+            if task_status_str == "submitted":
+                await self._send_protocol_webhook(task, status="submitted")
 
         except A2AError:
-            # Re-raise A2AError as-is (will be caught by JSON-RPC handler)
+            # Transport-layer failure (missing auth, invalid request, …) → JSON-RPC
+            # error, NOT a Task-layer outcome. The provisional WORKING task + push
+            # config stored before dispatch (and before identity resolution) must not
+            # survive as ownerless, unservable orphans that grow the maps on repeated
+            # invalid requests — drop them, mirroring the untyped-crash path below.
+            self._forget_task(task_id)
             raise
-        except Exception as e:
-            # Use identity resolved at transport boundary (if available)
-            err_tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
-            err_principal_id = (identity.principal_id or "unknown") if identity else "unknown"
-
-            record_boundary_error(
-                "a2a",
-                "message_processing",
-                e,
-                tenant_id=err_tenant_id,
-                principal_id=err_principal_id,
-            )
-
-            # Send protocol-level webhook notification for failure if configured
-            task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
-            # Attach error to task artifacts as a spec-compliant two-layer
-            # envelope (same shape as failed-skill DataParts) so storyboard
-            # runners can ``JSON.parse`` the artifact uniformly regardless of
-            # which failure path produced it.
+        except AdCPError as e:
+            # TYPED application/task failure → failed Task carrying the two-layer
+            # envelope (transport-errors.mdx "Layer Separation"). The AdCPError
+            # message is CONTROLLED (e.g. "Unknown skill 'x'", "brief must not be
+            # empty"), so it is client-safe to surface. Immediate terminal response
+            # returned synchronously below → no webhook (a2a-guide.mdx). Falls through
+            # to the shared store-and-return.
             del task.artifacts[:]
-            task.artifacts.append(
-                Artifact(
-                    artifact_id="error_1",
-                    name="processing_error",
-                    parts=[Part(data=_dict_to_value(self._build_error_envelope(e)))],
-                )
-            )
+            task.artifacts.append(self._failed_task_artifact(e))
+            self._mark_task_failed(task)
+        except Exception as e:
+            # UNTYPED internal crash. The spec table classifies an internal crash as
+            # a TRANSPORT-layer error, and the security requirements forbid exposing
+            # raw internals (credentials, SQL, hostnames, paths, upstream responses).
+            # So we log the raw exception SERVER-SIDE only (record_boundary_error) and
+            # raise a SANITIZED JSON-RPC InternalError whose client-facing envelope
+            # carries NO raw exception text. Never build a failed-Task envelope from
+            # ``str(exc)`` here — that is the leak fixed by this branch.
+            # NOTE the deliberate split: an untyped crash INSIDE a skill handler is a
+            # task-layer outcome (the dispatch loop wraps it via
+            # ``_build_failed_skill_result`` → sanitized failed Task), while a crash in
+            # THIS boundary — before/after dispatch — is transport-layer (JSON-RPC).
+            # This path yields a JSON-RPC InternalError (transport-layer), NOT a
+            # Task-layer outcome — so the provisional WORKING task stored before
+            # dispatch must not survive as a retrievable orphan. Drop it (and its
+            # push config) before raising so ``tasks/get`` returns nothing.
+            self._forget_task(task_id)
+            raise _boundary_internal_error("message_processing", "message processing", identity, e) from e
 
-            await self._send_protocol_webhook(task, status="failed")
-
-            # Raise A2A error instead of creating failed task
-            raise _internal_error_for("message processing", e)
-
-        self.tasks[task_id] = task
+        self._remember_task(task_id, task, identity)
         return task
 
     async def on_message_send_stream(
@@ -1033,39 +1285,32 @@ class AdCPRequestHandler(RequestHandler):
         # result is already Task | Message — yield it directly
         yield result
 
-    def _get_task_or_raise(self, task_id: str) -> Task:
-        """Return the in-memory task, or raise ``TaskNotFoundError``.
+    # Terminal persisted workflow-step status → A2A TaskState, for the durable
+    # tasks/get fallback. Non-terminal steps (in_progress, approved, …) surface as
+    # WORKING.
+    _STEP_STATUS_TO_TASK_STATE = {
+        "completed": TaskState.TASK_STATE_COMPLETED,
+        "rejected": TaskState.TASK_STATE_REJECTED,
+        "failed": TaskState.TASK_STATE_FAILED,
+        "canceled": TaskState.TASK_STATE_CANCELED,
+    }
 
-        A bare ``None`` return makes the SDK synthesize a generic internal error;
-        the A2A spec defines ``TaskNotFoundError`` for an unknown task id, so
-        raising it is the correct thing to do here and is what an A2A client
-        should be able to react to precisely.
+    # Step statuses that are final outcomes — a buyer's tasks/cancel cannot undo
+    # work that already completed/failed/was rejected (or was already canceled).
+    # Single source of truth is the repository's TERMINAL_STEP_STATUSES (the atomic
+    # cancel guard's vocabulary); the state mapping above must cover exactly that
+    # set, checked at import time so the two can't silently drift.
+    _TERMINAL_STEP_STATUSES = TERMINAL_STEP_STATUSES
+    if frozenset(_STEP_STATUS_TO_TASK_STATE) != _TERMINAL_STEP_STATUSES:
+        raise RuntimeError("A2A step->TaskState mapping out of sync with WorkflowRepository.TERMINAL_STEP_STATUSES")
 
-        What a client sees TODAY is still ``-32603``, not the spec's ``-32001``:
-        this app builds its A2A routes with ``enable_v0_3_compat=True``
-        (``src/app.py:306``), so requests dispatch through
-        ``a2a.compat.v0_3.jsonrpc_adapter``, whose ``handle_request`` ends in a
-        bare ``except Exception -> CoreInternalError`` with no ``A2AError -> code``
-        mapping — the mapping the SDK's own main dispatcher performs. Returning
-        ``None`` produces the same ``-32603`` there, so the code cannot be fixed
-        at this layer (#1670). Raising the right type is still correct and is what
-        will surface ``-32001`` the moment that gap closes; the xfail'd
-        live-server test pins the current reality.
+    _TERMINAL_TASK_STATES = frozenset(_STEP_STATUS_TO_TASK_STATE.values())
 
-        The requested id is put on both the message and structured ``data``.
-        Only the message reaches a client today: the same compat adapter that
-        flattens the code to ``-32603`` rebuilds the error as
-        ``CoreInternalError(message=str(e))``, which drops ``data`` — driving
-        the real route returns ``data: null``. Populating it is still correct
-        and becomes readable when #1670 closes, the same as the code.
-
-        Shared by ``on_get_task`` and ``on_cancel_task`` so both surface the
-        same error.
-        """
-        task = self.tasks.get(task_id)
-        if task is None:
-            raise TaskNotFoundError(message=f"Task not found: {task_id}", data={"task_id": task_id})
-        return task
+    # Reverse of the mapping above, for rendering an in-memory Task's terminal
+    # TaskState back into the same lowercase vocabulary the durable leg's step-status
+    # string already uses — so a cancel refusal reads identically ("current state:
+    # completed") regardless of which leg (in-memory vs durable) refused it.
+    _TASK_STATE_TO_STEP_STATUS = {v: k for k, v in _STEP_STATUS_TO_TASK_STATE.items()}
 
     async def on_get_task(
         self,
@@ -1074,10 +1319,151 @@ class AdCPRequestHandler(RequestHandler):
     ) -> Task:
         """Handle 'tasks/get' method to retrieve task status.
 
-        Raises ``TaskNotFoundError`` for an unknown task id — see
-        ``_get_task_or_raise`` (and #1670 for why the wire code is still -32603).
+        Identity is resolved ONCE and gates BOTH stores: the in-memory task is
+        served only to its recorded owner (``_authorized_in_memory_task``), and the
+        durable step lookup is tenant+principal-scoped — so a same-tenant sibling
+        principal who learns a task id can read neither.
+
+        The persisted workflow step is the source of truth for an async task's
+        outcome: the admin decision that terminalizes it runs in a DIFFERENT
+        process, so this process's in-memory entry can be stale forever (a
+        SUBMITTED/WORKING task whose workflow already completed). A poll therefore
+        returns the owned in-memory task only when IT is already terminal;
+        otherwise the durable step is consulted and, if it reached a terminal
+        status, wins (and reconciles the owned in-memory entry). The durable
+        fallback also serves polls after a restart, when the map is empty.
+
+        Raises ``TaskNotFoundError`` when neither store has the task (unknown id,
+        or not owned by the caller) — a bare ``None`` return would make the SDK
+        synthesize a generic internal error instead of the spec's not-found
+        signal. What a client sees TODAY is still ``-32603``, not the spec's
+        ``-32001``: this app builds its A2A routes with ``enable_v0_3_compat=True``
+        (``src/app.py``), so requests dispatch through
+        ``a2a.compat.v0_3.jsonrpc_adapter``, whose ``handle_request`` ends in a
+        bare ``except Exception -> CoreInternalError`` with no ``A2AError -> code``
+        mapping — the mapping the SDK's own main dispatcher performs. Raising the
+        right type is still correct and is what will surface ``-32001`` the
+        moment that gap closes (#1670).
         """
-        return self._get_task_or_raise(params.id)
+        task_id = params.id
+        identity: ResolvedIdentity | None = None
+        try:
+            identity = self._durable_lookup_identity(context)
+            owned = self._authorized_in_memory_task(task_id, identity)
+            if owned is not None and owned.status.state in self._TERMINAL_TASK_STATES:
+                return owned
+            durable = self._durable_task_from_step(task_id, identity)
+            if durable is not None and durable.status.state in self._TERMINAL_TASK_STATES:
+                if owned is not None:
+                    # Reconcile only our OWN entry — never write a map key we don't own.
+                    self._remember_task(task_id, durable, identity)
+                return durable
+            # No terminal durable outcome: the richer owned in-memory task (metadata,
+            # artifacts) beats the durable WORKING skeleton.
+            found = owned if owned is not None else durable
+            if found is None:
+                raise TaskNotFoundError(message=f"Task not found: {task_id}", data={"task_id": task_id})
+            return found
+        except A2AError:
+            raise
+        except Exception as e:
+            # The durable lookup touches the DB; an untyped failure here must not
+            # escape to the SDK dispatcher, which would echo str(exc) verbatim on
+            # the JSON-RPC wire. Mirror every sibling handler's boundary arm.
+            raise _boundary_internal_error("get_task", "get task", identity, e) from e
+
+    def _durable_lookup_identity(self, context: ServerCallContext | None) -> ResolvedIdentity | None:
+        """Resolve the caller's identity for a durable (cross-process) task lookup.
+
+        A restart-surviving lookup needs a tenant AND principal scope, so identity
+        is resolved from the request's own auth (the buyer who created the task
+        authenticated). Missing or invalid authentication remains a transport-layer
+        ``InvalidRequestError``; it must not be downgraded to a task-not-found result.
+        Returns None only when a resolved identity is unexpectedly incomplete — the
+        durable lookup must then be refused rather than risk serving or mutating
+        another tenant's (or same-tenant sibling principal's) task.
+        """
+        auth_token = self._get_auth_token(context)
+        identity = self._resolve_a2a_identity(auth_token, require_valid_token=True, context=context)
+        if identity is None or not identity.tenant_id or not identity.principal_id:
+            return None
+        return identity
+
+    @contextmanager
+    def _owned_durable_step(
+        self, task_id: str, identity: ResolvedIdentity | None
+    ) -> Iterator[tuple["Session", "WorkflowRepository", "WorkflowStep"] | None]:
+        """Shared preamble for durable (cross-process) task ops carrying an outer ``task_*`` id.
+
+        Identity guard → tenant-scoped session + ``WorkflowRepository`` → the principal-owned step
+        carrying ``task_id``. Yields ``(session, repo, step)``, or ``None`` when identity is
+        unresolved/non-owning or no persisted step matches. The caller performs any mutation and
+        ``commit()``/``rollback()`` inside the ``with`` block (the session stays open for its body).
+        """
+        if identity is None or identity.tenant_id is None or identity.principal_id is None:
+            yield None
+            return
+
+        # get_db_session stays function-local: this repo's tests patch it at its SOURCE
+        # module (20+ call sites across tests/), which only takes effect when the name is
+        # re-resolved per call rather than bound once at import time.
+        from src.core.database.database_session import get_db_session
+
+        with get_db_session() as session:
+            repo = WorkflowRepository(session, identity.tenant_id)
+            step = repo.get_by_external_task_id(task_id, principal_id=identity.principal_id)
+            yield (session, repo, step) if step is not None else None
+
+    def _durable_task_from_step(self, task_id: str, identity: ResolvedIdentity | None) -> Task | None:
+        """Rebuild a terminal Task from the workflow step that stored this transport id.
+
+        ``identity`` is the caller's resolved identity (see ``_durable_lookup_identity``);
+        the lookup is tenant+principal-scoped, so an unresolved or non-owning identity
+        yields None. Callers resolve identity once and pass it here.
+
+        A FAILED step is rebuilt with the SAME error framing the synchronous paths emit —
+        an ``error_result`` artifact carrying a human-readable TextPart alongside the
+        authoritative envelope DataPart (see ``_failed_task_artifact``). A buyer polling
+        an async failure must not receive a differently-shaped artifact than the one they
+        would have received had the same failure surfaced synchronously.
+        """
+        with self._owned_durable_step(task_id, identity) as owned:
+            if owned is None:
+                return None
+            _session, _repo, step = owned
+            state = self._STEP_STATUS_TO_TASK_STATE.get(step.status, TaskState.TASK_STATE_WORKING)
+            task = Task(id=task_id, context_id=step.context_id, status=TaskStatus(state=state))
+            if step.response_data:
+                task.artifacts.append(
+                    self._durable_result_artifact(
+                        task_id, step.response_data, failed=state == TaskState.TASK_STATE_FAILED
+                    )
+                )
+            return task
+
+    @staticmethod
+    def _durable_result_artifact(task_id: str, response_data: dict[str, Any], *, failed: bool) -> "Artifact":
+        """The stored-result artifact for a durably-rebuilt Task.
+
+        Success keeps the ``media_buy_result`` DataPart. Failure mirrors the synchronous
+        error binding: an ``error_result`` artifact whose TextPart is the envelope's
+        human-readable message and whose DataPart is the two-layer envelope
+        ``audit_workflow_step_failure`` persisted — one framing for a failed artifact,
+        whether the buyer saw it synchronously or by polling.
+        """
+        if not failed:
+            return Artifact(
+                artifact_id=f"{task_id}_result",
+                name="media_buy_result",
+                parts=[Part(data=_dict_to_value(response_data))],
+            )
+        errors = response_data.get("errors") or []
+        text = (errors[0].get("message") if errors else None) or "Request failed."
+        return Artifact(
+            artifact_id=f"{task_id}_result",
+            name="error_result",
+            parts=[Part(text=text), Part(data=_dict_to_value(response_data))],
+        )
 
     async def on_cancel_task(
         self,
@@ -1086,16 +1472,89 @@ class AdCPRequestHandler(RequestHandler):
     ) -> Task:
         """Handle 'tasks/cancel' method to cancel a task.
 
-        Raises ``TaskNotFoundError`` for an unknown task id — cancelling a task
-        that does not exist is the same not-found condition as get, not a silent
-        no-op. See ``_get_task_or_raise`` (and #1670 for why the wire code is
-        still -32603).
+        Mirrors ``on_get_task``'s durability: the in-memory task is
+        resolved first, then the persisted workflow step carrying the buyer's outer
+        ``task_*`` id — so a cancel still lands after a restart or in a different
+        process than the create. A task/step already in a terminal state cannot be
+        canceled; the durable check runs even on an in-memory hit so a stale
+        WORKING task can't cancel a workflow that was approved out-of-band.
+
+        Identity is resolved ONCE and gates both stores: only the recorded owner
+        can observe or mutate the in-memory task, and the durable cancel is
+        tenant+principal-scoped — a same-tenant sibling principal can neither
+        terminalize the in-memory task nor cancel the workflow.
+
+        Grounding: ``tasks/cancel`` semantics are A2A-protocol-native (A2A spec
+        Task Management: ``TaskNotCancelableError`` for tasks already in a
+        terminal state; the SDK ``default_request_handler`` is the reference
+        cross-check). AdCP 3.1.1 prose defines no cancel contract of its own —
+        a2a-guide.mdx "Webhook Trigger Rules" lists ``canceled`` among the final
+        states ("Cancellation confirmed"). Storyboard: ungraded, pending the
+        upstream task-lifecycle obligation (#1574).
+
+        Raises ``TaskNotFoundError`` when neither store has the task (unknown id,
+        or not owned by the caller) — cancelling a task that does not exist is the
+        same not-found condition as get, not a silent no-op (and #1670 for why the
+        wire code is still -32603, not the spec's -32001).
         """
-        task = self._get_task_or_raise(params.id)
-        # CopyFrom mutates the stored Task in place — self.tasks already holds
-        # this exact reference, so re-storing it would rebind the same object.
-        task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_CANCELED))
-        return task
+        task_id = params.id
+        identity: ResolvedIdentity | None = None
+        try:
+            identity = self._durable_lookup_identity(context)
+            owned = self._authorized_in_memory_task(task_id, identity)
+            if owned is not None and owned.status.state in self._TERMINAL_TASK_STATES:
+                current_status = self._TASK_STATE_TO_STEP_STATUS.get(owned.status.state, "unknown")
+                raise TaskNotCancelableError(message=f"Task cannot be canceled - current state: {current_status}")
+            durable = self._durable_cancel_step(task_id, identity)
+            if owned is not None:
+                owned.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_CANCELED))
+                self._remember_task(task_id, owned, identity)
+                return owned
+            if durable is None:
+                raise TaskNotFoundError(message=f"Task not found: {task_id}", data={"task_id": task_id})
+            return durable
+        except A2AError:
+            raise
+        except Exception as e:
+            # The durable cancel touches the DB; an untyped failure must not escape
+            # to the SDK dispatcher (which echoes str(exc) on the JSON-RPC wire).
+            raise _boundary_internal_error("cancel_task", "cancel task", identity, e) from e
+
+    def _durable_cancel_step(self, task_id: str, identity: ResolvedIdentity | None) -> Task | None:
+        """Durably cancel the workflow step carrying this outer task id.
+
+        Tenant- AND principal-scoped via ``identity`` (see ``_durable_lookup_identity``).
+        Returns None when identity is unresolved/non-owning or no persisted step
+        matches. Raises ``TaskNotCancelableError`` when the step is not in a
+        CANCELLABLE status — i.e. already terminal, ``approved``, OR ``in_progress``
+        (irreversible ad-server work has begun or is underway): an approved or
+        executing media buy cannot be canceled.
+
+        The transition itself is a single conditional UPDATE
+        (``cancel_if_cancellable`` — ``WHERE status IN cancellable``) so a concurrent
+        approval/execution that commits ``approved``/``in_progress``/``completed`` after
+        our read cannot be overwritten — the zero-row outcome is reported as
+        ``TaskNotCancelableError`` with the fresh status, and the decision stands.
+        """
+        with self._owned_durable_step(task_id, identity) as owned:
+            if owned is None:
+                return None
+            session, repo, step = owned
+            # cancel_if_cancellable refuses to cancel an ``approved`` OR ``in_progress`` step:
+            # once approved (or once execution has started its adapter side-effects), irreversible
+            # ad-server work is underway, so a cancel must not strand a real order behind a
+            # canceled task.
+            if not repo.cancel_if_cancellable(step.step_id, completed_at=datetime.now(UTC)):
+                session.rollback()
+                fresh = repo.get_by_step_id(step.step_id)
+                current = fresh.status if fresh is not None else "unknown"
+                raise TaskNotCancelableError(message=f"Task cannot be canceled - current state: {current}")
+            session.commit()
+            return Task(
+                id=task_id,
+                context_id=step.context_id,
+                status=TaskStatus(state=TaskState.TASK_STATE_CANCELED),
+            )
 
     async def on_list_tasks(
         self,
@@ -1125,11 +1584,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         tool_context = None
         try:
-            auth_token = self._get_auth_token(context)
-            if not auth_token:
-                raise InvalidRequestError(message="Missing authentication token")
-            identity = self._resolve_a2a_identity(auth_token, context=context)
-            tool_context = self._make_tool_context(identity, "get_push_notification_config")
+            tool_context = self._authenticated_tool_context(context, "get_push_notification_config")
 
             config_id = params.get("id") if isinstance(params, dict) else getattr(params, "id", None)
             if not config_id:
@@ -1188,11 +1643,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         tool_context = None
         try:
-            auth_token = self._get_auth_token(context)
-            if not auth_token:
-                raise InvalidRequestError(message="Missing authentication token")
-            identity = self._resolve_a2a_identity(auth_token, context=context)
-            tool_context = self._make_tool_context(identity, "set_push_notification_config")
+            tool_context = self._authenticated_tool_context(context, "set_push_notification_config")
 
             # In a2a-sdk 1.0, TaskPushNotificationConfig is a flat protobuf message
             # with fields: tenant, id, task_id, url, token, authentication
@@ -1262,11 +1713,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         tool_context = None
         try:
-            auth_token = self._get_auth_token(context)
-            if not auth_token:
-                raise InvalidRequestError(message="Missing authentication token")
-            identity = self._resolve_a2a_identity(auth_token, context=context)
-            tool_context = self._make_tool_context(identity, "list_push_notification_configs")
+            tool_context = self._authenticated_tool_context(context, "list_push_notification_configs")
 
             with PushNotificationConfigUoW(tool_context.tenant_id) as uow:
                 assert uow.push_notification_configs is not None
@@ -1320,11 +1767,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         tool_context = None
         try:
-            auth_token = self._get_auth_token(context)
-            if not auth_token:
-                raise InvalidRequestError(message="Missing authentication token")
-            identity = self._resolve_a2a_identity(auth_token, context=context)
-            tool_context = self._make_tool_context(identity, "delete_push_notification_config")
+            tool_context = self._authenticated_tool_context(context, "delete_push_notification_config")
 
             config_id = params.id
             if not config_id:
@@ -1398,12 +1841,50 @@ class AdCPRequestHandler(RequestHandler):
 
         return response_data
 
+    def _skill_handler_map(self) -> dict[str, Callable[..., Awaitable[Any]]]:
+        """Explicit-skill dispatch registry: skill name → bound handler.
+
+        The single source of truth for which skills A2A dispatches. Exposed as a
+        method so the transport-contract suite can assert a registry↔test bijection
+        (every registered skill is exercised on the wire). Handler signatures are
+        heterogeneous (discovery skills accept ``identity: ResolvedIdentity | None``;
+        the rest require non-None), so dispatch is typed dynamically — the
+        non-discovery guard in ``_handle_explicit_skill`` enforces identity first.
+        """
+        return {
+            # Core AdCP Discovery Skills
+            "get_adcp_capabilities": self._handle_get_adcp_capabilities_skill,
+            # Core AdCP Media Buy Skills
+            "get_products": self._handle_get_products_skill,
+            "create_media_buy": self._handle_create_media_buy_skill,
+            # Discovery Skills
+            "list_creative_formats": self._handle_list_creative_formats_skill,
+            "list_accounts": self._handle_list_accounts_skill,
+            "sync_accounts": self._handle_sync_accounts_skill,
+            "list_authorized_properties": self._handle_list_authorized_properties_skill,
+            # Media Buy Management Skills
+            "update_media_buy": self._handle_update_media_buy_skill,
+            "get_media_buys": self._handle_get_media_buys_skill,
+            "get_media_buy_delivery": self._handle_get_media_buy_delivery_skill,
+            "update_performance_index": self._handle_update_performance_index_skill,
+            # AdCP Spec Creative Management (centralized library approach)
+            "sync_creatives": self._handle_sync_creatives_skill,
+            "list_creatives": self._handle_list_creatives_skill,
+            "create_creative": self._handle_create_creative_skill,
+            "assign_creative": self._handle_assign_creative_skill,
+            # Creative Management & Approval
+            "approve_creative": self._handle_approve_creative_skill,
+            "get_media_buy_status": self._handle_get_media_buy_status_skill,
+            "optimize_media_buy": self._handle_optimize_media_buy_skill,
+        }
+
     async def _handle_explicit_skill(
         self,
         skill_name: str,
         parameters: dict,
         identity: ResolvedIdentity | None,
         push_notification_config: TaskPushNotificationConfig | None = None,
+        task_id: str | None = None,
     ) -> dict:
         """Handle explicit AdCP skill invocations.
 
@@ -1450,50 +1931,30 @@ class AdCPRequestHandler(RequestHandler):
 
         # Validate identity for non-discovery skills
         if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
-            raise InvalidRequestError(message="Authentication required for skill invocation")
+            raise _auth_required_error(AdCPAuthRequiredError("Authentication required for skill invocation"))
 
-        # Map skill names to handlers. Handler signatures are heterogeneous
-        # (discovery skills accept ``identity: ResolvedIdentity | None``; the rest
-        # require non-None), so the dispatch is typed dynamically — the non-discovery
-        # guard above enforces a non-None identity before the call.
-        skill_handlers: dict[str, Callable[..., Awaitable[Any]]] = {
-            # Core AdCP Discovery Skills
-            "get_adcp_capabilities": self._handle_get_adcp_capabilities_skill,
-            # Core AdCP Media Buy Skills
-            "get_products": self._handle_get_products_skill,
-            "create_media_buy": self._handle_create_media_buy_skill,
-            # ✅ NEW: Missing AdCP Discovery Skills (CRITICAL for protocol compliance)
-            "list_creative_formats": self._handle_list_creative_formats_skill,
-            "list_accounts": self._handle_list_accounts_skill,
-            "sync_accounts": self._handle_sync_accounts_skill,
-            "list_authorized_properties": self._handle_list_authorized_properties_skill,
-            # ✅ NEW: Missing Media Buy Management Skills (CRITICAL for campaign lifecycle)
-            "update_media_buy": self._handle_update_media_buy_skill,
-            "get_media_buys": self._handle_get_media_buys_skill,
-            "get_media_buy_delivery": self._handle_get_media_buy_delivery_skill,
-            "update_performance_index": self._handle_update_performance_index_skill,
-            # AdCP Spec Creative Management (centralized library approach)
-            "sync_creatives": self._handle_sync_creatives_skill,
-            "list_creatives": self._handle_list_creatives_skill,
-            "create_creative": self._handle_create_creative_skill,
-            "assign_creative": self._handle_assign_creative_skill,
-            # Creative Management & Approval
-            "approve_creative": self._handle_approve_creative_skill,
-            "get_media_buy_status": self._handle_get_media_buy_status_skill,
-            "optimize_media_buy": self._handle_optimize_media_buy_skill,
-            # Note: signals skills removed - should come from dedicated signals agents
-            # Note: legacy get_pricing/get_targeting removed - use get_products and get_adcp_capabilities instead
-        }
-
-        if skill_name not in skill_handlers:
-            available_skills = list(skill_handlers.keys())
-            raise MethodNotFoundError(message=f"Unknown skill '{skill_name}'. Available skills: {available_skills}")
+        skill_handlers = self._skill_handler_map()
 
         try:
+            # An unknown SKILL is an application-layer failure — the JSON-RPC method
+            # (message/send) is valid; routing failed inside skill dispatch. Per AdCP
+            # transport-errors.mdx "Layer Separation" (present since 3.0.0), it belongs in the
+            # task body as a failed Task with a two-layer envelope, NOT a JSON-RPC
+            # MethodNotFoundError (reserved for unknown JSON-RPC methods). Raised
+            # INSIDE this try so the boundary observability below records it exactly
+            # once (an unknown skill must not bypass record_boundary_error); the outer
+            # dispatcher's `except AdCPError` re-wraps it into a failed-skill result,
+            # preserving accumulated results from earlier skills.
+            if skill_name not in skill_handlers:
+                available_skills = list(skill_handlers.keys())
+                raise AdCPCapabilityNotSupportedError(
+                    message=f"Unknown skill '{skill_name}'. Available skills: {available_skills}"
+                )
+
             handler = skill_handlers[skill_name]
             # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
             if skill_name == "create_media_buy":
-                result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload)
+                result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload, a2a_task_id=task_id)
             else:
                 result = await handler(parameters, identity)
             # Serialize at the boundary — models become dicts with protocol fields
@@ -1502,16 +1963,18 @@ class AdCPRequestHandler(RequestHandler):
             # Re-raise A2AError as-is (already properly formatted)
             raise
         except (AdCPError, ValueError, PermissionError) as e:
-            # Normalize ValueError/PermissionError to typed AdCPError via the
-            # shared normalize_to_adcp_error() helper — same mapping the MCP
-            # and REST boundaries apply. The outer dispatcher's `except
-            # AdCPError` branch wraps the result into a failed Task with the
-            # two-layer envelope.
+            # SANITIZE HERE so exception PROVENANCE (raw built-in vs explicitly-typed) is decided
+            # before the outer envelope build. ``safe_adcp_error`` keeps the SEMANTIC code the
+            # buyer's contract expects — ``ValueError`` → VALIDATION_ERROR, ``PermissionError`` →
+            # AUTH_REQUIRED, native ``AdCPError`` unchanged — but SCRUBS a raw built-in's untrusted
+            # ``str(e)`` (a connection string / token), because re-raising the *normalized* typed
+            # error here would hand the outer sanitizer a trusted ``AdCPValidationError`` and let
+            # the secret survive. ``record_boundary_error`` gets the un-sanitized semantic error so
+            # server-side observability still sees the raw message.
+            #
+            # Defensive about identity shape — test fixtures sometimes pass a string or
+            # partially-built identity; record_boundary_error handles None internally.
             normalized = normalize_to_adcp_error(e)
-
-            # Defensive about identity shape — test fixtures sometimes pass a
-            # string or partially-built identity instead of ResolvedIdentity.
-            # record_boundary_error handles None tenant_id internally.
             record_boundary_error(
                 "a2a",
                 skill_name,
@@ -1520,8 +1983,9 @@ class AdCPRequestHandler(RequestHandler):
                 principal_id=getattr(identity, "principal_id", None) or "anonymous",
             )
 
-            if normalized is not e:
-                raise normalized from e
+            sanitized = safe_adcp_error(e)
+            if sanitized is not e:
+                raise sanitized from e
             raise
         # Untyped exceptions fall through to the dispatcher's `except Exception`
         # at the call site, which routes them through `_build_failed_skill_result`
@@ -1570,6 +2034,7 @@ class AdCPRequestHandler(RequestHandler):
         parameters: dict,
         identity: ResolvedIdentity,
         raw_wire_payload: dict | None = None,
+        a2a_task_id: str | None = None,
     ) -> dict:
         """Handle explicit create_media_buy skill invocation.
 
@@ -1663,6 +2128,9 @@ class AdCPRequestHandler(RequestHandler):
             # the idempotency payload-hash input; the post-processed dict is the
             # fallback only for direct handler callers.
             raw_wire_payload=raw_wire_payload if raw_wire_payload is not None else params,
+            # Persist the outer A2A task id on the workflow step so the completion
+            # webhook / tasks/get correlate to the id the buyer holds.
+            external_task_id=a2a_task_id,
         )
 
         return response
@@ -1765,7 +2233,7 @@ class AdCPRequestHandler(RequestHandler):
         # TODO: Implement create_creative tool
         # Call core function with individual parameters
         # response = core_create_creative_tool(...)
-        raise UnsupportedOperationError(message="create_creative skill not yet implemented")
+        raise AdCPCapabilityNotSupportedError(message="create_creative skill not yet implemented")
 
     async def _handle_get_creatives_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit get_creatives skill invocation."""
@@ -1781,7 +2249,7 @@ class AdCPRequestHandler(RequestHandler):
         #     include_assignments=parameters.get("include_assignments", False),
         #     identity=identity,
         # )
-        raise UnsupportedOperationError(message="get_creatives skill not yet implemented")
+        raise AdCPCapabilityNotSupportedError(message="get_creatives skill not yet implemented")
 
     async def _handle_assign_creative_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit assign_creative skill invocation."""
@@ -1810,21 +2278,21 @@ class AdCPRequestHandler(RequestHandler):
         #     override_click_url=parameters.get("override_click_url"),
         #     identity=identity,
         # )
-        raise UnsupportedOperationError(message="assign_creative skill not yet implemented")
+        raise AdCPCapabilityNotSupportedError(message="assign_creative skill not yet implemented")
 
     async def _handle_approve_creative_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit approve_creative skill invocation."""
-        raise UnsupportedOperationError(message="approve_creative skill not yet implemented")
+        raise AdCPCapabilityNotSupportedError(message="approve_creative skill not yet implemented")
 
     # Signals skill handlers removed - should come from dedicated signals agents
 
     async def _handle_get_media_buy_status_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit get_media_buy_status skill invocation."""
-        raise UnsupportedOperationError(message="get_media_buy_status skill not yet implemented")
+        raise AdCPCapabilityNotSupportedError(message="get_media_buy_status skill not yet implemented")
 
     async def _handle_optimize_media_buy_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit optimize_media_buy skill invocation."""
-        raise UnsupportedOperationError(message="optimize_media_buy skill not yet implemented")
+        raise AdCPCapabilityNotSupportedError(message="optimize_media_buy skill not yet implemented")
 
     async def _handle_get_adcp_capabilities_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit get_adcp_capabilities skill invocation (CRITICAL AdCP discovery endpoint).
@@ -2296,25 +2764,13 @@ def create_agent_card() -> AgentCard:
                 description="Search and query creative library with advanced filtering (AdCP spec)",
                 tags=["creative", "library", "search", "adcp", "spec"],
             ),
-            # Creative Management & Approval
-            AgentSkill(
-                id="approve_creative",
-                name="approve_creative",
-                description="Review and approve/reject creative assets (admin only)",
-                tags=["creative", "approval", "review", "adcp"],
-            ),
-            AgentSkill(
-                id="get_media_buy_status",
-                name="get_media_buy_status",
-                description="Check status and performance of media buys",
-                tags=["status", "performance", "tracking", "adcp"],
-            ),
-            AgentSkill(
-                id="optimize_media_buy",
-                name="optimize_media_buy",
-                description="Optimize media buy performance and targeting",
-                tags=["optimization", "performance", "targeting", "adcp"],
-            ),
+            # Note: approve_creative, get_media_buy_status, and optimize_media_buy are
+            # deliberately NOT advertised. Their handlers unconditionally
+            # raise UNSUPPORTED_FEATURE, so advertising them would promise capabilities
+            # the agent does not provide. They stay registered in _skill_handler_map and
+            # remain reachable-but-unsupported (structured UNSUPPORTED_FEATURE failed
+            # Task) if a buyer invokes them by name — they are just no longer offered on
+            # the card. The test oracle (SKILL_METADATA) marks them advertised: False.
             # Note: signals skills removed - should come from dedicated signals agents
             # Note: legacy get_pricing/get_targeting removed - use get_products and get_adcp_capabilities instead
         ],

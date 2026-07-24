@@ -137,6 +137,23 @@ def get_tenant_config_from_db(tenant_id):
         return {}
 
 
+def session_user_email(default: str = "unknown") -> str:
+    """The acting user's email from the Flask session, for audit attribution.
+
+    ``session["user"]`` is a dict under OAuth login and a bare string under the test/password
+    path, so every caller needs the same isinstance split. Keeping it in one place stops an
+    audit row from recording a dict repr (``{'email': ...}``) instead of an email — a lossy
+    attribution that is invisible until someone reads the audit log.
+
+    ``default`` is the caller's placeholder for an absent/blank session user (routes that log
+    an operator action use ``"system"``; generic audit decorators use ``"unknown"``).
+    """
+    user_info = session.get("user")
+    if isinstance(user_info, dict):
+        return user_info.get("email") or default
+    return str(user_info) if user_info else default
+
+
 def is_super_admin(email):
     """Check if user is a super admin based on email or domain.
 

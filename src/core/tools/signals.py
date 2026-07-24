@@ -310,8 +310,9 @@ async def _activate_signal_impl(
     except AdCPError:
         raise
     except Exception as e:
+        # Raw exception logged server-side only; keep str(e) off the client message.
         logger.error("Error activating signal %s: %s", signal_agent_segment_id, e)
-        raise AdCPAdapterError(str(e), context=context) from e
+        raise AdCPAdapterError("Failed to activate signal.", context=context) from e
 
 
 async def activate_signal(

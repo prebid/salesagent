@@ -11,13 +11,13 @@ to help buyer agents decide whether to retry, fix, or abandon a request.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
 from pydantic import BaseModel, ValidationError
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping, Sequence
+    from collections.abc import Callable, Iterator, Mapping, Sequence
 
     from adcp.types import ContextObject
 
@@ -1028,9 +1028,16 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
 
 # Canonical buyer-facing suggestions from error-code.json enumMetadata (AdCP 3.1.1):
 # each code carries its own default hint, so a VALIDATION_ERROR must not borrow
-# INVALID_REQUEST's text.
+# INVALID_REQUEST's text. Text is byte-identical to the pinned enum — graded by
+# the pinned-fixture oracle in test_error_boundary_translation. NOTE the deliberate
+# split from ``AUTH_REQUIRED_SUGGESTION`` above: that one is the TYPED auth error's
+# server-specific hint (names the x-adcp-auth token, graded by BDD); this one is the
+# spec enum's canonical text, used where no server-specific context exists (the scrub).
 INVALID_REQUEST_SUGGESTION = "check request parameters and fix"
 VALIDATION_ERROR_SUGGESTION = "review error details and fix field values"
+AUTH_REQUIRED_CANONICAL_SUGGESTION = (
+    "provide credentials when missing; do NOT auto-retry rejected credentials — escalate for rotation"
+)
 
 
 def first_validation_error_field(validation_error: ValidationError) -> str | None:
@@ -1070,28 +1077,285 @@ def build_validation_error_details(errors: Sequence[Mapping[str, Any]]) -> dict[
     }
 
 
+def _pydantic_validation_error_kwargs(exc: ValidationError) -> dict[str, Any]:
+    """Constructor kwargs for a structured ``AdCPValidationError``.
+
+    The projector can populate message/field/details, but it cannot choose the semantic error
+    class or wire code; the registry's single ``adcp_class`` authority does that at runtime.
+    """
+    errors = exc.errors()
+    return {
+        "message": errors[0].get("msg") if errors else "Request failed schema validation",
+        "field": first_validation_error_field(exc),
+        "suggestion": VALIDATION_ERROR_SUGGESTION,
+        "details": build_validation_error_details(errors),
+    }
+
+
+def _message_only_kwargs(exc: Exception) -> dict[str, Any]:
+    """Constructor kwargs for built-ins whose semantic mapping needs only their message."""
+    return {"message": str(exc)}
+
+
+# Ordered registry of EVERY raw-exception → typed-AdCPError normalizer. The SINGLE SOURCE OF TRUTH
+# for ``normalize_to_adcp_error`` AND the completeness guard
+# (``test_sanitized_category_registry_covers_all_correctable_builtin_targets``), which pins every
+# CLIENT-CORRECTABLE target code into ``_SANITIZED_BY_WIRE_CODE`` — so a future mapping (e.g.
+# ``KeyError → AdCPNotFoundError``, or another SPECIAL normalizer) can't silently fall through to
+# the misleading generic internal message when scrubbed. Each entry is
+# ``(builtin_type, adcp_class, kwargs_projector)``. ``adcp_class`` is the ONE semantic authority:
+# runtime always instantiates it, and the completeness guard reads it. The projector can only return
+# constructor kwargs (message/field/details/etc.), so input-dependent projection cannot change the
+# error class or wire code. ``ValidationError`` is listed FIRST because it IS-A ``ValueError`` and
+# needs structured kwargs; first ``isinstance`` match wins.
+_BuiltinNormalizer = tuple[type[Exception], type["AdCPError"], "Callable[[Any], dict[str, Any]]"]
+_BUILTIN_NORMALIZATION: tuple[_BuiltinNormalizer, ...] = (
+    (ValidationError, AdCPValidationError, _pydantic_validation_error_kwargs),
+    (ValueError, AdCPValidationError, _message_only_kwargs),
+    (PermissionError, AdCPAuthorizationError, _message_only_kwargs),
+)
+
+# Projectors may populate buyer-facing presentation fields only. Semantic identity belongs solely
+# to the registry's ``adcp_class``; allowing constructor overrides such as ``error_code`` or
+# ``recovery`` would recreate a second authority behind the completeness guard's back. ``context``
+# is also forbidden because it bypasses the raw-exception scrubbing applied to messages/details.
+_NORMALIZATION_PROJECTOR_KEYS = frozenset({"message", "field", "suggestion", "retry_after", "details"})
+
+
+def _representative_builtin(exc_type: type[Exception]) -> Exception:
+    """A minimal live instance of a registry builtin, for probing its projector."""
+    if exc_type is ValidationError:
+
+        class _Probe(BaseModel):
+            x: int
+
+        probe_error: ValidationError | None = None
+        try:
+            _Probe(x="not-an-int")
+        except ValidationError as ve:
+            probe_error = ve
+        assert probe_error is not None, "probe model failed to raise ValidationError"
+        return probe_error
+    return exc_type("probe")
+
+
+def _projector_key_violations(registry: tuple[_BuiltinNormalizer, ...]) -> list[str]:
+    """Forbidden-key findings per registry projector, probed with a representative builtin.
+
+    Pure detector shared by the import-time gate below and its known-bad self-test, so the
+    gate's matcher cannot silently degrade.
+    """
+    findings: list[str] = []
+    for exc_type, _adcp_class, projector in registry:
+        forbidden = set(projector(_representative_builtin(exc_type))) - _NORMALIZATION_PROJECTOR_KEYS
+        if forbidden:
+            findings.append(f"{exc_type.__name__}: forbidden projector keys {sorted(forbidden)}")
+    return findings
+
+
+def _build_normalized_error(adcp_class: type[AdCPError], projected_kwargs: dict[str, Any]) -> AdCPError:
+    """Instantiate the registry's fixed semantic class from presentation-only kwargs.
+
+    The presentation-only contract is enforced at MODULE IMPORT (the gate below probes every
+    registry projector), never mid-request: this function runs inside boundary exception
+    handlers at all three transports, where a raise would shadow the original exception and
+    fail open with no envelope.
+    """
+    return adcp_class(**projected_kwargs)
+
+
+# Import-time gate: a projector emitting a semantic override (``error_code``/``recovery``/
+# ``context``/anything off the allowlist) fails the BUILD here, mirroring the
+# ``_NON_STANDARD_TARGETS`` precedent above — never a live request inside a boundary handler.
+_PROJECTOR_KEY_VIOLATIONS = _projector_key_violations(_BUILTIN_NORMALIZATION)
+assert not _PROJECTOR_KEY_VIOLATIONS, f"normalization projector contract violated: {_PROJECTOR_KEY_VIOLATIONS}"
+
+
 def normalize_to_adcp_error(exc: Exception) -> AdCPError:
     """Normalize untyped exceptions to typed AdCPError subclasses.
 
     Single source of truth for the wrapping applied at all three transport
     boundaries (MCP, A2A, REST). Already-typed ``AdCPError`` passes through
-    unchanged. Pydantic ``ValidationError`` maps to a structured, sanitized
-    ``AdCPValidationError``; other ``ValueError`` instances map to the plain
-    validation error, ``PermissionError`` to ``AdCPAuthorizationError``, and
-    anything else wraps in base ``AdCPError`` (INTERNAL_ERROR).
+    unchanged. Every raw-exception normalizer lives in ``_BUILTIN_NORMALIZATION``:
+    Pydantic ``ValidationError`` → a structured, sanitized ``AdCPValidationError`` (field +
+    details); other ``ValueError`` → the plain validation error; ``PermissionError`` →
+    ``AdCPAuthorizationError``. Anything else wraps in base ``AdCPError`` (INTERNAL_ERROR).
     """
     if isinstance(exc, AdCPError):
         return exc
-    if isinstance(exc, ValidationError):
-        errors = exc.errors()
-        return AdCPValidationError(
-            errors[0].get("msg") if errors else "Request failed schema validation",
-            field=first_validation_error_field(exc),
-            suggestion=VALIDATION_ERROR_SUGGESTION,
-            details=build_validation_error_details(errors),
-        )
-    if isinstance(exc, ValueError):
-        return AdCPValidationError(str(exc))
-    if isinstance(exc, PermissionError):
-        return AdCPAuthorizationError(str(exc))
+    for exc_type, adcp_class, kwargs_projector in _BUILTIN_NORMALIZATION:
+        if isinstance(exc, exc_type):
+            return _build_normalized_error(adcp_class, kwargs_projector(exc))
     return AdCPError(str(exc) or type(exc).__name__)
+
+
+# Internal/infra wire codes whose raise-site message may embed adapter/DB internals (a
+# connection string, a stack detail) and MUST be scrubbed before reaching ANY buyer-facing
+# wire. The SERVICE_UNAVAILABLE family (base ``AdCPError``, ``AdCPAdapterError`` + subclasses,
+# ``AdCPServiceUnavailableError``) plus terminal ``CONFIGURATION_ERROR`` (seller-side
+# misconfiguration the buyer can't resolve — its decryption-failure raise sites can interpolate
+# a secret) both belong here. Keyed on the wire code, NOT on ``recovery == "transient"`` (which
+# would miss the terminal Config/base errors and false-positive on the safe-message RateLimit).
+INTERNAL_WIRE_CODES: frozenset[str] = frozenset({"SERVICE_UNAVAILABLE", "CONFIGURATION_ERROR"})
+
+_SANITIZED_INTERNAL_MESSAGE = "An internal error occurred while processing the request."
+# We always emit a suggestion, though the spec does not require one (error.json requires only
+# ``code`` + ``message``); transport-errors.mdx §Security Considerations constrains its CONTENT
+# to generic correction guidance, which is what the scrub provides. The raise site's suggestion
+# (which, like the message, may interpolate internals) is replaced with static guidance whose
+# retry semantics MATCH the emitted ``recovery``. A single retry-later string is WRONG for a
+# ``terminal`` internal error (CONFIGURATION_ERROR — per 3.1.1 the buyer MUST NOT auto-retry;
+# the seller operator must resolve it): pairing ``recovery: terminal`` with "retry later" emits
+# a self-contradictory envelope. Pick the suggestion by recovery so the two never disagree.
+_SANITIZED_TRANSIENT_SUGGESTION = "Retry the request later; if the problem persists, contact the seller."
+_SANITIZED_TERMINAL_SUGGESTION = (
+    "This request cannot be retried; the seller must resolve the issue before it can succeed. Contact the seller."
+)
+_SANITIZED_CORRECTABLE_SUGGESTION = (
+    "The request could not be completed as submitted; review and adjust the request before resubmitting."
+)
+
+# Exhaustive over ``RecoveryHint`` — one static, internals-free suggestion per recovery class so
+# the guidance can never contradict the emitted ``recovery``. A missing/extra key is caught by
+# ``test_..._suggestion_table_covers_all_recovery_hints``.
+_SUGGESTION_BY_RECOVERY: dict[RecoveryHint, str] = {
+    "transient": _SANITIZED_TRANSIENT_SUGGESTION,
+    "correctable": _SANITIZED_CORRECTABLE_SUGGESTION,
+    "terminal": _SANITIZED_TERMINAL_SUGGESTION,
+}
+
+
+def _sanitized_suggestion_for(recovery: RecoveryHint) -> str:
+    """Static, internals-free guidance matching ``recovery``: retry for ``transient``, adjust-and-
+    resubmit for ``correctable``, no-retry/escalation for ``terminal``. Keyed on the SAME
+    ``recovery`` the sanitized error carries so the suggestion can't contradict it."""
+    return _SUGGESTION_BY_RECOVERY[recovery]
+
+
+def _canonical_recovery_for(wire_code: str) -> RecoveryHint:
+    """The recovery the SDK table (plus the pinned-spec supplement) assigns a wire code
+    (SERVICE_UNAVAILABLE→transient, CONFIGURATION_ERROR→terminal, …). NOT the pinned spec enum
+    for every code — the SDK table diverges from it for several codes; both codes this scrub can
+    emit agree across the two sources, which is what the callers rely on. Internal/infra errors
+    emit the recovery their CODE mandates, NOT a possibly-inconsistent instance override — a
+    sanitized SERVICE_UNAVAILABLE tagged ``terminal``/``correctable`` (or a CONFIGURATION_ERROR
+    tagged ``transient``) is self-contradictory on the wire. Unknown codes are coerced to
+    SERVICE_UNAVAILABLE by the caller, so they resolve to ``transient`` here too."""
+    meta = WIRE_STANDARD_CODES.get(wire_code)
+    return cast(RecoveryHint, meta["recovery"]) if meta else "transient"
+
+
+# Category-specific sanitized (message, suggestion) for the client-correctable codes a scrub can
+# emit, so the human text MATCHES the machine code — a VALIDATION_ERROR must not read "an internal
+# error occurred", and an AUTH_REQUIRED must say "authenticate", not "adjust the request". The
+# SUGGESTION leg is the code's canonical spec text (error-code.json enumMetadata, via the shared
+# spec-derived constants above) — hand-written retry advice here once contradicted the enum, which
+# says AUTH_REQUIRED must NOT advise auto-retry. Messages stay ours (the spec defines no canonical
+# message); all strings are static and secret-free — ``str(exc)`` is never restored. Codes absent
+# here (SERVICE_UNAVAILABLE, CONFIGURATION_ERROR) fall back to the generic internal message + a
+# recovery-matched suggestion, which is correct for the internal/infra bucket.
+_SANITIZED_BY_WIRE_CODE: dict[str, tuple[str, str]] = {
+    "VALIDATION_ERROR": (
+        "The request could not be validated; review the submitted fields and resubmit.",
+        VALIDATION_ERROR_SUGGESTION,
+    ),
+    "AUTH_REQUIRED": (
+        "Authentication or authorization failed; provide valid credentials or the required permissions.",
+        AUTH_REQUIRED_CANONICAL_SUGGESTION,
+    ),
+}
+
+
+def _scrubbed_error(
+    *, error_code: str, wire_code: str, recovery: RecoveryHint, status_code: int, context: Any
+) -> AdCPError:
+    """A wire-safe ``AdCPError`` carrying the given code/recovery but a SANITIZED, secret-free
+    message + suggestion selected by the BUYER-FACING ``wire_code`` (so the human text matches the
+    machine code), with ``details``/``field`` dropped. The single scrub constructor for
+    ``safe_adcp_error`` so message replacement can't drift between call sites. Codes without a
+    category entry fall back to the generic internal message + a recovery-matched suggestion."""
+    message, suggestion = _SANITIZED_BY_WIRE_CODE.get(
+        wire_code, (_SANITIZED_INTERNAL_MESSAGE, _sanitized_suggestion_for(recovery))
+    )
+    return AdCPError.synthesize(
+        message,
+        error_code=error_code,
+        status_code=status_code,
+        recovery=recovery,
+        suggestion=suggestion,
+        context=context,
+    )
+
+
+def safe_adcp_error(exc: Exception) -> AdCPError:
+    """Return a wire-safe ``AdCPError`` — THE sanitization policy for the boundaries that have
+    ADOPTED it: the A2A failed-Task / JSON-RPC ``InternalError`` paths, and the webhook push path
+    via ``ContextManager.audit_workflow_step_failure``.
+
+    Adoption is NOT universal, so this is not a claim that every buyer-facing emission is
+    scrubbed: the MCP/REST boundaries and the approval-service webhook still build their own
+    messages and depend on source-site scrubbing (tracked in #1587). Route any NEW buyer-facing
+    error surface through here instead of adding a second policy.
+
+    Two ORTHOGONAL decisions, deliberately kept separate — conflating them is what leaked secrets
+    (a raw ``ValueError`` pre-normalized to a *trusted* ``AdCPValidationError`` whose raw message
+    then survived):
+
+    1. SEMANTIC code/recovery — from ``normalize_to_adcp_error`` (``ValueError`` →
+       VALIDATION_ERROR, ``PermissionError`` → AUTH_REQUIRED, native ``AdCPError`` unchanged). This
+       is the SAME mapping the synchronous MCP/REST/A2A boundaries apply, so a webhook audit and
+       the synchronous response for the SAME exception emit the SAME code — no divergence.
+    2. MESSAGE trust — from the ORIGINAL exception's PROVENANCE. A raw built-in's ``str(exc)`` is
+       UNTRUSTED (it can embed a connection string / token / SQL) and is SCRUBBED even when its
+       semantic code is client-correctable; only an explicitly-raised typed ``AdCPError`` carries a
+       controlled buyer-facing message worth preserving.
+
+    Concretely:
+    - INTERNAL/INFRA codes (``wire_error_code in INTERNAL_WIRE_CODES`` — SERVICE_UNAVAILABLE family
+      + terminal CONFIGURATION_ERROR): message scrubbed regardless of provenance (a typed
+      ``AdCPAdapterError(f"...: {e}")`` can interpolate a secret too); recovery normalized to the
+      wire code's canonical value; suggestion derived from that recovery.
+    - A wire code not in ``WIRE_STANDARD_CODES`` (internal-only): coerced to SERVICE_UNAVAILABLE and
+      scrubbed.
+    - A CLIENT-CORRECTABLE standard code (VALIDATION_ERROR, ``*_NOT_FOUND``, AUTH_*, …): the
+      message is kept ONLY when the ORIGINAL exception is a typed ``AdCPError`` (trusted
+      provenance); a RAW built-in that merely *normalized* to such a code keeps the semantic
+      code/recovery but has its untrusted message scrubbed.
+    """
+    # (1) SEMANTIC code/recovery — the mapping the synchronous boundaries also apply.
+    normalized = normalize_to_adcp_error(exc)
+    wire_code = normalized.wire_error_code
+
+    if wire_code in INTERNAL_WIRE_CODES:
+        return _scrubbed_error(
+            error_code=normalized.error_code,
+            wire_code=wire_code,
+            recovery=_canonical_recovery_for(wire_code),
+            status_code=normalized.status_code,
+            context=normalized.context,
+        )
+    if wire_code not in WIRE_STANDARD_CODES:
+        # An internal-only code the wire doesn't model: coerce to SERVICE_UNAVAILABLE + scrub.
+        return _scrubbed_error(
+            error_code="SERVICE_UNAVAILABLE",
+            wire_code="SERVICE_UNAVAILABLE",
+            recovery=_canonical_recovery_for("SERVICE_UNAVAILABLE"),
+            status_code=normalized.status_code,
+            context=normalized.context,
+        )
+    # (2) MESSAGE trust — client-correctable standard code.
+    if isinstance(exc, AdCPError):
+        # Explicitly-raised typed error → controlled buyer-facing message, pass through unchanged.
+        return exc
+    # A RAW built-in that normalized to a client-correctable code: keep that SEMANTIC code/recovery
+    # (so webhook and synchronous responses agree) but SCRUB the untrusted ``str(exc)`` message —
+    # replaced with a static, category-appropriate message + suggestion (a VALIDATION_ERROR reads
+    # "review the submitted fields", an AUTH_REQUIRED reads "provide valid credentials"), never the
+    # generic "internal error" that contradicts the code.
+    return _scrubbed_error(
+        error_code=normalized.error_code,
+        wire_code=wire_code,
+        recovery=normalized.recovery,
+        status_code=normalized.status_code,
+        context=normalized.context,
+    )

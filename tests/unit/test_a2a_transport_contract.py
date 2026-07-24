@@ -14,46 +14,87 @@ beads: salesagent-b61l.17
 
 import json
 import uuid
+from contextlib import nullcontext
 from unittest.mock import patch
 
 import pytest
 from starlette.testclient import TestClient
 
+from src.a2a_server.adcp_a2a_server import DISCOVERY_SKILLS as _PROD_DISCOVERY_SKILLS
+from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.app import app
-from tests.factories.principal import PrincipalFactory
+from src.core.exceptions import AdCPAuthenticationError
+from tests.utils.a2a_helpers import make_test_a2a_identity
 
-_MOCK_IDENTITY = PrincipalFactory.make_identity(
-    principal_id="test-principal",
-    tenant_id="test-tenant",
-    tenant={"tenant_id": "test-tenant"},
-    protocol="a2a",
-)
+_TEST_IDENTITY = make_test_a2a_identity()
 
 # ---------------------------------------------------------------------------
-# All 13 A2A skills from the dispatch map (adcp_a2a_server.py:1416-1438)
+# Explicit per-skill contract. Every registered skill MUST have an entry here
+# (asserted), and each entry is INDEPENDENTLY authored — NOT derived from the
+# registry — so the checks are not tautological: a new dispatch entry can't pass
+# without a human classifying it, and a skill routed to the wrong handler is
+# caught by the per-skill wire assertion.
+#   classification: "implemented" (must NOT return UNSUPPORTED_FEATURE) or
+#                   "unsupported" (must return a UNSUPPORTED_FEATURE failed Task)
+#   advertised:     whether the agent card advertises it (asserted for exact equality)
+#   discovery:      whether the skill is auth-OPTIONAL (no principal required); HAND-AUTHORED
+#                   here and asserted for exact equality against production's DISCOVERY_SKILLS,
+#                   so a skill wrongly flipped into/out of the discovery set in production
+#                   reddens the build instead of silently re-partitioning the test.
+#   params:         request params that reach the skill's terminal branch
 # ---------------------------------------------------------------------------
-ALL_SKILLS = [
-    "get_adcp_capabilities",
-    "get_products",
-    "create_media_buy",
-    "list_creative_formats",
-    "list_authorized_properties",
-    "update_media_buy",
-    "get_media_buy_delivery",
-    "update_performance_index",
-    "sync_creatives",
-    "list_creatives",
-    "approve_creative",
-    "get_media_buy_status",
-    "optimize_media_buy",
-]
+SKILL_METADATA: dict[str, dict] = {
+    "get_adcp_capabilities": {"classification": "implemented", "advertised": True, "discovery": True, "params": {}},
+    "get_products": {"classification": "implemented", "advertised": True, "discovery": True, "params": {}},
+    "create_media_buy": {"classification": "implemented", "advertised": True, "discovery": False, "params": {}},
+    "list_creative_formats": {"classification": "implemented", "advertised": True, "discovery": True, "params": {}},
+    "list_accounts": {"classification": "implemented", "advertised": True, "discovery": True, "params": {}},
+    "sync_accounts": {"classification": "implemented", "advertised": True, "discovery": False, "params": {}},
+    "list_authorized_properties": {
+        "classification": "implemented",
+        "advertised": True,
+        "discovery": True,
+        "params": {},
+    },
+    "update_media_buy": {"classification": "implemented", "advertised": True, "discovery": False, "params": {}},
+    "get_media_buys": {"classification": "implemented", "advertised": True, "discovery": False, "params": {}},
+    "get_media_buy_delivery": {"classification": "implemented", "advertised": True, "discovery": False, "params": {}},
+    "update_performance_index": {
+        "classification": "implemented",
+        "advertised": True,
+        "discovery": False,
+        "params": {},
+    },
+    "sync_creatives": {"classification": "implemented", "advertised": True, "discovery": False, "params": {}},
+    "list_creatives": {"classification": "implemented", "advertised": True, "discovery": False, "params": {}},
+    # Unsupported + NOT advertised (round-9 SF-B): handlers raise UNSUPPORTED_FEATURE,
+    # so they are hidden from the agent card but stay reachable-but-unsupported by name.
+    "approve_creative": {"classification": "unsupported", "advertised": False, "discovery": False, "params": {}},
+    "get_media_buy_status": {"classification": "unsupported", "advertised": False, "discovery": False, "params": {}},
+    "optimize_media_buy": {"classification": "unsupported", "advertised": False, "discovery": False, "params": {}},
+    "create_creative": {
+        "classification": "unsupported",
+        "advertised": False,
+        "discovery": False,
+        "params": {"format_id": "display_300x250", "content_uri": "https://ex/c.jpg", "name": "c"},
+    },
+    "assign_creative": {
+        "classification": "unsupported",
+        "advertised": False,
+        "discovery": False,
+        "params": {"media_buy_id": "mb-1", "package_id": "pkg-1", "creative_id": "cr-1"},
+    },
+}
 
-DISCOVERY_SKILLS = [
-    "get_adcp_capabilities",
-    "list_creative_formats",
-    "list_authorized_properties",
-    "get_products",
-]
+ALL_SKILLS = sorted(AdCPRequestHandler()._skill_handler_map().keys())
+IMPLEMENTED_SKILLS = sorted(s for s, m in SKILL_METADATA.items() if m["classification"] == "implemented")
+UNSUPPORTED_SKILLS = sorted(s for s, m in SKILL_METADATA.items() if m["classification"] == "unsupported")
+ADVERTISED_SKILLS = {s for s, m in SKILL_METADATA.items() if m["advertised"]}
+
+# Discovery (no-auth) skills come from the HAND-AUTHORED oracle above (not the production
+# frozenset), so the auth-boundary tests can't move in lockstep with a production mis-classification.
+# ``test_discovery_metadata_matches_production`` pins this set equal to production's DISCOVERY_SKILLS.
+DISCOVERY_SKILLS = sorted(s for s, m in SKILL_METADATA.items() if m["discovery"])
 
 AUTH_REQUIRED_SKILLS = [s for s in ALL_SKILLS if s not in DISCOVERY_SKILLS]
 
@@ -205,6 +246,66 @@ class TestA2AAuthContract:
             f"Error for '{skill}' should mention auth/token: {body['error']['message']}"
         )
 
+    @pytest.mark.parametrize("method", ["GetTask", "CancelTask"])
+    @pytest.mark.parametrize(
+        ("headers", "resolver_error"),
+        [
+            ({"Content-Type": "application/json", "A2A-Version": "1.0"}, None),
+            (
+                {
+                    "Authorization": "Bearer invalid-task-token",
+                    "Content-Type": "application/json",
+                    "A2A-Version": "1.0",
+                },
+                "Authentication token is invalid or expired.",
+            ),
+        ],
+        ids=["missing-token", "invalid-token"],
+    )
+    def test_task_management_auth_errors_use_json_rpc_dispatcher(self, client, method, headers, resolver_error):
+        """The real dispatcher must serialize task auth failures as JSON-RPC errors carrying the
+        full two-layer AUTH_REQUIRED envelope in ``error.data`` — not just a bare message.
+
+        Drives the ACTUAL SDK ``JsonRpcDispatcher`` via a real HTTP POST (not a direct handler
+        call), so this catches regressions in dispatcher routing, request parsing, and response
+        serialization that a unit test calling the handler method directly cannot see.
+
+        The invalid-token case patches ``resolve_identity`` at its SOURCE module (not
+        ``_resolve_a2a_identity`` itself) so the REAL ``_resolve_a2a_identity`` exception
+        handling — and its own enveloping via ``_auth_required_error`` — actually runs. An
+        earlier version of this test patched ``_resolve_a2a_identity`` with a bare
+        ``InvalidRequestError`` side effect, which bypassed that enveloping entirely and made
+        the invalid-token case silently untested for ``error.data``.
+        """
+        payload = {"jsonrpc": "2.0", "id": "task-auth-request", "method": method, "params": {"id": "task_auth"}}
+        resolver_patch = (
+            patch(
+                "src.core.resolved_identity.resolve_identity",
+                side_effect=AdCPAuthenticationError(resolver_error),
+            )
+            if resolver_error
+            else nullcontext()
+        )
+
+        with resolver_patch:
+            response = client.post("/a2a", json=payload, headers=headers)
+
+        body = response.json()
+        assert body["jsonrpc"] == "2.0"
+        assert body["id"] == "task-auth-request"
+        assert "result" not in body
+        assert body["error"]["code"] == -32600
+        assert "auth" in body["error"]["message"].lower()
+        assert "task_auth" not in json.dumps(body)
+        # The two-layer envelope must ALSO reach the real wire, not just a bare JSON-RPC message —
+        # a buyer branches on error.data.adcp_error.code, and this is what previously required a
+        # separate unit test calling the handler directly (which cannot prove the real dispatcher
+        # actually places the envelope in the serialized HTTP response body).
+        adcp_error = body["error"]["data"]["adcp_error"]
+        assert adcp_error["code"] == "AUTH_REQUIRED"
+        assert adcp_error["recovery"] == "correctable"
+        assert body["error"]["message"] == adcp_error["message"]
+
 
 # ---------------------------------------------------------------------------
 # JSON-RPC Protocol
@@ -221,12 +322,30 @@ class TestA2AJsonRpcProtocol:
         body = response.json()
         assert "error" in body, "Unknown method should return JSON-RPC error"
 
-    def test_unknown_skill_returns_error(self, client, auth_headers):
-        """Unknown skill name should return error (not crash)."""
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY)
+    def test_unknown_skill_returns_failed_task_not_transport_error(self, mock_resolve, client, auth_headers):
+        """Unknown skill name returns a failed Task with UNSUPPORTED_FEATURE, not JSON-RPC.
+
+        The JSON-RPC method (message/send) is valid; routing failed *inside*
+        skill dispatch, which is an application-layer failure. Per AdCP
+        3.1.1 transport-errors.mdx "Layer Separation" it belongs in the
+        task body as a failed Task carrying a two-layer envelope — JSON-RPC
+        MethodNotFoundError is reserved for unknown JSON-RPC *methods*
+        (see test_invalid_method_returns_error). Identity is mocked so the
+        request reaches skill dispatch.
+        """
         payload = _build_jsonrpc("nonexistent_skill", {})
         response = client.post("/a2a", json=payload, headers=auth_headers)
         body = response.json()
-        assert "error" in body, "Unknown skill should return JSON-RPC error"
+
+        assert "error" not in body, f"unknown skill must not be a JSON-RPC error: {body.get('error')}"
+        assert "result" in body, f"expected a failed-Task result, got: {json.dumps(body)[:400]}"
+        data = _extract_artifact_data(body["result"])
+        assert data.get("adcp_error", {}).get("code") == "UNSUPPORTED_FEATURE", (
+            f"unknown skill must surface UNSUPPORTED_FEATURE in the task body: {data}"
+        )
+        assert data.get("adcp_error", {}).get("recovery") == "correctable", data
+        assert "nonexistent_skill" in data["errors"][0]["message"], data
 
     def test_response_echoes_request_id(self, client, auth_headers):
         """JSON-RPC response must echo the request id."""
@@ -267,7 +386,7 @@ class TestA2AResponseShape:
     testing the full transport chain: middleware → dispatch → serialization.
     """
 
-    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY)
     @patch("src.core.tools.products._get_products_impl")
     def test_get_products_response_shape(self, mock_impl, mock_resolve, client, auth_headers):
         """get_products response must contain 'products' list."""
@@ -286,7 +405,7 @@ class TestA2AResponseShape:
             assert "products" in data, "get_products response must have 'products' field"
             assert isinstance(data["products"], list)
 
-    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY)
     @patch("src.core.tools.media_buy_create._create_media_buy_impl")
     def test_create_media_buy_response_shape(self, mock_impl, mock_resolve, client, auth_headers):
         """create_media_buy response must have media_buy_id."""
@@ -331,7 +450,7 @@ class TestA2AResponseShape:
             assert "code" in body["error"], "JSON-RPC error must have 'code'"
             assert "message" in body["error"], "JSON-RPC error must have 'message'"
 
-    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY)
     @patch("src.a2a_server.adcp_a2a_server.core_sync_creatives_tool")
     def test_sync_creatives_response_shape(self, mock_impl, mock_resolve, client, auth_headers):
         """sync_creatives response must contain 'creatives' or 'synced_creatives'."""
@@ -349,7 +468,7 @@ class TestA2AResponseShape:
                 "sync_creatives response must have 'creatives' field"
             )
 
-    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY)
     @patch("src.a2a_server.adcp_a2a_server.core_list_creatives_tool")
     def test_list_creatives_response_shape(self, mock_impl, mock_resolve, client, auth_headers):
         """list_creatives response must contain 'creatives' list."""
@@ -371,7 +490,7 @@ class TestA2AResponseShape:
             assert "creatives" in data, "list_creatives response must have 'creatives' field"
             assert isinstance(data["creatives"], list)
 
-    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY)
     @patch("src.a2a_server.adcp_a2a_server.core_update_media_buy_tool")
     def test_update_media_buy_response_shape(self, mock_impl, mock_resolve, client, auth_headers):
         """update_media_buy response must have media_buy_id."""
@@ -393,7 +512,7 @@ class TestA2AResponseShape:
             data = _extract_artifact_data(body["result"])
             assert "media_buy_id" in data, "update_media_buy response must have 'media_buy_id'"
 
-    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY)
     @patch("src.a2a_server.adcp_a2a_server.core_get_media_buy_delivery_tool")
     def test_get_media_buy_delivery_response_shape(self, mock_impl, mock_resolve, client, auth_headers):
         """get_media_buy_delivery response must have 'deliveries' or 'media_buys'."""
@@ -416,7 +535,7 @@ class TestA2AResponseShape:
                 "get_media_buy_delivery response must have 'media_buy_deliveries' field"
             )
 
-    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY)
     @patch("src.a2a_server.adcp_a2a_server.core_update_performance_index_tool")
     def test_update_performance_index_response_shape(self, mock_impl, mock_resolve, client, auth_headers):
         """update_performance_index response must have acknowledgment fields."""
@@ -447,19 +566,88 @@ class TestA2AResponseShape:
 
 
 class TestA2AStubHandlers:
-    """Verify stub handlers return JSON-RPC responses (not crashes)."""
+    """Unimplemented-but-registered skills surface UNSUPPORTED_FEATURE in the task body.
 
-    STUB_SKILLS = ["approve_creative", "get_media_buy_status", "optimize_media_buy"]
+    Table-driven wire assertions across the dispatch registry: a recognized-but-
+    unimplemented skill is an application-layer failure, so it must return a
+    failed Task carrying a two-layer ``UNSUPPORTED_FEATURE``/``correctable``
+    envelope — NOT a JSON-RPC ``UnsupportedOperationError`` (-32004). Reserving
+    JSON-RPC for transport faults is the AdCP 3.1.1 "Layer Separation"
+    contract; these stubs are advertised on the agent card, so a buyer must get
+    a structured, recoverable AdCP error rather than a transport exception.
+    """
 
-    @pytest.mark.parametrize("skill", STUB_SKILLS)
-    def test_stub_handler_returns_jsonrpc_response(self, client, auth_headers, skill):
-        """Stub handlers must return valid JSON-RPC (result or error), not crash."""
-        payload = _build_jsonrpc(skill, {})
+    @pytest.mark.parametrize("skill", UNSUPPORTED_SKILLS)
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY)
+    def test_unsupported_skill_returns_failed_task_not_transport_error(self, mock_resolve, client, auth_headers, skill):
+        """Each unsupported skill returns a failed Task with UNSUPPORTED_FEATURE, not JSON-RPC."""
+        payload = _build_jsonrpc(skill, SKILL_METADATA[skill]["params"])
         response = client.post("/a2a", json=payload, headers=auth_headers)
         body = response.json()
 
-        assert "result" in body or "error" in body, f"Stub skill '{skill}' must return JSON-RPC result or error"
-        assert body.get("jsonrpc") == "2.0"
+        assert "error" not in body, f"'{skill}' must not be a JSON-RPC error: {body.get('error')}"
+        assert "result" in body, f"'{skill}' expected a failed-Task result, got: {json.dumps(body)[:400]}"
+        data = _extract_artifact_data(body["result"])
+        assert data.get("adcp_error", {}).get("code") == "UNSUPPORTED_FEATURE", (
+            f"'{skill}' must surface UNSUPPORTED_FEATURE in the task body: {data}"
+        )
+        assert data.get("adcp_error", {}).get("recovery") == "correctable", f"'{skill}': {data}"
+
+    @pytest.mark.parametrize("skill", IMPLEMENTED_SKILLS)
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_TEST_IDENTITY)
+    def test_implemented_skill_does_not_return_unsupported_feature(self, mock_resolve, client, auth_headers, skill):
+        """A skill classified 'implemented' must NOT surface UNSUPPORTED_FEATURE.
+
+        This is the non-tautological half: a skill mis-routed to an unsupported
+        handler (the reviewer's mutation) would return a UNSUPPORTED_FEATURE failed
+        Task and fail here, even without a DB (empty params yield VALIDATION_ERROR or
+        a JSON-RPC error, never UNSUPPORTED_FEATURE, for a genuinely-implemented skill).
+        """
+        payload = _build_jsonrpc(skill, {})
+        response = client.post("/a2a", json=payload, headers=auth_headers)
+        body = response.json()
+        # An implemented skill with empty params yields a result Task (the skill ran and
+        # returned VALIDATION_ERROR, never UNSUPPORTED_FEATURE). A JSON-RPC "error" body
+        # here would mean the skill never reached its handler — assert the shape rather
+        # than silently skipping, so a routing regression can't pass by changing the shape.
+        assert "result" in body, f"'{skill}' produced a JSON-RPC error, not a result Task: {body}"
+        data = _extract_artifact_data(body["result"])
+        assert data.get("adcp_error", {}).get("code") != "UNSUPPORTED_FEATURE", (
+            f"'{skill}' is classified implemented but routed to an unsupported handler: {data}"
+        )
+
+
+class TestA2ARegistryContract:
+    """Explicit skill metadata ↔ production registry & agent card (non-tautological)."""
+
+    def test_metadata_covers_exactly_the_production_registry(self):
+        """SKILL_METADATA must be a bijection with the production registry.
+
+        Both sides are independently authored (the metadata is NOT derived from the
+        registry), so a skill added to ``_skill_handler_map`` without a metadata entry
+        — or a stale metadata entry — fails here. Combined with the per-skill wire
+        assertions (implemented ≠ UNSUPPORTED_FEATURE, unsupported = UNSUPPORTED_FEATURE),
+        a mis-classified or mis-routed skill can no longer pass silently.
+        """
+        registry = set(AdCPRequestHandler()._skill_handler_map())
+        assert set(SKILL_METADATA) == registry, (
+            f"metadata↔registry drift — missing: {registry - set(SKILL_METADATA)}, "
+            f"stale: {set(SKILL_METADATA) - registry}"
+        )
+
+    def test_discovery_metadata_matches_production(self):
+        """The HAND-AUTHORED ``discovery`` flags must equal production's
+        ``DISCOVERY_SKILLS`` frozenset. The auth-boundary tests derive their partitions from the
+        oracle, so without this pin they would move in lockstep with production and a skill
+        wrongly flipped into (or out of) the no-auth discovery set would still pass. Combined with
+        the metadata↔registry bijection above (which forces every skill to carry a ``discovery``
+        bool), a production classification change reddens here.
+        """
+        hand_authored = {s for s, m in SKILL_METADATA.items() if m["discovery"]}
+        assert hand_authored == set(_PROD_DISCOVERY_SKILLS), (
+            f"discovery classification drift — production-only: {set(_PROD_DISCOVERY_SKILLS) - hand_authored}, "
+            f"oracle-only: {hand_authored - set(_PROD_DISCOVERY_SKILLS)}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -468,7 +656,7 @@ class TestA2AStubHandlers:
 
 
 class TestA2AAllSkillsDispatch:
-    """Verify all 13 skills are reachable through the transport layer."""
+    """Verify every registered skill (ALL_SKILLS, derived from the production registry) is reachable."""
 
     @pytest.mark.parametrize("skill", ALL_SKILLS)
     def test_skill_dispatches_not_404(self, client, auth_headers, skill):
@@ -504,14 +692,23 @@ class TestA2AAllSkillsDispatch:
 class TestAgentCardContract:
     """Verify agent card advertises all skills and has required structure."""
 
-    def test_agent_card_skills_match_dispatch(self, client):
-        """Agent card must advertise at least the skills in the dispatch map."""
+    def test_agent_card_advertises_exactly_the_metadata_advertised_set(self, client):
+        """The agent card's advertised skills must EXACTLY equal ``ADVERTISED_SKILLS``.
+
+        Exact set equality (not ``⊇``) catches both a dispatchable skill that stops
+        being advertised AND an arbitrary extra skill advertised by accident (the
+        reviewer's mutation), because the expected set is the independently-authored
+        metadata, not something derived from the card itself.
+        """
         response = client.get("/.well-known/agent-card.json")
         card = response.json()
         advertised_skills = {s["name"] for s in card.get("skills", [])}
 
-        for skill in ALL_SKILLS:
-            assert skill in advertised_skills, f"Skill '{skill}' in dispatch map but not advertised in agent card"
+        assert advertised_skills == ADVERTISED_SKILLS, (
+            f"agent card advertised set drifted from SKILL_METADATA — "
+            f"unexpected: {sorted(advertised_skills - ADVERTISED_SKILLS)}, "
+            f"missing: {sorted(ADVERTISED_SKILLS - advertised_skills)}"
+        )
 
     def test_agent_card_url_no_trailing_slash(self, client):
         """Agent card URL must not have trailing slash (causes redirects)."""
