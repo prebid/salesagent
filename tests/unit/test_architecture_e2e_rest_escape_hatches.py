@@ -180,6 +180,19 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "live stack always serves the agent catalog; an empty catalog cannot be realized over e2e",
         ),
         ("tests/harness/creative_formats.py", "_validate_registry_formats", "<dynamic>"),
+        # UC-010 pricing degrade partitions (PR #1677): the scenario pins the
+        # resolved adapter's declared pricing surface (empty / off-enum) via an
+        # in-process patch on MockAdServer; the live stack's adapter surface is
+        # fixed production code, so the intent has no server realization. The
+        # happy-path @T-UC-010-pricing scenario stays fully live-graded on
+        # e2e_rest (green in the in-network CI job).
+        (
+            "tests/harness/capabilities.py",
+            "set_adapter_pricing_models",
+            "the live stack resolves the tenant's real bound adapter, whose pricing "
+            "surface is fixed production code — a degenerate or off-enum adapter "
+            "cannot be injected over e2e",
+        ),
     }
 )
 

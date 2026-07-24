@@ -7,6 +7,7 @@ This module follows the MCP/A2A shared implementation pattern from CLAUDE.md.
 """
 
 import logging
+from collections.abc import Callable, Container, Iterable
 from datetime import UTC, datetime
 
 from adcp.types import GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
@@ -15,6 +16,7 @@ from adcp.types.generated_poc.core.postal_area_support import (
     PostalAreaSupport,  # adcp 6.6: standalone GeoPostalAreas removed; capabilities use PostalAreaSupport
 )
 from adcp.types.generated_poc.enums.channels import MediaChannel
+from adcp.types.generated_poc.enums.pricing_model import PricingModel
 from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Adcp,
@@ -70,6 +72,38 @@ CHANNEL_MAPPING: dict[str, MediaChannel] = {
     "product_placement": MediaChannel.product_placement,
 }
 
+# Wire-legal pricing-model strings, used to filter what an adapter reports before
+# constructing the enum. Adapters return free-form strings (see
+# AdServerAdapter.get_supported_pricing_models), so the sibling channel mapping
+# above is the precedent: normalize, then skip what we don't recognize.
+_PRICING_MODEL_VALUES: frozenset[str] = frozenset(m.value for m in PricingModel)
+
+
+def _map_adapter_capability[T](
+    values: Iterable[object],
+    valid_set: Container[str],
+    to_enum: Callable[[str], T],
+    label: str,
+) -> list[T]:
+    """Map free-form adapter capability strings onto a wire enum, degrading gracefully.
+
+    Adapters report capabilities as free-form strings (channels, pricing models),
+    so a strict enum construction would raise on anything off-enum or mis-cased —
+    turning a read-only discovery call into a spurious failure. Instead: normalize
+    case, dedup + sort for a stable order, keep only values in ``valid_set`` (mapped
+    via ``to_enum``), and skip+log anything unrecognized under ``label``.
+
+    Shared by the channel and pricing-model blocks so the two cannot drift again.
+    Callers own their own exception handling around the adapter call itself.
+    """
+    mapped: list[T] = []
+    for value in sorted({str(v).lower() for v in values}):
+        if value in valid_set:
+            mapped.append(to_enum(value))
+        else:
+            logger.warning(f"Ignoring unrecognized {label} from adapter: {value!r}")
+    return mapped
+
 
 def _get_adcp_capabilities_impl(
     req: GetAdcpCapabilitiesRequest | None = None, identity: ResolvedIdentity | None = None
@@ -119,9 +153,9 @@ def _get_adcp_capabilities_impl(
         if principal:
             adapter = get_adapter(principal, dry_run=True, tenant=tenant)
             if adapter and hasattr(adapter, "default_channels"):
-                for channel_name in adapter.default_channels:
-                    if channel_name.lower() in CHANNEL_MAPPING:
-                        primary_channels.append(CHANNEL_MAPPING[channel_name.lower()])
+                primary_channels = _map_adapter_capability(
+                    adapter.default_channels, CHANNEL_MAPPING, CHANNEL_MAPPING.__getitem__, "channel"
+                )
     except Exception as e:
         logger.warning(f"Could not get adapter channels: {e}")
 
@@ -245,11 +279,38 @@ def _get_adcp_capabilities_impl(
         targeting=targeting,
     )
 
+    # Pricing models the bound adapter supports (buyer-visible capability).
+    # Degrades exactly like the channel block above via _map_adapter_capability:
+    # adapters return free-form strings (base.py compares them case-insensitively),
+    # so a strict PricingModel(m) raises ValueError on e.g. "CPM" — which the
+    # boundary turns into a spurious VALIDATION_ERROR on a read-only discovery call
+    # that carries no buyer input to invalidate. Normalize case, skip+log anything
+    # off-enum, and swallow an adapter that raises — capabilities must still answer.
+    # supported_pricing_models has min_length=1 on the wire, so an adapter that
+    # reports none (or only unrecognized values) leaves the field None (unknown)
+    # rather than an empty list.
+    #
+    # None is wire-safe by OMISSION on REST/A2A only (Pydantic exclude-none drops
+    # the key); MCP currently serializes an explicit `null`, which is schema-invalid
+    # for this field — pre-existing, repo-wide, tracked as a transport-level
+    # exclude-none follow-up (not introduced here).
+    supported_pricing_models = None
+    if adapter and hasattr(adapter, "get_supported_pricing_models"):
+        try:
+            raw = adapter.get_supported_pricing_models()
+        except Exception as e:
+            logger.warning(f"Could not get adapter pricing models: {e}")
+            raw = set()  # match the set[str] the try returns; the helper takes any iterable
+        supported_pricing_models = (
+            _map_adapter_capability(raw, _PRICING_MODEL_VALUES, PricingModel, "pricing model") or None
+        )
+
     # Build media_buy capabilities
     media_buy = MediaBuy(
         portfolio=portfolio,
         features=features,
         execution=execution,
+        supported_pricing_models=supported_pricing_models,
     )
 
     # Build response

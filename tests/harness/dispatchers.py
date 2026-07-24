@@ -272,7 +272,14 @@ class RestE2EDispatcher:
 
         with httpx.Client(base_url=base_url, timeout=30) as client:
             method = getattr(env, "REST_METHOD", "post")
-            response = getattr(client, method)(endpoint, json=body, headers=headers)
+            if method in {"get", "delete", "head", "options"}:
+                # Bodyless verbs: httpx.Client.get/delete/head/options() take no
+                # ``json`` kwarg — passing one raises TypeError before the request
+                # is ever sent. Discovery reads (GET /api/v1/capabilities) carry no
+                # body. Honor the configured verb via getattr, just without json=.
+                response = getattr(client, method)(endpoint, headers=headers)
+            else:
+                response = getattr(client, method)(endpoint, json=body, headers=headers)
 
         envelope = {
             "transport": "e2e_rest",

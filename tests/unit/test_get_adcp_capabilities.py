@@ -418,6 +418,35 @@ def _patch_capabilities_deps(
     return stack
 
 
+def _mock_adapter(
+    *,
+    default_channels=("display",),
+    targeting=None,
+    pricing_models=None,
+    pricing_side_effect=None,
+):
+    """Build a mock adapter wired for the three attributes the impl reads.
+
+    Sets ``default_channels`` and ``get_targeting_capabilities()``; wires
+    ``get_supported_pricing_models()`` to ``pricing_side_effect`` (raises) or
+    ``pricing_models`` (return value) when either is given. When neither pricing
+    argument is supplied the method is left at its default MagicMock return — only
+    the channel/targeting partitions use that shape.
+
+    The absent-method partition (``MagicMock(spec=[])``) is deliberately NOT built
+    here: forcing attributes on would defeat the ``hasattr`` guard those tests
+    exercise, so they stay hand-rolled.
+    """
+    adapter = MagicMock()
+    adapter.default_channels = list(default_channels)
+    adapter.get_targeting_capabilities.return_value = targeting
+    if pricing_side_effect is not None:
+        adapter.get_supported_pricing_models.side_effect = pricing_side_effect
+    elif pricing_models is not None:
+        adapter.get_supported_pricing_models.return_value = pricing_models
+    return adapter
+
+
 class TestChannelMapping:
     """Test CHANNEL_MAPPING integration in _get_adcp_capabilities_impl."""
 
@@ -427,9 +456,7 @@ class TestChannelMapping:
 
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
-        mock_adapter = MagicMock()
-        mock_adapter.default_channels = ["video"]
-        mock_adapter.get_targeting_capabilities.return_value = None
+        mock_adapter = _mock_adapter(default_channels=["video"])
 
         identity = _make_capabilities_identity()
         stack = _patch_capabilities_deps(adapter=mock_adapter)
@@ -447,9 +474,7 @@ class TestChannelMapping:
 
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
-        mock_adapter = MagicMock()
-        mock_adapter.default_channels = ["audio"]
-        mock_adapter.get_targeting_capabilities.return_value = None
+        mock_adapter = _mock_adapter(default_channels=["audio"])
 
         identity = _make_capabilities_identity()
         stack = _patch_capabilities_deps(adapter=mock_adapter)
@@ -466,9 +491,7 @@ class TestChannelMapping:
 
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
-        mock_adapter = MagicMock()
-        mock_adapter.default_channels = ["unknown_channel", "display"]
-        mock_adapter.get_targeting_capabilities.return_value = None
+        mock_adapter = _mock_adapter(default_channels=["unknown_channel", "display"])
 
         identity = _make_capabilities_identity()
         stack = _patch_capabilities_deps(adapter=mock_adapter)
@@ -497,6 +520,160 @@ class TestChannelMapping:
 
         assert response.media_buy is not None
         assert MediaChannel.display in response.media_buy.portfolio.primary_channels
+
+
+class TestSupportedPricingModels:
+    """media_buy.supported_pricing_models is sourced from the bound adapter.
+
+    Every partition here builds its adapter with the shared
+    ``_make_capabilities_identity()`` / ``_patch_capabilities_deps()`` helpers so
+    the audit write (``log_tool_activity``) is stubbed like every sibling test —
+    a hand-rolled 3-patch stack silently ran the real one.
+    """
+
+    def test_impl_includes_supported_pricing_models_from_adapter(self):
+        """supported_pricing_models is wired from the adapter and mapped to PricingModel.
+
+        Deletion oracle: dropping the ``supported_pricing_models=`` kwarg on MediaBuy
+        leaves the field at its None default, so both asserts below fail.
+        """
+        from adcp.types.generated_poc.enums.pricing_model import PricingModel
+
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        mock_adapter = _mock_adapter(pricing_models={"cpm", "cpc"})
+
+        identity = _make_capabilities_identity()
+
+        with _patch_capabilities_deps(adapter=mock_adapter):
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        assert response.media_buy is not None
+        assert response.media_buy.supported_pricing_models is not None
+        assert set(response.media_buy.supported_pricing_models) == {
+            PricingModel("cpm"),
+            PricingModel("cpc"),
+        }
+
+    def test_adapter_reporting_no_models_leaves_field_none(self):
+        """An adapter that supports nothing leaves the field None, never [].
+
+        ``supported_pricing_models`` carries min_length=1 on the wire, so an empty
+        list is not serializable — "unknown" must be expressed as absence.
+
+        Deletion oracle: drop the ``or None`` degradation and the empty list reaches
+        MediaBuy(), where Pydantic raises
+        ``List should have at least 1 item after validation, not 0``.
+        """
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        mock_adapter = _mock_adapter(pricing_models=set())
+
+        identity = _make_capabilities_identity()
+
+        with _patch_capabilities_deps(adapter=mock_adapter):
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        assert response.media_buy is not None
+        assert response.media_buy.supported_pricing_models is None
+
+    def test_adapter_without_the_method_leaves_field_none(self):
+        """An adapter predating get_supported_pricing_models still answers.
+
+        ``MagicMock(spec=[])`` is the in-file idiom for "attribute genuinely
+        absent" (see test_no_adapter_channels_defaults_to_display) — a bare
+        MagicMock answers hasattr truthily and would not exercise this branch.
+
+        Deletion oracle: remove BOTH the ``hasattr`` guard and the
+        ``except Exception`` degradation (they are redundant defenses) and the
+        call dies with ``AttributeError: Mock object has no attribute
+        'get_supported_pricing_models'``.
+        """
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        mock_adapter = MagicMock(spec=[])
+        identity = _make_capabilities_identity()
+
+        with _patch_capabilities_deps(adapter=mock_adapter):
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        assert response.media_buy is not None
+        assert response.media_buy.supported_pricing_models is None
+
+    def test_offenum_pricing_model_is_skipped(self):
+        """An off-enum adapter string is dropped, not fatal — the known one survives.
+
+        Adapters return free-form strings, so a value with no PricingModel member
+        (``"totally_bogus"``) must be filtered out rather than crashing a read-only
+        discovery call. Both inputs here are already lowercase, isolating the
+        off-enum skip from the case-fold behavior tested separately below.
+
+        Deletion oracle: in ``capabilities._map_adapter_capability`` delete the
+        ``if value in valid_set`` guard (append every value unconditionally) and
+        this reddens with ``ValueError: 'totally_bogus' is not a valid PricingModel``
+        — which the transport boundary turns into a failed capabilities read.
+        """
+        from adcp.types.generated_poc.enums.pricing_model import PricingModel
+
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        mock_adapter = _mock_adapter(pricing_models={"cpm", "totally_bogus"})
+
+        identity = _make_capabilities_identity()
+
+        with _patch_capabilities_deps(adapter=mock_adapter):
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        assert response.media_buy is not None
+        assert response.media_buy.supported_pricing_models == [PricingModel("cpm")]
+
+    def test_mixedcase_pricing_model_is_casefolded(self):
+        """A mixed-case adapter string is normalized, not dropped.
+
+        The rest of the codebase compares pricing models case-insensitively
+        (``base.py`` ``pricing_model.lower() not in supported``), so ``"CPM"`` is a
+        realistic adapter answer that must map to ``PricingModel("cpm")``.
+
+        Deletion oracle: in ``capabilities._map_adapter_capability`` drop the
+        ``.lower()`` normalization (iterate ``{str(v) for v in values}``) and
+        ``"CPM"`` fails the ``valid_set`` membership check, gets skipped, and the
+        field degrades to None — so this asserts reddens (expected ``[cpm]``, got
+        ``None``).
+        """
+        from adcp.types.generated_poc.enums.pricing_model import PricingModel
+
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        mock_adapter = _mock_adapter(pricing_models={"CPM"})
+
+        identity = _make_capabilities_identity()
+
+        with _patch_capabilities_deps(adapter=mock_adapter):
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        assert response.media_buy is not None
+        assert response.media_buy.supported_pricing_models == [PricingModel("cpm")]
+
+    def test_adapter_raising_leaves_field_none(self):
+        """An adapter whose pricing lookup explodes degrades to None, not an error.
+
+        Mirrors the channel sibling's ``except Exception`` fallback: capabilities
+        is a read-only discovery call and must still answer.
+
+        Deletion oracle: remove the ``except Exception`` arm and this reddens with
+        ``RuntimeError: ad server unreachable``.
+        """
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        mock_adapter = _mock_adapter(pricing_side_effect=RuntimeError("ad server unreachable"))
+
+        identity = _make_capabilities_identity()
+
+        with _patch_capabilities_deps(adapter=mock_adapter):
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        assert response.media_buy is not None
+        assert response.media_buy.supported_pricing_models is None
 
 
 class TestGracefulDegradation:
