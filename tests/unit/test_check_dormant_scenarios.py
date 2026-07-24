@@ -8,7 +8,7 @@ touched paths to the BDD test modules that bind them, the ``git status
 a broken pytest run instead of reporting a false all-clear.
 
 The two drift-pin tests (``test_every_conftest_dormant_reason_classifies_as_dormant``
-and the ``_harness_env`` taxonomy-derivation guard) deliberately build reasons
+and the conftest-emitter taxonomy-derivation guard) deliberately build reasons
 from ``tests.bdd.xfail_taxonomy``'s builders — the same functions
 ``tests/bdd/conftest.py`` emits from — rather than restating markers, so a reason
 reworded outside the shared module reddens here instead of silently reclassifying
@@ -19,10 +19,12 @@ they are a parser fixture exercising the split, not a claim about the vocabulary
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import re
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -33,6 +35,34 @@ _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "check_dormant_scena
 _spec = importlib.util.spec_from_file_location("check_dormant_scenarios", _SCRIPT)
 cds = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cds)
+
+#: The one file whose emitted xfail reasons the two AST guards below grade.
+_CONFTEST = Path(__file__).resolve().parents[1] / "bdd" / "conftest.py"
+
+
+def _xfail_reason_nodes(scope: ast.AST) -> Iterator[ast.expr]:
+    """Yield every xfail-reason expression in ``scope`` — the single owner of
+    "what counts as an xfail-reason site" for both AST guards below.
+
+    A reason site is either the first positional argument of an imperative
+    ``pytest.xfail(...)`` / ``xfail(...)`` call, or the value assigned to
+    ``report.wasxfail``. ``pytest.mark.xfail(reason=...)`` markers are
+    deliberately NOT collected: they are the documented spec-production-gap
+    ledger, whose bespoke reasons classify as documented on purpose (their
+    ``func.value`` is an Attribute — ``pytest.mark`` — not a Name, which is
+    what the predicate keys on).
+    """
+    for node in ast.walk(scope):
+        if isinstance(node, ast.Call):
+            func = node.func
+            is_imperative_xfail = (
+                isinstance(func, ast.Attribute) and func.attr == "xfail" and isinstance(func.value, ast.Name)
+            ) or (isinstance(func, ast.Name) and func.id == "xfail")
+            if is_imperative_xfail and node.args:
+                yield node.args[0]
+        elif isinstance(node, ast.Assign):
+            if any(isinstance(t, ast.Attribute) and t.attr == "wasxfail" for t in node.targets):
+                yield node.value
 
 
 SAMPLE_OUTPUT = """
@@ -122,6 +152,32 @@ class TestClassify:
         # leaking through the collapse fails this.
         assert dormant["No harness wired for None"] == {"test_create_package_via_mcp", "test_outline"}
 
+    def test_multi_sentence_reason_keys_on_its_first_sentence(self):
+        """The printed headline key is the reason's first sentence, capped at 120.
+
+        ``SAMPLE_OUTPUT``'s step-definition line carries a two-sentence reason
+        whose tail (``Line 12 in scenario ...``) is per-scenario; the bucket key
+        must be exactly the first sentence, or per-scenario tails explode one
+        gap into N single-scenario buckets and the headline count shifts.
+        """
+        dormant, _ = cds.classify(SAMPLE_OUTPUT)
+        key = 'Step definition not found: Step definition is not found: Given "the buyer is authenticated"'
+        assert dormant[key] == {"test_new_step"}
+        assert not any("Line 12" in k for k in dormant)
+
+    def test_reasons_sharing_a_first_sentence_collapse_into_one_bucket(self):
+        output = (
+            "XFAIL tests/bdd/test_x.py::test_a[mcp] - No harness wired for None. Detail A.\n"
+            "XFAIL tests/bdd/test_x.py::test_b[a2a] - No harness wired for None. Detail B.\n"
+        )
+        dormant, _ = cds.classify(output)
+        assert dormant == {"No harness wired for None": {"test_a", "test_b"}}
+
+    def test_reason_longer_than_120_chars_is_truncated_in_the_key(self):
+        reason = "No harness wired for " + "x" * 150
+        dormant, _ = cds.classify(f"XFAIL tests/bdd/test_x.py::test_y[mcp] - {reason}")
+        assert set(dormant) == {reason[:120]}
+
     def test_nested_brackets_in_outline_params_collapse(self):
         dormant, _ = cds.classify(SAMPLE_OUTPUT)
         all_names = _names(dormant)
@@ -164,8 +220,16 @@ class TestClassify:
             ),
             ("XFAIL tests/bdd/test_x.py::test_y", ("tests/bdd/test_x.py::test_y", "")),
             ("XPASS tests/bdd/test_x.py::test_y - graduated", None),
+            # A param id embedding a lone "[" from a string param never reaches
+            # depth 0 again, so the scan runs off the end of the line; the
+            # partition fallback must still split nodeid from reason instead of
+            # swallowing the reason into the nodeid.
+            (
+                "XFAIL tests/bdd/test_x.py::test_y[a2a-op-[-broken - No harness wired for None",
+                ("tests/bdd/test_x.py::test_y[a2a-op-[-broken", "No harness wired for None"),
+            ),
         ],
-        ids=["plain", "separator-in-param", "nested-brackets", "no-reason", "not-an-xfail"],
+        ids=["plain", "separator-in-param", "nested-brackets", "no-reason", "not-an-xfail", "unbalanced-fallback"],
     )
     def test_split_xfail_line(self, line, expected):
         assert cds.split_xfail_line(line) == expected
@@ -248,27 +312,13 @@ class TestConftestUsesSharedTaxonomy:
     """
 
     @staticmethod
-    def _emitted_reason_strings(path: Path) -> list[str]:
-        import ast
-
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        out: list[str] = []
-        for node in ast.walk(tree):
-            # pytest.xfail("...") / xfail("...") positional reason
-            if isinstance(node, ast.Call):
-                func = node.func
-                if (isinstance(func, ast.Attribute) and func.attr == "xfail") or (
-                    isinstance(func, ast.Name) and func.id == "xfail"
-                ):
-                    for arg in node.args:
-                        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                            out.append(arg.value)
-            # report.wasxfail = "..."
-            elif isinstance(node, ast.Assign):
-                targets_wasxfail = any(isinstance(t, ast.Attribute) and t.attr == "wasxfail" for t in node.targets)
-                if targets_wasxfail and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-                    out.append(node.value.value)
-        return out
+    def _emitted_reason_strings() -> list[str]:
+        tree = ast.parse(_CONFTEST.read_text(encoding="utf-8"))
+        return [
+            node.value
+            for node in _xfail_reason_nodes(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        ]
 
     @pytest.mark.parametrize(
         "fragment",
@@ -281,8 +331,7 @@ class TestConftestUsesSharedTaxonomy:
         ],
     )
     def test_no_dormant_reason_is_retyped_in_conftest(self, fragment):
-        conftest = Path(__file__).resolve().parents[1] / "bdd" / "conftest.py"
-        offenders = [s for s in self._emitted_reason_strings(conftest) if fragment.lower() in s.lower()]
+        offenders = [s for s in self._emitted_reason_strings() if fragment.lower() in s.lower()]
         assert offenders == [], (
             f"tests/bdd/conftest.py re-types the xfail reason fragment {fragment!r} instead of "
             f"building it from tests/bdd/xfail_taxonomy. The dormant-scenario checker classifies "
@@ -290,77 +339,80 @@ class TestConftestUsesSharedTaxonomy:
         )
 
 
-class TestHarnessEnvReasonsAreTaxonomyDerived:
-    """Every ``_harness_env`` xfail reason must be BUILT from ``xfail_taxonomy``.
+class TestConftestEmittedReasonsAreTaxonomyDerived:
+    """Every xfail reason conftest EMITS must be BUILT from ``xfail_taxonomy``.
 
     This is the positive class-closer the negative anti-retype guard above does
     not provide. That guard only fires on a re-typed KNOWN marker; a brand-new
-    no-marker wiring phrasing — the shape all these sites had before the routing
-    fix (e.g. ``"...create_media_buy harness wiring is tracked in #1652"``) —
-    contains no marker, so ``is_dormant_reason`` returns False, the scenario
-    silently re-buckets as a documented gap, and the negative guard stays green.
+    no-marker wiring phrasing — the shape the ``_harness_env`` sites had before
+    the routing fix (e.g. ``"...create_media_buy harness wiring is tracked in
+    #1652"``) — contains no marker, so ``is_dormant_reason`` returns False, the
+    scenario silently re-buckets as a documented gap, and the negative guard
+    stays green.
 
-    This test instead requires every ``pytest.xfail(...)`` reason inside
-    ``_harness_env`` to REFERENCE ``xfail_taxonomy`` — a builder call
-    (``xfail_taxonomy.no_harness_wired(uc)``) or an f-string / constant that
-    names a taxonomy constant (``f"... {xfail_taxonomy.NOT_YET_WIRED} ..."``). A
-    bare string literal, or an f-string with no taxonomy reference, is an
-    offender. So a bespoke wiring reason cannot be written in this function
-    without reddening here — the class is closed, not just the known instances.
+    The scope is the emitter ROLE, not one function: ``_xfail_reason_nodes``
+    over the whole conftest reaches both places a classification-bearing reason
+    is emitted — the ``_harness_env`` ``pytest.xfail(...)`` calls AND the
+    ``pytest_runtest_makereport`` ``report.wasxfail`` assignments — plus any
+    future site of either shape, by construction. Each reason must REFERENCE
+    ``xfail_taxonomy``: a builder call (``xfail_taxonomy.no_harness_wired(uc)``)
+    or an f-string / constant naming a taxonomy constant (``f"...
+    {xfail_taxonomy.NOT_YET_WIRED} ..."``). A bare string literal, or an
+    f-string with no taxonomy reference, is an offender.
+    ``pytest.mark.xfail(reason=...)`` markers stay out of scope on purpose:
+    they are the documented spec-production-gap ledger, whose bespoke reasons
+    classify as documented deliberately.
 
-    Deletion oracle: revert any routed reason to a bare literal and this reddens.
-    (No exemption is needed today: every branch already routes through the
-    taxonomy, including the documented ``e2e_unsupported_setup`` builder used
-    outside this function.)
+    Deletion oracle: revert any routed reason to a bare literal or marker-less
+    f-string — in ``_harness_env`` OR in the makereport hook (e.g.
+    ``report.wasxfail = f"placeholder dispatcher for {call.excinfo.value}"``) —
+    and this reddens.
     """
 
     @staticmethod
-    def _references_taxonomy(node: object) -> bool:
-        import ast
-
+    def _references_taxonomy(node: ast.AST) -> bool:
         return any(
             isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name) and sub.value.id == "xfail_taxonomy"
-            for sub in ast.walk(node)  # type: ignore[arg-type]
+            for sub in ast.walk(node)
         )
 
     @classmethod
-    def _reason_is_derived(cls, reason: object) -> bool:
-        import ast
-
+    def _reason_is_derived(cls, reason: ast.expr) -> bool:
         if isinstance(reason, ast.Call):  # a builder call, e.g. xfail_taxonomy.no_harness_wired(uc)
             return cls._references_taxonomy(reason.func)
         if isinstance(reason, ast.JoinedStr | ast.Attribute | ast.Name):  # f-string or bare constant ref
             return cls._references_taxonomy(reason)
         return False  # a bare Constant string, or anything with no taxonomy reference
 
-    def test_every_harness_env_xfail_reason_is_taxonomy_derived(self):
-        import ast
+    def test_finder_sees_both_emitter_kinds(self):
+        """Anti-vacuity pin: the shared finder must reach BOTH emitter shapes.
 
-        conftest = Path(__file__).resolve().parents[1] / "bdd" / "conftest.py"
-        source = conftest.read_text(encoding="utf-8")
-        tree = ast.parse(source)
-
-        env = next(
-            (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_harness_env"),
-            None,
+        If the ``report.wasxfail`` (Assign) branch of ``_xfail_reason_nodes``
+        broke, the derivation test below would silently skip the makereport
+        hook and pass on the ``pytest.xfail`` sites alone — re-opening the
+        exact gap this guard was widened to close. Same for the Call branch
+        and ``_harness_env``.
+        """
+        tree = ast.parse(_CONFTEST.read_text(encoding="utf-8"))
+        hook = next(
+            n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "pytest_runtest_makereport"
         )
-        assert env is not None, "could not find _harness_env in tests/bdd/conftest.py"
+        env = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_harness_env")
+        assert sum(1 for _ in _xfail_reason_nodes(hook)) >= 3, "makereport wasxfail assignments not found"
+        assert sum(1 for _ in _xfail_reason_nodes(env)) >= 1, "_harness_env pytest.xfail calls not found"
 
-        offenders: list[str] = []
-        for node in ast.walk(env):
-            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "xfail"):
-                continue
-            if not node.args:
-                continue
-            reason = node.args[0]
-            if not self._reason_is_derived(reason):
-                offenders.append(ast.get_source_segment(source, reason) or ast.dump(reason))
-
+    def test_every_emitted_xfail_reason_is_taxonomy_derived(self):
+        source = _CONFTEST.read_text(encoding="utf-8")
+        offenders: list[str] = [
+            ast.get_source_segment(source, reason) or ast.dump(reason)
+            for reason in _xfail_reason_nodes(ast.parse(source))
+            if not self._reason_is_derived(reason)
+        ]
         assert offenders == [], (
-            "_harness_env passes a bespoke wiring reason to pytest.xfail() instead of building it from "
-            "tests/bdd/xfail_taxonomy. A reason with no taxonomy marker classifies as a documented gap, so "
-            "the scenario silently drops out of the dormant count. Route it through a builder or an f-string "
-            f"referencing a taxonomy constant. Offenders: {offenders}"
+            "tests/bdd/conftest.py emits an xfail reason (a pytest.xfail(...) argument or a report.wasxfail "
+            "value) that is not built from tests/bdd/xfail_taxonomy. A reason with no taxonomy marker "
+            "classifies as a documented gap, so its scenarios silently drop out of the dormant count. Route "
+            f"it through a builder or an f-string referencing a taxonomy constant. Offenders: {offenders}"
         )
 
 
@@ -471,33 +523,48 @@ class TestMapPaths:
         modules, _ = cds.map_paths_to_modules(["tests/bdd/features/BR-UC-003-update-media-buy.feature"])
         assert any(m.name == "test_uc003_update_media_buy.py" for m in modules)
 
-    def test_conftest_touch_yields_note_not_full_sweep(self):
-        modules, notes = cds.map_paths_to_modules(["tests/bdd/conftest.py"])
-        assert modules == set()
-        assert any("--all" in n for n in notes)
+    @pytest.mark.parametrize(
+        ("path", "note_substrs"),
+        [
+            pytest.param(
+                "tests/bdd/features/BR-UC-999-nonexistent.feature",
+                ("NO test module binds this feature",),
+                id="unbound-feature-loudest-note",
+            ),
+            pytest.param(
+                "tests/bdd/steps/domain/uc999_imaginary.py",
+                ("no test module matches uc999", "its steps bind nothing"),
+                id="uc-step-module-without-test-module",
+            ),
+            pytest.param(
+                "tests/bdd/steps/domain/compat_normalization.py",
+                ("without a ucNNN name", "--all"),
+                id="non-uc-domain-module-all-hint",
+            ),
+            pytest.param(
+                "tests/bdd/conftest.py",
+                ("affects every scenario", "--all"),
+                id="conftest-touch-all-hint",
+            ),
+        ],
+    )
+    def test_note_branch_maps_nothing_and_says_why(self, path, note_substrs):
+        """The four note-only branches: no module mapped, exactly one note, specific text.
 
-    def test_unbound_feature_file_is_the_loudest_note(self):
-        """A .feature no test module binds: every scenario in it is dormant."""
-        modules, notes = cds.map_paths_to_modules(["tests/bdd/features/BR-UC-999-nonexistent.feature"])
+        unbound-feature: a ``.feature`` no test module binds — every scenario in
+        it is dormant, the loudest thing the tool says. uc-step-module: a
+        ``steps/domain/ucNNN_*.py`` whose ucNNN matches no test module binds
+        nothing. non-uc-domain-module: a real domain step module without a ucNNN
+        name cannot be mapped — point at ``--all``. conftest-touch: affects every
+        scenario, so the default run cannot sweep it. The BR-UC-999/uc999 paths
+        are deliberately absent from the tree — that absence IS the branch under
+        test; ``compat_normalization.py`` and ``conftest.py`` are real files.
+        """
+        modules, notes = cds.map_paths_to_modules([path])
         assert modules == set()
         assert len(notes) == 1
-        assert "NO test module binds this feature" in notes[0]
-
-    def test_uc_step_module_with_no_test_module_is_noted(self):
-        """steps/domain/ucNNN_*.py whose ucNNN matches no test module binds nothing."""
-        modules, notes = cds.map_paths_to_modules(["tests/bdd/steps/domain/uc999_imaginary.py"])
-        assert modules == set()
-        assert len(notes) == 1
-        assert "no test module matches uc999" in notes[0]
-        assert "its steps bind nothing" in notes[0]
-
-    def test_non_uc_domain_module_is_noted_with_all_hint(self):
-        """A real domain step module without a ucNNN name cannot be mapped — say so."""
-        modules, notes = cds.map_paths_to_modules(["tests/bdd/steps/domain/compat_normalization.py"])
-        assert modules == set()
-        assert len(notes) == 1
-        assert "without a ucNNN name" in notes[0]
-        assert "--all" in notes[0]
+        for substr in note_substrs:
+            assert substr in notes[0], f"expected {substr!r} in note: {notes[0]!r}"
 
     def test_bdd_relevance_filter(self):
         assert cds.is_bdd_relevant("tests/bdd/steps/domain/uc003_update_media_buy.py")
