@@ -53,6 +53,27 @@ def _coerce_concept_value(value: Any) -> str | None:
     return None
 
 
+# Defense-in-depth cap on the length of list-valued filters. On the pinned adcp
+# schema only creative_ids is bounded (MaxLen 100); its sibling list filters
+# (statuses, format_ids, concept_ids, ...) are not, so an over-long filter would
+# expand into a very large SQL IN (...) clause. We reject past the same bound the
+# SDK already enforces for creative_ids, turning it into a clean VALIDATION_ERROR.
+_MAX_FILTER_LIST_LEN = 100
+
+# List-valued fields on CreativeFilters that expand into IN (...) predicates.
+_CAPPED_FILTER_FIELDS = (
+    "statuses",
+    "format_ids",
+    "concept_ids",
+    "creative_ids",
+    "tags",
+    "tags_any",
+    "media_buy_ids",
+    "accounts",
+    "assigned_to_packages",
+)
+
+
 def _merge_structured_filters(filters: "CreativeFilters | None", flat_params: dict) -> dict:
     """Merge a structured CreativeFilters model into flat params (flat take precedence).
 
@@ -63,6 +84,27 @@ def _merge_structured_filters(filters: "CreativeFilters | None", flat_params: di
     if filters:
         return {**filters.model_dump(exclude_none=True), **flat_params}
     return flat_params
+
+
+def _enforce_filter_list_caps(structured_filters: Any) -> None:
+    """Reject any list-valued filter longer than ``_MAX_FILTER_LIST_LEN``.
+
+    Runs on the MERGED filters (the object the query actually runs off) — checking
+    the pre-merge ``filters`` argument alone would let the flat params (tags,
+    media_buy_ids) bypass the cap entirely. Rejects with a clean VALIDATION_ERROR
+    (``correctable``) rather than expanding into a very large SQL IN (...) query;
+    unlike the effective_limit clamp, this REJECTS rather than truncates.
+    """
+    if structured_filters is None:
+        return
+    for field in _CAPPED_FILTER_FIELDS:
+        values = getattr(structured_filters, field, None)
+        if values is not None and len(values) > _MAX_FILTER_LIST_LEN:
+            raise AdCPValidationError(
+                f"The {field} filter has {len(values)} entries; the maximum is {_MAX_FILTER_LIST_LEN}.",
+                field=f"filters.{field}",
+                suggestion=f"Send at most {_MAX_FILTER_LIST_LEN} values in {field}, or narrow the query.",
+            )
 
 
 def _build_list_creatives_request(
@@ -158,6 +200,10 @@ def _build_list_creatives_request(
 
     # Build structured objects
     structured_filters = LibraryCreativeFilters(**filters_dict) if filters_dict else None
+
+    # Defense-in-depth: reject over-long list filters before they expand into a
+    # very large SQL IN (...) query (see _enforce_filter_list_caps).
+    _enforce_filter_list_caps(structured_filters)
 
     # Build pagination
     # 3.6.0: PaginationRequest is cursor-based (max_results, cursor). DB query uses offset/limit internally.
