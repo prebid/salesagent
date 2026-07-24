@@ -10,6 +10,7 @@ Uses real PostgreSQL database via integration_db fixture.
 """
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 import pytest
 
@@ -522,6 +523,62 @@ async def test_scheduler_updates_multiple_media_buys(integration_db):
     assert _get_media_buy_status(tenant_id, "mb_multi_1") == "active"
     assert _get_media_buy_status(tenant_id, "mb_multi_2") == "completed"
     assert _get_media_buy_status(tenant_id, "mb_multi_3") == "scheduled"  # No change
+
+
+# =============================================================================
+# Test: Per-buy failure isolation (#1714)
+# =============================================================================
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_raising_buy_does_not_abort_remaining_status_flips(integration_db):
+    """One raising media buy must not prevent sibling status flips from committing.
+
+    Mirrors DeliveryWebhookScheduler._send_reports per-item isolation: a compute-path
+    exception on one buy is logged and skipped; remaining eligible flips still commit.
+    """
+    tenant_id = _create_test_tenant("tenant_isolation_1714")
+    principal_id = _create_test_principal(tenant_id)
+
+    now = datetime.now(UTC)
+    past_start = now - timedelta(days=7)
+    past_end = now - timedelta(hours=1)
+
+    bad_buy_id = "mb_isolation_raiser"
+    good_before_id = "mb_isolation_good_before"
+    good_after_id = "mb_isolation_good_after"
+
+    # Three active buys past end_time → would all flip to completed
+    for mid in (good_before_id, bad_buy_id, good_after_id):
+        _create_media_buy(
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            media_buy_id=mid,
+            status="active",
+            start_time=past_start,
+            end_time=past_end,
+        )
+
+    assert _get_media_buy_status(tenant_id, bad_buy_id) == "active"
+    assert _get_media_buy_status(tenant_id, good_before_id) == "active"
+    assert _get_media_buy_status(tenant_id, good_after_id) == "active"
+
+    scheduler = MediaBuyStatusScheduler()
+    real_compute = scheduler._compute_new_status
+
+    def _compute_with_raiser(media_buy, now_arg, session):
+        if media_buy.media_buy_id == bad_buy_id:
+            raise RuntimeError("injected compute failure for isolation test")
+        return real_compute(media_buy, now_arg, session)
+
+    with patch.object(scheduler, "_compute_new_status", side_effect=_compute_with_raiser):
+        await scheduler._update_statuses()
+
+    # Sibling flips commit; raiser unchanged (self-heal next cycle)
+    assert _get_media_buy_status(tenant_id, good_before_id) == "completed"
+    assert _get_media_buy_status(tenant_id, good_after_id) == "completed"
+    assert _get_media_buy_status(tenant_id, bad_buy_id) == "active"
 
 
 # =============================================================================

@@ -79,6 +79,7 @@ class MediaBuyStatusScheduler:
         """Check and update media buy statuses based on flight dates."""
         now = datetime.now(UTC)
         updated_count = 0
+        errors = 0
 
         try:
             with get_db_session() as session:
@@ -90,17 +91,31 @@ class MediaBuyStatusScheduler:
                 )
 
                 for media_buy in media_buys:
-                    new_status = self._compute_new_status(media_buy, now, session)
+                    try:
+                        new_status = self._compute_new_status(media_buy, now, session)
 
-                    if new_status and new_status != media_buy.status:
-                        old_status = media_buy.status
-                        media_buy.status = new_status
-                        updated_count += 1
-                        logger.info(f"Updated media buy {media_buy.media_buy_id} status: {old_status} -> {new_status}")
+                        if new_status and new_status != media_buy.status:
+                            old_status = media_buy.status
+                            media_buy.status = new_status
+                            updated_count += 1
+                            logger.info(
+                                f"Updated media buy {media_buy.media_buy_id} status: {old_status} -> {new_status}"
+                            )
+                    except Exception as e:
+                        errors += 1
+                        logger.error(
+                            "Error updating media buy status "
+                            f"(tenant_id={media_buy.tenant_id}, "
+                            f"principal_id={getattr(media_buy, 'principal_id', None)}, "
+                            f"media_buy_id={media_buy.media_buy_id}): {e}",
+                            exc_info=True,
+                        )
 
                 if updated_count > 0:
                     session.commit()
-                    logger.info(f"Updated {updated_count} media buy status(es)")
+                    logger.info(f"Media buy status update complete: {updated_count} updated, {errors} errors")
+                elif errors > 0:
+                    logger.info(f"Media buy status update complete: 0 updated, {errors} errors")
 
         except Exception as e:
             logger.error(f"Failed to update media buy statuses: {e}", exc_info=True)
