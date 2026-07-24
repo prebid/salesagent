@@ -16,7 +16,7 @@ import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import Session, joinedload
 
 from src.core.database.models import MediaBuy, MediaPackage
@@ -28,8 +28,10 @@ if TYPE_CHECKING:
 class MediaBuyRepository:
     """Tenant-scoped data access for MediaBuy and MediaPackage.
 
-    All queries filter by tenant_id automatically. Callers cannot bypass
-    tenant isolation — there is no way to query across tenants.
+    Instance queries filter by tenant_id automatically — callers cannot bypass
+    tenant isolation through them. The ``@staticmethod`` scheduler queries
+    (``get_all_by_statuses``, ``get_reportable_for_delivery``) are explicitly
+    system-level and cross-tenant by design.
 
     Write methods add objects to the session but never commit — the Unit of Work
     (MediaBuyUoW) handles commit/rollback at the boundary.
@@ -49,6 +51,59 @@ class MediaBuyRepository:
     @property
     def tenant_id(self) -> str:
         return self._tenant_id
+
+    def try_claim_final_webhook(
+        self, media_buy_id: str, *, now: datetime.datetime, stale_before: datetime.datetime
+    ) -> bool:
+        """Atomically claim this buy's FINAL delivery webhook. True if THIS caller won.
+
+        Best-effort concurrency guard (#1575): a single conditional UPDATE that sets
+        ``final_webhook_claimed_at = now`` only when it is unset OR older than
+        ``stale_before`` (so a crashed worker's claim self-heals once stale rather
+        than stranding the final forever). Two concurrent workers race on the same
+        row; exactly one UPDATE matches and RETURNs the id — the loser matches 0 rows
+        and skips the send. The caller MUST commit for the claim to be visible to
+        other transactions. This does NOT close the crash-after-POST duplicate window
+        (the POST precedes the success-log write); a durable exactly-once final
+        (outbox) is tracked in #1606.
+        """
+        claimed_id = self._session.execute(
+            update(MediaBuy)
+            .where(
+                MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.media_buy_id == media_buy_id,
+                or_(
+                    MediaBuy.final_webhook_claimed_at.is_(None),
+                    MediaBuy.final_webhook_claimed_at < stale_before,
+                ),
+            )
+            .values(final_webhook_claimed_at=now)
+            .returning(MediaBuy.media_buy_id)
+        ).scalar_one_or_none()
+        return claimed_id is not None
+
+    def release_final_webhook_claim(self, media_buy_id: str, *, claimed_at: datetime.datetime) -> bool:
+        """Release THIS worker's final-webhook claim so a definitive failure/no-send
+        doesn't block an immediate retry for the whole lease. True if the claim was cleared.
+
+        Token-guarded (#1575): clears ``final_webhook_claimed_at`` only when it still
+        equals ``claimed_at`` — the exact timestamp this worker wrote in
+        ``try_claim_final_webhook``. If the lease already expired and another worker
+        re-claimed with a newer timestamp, the ``== claimed_at`` predicate matches 0
+        rows, so this never clears a newer owner's claim. Lease recovery still covers
+        an actual crash (where no release runs). The caller MUST commit.
+        """
+        released_id = self._session.execute(
+            update(MediaBuy)
+            .where(
+                MediaBuy.tenant_id == self._tenant_id,
+                MediaBuy.media_buy_id == media_buy_id,
+                MediaBuy.final_webhook_claimed_at == claimed_at,
+            )
+            .values(final_webhook_claimed_at=None)
+            .returning(MediaBuy.media_buy_id)
+        ).scalar_one_or_none()
+        return released_id is not None
 
     # ------------------------------------------------------------------
     # Single MediaBuy lookups
@@ -593,3 +648,60 @@ class MediaBuyRepository:
         media buys regardless of tenant. Not tenant-scoped.
         """
         return list(session.scalars(select(MediaBuy).where(MediaBuy.status.in_(statuses))).all())
+
+    @staticmethod
+    def get_reportable_for_delivery(
+        session: Session,
+        *,
+        serving_statuses: list[str],
+        completed_statuses: list[str],
+        completed_horizon: datetime.timedelta,
+    ) -> list[MediaBuy]:
+        """Select the delivery webhook batch's buys: serving (unbounded) + recent ``completed``.
+
+        Args:
+            serving_statuses: PERSISTED statuses (``PERSISTED_STATUS_TO_CANONICAL`` keys)
+                that mean "still serving" — selected unbounded.
+            completed_statuses: PERSISTED statuses that mean "flight ended"
+                (``COMPLETED_PERSISTED_STATUSES``) — selected only within
+                ``completed_horizon``. Both arms take the persisted vocabulary because
+                ``MediaBuy.status`` stores a map key, never a canonical/wire value.
+            completed_horizon: how far back an already-``completed`` buy stays selectable,
+                measured on ``updated_at``.
+
+        System-level cross-tenant query for the delivery webhook scheduler ONLY (the
+        status scheduler keeps the unbounded ``get_all_by_statuses`` — its selection
+        is lifecycle-bounded by construction). ``completed`` is a permanent terminal
+        status, so an unbounded selection would materialize every completed buy that
+        ever existed on every hourly batch; bound it to rows touched within
+        ``completed_horizon`` via ``updated_at``, which the status scheduler's flip,
+        the final-webhook claim, AND the claim release all bump (``onupdate``) — so:
+          - the flip starts the clock even after scheduler downtime (flip time, not
+            flight end);
+          - a buy with ongoing failed-final retries re-enters the window on every
+            claim/release write and never silently ages out mid-retry;
+          - a buy whose final SUCCEEDED stops being written and ages out, so the
+            hourly scan cost decays instead of growing forever.
+        Deliberately NOT bounded via ``final_webhook_claimed_at IS NULL``: a
+        crashed-mid-send buy leaves its claim set and stale-lease recovery depends on
+        the buy being re-selected. Completed buys whose ``updated_at`` predates the
+        horizon (ancient backlog from before the completed-selection existed) are
+        intentionally excluded — a final months after campaign end is more surprising
+        than none; the durable answer is the #1606 outbox.
+        """
+        cutoff = datetime.datetime.now(datetime.UTC) - completed_horizon
+        return list(
+            session.scalars(
+                select(MediaBuy).where(
+                    or_(
+                        MediaBuy.status.in_(serving_statuses),
+                        # Both arms take PERSISTED statuses (map keys — what MediaBuy.status
+                        # holds), derived by the caller from PERSISTED_STATUS_TO_CANONICAL, so
+                        # neither can drift a partial copy (#1556). Passing the CANONICAL
+                        # "completed" here would be a vocabulary error: it is a map VALUE and
+                        # would stop matching the day a persisted key is renamed.
+                        and_(MediaBuy.status.in_(completed_statuses), MediaBuy.updated_at >= cutoff),
+                    )
+                )
+            ).all()
+        )

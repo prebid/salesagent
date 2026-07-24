@@ -18,7 +18,7 @@ Each test targets exactly one obligation ID and follows the 6 hard rules:
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -32,6 +32,7 @@ from src.core.tools.media_buy_delivery import (
     _get_media_buy_delivery_impl,
     _resolve_delivery_status_filter,
 )
+from tests.helpers.delivery_assertions import assert_next_expected_at_shape
 
 # UC-004-ALT-STATUS-FILTERED-DELIVERY-02
 # ---------------------------------------------------------------------------
@@ -575,6 +576,7 @@ def _make_media_buy_delivery_response(
     media_buy_count: int = 0,
     *,
     notification_type: str | None = None,
+    next_expected_at: datetime | None = None,
 ) -> GetMediaBuyDeliveryResponse:
     """Build a minimal GetMediaBuyDeliveryResponse with *media_buy_count* entries."""
     from datetime import UTC, datetime
@@ -603,6 +605,8 @@ def _make_media_buy_delivery_response(
     }
     if notification_type is not None:
         kwargs["notification_type"] = notification_type
+    if next_expected_at is not None:
+        kwargs["next_expected_at"] = next_expected_at
     return GetMediaBuyDeliveryResponse(**kwargs)
 
 
@@ -691,35 +695,46 @@ class TestCreativeDeliveryResponseStr:
 
 
 class TestNextExpectedAtSerialization:
-    """model_dump() forces next_expected_at=null when notification_type is set.
+    """model_dump() OMITS next_expected_at whenever it is unset — final included.
 
-    The AdCP protocol requires next_expected_at to be explicitly present
-    (as null) when notification_type is 'final', so consumers know no
-    further reports are expected. The base model excludes None values,
-    so the override on line 304 re-injects it.
+    Spec: next_expected_at is a non-nullable date-time "only present in
+    webhook deliveries when notification_type is not 'final'"
+    (get-media-buy-delivery-response.json @ v3.1-04f59d2d5;
+    optimization-reporting.mdx: "omitted for final notifications"). A final
+    webhook carrying an explicit ``"next_expected_at": null`` fails a strict
+    buyer's schema validation, so the base model's exclude-None behavior is
+    the correct wire shape. (A previous model_dump override injected the
+    null, citing a spec requirement the spec does not contain.)
 
     Covers: UC-004-SERIAL-01
     """
 
-    def test_final_notification_includes_null_next_expected_at(self):
-        """notification_type='final' forces next_expected_at=null in JSON output.
+    def test_final_notification_omits_next_expected_at(self):
+        """notification_type='final' with next_expected_at unset omits the field.
 
         Covers: UC-004-SERIAL-01
         """
         resp = _make_media_buy_delivery_response(0, notification_type="final")
         dumped = resp.model_dump(mode="json")
-        assert "next_expected_at" in dumped
-        assert dumped["next_expected_at"] is None
+        assert_next_expected_at_shape(dumped, present=False, context="final notification dump")
 
-    def test_scheduled_notification_includes_null_next_expected_at(self):
-        """Any notification_type (not just 'final') forces next_expected_at into JSON.
+    def test_scheduled_notification_serializes_concrete_next_expected_at(self):
+        """A non-final notification carries its concrete timestamp as a string.
 
         Covers: UC-004-SERIAL-01
         """
-        resp = _make_media_buy_delivery_response(0, notification_type="scheduled")
+        from datetime import UTC, datetime
+
+        resp = _make_media_buy_delivery_response(
+            0, notification_type="scheduled", next_expected_at=datetime(2025, 6, 2, tzinfo=UTC)
+        )
         dumped = resp.model_dump(mode="json")
-        assert "next_expected_at" in dumped
-        assert dumped["next_expected_at"] is None
+        # Shape via the shared rule (the same helper the present=False siblings and the
+        # e2e/BDD graders use), then the concrete value on top -- the value assert is the
+        # stronger claim and stays, but the SHAPE must come from the one home so a
+        # date-time format change cannot pass here while reddening the other graders.
+        assert_next_expected_at_shape(dumped, present=True, context="scheduled notification dump")
+        assert dumped["next_expected_at"].startswith("2025-06-02T00:00:00")
 
     def test_no_notification_type_excludes_next_expected_at(self):
         """Without notification_type, next_expected_at is excluded from JSON (base behavior).
@@ -728,7 +743,7 @@ class TestNextExpectedAtSerialization:
         """
         resp = _make_media_buy_delivery_response(0)
         dumped = resp.model_dump(mode="json")
-        assert "next_expected_at" not in dumped
+        assert_next_expected_at_shape(dumped, present=False, context="dump without notification_type")
 
 
 # ---------------------------------------------------------------------------

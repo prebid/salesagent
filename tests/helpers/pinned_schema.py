@@ -3,8 +3,28 @@
 Single source of truth for schema-shape assertions in tests (e.g. the BDD step
 "the response should be schema-valid against <file>"). Reads the committed
 fixtures under ``tests/fixtures/adcp_schemas_pinned/``, pinned at
-adcontextprotocol/adcp@04f59d2d5 (tag ``v3.1-04f59d2d5``). It never fetches the
-network — ``/schemas/latest`` drifts and would make tests non-deterministic.
+adcontextprotocol/adcp@04f59d2d5 (tag ``v3.1-04f59d2d5``).
+
+**This tree PREDATES the ``v3.1.1`` release the repo targets (adcp==6.6.0) and is
+NOT equivalent to it — a pass here is NOT a 3.1.1 conformance pass.** Verified
+2026-07-22 against the released schemas: 70 of the 244 vendored files differ in
+CONTENT from ``v3.1.1``, measured against ``static/schemas/source`` at that tag —
+the base ``_refresh.py`` actually vendors from. (Against ``dist/schemas/3.1.1/``
+all 244 additionally differ, because every ``dist`` file carries a
+``/schemas/3.1.1/`` version segment in ``$id``/``$ref`` that the source namespace
+lacks; normalizing that segment reproduces the same 70.) The 70 include
+``enums/error-code.json`` — 64 vendored codes vs 92 released, i.e. exactly 28
+missing, 0 extra — and every ``media-buy/*`` file (9 of 9).
+``get-media-buy-delivery-response.json``
+specifically lacks the ``media_buy_deliveries[]`` fields ``is_final`` /
+``finalized_at`` / ``windows`` and the ``core/protocol-envelope.json`` ``allOf``
+member. What IS byte-identical to v3.1.1 — and all that schema-grounded oracles may
+rely on — is that file's top-level property names, descriptions and ``required``,
+plus the ``media_buy_deliveries[].status`` enum. Re-pinning to ``v3.1.1`` is tracked
+separately (the error-code additions ripple into the error-enum conformance guards).
+
+It never fetches the network — ``/schemas/latest`` drifts and would make tests
+non-deterministic.
 
 ``$ref`` resolution (e.g. ``/schemas/core/format-id.json``) is wired through a
 ``referencing.Registry`` retrieve callback that loads each referenced schema from
@@ -57,12 +77,26 @@ def _retrieve(uri: str) -> referencing.Resource:
     return DRAFT7.create_resource(_load_by_ref(uri))
 
 
+def load_pinned_schema(filename: str) -> dict[str, Any]:
+    """Load a pinned AdCP schema dict by bare filename (offline, from the vendored tree).
+
+    Internal helper for ``validate_against_pinned_schema``. A missing schema is a HARD
+    FAILURE (see ``_resolve_filename``), never a skip.
+
+    NOT a spec-grounding source. The vendored tree is frozen at an anchor that PREDATES
+    the targeted spec version, so reading field metadata from it to ground a constant is
+    blind to exactly the staleness it appears to rule out — derive from the pinned SDK
+    instead (see the webhook-only field oracle in tests/unit/test_media_buy_status_consistency.py).
+    """
+    return json.loads(_resolve_filename(filename).read_text())
+
+
 def validate_against_pinned_schema(filename: str, data: Any) -> None:
     """Assert *data* is schema-valid against the pinned AdCP schema *filename*.
 
     Raises ``AssertionError`` listing every JSON-path violation on failure.
     """
-    schema = json.loads(_resolve_filename(filename).read_text())
+    schema = load_pinned_schema(filename)
     registry: referencing.Registry = referencing.Registry(retrieve=_retrieve)
     root_id = schema.get("$id")
     if root_id:

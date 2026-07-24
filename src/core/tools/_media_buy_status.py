@@ -1,11 +1,17 @@
-"""Shared persisted-status resolver for the two required read tools.
+"""Shared persisted-status resolver for the two required read tools and the
+status/delivery-webhook schedulers.
 
 ``get_media_buy_delivery`` and ``get_media_buys`` each map the persisted
 ``MediaBuy.status`` column onto a wire status vocabulary, refining generic
 serving states against the flight window. That map + date-refinement is ONE
 logical operation (CLAUDE.md DRY invariant), so it lives here once instead of
 being mirrored in two modules where the copies drifted (delivery dropped
-unmapped rows; list showed them).
+unmapped rows; list showed them). The background schedulers
+consume the derived sets below — the status scheduler
+(``media_buy_status_scheduler.py``) selects ``SERVING_PERSISTED_STATUSES`` and
+the delivery scheduler (``delivery_webhook_scheduler.py``) selects it plus
+recent persisted ``completed`` rows — so their persisted-column queries can
+never drift from what the read tools report as serving.
 
 Canonical output vocabulary — the media-buy lifecycle taxonomy plus the
 delivery-only terminal ``failed``::
@@ -13,12 +19,16 @@ delivery-only terminal ``failed``::
     pending_creatives, pending_start, active, paused, completed,
     rejected, canceled, failed
 
-(``get-media-buy-delivery-response.json`` status enum; AdCP spec 3.1.0-beta.3.)
+(``get-media-buy-delivery-response.json`` status enum; AdCP spec 3.1.1. The
+pinned schema copy is tagged ``v3.1-04f59d2d5``; the delivery-response contract
+this module grounds — the status enum plus the webhook-only fields — is
+byte-identical in AdCP 3.1.1, so every ``@ v3.1-04f59d2d5`` reference below cites
+the pinned commit whose shape 3.1.1 preserves, not an older spec version.)
 The two callers adapt this single result to their own surface:
 
 - ``get_media_buy_delivery`` uses the canonical string directly and overlays
-  the webhook-only ``reporting_delayed`` when the reporting circuit breaker is
-  open.
+  ``reporting_delayed`` when the reporting circuit breaker is open (the schema
+  admits it on any surface; it is not restricted to webhook deliveries).
 - ``get_media_buys`` collapses ``failed`` to ``rejected`` (the lifecycle enum
   has no ``failed``) and converts to ``MediaBuyStatus``.
 
@@ -39,6 +49,7 @@ clock, a further legitimate divergence.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from datetime import date
 from typing import Any
 
@@ -53,6 +64,12 @@ logger = logging.getLogger(__name__)
 # the flight window". These resolve to CANONICAL_SERVING and are then
 # date-refined (pending_start before flight, active within, completed after).
 CANONICAL_SERVING = "active"
+
+# Canonical status for a flight that has ended. A serving buy is date-refined to
+# this once ``now`` passes the flight window; it is the one terminal status that
+# still carries delivery data (so it, with CANONICAL_SERVING, is what the
+# delivery impl reports on — see REPORTABLE_CANONICAL_STATUSES).
+CANONICAL_COMPLETED = "completed"
 
 # Terminal / explicit lifecycle decisions. These are authoritative and are
 # NEVER re-derived from flight dates — a canceled buy inside its flight window
@@ -117,6 +134,123 @@ PERSISTED_STATUS_TO_CANONICAL: dict[str, str] = {
 # the lifecycle enum fails loudly instead of silently making a new status
 # unfilterable.
 CANONICAL_STATUSES: frozenset[str] = frozenset(PERSISTED_STATUS_TO_CANONICAL.values())
+
+# Persisted statuses that mean "this buy is (or may be) serving, subject to the
+# flight window" — everything that maps to CANONICAL_SERVING, including the
+# legacy aliases ("ready", "scheduled", "approved") still resident in
+# production rows. Derived from the map so the schedulers can never drift from
+# the read tools: the delivery webhook scheduler selects exactly this set, and
+# the status scheduler migrates the legacy aliases to "active"/"completed".
+# (Regression #1556: the schedulers hardcoded partial copies and stranded
+# legacy "ready" rows — reported active by get_media_buy_delivery but never
+# sent delivery webhooks and never migrated.)
+SERVING_PERSISTED_STATUSES: frozenset[str] = frozenset(
+    k for k, v in PERSISTED_STATUS_TO_CANONICAL.items() if v == CANONICAL_SERVING
+)
+
+# The legacy serving aliases (everything serving EXCEPT the modern "active") the
+# STATUS SCHEDULER migrates to canonical "active"/"completed" once serving —
+# purely date-gated (already approved), no creative check. Lives here beside the
+# set it derives from so the scheduler can't drift a partial copy (#1556 class);
+# membership pinned in test_media_buy_status_consistency.py.
+LEGACY_SERVING_ALIASES: frozenset[str] = SERVING_PERSISTED_STATUSES - {"active"}
+
+# Persisted pre-serving states the STATUS SCHEDULER may auto-promote to "active"
+# once the flight starts (and creatives are approved). Derived from the map (all
+# -> "pending_start") MINUS the human-approval gates that must NEVER be
+# date-promoted: "pending_approval" (awaiting seller acceptance — promoting it
+# would serve a buy the seller has not accepted) and bare "pending". The
+# subtraction is business taxonomy the map cannot encode on its own, so it is
+# spelled out here (and pinned in test_media_buy_status_consistency.py) rather
+# than hardcoded as a partial copy that could silently drift (#1556 class).
+PENDING_PERSISTED_STATUSES: frozenset[str] = frozenset(
+    k for k, v in PERSISTED_STATUS_TO_CANONICAL.items() if v == "pending_start"
+) - {"pending", "pending_approval"}
+
+# The canonical statuses the delivery impl reports on — a serving buy plus the
+# one terminal state that still carries delivery data. Used both as the delivery
+# webhook scheduler's status_filter and as its pre-send skip (a selected buy
+# resolving outside this set — pre-flight pending_start, paused — has no
+# delivery data). Lives here beside CANONICAL_SERVING/CANONICAL_COMPLETED
+# because it describes the read tool's contract, not the scheduler's.
+REPORTABLE_CANONICAL_STATUSES: frozenset[str] = frozenset({CANONICAL_SERVING, CANONICAL_COMPLETED})
+
+# The PERSISTED statuses the delivery webhook batch must SELECT — every persisted
+# value that resolves to a reportable canonical (serving OR completed). Derived
+# from the map (not a hardcoded partial copy, #1556 class) so it tracks the
+# canonical set. This MUST include persisted "completed": the status scheduler
+# flips an ended buy to persisted "completed" within ~60s, long before the hourly
+# delivery batch runs, so selecting only the serving set would drop the ended buy
+# and the spec-required FINAL webhook ("one final notification when the campaign
+# completes", optimization-reporting.mdx §Publisher Commitment) would never be
+# sent. Selecting completed too lets the batch send the final, de-duplicated on
+# a best-effort basis by DeliveryRepository.has_successful_final (a true
+# exactly-once final under concurrency/crash needs the outbox tracked in #1606).
+#
+REPORTABLE_PERSISTED_STATUSES: frozenset[str] = frozenset(
+    k for k, v in PERSISTED_STATUS_TO_CANONICAL.items() if v in REPORTABLE_CANONICAL_STATUSES
+)
+
+# The reportable-but-not-serving remainder: the PERSISTED status(es) a buy carries once
+# its flight has ended. The delivery scheduler passes BOTH halves of REPORTABLE into
+# MediaBuyRepository.get_reportable_for_delivery, so the entire selection derives from
+# PERSISTED_STATUS_TO_CANONICAL and neither arm can drift a partial copy (#1556).
+#
+# PERSISTED, not canonical: the query filters MediaBuy.status, which holds a map KEY.
+# CANONICAL_COMPLETED is a map VALUE (the wire status, pinned to the SDK enum). The two
+# read as "completed" today only because the map has an identity row for it — filtering
+# the column by the canonical constant would silently select nothing the day a persisted
+# key is renamed. Membership is pinned in test_media_buy_status_consistency.py.
+COMPLETED_PERSISTED_STATUSES: frozenset[str] = REPORTABLE_PERSISTED_STATUSES - SERVING_PERSISTED_STATUSES
+
+# The FIVE webhook-only response fields — every field whose schema description
+# says "only present in webhook deliveries" (get-media-buy-delivery-response.json
+# @ v3.1-04f59d2d5): notification_type, sequence_number, next_expected_at,
+# partial_data, and unavailable_count (the latter further scoped to
+# "when partial_data is true"). The polling _get_media_buy_delivery_impl must
+# omit all of them; on the polling-response path the delivery webhook scheduler
+# is the only place they are attached to the wire (#1570). NOT a repo-wide sole
+# emitter: webhook_delivery_service.send_delivery_webhook (GAM reporting,
+# delivery simulator) attaches its own notification_type / sequence_number /
+# next_expected_at from an in-memory counter rather than the WebhookDeliveryLog.
+# That emitter IS graded by the shared next_expected_at oracle, but not by the
+# omission or pairing ones — reconciliation tracked in #1624. Membership is
+# pinned in test_media_buy_status_consistency.py so a partial copy cannot drift
+# silently.
+WEBHOOK_ONLY_FIELDS: frozenset[str] = frozenset(
+    {"notification_type", "sequence_number", "next_expected_at", "partial_data", "unavailable_count"}
+)
+
+
+def derive_notification_type(statuses: Iterable[str]) -> str | None:
+    """Derive the webhook ``notification_type`` from the reported buy statuses.
+
+    "final" when every returned buy is in a state that will never produce more
+    data (completed, rejected, canceled, failed — NOT paused, which may
+    resume), "scheduled" otherwise, ``None`` when there are no buys. Deriving
+    from NO_MORE_DATA_STATUSES instead of a hardcoded "completed" keeps a
+    rejected/canceled/failed buy from being promised a next report that will
+    never come (next_expected_at is "only present ... when notification_type
+    is not 'final'" per get-media-buy-delivery-response.json @ v3.1-04f59d2d5).
+
+    Webhook-path only (#1570): the spec scopes notification_type to webhook
+    deliveries ("only present in webhook deliveries"), so the polling
+    ``_get_media_buy_delivery_impl`` must NOT call this — the delivery webhook
+    scheduler applies it when decorating the response for the wire.
+
+    UNGRADED: the schema/storyboard describe "final" narrowly as "the campaign
+    completes" (optimization-reporting.mdx §Publisher Commitment). Extending
+    "final" to the other no-more-data terminals (rejected / canceled / failed)
+    is our reading of the same "no next_expected_at when no more data"
+    invariant, not a directly graded conformance step — no storyboard exercises
+    a rejected/canceled/failed buy's notification_type.
+    """
+    status_list = list(statuses)  # materialize once (the param may be a one-shot iterable)
+    if not status_list:
+        return None
+    if all(s in NO_MORE_DATA_STATUSES for s in status_list):
+        return "final"
+    return "scheduled"
 
 
 def resolve_canonical_status(buy: Any, reference_date: date, *, simulate: bool = False) -> str:

@@ -9,6 +9,23 @@ upstream adcp repo ships constantly and `/schemas/latest` drifts; we deliberatel
 NOT track it. The commit is immutable on GitHub, so the schemas are vendored here
 (committed) — the alignment test reads them offline and never fetches `/schemas/latest`.
 
+Content note: this pin PREDATES the `v3.1.1` release the repo targets (adcp==6.6.0 ->
+3.1.1) and its content is NOT equivalent to it. Verified 2026-07-22: 70 of the 244
+vendored files differ in CONTENT from `v3.1.1`, measured against `static/schemas/source`
+at that tag — the same base this script vendors from. (Against `dist/schemas/3.1.1/` all
+244 additionally differ on the `/schemas/3.1.1/` version segment that `dist` adds to
+`$id`/`$ref`; normalizing it reproduces the same 70.) The 70 include
+`enums/error-code.json` — 64 vendored codes vs 92 released, exactly 28 missing, 0 extra —
+and every `media-buy/*` file (9 of 9);
+`get-media-buy-delivery-response.json` lacks the `media_buy_deliveries[]` fields
+`is_final` / `finalized_at` / `windows` and the `core/protocol-envelope.json` `allOf`
+member. The NARROW facts that ARE byte-identical to v3.1.1 — the only ones a
+schema-grounded oracle may lean on — are that file's top-level property names,
+descriptions and `required`, plus the `media_buy_deliveries[].status` enum. Anything
+broader must be re-verified, not assumed. Re-pinning to the `v3.1.1` tag is a separate,
+reviewed refresh (the error-code additions ripple into the error-enum conformance
+guards, and `MediaBuyDeliveryData` would need the three missing fields reconciled).
+
 Layout: schema `$id`/`$ref` namespace is `/schemas/<rest>`; each is written to
 `<this dir>/<rest>` (so `/schemas/core/account-ref.json` -> `core/account-ref.json`).
 

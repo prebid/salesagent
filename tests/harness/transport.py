@@ -141,6 +141,28 @@ class TransportResult:
     def is_error(self) -> bool:
         return self.error is not None
 
+    def wire_dict(self) -> dict[str, Any]:
+        """Return the full success-path wire body as the buyer would see it.
+
+        Single source of truth for the anti-tautology guard: BDD's
+        ``wire_dict(ctx)`` (``tests/bdd/steps/_outcome_helpers.py``) delegates
+        here rather than re-implementing the rule, so an integration test and a
+        BDD scenario asserting the same wire shape share one guard instead of
+        two copies that can silently drift. A real-wire transport (a2a/mcp/rest/
+        e2e_rest) that failed to stash ``wire_response`` raises instead of
+        falling through to a re-serialized ``model_dump`` — which would
+        normalize away the exact wire-shape regression these oracles exist to
+        catch (e.g. the MCP explicit-null leak, #1570). Only IMPL legitimately
+        has no wire.
+        """
+        transport = self.envelope.get("transport")
+        if self.wire_response is None and transport != "impl":
+            raise AssertionError(f"{transport}: wire_response missing — result has no stashed wire body")
+        if self.wire_response is not None:
+            return self.wire_response
+        assert self.payload is not None, "no payload to serialize — dispatch did not succeed"
+        return self.payload.model_dump(mode="json")
+
     def assert_wire_error(
         self,
         code: str,

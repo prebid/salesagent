@@ -186,23 +186,26 @@ class DeliveryRepository:
         media_buy_id: str,
         *,
         task_type: str,
-        notification_type: str,
         since: datetime,
+        notification_type: str | None = None,
     ) -> WebhookDeliveryLog | None:
         """Find a recent successful log entry (for duplicate detection).
 
-        Used by the scheduler to check if a report was already sent.
+        Used by the scheduler to check if a report was already sent within a
+        rolling window. When ``notification_type`` is None the check spans ANY
+        notification_type (the broadened #1570 dedup — a sent "final" must also
+        suppress a re-send); pass a value to scope the check to one type.
         """
-        return self._session.scalars(
-            select(WebhookDeliveryLog).where(
-                WebhookDeliveryLog.tenant_id == self._tenant_id,
-                WebhookDeliveryLog.media_buy_id == media_buy_id,
-                WebhookDeliveryLog.task_type == task_type,
-                WebhookDeliveryLog.notification_type == notification_type,
-                WebhookDeliveryLog.status == "success",
-                WebhookDeliveryLog.created_at > since,
-            )
-        ).first()
+        stmt = select(WebhookDeliveryLog).where(
+            WebhookDeliveryLog.tenant_id == self._tenant_id,
+            WebhookDeliveryLog.media_buy_id == media_buy_id,
+            WebhookDeliveryLog.task_type == task_type,
+            WebhookDeliveryLog.status == "success",
+            WebhookDeliveryLog.created_at > since,
+        )
+        if notification_type is not None:
+            stmt = stmt.where(WebhookDeliveryLog.notification_type == notification_type)
+        return self._session.scalars(stmt).first()
 
     def get_max_sequence_number(
         self,
@@ -210,18 +213,48 @@ class DeliveryRepository:
         *,
         task_type: str,
     ) -> int:
-        """Get the maximum sequence number for a media buy's delivery logs.
+        """Get the maximum successfully-delivered sequence number for a media buy.
 
-        Returns 0 if no logs exist (caller should add 1 for the next sequence).
+        Only ``status == "success"`` rows count: failed/retrying sends also
+        record the sequence they attempted, and counting those would burn
+        numbers the buyer never received — the wire contract is a strictly
+        increasing sequence that "starts at 1".
+
+        Returns 0 if no successful logs exist (caller should add 1 for the
+        next sequence).
         """
         result = self._session.scalar(
             select(func.coalesce(func.max(WebhookDeliveryLog.sequence_number), 0)).where(
                 WebhookDeliveryLog.tenant_id == self._tenant_id,
                 WebhookDeliveryLog.media_buy_id == media_buy_id,
                 WebhookDeliveryLog.task_type == task_type,
+                WebhookDeliveryLog.status == "success",
             )
         )
         return result or 0
+
+    def has_successful_final(self, media_buy_id: str, *, task_type: str) -> bool:
+        """Whether a successful FINAL delivery webhook has already been logged for this buy.
+
+        Backs the delivery scheduler's BEST-EFFORT final de-duplication: the spec
+        promises "one final notification when the campaign completes"
+        (optimization-reporting.mdx §Publisher Commitment), and because the status
+        scheduler flips an ended buy to persisted "completed" within ~60s — before
+        the hourly delivery batch — the batch selects completed buys and skips the
+        final when this returns True (no time window; independent of the 24h
+        "scheduled" dedup). This is a READ-only check, so it does NOT by itself
+        guarantee exactly-once under concurrent workers or a crash between a
+        successful POST and the log write — that needs an atomic reserve / outbox
+        (#1606).
+        """
+        stmt = select(WebhookDeliveryLog.id).where(
+            WebhookDeliveryLog.tenant_id == self._tenant_id,
+            WebhookDeliveryLog.media_buy_id == media_buy_id,
+            WebhookDeliveryLog.task_type == task_type,
+            WebhookDeliveryLog.status == "success",
+            WebhookDeliveryLog.notification_type == "final",
+        )
+        return self._session.scalars(stmt).first() is not None
 
     # ------------------------------------------------------------------
     # WebhookDeliveryLog writes

@@ -25,10 +25,12 @@ from tests.e2e.adcp_request_builder import (
 )
 from tests.e2e.utils import (
     force_approve_media_buy_in_db,
+    force_complete_media_buy_in_db,
     make_mcp_client,
     set_live_adapter_behavior,
     wait_for_server_readiness,
 )
+from tests.helpers.delivery_assertions import assert_next_expected_at_shape, assert_partial_data_pairing
 
 
 class DeliveryWebhookReceiver(WebhookCaptureHandler):
@@ -229,4 +231,37 @@ class TestDailyDeliveryWebhookFlow:
                 assert result.get("notification_type") == "scheduled", (
                     f"Expected notification_type 'scheduled', got {result.get('notification_type')}"
                 )
-                assert "next_expected_at" in result, "Missing next_expected_at in result"
+                # Shared rule (shape, not mere presence) so the e2e wire grader cannot
+                # drift from the BDD/integration ones.
+                assert_next_expected_at_shape(result, present=True, context="scheduled webhook (real e2e wire)")
+                assert_partial_data_pairing(result, context="scheduled webhook (real e2e wire)")
+
+            # 6. Final webhook on completion — grade the `final` derivation on the REAL wire.
+            # Drive the buy to terminal `completed` (what the status scheduler writes when a
+            # flight ends). The next scheduler batch resolves it to canonical `completed` and
+            # sends the FINAL notification. The prior `scheduled` send does NOT dedup this:
+            # the final gate keys only on a prior SUCCESSFUL `final` (has_successful_final),
+            # of which there is none. AdCP 3.1.1 requires `next_expected_at` be OMITTED (not
+            # null) for `final`, so this asserts real-wire omission — the headline behavior.
+            force_complete_media_buy_in_db(live_server, media_buy_id)
+
+            def _final_webhook():
+                for wh in received:
+                    if (wh.get("result") or {}).get("notification_type") == "final":
+                        return wh
+                return None
+
+            elapsed = 0
+            while elapsed < timeout_seconds and _final_webhook() is None:
+                sleep(poll_interval)
+                elapsed += poll_interval
+
+            final_webhook = _final_webhook()
+            assert final_webhook is not None, (
+                "Expected a FINAL delivery webhook after the buy completed. "
+                f"Captured notification_types: {[(w.get('result') or {}).get('notification_type') for w in received]}"
+            )
+            assert final_webhook.get("task_id") == media_buy_id
+            final_result = final_webhook.get("result") or {}
+            assert_next_expected_at_shape(final_result, present=False, context="final webhook (real e2e wire)")
+            assert_partial_data_pairing(final_result, context="final webhook (real e2e wire)")

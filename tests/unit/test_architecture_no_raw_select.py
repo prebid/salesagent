@@ -325,7 +325,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/background_sync_service.py", "_update_sync_progress"),
     ("src/services/background_sync_service.py", "start_inventory_sync_background"),
     ("src/services/delivery_simulator.py", "restart_active_simulations"),
-    ("src/services/delivery_webhook_scheduler.py", "_send_report_for_media_buy"),
     ("src/services/dynamic_pricing_service.py", "_calculate_product_pricing"),
     ("src/services/dynamic_products.py", "archive_expired_variants"),
     ("src/services/dynamic_products.py", "generate_variants_for_brief"),

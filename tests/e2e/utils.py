@@ -107,6 +107,33 @@ def set_live_adapter_behavior(live_server: dict, *, tenant_subdomain: str = "ci-
         return set_adapter_test_behavior(env, tenant.tenant_id, **behavior)
 
 
+def force_complete_media_buy_in_db(live_server: dict, media_buy_id: str):
+    """Force a media buy to persisted ``completed`` on the live e2e DB.
+
+    Drives the buy to the terminal ``completed`` status the status scheduler would
+    otherwise write when a flight ends — so the delivery webhook scheduler's next
+    batch resolves it to canonical ``completed`` and sends the spec-required FINAL
+    notification (``notification_type == "final"``, ``next_expected_at`` omitted).
+    ``completed`` is terminal, so ``resolve_canonical_status`` returns it verbatim
+    (no date refinement needed); the write bumps ``updated_at`` so the buy falls
+    inside the completed-selection recency horizon. Fails loud if the buy is absent.
+    """
+    from src.core.database.models import MediaBuy
+    from src.core.tools._media_buy_status import COMPLETED_PERSISTED_STATUSES
+
+    # Derived, not a re-typed "completed": this must stay the same persisted status the
+    # delivery scheduler's completed arm selects, or the FINAL webhook is never sent.
+    (completed_status,) = sorted(COMPLETED_PERSISTED_STATUSES)
+
+    with live_db_env(live_server) as env:
+        session = env.get_session()
+        buy = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy_id)).first()
+        if buy is None:
+            raise RuntimeError(f"media buy {media_buy_id!r} not found in the live e2e DB")
+        buy.status = completed_status
+        session.commit()
+
+
 def wait_for_server_readiness(mcp_url: str, timeout: int = 60):
     """
     Wait for the MCP server to become ready by checking its health endpoint.

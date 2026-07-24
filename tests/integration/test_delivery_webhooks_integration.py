@@ -7,7 +7,7 @@ These tests:
 """
 
 from datetime import UTC, datetime, time, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
 from freezegun import freeze_time
@@ -24,7 +24,16 @@ from src.core.database.models import (
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.testing_hooks import AdCPTestContext
+from src.core.tools._media_buy_status import SERVING_PERSISTED_STATUSES
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+from tests.harness.delivery_poll import mock_webhook_post
+from tests.helpers.delivery_assertions import (
+    DetachedPushConfigMatcher,
+    assert_detached_push_config,
+    assert_next_expected_at_shape,
+    assert_partial_data_pairing,
+)
+from tests.helpers.delivery_fixtures import DAILY_REPORTING_WEBHOOK, SIGNED_DAILY_REPORTING_WEBHOOK
 
 
 def _create_test_tenant_and_principal(ad_server: str | None = None) -> tuple[str, str]:
@@ -65,8 +74,13 @@ def _create_basic_media_buy_with_webhook(
     principal_id: str,
     start_date=None,
     end_date=None,
+    reporting_webhook: dict | None = None,
 ) -> str:
     """Create a minimal tenant/principal/media_buy with a daily reporting_webhook.
+
+    ``reporting_webhook`` defaults to the shared unsigned daily config; pass
+    ``SIGNED_DAILY_REPORTING_WEBHOOK`` to exercise the signed arm (the scheduler
+    then carries its credentials into the push config handed to the sender).
 
     Returns:
         (tenant_id, principal_id, media_buy_id)
@@ -114,10 +128,9 @@ def _create_basic_media_buy_with_webhook(
             status="active",
             raw_request={
                 "packages": [{"product_id": product.product_id, "pricing_option_id": pricing_option.id}],
-                "reporting_webhook": {
-                    "url": "https://example.com/webhook",  # outbound HTTP will be mocked
-                    "frequency": "daily",
-                },
+                # Shared daily webhook config (outbound HTTP is mocked). This file's flight
+                # windows are bespoke boundary dates, NOT the flight_window named-phase taxonomy.
+                "reporting_webhook": dict(reporting_webhook or DAILY_REPORTING_WEBHOOK),
             },
         )
 
@@ -227,11 +240,28 @@ async def test_delivery_webhook_sends_for_fresh_data(integration_db):
         assert extracted_media_buy_id == media_buy_id
         assert result is not None
         assert result.get("notification_type") == "scheduled"
-        assert result.get("next_expected_at") is not None
-        assert result.get("partial_data") is False
-        assert result.get("unavailable_count") == 0
+        # Shared rule (shape, not mere presence) — a date-only or empty-string
+        # regression slips past `is not None`.
+        assert_next_expected_at_shape(result, present=True, context="scheduled webhook wire")
+        assert_partial_data_pairing(result, context="scheduled webhook wire")
         assert result.get("reporting_period") is not None
         assert result.get("errors") is None
+
+        # The principal registered no push config for this URL, so the scheduler
+        # took the fallback arm (PushNotificationConfigRepository.build_detached).
+        # Pin what that carrier hands the sender — it was previously extracted
+        # into a local and never asserted, so a dropped field was invisible here.
+        # Unsigned webhook -> no credentials invented along the way.
+        assert_detached_push_config(
+            push_notification_config,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            url=DAILY_REPORTING_WEBHOOK["url"],
+            config_id=f"temp_{media_buy_id}",
+            authentication_type=None,
+            authentication_token=None,
+            context="unsigned scheduler carrier",
+        )
 
         yesterday = datetime.now(UTC).date() - timedelta(days=1)
 
@@ -239,6 +269,88 @@ async def test_delivery_webhook_sends_for_fresh_data(integration_db):
         expected_end_date = (datetime.combine(yesterday, time.max)).isoformat()
 
         assert len(result.get("media_buy_deliveries")) == 1
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_signed_reporting_webhook_carries_credentials_into_the_push_config(integration_db):
+    """A signed reporting_webhook's credentials reach the sender's push config.
+
+    The principal has no registered push config for this URL, so the scheduler
+    takes the fallback arm and builds a transient carrier. That carrier's
+    ``authentication_token`` becomes the outbound ``Authorization`` header, so it
+    is the only thing standing between a signed webhook and an unsigned one —
+    and no delivery fixture exercised the signed arm before this test.
+    """
+    tenant_id, principal_id = _create_test_tenant_and_principal()
+    media_buy_id = _create_basic_media_buy_with_webhook(
+        tenant_id,
+        principal_id,
+        reporting_webhook=SIGNED_DAILY_REPORTING_WEBHOOK,
+    )
+
+    scheduler = DeliveryWebhookScheduler()
+
+    with patch.object(
+        scheduler.webhook_service,
+        "send_notification",
+        new_callable=AsyncMock,
+        return_value=True,
+    ) as mock_send_notification:
+        await scheduler._send_reports()
+
+        # Count and config identity checked together: a count-less read of
+        # .await_args would ship a regressed duplicate send green as long as
+        # the LAST call still carried the right config. Concrete literals, not
+        # re-derived from the fixture: the scheme->authentication_type and
+        # credentials->authentication_token mapping is exactly what's graded.
+        mock_send_notification.assert_awaited_once_with(
+            push_notification_config=DetachedPushConfigMatcher(
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+                url="https://example.com/webhook",
+                config_id=f"temp_{media_buy_id}",
+                authentication_type="Bearer",
+                authentication_token="test-webhook-credential",
+            ),
+            payload=ANY,
+            metadata=ANY,
+        )
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+async def test_signed_reporting_webhook_puts_a_bearer_header_on_the_wire(integration_db):
+    """The carrier's credentials become a real outbound ``Authorization`` header.
+
+    The sibling test above stops at the config object handed to ``send_notification``;
+    this one lets ``send_notification`` run for real and mocks only the HTTP POST, so
+    the last hop — ``authentication_type == "Bearer"`` selecting the Bearer arm in
+    ``protocol_webhook_service.send_notification`` — is graded rather than assumed.
+    Without this, disabling that arm entirely left the whole delivery suite green
+    while every signed webhook shipped unauthenticated.
+
+    The header casing is load-bearing: the scheme is stored verbatim from
+    ``reporting_webhook["authentication"]["schemes"][0]``, and the spec enum value is
+    ``"Bearer"``, so a reader comparing a lowercased literal never matches.
+    """
+    tenant_id, principal_id = _create_test_tenant_and_principal()
+    _create_basic_media_buy_with_webhook(
+        tenant_id,
+        principal_id,
+        reporting_webhook=SIGNED_DAILY_REPORTING_WEBHOOK,
+    )
+
+    scheduler = DeliveryWebhookScheduler()
+
+    with mock_webhook_post(scheduler) as mock_post:
+        await scheduler._send_reports()
+
+        assert mock_post.call_count == 1
+        headers = mock_post.call_args.kwargs["headers"]
+        assert headers.get("Authorization") == "Bearer test-webhook-credential", (
+            f"signed reporting_webhook must produce a Bearer Authorization header, got {headers!r}"
+        )
 
 
 @pytest.mark.requires_db
@@ -307,7 +419,14 @@ async def test_delivery_webhook_sends_gam_based_reporting_data_only_on_gam_avail
 @pytest.mark.requires_db
 @pytest.mark.asyncio
 async def test_dont_call_get_media_buy_delivery_tool_unless_media_buy_start_date_passed(integration_db):
-    """Test that we handle media buys with future start dates gracefully (empty delivery)."""
+    """A pre-flight buy is skipped before the delivery impl is ever invoked.
+
+    The status-only selection also matches pre-flight rows ("scheduled" is what
+    admin approval writes for future-dated buys). Asking the impl for them
+    produced an hourly MEDIA_BUY_NOT_FOUND advisory for a buy that exists and
+    counted the early return as a sent report — the scheduler now resolves the
+    canonical status itself and skips anything outside the reportable set.
+    """
     tenant_id, principal_id = _create_test_tenant_and_principal()
 
     # Start date is tomorrow
@@ -318,18 +437,12 @@ async def test_dont_call_get_media_buy_delivery_tool_unless_media_buy_start_date
 
     scheduler = DeliveryWebhookScheduler()
 
-    async def fake_send_notification(*args, **kwargs):
-        return True
-
-    with patch.object(scheduler.webhook_service, "send_notification", new_callable=AsyncMock) as mock_send:
+    with patch.object(scheduler, "_send_report_for_media_buy", new_callable=AsyncMock) as mock_send:
         await scheduler._send_reports()
 
-        # Should send a webhook (since status=active in DB) but with empty deliveries (since dynamic status=ready)
-        if mock_send.call_count > 0:
-            args, kwargs = mock_send.call_args
-            payload = kwargs.get("payload")
-            result = payload.result
-            assert len(result.get("media_buy_deliveries", [])) == 0
+    assert mock_send.await_count == 0, (
+        "pre-flight buy (dynamic status pending_start) must be skipped without invoking the delivery path"
+    )
 
 
 @pytest.mark.requires_db
@@ -453,3 +566,47 @@ async def test_scheduler_uses_simulated_path_in_testing_mode(integration_db):
         # Verify simulator was called (proof that testing_ctx.dry_run was respected)
         assert mock_sim.called
         assert mock_send.call_count == 1
+
+
+@pytest.mark.requires_db
+@pytest.mark.asyncio
+@pytest.mark.parametrize("persisted_status", sorted(SERVING_PERSISTED_STATUSES))
+async def test_serving_persisted_status_is_selected_for_delivery_webhook(integration_db, persisted_status):
+    """Every serving persisted status — legacy aliases included — is selected for webhooks.
+
+    Regression #1556: the scheduler queried a hardcoded ["active", "approved"],
+    so a legacy mid-flight "ready" (or "scheduled") row with a configured
+    reporting_webhook was reported active by get_media_buy_delivery yet never
+    received scheduled delivery webhooks. The query must select exactly the
+    serving set derived from the canonical status map.
+    """
+    from tests.factories import MediaBuyFactory
+    from tests.harness._base import IntegrationEnv
+
+    with IntegrationEnv(tenant_id="t_1556", principal_id="p_1556") as env:
+        tenant, principal = env.setup_default_data()
+        buy = MediaBuyFactory(
+            tenant=tenant,
+            principal=principal,
+            media_buy_id=f"mb_1556_{persisted_status}",
+            status=persisted_status,  # legacy alias, mid-flight
+            start_date=datetime.now(UTC).date() - timedelta(days=7),
+            end_date=datetime.now(UTC).date() + timedelta(days=7),
+            raw_request={
+                # Shared webhook config; the ±7d window here is a bespoke boundary, not a named phase.
+                "reporting_webhook": dict(DAILY_REPORTING_WEBHOOK),
+            },
+        )
+
+        scheduler = DeliveryWebhookScheduler()
+        with patch.object(scheduler, "_send_report_for_media_buy", new_callable=AsyncMock) as mock_send:
+            await scheduler._send_reports()
+
+        # One atomic assertion: the scheduler awaited _send_report_for_media_buy
+        # exactly once, and for this buy. Asserting the list of awaited-arg
+        # media_buy_ids pins both the count and the argument together (a split
+        # call_count + call_args check slips past test_architecture_weak_mock_assertions).
+        assert [c.args[0].media_buy_id for c in mock_send.await_args_list] == [buy.media_buy_id], (
+            f"persisted status {persisted_status!r} with a reporting_webhook must be selected "
+            f"exactly once by the delivery webhook scheduler (awaited: {mock_send.await_args_list!r})"
+        )

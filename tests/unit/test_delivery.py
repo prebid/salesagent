@@ -32,7 +32,6 @@ import pytest
 from adcp.types import MediaBuyStatus
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
-from src.core.helpers import enum_value
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
@@ -45,6 +44,7 @@ from src.core.schemas import (
     ReportingPeriod,
 )
 from src.core.testing_hooks import AdCPTestContext
+from src.core.tools._media_buy_status import derive_notification_type
 from src.core.tools.media_buy_delivery import (
     _get_media_buy_delivery_impl,
     get_media_buy_delivery,
@@ -52,6 +52,7 @@ from src.core.tools.media_buy_delivery import (
 )
 from src.services.webhook_delivery_service import CircuitBreaker, CircuitState, WebhookDeliveryService
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
+from tests.helpers.delivery_assertions import assert_next_expected_at_shape, assert_omits_webhook_only_fields
 
 # ---------------------------------------------------------------------------
 # Fixtures (shared across all test classes)
@@ -1808,7 +1809,7 @@ class TestDeliveryWebhookHappyPath:
         # Verify the payload passed to _send_webhook_enhanced includes next_expected_at
         call_kwargs = mock_send.call_args[1]
         payload = call_kwargs["delivery_payload"]
-        assert "next_expected_at" in payload
+        assert_next_expected_at_shape(payload, present=True, context="scheduled webhook payload")
         assert payload["notification_type"] == "scheduled"
 
     def test_hmac_sha256_signature_headers(self):
@@ -2343,11 +2344,54 @@ class TestNotificationTypeTerminality:
     present ... when notification_type is not 'final'"
     (get-media-buy-delivery-response.json @ v3.1-04f59d2d5).
 
+    Since #1570 the derivation lives in the shared ``derive_notification_type``
+    helper, applied only on the webhook path (the delivery webhook scheduler) —
+    the spec scopes notification_type to webhook deliveries, so the polling
+    response no longer carries it. The #1552 invariant is pinned here against
+    the helper directly; the poll-path absence is pinned below.
+
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING
     """
 
-    @staticmethod
-    def _poll_single(status: str) -> GetMediaBuyDeliveryResponse:
+    @pytest.mark.parametrize("status", ["rejected", "canceled", "failed", "completed"])
+    def test_no_more_data_status_is_final(self, status):
+        """Every no-more-data terminal — not just completed — derives 'final'."""
+        assert derive_notification_type([status]) == "final"
+
+    def test_paused_buy_still_schedules_a_next_report(self):
+        """paused is terminal for date-refinement but NOT for notifications —
+        a paused buy may resume, so the next scheduled report is a truthful
+        promise."""
+        assert derive_notification_type(["paused"]) == "scheduled"
+
+    def test_mixed_terminal_and_active_is_scheduled(self):
+        """One buy that will still report keeps the notification non-final."""
+        assert derive_notification_type(["canceled", "active"]) == "scheduled"
+
+    def test_all_terminal_mix_is_final(self):
+        """completed + canceled together: nothing will report again -> final."""
+        assert derive_notification_type(["completed", "canceled"]) == "final"
+
+    def test_no_buys_derives_none(self):
+        """No reported buys -> no notification_type at all."""
+        assert derive_notification_type([]) is None
+
+
+class TestPollingResponseOmitsWebhookOnlyFields:
+    """The polling response never carries the webhook-only metadata fields.
+
+    Spec (#1570): notification_type, sequence_number and next_expected_at are
+    "only present in webhook deliveries" (get-media-buy-delivery-response.json
+    @ v3.1-04f59d2d5) — the delivery webhook scheduler attaches them when
+    decorating the response for the webhook wire; the synchronous poll must
+    not emit them on any transport.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING
+    """
+
+    @pytest.mark.parametrize("status", ["active", "completed", "rejected", "paused"])
+    def test_poll_response_omits_webhook_only_fields(self, status):
+        """Regardless of buy status — even all-terminal — the poll omits all three."""
         buy = _make_mock_media_buy(
             media_buy_id=f"mb_{status}",
             status=status,
@@ -2357,89 +2401,19 @@ class TestNotificationTypeTerminality:
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(media_buy_id=f"mb_{status}")
         req = GetMediaBuyDeliveryRequest(media_buy_ids=[f"mb_{status}"])
-        return _run_impl_with_patches(req, adapter=mock_adapter, target_buys=[(f"mb_{status}", buy)])
+        response = _run_impl_with_patches(req, adapter=mock_adapter, target_buys=[(f"mb_{status}", buy)])
 
-    @pytest.mark.parametrize("status", ["rejected", "canceled", "failed", "completed"])
-    def test_no_more_data_status_is_final_with_no_next_expected_at(self, status):
-        response = self._poll_single(status)
-
-        assert enum_value(response.media_buy_deliveries[0].status) == status
-        assert enum_value(response.notification_type) == "final"
+        assert response.notification_type is None
+        assert response.sequence_number is None
         assert response.next_expected_at is None
 
-    def test_paused_buy_still_schedules_a_next_report(self):
-        """paused is terminal for date-refinement but NOT for notifications —
-        a paused buy may resume, so the next scheduled report is a truthful
-        promise."""
-        response = self._poll_single("paused")
-
-        assert enum_value(response.media_buy_deliveries[0].status) == "paused"
-        assert enum_value(response.notification_type) == "scheduled"
-        assert response.next_expected_at is not None
-
-    def test_mixed_terminal_and_active_is_scheduled(self):
-        """One buy that will still report keeps the response non-final."""
-        buy_done = _make_mock_media_buy(
-            media_buy_id="mb_done",
-            status="canceled",
-            start_date=date(2025, 1, 1),
-            end_date=date(2025, 12, 31),
-        )
-        buy_live = _make_mock_media_buy(
-            media_buy_id="mb_live",
-            status="active",
-            start_date=date(2025, 1, 1),
-            end_date=date(2027, 12, 31),
-        )
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.side_effect = [
-            _make_adapter_response(media_buy_id="mb_done"),
-            _make_adapter_response(media_buy_id="mb_live"),
-        ]
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_done", "mb_live"])
-
-        response = _run_impl_with_patches(
-            req,
-            adapter=mock_adapter,
-            target_buys=[("mb_done", buy_done), ("mb_live", buy_live)],
-        )
-
-        assert enum_value(response.notification_type) == "scheduled"
-        assert response.next_expected_at is not None
-
-    def test_all_terminal_mix_is_final(self):
-        """completed + canceled together: nothing will report again -> final."""
-        buy_a = _make_mock_media_buy(
-            media_buy_id="mb_a",
-            status="completed",
-            start_date=date(2025, 1, 1),
-            end_date=date(2025, 3, 31),
-        )
-        buy_b = _make_mock_media_buy(
-            media_buy_id="mb_b",
-            status="canceled",
-            start_date=date(2025, 1, 1),
-            end_date=date(2025, 3, 31),
-        )
-        mock_adapter = MagicMock()
-        mock_adapter.get_media_buy_delivery.side_effect = [
-            _make_adapter_response(media_buy_id="mb_a"),
-            _make_adapter_response(media_buy_id="mb_b"),
-        ]
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_a", "mb_b"])
-
-        response = _run_impl_with_patches(
-            req,
-            adapter=mock_adapter,
-            target_buys=[("mb_a", buy_a), ("mb_b", buy_b)],
-        )
-
-        assert enum_value(response.notification_type) == "final"
-        assert response.next_expected_at is None
+        # Serialized wire omits ALL webhook-only fields — via the shared oracle backed by
+        # WEBHOOK_ONLY_FIELDS, so a 4th field added there is enforced here automatically.
+        assert_omits_webhook_only_fields(response.model_dump(mode="json"), context="polling impl")
 
 
 class TestTimeSimulationReachesFinalNotification:
-    """A time-simulation client can advance a non-serving buy to completed/final.
+    """A time-simulation client can advance a non-serving buy to completed.
 
     Regression (finding #3): honoring the persisted lifecycle short-circuited
     date refinement, so a buy created as pending_creatives (creation hardcodes
@@ -2447,10 +2421,14 @@ class TestTimeSimulationReachesFinalNotification:
     the "final" delivery notification was unreachable. In simulation mode
     (mock_time / jump_to_event) a non-terminal buy follows the simulated clock.
 
+    Since #1570 the "final" notification itself is webhook-only (the scheduler
+    derives it from these statuses via derive_notification_type); the poll
+    pins the simulated *status* and the absence of the webhook-only fields.
+
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING
     """
 
-    def test_simulated_clock_past_flight_yields_completed_and_final(self):
+    def test_simulated_clock_past_flight_yields_completed(self):
         buy = _make_mock_media_buy(
             media_buy_id="mb_sim",
             status="pending_creatives",
@@ -2472,7 +2450,10 @@ class TestTimeSimulationReachesFinalNotification:
         )
 
         assert response.media_buy_deliveries[0].status == "completed"
-        assert enum_value(response.notification_type) == "final"
+        # The status feeds the webhook path's "final" derivation (pinned once by
+        # test_no_more_data_status_is_final); the poll itself carries NONE of the
+        # webhook-only fields (#1570) — enforced via the shared full-set oracle.
+        assert_omits_webhook_only_fields(response.model_dump(mode="json"), context="simulated-clock poll")
 
     def test_mid_flight_mock_time_via_from_headers_does_not_raise(self):
         """A mid-flight X-Mock-Time through the real header boundary succeeds.
@@ -2505,7 +2486,7 @@ class TestTimeSimulationReachesFinalNotification:
         )
 
         assert response.media_buy_deliveries[0].status == "active"
-        assert enum_value(response.notification_type) == "scheduled"
+        assert_omits_webhook_only_fields(response.model_dump(mode="json"), context="mock-time poll")
 
     def test_jump_to_event_only_does_not_raise(self):
         """jump_to_event with no mock_time hits the real hook without a TypeError.
@@ -2554,3 +2535,32 @@ class TestTimeSimulationReachesFinalNotification:
         )
 
         assert response.media_buy_deliveries[0].status == "pending_creatives"
+
+
+class TestFinalWebhookSchedulingInvariants:
+    """Pin the timing relationships the final-webhook machinery depends on.
+
+    The completed-selection horizon (which bounds the hourly batch's scan of
+    persisted-"completed" buys) must dwarf both the claim lease — so a
+    stale-lease recovery always happens while the buy is still selected — and
+    the batch interval, so the status scheduler's ~60s completed-flip is always
+    caught by a later batch even across restarts. Shrinking the horizon below
+    either bound would silently strand finals.
+    """
+
+    def test_completed_horizon_dwarfs_lease_and_batch_interval(self):
+        from datetime import timedelta
+
+        from src.services.delivery_webhook_scheduler import (
+            FINAL_WEBHOOK_CLAIM_LEASE,
+            FINAL_WEBHOOK_COMPLETED_HORIZON,
+        )
+
+        assert FINAL_WEBHOOK_COMPLETED_HORIZON >= 10 * FINAL_WEBHOOK_CLAIM_LEASE
+        # Bind to the SHIPPED default cadence, not the env-resolved SLEEP_INTERVAL_SECONDS:
+        # test runs export DELIVERY_WEBHOOK_INTERVAL=5, which would collapse this bound to
+        # seconds and make the invariant vacuous. FINAL_WEBHOOK_COMPLETED_HORIZON is not
+        # env-configurable, so it is pinned against the constant, not the resolved value.
+        from src.services.delivery_webhook_scheduler import DEFAULT_SLEEP_INTERVAL_SECONDS
+
+        assert FINAL_WEBHOOK_COMPLETED_HORIZON >= 24 * timedelta(seconds=DEFAULT_SLEEP_INTERVAL_SECONDS)

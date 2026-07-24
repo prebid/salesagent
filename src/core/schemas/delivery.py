@@ -82,7 +82,7 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
 
     # account, reporting_dimensions, attribution_window, time_granularity,
     # include_window_breakdown, include_package_daily_breakdown: all now provided
-    # by adcp SDK 5.7 (spec 3.1.0-beta.3). No local redeclarations needed.
+    # by adcp SDK 6.6.0 (spec 3.1.1). No local redeclarations needed.
 
 
 # ---------------------------------------------------------------------------
@@ -326,17 +326,14 @@ class GetMediaBuyDeliveryResponse(NestedModelSerializerMixin, LibraryGetMediaBuy
         ..., description="Array of delivery data for each media buy"
     )
 
-    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
-        """Override to ensure webhook metadata fields are present when notification_type is set.
-
-        The base AdCPBaseModel excludes None values, but the AdCP protocol requires
-        next_expected_at to be explicitly present (as null) when notification_type
-        is 'final' so consumers know no further reports are expected.
-        """
-        result = super().model_dump(**kwargs)
-        if self.notification_type is not None and "next_expected_at" not in result:
-            result["next_expected_at"] = None
-        return result
+    # NOTE: next_expected_at is deliberately OMITTED (not serialized as an
+    # explicit null) when unset — the base model's exclude-None handles it. The
+    # spec pins the field as a non-nullable date-time "only present in webhook
+    # deliveries when notification_type is not 'final'"
+    # (get-media-buy-delivery-response.json @ v3.1-04f59d2d5), so a final
+    # webhook carrying "next_expected_at": null would fail a strict buyer's
+    # schema validation. A prior model_dump override here injected that null,
+    # citing a spec requirement the spec does not contain.
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""

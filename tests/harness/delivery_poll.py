@@ -24,11 +24,61 @@ Available mocks via env.mock:
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.core.schemas import AdapterGetMediaBuyDeliveryResponse, GetMediaBuyDeliveryResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import DeliveryPollMixin
+
+if TYPE_CHECKING:  # annotations only — keeps the harness import graph unchanged at runtime
+    from src.core.database.models import MediaBuy
+    from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+
+
+@contextmanager
+def mock_webhook_post(scheduler: DeliveryWebhookScheduler) -> Iterator[MagicMock]:
+    """Stub a scheduler's outbound webhook POST with a 200 success response.
+
+    Single source of truth for the mocked-POST shape every delivery-webhook
+    integration test needs (CLAUDE.md DRY invariant — ``send_delivery_webhook``
+    and ``run_delivery_batch`` share it instead of each building the
+    ``MagicMock(status_code=200, ...)`` + ``patch.object(..._session, "post", ...)``
+    pair). Reaches into
+    ``webhook_service._session`` (private) because that is the only seam where
+    the serialized outbound body is observable; if the service ever swaps its
+    HTTP client this AttributeErrors loudly rather than silently no-op'ing.
+    Everything above the HTTP call (delivery impl, derivation, sequence,
+    serialization, the atomic final claim) runs for real.
+
+    Yields the ``mock_post`` patch object so callers can assert on
+    ``call_count`` / ``call_args_list`` after driving one or more sends.
+    """
+    mock_response = MagicMock(status_code=200, text="OK")
+    mock_response.raise_for_status.return_value = None
+    with patch.object(scheduler.webhook_service._session, "post", return_value=mock_response) as mock_post:
+        yield mock_post
+
+
+@contextmanager
+def mock_send_notification(scheduler: DeliveryWebhookScheduler, *, delivered: bool = True) -> Iterator[AsyncMock]:
+    """Stub a scheduler's ``webhook_service.send_notification`` with a fixed outcome.
+
+    Single source of truth for the mocked-``send_notification`` shape the claim/dedup
+    integration tests need (CLAUDE.md DRY invariant — they were each hand-rolling the
+    identical ``patch.object(..., new_callable=AsyncMock, return_value=<bool>)``). This
+    is one seam ABOVE ``mock_webhook_post``: it short-circuits the whole send (payload
+    build, POST, delivery-log write) with a boolean, where ``delivered=False`` models a
+    permanent failure that makes ``_deliver_report`` raise ``RuntimeError``.
+
+    Yields the ``AsyncMock`` so callers keep ``await_count`` / ``assert_not_awaited()``.
+    """
+    with patch.object(
+        scheduler.webhook_service, "send_notification", new_callable=AsyncMock, return_value=delivered
+    ) as mock_send:
+        yield mock_send
 
 
 class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
@@ -83,3 +133,42 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
     def parse_rest_response(self, data: dict[str, Any]) -> GetMediaBuyDeliveryResponse:
         """Parse REST JSON into GetMediaBuyDeliveryResponse."""
         return GetMediaBuyDeliveryResponse(**data)
+
+    async def send_delivery_webhook(self, buy: MediaBuy) -> dict[str, Any]:
+        """Force one delivery-webhook scheduler send for ``buy``; return the wire payload.
+
+        Drives the REAL scheduler path (``_send_report_for_media_buy`` with
+        ``force=True``) — delivery impl, sequence computation from
+        WebhookDeliveryLog, payload serialization — mocking only the outbound
+        HTTP POST. Returns the JSON body the buyer's webhook would receive
+        (the webhook-only fields notification_type / sequence_number /
+        next_expected_at live under ``result``; #1570).
+
+        ``buy.raw_request`` must contain a ``reporting_webhook`` config.
+        """
+        from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+
+        scheduler = DeliveryWebhookScheduler()
+        with mock_webhook_post(scheduler) as mock_post:
+            await scheduler._send_report_for_media_buy(
+                buy, buy.raw_request["reporting_webhook"], self.get_session(), force=True
+            )
+        assert mock_post.call_count == 1, "scheduler must send exactly one webhook"
+        return mock_post.call_args.kwargs["json"]
+
+    async def run_delivery_batch(self) -> list[dict[str, Any]]:
+        """Run one REAL delivery-webhook batch (``_send_reports``); return the wire bodies sent.
+
+        Drives the cross-tenant batch — selection, per-buy dedup gate, delivery
+        impl, serialization — mocking only the outbound HTTP POST. Returns one
+        JSON body per webhook actually sent (empty when the batch sends nothing),
+        so a test can assert both the count and each wire ``result`` (the
+        webhook-only fields live under ``result``; #1570) without hand-rolling a
+        mock in the test body.
+        """
+        from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+
+        scheduler = DeliveryWebhookScheduler()
+        with mock_webhook_post(scheduler) as mock_post:
+            await scheduler._send_reports()
+        return [call.kwargs["json"] for call in mock_post.call_args_list]

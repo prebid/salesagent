@@ -15,15 +15,195 @@ Each test targets exactly one obligation ID and follows the 6 hard rules:
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
+from typing import TYPE_CHECKING, Any, cast
+from unittest.mock import ANY
 
 import pytest
+from sqlalchemy import inspect
 
 from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPValidationError,
 )
 from src.core.schemas import GetMediaBuyDeliveryResponse
+from tests.harness.delivery_poll import mock_send_notification
+from tests.helpers.delivery_assertions import (
+    assert_next_expected_at_shape,
+    assert_omits_webhook_only_fields,
+    assert_partial_data_pairing,
+)
+from tests.helpers.delivery_fixtures import DAILY_REPORTING_WEBHOOK, flight_window
+
+if TYPE_CHECKING:  # annotations only — the helpers below keep their lazy runtime imports
+    import threading
+    from collections.abc import Callable
+
+    from sqlalchemy.orm import Session
+
+    from src.core.database.models import MediaBuy
+    from src.core.database.repositories.delivery import DeliveryRepository
+    from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+    from tests.harness.delivery_poll import DeliveryPollEnv
+
+# ---------------------------------------------------------------------------
+# Webhook-path coverage for UC-004-ALT-WEBHOOK-PUSH-REPORTING
+#
+# The webhook-only fields (notification_type / sequence_number /
+# next_expected_at) are attached by the delivery webhook scheduler, not the
+# polling impl (#1570: "only present in webhook deliveries" —
+# get-media-buy-delivery-response.json @ v3.1-04f59d2d5). The tests below
+# drive a real scheduler send via DeliveryPollEnv.send_delivery_webhook()
+# (only the outbound HTTP POST is mocked), asserting on the actual wire body
+# the buyer's webhook would receive.
+# ---------------------------------------------------------------------------
+
+
+def _serving_webhook_buy(
+    env: DeliveryPollEnv,
+    *,
+    flight: str = "live",
+    mb_id: str | None = None,
+    tenant: Any = None,
+    principal: Any = None,
+) -> Any:
+    """Create a serving buy (tenant t1 / principal p1) with a daily reporting_webhook + adapter data.
+
+    ``flight`` selects the window so the scheduler derives the right
+    notification_type: "live" -> in-flight (resolves "active" -> "scheduled");
+    "completed" -> flight ended (date-refines to "completed" -> "final"). The
+    phase→window taxonomy lives once in ``flight_window`` (tests/helpers) so this
+    and the BDD fixture cannot diverge under the same phase name.
+    Pass ``tenant``/``principal`` to reuse them across multiple buys in one env
+    (a second TenantFactory("t1") would collide on the primary key). Returns the
+    MediaBuy; the adapter response is registered for its id.
+    """
+    from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+
+    if tenant is None:
+        tenant = TenantFactory(tenant_id="t1")
+    if principal is None:
+        principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+    start_date, end_date = flight_window(flight)
+    kwargs = {
+        "tenant": tenant,
+        "principal": principal,
+        "status": "active",
+        "start_date": start_date,
+        "end_date": end_date,
+        # Shared daily webhook config; copied to avoid aliasing the shared dict into ORM state.
+        "raw_request": {"reporting_webhook": dict(DAILY_REPORTING_WEBHOOK)},
+    }
+    if mb_id is not None:
+        kwargs["media_buy_id"] = mb_id
+    buy = cast("MediaBuy", MediaBuyFactory(**kwargs))
+    env.set_adapter_response(buy.media_buy_id, impressions=5000)
+    return buy
+
+
+def _seed_delivery_log(
+    env: DeliveryPollEnv,
+    buy: MediaBuy,
+    *,
+    log_id: str,
+    status: str,
+    notification_type: str | None = None,
+    sequence_number: int | None = None,
+) -> DeliveryRepository:
+    """Seed one delivery-log row for *buy* (tenant t1 / principal p1) and commit it.
+
+    The seed SHAPE lives here once — the webhook-url source, ``task_type``, and the
+    tenant/principal pair — so a column rename or a newly required field is a single
+    edit instead of a parallel one at every dedup/sequence test. Callers pass only
+    what distinguishes their row. Returns the repository so a caller can keep
+    querying it (e.g. ``get_max_sequence_number``).
+    """
+    from src.core.database.repositories.delivery import DeliveryRepository
+
+    optional: dict[str, Any] = {}
+    if notification_type is not None:
+        optional["notification_type"] = notification_type
+    if sequence_number is not None:
+        optional["sequence_number"] = sequence_number
+
+    session = env.get_session()
+    repo = DeliveryRepository(session, "t1")
+    repo.create_log(
+        log_id=log_id,
+        principal_id="p1",
+        media_buy_id=buy.media_buy_id,
+        webhook_url=DAILY_REPORTING_WEBHOOK["url"],
+        task_type="media_buy_delivery",
+        status=status,
+        **optional,
+    )
+    session.commit()
+    return repo
+
+
+async def _drive_failed_send(scheduler: DeliveryWebhookScheduler, env: DeliveryPollEnv, buy: MediaBuy) -> None:
+    """Drive one forced send whose outbound delivery fails, asserting the scheduler raises.
+
+    ``send_notification`` returns False (never raises) on a permanent 4xx / exhausted
+    retries — the buyer never received the webhook, so the scheduler must NOT log a
+    "Sent"; it raises and the batch counts an error. The raise-message contract and the
+    ``_send_report_for_media_buy`` call shape live here once, so a signature or message
+    change is a single edit; callers keep only their own post-assertions.
+    """
+    with mock_send_notification(scheduler, delivered=False):
+        with pytest.raises(RuntimeError, match="webhook send failed"):
+            await scheduler._send_report_for_media_buy(
+                buy, buy.raw_request["reporting_webhook"], env.get_session(), force=True
+            )
+
+
+def _race_two_workers(worker: Callable[[Session, threading.Barrier], bool]) -> list[bool]:
+    """Run ``worker(session, barrier)`` on two OS threads released together, return both bools.
+
+    Single source of truth for the two-connection contention scaffold the concurrent
+    claim/entrypoint tests share (CLAUDE.md DRY invariant — each was re-implementing the
+    same ``threading.Barrier(2)`` + per-thread ``Session(bind=get_engine())`` + join-with-
+    timeout + exception-surfacing). The barrier is passed INTO the worker so each test
+    keeps its own release point (claim-after-release vs load-then-race-the-send). Owns the
+    session lifecycle and asserts no worker raised; callers supply a one-line worker plus
+    the shared ``assert sorted(results) == [False, True]``.
+    """
+    import threading
+
+    from sqlalchemy.orm import Session
+
+    from src.core.database.database_session import get_engine
+
+    engine = get_engine()
+    barrier = threading.Barrier(2)
+    results: list[bool] = [False, False]
+    errors: list[BaseException] = []
+
+    def _run(index: int) -> None:
+        session = Session(bind=engine)
+        try:
+            results[index] = worker(session, barrier)
+        except BaseException as exc:  # surfaced via `errors` for the assertion below
+            errors.append(exc)
+        finally:
+            session.close()
+
+    threads = [threading.Thread(target=_run, args=(i,), daemon=True) for i in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    # A worker that never returns must FAIL, not be read as a lost race: without this a
+    # deadlock (the exact hazard these tests exist to catch) leaves results=[False, False]
+    # / a stale call_count and every downstream assertion still passes. daemon=True above
+    # keeps a hung thread from wedging the interpreter at exit.
+    assert not [t for t in threads if t.is_alive()], (
+        f"worker thread(s) did not finish within the 10s join timeout; errors so far: {errors}"
+    )
+    assert not errors, f"worker thread(s) raised: {errors}"
+    return results
+
 
 # ---------------------------------------------------------------------------
 # UC-004-ALT-WEBHOOK-PUSH-REPORTING-03
@@ -32,34 +212,29 @@ from src.core.schemas import GetMediaBuyDeliveryResponse
 
 @pytest.mark.requires_db
 class TestWebhookNotificationTypeScheduled:
-    """Normal periodic delivery sets notification_type to 'scheduled'.
+    """Normal periodic webhook delivery sets notification_type to 'scheduled'.
 
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-03
     """
 
-    def test_periodic_delivery_sets_scheduled_type(self, integration_db):
-        """Normal periodic delivery should auto-set notification_type to 'scheduled'.
+    @pytest.mark.asyncio
+    async def test_periodic_webhook_sets_scheduled_type_and_poll_omits_it(self, integration_db):
+        """The webhook wire carries notification_type='scheduled'; the poll omits it.
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-03
         """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            buy = MediaBuyFactory(
-                tenant=tenant,
-                principal=principal,
-                start_date=date(2026, 1, 1),
-                end_date=date(2026, 12, 31),
-            )
-            env.set_adapter_response(buy.media_buy_id, impressions=5000)
+            buy = _serving_webhook_buy(env)
 
+            wire = await env.send_delivery_webhook(buy)
+            assert wire["result"]["notification_type"] == "scheduled"
+
+            # The synchronous poll for the same buy carries none of the
+            # webhook-only fields (#1570).
             response = env.call_impl(media_buy_ids=[buy.media_buy_id])
-
-            dumped = response.model_dump(mode="json")
-            assert dumped["notification_type"] == "scheduled"
+            assert_omits_webhook_only_fields(response.model_dump(mode="json"), context="scheduled webhook poll")
 
 
 # ---------------------------------------------------------------------------
@@ -69,53 +244,57 @@ class TestWebhookNotificationTypeScheduled:
 
 @pytest.mark.requires_db
 class TestWebhookNotificationTypeFinal:
-    """Completed campaign sets notification_type to 'final' with no next_expected_at.
+    """Completed campaign's webhook is 'final' and OMITS next_expected_at.
 
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
     """
 
-    def test_completed_campaign_sets_final_type(self, integration_db):
-        """Completed campaign should set notification_type='final' and omit next_expected_at.
+    @pytest.mark.asyncio
+    async def test_completed_campaign_webhook_is_final(self, integration_db):
+        """A flight-ended buy's webhook carries notification_type='final' with
+        next_expected_at omitted from the wire body (spec: the field is a
+        non-nullable date-time "only present in webhook deliveries when
+        notification_type is not 'final'" — an explicit null would fail a
+        strict buyer's schema validation).
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
         """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            buy = MediaBuyFactory(
-                tenant=tenant,
-                principal=principal,
-                # Was serving; flight ended -> date-refined to "completed"
-                status="active",
-                start_date=date(2025, 1, 1),
-                end_date=date(2025, 6, 30),
-            )
-            env.set_adapter_response(buy.media_buy_id, impressions=5000)
+            # Was serving; flight ended -> date-refines to "completed" -> "final".
+            buy = _serving_webhook_buy(env, flight="completed")
 
+            wire = await env.send_delivery_webhook(buy)
+
+            assert wire["result"]["notification_type"] == "final"
+            assert_next_expected_at_shape(wire["result"], present=False, context="final webhook wire")
+            assert_partial_data_pairing(wire["result"], context="final webhook wire")
+
+            # The poll for the same completed buy reports the status but no
+            # webhook metadata (#1570).
             response = env.call_impl(media_buy_ids=[buy.media_buy_id])
-
             dumped = response.model_dump(mode="json")
-            assert dumped["notification_type"] == "final"
-            assert dumped["next_expected_at"] is None
+            assert dumped["media_buy_deliveries"][0]["status"] == "completed"
+            assert_omits_webhook_only_fields(dumped, context="final webhook poll")
 
 
 @pytest.mark.requires_db
 class TestSimulationReachesFinalThroughRealHook:
-    """A time-simulation client advancing the clock past flight end reaches 'final'.
+    """A time-simulation client advancing the clock past flight end reaches 'completed'.
 
     Exercises the FULL mock_time path through the real apply_testing_hooks — the
     branch that previously built naive campaign_info datetimes and raised
     TypeError against the aware simulated clock (#1545 K1), and the status-filter
     path that must agree with the reported status (#1545 O2). A pending_creatives
-    buy under mock_time past flight end must report 'completed' + 'final'.
+    buy under mock_time past flight end must report 'completed' — the status that
+    feeds the webhook path's 'final' derivation. The webhook-only fields
+    themselves never appear on this polling response (#1570).
 
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
     """
 
-    def test_mock_time_past_flight_reaches_completed_and_final(self, integration_db):
+    def test_mock_time_past_flight_reaches_completed(self, integration_db):
         from src.core.testing_hooks import AdCPTestContext
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
@@ -144,11 +323,10 @@ class TestSimulationReachesFinalThroughRealHook:
 
             dumped = response.model_dump(mode="json")
             assert dumped["media_buy_deliveries"][0]["status"] == "completed"
-            assert dumped["notification_type"] == "final"
-            assert dumped["next_expected_at"] is None
+            assert_omits_webhook_only_fields(dumped, context="mock-time completed poll")
 
-    def test_mock_time_in_flight_reports_active_and_scheduled(self, integration_db):
-        """The in-flight companion: simulated clock inside the window -> active/scheduled."""
+    def test_mock_time_in_flight_reports_active(self, integration_db):
+        """The in-flight companion: simulated clock inside the window -> active."""
         from src.core.testing_hooks import AdCPTestContext
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
@@ -175,8 +353,386 @@ class TestSimulationReachesFinalThroughRealHook:
 
             dumped = response.model_dump(mode="json")
             assert dumped["media_buy_deliveries"][0]["status"] == "active"
-            assert dumped["notification_type"] == "scheduled"
-            assert dumped["next_expected_at"] is not None
+            assert_omits_webhook_only_fields(dumped, context="mock-time active poll")
+
+
+@pytest.mark.requires_db
+class TestFinalWebhookSurvivesStatusHandoff:
+    """The spec-required FINAL webhook survives the status-scheduler -> delivery-batch handoff.
+
+    Regression (#1575 blocker): the media-buy status scheduler flips an ended buy
+    to persisted "completed" on its 60s cadence, long before the hourly delivery
+    batch. When the delivery batch selected only the serving persisted set, the
+    just-completed buy was dropped and its FINAL delivery webhook ("one final
+    notification when the campaign completes" — optimization-reporting.mdx
+    §Publisher Commitment) was never sent. This drives the REAL lifecycle path —
+    the status scheduler THEN the delivery batch — and asserts one "final" wire
+    webhook, not re-sent by a subsequent batch (best-effort dedup; a true
+    exactly-once final under concurrent workers / crash is deferred to #1606).
+    Prior "final" tests seeded an active row with a past flight or called the send
+    helper directly, bypassing this handoff.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
+    """
+
+    @pytest.mark.asyncio
+    async def test_final_sent_once_after_status_scheduler_marks_completed(self, integration_db):
+        from src.services.media_buy_status_scheduler import MediaBuyStatusScheduler
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            # A serving buy (persisted "active") whose flight has ENDED.
+            buy = _serving_webhook_buy(env, flight="completed")
+            mb_id = buy.media_buy_id
+
+            # 1) Status scheduler runs first (its real transition), flipping the
+            #    ended buy to persisted "completed" — the exact state that used to
+            #    make the hourly delivery batch drop it.
+            await MediaBuyStatusScheduler()._update_statuses()
+            session = env.get_session()
+            session.expire(buy)
+            assert buy.status == "completed", "status scheduler must flip the ended buy to persisted completed"
+
+            # 2) The delivery batch runs for real (only the outbound POST is mocked,
+            #    inside the harness). The just-completed buy must still get a webhook,
+            #    and it must be the "final".
+            wires = await env.run_delivery_batch()
+            assert len(wires) == 1, "the just-completed buy must still receive a delivery webhook"
+            assert wires[0]["result"]["notification_type"] == "final"
+            assert wires[0]["result"]["media_buy_deliveries"][0]["media_buy_id"] == mb_id
+            # Schema: aggregated_totals is "Only included in API responses
+            # (get_media_buy_delivery), not in webhook notifications".
+            assert "aggregated_totals" not in wires[0]["result"], (
+                "webhook bodies must exclude the polling-only aggregated_totals"
+            )
+
+            # 3) A subsequent batch does NOT re-send the final (best-effort per-buy gate).
+            assert await env.run_delivery_batch() == [], "the delivered final must not be re-sent by a later batch"
+
+
+@pytest.mark.requires_db
+class TestForceDoesNotDuplicateDeliveredFinal:
+    """A manual (force=True) trigger must NOT re-send a final that was already delivered.
+
+    ``force`` bypasses the frequency + 24h "scheduled" dedup so an operator can
+    re-send a fresh periodic report — but it must NOT bypass the final-ever gate,
+    or a manual re-trigger of a completed buy would put a DUPLICATE final (with a
+    fresh sequence) on the wire. The gate keys on a *successful* final, so a retry
+    after a FAILED final still goes through. (This is best-effort; a true
+    exactly-once final under concurrent workers / crash is deferred to #1606.)
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
+    """
+
+    @pytest.mark.asyncio
+    async def test_manual_force_trigger_skips_when_final_already_delivered(self, integration_db):
+        from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            # An ended buy -> resolves to canonical "completed" -> its report is a final.
+            buy = _serving_webhook_buy(env, flight="completed")
+
+            # A final was already SUCCESSFULLY delivered for this buy.
+            _seed_delivery_log(env, buy, log_id="prior-final-success", status="success", notification_type="final")
+
+            # Manual trigger uses force=True; the final-ever gate must still fire.
+            scheduler = DeliveryWebhookScheduler()
+            with mock_send_notification(scheduler, delivered=True) as mock_send:
+                delivered = await scheduler.trigger_report_for_media_buy_by_id(buy.media_buy_id, "t1")
+
+            assert delivered is False, "a manual force trigger must not re-send an already-delivered final"
+            mock_send.assert_not_awaited()
+
+
+@pytest.mark.requires_db
+class TestConcurrentFinalWebhookClaim:
+    """The final webhook is serialized across concurrent workers by an atomic claim.
+
+    Two workers that both observe "no final logged" must not both send: the first to
+    win the conditional-UPDATE claim sends, the loser skips — proven here with two
+    OS threads racing the SAME claim (and, separately, the SAME public entrypoint)
+    via a ``threading.Barrier`` so the contention genuinely overlaps, not just two
+    sequential sessions. A stale claim (crashed worker) self-heals; a definitive
+    failure/no-send RELEASES the claim so an immediate retry isn't blocked for the
+    lease. This closes the concurrency duplicate (#1575); the crash-after-POST
+    window remains and is deferred to #1606.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
+    """
+
+    @pytest.mark.asyncio
+    async def test_fresh_claim_held_by_another_worker_blocks_the_batch(self, integration_db):
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            buy = _serving_webhook_buy(env, flight="completed")
+            # Simulate a concurrent worker that claimed the final moments ago.
+            session = env.get_session()
+            buy.final_webhook_claimed_at = datetime.now(UTC)
+            session.commit()
+
+            assert await env.run_delivery_batch() == [], "a fresh claim held by another worker must block the send"
+
+    @pytest.mark.asyncio
+    async def test_stale_claim_is_reclaimed_and_final_sent(self, integration_db):
+        from src.services.delivery_webhook_scheduler import FINAL_WEBHOOK_CLAIM_LEASE
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            buy = _serving_webhook_buy(env, flight="completed")
+            # A crashed worker's claim, older than the lease -> reclaimable.
+            session = env.get_session()
+            buy.final_webhook_claimed_at = datetime.now(UTC) - FINAL_WEBHOOK_CLAIM_LEASE - timedelta(minutes=1)
+            session.commit()
+
+            wires = await env.run_delivery_batch()
+            assert len(wires) == 1, "a stale claim must be reclaimed so the final is not stranded"
+            assert wires[0]["result"]["notification_type"] == "final"
+
+    def test_concurrent_claim_attempts_exactly_one_winner(self, integration_db):
+        """Genuine overlapping contention: two OS threads race the SAME conditional UPDATE.
+
+        Unlike a sequential same-row check, this uses a ``threading.Barrier`` to release
+        two threads — each holding its own SQLAlchemy session/connection — at (as close
+        as achievable) the same instant, so their UPDATEs genuinely overlap in Postgres.
+        Whichever arrives first takes the row lock; the second BLOCKS on that lock, and
+        once the first commits, Postgres re-evaluates the second's WHERE predicate against
+        the now-committed row (EvalPlanQual "first updater wins") — it no longer matches
+        (claimed_at is neither NULL nor stale), so it updates 0 rows and loses. This holds
+        regardless of which thread happens to arrive first; the property under test is
+        that EXACTLY ONE thread ever wins, never zero and never two.
+        """
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            buy = _serving_webhook_buy(env, flight="completed")
+            mb_id = buy.media_buy_id
+            env.get_session().commit()  # ensure the buy is visible to other connections
+
+            now = datetime.now(UTC)
+            cutoff = now - timedelta(minutes=15)
+
+            def worker(session: Session, barrier: threading.Barrier) -> bool:
+                barrier.wait(timeout=5)  # release both threads together
+                won = MediaBuyRepository(session, "t1").try_claim_final_webhook(mb_id, now=now, stale_before=cutoff)
+                session.commit()
+                return won
+
+            results = _race_two_workers(worker)
+            assert sorted(results) == [False, True], (
+                f"exactly one of two genuinely concurrent threads must win the claim, got {results}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_concurrent_entrypoints_produce_exactly_one_webhook(self, integration_db):
+        """Two real scheduler/manual entrypoints racing the SAME buy produce exactly one POST.
+
+        Drives the actual public entrypoint (``_send_report_for_media_buy``, the method
+        both the hourly batch and the manual trigger call) from two OS threads — each with
+        its own event loop, DB session, and freshly loaded MediaBuy row — released together
+        via a ``threading.Barrier`` so the calls genuinely overlap. Only the outbound HTTP
+        POST is mocked (shared across both threads, same scheduler instance). Asserts the
+        webhook was sent exactly once and exactly one thread's call reports success.
+        """
+        import asyncio
+
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+        from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+        from tests.harness import DeliveryPollEnv
+        from tests.harness.delivery_poll import mock_webhook_post
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            buy = _serving_webhook_buy(env, flight="completed")
+            mb_id = buy.media_buy_id
+            reporting_webhook = dict(buy.raw_request["reporting_webhook"])
+            env.get_session().commit()  # ensure the buy is visible to other connections/threads
+
+            scheduler = DeliveryWebhookScheduler()  # shared instance -> shared webhook_service
+
+            def worker(session: Session, barrier: threading.Barrier) -> bool:
+                # Load the row BEFORE the barrier so both threads race the SEND, not the fetch.
+                media_buy = MediaBuyRepository(session, "t1").get_by_id(mb_id)
+                barrier.wait(timeout=5)  # release both threads together
+                return asyncio.run(
+                    scheduler._send_report_for_media_buy(media_buy, reporting_webhook, session, force=True)
+                )
+
+            with mock_webhook_post(scheduler) as mock_post:
+                results = _race_two_workers(worker)
+
+            assert mock_post.call_count == 1, (
+                f"two concurrent entrypoints racing the same buy must produce exactly one outbound "
+                f"webhook, got {mock_post.call_count}"
+            )
+            assert sorted(results) == [False, True], f"exactly one entrypoint call must report success, got {results}"
+
+    def test_claim_and_release_bump_updated_at(self, integration_db):
+        """The horizon's liveness rests on claim/release bumping ``updated_at`` — pin it.
+
+        get_reportable_for_delivery bounds the completed arm by ``updated_at``; the
+        no-strand-mid-retry property holds ONLY because the claim UPDATE and the
+        release UPDATE fire the column's ``onupdate`` (Core updates included). If a
+        change ever sets ``updated_at`` explicitly in those .values() or reroutes
+        them around SQLAlchemy, a retrying buy silently ages out at the horizon and
+        its final is stranded — with every other test green. This reddens instead.
+        """
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            buy = _serving_webhook_buy(env, flight="completed")
+            mb_id = buy.media_buy_id
+            session = env.get_session()
+            session.commit()
+            repo = MediaBuyRepository(session, "t1")
+
+            def _updated_at():
+                session.expire_all()
+                return repo.get_by_id(mb_id).updated_at
+
+            before = _updated_at()
+            now = datetime.now(UTC)
+            assert repo.try_claim_final_webhook(mb_id, now=now, stale_before=now - timedelta(minutes=15)) is True
+            session.commit()
+            after_claim = _updated_at()
+            assert after_claim > before, "the claim UPDATE must bump updated_at (horizon liveness)"
+
+            assert repo.release_final_webhook_claim(mb_id, claimed_at=now) is True
+            session.commit()
+            after_release = _updated_at()
+            assert after_release > after_claim, "the release UPDATE must bump updated_at (horizon liveness)"
+
+    @pytest.mark.asyncio
+    async def test_failed_send_releases_the_claim_for_immediate_retry(self, integration_db):
+        """A definitive send failure releases the final claim so a retry isn't blocked for the lease.
+
+        Contradicting the earlier behavior where a failed final held its claim for 15
+        minutes: the claim is now released (token-guarded) on a failed POST, so
+        ``final_webhook_claimed_at`` returns to NULL and an immediate re-claim succeeds.
+        """
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+        from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            buy = _serving_webhook_buy(env, flight="completed")
+            mb_id = buy.media_buy_id
+
+            scheduler = DeliveryWebhookScheduler()
+            await _drive_failed_send(scheduler, env, buy)
+
+            # The claim was released: the row is NULL again and immediately re-claimable.
+            session = env.get_session()
+            session.expire_all()
+            refreshed = MediaBuyRepository(session, "t1").get_by_id(mb_id)
+            assert refreshed.final_webhook_claimed_at is None, "a failed final send must release its claim"
+
+    def test_release_only_clears_own_token(self, integration_db):
+        """A's late release must NOT clear B's newer claim (the token guard's one invariant).
+
+        Sequence: worker A claims at T1; A goes silent past the lease; worker B
+        re-claims at T2 (stale takeover). A's delayed release, still holding token
+        T1, must match 0 rows — clearing B's T2 claim here would re-open the
+        concurrent-duplicate-final window the claim exists to close. Distinguishes
+        the ``== claimed_at`` predicate from a clear-any-claim (``IS NOT NULL``)
+        implementation, which every other test is blind to.
+        """
+        from src.core.database.repositories.media_buy import MediaBuyRepository
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            buy = _serving_webhook_buy(env, flight="completed")
+            mb_id = buy.media_buy_id
+            session = env.get_session()
+            repo = MediaBuyRepository(session, "t1")
+
+            t2 = datetime.now(UTC)
+            t1 = t2 - timedelta(minutes=16)  # older than the 15-min lease at t2
+
+            # A wins the fresh claim at T1.
+            assert repo.try_claim_final_webhook(mb_id, now=t1, stale_before=t1 - timedelta(minutes=15)) is True
+            # B re-claims at T2: A's T1 claim is stale by then (t1 < t2 - lease).
+            assert repo.try_claim_final_webhook(mb_id, now=t2, stale_before=t2 - timedelta(minutes=15)) is True
+
+            # A's late release with its stale token must NOT clear B's claim.
+            assert repo.release_final_webhook_claim(mb_id, claimed_at=t1) is False
+            session.expire_all()
+            assert repo.get_by_id(mb_id).final_webhook_claimed_at == t2, (
+                "a stale-token release must leave the newer owner's claim intact"
+            )
+
+    @pytest.mark.asyncio
+    async def test_ancient_completed_buys_age_out_of_selection(self, integration_db):
+        """The batch's completed arm is bounded by the updated_at recency horizon.
+
+        A completed buy last touched beyond FINAL_WEBHOOK_COMPLETED_HORIZON is not
+        selected (its would-be final would otherwise SEND — no success log exists —
+        so this reddens if the horizon is removed). A recently-touched completed buy
+        is still selected and gets its final: the bound trims the ever-growing
+        backlog without breaking the live handoff path.
+        """
+        from tests.factories import PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            session = env.get_session()
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+
+            ancient = _serving_webhook_buy(
+                env, flight="completed", mb_id="mb_ancient", tenant=tenant, principal=principal
+            )
+            # The horizon bounds the PERSISTED-"completed" arm (the serving arm is
+            # lifecycle-bounded), so persist the status-scheduler flip, backdated
+            # beyond the horizon (explicit updated_at assignment beats onupdate).
+            ancient.status = "completed"
+            ancient.updated_at = datetime.now(UTC) - timedelta(days=3)
+            session.commit()
+
+            assert await env.run_delivery_batch() == [], (
+                "a completed buy beyond the recency horizon must not be selected"
+            )
+
+            fresh = _serving_webhook_buy(env, flight="completed", mb_id="mb_fresh", tenant=tenant, principal=principal)
+            # Recently flipped to persisted "completed" (updated_at bumps to now).
+            fresh.status = "completed"
+            session.commit()
+            wires = await env.run_delivery_batch()
+            assert len(wires) == 1, "a recently-completed buy must still be selected"
+            assert wires[0]["result"]["notification_type"] == "final"
+            assert wires[0]["result"]["media_buy_deliveries"][0]["media_buy_id"] == fresh.media_buy_id
+
+    @pytest.mark.asyncio
+    async def test_batch_continues_after_midloop_final_commit(self, integration_db):
+        """The final claim's mid-loop session commit doesn't break later buys in the batch.
+
+        _claim_final_webhook commits the shared batch session (for cross-worker
+        visibility), which expires the remaining batch rows (expire_on_commit) —
+        they must lazily reload and still process correctly. Two completed buys in
+        one batch: the first final's commit happens mid-loop, and the second buy is
+        read and sent AFTER that commit. Both finals must go out.
+        """
+        from tests.factories import PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            buy_a = _serving_webhook_buy(
+                env, flight="completed", mb_id="mb_final_a", tenant=tenant, principal=principal
+            )
+            buy_b = _serving_webhook_buy(
+                env, flight="completed", mb_id="mb_final_b", tenant=tenant, principal=principal
+            )
+
+            wires = await env.run_delivery_batch()
+
+            assert len(wires) == 2, "both finals must be sent despite the mid-loop claim commits"
+            sent = {w["result"]["media_buy_deliveries"][0]["media_buy_id"] for w in wires}
+            assert sent == {buy_a.media_buy_id, buy_b.media_buy_id}
+            assert all(w["result"]["notification_type"] == "final" for w in wires)
 
 
 # ---------------------------------------------------------------------------
@@ -186,34 +742,63 @@ class TestSimulationReachesFinalThroughRealHook:
 
 @pytest.mark.requires_db
 class TestWebhookSequenceNumber:
-    """Monotonically increasing sequence_number per media buy.
+    """Monotonically increasing sequence_number per media buy on the webhook wire.
 
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-05
     """
 
-    def test_sequence_number_auto_assigned(self, integration_db):
-        """Delivery response should auto-assign sequence_number starting from 1.
+    @pytest.mark.asyncio
+    async def test_sequence_number_increments_across_webhook_sends(self, integration_db):
+        """Consecutive webhook sends carry sequence_number 1 then 2; the poll carries none.
+
+        The sequence is backed by WebhookDeliveryLog rows written by the real
+        send path (only the outbound HTTP POST is mocked), so this pins the
+        scheduler's own counter — not the poll-path counter it silently
+        inherited before #1570.
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-05
         """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            buy = MediaBuyFactory(
-                tenant=tenant,
-                principal=principal,
-                start_date=date(2026, 1, 1),
-                end_date=date(2026, 12, 31),
-            )
-            env.set_adapter_response(buy.media_buy_id, impressions=5000)
+            buy = _serving_webhook_buy(env)
 
+            first = await env.send_delivery_webhook(buy)
+            second = await env.send_delivery_webhook(buy)
+
+            assert first["result"]["sequence_number"] == 1
+            assert second["result"]["sequence_number"] == 2
+
+            # The poll never assigns a sequence (and writes no log row).
             response = env.call_impl(media_buy_ids=[buy.media_buy_id])
+            assert response.sequence_number is None
 
-            assert response.sequence_number is not None, "sequence_number should be auto-assigned"
-            assert response.sequence_number >= 1
+    @pytest.mark.asyncio
+    async def test_failed_send_does_not_consume_a_sequence_number(self, integration_db):
+        """A failed webhook attempt must not burn a sequence number.
+
+        The counter derives from SUCCESSFUL WebhookDeliveryLog rows only:
+        failed/retrying rows also record the sequence they attempted, and
+        counting them would make the buyer's first received webhook start
+        above 1 (spec: sequence_number "starts at 1", strictly increasing
+        per media buy).
+
+        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-05
+        """
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            buy = _serving_webhook_buy(env)
+
+            # A prior attempt that failed after consuming what would be seq 1.
+            repo = _seed_delivery_log(env, buy, log_id="failed-attempt-1", status="failed", sequence_number=1)
+
+            # The failed row is invisible to the counter...
+            assert repo.get_max_sequence_number(buy.media_buy_id, task_type="media_buy_delivery") == 0
+
+            # ...so the buyer's first delivered webhook still starts at 1.
+            wire = await env.send_delivery_webhook(buy)
+            assert wire["result"]["sequence_number"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -223,18 +808,232 @@ class TestWebhookSequenceNumber:
 
 @pytest.mark.requires_db
 class TestWebhookNextExpectedAt:
-    """next_expected_at computed for non-final deliveries.
+    """next_expected_at computed for non-final webhook deliveries.
 
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-06
     """
 
-    def test_next_expected_at_set_for_active_delivery(self, integration_db):
-        """Scheduled delivery for active buy should compute next_expected_at.
+    @pytest.mark.asyncio
+    async def test_next_expected_at_set_for_active_delivery_webhook(self, integration_db):
+        """A non-final webhook carries a concrete next_expected_at; the poll omits it.
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-06
         """
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            buy = _serving_webhook_buy(env)
+
+            wire = await env.send_delivery_webhook(buy)
+
+            assert wire["result"]["notification_type"] == "scheduled"
+            # Shape, not mere presence — via the shared rule so this cannot drift from
+            # the BDD/e2e graders (a date-only or empty-string regression slips past
+            # `is not None`).
+            assert_next_expected_at_shape(wire["result"], present=True, context="scheduled webhook wire")
+            assert_partial_data_pairing(wire["result"], context="scheduled webhook wire")
+
+            response = env.call_impl(media_buy_ids=[buy.media_buy_id])
+            assert response.next_expected_at is None
+
+
+# ---------------------------------------------------------------------------
+# Failed send accounting + broadened dedup (#1570 review remediation)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestFailedWebhookSendRaisesNotCountedAsSent:
+    """A failed webhook send (send_notification -> False) RAISES; the batch counts an error, not a "Sent".
+
+    Headline correctness fix (#1570/#1575): ``_send_report_for_media_buy`` returns
+    ``bool`` and raises ``RuntimeError`` when the outbound send reports failure,
+    and ``_send_reports`` increments ``reports_sent`` only on a truthy return.
+    The ``if not delivered: raise`` branch is driven through the shared
+    ``_drive_failed_send`` helper — here and in
+    ``test_failed_send_releases_the_claim_for_immediate_retry`` — so deleting the
+    branch turns both red.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
+    """
+
+    @pytest.mark.asyncio
+    async def test_failed_send_raises_runtime_error(self, integration_db):
+        """Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04"""
+        from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            buy = _serving_webhook_buy(env)
+
+            scheduler = DeliveryWebhookScheduler()
+            await _drive_failed_send(scheduler, env, buy)
+
+
+@pytest.mark.requires_db
+class TestDedupSuppressesPriorFinalWebhook:
+    """A prior successful webhook of ANY notification_type dedups the next non-forced send.
+
+    #1570 broadened the 24h dedup by dropping the ``notification_type == "scheduled"``
+    predicate: a sent "final" must ALSO suppress a re-send within the window (the
+    durable stopper is the status scheduler flipping the buy out of the serving
+    selection, not this check). Seeding a prior successful "final" log — the
+    discriminating case the old "scheduled"-only query would have missed — and
+    asserting the next non-forced send is skipped pins the broadening: re-adding
+    the "scheduled"-only predicate lets the send through and turns this red.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
+    """
+
+    @pytest.mark.asyncio
+    async def test_prior_final_success_suppresses_next_non_forced_send(self, integration_db):
+        """Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04"""
+        from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            buy = _serving_webhook_buy(env)
+
+            # A "final" webhook was already delivered inside the 24h window.
+            _seed_delivery_log(env, buy, log_id="prior-final-success", status="success", notification_type="final")
+            session = env.get_session()
+
+            scheduler = DeliveryWebhookScheduler()
+            with mock_send_notification(scheduler, delivered=True) as mock_send:
+                delivered = await scheduler._send_report_for_media_buy(
+                    buy, buy.raw_request["reporting_webhook"], session, force=False
+                )
+
+            assert delivered is False
+            mock_send.assert_not_awaited()
+
+
+@pytest.mark.requires_db
+class TestBatchContinuesPastFailedSend:
+    """A failed send does NOT abort the batch — the loop continues to the rest.
+
+    ``_send_reports`` catches a per-item failure and continues to the remaining
+    buys. Dropping the per-item try/except (delivery_webhook_scheduler.py:119-145)
+    lets the first failure propagate out of the loop, so the batch never reaches
+    the remaining buys. This drives the real batch loop (only the outbound send
+    is mocked), unlike the other tests that mock _send_report_for_media_buy or
+    check the delivery response directly.
+
+    Scope: this pins *continuation* only. The batch tally itself — that a failed
+    send increments ``errors`` rather than ``reports_sent`` — is log-only today
+    and asserted by the return-value change tracked in #1635 (make
+    ``_send_reports`` return ``(reports_sent, errors)``).
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
+    """
+
+    @pytest.mark.asyncio
+    async def test_failed_send_does_not_abort_batch(self, integration_db):
+        """Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04"""
+        from unittest.mock import AsyncMock, patch
+
+        from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+        from tests.factories import PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            for mb_id in ("mb_a", "mb_b"):
+                _serving_webhook_buy(env, mb_id=mb_id, tenant=tenant, principal=principal)
+
+            scheduler = DeliveryWebhookScheduler()
+
+            # Fail the FIRST send (whichever buy the batch reaches first) and
+            # succeed on the rest. Keying on call ORDER — not buy id — makes the
+            # assertion independent of the DB row order: whichever buy is
+            # processed first fails (the scheduler raises on a False return), and
+            # the batch must still attempt the second one.
+            calls = {"n": 0}
+
+            async def fake_send(*, push_notification_config, payload, metadata):
+                calls["n"] += 1
+                return calls["n"] != 1
+
+            with patch.object(
+                scheduler.webhook_service, "send_notification", new_callable=AsyncMock, side_effect=fake_send
+            ) as mock_send:
+                await scheduler._send_reports()
+
+            # Both buys were attempted: the first send failed and was counted as
+            # an error, but the loop continued to the second. Dropping the
+            # per-item try/except aborts after the first, leaving await_count == 1.
+            assert mock_send.await_count == 2, (
+                f"batch must attempt the second buy after the first send fails; got {mock_send.await_count} send(s)"
+            )
+
+
+@pytest.mark.requires_db
+class TestPausedBuyReceivesNoDeliveryWebhook:
+    """A paused buy is never sent a delivery report webhook by the batch.
+
+    "paused" is not in SERVING_PERSISTED_STATUSES (so ``_send_reports`` never
+    selects it) and not in REPORTABLE_CANONICAL_STATUSES (so the pre-send skip
+    at delivery_webhook_scheduler.py drops it even if reached). Either way the
+    buyer gets no report for a paused buy — pinned here through the real batch.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04
+    """
+
+    @pytest.mark.asyncio
+    async def test_paused_buy_is_not_sent(self, integration_db):
+        """Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-04"""
+        from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            # Paused, but mid-flight ("live" window) and with a reporting_webhook configured.
+            # Same shared phase→window / webhook facts as _serving_webhook_buy — this buy is
+            # paused, so it can't call that helper (which forces status="active").
+            start_date, end_date = flight_window("live")
+            buy = MediaBuyFactory(
+                tenant=tenant,
+                principal=principal,
+                status="paused",
+                start_date=start_date,
+                end_date=end_date,
+                raw_request={"reporting_webhook": dict(DAILY_REPORTING_WEBHOOK)},
+            )
+            env.set_adapter_response(buy.media_buy_id, impressions=5000)
+
+            scheduler = DeliveryWebhookScheduler()
+            with mock_send_notification(scheduler, delivered=True) as mock_send:
+                await scheduler._send_reports()
+
+            assert mock_send.await_count == 0, "a paused buy must not receive a delivery webhook"
+
+
+# ---------------------------------------------------------------------------
+# Cross-transport: poll omits webhook-only fields on every wire (#1570)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.requires_db
+class TestPollOmitsWebhookOnlyFieldsOnEveryTransport:
+    """The poll's actual wire body omits the webhook-only fields on MCP, A2A and REST.
+
+    The WEBHOOK_ONLY_FIELDS members are "only present in webhook deliveries" (spec, #1570).
+    MCP is the transport that regressed differently: fastmcp serializes
+    structured content via pydantic_core, bypassing model_dump — so before the
+    fix MCP emitted explicit nulls that A2A/REST omitted. Asserting on
+    wire_response (the real serialized body per transport) pins all three
+    transports to the same shape.
+
+    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING
+    """
+
+    def test_wire_omits_webhook_only_fields(self, integration_db):
+        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+        from tests.harness.transport import Transport
 
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
@@ -242,14 +1041,26 @@ class TestWebhookNextExpectedAt:
             buy = MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
-                start_date=date(2026, 1, 1),
-                end_date=date(2026, 12, 31),
+                status="active",
+                start_date=date(2025, 1, 1),
+                end_date=date(2027, 12, 31),
             )
             env.set_adapter_response(buy.media_buy_id, impressions=5000)
 
-            response = env.call_impl(media_buy_ids=[buy.media_buy_id])
-
-            assert response.next_expected_at is not None, "next_expected_at must be set for non-final delivery"
+            for transport in [Transport.MCP, Transport.A2A, Transport.REST, Transport.IMPL]:
+                result = env.call_via(transport, media_buy_ids=[buy.media_buy_id])
+                assert result.is_success, f"{transport}: {result.error}"
+                # result.wire_dict() owns the anti-tautology guard (only IMPL
+                # legitimately has no wire; MCP/A2A/REST require the real stashed
+                # body, or this raises rather than silently reserializing the
+                # parsed model and normalizing away the exact wire-shape
+                # regression this test exists to catch) — the same rule BDD's
+                # wire_dict(ctx) delegates to, so there is one guard, not two.
+                wire = result.wire_dict()
+                # Anchor: the webhook-only fields only surface alongside deliveries,
+                # so an empty-deliveries response would pass the omission check vacuously.
+                assert wire.get("media_buy_deliveries"), f"{transport}: no deliveries — omission check is vacuous"
+                assert_omits_webhook_only_fields(wire, context=str(transport))
 
 
 # ---------------------------------------------------------------------------
@@ -691,7 +1502,6 @@ class TestNoIdentifiersReturnAll:
 
         Covers: UC-004-MAIN-04
         """
-        from datetime import timedelta
 
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
@@ -737,7 +1547,6 @@ class TestNoIdentifiersReturnAll:
 
         Covers: UC-004-MAIN-04
         """
-        from datetime import timedelta
 
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
@@ -2663,7 +3472,7 @@ class TestCircuitBreakerReportingDelayed:
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
-        endpoint_key = "t1:https://example.com/webhook"
+        endpoint_key = f"t1:{DAILY_REPORTING_WEBHOOK['url']}"
         try:
             # Inject an OPEN circuit breaker into the global singleton
             cb = CircuitBreaker(failure_threshold=3)
@@ -2703,7 +3512,7 @@ class TestCircuitBreakerReportingDelayed:
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
-        endpoint_key = "t1:https://example.com/webhook"
+        endpoint_key = f"t1:{DAILY_REPORTING_WEBHOOK['url']}"
         try:
             cb = CircuitBreaker(failure_threshold=3)
             assert cb.state == CircuitState.CLOSED
@@ -2951,3 +3760,141 @@ class TestStartTimeFallbackForStatus:
             # The media buy should be filtered out because start_time makes it "pending_start"
             returned_ids = {d.media_buy_id for d in result.media_buy_deliveries}
             assert "mb_time" not in returned_ids
+
+
+# ---------------------------------------------------------------------------
+# Push-config lookup arm — the sibling of build_detached
+# ---------------------------------------------------------------------------
+
+
+class _PushConfigMatcher:
+    """Matcher pinning the push config passed to the sender, by identity + credential.
+
+    A count-less ``.await_args`` read can't tell a single correct send from a
+    second, duplicate send with the same last call — this pairs with an
+    ``assert_awaited_once_with`` so count and argument shape are verified
+    together, the same atomic-assertion shape this file already uses via
+    ``_MediaBuyIdMatcher``/``_SessionMatcher`` in test_delivery_webhooks_force.py.
+    """
+
+    def __init__(self, config_id: str, authentication_token: str | None) -> None:
+        self._config_id = config_id
+        self._authentication_token = authentication_token
+
+    def __eq__(self, other: object) -> bool:
+        from src.core.database.models import PushNotificationConfig
+
+        return (
+            isinstance(other, PushNotificationConfig)
+            and other.id == self._config_id
+            and other.authentication_token == self._authentication_token
+        )
+
+    def __repr__(self) -> str:
+        return f"PushNotificationConfig(id={self._config_id!r}, authentication_token={self._authentication_token!r})"
+
+
+@pytest.mark.requires_db
+class TestRegisteredPushConfigLookup:
+    """The lookup arm of the scheduler's push-config decision.
+
+    ``build_detached`` (the fallback arm) is graded by the repository unit test and
+    the signed/unsigned scheduler integration tests. This arm — which reads a
+    *stored* ``authentication_token`` out of the database and hands it to the
+    outbound sender — had no test at all: both its ``tenant_id`` and
+    ``principal_id`` predicates could be deleted with the whole suite still
+    green, and no test seeded a row that made the lookup return anything, so the
+    branch (including its ``session.expunge``) never executed.
+
+    The scope predicates are a credential boundary, not a filter: a cross-tenant
+    match would emit tenant A's stored bearer token to a URL supplied by tenant B's
+    media buy.
+    """
+
+    def test_lookup_is_scoped_to_the_repository_tenant(self, integration_db):
+        """A row owned by another tenant is invisible, even on an exact URL match."""
+        from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
+        from tests.factories import PrincipalFactory, PushNotificationConfigFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            owner = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=owner, principal_id="p1")
+            PushNotificationConfigFactory(
+                tenant=owner,
+                principal=principal,
+                id="cfg-owned",
+                url=DAILY_REPORTING_WEBHOOK["url"],
+                authentication_type="Bearer",
+                authentication_token="owner-secret",
+            )
+
+            session = env.get_session()
+
+            # Same principal id and same URL, but a foreign tenant scope.
+            foreign = PushNotificationConfigRepository(session, "other-tenant")
+            assert foreign.get_active_by_principal_and_url("p1", DAILY_REPORTING_WEBHOOK["url"]) is None
+
+            # Same tenant, but a principal that does not own the row.
+            other_principal = PushNotificationConfigRepository(session, "t1")
+            assert other_principal.get_active_by_principal_and_url("p2", DAILY_REPORTING_WEBHOOK["url"]) is None
+
+            # The owning (tenant, principal) pair does see it — otherwise the two
+            # assertions above would pass against a lookup that never matches.
+            found = PushNotificationConfigRepository(session, "t1").get_active_by_principal_and_url(
+                "p1", DAILY_REPORTING_WEBHOOK["url"]
+            )
+            assert found is not None
+            assert found.id == "cfg-owned"
+            assert found.authentication_token == "owner-secret"
+            # Both arms of the push-config decision hand the caller a detached
+            # carrier — the repository owns identity-map management, not the
+            # scheduler. (Detached, not transient: this row WAS in the session;
+            # build_detached's sibling carrier never was — see
+            # TestBuildDetachedIsNeverPersisted.test_instance_is_transient.)
+            assert inspect(found).detached is True
+
+    @pytest.mark.asyncio
+    async def test_scheduler_reuses_a_registered_config_instead_of_building_one(self, integration_db):
+        """With a registered config for the URL, the scheduler sends ITS credentials.
+
+        Pins the arm choice, not just the query: a registered row must win over the
+        transient carrier, so the buyer's stored token reaches the wire and the
+        scheduler does not silently substitute an unsigned config. Mutating the
+        lookup to return None reddens this.
+        """
+        from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+        from tests.factories import PrincipalFactory, PushNotificationConfigFactory, TenantFactory
+        from tests.harness import DeliveryPollEnv
+
+        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            PushNotificationConfigFactory(
+                tenant=tenant,
+                principal=principal,
+                id="cfg-registered",
+                url=DAILY_REPORTING_WEBHOOK["url"],
+                authentication_type="Bearer",
+                authentication_token="registered-secret",
+            )
+            # The buy carries an UNSIGNED reporting_webhook for the same URL, so a
+            # token on the wire can only have come from the registered row.
+            buy = _serving_webhook_buy(env, tenant=tenant, principal=principal)
+
+            scheduler = DeliveryWebhookScheduler()
+            with mock_send_notification(scheduler) as mock_send:
+                await scheduler._send_report_for_media_buy(
+                    buy, buy.raw_request["reporting_webhook"], env.get_session(), force=True
+                )
+
+            # Count and config identity checked together: a count-less read of
+            # .await_args would ship a regressed duplicate send green as long as
+            # the LAST call still carried the registered config.
+            mock_send.assert_awaited_once_with(
+                push_notification_config=_PushConfigMatcher(
+                    config_id="cfg-registered", authentication_token="registered-secret"
+                ),
+                payload=ANY,
+                metadata=ANY,
+            )

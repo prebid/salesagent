@@ -934,6 +934,13 @@ class MediaBuy(Base):
         nullable=True,
         comment="RFC 8785 JCS SHA-256 of the create request (excluded fields stripped); degraded-path IDEMPOTENCY_CONFLICT signal",
     )
+    # Best-effort atomic claim serializing the buy's one FINAL delivery webhook
+    # across concurrent scheduler/manual workers (#1575). Set by a conditional
+    # UPDATE (MediaBuyRepository.try_claim_final_webhook) before the final POST so
+    # only one worker sends; a stale claim (crashed worker) self-heals once older
+    # than the lease. NULL until a final is claimed. The residual crash-after-POST
+    # duplicate window is deferred to the durable outbox (#1606).
+    final_webhook_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     tenant = relationship("Tenant", back_populates="media_buys", overlaps="media_buys")

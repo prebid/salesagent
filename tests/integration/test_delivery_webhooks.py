@@ -1,5 +1,6 @@
 """Integration tests for delivery webhook scheduler."""
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -64,11 +65,24 @@ async def test_send_reports_no_webhooks(mock_db_session, scheduler):
 @patch("src.services.delivery_webhook_scheduler.get_db_session")
 async def test_send_reports_with_media_buys(mock_db_session, scheduler):
     """Test sending reports for media buys with webhooks."""
-    # Setup mock media buys
+
+    # Setup mock media buys. The scheduler resolves each buy's canonical
+    # status before sending (pre-flight/paused buys are skipped), so the
+    # mocks need real status/flight/pause attributes — bare Mock attributes
+    # are truthy and would resolve as "paused".
+    def _make_serving_buy_attrs(mock_buy):
+        mock_buy.status = "active"
+        mock_buy.start_date = datetime.now(UTC).date() - timedelta(days=7)
+        mock_buy.end_date = datetime.now(UTC).date() + timedelta(days=7)
+        mock_buy.start_time = None
+        mock_buy.end_time = None
+        mock_buy.is_paused = False
+
     mock_media_buy_1 = Mock()
     mock_media_buy_1.media_buy_id = "mb_1"
     mock_media_buy_1.tenant_id = "tenant_1"
     mock_media_buy_1.principal_id = "principal_1"
+    _make_serving_buy_attrs(mock_media_buy_1)
     mock_media_buy_1.raw_request = {
         "reporting_webhook": {
             "url": "https://example.com/webhook1",
@@ -84,6 +98,7 @@ async def test_send_reports_with_media_buys(mock_db_session, scheduler):
     mock_media_buy_3.media_buy_id = "mb_3"
     mock_media_buy_3.tenant_id = "tenant_1"
     mock_media_buy_3.principal_id = "principal_1"
+    _make_serving_buy_attrs(mock_media_buy_3)
     mock_media_buy_3.raw_request = {
         "reporting_webhook": {
             "url": "https://example.com/webhook3",

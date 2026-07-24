@@ -32,6 +32,7 @@ from src.core.schemas import (
     ReportingPeriod,
 )
 from src.core.schemas.product import ProductFilters
+from tests.helpers.delivery_assertions import assert_next_expected_at_shape
 
 # ---------------------------------------------------------------------------
 # Enum completeness
@@ -285,17 +286,18 @@ class TestGetMediaBuyDeliveryResponseMethods:
         resp = _make_delivery_response(media_buy_deliveries=deliveries)
         assert str(resp) == "Retrieved delivery data for 3 media buys."
 
-    def test_model_dump_includes_next_expected_at_when_notification_type_set(self):
+    def test_model_dump_omits_next_expected_at_for_final_notification(self):
+        # Spec: non-nullable date-time, "only present ... when notification_type
+        # is not 'final'" — a final notification omits the field, never null.
         resp = _make_delivery_response(notification_type="final")
         dumped = resp.model_dump()
-        assert "next_expected_at" in dumped
-        assert dumped["next_expected_at"] is None
+        assert_next_expected_at_shape(dumped, present=False, context="final notification dump")
 
     def test_model_dump_omits_next_expected_at_when_no_notification_type(self):
         resp = _make_delivery_response()
         dumped = resp.model_dump()
         assert resp.notification_type is None
-        assert "next_expected_at" not in dumped
+        assert_next_expected_at_shape(dumped, present=False, context="dump without notification_type")
 
     def test_webhook_payload_excludes_aggregated_totals(self):
         resp = _make_delivery_response()

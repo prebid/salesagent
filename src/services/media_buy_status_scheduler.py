@@ -2,12 +2,15 @@
 
 This scheduler runs in the background and updates media buy statuses based on
 their flight dates:
-- pending_activation -> active (when start_time has passed and creatives approved)
-- scheduled -> active (when start_time has passed)
-- active -> completed (when end_time has passed)
+- pending_start / pending_activation -> active (when start_time has passed AND
+  creatives are approved — creative-gated states)
+- scheduled / ready / approved (legacy serving aliases) -> active (when
+  start_time has passed — purely date-gated, already approved)
+- any serving status -> completed (when end_time has passed)
 
 This ensures media buys don't get stuck in transitional states when approved
-before their start date.
+before their start date, and migrates legacy persisted aliases to the modern
+vocabulary so they match what the read tools report (#1556).
 """
 
 import asyncio
@@ -20,12 +23,22 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyRepository
+from src.core.tools._media_buy_status import (
+    LEGACY_SERVING_ALIASES,
+    PENDING_PERSISTED_STATUSES,
+    SERVING_PERSISTED_STATUSES,
+)
 from src.core.utils import utc_flight_end, utc_flight_start
 
 logger = logging.getLogger(__name__)
 
 # Configurable via env var - default 60 seconds
 STATUS_CHECK_INTERVAL_SECONDS = int(os.getenv("MEDIA_BUY_STATUS_CHECK_INTERVAL") or "60")
+
+# PENDING_PERSISTED_STATUSES / LEGACY_SERVING_ALIASES (imported): the pre-serving
+# states this scheduler promotes, and the legacy serving aliases it migrates to the
+# modern "active" once serving. Both derive from the canonical map and live beside it
+# in src/core/tools/_media_buy_status.py so this scheduler can't drift a partial copy.
 
 
 class MediaBuyStatusScheduler:
@@ -83,10 +96,12 @@ class MediaBuyStatusScheduler:
         try:
             with get_db_session() as session:
                 # Find media buys that need status updates (cross-tenant scheduler query)
-                # 1. pending_start (or legacy pending_activation/scheduled) -> active if start_time passed
-                # 2. active -> should become completed if end_time passed
+                # 1. pending set -> active if start_time passed (and creatives approved)
+                # 2. serving set (incl. legacy aliases) -> active mid-flight, completed
+                #    once end_time passes. Derived from the canonical map so legacy
+                #    "ready"/"approved" rows are migrated, not stranded (#1556).
                 media_buys = MediaBuyRepository.get_all_by_statuses(
-                    session, ["pending_start", "pending_activation", "scheduled", "active"]
+                    session, sorted(PENDING_PERSISTED_STATUSES | SERVING_PERSISTED_STATUSES)
                 )
 
                 for media_buy in media_buys:
@@ -148,16 +163,16 @@ class MediaBuyStatusScheduler:
 
         # Check if campaign should be active
         if now >= start_time:
-            if current_status in ["pending_start", "pending_activation", "scheduled"]:
-                # Before activating, verify creatives are approved (for pending_start/pending_activation)
-                if current_status in ["pending_start", "pending_activation"]:
-                    if self._are_creatives_approved(media_buy, session):
-                        return "active"
-                    # Creatives not approved yet - stay pending
-                    return None
-                else:
-                    # scheduled -> active (no creative check needed, already validated)
+            if current_status in PENDING_PERSISTED_STATUSES:
+                # Creative-gated: verify creatives are approved before activating
+                if self._are_creatives_approved(media_buy, session):
                     return "active"
+                # Creatives not approved yet - stay pending
+                return None
+            if current_status in LEGACY_SERVING_ALIASES:
+                # scheduled/ready/approved -> active: purely date-gated legacy
+                # serving aliases (already approved), no creative check needed
+                return "active"
 
         return None
 
