@@ -35,6 +35,16 @@ def _get_schemas_source_files() -> list["Path"]:
     raise FileNotFoundError("Cannot find src/core/schemas.py or src/core/schemas/ package")
 
 
+def _is_adcp_module(module: str) -> bool:
+    """True iff ``module`` is the ``adcp`` package or one of its submodules.
+
+    The single answer to "is this the adcp library?" for this file — used both
+    on AST ``ImportFrom.module`` strings and on runtime ``__module__`` values.
+    Exact package match, not a bare prefix: ``adcpx``/``adcp_local`` are not adcp.
+    """
+    return module == "adcp" or module.startswith("adcp.")
+
+
 def _get_library_type_mapping() -> dict[str, type]:
     """Build mapping of local class names to their expected library base types.
 
@@ -53,7 +63,7 @@ def _get_library_type_mapping() -> dict[str, type]:
 
         # Find all "from adcp... import X as LibraryX" statements
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("adcp"):
+            if isinstance(node, ast.ImportFrom) and node.module and _is_adcp_module(node.module):
                 for alias in node.names:
                     if alias.asname and alias.asname.startswith("Library"):
                         # e.g. "from adcp.types import Product as LibraryProduct"
@@ -91,8 +101,7 @@ def _nearest_adcp_base(cls: type) -> type | None:
     """
     for base in inspect.getmro(cls)[1:]:
         module = getattr(base, "__module__", "") or ""
-        # Exact package match, not a bare prefix: "adcpx"/"adcp_local" are not adcp.
-        if (module == "adcp" or module.startswith("adcp.")) and hasattr(base, "model_fields"):
+        if _is_adcp_module(module) and hasattr(base, "model_fields"):
             return base
     return None
 
