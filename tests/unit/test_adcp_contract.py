@@ -59,6 +59,24 @@ from src.core.schemas import (
 from tests.factories.creative_asset import build_assets, image_spec, url_spec, video_spec
 
 
+def _assert_field_inherits_parent_annotation(local_cls, parent_cls, field_name):
+    """Assert a local schema field carries EXACTLY its adcp parent's annotation.
+
+    Shared by the *_inherits_parent_typed_annotations tests: the adcp library
+    parent is the source of truth, so any local redeclaration that weakens or
+    drifts from the parent's typed field must fail here. The failure message is
+    built from ``local_cls.__name__`` so the compare rule and message live in one
+    place instead of being copied per response type.
+    """
+    parent_annotation = parent_cls.model_fields[field_name].annotation
+    local_annotation = local_cls.model_fields[field_name].annotation
+    assert local_annotation == parent_annotation, (
+        f"{local_cls.__name__}.{field_name} drifts from the adcp parent: "
+        f"local={local_annotation!r} vs parent={parent_annotation!r} — "
+        f"delete the stale local redeclaration and inherit the parent's typed field"
+    )
+
+
 class TestSchemaMatchesLibrary:
     """Validate that our schemas match the adcp library schemas.
 
@@ -261,13 +279,29 @@ class TestSchemaMatchesLibrary:
 
         from src.core.schemas import CreateMediaBuySuccess as LocalCreateMediaBuySuccess
 
-        parent_annotation = LibraryCreateMediaBuySuccess.model_fields[field_name].annotation
-        local_annotation = LocalCreateMediaBuySuccess.model_fields[field_name].annotation
-        assert local_annotation == parent_annotation, (
-            f"CreateMediaBuySuccess.{field_name} drifts from the adcp parent: "
-            f"local={local_annotation!r} vs parent={parent_annotation!r} — "
-            f"delete the stale local redeclaration and inherit the parent's typed field"
-        )
+        _assert_field_inherits_parent_annotation(LocalCreateMediaBuySuccess, LibraryCreateMediaBuySuccess, field_name)
+
+    @pytest.mark.parametrize("field_name", ["dry_run", "context", "ext"])
+    def test_sync_accounts_response_inherits_parent_typed_annotations(self, field_name):
+        """SyncAccountsResponse must inherit the adcp 6.6 parent's TYPED annotations.
+
+        Twin of the create_media_buy case above. account.py carried
+        'SDK 5.7 removed these from the parent — declare locally' redeclarations
+        that are stale under adcp 6.6: SyncAccountsResponse1 re-added dry_run,
+        context (ContextObject | None) and ext (ExtensionObject | None). Two of
+        the local redeclarations WEAKENED the parent's types (context was
+        ContextObject | dict[str, Any] | None; ext was a bare dict[str, Any] | None).
+
+        Note: dry_run was byte-identical to the parent, so it alone would not have
+        reddened here — it is covered by the redeclaration arch guard
+        (tests/unit/test_architecture_schema_inheritance.py), which now has no
+        allowlist entry for it.
+        """
+        from adcp.types.aliases import SyncAccountsSuccessResponse as LibrarySyncAccountsSuccess
+
+        from src.core.schemas import SyncAccountsResponse as LocalSyncAccountsResponse
+
+        _assert_field_inherits_parent_annotation(LocalSyncAccountsResponse, LibrarySyncAccountsSuccess, field_name)
 
 
 class TestAdCPContract:

@@ -15,7 +15,6 @@ SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
 from typing import Any
 
 from adcp.types import Account as LibraryAccountDomain
-from adcp.types import ContextObject as LibraryContextObject
 from adcp.types import Error as LibraryError
 from adcp.types import ListAccountsRequest as LibraryListAccountsRequest
 from adcp.types import ListAccountsResponse as LibraryListAccountsResponse
@@ -145,23 +144,24 @@ class SyncAccountsResponse(NestedModelSerializerMixin, LibrarySyncAccountsSucces
     Since the error variant is never constructed (ToolError handles failures),
     we subclass the success variant directly.
 
-    SDK 5.7 collapsed the success envelope to just `status`. Fields previously
-    inherited (accounts, dry_run, context, ext) are now declared locally.
+    adcp 6.6 restored the fields SDK 5.7 had collapsed off the success envelope:
+    dry_run, context (ContextObject|None) and ext (ExtensionObject|None) are all
+    INHERITED from the parent again (identical definitions; production may assign
+    raw dicts to context/ext, which Pydantic coerces on validation). Only
+    ``accounts`` remains overridden — see below.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # SDK 5.7 removed these from the parent — declare locally.
-    # Typed as SyncResponseAccount for proper deserialization on transport roundtrip.
+    # Override accounts to use our SyncResponseAccount (Pattern #4: nested
+    # serialization) — the parent's Account type lacks action/status/errors/setup,
+    # and the local type is needed for correct deserialization on transport roundtrip.
     # `accounts` is REQUIRED (no default): AdCP 3.1 sync-accounts-response is
     # oneOf(SyncAccountsSuccess requires `accounts` | SyncAccountsError requires
     # `errors`). This model is the success variant, so omitting `accounts`
     # entirely is invalid (it would be neither a valid success nor error). May
     # be an empty list for a zero-account sync, but the field must be present.
     accounts: list[SyncResponseAccount]
-    dry_run: bool | None = None
-    context: LibraryContextObject | dict[str, Any] | None = None
-    ext: dict[str, Any] | None = None
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
