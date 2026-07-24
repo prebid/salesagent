@@ -186,9 +186,10 @@ def _enveloped_invalid_request(exc: AdCPError) -> InvalidRequestError:
     a buyer branch on the AdCP code. "Stays on the JSON-RPC wire" and "carries the envelope in
     ``data``" are orthogonal; every AdCP-layer rejection routed through this helper does both.
     Protocol-native JSON-RPC errors — ``UnsupportedOperationError`` (task listing/subscription,
-    the extended agent card) and ``TaskNotFoundError`` (push-config lookups) — are correctly
-    envelope-free: they signal a transport-protocol condition with no corresponding AdCP wire
-    code, not an escape from this helper.
+    the extended agent card) and ``TaskNotFoundError`` (an unknown/unowned task id on
+    tasks/get, tasks/cancel, and push-config lookups) — are correctly envelope-free: they
+    signal a transport-protocol condition with no corresponding AdCP wire code, not an escape
+    from this helper.
 
     Both wire layers carry the SAME sanitized message — the JSON-RPC ``message`` is taken from the
     envelope — so ``error.message`` and ``error.data.adcp_error.message`` can never disagree.
@@ -1315,7 +1316,7 @@ class AdCPRequestHandler(RequestHandler):
         self,
         params: GetTaskRequest,
         context: ServerCallContext,
-    ) -> Task | None:
+    ) -> Task:
         """Handle 'tasks/get' method to retrieve task status.
 
         Identity is resolved ONCE and gates BOTH stores: the in-memory task is
@@ -1331,6 +1332,18 @@ class AdCPRequestHandler(RequestHandler):
         otherwise the durable step is consulted and, if it reached a terminal
         status, wins (and reconciles the owned in-memory entry). The durable
         fallback also serves polls after a restart, when the map is empty.
+
+        Raises ``TaskNotFoundError`` when neither store has the task (unknown id,
+        or not owned by the caller) — a bare ``None`` return would make the SDK
+        synthesize a generic internal error instead of the spec's not-found
+        signal. What a client sees TODAY is still ``-32603``, not the spec's
+        ``-32001``: this app builds its A2A routes with ``enable_v0_3_compat=True``
+        (``src/app.py``), so requests dispatch through
+        ``a2a.compat.v0_3.jsonrpc_adapter``, whose ``handle_request`` ends in a
+        bare ``except Exception -> CoreInternalError`` with no ``A2AError -> code``
+        mapping — the mapping the SDK's own main dispatcher performs. Raising the
+        right type is still correct and is what will surface ``-32001`` the
+        moment that gap closes (#1670).
         """
         task_id = params.id
         identity: ResolvedIdentity | None = None
@@ -1347,7 +1360,10 @@ class AdCPRequestHandler(RequestHandler):
                 return durable
             # No terminal durable outcome: the richer owned in-memory task (metadata,
             # artifacts) beats the durable WORKING skeleton.
-            return owned if owned is not None else durable
+            found = owned if owned is not None else durable
+            if found is None:
+                raise TaskNotFoundError(message=f"Task not found: {task_id}", data={"task_id": task_id})
+            return found
         except A2AError:
             raise
         except Exception as e:
@@ -1453,7 +1469,7 @@ class AdCPRequestHandler(RequestHandler):
         self,
         params: CancelTaskRequest,
         context: ServerCallContext,
-    ) -> Task | None:
+    ) -> Task:
         """Handle 'tasks/cancel' method to cancel a task.
 
         Mirrors ``on_get_task``'s durability: the in-memory task is
@@ -1476,8 +1492,10 @@ class AdCPRequestHandler(RequestHandler):
         states ("Cancellation confirmed"). Storyboard: ungraded, pending the
         upstream task-lifecycle obligation (#1574).
 
-        Returns:
-            Task object with canceled status, or None if not found (or not owned).
+        Raises ``TaskNotFoundError`` when neither store has the task (unknown id,
+        or not owned by the caller) — cancelling a task that does not exist is the
+        same not-found condition as get, not a silent no-op (and #1670 for why the
+        wire code is still -32603, not the spec's -32001).
         """
         task_id = params.id
         identity: ResolvedIdentity | None = None
@@ -1492,6 +1510,8 @@ class AdCPRequestHandler(RequestHandler):
                 owned.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_CANCELED))
                 self._remember_task(task_id, owned, identity)
                 return owned
+            if durable is None:
+                raise TaskNotFoundError(message=f"Task not found: {task_id}", data={"task_id": task_id})
             return durable
         except A2AError:
             raise
