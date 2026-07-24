@@ -14,6 +14,8 @@ Classification categories:
     PREMATURE_XFAIL   - Step calls pytest.xfail() before exercising production code
     MISSING_STEP      - No step definition exists for a Gherkin step
     STALE             - Marked xfail but actually passes on every present transport
+    STALE_CONFIRM     - All present transports pass, but single-/e2e_rest-only —
+                        needs confirmation before removing tags
     PARTIAL_PASS      - Passes on some transports, fails on others
     UNCLASSIFIED      - Doesn't match any known pattern
 
@@ -21,7 +23,9 @@ Graduation criteria (STALE → remove xfail):
     1. Every transport *present for that scenario base* passed/xpassed
        (a2a/mcp/rest, plus e2e_rest when in the result set; not a hardcoded
        four-transport universe — #1417 dropped impl from BDD parametrization)
-    2. Then steps are PASS in inspector report (if available)
+    2. Present set is not single-transport / e2e_rest-only (those are
+       STALE_CONFIRM — e2e_rest xfails are non-strict / environment-dependent)
+    3. Then steps are PASS in inspector report (if available)
 
 PREMATURE_XFAIL matching uses crash path+lineno against live step files.
 Run this audit against a bdd.json produced from the *current* tree; a stale
@@ -37,7 +41,7 @@ import json
 import re
 import sys
 from collections import Counter, defaultdict
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -49,8 +53,7 @@ from bdd_audit_common import (  # noqa: E402
     extract_scenario_base,
     extract_transport,
     extract_uc,
-    outcomes_by_transport_for_base,
-    transport_coverage,
+    grade_base,
 )
 
 # ── Data classes ──────────────────────────────────────────────────────
@@ -260,13 +263,12 @@ def find_premature_xfails(steps_dir: Path) -> list[PrematureXfail]:
     return premature
 
 
-def match_premature_by_crash(
-    test: dict,
-    premature_xfails: Sequence[PrematureXfail],
-) -> PrematureXfail | None:
-    """Map setup/call crash path+lineno to an enclosing premature step."""
-    if not premature_xfails:
-        return None
+def _iter_crash_locations(test: dict) -> Iterator[tuple[Path, int]]:
+    """Yield resolved ``(path, lineno)`` for setup/call crash sites on a test.
+
+    Owns the shared phase loop, crash-dict guarding, and path/lineno
+    normalization used by both premature matching and line-drift warnings.
+    """
     for phase in ("setup", "call"):
         ph = test.get(phase) or {}
         if not isinstance(ph, dict):
@@ -279,10 +281,19 @@ def match_premature_by_crash(
         if not cpath or clineno is None:
             continue
         try:
-            resolved = Path(cpath).resolve()
-            line = int(clineno)
+            yield Path(cpath).resolve(), int(clineno)
         except (OSError, TypeError, ValueError):
             continue
+
+
+def match_premature_by_crash(
+    test: dict,
+    premature_xfails: Sequence[PrematureXfail],
+) -> PrematureXfail | None:
+    """Map setup/call crash path+lineno to an enclosing premature step."""
+    if not premature_xfails:
+        return None
+    for resolved, line in _iter_crash_locations(test):
         for step in premature_xfails:
             if resolved == step.path and step.lineno <= line <= step.end_lineno:
                 return step
@@ -303,22 +314,7 @@ def crash_line_drift_warnings(
         return []
     known_paths = {step.path for step in premature_xfails}
     warnings: list[str] = []
-    for phase in ("setup", "call"):
-        ph = test.get(phase) or {}
-        if not isinstance(ph, dict):
-            continue
-        crash = ph.get("crash") or {}
-        if not isinstance(crash, dict):
-            continue
-        cpath = crash.get("path")
-        clineno = crash.get("lineno")
-        if not cpath or clineno is None:
-            continue
-        try:
-            resolved = Path(cpath).resolve()
-            line = int(clineno)
-        except (OSError, TypeError, ValueError):
-            continue
+    for resolved, line in _iter_crash_locations(test):
         if resolved not in known_paths:
             continue
         in_any = any(step.path == resolved and step.lineno <= line <= step.end_lineno for step in premature_xfails)
@@ -539,28 +535,33 @@ def classify_xfail(
 
 def classify_xpassed(
     all_tests: list[dict],
-) -> tuple[set[str], dict[str, set[str]], dict[str, set[str]]]:
-    """Classify xpassed scenario bases into graduate vs partial.
+) -> tuple[set[str], set[str], dict[str, set[str]], dict[str, set[str]]]:
+    """Classify xpassed scenario bases into graduate / confirm / partial.
 
     Graduation is relative to transports *present for that base* across the
-    full result set (not a hardcoded impl/a2a/mcp/rest universe).
+    full result set (not a hardcoded impl/a2a/mcp/rest universe). Single-
+    transport and e2e_rest-only present sets land in ``confirm_bases``
+    (STALE_CONFIRM) rather than firm graduation.
 
-    Returns ``(graduate_bases, partial_passing, partial_missing)``.
+    Returns ``(graduate_bases, confirm_bases, partial_passing, partial_missing)``.
     """
     xpassed_bases = {extract_scenario_base(t["nodeid"]) for t in all_tests if t.get("outcome") == "xpassed"}
     graduate: set[str] = set()
+    confirm: set[str] = set()
     partial_passing: dict[str, set[str]] = {}
     partial_missing: dict[str, set[str]] = {}
     nodeid_outcomes = [(t["nodeid"], t["outcome"]) for t in all_tests]
     for base in xpassed_bases:
-        outcomes = outcomes_by_transport_for_base(base, nodeid_outcomes)
-        graduates, passing, missing = transport_coverage(outcomes)
+        graduates, passing, missing, _present_n, needs_confirmation = grade_base(base, nodeid_outcomes)
         if graduates:
-            graduate.add(base)
+            if needs_confirmation:
+                confirm.add(base)
+            else:
+                graduate.add(base)
         elif passing:
             partial_passing[base] = passing
             partial_missing[base] = missing
-    return graduate, partial_passing, partial_missing
+    return graduate, confirm, partial_passing, partial_missing
 
 
 # ── Report generator ──────────────────────────────────────────────────
@@ -592,6 +593,7 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
         "MISSING_STEP": "No step definition exists for a Gherkin step",
         "PREMATURE_XFAIL": "Step calls pytest.xfail() before production code",
         "STALE": "Passes all present transports — should graduate",
+        "STALE_CONFIRM": "All present pass, but single-/e2e_rest-only — needs confirmation",
         "PARTIAL_PASS": "Passes some transports, not all",
         "UNCLASSIFIED": "No matching pattern found",
     }
@@ -604,6 +606,7 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
         "MISSING_STEP",
         "PREMATURE_XFAIL",
         "STALE",
+        "STALE_CONFIRM",
         "PARTIAL_PASS",
         "UNCLASSIFIED",
     ]:
@@ -634,6 +637,7 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
             "## Xpassed Tests (marked xfail but pass)",
             "",
             f"- **All present transports (graduation candidates)**: {len([e for e in report.xpassed_entries if e.category == 'STALE'])}",
+            f"- **Needs confirmation (single-/e2e_rest-only)**: {len([e for e in report.xpassed_entries if e.category == 'STALE_CONFIRM'])}",
             f"- **Partial pass (keep investigating)**: {len([e for e in report.xpassed_entries if e.category == 'PARTIAL_PASS'])}",
             "",
         ]
@@ -648,6 +652,17 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
         for e in sorted(stale, key=lambda x: x.scenario_base):
             if e.scenario_base not in seen_bases:
                 seen_bases.add(e.scenario_base)
+                short = e.scenario_base.split("::")[-1] if "::" in e.scenario_base else e.scenario_base
+                lines.append(f"- {short}")
+
+    # STALE_CONFIRM details
+    stale_confirm = [e for e in report.xpassed_entries if e.category == "STALE_CONFIRM"]
+    if stale_confirm:
+        seen_confirm = set()
+        lines.extend(["", "### Graduation needs confirmation (single-/e2e_rest-only)", ""])
+        for e in sorted(stale_confirm, key=lambda x: x.scenario_base):
+            if e.scenario_base not in seen_confirm:
+                seen_confirm.add(e.scenario_base)
                 short = e.scenario_base.split("::")[-1] if "::" in e.scenario_base else e.scenario_base
                 lines.append(f"- {short}")
 
@@ -682,15 +697,16 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
             "",
             "### Immediate actions",
             f"1. **Graduate {len(stale)} stale scenarios** — remove xfail tags from conftest (all present transports pass with strong assertions)",
-            f"2. **Fix {len(report.by_category.get('PREMATURE_XFAIL', []))} premature xfails** — step calls pytest.xfail() before production code",
+            f"2. **Confirm {len(stale_confirm)} single-/e2e_rest-only graduations** — do not auto-remove tags; e2e is environment-dependent",
+            f"3. **Fix {len(report.by_category.get('PREMATURE_XFAIL', []))} premature xfails** — step calls pytest.xfail() before production code",
             "",
             "### Tracked debt",
-            f"3. **{len(report.by_category.get('PRODUCTION_GAP', []))} production gaps** — legitimate, needs src/ implementation",
-            f"4. **{len(report.by_category.get('TRANSPORT_GAP', []))} transport gaps** — REST/MCP/A2A wrappers missing params",
-            f"5. **{len(report.by_category.get('HARNESS_GAP', []))} harness gaps** — test env not wired, fixable in tests/",
-            f"6. **{len(report.by_category.get('PARTIAL_IMPL', []))} partial implementations** — partition/boundary values vary",
-            f"7. **{len(report.by_category.get('MISSING_STEP', []))} missing steps** — step definitions needed",
-            f"8. **{len(report.by_category.get('UNCLASSIFIED', []))} unclassified** — need manual review",
+            f"4. **{len(report.by_category.get('PRODUCTION_GAP', []))} production gaps** — legitimate, needs src/ implementation",
+            f"5. **{len(report.by_category.get('TRANSPORT_GAP', []))} transport gaps** — REST/MCP/A2A wrappers missing params",
+            f"6. **{len(report.by_category.get('HARNESS_GAP', []))} harness gaps** — test env not wired, fixable in tests/",
+            f"7. **{len(report.by_category.get('PARTIAL_IMPL', []))} partial implementations** — partition/boundary values vary",
+            f"8. **{len(report.by_category.get('MISSING_STEP', []))} missing steps** — step definitions needed",
+            f"9. **{len(report.by_category.get('UNCLASSIFIED', []))} unclassified** — need manual review",
         ]
     )
 
@@ -738,8 +754,9 @@ def main() -> None:
 
     # Step 4: Classify xpassed tests (needs full suite for present-transport set)
     print("Classifying xpassed tests...")
-    graduate_bases, partial_passing, partial_missing = classify_xpassed(all_tests)
+    graduate_bases, confirm_bases, partial_passing, partial_missing = classify_xpassed(all_tests)
     print(f"  {len(graduate_bases)} pass all present transports (graduation candidates)")
+    print(f"  {len(confirm_bases)} need confirmation (single-/e2e_rest-only)")
     print(f"  {len(partial_passing)} pass some transports (partial)")
 
     # Step 5: Classify each xfailed test
@@ -770,6 +787,8 @@ def main() -> None:
         transport = extract_transport(test["nodeid"])
         if base in graduate_bases:
             category = "STALE"
+        elif base in confirm_bases:
+            category = "STALE_CONFIRM"
         else:
             category = "PARTIAL_PASS"
         entry = XfailEntry(
@@ -803,6 +822,7 @@ def main() -> None:
             if count > 0:
                 print(f"  {cat}: {count}")
         print(f"\n  STALE (graduation candidates): {len(graduate_bases)} scenarios")
+        print(f"  STALE_CONFIRM (needs confirmation): {len(confirm_bases)} scenarios")
         print(f"  PARTIAL_PASS: {len(partial_passing)} scenarios")
         if report.line_drift_warnings:
             print(f"  line-drift warnings: {len(report.line_drift_warnings)}")

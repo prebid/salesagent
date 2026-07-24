@@ -94,32 +94,39 @@ class TestClassifyXpass:
         all_entries = [
             self._entry(bdd_full_audit, f"tests/bdd/test_uc004.py::test_s[{t}]") for t in ("a2a", "mcp", "rest")
         ]
-        bucket, cat, detail = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
+        bucket, cat, detail, present_n = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
         assert bucket == "FIX_NOW"
         assert cat == "GRADUATE"
+        assert present_n == 3
         assert "All 3 present transports pass" in detail
 
     def test_two_transport_uc_graduates_without_rest(self, bdd_full_audit) -> None:
         """UC-019 style (a2a+mcp only) must not demand rest."""
         all_entries = [self._entry(bdd_full_audit, f"tests/bdd/test_uc019.py::test_s[{t}]") for t in ("a2a", "mcp")]
-        _, cat, detail = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
+        _, cat, detail, present_n = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
         assert cat == "GRADUATE"
+        assert present_n == 2
         assert "All 2 present transports pass" in detail
 
     def test_single_transport_needs_confirmation(self, bdd_full_audit) -> None:
         """Single-/e2e_rest-only present sets must not auto-graduate."""
         all_entries = [self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[e2e_rest]")]
-        _, cat, detail = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
+        _, cat, detail, present_n = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
         assert cat == "GRADUATE_CONFIRM"
+        assert present_n == 1
         assert "needs confirmation" in detail
 
     def test_mixed_outline_examples_same_transport_not_graduate(self, bdd_full_audit) -> None:
-        """Outline rows for one transport: xpassed+xfailed must not graduate."""
+        """Outline rows: failing first + passing last must not graduate.
+
+        Last-wins would keep xpassed and falsely graduate; worst-outcome must
+        stay PARTIAL. Passing-last is the only order that reddens on revert.
+        """
         all_entries = [
-            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_o[e2e_rest-ex1]", "xpassed"),
-            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_o[e2e_rest-ex2]", "xfailed"),
+            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_o[e2e_rest-ex1]", "xfailed"),
+            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_o[e2e_rest-ex2]", "xpassed"),
         ]
-        _, cat, _ = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
+        _, cat, _, _ = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
         assert cat == "PARTIAL_XPASS"
 
     def test_strict_subset_is_partial_xpass(self, bdd_full_audit) -> None:
@@ -128,7 +135,7 @@ class TestClassifyXpass:
             self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[mcp]", "xfailed"),
             self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[rest]", "xfailed"),
         ]
-        bucket, cat, detail = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
+        bucket, cat, detail, _ = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
         assert bucket == "FIX_NOW"
         assert cat == "PARTIAL_XPASS"
         assert "missing" in detail
@@ -160,6 +167,23 @@ class TestClassifyXpass:
         partial_item = next(i for i in items if i.category == "PARTIAL_XPASS")
         assert "gaps remain" in partial_item.title
 
+    def test_generate_work_items_confirm_title_for_e2e_rest_only(self, bdd_full_audit) -> None:
+        """GRADUATE_CONFIRM work-item title must say needs confirmation."""
+        all_entries = [self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[e2e_rest]")]
+        items = bdd_full_audit.generate_work_items(
+            failed=[],
+            xfailed=[],
+            xpassed=all_entries,
+            inspector_flags=[],
+            tag_reasons={},
+            strict_tags=set(),
+            all_entries=all_entries,
+        )
+        assert len(items) == 1
+        item = items[0]
+        assert item.category == "GRADUATE_CONFIRM"
+        assert "needs confirmation" in item.title
+
 
 class TestClassifyXpassedAudit:
     """audit_xfails.classify_xpassed uses the same present-transport rule."""
@@ -168,8 +192,19 @@ class TestClassifyXpassedAudit:
         all_tests = [
             {"nodeid": f"tests/bdd/test_uc004.py::test_s[{t}]", "outcome": "xpassed"} for t in ("a2a", "mcp", "rest")
         ]
-        graduate, partial_passing, partial_missing = audit_xfails.classify_xpassed(all_tests)
+        graduate, confirm, partial_passing, partial_missing = audit_xfails.classify_xpassed(all_tests)
         assert len(graduate) == 1
+        assert confirm == set()
+        assert partial_passing == {}
+        assert partial_missing == {}
+
+    def test_e2e_rest_only_needs_confirmation_not_stale(self, audit_xfails) -> None:
+        """Mirror bdd_full_audit GRADUATE_CONFIRM — lone e2e_rest must not be STALE."""
+        base = "tests/bdd/test_uc004.py::test_s"
+        all_tests = [{"nodeid": f"{base}[e2e_rest]", "outcome": "xpassed"}]
+        graduate, confirm, partial_passing, partial_missing = audit_xfails.classify_xpassed(all_tests)
+        assert graduate == set()
+        assert confirm == {base}
         assert partial_passing == {}
         assert partial_missing == {}
 
@@ -181,20 +216,26 @@ class TestClassifyXpassedAudit:
             {"nodeid": f"{base}[mcp]", "outcome": "xfailed"},
             {"nodeid": f"{base}[rest]", "outcome": "xfailed"},
         ]
-        graduate, partial_passing, partial_missing = audit_xfails.classify_xpassed(all_tests)
+        graduate, confirm, partial_passing, partial_missing = audit_xfails.classify_xpassed(all_tests)
         assert graduate == set()
+        assert confirm == set()
         assert partial_passing == {base: {"a2a"}}
         assert partial_missing == {base: {"mcp", "rest"}}
 
     def test_mixed_outline_examples_same_transport_do_not_graduate(self, audit_xfails) -> None:
-        """Last-wins would graduate; worst-outcome must keep graduate empty."""
+        """Last-wins would graduate; worst-outcome must keep graduate empty.
+
+        Failing example first + passing last is the only order that reddens
+        when the aggregate reverts to last-wins.
+        """
         base = "tests/bdd/test_uc004.py::test_outline"
         all_tests = [
-            {"nodeid": f"{base}[e2e_rest-ex1]", "outcome": "xpassed"},
-            {"nodeid": f"{base}[e2e_rest-ex2]", "outcome": "xfailed"},
+            {"nodeid": f"{base}[e2e_rest-ex1]", "outcome": "xfailed"},
+            {"nodeid": f"{base}[e2e_rest-ex2]", "outcome": "xpassed"},
         ]
-        graduate, partial_passing, partial_missing = audit_xfails.classify_xpassed(all_tests)
+        graduate, confirm, partial_passing, partial_missing = audit_xfails.classify_xpassed(all_tests)
         assert graduate == set()
+        assert confirm == set()
         assert partial_passing == {}  # no passing transport after worst-outcome aggregate
         assert partial_missing == {}
 

@@ -11,8 +11,10 @@ is never required for graduation.
 
 Report-bucket vocabulary (intentional split, same underlying coverage grade):
 ``bdd_full_audit`` labels partial xpass as ``PARTIAL_XPASS`` / full as
-``GRADUATE``; ``audit_xfails`` keeps ``PARTIAL_PASS`` / ``STALE``. Do not
-unify the report tokens without a deliberate cross-script rename.
+``GRADUATE`` / confirm as ``GRADUATE_CONFIRM``; ``audit_xfails`` keeps
+``PARTIAL_PASS`` / ``STALE`` / ``STALE_CONFIRM``. Do not unify the report
+tokens without a deliberate cross-script rename. The shared ``grade_base``
+helper owns the confirmation gate so both classifiers cannot drift.
 
 ``parse_conftest_xfail_tags`` stays per-script on purpose: ``audit_xfails``
 returns ``tag → (reason, mechanism)`` for classification, while
@@ -133,3 +135,25 @@ def outcomes_by_transport_for_base(
         if transport:
             collected.setdefault(transport, []).append(outcome)
     return {t: _worst_transport_outcome(outs) for t, outs in collected.items()}
+
+
+def grade_base(
+    base: str,
+    nodeid_outcomes: Iterable[tuple[str, str]],
+) -> tuple[bool, set[str], set[str], int, bool]:
+    """Grade one scenario base end-to-end for both audit classifiers.
+
+    Composes ``outcomes_by_transport_for_base`` + ``transport_coverage`` and
+    applies the single-/e2e_rest-only confirmation gate so callers never
+    re-wire that pipeline (or re-scan for ``present_count``).
+
+    Returns ``(graduates, passing, missing, present_count, needs_confirmation)``.
+    ``needs_confirmation`` is True when every present transport passed but the
+    present set is a single transport or ``e2e_rest``-only — do not auto-graduate
+    (e2e_rest xfails are non-strict because e2e is environment-dependent).
+    """
+    outcomes = outcomes_by_transport_for_base(base, nodeid_outcomes)
+    graduates, passing, missing = transport_coverage(outcomes)
+    present_count = len(outcomes)
+    needs_confirmation = bool(graduates and (present_count == 1 or passing == {"e2e_rest"}))
+    return graduates, passing, missing, present_count, needs_confirmation
