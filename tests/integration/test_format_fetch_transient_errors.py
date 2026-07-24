@@ -46,7 +46,7 @@ class TestFormatFetchTransientErrors:
     @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS, ids=lambda t: t.value)
     def test_typed_transient_registry_error_reaches_wire(self, integration_db, raised, wire_code, transport):
         from src.core.exceptions import AdCPRateLimitError, AdCPServiceUnavailableError
-        from tests.helpers import assert_envelope_shape
+        from tests.helpers import assert_envelope_shape, error_envelope_for_raw_a2a_env
 
         exc = (
             AdCPRateLimitError("Creative agent rate limited (429)")
@@ -71,8 +71,10 @@ class TestFormatFetchTransientErrors:
                 f"not return success with a terminal-looking per-item failure. Got: "
                 f"{getattr(result, 'wire_response', None) or result.payload!r}"
             )
+            # CreativeSyncEnv's A2A uses the raw wrapper (synthesized envelope);
+            # REST/MCP capture real wire.
             assert_envelope_shape(
-                result.wire_error_envelope,
+                error_envelope_for_raw_a2a_env(result, transport),
                 wire_code,
                 recovery="transient",
             )

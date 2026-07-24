@@ -3,9 +3,10 @@
 Tests the thread-safe webhook delivery service that's shared by all adapters.
 """
 
+import json
 import threading
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -33,7 +34,7 @@ def mock_db_session(mocker):
     mock_context.__enter__.return_value = mock_session
     mock_context.__exit__.return_value = None
 
-    mocker.patch("src.core.database.database_session.get_db_session", return_value=mock_context)
+    mocker.patch("src.core.database.repositories.uow.get_db_session", return_value=mock_context)
     return mock_session
 
 
@@ -93,18 +94,16 @@ def test_adcp_payload_structure(webhook_service, mock_db_session):
     media_buy_id = "buy_adcp"
     start_time = datetime.now(UTC)
 
-    # Mock httpx to capture the payload
-    with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
-
+    # Mock the shared pinned POST seam to capture the exact wire body.
+    with patch("src.services.webhook_delivery_service.post_webhook_status", return_value=200) as mock_post:
         # Mock webhook config
         mock_config = MagicMock()
         mock_config.url = "https://example.com/webhook"
         mock_config.authentication_type = None
         mock_config.validation_token = None
         mock_config.webhook_secret = None  # No HMAC for this test
+        mock_config.authentication_token = None
+        mock_config.auth_blocked_at = None
 
         # Update mock to return config for SQLAlchemy 2.0
         mock_db_session.scalars.return_value.all.return_value = [mock_config]
@@ -124,15 +123,20 @@ def test_adcp_payload_structure(webhook_service, mock_db_session):
             next_expected_interval_seconds=60.0,
         )
 
-        # Verify httpx was called
-        assert mock_client.return_value.__enter__.return_value.post.called
-        call_args = mock_client.return_value.__enter__.return_value.post.call_args
+        mock_post.assert_called_once_with(
+            ANY,
+            "https://example.com/webhook",
+            body=ANY,
+            headers=ANY,
+            timeout=10.0,
+        )
+        call_args = mock_post.call_args
 
         # Check new payload structure (PR #86 - no wrapper, direct payload)
         # Version should match what's reported by the adcp library
         from adcp import get_adcp_spec_version
 
-        payload = call_args.kwargs["json"]
+        payload = json.loads(call_args.kwargs["body"])
         assert payload["adcp_version"] == get_adcp_spec_version()
         assert payload["notification_type"] == "scheduled"
         assert payload["is_adjusted"] is False  # NEW in PR #86
@@ -157,16 +161,14 @@ def test_final_notification_type(webhook_service, mock_db_session):
     media_buy_id = "buy_final"
     start_time = datetime.now(UTC)
 
-    with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
-
+    with patch("src.services.webhook_delivery_service.post_webhook_status", return_value=200) as mock_post:
         mock_config = MagicMock()
         mock_config.url = "https://example.com/webhook"
         mock_config.authentication_type = None
         mock_config.validation_token = None
         mock_config.webhook_secret = None
+        mock_config.authentication_token = None
+        mock_config.auth_blocked_at = None
         mock_db_session.scalars.return_value.all.return_value = [mock_config]
 
         # Send final webhook
@@ -183,7 +185,7 @@ def test_final_notification_type(webhook_service, mock_db_session):
         )
 
         # Check notification_type (direct payload structure in PR #86)
-        payload = mock_client.return_value.__enter__.return_value.post.call_args.kwargs["json"]
+        payload = json.loads(mock_post.call_args.kwargs["body"])
         assert payload["notification_type"] == "final"
         assert payload["is_adjusted"] is False
         assert "next_expected_at" not in payload
@@ -220,21 +222,12 @@ def test_failure_tracking(mock_sleep, webhook_service, mock_db_session):
     media_buy_id = "buy_fail"
     start_time = datetime.now(UTC)
 
-    with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
-        # First call succeeds
-        mock_response_ok = MagicMock()
-        mock_response_ok.status_code = 200
-
-        # Second call fails (with retries)
-        mock_response_fail = MagicMock()
-        mock_response_fail.status_code = 500
-
-        # Mock will be called 3 times total (1 success, then 2 failure attempts with retries)
-        mock_client.return_value.__enter__.return_value.post.side_effect = [
-            mock_response_ok,  # First webhook succeeds
-            mock_response_fail,  # Second webhook attempt 1 fails
-            mock_response_fail,  # Second webhook attempt 2 fails (retry)
-            mock_response_fail,  # Second webhook attempt 3 fails (retry)
+    with patch("src.services.webhook_delivery_service.post_webhook_status") as mock_post:
+        mock_post.side_effect = [
+            200,
+            500,
+            500,
+            500,
         ]
 
         mock_config = MagicMock()
@@ -242,6 +235,8 @@ def test_failure_tracking(mock_sleep, webhook_service, mock_db_session):
         mock_config.authentication_type = None
         mock_config.validation_token = None
         mock_config.webhook_secret = None
+        mock_config.authentication_token = None
+        mock_config.auth_blocked_at = None
         mock_db_session.scalars.return_value.all.return_value = [mock_config]
 
         # First webhook - success
@@ -285,18 +280,16 @@ def test_authentication_headers(webhook_service, mock_db_session):
     media_buy_id = "buy_auth"
     start_time = datetime.now(UTC)
 
-    with patch("src.services.webhook_delivery_service.httpx.Client") as mock_client:
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_client.return_value.__enter__.return_value.post.return_value = mock_response
-
+    with patch("src.services.webhook_delivery_service.post_webhook_status", return_value=200) as mock_post:
         # Test bearer auth
         mock_config = MagicMock()
         mock_config.url = "https://example.com/webhook"
-        mock_config.authentication_type = "bearer"
+        # The AdCP scheme spelling (core/push_notification_config.json v3.1.1).
+        mock_config.authentication_type = "Bearer"
         mock_config.authentication_token = "secret_token"
         mock_config.validation_token = "validation_token"
         mock_config.webhook_secret = None
+        mock_config.auth_blocked_at = None
         mock_db_session.scalars.return_value.all.return_value = [mock_config]
 
         webhook_service.send_delivery_webhook(
@@ -310,7 +303,7 @@ def test_authentication_headers(webhook_service, mock_db_session):
         )
 
         # Verify headers (PR #86 added X-ADCP-Timestamp, no longer uses X-Webhook-Token)
-        call_args = mock_client.return_value.__enter__.return_value.post.call_args
+        call_args = mock_post.call_args
         headers = call_args.kwargs["headers"]
         assert headers["Authorization"] == "Bearer secret_token"
         assert "X-ADCP-Timestamp" in headers  # NEW in PR #86

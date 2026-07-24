@@ -1,6 +1,6 @@
 """CircuitBreakerEnv — integration test environment for WebhookDeliveryService.
 
-Patches: httpx.Client, time.sleep, random.uniform (external/timing concerns).
+Patches: pinned HTTP session/POST seams, time.sleep, random.uniform.
 Real: get_db_session for PushNotificationConfig queries (real DB).
 
 Requires: integration_db fixture (creates test PostgreSQL DB).
@@ -19,7 +19,7 @@ Usage::
             result = service.send_delivery_webhook(...)
 
 Available mocks via env.mock:
-    "client"    -- httpx.Client mock
+    "client"    -- compatibility view of the pinned POST/session mocks
     "sleep"     -- time.sleep mock
     "random"    -- random.uniform mock
 """
@@ -57,7 +57,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
     Fluent API (from CircuitBreakerMixin):
         get_service()                    -- return a WebhookDeliveryService instance
         get_breaker(**kwargs)            -- return a fresh CircuitBreaker instance
-        set_http_response(status_code)   -- configure httpx Client mock response
+        set_http_response(status_code)   -- configure pinned POST status
         call_send(...)                   -- call service.send_delivery_webhook
         make_webhook_config(...)         -- create a PushNotificationConfig in DB
         set_db_webhooks(configs)         -- replace webhook configs in DB
@@ -66,7 +66,8 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
     MODULE = "src.services.webhook_delivery_service"
 
     EXTERNAL_PATCHES = {
-        "client": "src.services.webhook_delivery_service.httpx.Client",
+        "post_status": "src.services.webhook_delivery_service.post_webhook_status",
+        "session": "src.services.webhook_delivery_service.create_pinned_webhook_session",
         "sleep": "src.services.webhook_delivery_service.time.sleep",
         "random": "src.services.webhook_delivery_service.random.uniform",
     }
@@ -95,14 +96,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
         return super().__exit__(*exc)
 
     def _configure_mocks(self) -> None:
-        # random.uniform: return 0.0 for deterministic tests
-        self.mock["random"].return_value = 0.0
-
-        # httpx.Client: 200 OK by default
-        self.set_http_response(200)
-
-        # Expose inner httpx post as mock["post"] so BDD steps can inspect call_args
-        self.mock["post"] = self.mock["client"].return_value.__enter__.return_value.post
+        self._configure_http_mocks()
 
     def make_webhook_config(
         self,

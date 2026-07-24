@@ -6,18 +6,22 @@ standard FastAPI routes so they are served by the unified FastAPI app.
 
 import logging
 import os
+import secrets
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import Field
 from sqlalchemy import select
 
+from src.core.adcp_version import _install_testing_version_policy, _reset_testing_version_policy
 from src.core.config_loader import get_tenant_by_virtual_host
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant
 from src.core.domain_config import extract_subdomain_from_host, is_sales_agent_domain
+from src.core.schemas import SalesAgentBaseModel
 from src.landing import generate_tenant_landing_page
 
 logger = logging.getLogger(__name__)
@@ -32,6 +36,69 @@ def require_testing_mode() -> None:
 
 
 debug_router = APIRouter(dependencies=[Depends(require_testing_mode)])
+
+_TEST_CONTROL_HEADER = "x-adcp-test-control-token"
+
+
+class TestingAdCPVersionPolicy(SalesAgentBaseModel):
+    """Complete version-policy snapshot installed by E2E setup."""
+
+    lease_id: str = Field(min_length=16, max_length=128)
+    supported_versions: list[str] = Field(min_length=1)
+    build_version: str = Field(min_length=1, max_length=128)
+
+
+def require_test_control(request: Request) -> None:
+    """Authorize live-server setup with test mode plus a per-run secret."""
+    expected = os.environ.get("ADCP_TEST_CONTROL_TOKEN")
+    supplied = request.headers.get(_TEST_CONTROL_HEADER)
+    if (
+        os.environ.get("ADCP_TESTING") != "true"
+        or not expected
+        or not supplied
+        or not secrets.compare_digest(supplied, expected)
+    ):
+        # Hide the control surface entirely when either independent gate fails.
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+@debug_router.put(
+    "/_internal/testing/adcp-version-policy",
+    dependencies=[Depends(require_test_control)],
+    include_in_schema=False,
+)
+async def install_testing_adcp_version_policy(policy: TestingAdCPVersionPolicy) -> dict[str, Any]:
+    """Atomically install one leased policy snapshot for real-server BDD setup."""
+    from src.core.exceptions import AdCPConfigurationError
+
+    try:
+        installed = _install_testing_version_policy(
+            lease_id=policy.lease_id,
+            supported_versions=tuple(policy.supported_versions),
+            build_version=policy.build_version,
+        )
+    except AdCPConfigurationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not installed:
+        raise HTTPException(status_code=409, detail="Another version-policy test lease is active")
+    return {
+        "lease_id": policy.lease_id,
+        "supported_versions": policy.supported_versions,
+        "build_version": policy.build_version,
+    }
+
+
+@debug_router.delete(
+    "/_internal/testing/adcp-version-policy/{lease_id}",
+    dependencies=[Depends(require_test_control)],
+    include_in_schema=False,
+    status_code=204,
+)
+async def reset_testing_adcp_version_policy(lease_id: str) -> Response:
+    """Reset a policy snapshot only when teardown owns the active lease."""
+    if not _reset_testing_version_policy(lease_id=lease_id):
+        raise HTTPException(status_code=409, detail="The active version-policy test lease has a different owner")
+    return Response(status_code=204)
 
 
 @router.get("/health")

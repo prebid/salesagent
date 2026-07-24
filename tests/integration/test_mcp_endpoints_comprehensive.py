@@ -9,12 +9,12 @@ See #1233 D11 and ``docs/development/ci-pipeline.md``.
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from src.core.schemas import CreateMediaBuyRequest
+from tests.harness._idempotency import fresh_idempotency_key
 from tests.helpers.adcp_factories import create_test_package_request
 
 
@@ -30,7 +30,7 @@ def test_schema_adcp_format() -> None:
         ],
         start_time=datetime.now(UTC),
         end_time=datetime.now(UTC) + timedelta(days=30),
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+        idempotency_key=fresh_idempotency_key("int-key"),
     )
 
     assert len(request.packages) == 2

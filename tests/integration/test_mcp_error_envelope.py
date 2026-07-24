@@ -5,7 +5,7 @@ Companion to tests/integration/test_a2a_error_responses.py — verifies that
 typed AdCPError raised inside an MCP-routed _impl surfaces on the wire as a
 spec two-layer envelope (``adcp_error`` + ``errors[]``) inside the
 FastMCP CallToolResult content text. The MCP boundary translator
-(src/core/tool_error_logging.py:_translate_to_tool_error) builds the envelope
+(src/core/tool_error_logging.py:translate_to_tool_error) builds the envelope
 via build_two_layer_error_envelope and wraps it in an AdCPToolError whose
 ``str(self)`` is the JSON-encoded envelope.
 
@@ -23,12 +23,12 @@ AdCPValidationError raised directly.
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from tests.factories.principal import PrincipalFactory
+from tests.harness._idempotency import fresh_idempotency_key
 from tests.helpers import assert_envelope_shape
 from tests.helpers.adcp_factories import create_test_package_request_dict
 from tests.helpers.mcp_envelope_capture import call_mcp_tool_capturing_envelope
@@ -69,14 +69,15 @@ class TestMcpWireErrorEnvelope:
         """AdCPMediaBuyNotFoundError from _impl surfaces as a two-layer envelope on the MCP wire.
 
         Flow exercised end-to-end:
-            Client(mcp).call_tool("update_media_buy", {"media_buy_id": "nonexistent", "paused": True})
+            Client(mcp).call_tool("update_media_buy", {"media_buy_id": "nonexistent", "paused": True,
+                "idempotency_key": "mcp-not-found-key-0001"})
               → FastMCP middleware chain
               → TypeAdapter validates args
               → update_media_buy MCP wrapper (src/core/tools/media_buy_update.py)
               → _update_media_buy_impl → MediaBuyRepository.get_by_id returns None
               → raise AdCPMediaBuyNotFoundError("Media buy 'nonexistent' not found.")
               → with_error_logging wrapper catches it
-              → _translate_to_tool_error builds envelope via build_two_layer_error_envelope
+              → translate_to_tool_error builds envelope via build_two_layer_error_envelope
               → raises AdCPToolError(envelope, status_code=404)
               → FastMCP serializes str(error) = JSON envelope into CallToolResult.content[0].text
 
@@ -94,6 +95,7 @@ class TestMcpWireErrorEnvelope:
             {
                 "media_buy_id": "mb_does_not_exist_mcp_wire",
                 "paused": True,  # need ≥1 updatable field to pass pre-lookup validation
+                "idempotency_key": "mcp-not-found-key-0001",
             },
             identity,
         )
@@ -124,7 +126,7 @@ class TestMcpWireErrorEnvelope:
               → _create_media_buy_impl validation: get_total_budget() == 0
               → raise AdCPBudgetTooLowError(...) (line 1758)
               → except block translates to AdCPValidationError (line 2221)
-              → with_error_logging → _translate_to_tool_error → wire envelope
+              → with_error_logging → translate_to_tool_error → wire envelope
 
         No ``_impl`` patching — exercises the actual production validator
         and the structured-error→AdCPError translation path.
@@ -139,7 +141,7 @@ class TestMcpWireErrorEnvelope:
             "create_media_buy",
             {
                 "brand": {"domain": "wiretest.example"},
-                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+                "idempotency_key": fresh_idempotency_key("int-key"),
                 "packages": [
                     create_test_package_request_dict(
                         product_id=_PRODUCT_ID,
@@ -176,7 +178,7 @@ class TestMcpWireErrorEnvelope:
             "create_media_buy",
             {
                 "brand": {"domain": "wiretest.example"},
-                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+                "idempotency_key": fresh_idempotency_key("int-key"),
                 "packages": [
                     create_test_package_request_dict(
                         product_id=_PRODUCT_ID,
@@ -209,9 +211,14 @@ class TestMcpWireErrorEnvelope:
 
         AUTH_REQUIRED is a STANDARD spec code — passes through unchanged.
         """
+        application_context = {
+            "correlation_id": "mcp-auth-wire-context",
+            "nullable": None,
+            "nested": {"value": None},
+        }
         is_error, envelope = call_mcp_tool_capturing_envelope(
             "get_media_buy_delivery",
-            {"media_buy_ids": ["any_id"]},
+            {"media_buy_ids": ["any_id"], "context": application_context},
             identity=None,
         )
 
@@ -221,6 +228,7 @@ class TestMcpWireErrorEnvelope:
         # AdCPAuthRequiredError -> AUTH_REQUIRED (AdCP 3.1 spec code, passed through unchanged).
         # Recovery is correctable per the pinned error-code enum (#1417).
         assert_envelope_shape(envelope, "AUTH_REQUIRED", recovery="correctable")
+        assert envelope["context"] == application_context
         assert "identity" in envelope["adcp_error"]["message"].lower() or (
             "auth" in envelope["adcp_error"]["message"].lower()
         ), f"Envelope message must mention identity/auth, got: {envelope['adcp_error']['message']}"

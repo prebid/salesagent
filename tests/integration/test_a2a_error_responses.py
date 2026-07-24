@@ -10,7 +10,6 @@ through the A2A wrapper layer, including:
 """
 
 import logging
-import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
@@ -20,6 +19,7 @@ from a2a.types import Message, SendMessageRequest, Task
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from tests.factories.principal import PrincipalFactory
+from tests.harness._idempotency import fresh_idempotency_key
 from tests.helpers import assert_envelope_shape, assert_no_raw_validation_leak
 from tests.helpers.adcp_factories import create_test_package_request_dict
 from tests.integration.conftest import seed_error_test_tenant
@@ -110,9 +110,13 @@ class TestA2AErrorPropagation:
 
         set_current_tenant(test_tenant)
 
-        # Create message with INVALID parameters (missing required fields)
+        # Create message with INVALID parameters (missing required fields).
+        # A valid idempotency_key is supplied so this exercises the missing-
+        # PARAMS path (packages/start_time/end_time), not the earlier
+        # missing-key rejection that now fires first (key-precedence parity).
         skill_params = {
             "brand": {"domain": "testbrand.com"},
+            "idempotency_key": fresh_idempotency_key("int-key"),
             # Missing: packages, budget, start_time, end_time
         }
         message = self.create_message_with_skill("create_media_buy", skill_params)
@@ -165,7 +169,7 @@ class TestA2AErrorPropagation:
 
         skill_params = {
             "brand": {"domain": "testbrand.com"},
-            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+            "idempotency_key": fresh_idempotency_key("int-key"),
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -222,7 +226,7 @@ class TestA2AErrorPropagation:
         end = start - timedelta(days=1)  # end before start
         skill_params = {
             "brand": {"domain": "testbrand.com"},
-            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+            "idempotency_key": fresh_idempotency_key("int-key"),
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -310,7 +314,7 @@ class TestA2AErrorPropagation:
 
         skill_params = {
             "brand": {"domain": "testbrand.com"},
-            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+            "idempotency_key": fresh_idempotency_key("int-key"),
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -343,6 +347,49 @@ class TestA2AErrorPropagation:
         wire_field = artifact_data["errors"][0].get("field") or ""
         assert "budget" in wire_field, f"expected a budget field path on the wire, got {wire_field!r}"
 
+    async def test_ssrf_callback_rejected_as_validation_envelope_wire(self, handler, test_tenant, test_principal):
+        """A callback URL targeting a metadata/internal address surfaces VALIDATION_ERROR on the wire.
+
+        Round-1 raised AdCPValidationError from the push-callback guard BEFORE the per-skill
+        translation seam, so on_message_send emitted a JSON-RPC -32603 InternalError whose data
+        the A2A v0.3 adapter has been observed dropping on the E2E network wire (in-process the mounted app carries data; network-wire reconciliation is a tracked follow-up). The rejection must instead
+        produce a buyer-CORRECTABLE two-layer envelope on the failed Task's artifact DataPart, and
+        the callback must never be stored (#1512).
+        """
+        from a2a.types import SendMessageConfiguration, TaskPushNotificationConfig
+
+        identity = PrincipalFactory.make_identity(
+            principal_id=test_principal["principal_id"],
+            tenant_id=test_tenant["tenant_id"],
+            tenant=test_tenant,
+            auth_token=test_principal["access_token"],
+            protocol="a2a",
+        )
+        handler._get_auth_token = MagicMock(return_value=test_principal["access_token"])
+        handler._resolve_a2a_identity = MagicMock(return_value=identity)
+
+        message = self.create_message_with_skill("get_adcp_capabilities", {})
+        params = SendMessageRequest(
+            message=message,
+            configuration=SendMessageConfiguration(
+                task_push_notification_config=TaskPushNotificationConfig(url="https://169.254.169.254/latest/meta-data")
+            ),
+        )
+
+        result = await handler.on_message_send(params, ServerCallContext())
+
+        assert isinstance(result, Task)
+        assert result.artifacts is not None and len(result.artifacts) > 0
+        artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+        assert_envelope_shape(artifact_data, "VALIDATION_ERROR", message_substr="SSRF", recovery="correctable")
+        wire_error = artifact_data["errors"][0]
+        assert wire_error["field"] == "push_notification_config.url"
+        assert wire_error["suggestion"] == (
+            "Supply a publicly routable HTTPS callback URL without embedded credentials."
+        )
+        assert "169.254.169.254" not in wire_error["message"], "metadata address leaked into buyer error"
+        assert handler._task_push_configs == {}, "a rejected callback must never be stored"
+
     async def test_create_media_buy_success_has_no_errors_field(self, handler, test_tenant, test_principal):
         """Test that successful responses don't have errors field (or it's None/empty)."""
         identity = PrincipalFactory.make_identity(
@@ -365,7 +412,7 @@ class TestA2AErrorPropagation:
 
         skill_params = {
             "brand": {"domain": "testbrand.com"},
-            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+            "idempotency_key": fresh_idempotency_key("int-key"),
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -469,7 +516,7 @@ class TestA2AErrorPropagation:
 
         skill_params = {
             "brand": {"domain": "testbrand.com"},
-            "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+            "idempotency_key": fresh_idempotency_key("int-key"),
             "packages": [
                 create_test_package_request_dict(
                     product_id="a2a_error_product",
@@ -626,7 +673,11 @@ class TestA2AErrorPropagation:
 
         # Send paused=True so _update_media_buy_impl has ≥1 updatable field and
         # reaches _verify_principal where the lookup fires the typed exception.
-        skill_params = {"media_buy_id": "mb_does_not_exist_a2a_wire", "paused": True}
+        skill_params = {
+            "media_buy_id": "mb_does_not_exist_a2a_wire",
+            "paused": True,
+            "idempotency_key": fresh_idempotency_key(),
+        }
         message = self.create_message_with_skill("update_media_buy", skill_params)
         params = SendMessageRequest(message=message)
 
@@ -733,7 +784,12 @@ class TestA2AErrorPropagation:
 
         set_current_tenant(test_tenant)
 
-        skill_params = {"media_buy_id": active_media_buy, "budget": 888_888_888.0, "currency": "USD"}
+        skill_params = {
+            "media_buy_id": active_media_buy,
+            "budget": 888_888_888.0,
+            "currency": "USD",
+            "idempotency_key": fresh_idempotency_key(),
+        }
         message = self.create_message_with_skill("update_media_buy", skill_params)
         params = SendMessageRequest(message=message)
 
@@ -775,6 +831,7 @@ class TestA2AErrorPropagation:
         skill_params = {
             "media_buy_id": active_media_buy,
             "packages": [{"package_id": "pkg-1", "budget": 0.50}],
+            "idempotency_key": fresh_idempotency_key(),
         }
         message = self.create_message_with_skill("update_media_buy", skill_params)
         params = SendMessageRequest(message=message)
@@ -820,7 +877,9 @@ class TestA2AErrorResponseStructure:
 
         with pytest.raises(AdCPValidationError) as exc_info:
             await handler._handle_create_media_buy_skill(
-                parameters={"brand": {"domain": "testbrand.com"}},  # Missing required fields
+                # Valid key supplied: pins the missing-PARAMS error, not the
+                # missing-key error that now precedes it.
+                parameters={"brand": {"domain": "testbrand.com"}, "idempotency_key": "int-key-0123456789ab"},
                 identity=identity,
             )
 
@@ -849,6 +908,7 @@ class TestA2AErrorResponseStructure:
             await handler._handle_create_media_buy_skill(
                 parameters={
                     "brand": {"domain": "testbrand.com"},
+                    "idempotency_key": "int-key-0123456789ab",  # Valid: pins missing-PARAMS path.
                     # Missing: packages, budget, start_time, end_time
                 },
                 identity=identity,

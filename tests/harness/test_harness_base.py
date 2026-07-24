@@ -7,7 +7,41 @@ modes share the same lifecycle contract.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
+
+import pytest
+
+
+def _make_unit_capabilities_env(*, e2e_config=None):
+    """Build CapabilitiesEnv without binding a database for harness meta-tests."""
+    from tests.harness.capabilities import CapabilitiesEnv
+
+    class _UnitCapabilitiesEnv(CapabilitiesEnv):
+        use_real_db = False
+
+    return _UnitCapabilitiesEnv(e2e_config=e2e_config)
+
+
+def _expected_policy_control_calls(lease_id: str, *, versions: list[str], build_version: str):
+    """Canonical live-server install/reset call pair for one owned lease."""
+    headers = {"x-adcp-test-control-token": "per-run-secret"}
+    return [
+        call(
+            "PUT",
+            "/_internal/testing/adcp-version-policy",
+            headers=headers,
+            json={
+                "lease_id": lease_id,
+                "supported_versions": versions,
+                "build_version": build_version,
+            },
+        ),
+        call(
+            "DELETE",
+            f"/_internal/testing/adcp-version-policy/{lease_id}",
+            headers=headers,
+        ),
+    ]
 
 
 class TestBaseClassContract:
@@ -224,6 +258,37 @@ class TestBaseClassContract:
         assert env.identity.principal_id == "p1"
         assert env.identity.protocol == "mcp"
 
+    def test_wire_auth_snapshots_raw_headers(self):
+        """WireAuth preserves exact wire values without retaining caller state."""
+        from tests.harness import WireAuth
+
+        headers = {"Authorization": "  Bearer raw-token  "}
+        auth = WireAuth(headers=headers)
+        headers["Authorization"] = "mutated"
+
+        assert auth.headers["Authorization"] == "  Bearer raw-token  "
+
+    def test_build_rest_body_preserves_explicit_boundary_fields(self):
+        """Negotiation pins beside a typed request survive REST serialization."""
+        from pydantic import BaseModel
+
+        from tests.harness._base import BaseTestEnv
+
+        class _Request(BaseModel):
+            value: str
+
+        body = BaseTestEnv().build_rest_body(
+            req=_Request(value="payload"),
+            adcp_version="4.0",
+            adcp_major_version=4,
+        )
+
+        assert body == {
+            "value": "payload",
+            "adcp_version": "4.0",
+            "adcp_major_version": 4,
+        }
+
     def test_call_via_raises_for_unimplemented_transport(self):
         """call_via with Transport.A2A raises NotImplementedError if call_a2a not overridden."""
 
@@ -265,6 +330,211 @@ class TestBaseClassContract:
         assert result.is_success
         assert result.payload.ok is True
         assert result.envelope.get("transport") == "mcp"
+
+    def test_a2a_dispatcher_splits_stashed_wire_from_synthesized(self):
+        """``wire_error_envelope`` holds ONLY captured wire; raw-path output is synthesized.
+
+        The A2A dispatcher mirrors ``McpDispatcher``: real wire lives on
+        ``wire_error_envelope`` and is present ONLY when the env stashes it
+        (``_run_a2a_handler`` path, via ``_envelope_to_adcp_error``). Envs whose
+        ``call_a2a`` uses the direct ``*_raw`` path (no Task framing, e.g.
+        CreativeSyncEnv) never stash — so ``wire_error_envelope`` is ``None`` and
+        the envelope production WOULD emit is exposed on
+        ``synthesized_error_envelope``. This keeps the wire field honest: raw-path
+        synthesis can no longer masquerade as captured wire.
+        """
+        from src.core.exceptions import AdCPValidationError
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.transport import Transport
+
+        class _RawPathEnv(BaseTestEnv):
+            def call_a2a(self, **kwargs):
+                raise AdCPValidationError("invalid")
+
+        result = _RawPathEnv().call_via(Transport.A2A)
+        assert result.is_error
+        assert result.wire_error_envelope is None, "raw path has no captured wire — must be None, not synthesized"
+        assert result.synthesized_error_envelope is not None, "raw-path A2A error must expose a synthesized envelope"
+        assert result.synthesized_error_envelope["adcp_error"]["code"] == "VALIDATION_ERROR"
+        # The raw path never had the opportunity to stash wire — a permanent,
+        # by-design None, not a transient dispatcher miss. See
+        # tests/bdd/steps/_outcome_helpers.wire_error_envelope, which relies on
+        # this flag to avoid misclassifying this env as a regression.
+        assert result.wire_capture_unavailable is True
+
+        sentinel = {"adcp_error": {"code": "VALIDATION_ERROR", "message": "real-wire-sentinel"}}
+
+        class _StashedEnv(BaseTestEnv):
+            def call_a2a(self, **kwargs):
+                exc = AdCPValidationError("invalid")
+                exc._wire_error_envelope = sentinel  # what _envelope_to_adcp_error stashes
+                raise exc
+
+        result = _StashedEnv().call_via(Transport.A2A)
+        assert result.wire_error_envelope == sentinel, "stashed real wire must surface on wire_error_envelope"
+        assert result.wire_capture_unavailable is False, "the full pipeline promises captured wire"
+
+    @pytest.mark.parametrize(
+        ("rest_method", "payload_argument"),
+        [("post", "json"), ("get", "params")],
+    )
+    def test_e2e_rest_dispatcher_forwards_wire_auth_and_uses_method_payload(
+        self,
+        rest_method,
+        payload_argument,
+    ):
+        """E2E REST mirrors in-process auth headers and GET/query semantics."""
+        from pydantic import BaseModel
+
+        from tests.harness._base import BaseTestEnv
+        from tests.harness.dispatchers import RestE2EDispatcher
+        from tests.harness.transport import E2EConfig, WireAuth
+
+        class _ResponseModel(BaseModel):
+            ok: bool
+
+        class _TestEnv(BaseTestEnv):
+            REST_ENDPOINT = "/test"
+            REST_METHOD = rest_method
+
+            def parse_rest_response(self, data):
+                return _ResponseModel(**data)
+
+        env = _TestEnv(e2e_config=E2EConfig(base_url="http://example.test", postgres_url="postgresql://test"))
+        response = MagicMock(
+            status_code=200,
+            headers={"content-type": "application/json"},
+        )
+        response.json.return_value = {"ok": True}
+
+        with patch("httpx.Client") as client_cls:
+            client = client_cls.return_value.__enter__.return_value
+            request_method = getattr(client, rest_method)
+            request_method.return_value = response
+            result = RestE2EDispatcher().dispatch(
+                env,
+                identity=WireAuth(headers={"Authorization": "  Bearer raw-token  "}),
+            )
+
+        request_method.assert_called_once_with(
+            "/test",
+            **{
+                payload_argument: {},
+                "headers": {
+                    "Content-Type": "application/json",
+                    "Authorization": "  Bearer raw-token  ",
+                },
+            },
+        )
+        assert result.is_success
+        assert result.wire_response == {"ok": True}
+
+    def test_capabilities_policy_setup_uses_managed_in_process_patches(self):
+        """The UC-010 setup intent drives core policy and is undone on exit."""
+        from src.core import adcp_version as av
+        from tests.harness.transport import Transport
+
+        default_versions = av.supported_adcp_versions()
+        default_build = av.adcp_build_version()
+        with _make_unit_capabilities_env() as env:
+            env.configure_version_policy(
+                Transport.REST,
+                supported_versions=("3.0", "3.1"),
+                build_version="3.1.2+e2e.1",
+            )
+            assert av.supported_adcp_versions() == ("3.0", "3.1")
+            assert av.adcp_build_version() == "3.1.2+e2e.1"
+
+        assert av.supported_adcp_versions() == default_versions
+        assert av.adcp_build_version() == default_build
+
+    def test_capabilities_advertises_configured_supported_versions(self):
+        """Capabilities ADVERTISES the configured policy, not a stale by-name import (#1512).
+
+        The prior test only proved the patch took on src.core.adcp_version. This
+        exercises the actual consumer: _build_adcp_block must resolve
+        supported_versions through the same canonical attribute the harness
+        overrides, or advertisement splits from what validate_adcp_version_pins
+        negotiates. Asserts the advertised versions themselves, not merely the
+        absence of an error.
+        """
+        from src.core.tools.capabilities import _build_adcp_block
+        from tests.harness.transport import Transport
+
+        with _make_unit_capabilities_env() as env:
+            env.configure_version_policy(Transport.REST, supported_versions=("3.0", "3.1"))
+            block = _build_adcp_block()
+            advertised = [sv.root for sv in block.supported_versions]
+            assert advertised == ["3.0", "3.1"]
+
+    def test_capabilities_rest_preserves_explicit_empty_protocol_filter(self):
+        """An explicit [] becomes a present blank query value, never absence."""
+        env = _make_unit_capabilities_env()
+
+        assert env.build_rest_body(protocols=[]) == {"protocols": ""}
+
+    def test_capabilities_e2e_policy_setup_is_secret_gated_and_reset_on_failure(self):
+        """Live-server setup sends a leased snapshot and teardown always resets it."""
+        from tests.harness.transport import E2EConfig, Transport
+
+        config = E2EConfig(
+            base_url="http://example.test",
+            postgres_url="postgresql://test",
+            test_control_token="per-run-secret",
+        )
+        env = _make_unit_capabilities_env(e2e_config=config)
+        lease_id = env._version_policy_lease
+        response = MagicMock()
+
+        with patch("httpx.Client") as client_cls:
+            client = client_cls.return_value.__enter__.return_value
+            client.request.return_value = response
+            with pytest.raises(RuntimeError, match="scenario failed"):
+                with env:
+                    env.configure_version_policy(
+                        Transport.E2E_REST,
+                        supported_versions=("3.1", "3.2"),
+                        build_version="3.2.0",
+                    )
+                    raise RuntimeError("scenario failed")
+
+        assert client.request.call_args_list == _expected_policy_control_calls(
+            lease_id,
+            versions=["3.1", "3.2"],
+            build_version="3.2.0",
+        )
+        assert response.raise_for_status.call_count == 2
+
+    def test_capabilities_e2e_policy_ambiguous_put_still_resets_owned_lease(self):
+        """A lost PUT response cannot leave server-global policy poisoning later tests."""
+        from tests.harness.transport import E2EConfig, Transport
+
+        config = E2EConfig(
+            base_url="http://example.test",
+            postgres_url="postgresql://test",
+            test_control_token="per-run-secret",
+        )
+        env = _make_unit_capabilities_env(e2e_config=config)
+        lease_id = env._version_policy_lease
+        response = MagicMock()
+        response.raise_for_status.side_effect = [RuntimeError("ambiguous PUT failure"), None]
+
+        with patch("httpx.Client") as client_cls:
+            client = client_cls.return_value.__enter__.return_value
+            client.request.return_value = response
+            with pytest.raises(RuntimeError, match="ambiguous PUT failure"):
+                with env:
+                    env.configure_version_policy(
+                        Transport.E2E_REST,
+                        supported_versions=("3.0", "3.1"),
+                        build_version="3.1.2+e2e.1",
+                    )
+
+        assert client.request.call_args_list == _expected_policy_control_calls(
+            lease_id,
+            versions=["3.0", "3.1"],
+            build_version="3.1.2+e2e.1",
+        )
 
     def test_call_via_impl_uses_call_impl(self):
         """call_via(Transport.IMPL) routes through call_impl."""

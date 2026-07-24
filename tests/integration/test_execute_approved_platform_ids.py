@@ -78,6 +78,8 @@ def pending_media_buy_with_package(integration_db):
             end_time=end,
             status="pending_approval",
             raw_request={
+                # Historical rows serialized the then-optional field as JSON null.
+                "idempotency_key": None,
                 "brand": {"domain": "testbrand.com"},
                 "start_time": start.isoformat(),
                 "end_time": end.isoformat(),
@@ -227,6 +229,15 @@ def _run_execute_approved(media_buy_id, tenant_id, adapter_response):
 
 class TestExecuteApprovedPlatformIds:
     """execute_approved_media_buy must persist _platform_line_item_ids to package_config."""
+
+    def test_explicit_null_legacy_idempotency_key_is_synthesized(self, pending_media_buy_with_package):
+        """A pre-requirement request serialized with a null key still executes after approval."""
+        data = pending_media_buy_with_package
+        adapter_response = CreateMediaBuySuccess(media_buy_id=data["media_buy_id"], packages=[])
+
+        success, error = _run_execute_approved(data["media_buy_id"], data["tenant_id"], adapter_response)
+
+        assert success is True, f"legacy approval replay failed: {error}"
 
     def test_platform_line_item_ids_persisted_after_approval(self, pending_media_buy_with_package):
         """After adapter execution via manual approval, platform_line_item_id

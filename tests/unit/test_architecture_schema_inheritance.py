@@ -234,15 +234,15 @@ class TestSchemaInheritance:
             ("UpdateMediaBuyRequest", "end_time"),  # datetime|None (library uses AwareDatetime)
             ("UpdateMediaBuyRequest", "packages"),  # list[AdCPPackageUpdate] (local subclass type)
             ("UpdateMediaBuyRequest", "start_time"),  # datetime|Literal["asap"]|None (wider type)
-            # adcp 4.3 field overrides — library made these required; we keep them
-            # optional because identity is resolved at the transport boundary, and
-            # required-key enforcement rolls out create_media_buy-first
-            # (CreateMediaBuyRequest.idempotency_key now inherits the required field)
+            # adcp 4.3 field overrides — identity fields remain optional at the
+            # transport boundary. Create/sync request models inherit their
+            # required idempotency keys; update keeps an internal optional
+            # override and enforces requiredness in the shared wire builder.
             ("Product", "reporting_capabilities"),  # optional override (not all products have it)
-            ("SyncAccountsRequest", "idempotency_key"),  # optional override (required-key fast-follow)
-            ("SyncCreativesRequest", "idempotency_key"),  # optional override (required-key fast-follow)
             ("UpdateMediaBuyRequest", "account"),  # optional override (resolved from identity)
-            ("UpdateMediaBuyRequest", "idempotency_key"),  # optional override (required-key fast-follow)
+            # Optional internally so the shared transport boundary emits one
+            # typed required-field envelope; every wire entry point enforces it.
+            ("UpdateMediaBuyRequest", "idempotency_key"),
             # Pattern #4: ListAccountsResponse.accounts uses local Account subclass
             ("ListAccountsResponse", "accounts"),
             # Required-field tightening (#1399 Plan-B): pinned 3.1 marks these

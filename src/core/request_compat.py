@@ -19,6 +19,56 @@ V25_SIGNALS: frozenset[str] = frozenset({"brand_manifest", "promoted_offerings",
 # Tools where brand_manifest → brand translation applies.
 _BRAND_TOOLS: frozenset[str] = frozenset({"get_products", "create_media_buy"})
 
+# AdCP version-negotiation envelope fields. Every AdCP SDK client injects these
+# on each request (Stripe-style API-version pinning); they are protocol envelope,
+# not tool parameters, so no tool wrapper declares them. Consumed for
+# negotiation first (src/core/adcp_version.validate_adcp_version_pins raises
+# VERSION_UNSUPPORTED when a well-formed pin cannot be served), then stripped before MCP
+# arg-validation so strict per-tool validation does not reject conformant SDK
+# clients. See https://github.com/prebid/salesagent/issues/1512.
+ADCP_NEGOTIATION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version"})
+
+# Standard read names registered by this seller.  Each transport applies the
+# validator only to names it actually exposes; notably, ``list_tasks`` remains
+# MCP-only.  The 3.1 compatibility grace permits omission, while security-layer
+# envelope tolerance permits a supplied key even when the individual request
+# schema does not declare it.  On standard reads the key is
+# validated then ignored — it never reaches business logic or a replay cache.
+# Deliberate branch choice: read-tool-idempotency.yaml's omitted_key_grace says
+# sellers "SHOULD reject this omission but MAY accept it for compatibility";
+# this seller takes the MAY-accept branch during 3.1. Flippable when: the 3.2
+# storyboard cut turns that probe into a required rejection.
+STANDARD_ADCP_READ_TOOLS: frozenset[str] = frozenset(
+    {
+        "get_adcp_capabilities",
+        "get_media_buy_delivery",
+        "get_media_buys",
+        "get_products",
+        "list_accounts",
+        "list_creative_formats",
+        "list_creatives",
+        "list_tasks",
+    }
+)
+
+
+def validate_standard_read_idempotency_key(tool_name: str, params: dict[str, Any]) -> None:
+    """Validate a supplied read key as inert protocol metadata.
+
+    Omission is accepted for the pinned 3.1 compatibility grace.  Presence is
+    shape-checked before any transport strips undeclared envelope fields;
+    explicit JSON null is presence and therefore invalid.  Non-standard/local
+    tools are untouched.
+    """
+    if tool_name not in STANDARD_ADCP_READ_TOOLS or "idempotency_key" not in params:
+        return
+
+    # Lazy import avoids request_compat -> schema_helpers -> schemas import
+    # cycles during startup while keeping one canonical shape validator.
+    from src.core.schemas._base import validate_idempotency_key_shape
+
+    validate_idempotency_key_shape(params["idempotency_key"], allow_none=False)
+
 
 @dataclass
 class NormalizationResult:
@@ -172,6 +222,114 @@ def normalize_request_params(
     )
 
 
+# Standard AdCP envelope-framing fields that SOME tools declare as real
+# parameters and others don't (unlike ADCP_NEGOTIATION_FIELDS, which no tool
+# declares). Stripped from a request only when the target tool does not declare
+# them — so a conformant client's envelope doesn't trip strict per-tool
+# validation, while tools that use these fields still receive them.
+ADCP_ENVELOPE_FIELDS: frozenset[str] = frozenset(
+    {
+        "context",
+        "ext",
+        "push_notification_config",
+        # Concurrency/idempotency framing. Tolerance grounding (3.1.1):
+        # every AdCP request schema carries additionalProperties: true, and
+        # building/by-layer/L1/security.mdx § Idempotency requires sellers to
+        # accept requests carrying idempotency_key ("no rejecting on undeclared
+        # envelope fields"). push_notification_config is a per-task request field
+        # (not universal envelope), tolerated on the same basis. Tools that
+        # declare these (e.g. create_media_buy's idempotency_key) still receive them.
+        "idempotency_key",
+        # NOTE: `revision` is deliberately NOT tolerated. It is an optimistic-
+        # concurrency control (update-media-buy-request.json, 3.1.1): a mismatch
+        # MUST return CONFLICT, atomically with the write. This agent does not
+        # implement that concurrency control. Silently stripping `revision` would
+        # drop the buyer's stale-write guard and perform an unprotected update the
+        # buyer believed was guarded. Instead, update_media_buy declares `revision`
+        # and rejects any supplied value fail-loud on every transport, so the
+        # buyer learns the guard is unavailable rather than getting a false success.
+    }
+)
+
+
+def _strip_fields(
+    params: dict[str, Any],
+    fields_to_strip: set[str] | frozenset[str],
+) -> tuple[dict[str, Any], list[str]]:
+    """Remove selected fields while preserving no-op object identity.
+
+    Returns the original ``params`` object when none of ``fields_to_strip``
+    are present. Keeping that invariant in one helper prevents the three
+    public strip operations from drifting in their copy/no-copy behavior.
+    """
+    present = params.keys() & fields_to_strip
+    if not present:
+        return params, []
+    cleaned = {key: value for key, value in params.items() if key not in present}
+    return cleaned, sorted(present)
+
+
+# Canonical ``kind`` labels for ``_log_dropped_fields``, shared by every
+# MCP/A2A call site so a field-drop event correlates by ONE label regardless
+# of transport or which specific envelope field(s) were involved — an
+# operator grepping/alerting on one label must see every occurrence. An
+# earlier revision hardcoded ``"inert read idempotency"`` at one A2A call
+# site instead of reusing DROPPED_FIELDS_UNDECLARED_ENVELOPE, splitting one
+# semantic event (an envelope field the tool doesn't declare, dropped before
+# dispatch) across two labels depending on which transport handled it.
+DROPPED_FIELDS_NEGOTIATION = "AdCP negotiation"
+DROPPED_FIELDS_UNDECLARED_ENVELOPE = "undeclared AdCP envelope"
+
+
+def _log_dropped_fields(operation: str, kind: str, dropped: list[str]) -> None:
+    """Log dropped request fields with one cross-transport message shape."""
+    if dropped:
+        logger.debug(
+            "Dropped %s fields from %s: %s",
+            kind,
+            operation,
+            ", ".join(dropped),
+        )
+
+
+def strip_undeclared_envelope_fields(
+    params: dict[str, Any], known_params: set[str] | None
+) -> tuple[dict[str, Any], list[str]]:
+    """Strip standard AdCP envelope fields the target tool does not declare.
+
+    The ``ADCP_ENVELOPE_FIELDS`` (context / ext / push_notification_config /
+    idempotency_key) are envelope framing that AdCP SDK clients may
+    send on any request. A tool that declares one receives it; a tool that
+    does not would otherwise reject it under FastMCP's strict per-tool
+    arg-validation. Strip only the undeclared ones, in all environments. When
+    ``known_params`` is None (schema lookup failed) strip nothing — the
+    production fallback handles it. See #1512.
+
+    Returns:
+        Tuple of (params without the undeclared envelope fields, sorted removed
+        keys). Returns the original dict object unchanged when nothing is removed.
+    """
+    if known_params is None:
+        return params, []
+    return _strip_fields(params, ADCP_ENVELOPE_FIELDS - known_params)
+
+
+def strip_negotiation_fields(params: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Remove AdCP version-negotiation envelope fields from top-level params.
+
+    ``adcp_version`` / ``adcp_major_version`` are injected by every AdCP SDK
+    client for version negotiation. They are protocol envelope, not tool
+    parameters, so FastMCP's strict per-tool arg-validation rejects them and
+    makes the agent uncallable by conformant SDK clients. Strip them in all
+    environments before dispatch. See #1512.
+
+    Returns:
+        Tuple of (params without negotiation fields, sorted list of removed keys).
+        Returns the original dict object unchanged when none are present.
+    """
+    return _strip_fields(params, ADCP_NEGOTIATION_FIELDS)
+
+
 def strip_unknown_params(
     params: dict[str, Any],
     known_params: set[str],
@@ -186,11 +344,7 @@ def strip_unknown_params(
     Returns:
         Tuple of (cleaned dict with only known keys, sorted list of stripped key names).
     """
-    unknown = params.keys() - known_params
-    if not unknown:
-        return params, []
-    cleaned = {k: v for k, v in params.items() if k in known_params}
-    return cleaned, sorted(unknown)
+    return _strip_fields(params, params.keys() - known_params)
 
 
 def deep_strip_to_schema(

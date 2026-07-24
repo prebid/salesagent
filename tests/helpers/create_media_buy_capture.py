@@ -65,9 +65,18 @@ async def capture_mcp_forwarded_pnc(pnc: Any) -> dict | None:
         captured.update(kwargs)
         return mock_result
 
-    with patch(
-        "src.core.tools.media_buy_create._create_media_buy_impl",
-        side_effect=_capture,
+    with (
+        patch(
+            "src.core.tools.media_buy_create._create_media_buy_impl",
+            side_effect=_capture,
+        ),
+        # This helper tests serialization/forwarding, not DNS. Callback-policy
+        # behavior is covered by the dedicated transport-boundary tests.
+        patch("src.core.tools.media_buy_create.require_valid_callback_config_urls"),
+        patch(
+            "src.core.webhook_validator.require_valid_callback_config_urls_async",
+            new_callable=AsyncMock,
+        ),
     ):
         try:
             await create_media_buy(
@@ -111,9 +120,16 @@ async def capture_a2a_forwarded_pnc(pnc: Any) -> dict | None:
         captured.update(kwargs)
         return mock_result
 
-    with patch(
-        "src.core.tools.media_buy_create._create_media_buy_impl",
-        side_effect=_capture,
+    with (
+        patch(
+            "src.core.tools.media_buy_create._create_media_buy_impl",
+            side_effect=_capture,
+        ),
+        patch("src.core.tools.media_buy_create.require_valid_callback_config_urls"),
+        patch(
+            "src.core.webhook_validator.require_valid_callback_config_urls_async",
+            new_callable=AsyncMock,
+        ),
     ):
         await create_media_buy_raw(
             brand=req_dict["brand"],

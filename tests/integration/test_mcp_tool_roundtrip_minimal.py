@@ -7,7 +7,6 @@ and caused errors.
 Focus: Test parameter-to-schema mapping, not business logic.
 """
 
-import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -15,6 +14,7 @@ from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
 from tests.factories.creative_asset import build_assets, image_spec
+from tests.harness._idempotency import fresh_idempotency_key
 from tests.helpers import assert_envelope_shape
 
 
@@ -74,7 +74,7 @@ class TestMCPToolRoundtripMinimal:
                 "create_media_buy",
                 {
                     "brand": {"domain": "testbrand.com"},
-                    "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+                    "idempotency_key": fresh_idempotency_key("int-key"),
                     "packages": [
                         {
                             "product_id": product_id,
@@ -112,7 +112,7 @@ class TestMCPToolRoundtripMinimal:
                 "create_media_buy",
                 {
                     "brand": {"domain": "testbrand.com"},
-                    "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+                    "idempotency_key": fresh_idempotency_key("int-key"),
                     "packages": [
                         {
                             "product_id": product_id,
@@ -135,6 +135,7 @@ class TestMCPToolRoundtripMinimal:
                     {
                         "media_buy_id": create_content["media_buy_id"],
                         "budget": 2000.0,  # update_budget is valid from pending_creatives
+                        "idempotency_key": fresh_idempotency_key("update-key"),
                     },
                 )
 
@@ -200,7 +201,8 @@ class TestMCPToolRoundtripMinimal:
                         },
                         "assets": build_assets(image_spec("image", url="https://example.com/preview.jpg")),
                     }
-                ]
+                ],
+                "idempotency_key": fresh_idempotency_key(),
             },
         )
 
@@ -249,7 +251,7 @@ class TestMCPToolRoundtripMinimal:
                 "create_media_buy",
                 {
                     "brand": {"domain": "testbrand.com"},
-                    "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+                    "idempotency_key": fresh_idempotency_key("int-key"),
                     "packages": [
                         {
                             "product_id": product_id,

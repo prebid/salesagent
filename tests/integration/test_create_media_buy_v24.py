@@ -16,7 +16,6 @@ NOTE: These tests require a database connection. Run with:
 or with Docker Compose running for PostgreSQL.
 """
 
-import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -26,6 +25,7 @@ from src.core.database.database_session import get_db_session
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest, PackageRequest, Targeting
 from src.core.testing_hooks import AdCPTestContext
+from tests.harness._idempotency import fresh_idempotency_key
 from tests.integration.conftest import add_required_setup_data, create_test_product_with_pricing
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.asyncio]
@@ -249,7 +249,7 @@ class TestCreateMediaBuyV24Format:
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=31),
             po_number="TEST-V24-001",
-            idempotency_key=f"int-key-{uuid.uuid4().hex}",
+            idempotency_key=fresh_idempotency_key("int-key"),
         )
         response, _ = await _create_media_buy_impl(req=req, identity=identity)
 
@@ -313,7 +313,7 @@ class TestCreateMediaBuyV24Format:
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=31),
             po_number="TEST-V24-002",
-            idempotency_key=f"int-key-{uuid.uuid4().hex}",
+            idempotency_key=fresh_idempotency_key("int-key"),
         )
         response, _ = await _create_media_buy_impl(req=req, identity=identity)
 
@@ -389,7 +389,7 @@ class TestCreateMediaBuyV24Format:
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=31),
             po_number="TEST-V24-003",
-            idempotency_key=f"int-key-{uuid.uuid4().hex}",
+            idempotency_key=fresh_idempotency_key("int-key"),
         )
         response, _ = await _create_media_buy_impl(req=req, identity=identity)
 
@@ -433,7 +433,7 @@ class TestCreateMediaBuyV24Format:
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=31),
             po_number="TEST-V24-A2A-001",
-            idempotency_key=f"int-key-{uuid.uuid4().hex}",
+            idempotency_key=fresh_idempotency_key("int-key"),
         )
         response, _ = await _create_media_buy_impl(req=req, identity=identity)
 
@@ -478,7 +478,7 @@ class TestCreateMediaBuyV24Format:
             start_time=datetime.now(UTC) + timedelta(days=1),
             end_time=datetime.now(UTC) + timedelta(days=31),
             po_number="TEST-STANDARD-001",
-            idempotency_key=f"int-key-{uuid.uuid4().hex}",
+            idempotency_key=fresh_idempotency_key("int-key"),
         )
         response, _ = await _create_media_buy_impl(req=req, identity=identity)
 

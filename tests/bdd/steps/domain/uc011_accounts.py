@@ -12,6 +12,7 @@ ctx["error"] is any exception raised.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
@@ -19,6 +20,7 @@ from pytest_bdd import given, parsers, then, when
 from tests.bdd.steps._outcome_helpers import _require_response
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
+from tests.harness.account_sync import make_sync_accounts_request
 from tests.helpers import assert_envelope_shape
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -115,11 +117,10 @@ def _sync_pre_create(ctx: dict, brand_domain: str, operator: str, billing: str, 
     Captures original field values in ctx["original_field_values"] for later
     "unchanged from the original" assertions.
     """
-    from src.core.schemas.account import SyncAccountsRequest
 
     entry: dict[str, Any] = {"brand": {"domain": brand_domain}, "operator": operator, "billing": billing}
     entry.update(extra)
-    req = SyncAccountsRequest(accounts=[entry])
+    req = make_sync_accounts_request(accounts=[entry])
     dispatch_request(ctx, req=req)
     error = ctx.get("error")
     assert error is None, f"Given: pre-create sync for {brand_domain!r} failed: {error!r}"
@@ -177,6 +178,38 @@ def given_expired_token(ctx: dict) -> None:
     """Set up A2A connection with an expired/invalid token."""
     ctx["has_auth"] = False
     ctx["force_identity"] = None
+
+
+@given("the Buyer Agent presents an invalid bearer token")
+def given_invalid_wire_bearer(ctx: dict) -> None:
+    """Supply raw headers so every transport runs its real auth resolver."""
+    tenant, _principal = _setup_tenant_and_principal(ctx)
+
+    from tests.harness.transport import WireAuth
+
+    ctx["wire_auth"] = WireAuth(
+        headers={
+            "Authorization": "Bearer definitely-not-a-real-token",
+            "x-adcp-tenant": tenant.tenant_id,
+        }
+    )
+
+
+@given("the Buyer Agent presents no bearer token")
+def given_missing_wire_bearer(ctx: dict) -> None:
+    """Supply headers WITHOUT any bearer so the real resolver sees a missing token.
+
+    resolve_identity raises for an INVALID token but returns a principal-less
+    identity for a MISSING one, so this Given grades a different production
+    branch than the invalid-bearer sibling: the boundary guard that rejects a
+    principal-less identity before the version check can disclose
+    supported_versions.
+    """
+    tenant, _principal = _setup_tenant_and_principal(ctx)
+
+    from tests.harness.transport import WireAuth
+
+    ctx["wire_auth"] = WireAuth(headers={"x-adcp-tenant": tenant.tenant_id})
 
 
 @given("the sync_accounts response schema uses oneOf")
@@ -829,7 +862,6 @@ def when_sync_accounts_with_table(ctx: dict, datatable: Any) -> None:
     pytest-bdd datatable: list of lists. First row = headers, rest = data rows.
     Handles force_identity (unauthenticated) and force_internal_error contexts.
     """
-    from src.core.schemas.account import SyncAccountsRequest
 
     headers = datatable[0]
     rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
@@ -853,7 +885,7 @@ def when_sync_accounts_with_table(ctx: dict, datatable: Any) -> None:
         return
 
     try:
-        req = SyncAccountsRequest(accounts=accounts)
+        req = make_sync_accounts_request(accounts=accounts)
         dispatch_request(ctx, req=req, **kwargs)
     except Exception as exc:
         ctx["error"] = exc
@@ -866,7 +898,6 @@ def when_sync_with_governance_agents(ctx: dict, domain: str) -> None:
     Constructs a valid GovernanceAgent entry (url + authentication) and
     dispatches through the standard transport pipeline.
     """
-    from src.core.schemas.account import SyncAccountsRequest
 
     governance_agents = [
         _make_governance_agent(
@@ -875,7 +906,7 @@ def when_sync_with_governance_agents(ctx: dict, domain: str) -> None:
         )
     ]
     try:
-        req = SyncAccountsRequest(
+        req = make_sync_accounts_request(
             accounts=[
                 {
                     "brand": {"domain": domain},
@@ -1658,11 +1689,10 @@ def _given_agent_synced(ctx: dict, agent_name: str, domain: str) -> None:
     itself failed — swallowing the Given error previously masked live-server
     401s, so agent accounts silently never existed (PR #1430 items 1-2).
     """
-    from src.core.schemas.account import SyncAccountsRequest
 
     _setup_tenant_and_principal(ctx)
     identity = _make_identity_for_agent(ctx, agent_name)
-    req = SyncAccountsRequest(
+    req = make_sync_accounts_request(
         accounts=[{"brand": {"domain": domain}, "operator": domain, "billing": "operator"}],
     )
     dispatch_request(ctx, req=req, identity=identity)
@@ -1691,14 +1721,13 @@ def given_agent_b_synced(ctx: dict, d: str) -> None:
 @when(parsers.re(r"the Buyer Agent sends a sync_accounts request with dry_run (?P<value>true|false) and:"))
 def when_sync_with_dry_run(ctx: dict, value: str, datatable: Any) -> None:
     """Send sync_accounts with dry_run flag and accounts table."""
-    from src.core.schemas.account import SyncAccountsRequest
 
     headers = datatable[0]
     rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
     accounts = _parse_sync_table(rows)
 
     try:
-        req = SyncAccountsRequest(
+        req = make_sync_accounts_request(
             accounts=accounts,
             dry_run=value.lower() == "true",
         )
@@ -1710,7 +1739,6 @@ def when_sync_with_dry_run(ctx: dict, value: str, datatable: Any) -> None:
 @when(parsers.re(r"the Buyer Agent sends a sync_accounts request with delete_missing (?P<value>true|false) and:"))
 def when_sync_with_delete_missing(ctx: dict, value: str, datatable: Any) -> None:
     """Send sync_accounts with delete_missing flag and accounts table."""
-    from src.core.schemas.account import SyncAccountsRequest
 
     headers = datatable[0]
     rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
@@ -1718,7 +1746,7 @@ def when_sync_with_delete_missing(ctx: dict, value: str, datatable: Any) -> None
 
     ctx["sync_request_domains"] = {a["brand"]["domain"] for a in accounts if a.get("brand", {}).get("domain")}
     try:
-        req = SyncAccountsRequest(
+        req = make_sync_accounts_request(
             accounts=accounts,
             delete_missing=value.lower() == "true",
         )
@@ -1730,7 +1758,6 @@ def when_sync_with_delete_missing(ctx: dict, value: str, datatable: Any) -> None
 @when("the Buyer Agent sends a sync_accounts request without delete_missing and:")
 def when_sync_without_delete_missing(ctx: dict, datatable: Any) -> None:
     """Send sync_accounts without delete_missing (uses default=False)."""
-    from src.core.schemas.account import SyncAccountsRequest
 
     headers = datatable[0]
     rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
@@ -1738,7 +1765,7 @@ def when_sync_without_delete_missing(ctx: dict, datatable: Any) -> None:
 
     ctx["sync_request_domains"] = {a["brand"]["domain"] for a in accounts if a.get("brand", {}).get("domain")}
     try:
-        req = SyncAccountsRequest(accounts=accounts)
+        req = make_sync_accounts_request(accounts=accounts)
         dispatch_request(ctx, req=req)
     except Exception as exc:
         ctx["error"] = exc
@@ -1747,7 +1774,6 @@ def when_sync_without_delete_missing(ctx: dict, datatable: Any) -> None:
 @when("agent A sends a sync_accounts request with delete_missing true and:")
 def when_agent_a_sync_delete_missing(ctx: dict, datatable: Any) -> None:
     """Send sync_accounts under agent A's identity with delete_missing=True."""
-    from src.core.schemas.account import SyncAccountsRequest
 
     headers = datatable[0]
     rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
@@ -1756,7 +1782,7 @@ def when_agent_a_sync_delete_missing(ctx: dict, datatable: Any) -> None:
     identity_a = _make_identity_for_agent(ctx, "A")
 
     try:
-        req = SyncAccountsRequest(
+        req = make_sync_accounts_request(
             accounts=accounts,
             delete_missing=True,
         )
@@ -2013,10 +2039,8 @@ def when_request_with_context(ctx: dict, operation: str, ctx_json: str) -> None:
 
         req = ListAccountsRequest(context=context_obj)
     else:
-        from src.core.schemas.account import SyncAccountsRequest
-
         # Provide a minimal valid account for sync context echo tests
-        req = SyncAccountsRequest(
+        req = make_sync_accounts_request(
             accounts=[{"brand": {"domain": "ctx-test.com"}, "operator": "ctx-test.com", "billing": "operator"}],
             context=context_obj,
         )
@@ -2037,13 +2061,21 @@ def when_request_with_context(ctx: dict, operation: str, ctx_json: str) -> None:
 @when("the Buyer Agent sends a sync_accounts request with an empty accounts array")
 def when_sync_empty_accounts(ctx: dict) -> None:
     """Send sync_accounts with an empty accounts array."""
-    from src.core.schemas.account import SyncAccountsRequest
 
     try:
-        req = SyncAccountsRequest(accounts=[])
+        req = make_sync_accounts_request(accounts=[])
         dispatch_request(ctx, req=req)
     except Exception as exc:
         ctx["error"] = exc
+
+
+@when("the Buyer Agent sends sync_accounts without the required idempotency_key")
+def when_sync_accounts_without_idempotency_key(ctx: dict) -> None:
+    """Dispatch an actual omission through A2A, MCP, or REST wire framing."""
+    from tests.harness._idempotency import OMIT_IDEMPOTENCY_KEY
+
+    _setup_tenant_and_principal(ctx)
+    dispatch_request(ctx, accounts=[], idempotency_key=OMIT_IDEMPOTENCY_KEY)
 
 
 @when("the Buyer Agent sends a sync_accounts request with an account that has no brand domain field")
@@ -2051,10 +2083,8 @@ def when_sync_no_brand_domain(ctx: dict) -> None:
     """Send sync with account missing brand.domain — triggers Pydantic validation."""
     from pydantic import ValidationError
 
-    from src.core.schemas.account import SyncAccountsRequest
-
     try:
-        req = SyncAccountsRequest(
+        req = make_sync_accounts_request(
             accounts=[{"operator": "test.com", "billing": "operator"}],
         )
         dispatch_request(ctx, req=req)
@@ -2067,10 +2097,8 @@ def when_sync_no_operator(ctx: dict) -> None:
     """Send sync with account missing operator — triggers Pydantic validation."""
     from pydantic import ValidationError
 
-    from src.core.schemas.account import SyncAccountsRequest
-
     try:
-        req = SyncAccountsRequest(
+        req = make_sync_accounts_request(
             accounts=[{"brand": {"domain": "test.com"}, "billing": "operator"}],
         )
         dispatch_request(ctx, req=req)
@@ -2083,10 +2111,8 @@ def when_sync_no_billing(ctx: dict) -> None:
     """Send sync with account missing billing — triggers Pydantic validation."""
     from pydantic import ValidationError
 
-    from src.core.schemas.account import SyncAccountsRequest
-
     try:
-        req = SyncAccountsRequest(
+        req = make_sync_accounts_request(
             accounts=[{"brand": {"domain": "test.com"}, "operator": "test.com"}],
         )
         dispatch_request(ctx, req=req)
@@ -2098,8 +2124,6 @@ def when_sync_no_billing(ctx: dict) -> None:
 def when_sync_invalid_field(ctx: dict, field: str, value: str) -> None:
     """Send sync with an invalid field value for validation testing."""
     from pydantic import ValidationError
-
-    from src.core.schemas.account import SyncAccountsRequest
 
     # Build account entry with the invalid field
     entry: dict[str, Any] = {
@@ -2118,7 +2142,7 @@ def when_sync_invalid_field(ctx: dict, field: str, value: str) -> None:
         entry[field] = value
 
     try:
-        req = SyncAccountsRequest(accounts=[entry])
+        req = make_sync_accounts_request(accounts=[entry])
         dispatch_request(ctx, req=req)
     except (ValidationError, Exception) as exc:
         ctx["error"] = exc
@@ -2129,8 +2153,6 @@ def when_sync_n_accounts(ctx: dict, count: int) -> None:
     """Send sync with N generated accounts for boundary testing."""
     from pydantic import ValidationError
 
-    from src.core.schemas.account import SyncAccountsRequest
-
     accounts = [
         {"brand": {"domain": f"brand-{i:04d}.com"}, "operator": f"brand-{i:04d}.com", "billing": "operator"}
         for i in range(count)
@@ -2138,7 +2160,7 @@ def when_sync_n_accounts(ctx: dict, count: int) -> None:
     ctx["submitted_account_count"] = count
 
     try:
-        req = SyncAccountsRequest(accounts=accounts)
+        req = make_sync_accounts_request(accounts=accounts)
         dispatch_request(ctx, req=req)
     except (ValidationError, Exception) as exc:
         ctx["error"] = exc
@@ -2475,7 +2497,6 @@ def when_list_accounts_no_principal(ctx: dict) -> None:
 def when_sync_no_principal(ctx: dict, datatable: Any) -> None:
     """Send sync_accounts with an identity that has tenant_id but no principal_id."""
     from src.core.resolved_identity import ResolvedIdentity
-    from src.core.schemas.account import SyncAccountsRequest
 
     tenant = ctx["tenant"]
     broken_identity = ResolvedIdentity(
@@ -2486,7 +2507,7 @@ def when_sync_no_principal(ctx: dict, datatable: Any) -> None:
     headers = datatable[0]
     rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
     accounts = _parse_sync_table(rows)
-    req = SyncAccountsRequest(accounts=accounts)
+    req = make_sync_accounts_request(accounts=accounts)
     dispatch_request(ctx, req=req, identity=broken_identity)
 
 
@@ -2532,10 +2553,9 @@ def given_existing_account_all_fields(ctx: dict, domain: str, billing: str, pt: 
 @when(parsers.parse('the Buyer Agent re-syncs with identical governance_agents for brand "{domain}"'))
 def when_resync_identical_governance(ctx: dict, domain: str) -> None:
     """Re-sync with the same governance_agents that were used during creation."""
-    from src.core.schemas.account import SyncAccountsRequest
 
     gov = ctx["governance_agents_fixture"]
-    req = SyncAccountsRequest(
+    req = make_sync_accounts_request(
         accounts=[{"brand": {"domain": domain}, "operator": domain, "billing": "operator", "governance_agents": gov}],
     )
     dispatch_request(ctx, req=req)
@@ -2544,9 +2564,8 @@ def when_resync_identical_governance(ctx: dict, domain: str) -> None:
 @when(parsers.parse('the Buyer Agent sends a sync with different governance_agents for brand "{domain}"'))
 def when_sync_different_governance(ctx: dict, domain: str) -> None:
     """Sync with modified governance_agents."""
-    from src.core.schemas.account import SyncAccountsRequest
 
-    req = SyncAccountsRequest(
+    req = make_sync_accounts_request(
         accounts=[
             {
                 "brand": {"domain": domain},
@@ -2570,10 +2589,9 @@ def when_sync_different_governance(ctx: dict, domain: str) -> None:
 )
 def when_resync_identical_all_fields(ctx: dict, domain: str) -> None:
     """Re-sync with all fields identical to creation."""
-    from src.core.schemas.account import SyncAccountsRequest
 
     gov = ctx["governance_agents_fixture"]
-    req = SyncAccountsRequest(
+    req = make_sync_accounts_request(
         accounts=[
             {
                 "brand": {"domain": domain},
@@ -2605,25 +2623,23 @@ def then_none_have_brand_domain(ctx: dict, domain: str) -> None:
 @when("the Buyer Agent sends a sync_accounts request with dry_run true and delete_missing true and:")
 def when_sync_dryrun_and_delete_missing(ctx: dict, datatable: Any) -> None:
     """Send sync_accounts with both dry_run=True and delete_missing=True."""
-    from src.core.schemas.account import SyncAccountsRequest
 
     headers = datatable[0]
     rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
     accounts = _parse_sync_table(rows)
-    req = SyncAccountsRequest(accounts=accounts, dry_run=True, delete_missing=True)
+    req = make_sync_accounts_request(accounts=accounts, dry_run=True, delete_missing=True)
     dispatch_request(ctx, req=req)
 
 
 @when(parsers.parse('agent "{name}" sends a sync_accounts request with delete_missing true and:'))
 def when_named_agent_sync_delete_missing(ctx: dict, name: str, datatable: Any) -> None:
     """Send sync_accounts under a named agent's identity with delete_missing=True."""
-    from src.core.schemas.account import SyncAccountsRequest
 
     identity = _make_identity_for_agent(ctx, name)
     headers = datatable[0]
     rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
     accounts = _parse_sync_table(rows)
-    req = SyncAccountsRequest(accounts=accounts, delete_missing=True)
+    req = make_sync_accounts_request(accounts=accounts, delete_missing=True)
     dispatch_request(ctx, req=req, identity=identity)
 
 
@@ -2778,10 +2794,53 @@ def when_sync_brandless_entry(ctx: dict) -> None:
     so this entry parses with brand=None. The pinned 3.1 spec
     (sync-accounts-request.json) marks every entry required:[brand,operator,billing].
     """
-    from src.core.schemas.account import SyncAccountsRequest
 
-    req = SyncAccountsRequest(accounts=[{"account": {"account_id": "ref-001"}, "operator": "example.com"}])
+    req = make_sync_accounts_request(accounts=[{"account": {"account_id": "ref-001"}, "operator": "example.com"}])
     dispatch_request(ctx, req=req)
+
+
+@when(parsers.parse('the Buyer Agent sends a sync_accounts request with unsupported {pin_field} "{pin_value}"'))
+def when_sync_with_invalid_auth_and_version_pin(ctx: dict, pin_field: str, pin_value: str) -> None:
+    """Send one valid operation with both an invalid token and unsupported pin."""
+
+    assert pin_field in {"adcp_version", "adcp_major_version"}, f"unexpected version pin field: {pin_field}"
+    parsed_pin: str | int = int(pin_value) if pin_field == "adcp_major_version" else pin_value
+    req = make_sync_accounts_request(
+        accounts=[
+            {
+                "brand": {"domain": "auth-precedence.example"},
+                "operator": "auth-precedence.example",
+                "billing": "operator",
+            }
+        ]
+    )
+    dispatch_request(
+        ctx,
+        req=req,
+        identity=ctx["wire_auth"],
+        **{pin_field: parsed_pin},
+    )
+
+
+@then("the real wire response is a correctable AUTH_REQUIRED envelope")
+def then_real_wire_auth_required(ctx: dict) -> None:
+    """Assert the buyer-visible envelope, never a harness reconstruction."""
+    assert ctx.get("response") is None, f"compound-invalid request unexpectedly succeeded: {ctx.get('response')!r}"
+    envelope = ctx.get("wire_error_envelope")
+    assert envelope is not None, (
+        "expected a real transport error envelope; synthesized harness output is not wire evidence"
+    )
+    assert_envelope_shape(envelope, "AUTH_REQUIRED", recovery="correctable")
+
+
+@then("the authentication rejection does not disclose supported_versions")
+def then_auth_rejection_hides_supported_versions(ctx: dict) -> None:
+    """AUTH wins without leaking version-negotiation recovery metadata."""
+    envelope = ctx.get("wire_error_envelope")
+    assert envelope is not None, "expected the preceding AUTH_REQUIRED wire envelope"
+    serialized = json.dumps(envelope, sort_keys=True)
+    assert "VERSION_UNSUPPORTED" not in serialized, f"VERSION won over AUTH: {serialized}"
+    assert "supported_versions" not in serialized, f"auth rejection disclosed seller versions: {serialized}"
 
 
 @then("the brandless entry is rejected with a correctable VALIDATION_ERROR")

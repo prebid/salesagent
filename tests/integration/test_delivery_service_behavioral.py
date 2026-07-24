@@ -1,8 +1,8 @@
 """Integration behavioral tests for UC-004 delivery service (WebhookDeliveryService, CircuitBreaker).
 
 Migrated from tests/unit/test_delivery_service_behavioral.py to use CircuitBreakerEnv
-integration harness. External services (httpx.Client, time.sleep, random.uniform)
-are mocked; DB operations for PushNotificationConfig queries are real.
+integration harness. External HTTP, timing, and randomness are mocked; DB
+operations for PushNotificationConfig queries are real.
 
 Pure CircuitBreaker state machine tests remain in the unit file.
 
@@ -230,6 +230,57 @@ class TestSendWebhookEnhancedAuthBlockedSkip:
             env.mock["client"].return_value.__enter__.return_value.post.assert_not_called()
 
 
+@pytest.mark.requires_db
+class TestPersistedWebhookSsrfRevalidation:
+    """Persisted push targets are revalidated immediately before connection."""
+
+    def test_persisted_target_is_revalidated_before_socket_connect(self, integration_db, monkeypatch):
+        """A stale row that resolves to metadata IP is refused before urllib3 connects."""
+        from urllib3.poolmanager import PoolManager
+
+        from src.core.security import url_validator, webhook_http
+        from src.services.webhook_delivery_service import WebhookDeliveryService
+        from tests.factories import PrincipalFactory, PushNotificationConfigFactory, TenantFactory
+        from tests.harness._base import BareIntegrationEnv
+
+        dns_lookups: list[str] = []
+        connection_attempts: list[bool] = []
+
+        def resolve_to_metadata(hostname: str) -> list[str]:
+            dns_lookups.append(hostname)
+            return ["169.254.169.254"]
+
+        def record_connection_attempt(*_args: object, **_kwargs: object) -> None:
+            connection_attempts.append(True)
+            raise AssertionError("SSRF-invalid target reached the urllib3 connection seam")
+
+        monkeypatch.setattr(webhook_http, "_allow_private_webhook_targets", lambda: False)
+        monkeypatch.setattr(url_validator, "_resolve_ips", resolve_to_metadata)
+        monkeypatch.setattr(PoolManager, "connection_from_host", record_connection_attempt)
+
+        url = "https://rebind.example/webhook"
+        with BareIntegrationEnv(tenant_id="t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="t1")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            PushNotificationConfigFactory(tenant=tenant, principal=principal, url=url)
+            env.get_session()
+
+            service = WebhookDeliveryService()
+            result = service._send_webhook_enhanced(
+                tenant_id="t1",
+                principal_id="p1",
+                media_buy_id="mb_001",
+                delivery_payload={"impressions": 5000},
+            )
+
+            assert result is False
+            assert dns_lookups == ["rebind.example"]
+            assert connection_attempts == []
+            state, failure_count = service.get_circuit_breaker_state(url)
+            assert state == CircuitState.CLOSED
+            assert failure_count == 1
+
+
 # ---------------------------------------------------------------------------
 # UC-004-EXT-G-06 (_send_webhook_enhanced: HMAC signing)
 # ---------------------------------------------------------------------------
@@ -344,9 +395,21 @@ class TestSendWebhookEnhancedBearerAuth:
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-08
     """
 
-    def test_bearer_token_sent_in_authorization_header(self, integration_db):
-        """When authentication_type='bearer' and authentication_token is set,
-        Authorization header is sent with 'Bearer <token>'.
+    @pytest.mark.parametrize(
+        "configured_scheme",
+        ["Bearer", "bearer"],
+        ids=["adcp-spelling", "legacy-lowercase-row"],
+    )
+    def test_bearer_token_sent_in_authorization_header(self, integration_db, configured_scheme):
+        """A configured Bearer scheme puts 'Bearer <token>' on the wire.
+
+        ``core/push_notification_config.json`` (v3.1.1) enumerates the scheme as
+        ``Bearer``, and the A2A/REST intake stores ``authentication.scheme``
+        verbatim — so the CAPITALIZED spelling is what a conformant config
+        actually carries. Pinning only the lowercase spelling let an
+        exact-match comparison ship that delivered every conformant Bearer
+        webhook with no Authorization header at all. The legacy row is kept as
+        a second case because pre-existing rows hold it.
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-08
         """
@@ -364,7 +427,7 @@ class TestSendWebhookEnhancedBearerAuth:
                 tenant=tenant,
                 principal=principal,
                 url="https://bearer.example.com/webhook",
-                authentication_type="bearer",
+                authentication_type=configured_scheme,
                 authentication_token="my-secret-token-xyz",
             )
 
@@ -402,6 +465,9 @@ class TestSendWebhookEnhancedHappyPath:
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-01
         """
+        import json
+        from unittest.mock import ANY
+
         from tests.factories import (
             PrincipalFactory,
             PushNotificationConfigFactory,
@@ -430,9 +496,14 @@ class TestSendWebhookEnhancedHappyPath:
 
             assert result is True
             post_mock = env.mock["client"].return_value.__enter__.return_value.post
-            post_mock.assert_called_once()
-            assert post_mock.call_args.args[0] == "https://happy.example.com/webhook"
-            assert post_mock.call_args.kwargs["json"] == payload
+            post_mock.assert_called_once_with(
+                ANY,
+                "https://happy.example.com/webhook",
+                body=ANY,
+                headers=ANY,
+                timeout=10.0,
+            )
+            assert json.loads(post_mock.call_args.kwargs["body"]) == payload
 
     def test_no_configs_returns_false(self, integration_db):
         """When no PushNotificationConfig exists, _send_webhook_enhanced returns False.
@@ -468,13 +539,13 @@ class TestSendWebhookEnhancedHappyPath:
 
 @pytest.mark.requires_db
 class TestDeliverWithBackoffSuccess:
-    """Successful httpx delivery records success on circuit breaker.
+    """Successful pinned HTTP delivery records success on circuit breaker.
 
     Covers: UC-004-EXT-G-01
     """
 
     def test_successful_delivery_returns_true_records_success(self, integration_db):
-        """httpx returns 200 -> _deliver_with_backoff returns True and
+        """The pinned POST returns 200 -> _deliver_with_backoff returns True and
         circuit breaker records success.
 
         Covers: UC-004-EXT-G-01
@@ -520,13 +591,13 @@ class TestDeliverWithBackoffSuccess:
 
 @pytest.mark.requires_db
 class TestDeliverWithBackoffRetry:
-    """httpx returns 500 -> retries with backoff, circuit breaker records failure.
+    """A 500 response retries with backoff and records circuit-breaker failure.
 
     Covers: UC-004-EXT-G-01
     """
 
     def test_500_triggers_retries_and_records_failure(self, integration_db):
-        """httpx returns 500 on all attempts -> _deliver_with_backoff retries
+        """The pinned POST returns 500 on all attempts -> delivery retries
         max_retries times, then circuit breaker records failure.
 
         Covers: UC-004-EXT-G-01
@@ -558,7 +629,7 @@ class TestDeliverWithBackoffRetry:
 
             assert result is False
 
-            # httpx.Client.post should have been called 3 times (max_retries=3)
+            # The pinned POST seam should have been called 3 times (max_retries=3)
             post_mock = env.mock["client"].return_value.__enter__.return_value.post
             assert post_mock.call_count == 3
 
@@ -578,18 +649,18 @@ class TestDeliverWithBackoffRetry:
 
 @pytest.mark.requires_db
 class TestDeliverWithBackoffTimeout:
-    """httpx raises TimeoutException -> retries with backoff, records failure.
+    """A requests timeout retries with backoff and records failure.
 
     Covers: UC-004-EXT-G-01
     """
 
     def test_timeout_triggers_retries_and_records_failure(self, integration_db):
-        """httpx raises TimeoutException on all attempts -> retries exhaust,
+        """requests raises Timeout on all attempts -> retries exhaust,
         circuit breaker records failure.
 
         Covers: UC-004-EXT-G-01
         """
-        import httpx
+        import requests
 
         from tests.factories import (
             PrincipalFactory,
@@ -607,8 +678,7 @@ class TestDeliverWithBackoffTimeout:
                 url="https://timeout.example.com/webhook",
             )
 
-            # Make httpx.Client().post() raise TimeoutException
-            env.mock["client"].return_value.__enter__.return_value.post.side_effect = httpx.TimeoutException(
+            env.mock["client"].return_value.__enter__.return_value.post.side_effect = requests.Timeout(
                 "Connection timed out"
             )
 
@@ -649,6 +719,7 @@ class TestIsAdjustedNotificationType:
 
         Covers: webhook_delivery_service.py line 239
         """
+        import json
         from datetime import UTC, datetime
 
         from tests.factories import (
@@ -682,7 +753,7 @@ class TestIsAdjustedNotificationType:
 
             assert result is True
             post_mock = env.mock["client"].return_value.__enter__.return_value.post
-            sent_payload = post_mock.call_args.kwargs["json"]
+            sent_payload = json.loads(post_mock.call_args.kwargs["body"])
             assert sent_payload["notification_type"] == "adjusted"
             assert sent_payload["is_adjusted"] is True
 

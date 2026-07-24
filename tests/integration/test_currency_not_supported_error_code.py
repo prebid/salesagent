@@ -11,11 +11,11 @@ Covers the create-path currency check (src/core/tools/media_buy_create.py).
 beads: salesagent-gh8p.3
 """
 
-import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from tests.harness._idempotency import fresh_idempotency_key
 from tests.harness.transport import Transport
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -50,7 +50,7 @@ class TestCurrencyNotSupportedErrorCode:
             start_time=(now + timedelta(days=1)).isoformat(),
             end_time=(now + timedelta(days=8)).isoformat(),
             packages=[{"product_id": "prod_eur", "budget": 5000.0, "pricing_option_id": "cpm_eur_fixed"}],
-            idempotency_key=f"cur-key-{uuid.uuid4().hex}",
+            idempotency_key=fresh_idempotency_key("cur-key"),
         )
 
     @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS)

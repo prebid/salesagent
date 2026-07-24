@@ -1,6 +1,6 @@
 """CircuitBreakerEnv — unit test environment for WebhookDeliveryService and CircuitBreaker.
 
-Patches: httpx.Client, time.sleep, random.uniform, get_db_session
+Patches: pinned HTTP session/POST seams, time.sleep, random.uniform, get_db_session
          (all in src.services.webhook_delivery_service)
 
 Usage::
@@ -17,12 +17,12 @@ Usage::
         service.send_delivery_webhook(...)
 
 Available mocks via env.mock:
-    "client"    -- httpx.Client mock
+    "client"    -- compatibility view of the pinned POST/session mocks
     "sleep"     -- time.sleep mock
     "random"    -- random.uniform mock
     "db"        -- get_db_session mock
     "logger"    -- module-level logger mock
-    "post"      -- shortcut to httpx client.post mock
+    "post"      -- shortcut to the pinned POST status mock
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
     Fluent API (from CircuitBreakerMixin):
         get_service()                    -- return a WebhookDeliveryService instance
         get_breaker(**kwargs)            -- return a fresh CircuitBreaker instance
-        set_http_response(status_code)   -- configure httpx Client mock response
+        set_http_response(status_code)   -- configure pinned POST status
         call_send(...)                   -- call service.send_delivery_webhook
 
     Unit-only API:
@@ -51,10 +51,11 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
 
     MODULE = "src.services.webhook_delivery_service"
     EXTERNAL_PATCHES = {
-        "client": f"{MODULE}.httpx.Client",
+        "post_status": f"{MODULE}.post_webhook_status",
+        "session": f"{MODULE}.create_pinned_webhook_session",
         "sleep": f"{MODULE}.time.sleep",
         "random": f"{MODULE}.random.uniform",
-        "db": "src.core.database.database_session.get_db_session",
+        "db": "src.core.database.repositories.uow.get_db_session",
         "logger": f"{MODULE}.logger",
     }
 
@@ -64,14 +65,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
         self._db_session: MagicMock | None = None
 
     def _configure_mocks(self) -> None:
-        # random.uniform: return 0.0 for deterministic tests
-        self.mock["random"].return_value = 0.0
-
-        # httpx.Client: 200 OK by default (from mixin)
-        self.set_http_response(200)
-
-        # Expose inner httpx post as mock["post"] so BDD steps can inspect call_args
-        self.mock["post"] = self.mock["client"].return_value.__enter__.return_value.post
+        self._configure_http_mocks()
 
         # DB session: return a mock session with one active webhook config
         # (BDD Given steps store config in ctx dict; the unit env provides a default
@@ -106,4 +100,5 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
         config.authentication_type = auth_type
         config.authentication_token = auth_token
         config.webhook_secret = secret
+        config.auth_blocked_at = None
         return config

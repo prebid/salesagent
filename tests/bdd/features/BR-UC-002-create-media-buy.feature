@@ -1,5 +1,17 @@
 # Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
+# Local scenario overlays applied: tests/bdd/overlays/BR-UC-002-create-media-buy.feature
+#
+# LOCAL DIVERGENCE pending an upstream sync: the body of
+# @T-UC-002-v31-idempotency-replay was authored here, not regenerated from
+# adcp-req at the SHA above (no adcp-req checkout was reachable). It is the
+# upstream scenario restored after a descope removed it, so the next
+# `compile_bdd.py --merge` against real upstream will overwrite it -- verify the
+# step texts still bind afterwards rather than assuming green, since unbound
+# steps auto-xfail rather than fail. The overlay-compiler guard covers a
+# different risk (an overlay reconciling the scenario away again), NOT fidelity
+# to upstream: its fixture is a synthetic source that already contains the
+# expected text.
 
 @analysis-2026-03-09 @schema-v3.1
 Feature: BR-UC-002 Create Media Buy
@@ -1916,11 +1928,11 @@ Feature: BR-UC-002 Create Media Buy
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/create-media-buy-request.json
 
     Examples:
-      | value                                                | violation                              |
-      | short                                                | minLength 16 violated                  |
-      | key with spaces in it that is long enough           | pattern [A-Za-z0-9_.:-] violated       |
-      | key/with/slashes/that/is/also/long/enough           | pattern [A-Za-z0-9_.:-] violated       |
-      | AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA | maxLength 255 violated                 |
+      | value                                      | violation                        |
+      | short                                      | minLength 16 violated            |
+      | key with spaces in it that is long enough | pattern [A-Za-z0-9_.:-] violated |
+      | key/with/slashes/that/is/also/long/enough | pattern [A-Za-z0-9_.:-] violated |
+      | <256 chars>                                | maxLength 255 violated           |
 
   @T-UC-002-v31-idempotency-in-flight @v31 @idempotency-key @error-details @post-f2 @post-f3 @ext-w
   Scenario: v3.1 idempotency_key matching an in-flight request rejects with IDEMPOTENCY_IN_FLIGHT

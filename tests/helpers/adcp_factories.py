@@ -7,7 +7,6 @@ instead of manually constructing objects to avoid validation errors.
 All factories use sensible defaults for required fields and accept overrides for customization.
 """
 
-import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -20,6 +19,7 @@ from adcp.types.generated_poc.brand import Brand  # TODO: no stable alias in adc
 from src.core.schemas import Package, PackageRequest, url
 from src.core.schemas.product import Product
 from tests.factories.creative_asset import build_assets, image_spec
+from tests.harness._idempotency import fresh_idempotency_key
 
 
 def create_test_product(
@@ -144,6 +144,38 @@ def create_product_with_empty_pricing(**overrides) -> Product:
         Product with empty pricing_options list
     """
     return create_test_product(pricing_options=[], **overrides)
+
+
+def make_get_products_response_with_pricing(fixed_price: float | None = None, floor_price: float | None = None):
+    """A GetProductsResponse with one product carrying a single CPM pricing option.
+
+    The pricing option is a real ``adcp.CpmPricingOption`` model (not a dict), so
+    ``apply_version_compat`` can read ``fixed_price`` / ``floor_price`` off it to
+    derive the v2-compat fields (is_fixed / rate / price_guidance.floor). Shared
+    by the version-compat registry tests and the REST transport-wrapper tests.
+    """
+    from adcp import CpmPricingOption
+
+    from src.core.schemas import GetProductsResponse
+
+    option_kwargs: dict[str, Any] = {"pricing_option_id": "cpm_usd_test", "pricing_model": "cpm", "currency": "USD"}
+    if fixed_price is not None:
+        option_kwargs["fixed_price"] = fixed_price
+    if floor_price is not None:
+        option_kwargs["floor_price"] = floor_price
+        option_kwargs["price_guidance"] = {"p50": floor_price * 2}
+
+    product = Product(
+        product_id="p1",
+        name="Test",
+        description="Test",
+        format_ids=[create_test_format_id("banner")],
+        delivery_type="guaranteed",
+        delivery_measurement={"provider": "test", "notes": "test"},
+        publisher_properties=[create_test_publisher_properties_by_tag()],
+        pricing_options=[CpmPricingOption(**option_kwargs)],
+    )
+    return GetProductsResponse(products=[product])
 
 
 def create_test_format_id(
@@ -675,9 +707,9 @@ def create_test_media_buy_request_dict(
         "packages": packages,
         "start_time": start_time,
         "end_time": end_time,
-        # Required by AdCP 3.0.1 — unique per call (a reused key would replay the
-        # original response instead of creating a new buy). Override via kwargs.
-        "idempotency_key": f"test-key-{uuid.uuid4().hex}",
+        # Required by AdCP 3.1.1. Use a unique value to keep fixture requests
+        # independently identifiable; supported=false means reuse still executes.
+        "idempotency_key": fresh_idempotency_key(),
     }
 
     # Handle targeting_overlay specially (goes in all packages, not top-level)

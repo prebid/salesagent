@@ -113,7 +113,7 @@ class TestExceptionHierarchy:
     def test_idempotency_conflict_wire_envelope(self):
         """The two-layer envelope carries IDEMPOTENCY_CONFLICT + correctable in both layers.
 
-        Correctable per the AdCP 3.0.1 prose example and storyboard expectation:
+        Correctable per the pinned AdCP 3.1.1 error semantics:
         the buyer can resend the original bytes or mint a fresh key.
         """
         from src.core.exceptions import AdCPIdempotencyConflictError, build_two_layer_error_envelope
@@ -287,8 +287,8 @@ class TestRecoveryClassification:
         """AdCPIdempotencyConflictError is recovery='correctable'.
 
         The buyer can fix the conflict — resend the original bytes under the
-        same key, or mint a fresh key for the new payload (AdCP 3.0.1 prose
-        example + storyboard expectation).
+        same key, or mint a fresh key for the new payload (pinned AdCP 3.1.1
+        standard error semantics).
         """
         from src.core.exceptions import AdCPIdempotencyConflictError
 
@@ -670,6 +670,20 @@ class TestErrorCodeWireTranslation:
         # RATE_LIMIT_EXCEEDED is mapped to RATE_LIMITED
         assert translate_error_code("RATE_LIMIT_EXCEEDED") == "RATE_LIMITED"
 
+    def test_spec_codes_pass_through_translate_unchanged(self):
+        """Every SPEC_CODES member is buyer-visible verbatim, never rewritten.
+
+        SPEC_CODES are the pinned-spec / project codes allowed beyond the SDK's
+        STANDARD_ERROR_CODES; their whole purpose is to reach the buyer as
+        themselves. A stray ERROR_CODE_MAPPING entry (BILLING_NOT_SUPPORTED ->
+        UNSUPPORTED_FEATURE previously) would silently collapse one into a generic
+        code and contradict that contract, so pin the invariant for all of them.
+        """
+        from src.core.exceptions import SPEC_CODES, translate_error_code
+
+        for code in SPEC_CODES:
+            assert translate_error_code(code) == code, f"{code} must pass through translate_error_code unchanged"
+
     def test_translate_unmapped_code_passes_through(self):
         from src.core.exceptions import translate_error_code
 
@@ -737,6 +751,20 @@ class TestErrorCodeWireTranslation:
         for standard in ("MEDIA_BUY_NOT_FOUND", "SERVICE_UNAVAILABLE", "VALIDATION_ERROR"):
             assert standard in STANDARD_ERROR_CODES
             assert to_wire_error_code(standard) == standard
+
+    def test_to_wire_error_code_passes_spec_codes_through(self):
+        """Pinned-spec codes are legal wire codes and must survive the helper.
+
+        ``translate_error_code`` and the compliance guard treat SPEC_CODES as
+        legal on the wire; collapsing them to SERVICE_UNAVAILABLE would undo
+        the BILLING_NOT_SUPPORTED advisory fix the moment any caller routes a
+        spec-code advisory through the guaranteed helper.
+        """
+        from src.core.exceptions import SPEC_CODES, to_wire_error_code
+
+        assert SPEC_CODES == {"BILLING_NOT_SUPPORTED", "VERSION_UNSUPPORTED"}
+        for spec_code in sorted(SPEC_CODES):
+            assert to_wire_error_code(spec_code) == spec_code
 
     def test_wire_error_code_property_translates(self):
         """``wire_error_code`` exposes the translated code on an instance."""

@@ -31,6 +31,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativesResponse, SyncCreativesResponse
 from src.core.testing_hooks import AdCPTestContext
 from tests.factories.creative_asset import asset_spec, build_assets, image_spec
+from tests.harness._idempotency import fresh_idempotency_key
 from tests.utils.database_helpers import create_tenant_with_timestamps, get_utc_now
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -280,7 +281,11 @@ class TestCreativeLifecycleMCP:
         identity = self._make_identity(tenant_overrides={"approval_mode": "auto-approve"})
 
         # Call sync_creatives tool (uses default patch=False for full upsert)
-        response = core_sync_creatives_tool(creatives=sample_creatives, identity=identity)
+        response = core_sync_creatives_tool(
+            creatives=sample_creatives,
+            idempotency_key=fresh_idempotency_key(),
+            identity=identity,
+        )
 
         # Verify response structure (AdCP-compliant domain response)
         assert isinstance(response, SyncCreativesResponse)
@@ -355,7 +360,11 @@ class TestCreativeLifecycleMCP:
         identity = self._make_identity()
 
         # Upsert with patch=False (default): full replacement
-        response = core_sync_creatives_tool(creatives=updated_creative_data, identity=identity)
+        response = core_sync_creatives_tool(
+            creatives=updated_creative_data,
+            idempotency_key=fresh_idempotency_key(),
+            identity=identity,
+        )
 
         # Verify response (domain response has creatives list, not summary/results)
         assert len(response.creatives) == 1
@@ -391,6 +400,7 @@ class TestCreativeLifecycleMCP:
         response = core_sync_creatives_tool(
             creatives=creative_data,
             assignments={creative_id: ["package_1", "package_2"]},
+            idempotency_key=fresh_idempotency_key(),
             identity=identity,
         )
 
@@ -423,6 +433,7 @@ class TestCreativeLifecycleMCP:
         response = core_sync_creatives_tool(
             creatives=creative_data,
             assignments={creative_id: ["package_buyer_ref"]},
+            idempotency_key=fresh_idempotency_key(),
             identity=identity,
         )
 
@@ -459,7 +470,11 @@ class TestCreativeLifecycleMCP:
 
         identity = self._make_identity()
 
-        response = core_sync_creatives_tool(creatives=invalid_creatives, identity=identity)
+        response = core_sync_creatives_tool(
+            creatives=invalid_creatives,
+            idempotency_key=fresh_idempotency_key(),
+            identity=identity,
+        )
 
         # Should sync valid creative but fail on invalid one
         # Domain response has creatives list with action field
@@ -887,7 +902,11 @@ class TestCreativeLifecycleMCP:
         from src.core.exceptions import AdCPAuthenticationError
 
         with pytest.raises((ToolError, ValueError, RuntimeError, AdCPAuthenticationError)):
-            core_sync_creatives_tool(creatives=sample_creatives, ctx=mock_context)
+            core_sync_creatives_tool(
+                creatives=sample_creatives,
+                idempotency_key=fresh_idempotency_key(),
+                ctx=mock_context,
+            )
 
     def test_list_creatives_authentication_optional(self, mock_context):
         """Test list_creatives authentication behavior."""
@@ -918,7 +937,11 @@ class TestCreativeLifecycleMCP:
         identity = self._make_identity(tenant_overrides={"approval_mode": "auto-approve"})
 
         # The function works with tenant_id and approval_mode
-        response = core_sync_creatives_tool(creatives=sample_creatives, identity=identity)
+        response = core_sync_creatives_tool(
+            creatives=sample_creatives,
+            idempotency_key=fresh_idempotency_key(),
+            identity=identity,
+        )
         assert isinstance(response, SyncCreativesResponse)
 
     def test_list_creatives_empty_results(self):
@@ -992,7 +1015,11 @@ class TestCreativeLifecycleMCP:
         core_sync_creatives_tool, _ = self._import_mcp_tools()
 
         identity = self._make_identity(tenant_overrides={"approval_mode": "require-human"})
-        sync_response = core_sync_creatives_tool(creatives=sample_creatives, identity=identity)
+        sync_response = core_sync_creatives_tool(
+            creatives=sample_creatives,
+            idempotency_key=fresh_idempotency_key(),
+            identity=identity,
+        )
         assert len(sync_response.creatives) == 3
 
         # Update creatives in database to have platform_creative_id
@@ -1129,7 +1156,7 @@ class TestCreativeLifecycleMCP:
                 start_time=datetime.now(UTC) + timedelta(days=1),
                 end_time=datetime.now(UTC) + timedelta(days=30),
                 po_number="PO-TEST-123",
-                idempotency_key=f"int-key-{uuid.uuid4().hex}",
+                idempotency_key=fresh_idempotency_key("int-key"),
                 identity=identity,
             )
 

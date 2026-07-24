@@ -6,6 +6,16 @@ which ensures tools/list exposes full JSON schemas with $defs for nested types.
 
 import inspect
 
+import pytest
+
+
+def _parameter_schema(schema: dict, name: str) -> dict:
+    """Resolve a tools/list property that may be emitted through ``$defs``."""
+    property_schema = schema["properties"][name]
+    if "$ref" not in property_schema:
+        return property_schema
+    return schema["$defs"][property_schema["$ref"].rsplit("/", maxsplit=1)[-1]]
+
 
 class TestMCPToolTypedSchemas:
     """Verify MCP tools expose typed schemas instead of untyped dicts."""
@@ -127,6 +137,51 @@ class TestMCPToolTypedSchemas:
         assert "PackageUpdate" in str(params["packages"].annotation), (
             f"packages should use PackageUpdate type (V3), got {params['packages'].annotation}"
         )
+
+    @pytest.mark.asyncio
+    async def test_mutating_tools_advertise_required_string_idempotency_key(self):
+        """Runtime signatures and tools/list must agree on requiredness."""
+        from src.core.main import mcp
+        from src.core.tools.accounts import sync_accounts
+        from src.core.tools.creatives import sync_creatives
+        from src.core.tools.media_buy_create import create_media_buy
+        from src.core.tools.media_buy_update import update_media_buy
+
+        functions = {
+            "create_media_buy": create_media_buy,
+            "update_media_buy": update_media_buy,
+            "sync_creatives": sync_creatives,
+            "sync_accounts": sync_accounts,
+        }
+        expected_schema = {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 255,
+            "pattern": r"^[A-Za-z0-9_.:-]{16,255}$",
+        }
+
+        for name, function in functions.items():
+            parameter = inspect.signature(function).parameters["idempotency_key"]
+            assert parameter.default is inspect.Parameter.empty
+
+            schema = (await mcp.get_tool(name)).parameters
+            assert "idempotency_key" in schema["required"]
+            property_schema = _parameter_schema(schema, "idempotency_key")
+            assert {key: property_schema[key] for key in expected_schema} == expected_schema
+
+    @pytest.mark.asyncio
+    async def test_update_revision_is_optional_but_never_nullable(self):
+        """tools/list must distinguish field omission from an explicit null."""
+        from src.core.main import mcp
+
+        schema = (await mcp.get_tool("update_media_buy")).parameters
+        assert "revision" not in schema.get("required", [])
+        revision_schema = _parameter_schema(schema, "revision")
+        assert {key: revision_schema[key] for key in ("type", "minimum")} == {
+            "type": "integer",
+            "minimum": 1,
+        }
+        assert "default" not in revision_schema
 
     def test_list_creative_formats_uses_typed_parameters(self):
         """list_creative_formats should use FormatId, etc."""

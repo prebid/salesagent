@@ -10,12 +10,24 @@ Write methods add objects to the session but never commit — the Unit of Work
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import PushNotificationConfig
+
+
+@dataclass(frozen=True)
+class PushNotificationTarget:
+    """Session-independent scalar snapshot used by outbound delivery workers."""
+
+    url: str
+    authentication_type: str | None
+    authentication_token: str | None
+    webhook_secret: str | None
+    auth_blocked_at: datetime | None
 
 
 class PushNotificationConfigRepository:
@@ -77,6 +89,19 @@ class PushNotificationConfigRepository:
                 )
             ).all()
         )
+
+    def list_active_delivery_targets(self, principal_id: str) -> list[PushNotificationTarget]:
+        """Return immutable delivery snapshots, never ORM instances across the UoW."""
+        return [
+            PushNotificationTarget(
+                url=config.url,
+                authentication_type=config.authentication_type,
+                authentication_token=config.authentication_token,
+                webhook_secret=config.webhook_secret,
+                auth_blocked_at=config.auth_blocked_at,
+            )
+            for config in self.list_active_by_principal(principal_id)
+        ]
 
     # ------------------------------------------------------------------
     # Writes

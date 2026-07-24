@@ -101,6 +101,23 @@ def test_bdd_shards_have_discoverable_scenario_counts() -> None:
         assert bdd_scenario_count(path, repo_root=_REPO_ROOT) >= 1
 
 
+def test_bdd_scenario_count_supports_selected_scenario_bindings(tmp_path: Path) -> None:
+    """A driver may bind a reviewed subset without collecting a known-gap feature wholesale."""
+    feature_dir = tmp_path / "tests/bdd/features"
+    feature_dir.mkdir(parents=True)
+    (feature_dir / "selected.feature").write_text(
+        """Feature: selected\n  Scenario: one\n    Given x\n  Scenario: two\n    Given x\n  Scenario: unbound\n    Given x\n""",
+        encoding="utf-8",
+    )
+    test_path = tmp_path / "tests/bdd/test_selected.py"
+    test_path.write_text(
+        """from pytest_bdd import scenario\n_FEATURE = \"features/selected.feature\"\n@scenario(_FEATURE, \"one\")\ndef test_one(): pass\n@scenario(_FEATURE, \"two\")\ndef test_two(): pass\n""",
+        encoding="utf-8",
+    )
+
+    assert bdd_scenario_count("tests/bdd/test_selected.py", repo_root=tmp_path) == 2
+
+
 @pytest.mark.arch_guard
 def test_bdd_greedy_split_rejects_shard_count_above_file_count() -> None:
     files = list_suite_files("bdd", repo_root=_REPO_ROOT)

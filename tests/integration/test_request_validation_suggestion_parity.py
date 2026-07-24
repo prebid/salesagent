@@ -32,8 +32,138 @@ two-layer envelope. Every A2A case drives the REAL wire — ``on_message_send``
 
 import pytest
 
+from tests.harness._idempotency import fresh_idempotency_key
+
 INVALID_STATUS_FILTER = ["nonexistent_status"]  # rejected by GetMediaBuyDeliveryRequest
 INVALID_ASSET_TYPES = ["not_an_asset_type"]  # rejected by ListCreativeFormatsRequest
+
+
+@pytest.mark.requires_db
+class TestRequestValidationContextEchoParity:
+    """A valid application context survives pre-tool validation on every wire."""
+
+    @pytest.mark.parametrize(
+        ("transport_name", "expected_code"),
+        [
+            ("A2A", "VALIDATION_ERROR"),
+            ("MCP", "VALIDATION_ERROR"),
+            ("REST", "INVALID_REQUEST"),
+        ],
+    )
+    def test_malformed_packages_echoes_exact_context(
+        self,
+        integration_db,
+        transport_name: str,
+        expected_code: str,
+    ) -> None:
+        """Validation before request construction still echoes opaque context."""
+        from tests.harness.media_buy_create import MediaBuyCreateEnv
+        from tests.harness.transport import Transport
+
+        transport = Transport[transport_name]
+        application_context = {
+            "correlation_id": f"ctx-validation-{transport.value}",
+            "nullable": None,
+            "nested": {"value": None},
+        }
+        with MediaBuyCreateEnv() as env:
+            env.setup_media_buy_data()
+            result = env.call_via(
+                transport,
+                brand={"domain": "acme.example"},
+                packages="not-a-list",
+                start_time="asap",
+                end_time="2099-12-31T23:59:59Z",
+                idempotency_key="context-echo-error-0001",
+                context=application_context,
+            )
+
+        assert result.is_error, f"{transport.value}: malformed packages unexpectedly succeeded"
+        result.assert_wire_error(
+            expected_code,
+            recovery="correctable",
+            require_suggestion=True,
+            message_substr="list",
+        )
+        assert result.wire_error_envelope["context"] == application_context
+
+
+@pytest.mark.requires_db
+class TestMissingIdempotencyKeyParity:
+    """One buyer mistake, one wire identity: the canonical missing-key error.
+
+    ``missing_idempotency_key_error`` (src.core.exceptions) is the single home
+    for the rejection's message, ``field``, and suggestion. Each transport
+    reaches it through a DIFFERENT boundary (A2A skill-handler precedence
+    check, MCP TypeAdapter → normalize_to_adcp_error, REST
+    RequestValidationError handler) — this parity matrix reddens if any one
+    boundary regresses to a transport-local copy or a divergent suggestion.
+    """
+
+    CANONICAL_MESSAGE = "idempotency_key is required."
+    CANONICAL_SUGGESTION = "Provide a client-generated idempotency_key (16-255 characters, using only [A-Za-z0-9_.:-])."
+
+    @pytest.mark.parametrize("transport_name", ["A2A", "MCP", "REST"])
+    def test_missing_key_identical_wire_identity(self, integration_db, transport_name: str) -> None:
+        from src.core.exceptions import missing_idempotency_key_error
+        from tests.harness._idempotency import OMIT_IDEMPOTENCY_KEY
+        from tests.harness.media_buy_create import MediaBuyCreateEnv
+        from tests.harness.transport import Transport
+
+        # The factory itself is the source the wire values below must equal —
+        # loaded here so drift between the constants and the factory reddens too.
+        canonical = missing_idempotency_key_error()
+        assert str(canonical) == self.CANONICAL_MESSAGE
+        assert canonical.suggestion == self.CANONICAL_SUGGESTION
+
+        transport = Transport[transport_name]
+        from datetime import UTC, datetime, timedelta
+
+        now = datetime.now(UTC)
+        with MediaBuyCreateEnv() as env:
+            _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+            result = env.call_via(
+                transport,
+                brand={"domain": "missing-key-parity.example"},
+                packages=[
+                    {
+                        "product_id": product.product_id,
+                        "budget": 5000.0,
+                        "pricing_option_id": "cpm_usd_fixed",
+                    }
+                ],
+                start_time=(now + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                end_time=(now + timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                idempotency_key=OMIT_IDEMPOTENCY_KEY,
+            )
+
+        from tests.helpers import assert_envelope_shape
+
+        assert result.is_error, f"{transport.value}: missing idempotency_key unexpectedly succeeded"
+        envelope = result.wire_error_envelope
+        assert envelope is not None, f"{transport.value}: missing-key rejection must carry the wire envelope"
+
+        # Lead with the shared helper: it pins `recovery` (a REQUIRED kwarg, so
+        # the buyer's retry semantics cannot drift silently) AND the two-layer
+        # invariant that adcp_error.code == errors[0].code. Asserting only on
+        # errors[0] left a boundary free to emit a mismatched top-layer code,
+        # or to flip recovery to terminal, with this matrix still green.
+        assert_envelope_shape(
+            envelope,
+            "VALIDATION_ERROR",
+            recovery="correctable",
+            message_substr="idempotency_key",
+        )
+
+        error = envelope["errors"][0]
+        assert error.get("message") == self.CANONICAL_MESSAGE, (
+            f"{transport.value}: message diverged: {error.get('message')!r}"
+        )
+        assert error.get("field") == "idempotency_key", f"{transport.value}: field diverged: {error.get('field')!r}"
+        assert error.get("suggestion") == self.CANONICAL_SUGGESTION, (
+            f"{transport.value}: suggestion diverged: {error.get('suggestion')!r}"
+        )
+        assert error.get("code") == "VALIDATION_ERROR"
 
 
 @pytest.mark.requires_db
@@ -328,6 +458,7 @@ class TestCreateMediaBuyRestWebhookSuggestionParity:
                     "packages": [],
                     "start_time": "asap",
                     "end_time": "2099-12-31T23:59:59Z",
+                    "idempotency_key": "reporting-webhook-test-0001",
                     "reporting_webhook": {"not_a_webhook_field": True},
                 },
             )
@@ -346,6 +477,73 @@ class TestCreateMediaBuyRestWebhookSuggestionParity:
             assert suggestion, (
                 "Expected a non-empty TOP-LEVEL suggestion in the VALIDATION_ERROR "
                 f"wire envelope (error.json @v3.1-04f59d2d5), got: {envelope}"
+            )
+
+
+@pytest.mark.requires_db
+class TestCreateMediaBuyRestUndecodableBodySuggestionParity:
+    """An undecodable REST body must still reject through the typed boundary.
+
+    ``_raw_json_body`` (api_v1.py) is a FastAPI dependency, so it resolves
+    BEFORE the route's body model. If it raises on an empty or malformed body,
+    the ``ValueError`` lands in the generic handler and the buyer receives a
+    bare ``VALIDATION_ERROR`` carrying the json module's own message — losing
+    the ``suggestion`` / ``field`` / ``details`` that ``CreateMediaBuyBody``
+    produces, and leaking a stdlib-internal string onto the wire.
+
+    Pins that the dependency swallows the decode failure so the body model —
+    not the raw decoder — owns the rejection.
+
+    Which cases actually grade the dependency (mutation-verified by reverting
+    ``_raw_json_body`` to its raising form): ``empty`` and ``non-json content
+    type`` redden; ``malformed`` does NOT. A syntactically-invalid JSON body is
+    rejected by FastAPI's own body parsing before the dependency is resolved,
+    so it never reaches ``_raw_json_body``. It is kept here because the
+    buyer-facing outcome is part of the same contract, but it is not the oracle
+    for this fix — do not treat its green as coverage of the dependency.
+    """
+
+    @pytest.mark.parametrize(
+        ("label", "content", "content_type"),
+        [
+            ("empty", b"", "application/json"),
+            ("malformed", b"{not json", "application/json"),
+            ("non-json content type", b"plain text", "text/plain"),
+        ],
+    )
+    def test_undecodable_body_rejects_as_invalid_request_with_suggestion(
+        self, integration_db, label, content, content_type
+    ):
+        from tests.harness.media_buy_create import MediaBuyCreateEnv
+        from tests.harness.transport import extract_wire_suggestion
+        from tests.helpers import assert_envelope_shape
+        from tests.helpers.envelope_assertions import assert_no_raw_validation_leak
+
+        with MediaBuyCreateEnv() as env:
+            env.setup_media_buy_data()
+            client = env.get_rest_client()
+
+            response = client.post(
+                "/api/v1/media-buys",
+                content=content,
+                headers={"Content-Type": content_type},
+            )
+
+            assert response.status_code == 400, (
+                f"An undecodable ({label}) REST body must be rejected as a 400, got "
+                f"{response.status_code}: {response.text[:500]}"
+            )
+            envelope = response.json()
+            assert_envelope_shape(envelope, "INVALID_REQUEST", recovery="correctable")
+            suggestion = extract_wire_suggestion(envelope)
+            assert suggestion, (
+                "An undecodable body must still carry the body model's TOP-LEVEL suggestion "
+                f"(error.json @v3.1-04f59d2d5), got: {envelope}"
+            )
+            assert_no_raw_validation_leak(envelope["adcp_error"]["message"])
+            assert "Expecting value" not in envelope["adcp_error"]["message"], (
+                "The json decoder's own message must not reach the buyer; the body model owns "
+                f"this rejection. Got: {envelope['adcp_error']['message']!r}"
             )
 
 
@@ -436,6 +634,7 @@ class TestSyncCreativesA2ASuggestionParity:
             result = env.call_via(
                 Transport.A2A,
                 creatives=[{"creative_id": "cr-invalid-1", "name": "No format"}],
+                idempotency_key=fresh_idempotency_key(),
             )
 
             assert result.is_error, (
@@ -520,7 +719,10 @@ class TestSyncAccountsRestSuggestionParity:
 
             response = client.post(
                 "/api/v1/accounts/sync",
-                json={"accounts": [{"operator": "no-brand.example"}]},
+                json={
+                    "accounts": [{"operator": "no-brand.example"}],
+                    "idempotency_key": "account-validation-parity-0001",
+                },
             )
 
             assert response.status_code == 400, (

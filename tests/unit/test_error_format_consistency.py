@@ -4,8 +4,8 @@ Tests for error format consistency across MCP and A2A transports.
 
 Verifies that:
 1. MCP tool errors have consistent structure (ToolError with message)
-2. A2A skill errors have consistent JSON-RPC error structure (A2AError)
-3. The SAME error scenario produces consistent error types/messages across transports
+2. Direct A2A skill dispatch keeps typed AdCP domain errors
+3. The SAME error scenario produces consistent typed errors across transports
 
 These are unit tests that mock database/adapter calls to isolate error formatting.
 """
@@ -14,11 +14,10 @@ from unittest.mock import patch
 
 import pytest
 from a2a.utils.errors import A2AError
-from fastmcp.exceptions import ToolError
 from pydantic import ValidationError
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.exceptions import AdCPAuthenticationError, AdCPError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 
 
@@ -145,18 +144,23 @@ class TestA2AErrorShapes:
         self.handler = AdCPRequestHandler()
 
     @pytest.mark.asyncio
-    async def test_auth_required_error_is_server_error(self):
-        """A2A non-discovery skills raise A2AError when identity is None."""
-        with pytest.raises(A2AError) as exc_info:
+    async def test_missing_identity_raises_typed_auth_required(self):
+        """A2A non-discovery skills raise typed auth errors when identity is None.
+
+        Raise-level pin on _handle_explicit_skill (no wire, no JSON-RPC framing
+        exercised here); the wire siblings live in test_a2a_auth_optional /
+        test_a2a_error_responses / test_auth_version_precedence.
+        """
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             await self.handler._handle_explicit_skill(
                 skill_name="create_media_buy",
                 parameters={"brand": {"domain": "testbrand.com"}},
                 identity=None,
             )
 
-        error = exc_info.value
-        assert isinstance(error, A2AError)
-        assert "Authentication required" in str(error)
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
+        assert exc_info.value.recovery == "correctable"
+        assert "Authentication required" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_unknown_skill_raises_server_error(self):
@@ -178,21 +182,22 @@ class TestA2AErrorShapes:
         assert "Unknown skill" in str(error)
 
     @pytest.mark.asyncio
-    async def test_invalid_auth_identity_raises_server_error(self):
-        """A2A raises A2AError when identity has no principal (auth required skill)."""
+    async def test_principal_less_identity_raises_typed_auth_required(self):
+        """A2A raises typed auth when identity has no principal (raise-level pin)."""
         # Identity with no principal_id simulates invalid auth
         invalid_identity = ResolvedIdentity(
             principal_id=None, tenant_id="default", tenant={"tenant_id": "default"}, protocol="a2a"
         )
 
-        with pytest.raises(A2AError) as exc_info:
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             await self.handler._handle_explicit_skill(
                 skill_name="create_media_buy",
                 parameters={"brand": {"domain": "testbrand.com"}},
                 identity=invalid_identity,
             )
 
-        assert "Authentication required" in str(exc_info.value)
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
+        assert exc_info.value.recovery == "correctable"
 
     @pytest.mark.asyncio
     async def test_missing_params_raises_typed_validation_error(self):
@@ -211,7 +216,8 @@ class TestA2AErrorShapes:
 
         with pytest.raises(AdCPValidationError) as exc_info:
             await self.handler._handle_create_media_buy_skill(
-                parameters={"brand": {"domain": "testbrand.com"}},
+                # Valid key: pins the missing-PARAMS path (key precedence parity).
+                parameters={"brand": {"domain": "testbrand.com"}, "idempotency_key": "consistency-key-0123456789"},
                 identity=mock_identity,
             )
 
@@ -288,19 +294,18 @@ class TestUpdateMediaBuyErrorShapes:
 
     @pytest.mark.asyncio
     async def test_a2a_missing_auth_raises_server_error(self):
-        """A2A update_media_buy raises A2AError when auth is missing."""
+        """A2A update_media_buy raises typed authentication when auth is missing."""
         handler = AdCPRequestHandler()
 
-        with pytest.raises(A2AError) as exc_info:
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             await handler._handle_explicit_skill(
                 skill_name="update_media_buy",
                 parameters={"media_buy_id": "buy_001"},
                 identity=None,
             )
 
-        error = exc_info.value
-        assert isinstance(error, A2AError)
-        assert "Authentication required" in str(error)
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
+        assert exc_info.value.recovery == "correctable"
 
 
 class TestListCreativesErrorShapes:
@@ -318,19 +323,18 @@ class TestListCreativesErrorShapes:
 
     @pytest.mark.asyncio
     async def test_a2a_missing_auth_raises_server_error(self):
-        """A2A list_creatives raises A2AError when auth is missing."""
+        """A2A list_creatives raises typed authentication when auth is missing."""
         handler = AdCPRequestHandler()
 
-        with pytest.raises(A2AError) as exc_info:
+        with pytest.raises(AdCPAuthenticationError) as exc_info:
             await handler._handle_explicit_skill(
                 skill_name="list_creatives",
                 parameters={},
                 identity=None,
             )
 
-        error = exc_info.value
-        assert isinstance(error, A2AError)
-        assert "Authentication required" in str(error)
+        assert exc_info.value.error_code == "AUTH_REQUIRED"
+        assert exc_info.value.recovery == "correctable"
 
 
 class TestCrossTransportErrorConsistency:
@@ -365,31 +369,19 @@ class TestCrossTransportErrorConsistency:
             idempotency_key="unit-test-key-errfmt-004",
         )
 
-        # MCP path: missing identity — raises AdCPValidationError (transport-agnostic)
-        mcp_error = None
-        try:
+        with pytest.raises(AdCPAuthenticationError) as mcp_exc:
             await _create_media_buy_impl(req=req, identity=None)
-        except (ToolError, AdCPError) as e:
-            mcp_error = e
 
-        # A2A path: missing identity (None = no auth)
-        a2a_error = None
-        try:
+        with pytest.raises(AdCPAuthenticationError) as a2a_exc:
             await self.handler._handle_explicit_skill(
                 skill_name="create_media_buy",
                 parameters={"brand": {"domain": "testbrand.com"}},
                 identity=None,
             )
-        except A2AError as e:
-            a2a_error = e
 
-        # Both must reject the request
-        assert mcp_error is not None, "MCP path must raise error for missing identity"
-        assert a2a_error is not None, "A2A path must raise A2AError for missing auth"
-
-        # Both errors indicate authentication/authorization failure
-        assert "Identity is required" in str(mcp_error) or "required" in str(mcp_error).lower()
-        assert "Authentication required" in str(a2a_error) or "required" in str(a2a_error).lower()
+        for error in (mcp_exc.value, a2a_exc.value):
+            assert error.error_code == "AUTH_REQUIRED"
+            assert error.recovery == "correctable"
 
     @pytest.mark.asyncio
     async def test_missing_required_params_error_consistent(self):
@@ -424,7 +416,8 @@ class TestCrossTransportErrorConsistency:
 
         with pytest.raises(AdCPValidationError) as a2a_exc_info:
             await self.handler._handle_create_media_buy_skill(
-                parameters={"brand": {"domain": "testbrand.com"}},
+                # Valid key: pins the missing-PARAMS path (key precedence parity).
+                parameters={"brand": {"domain": "testbrand.com"}, "idempotency_key": "consistency-key-0123456789"},
                 identity=mock_identity,
             )
 
@@ -740,6 +733,7 @@ class TestErrorCodeVocabularyConsistency:
         "VALIDATION_ERROR",  # adcp-req: Generic Errors
         "INVALID_REQUEST",  # SDK standard: AdCPInvalidRequestError (semantically-invalid value)
         "AUTH_REQUIRED",  # SDK standard: auth failures (AdCPAuthenticationError + AdCPAuthorizationError)
+        "VERSION_UNSUPPORTED",  # AdCP spec: unsupported release/major negotiation pin
         "POLICY_VIOLATION",  # SDK standard: AdCPPolicyViolationError (content/advertising policy block)
         "NOT_FOUND",  # Base class for entity-specific codes (internal only)
         "ACCOUNT_NOT_FOUND",  # adcp-req: Account resolution (BR-RULE-080)

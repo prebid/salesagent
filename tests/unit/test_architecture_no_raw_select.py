@@ -371,7 +371,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/setup_checklist_service.py", "_check_optional_tasks"),
     ("src/services/setup_checklist_service.py", "get_bulk_setup_status"),
     ("src/services/setup_checklist_service.py", "get_setup_status"),
-    ("src/services/webhook_delivery_service.py", "_send_webhook_enhanced"),
 }
 
 EXPECTED_VIOLATION_COUNT = len(ALLOWLIST)

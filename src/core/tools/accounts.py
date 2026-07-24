@@ -2,7 +2,7 @@
 
 Handles account management per AdCP spec (UC-011):
 - Agent-scoped results (BR-RULE-054)
-- Auth-optional list with empty fallback (BR-RULE-055)
+- Authenticated, caller-scoped list and sync (BR-RULE-055)
 - Upsert by natural key (BR-RULE-056)
 - Atomic XOR response (BR-RULE-057)
 - Brand echo (BR-RULE-058)
@@ -30,6 +30,7 @@ from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from pydantic import Field
 
+from src.core.application_context import dump_adcp_response
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.models import Account as DBAccount
@@ -37,6 +38,7 @@ from src.core.database.repositories.uow import AccountUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value
 from src.core.resolved_identity import ResolvedIdentity
+from src.core.schemas import RawIdempotencyKey
 from src.core.schemas.account import (
     Account,
     ListAccountsRequest,
@@ -203,7 +205,7 @@ async def list_accounts(
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _list_accounts_impl(req, identity)
 
-    return ToolResult(content=str(response), structured_content=response)
+    return ToolResult(content=str(response), structured_content=dump_adcp_response(response, context=context))
 
 
 # ---------------------------------------------------------------------------
@@ -689,6 +691,7 @@ async def _sync_accounts_impl(
 
 
 async def sync_accounts(
+    idempotency_key: RawIdempotencyKey,
     accounts: list[SyncAccountInput] | None = None,
     delete_missing: Annotated[
         bool | None, Field(description="Deactivate accounts not present in the sync list")
@@ -707,22 +710,29 @@ async def sync_accounts(
         delete_missing: Deactivate accounts not in the list.
         dry_run: Preview changes without persisting.
         context: Application-level context per AdCP spec.
+        idempotency_key: Required client-generated key. This seller advertises
+            idempotency support, but replay is implemented on create_media_buy
+            today, so a retry here re-executes rather than replaying the first
+            result. Extending dedupe to this tool is tracked separately.
         ctx: FastMCP context for authentication.
 
     Returns:
         ToolResult with human-readable text and structured data.
     """
+    from src.core.schemas._base import require_idempotency_key
+
+    require_idempotency_key(idempotency_key)
     req = SyncAccountsRequest(
         accounts=accounts or [],
         delete_missing=delete_missing,
         dry_run=dry_run,
         context=context,
-        idempotency_key=str(uuid.uuid4()),
+        idempotency_key=idempotency_key,
     )
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = await _sync_accounts_impl(req, identity)
 
-    return ToolResult(content=str(response), structured_content=response)
+    return ToolResult(content=str(response), structured_content=dump_adcp_response(response, context=context))
 
 
 # ---------------------------------------------------------------------------

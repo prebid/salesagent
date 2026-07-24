@@ -18,6 +18,7 @@ from tests.e2e.adcp_request_builder import (
     parse_tool_result,
 )
 from tests.e2e.utils import make_mcp_client
+from tests.harness._idempotency import fresh_idempotency_key
 
 
 class WebhookReceiver(WebhookCaptureHandler):
@@ -184,6 +185,7 @@ class TestAdCPReferenceImplementation:
                 {
                     "media_buy_id": media_buy_id,
                     "budget": 7500.0,
+                    "idempotency_key": fresh_idempotency_key("e2e-update-key"),
                     "context": {"e2e": "update_media_buy"},
                     "push_notification_config": {
                         "url": webhook_server["url"],
@@ -294,6 +296,7 @@ class TestAdCPReferenceImplementation:
                         {
                             "media_buy_id": media_buy_id,
                             "budget": 7500.0,
+                            "idempotency_key": fresh_idempotency_key("e2e-webhook-key"),
                             "context": {"e2e": "update_webhook"},
                             "push_notification_config": {"url": webhook["url"]},
                         },

@@ -27,6 +27,7 @@ from fastmcp.exceptions import ToolError
 from src.core.exceptions import AdCPValidationError
 from src.core.tools import list_creatives_raw, sync_creatives_raw
 from tests.factories import PrincipalFactory
+from tests.harness._idempotency import fresh_idempotency_key
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -65,24 +66,15 @@ class TestSyncCreativesErrorPaths:
             }
         ]
 
-        # The contract under test: sync_creatives_raw must surface a typed,
-        # buyer-visible validation error for a malformed creative. Either it
-        # returns a response carrying failed-creative entries, or it raises
-        # a typed AdCPError / Pydantic ValidationError / ValueError —
-        # anything else (e.g. RuntimeError, KeyError, NameError) is a bug,
-        # not an "ok" outcome the original ``except Exception: pass`` was
-        # silently accepting.
-        from pydantic import ValidationError
-
-        from src.core.exceptions import AdCPError
-
-        try:
-            response = sync_creatives_raw(
-                creatives=invalid_creatives,
-                identity=identity,
-            )
-        except (AdCPError, ValidationError, ValueError):
-            return  # typed validation surface — the contract is honored
+        # This raw boundary implements per-creative partial-success semantics:
+        # buyer-invalid creative data must become an explicit failed item, not a
+        # request-level exception. Supply the required request key so the test
+        # reaches that validation path instead of false-greening on ingress.
+        response = sync_creatives_raw(
+            creatives=invalid_creatives,
+            idempotency_key=fresh_idempotency_key(),
+            identity=identity,
+        )
 
         # sync_creatives_raw returned a response: it must report the failure
         # explicitly via a per-creative ``action == failed`` entry, not silently
@@ -90,11 +82,20 @@ class TestSyncCreativesErrorPaths:
         assert response is not None, "sync_creatives_raw must not return None for invalid input"
         failed = [c for c in response.creatives if c.action == "failed"]
         succeeded = [c for c in response.creatives if c.action in ("created", "updated")]
-        assert len(failed) >= 1, (
+        assert len(failed) == 1, (
             f"Invalid creative should land in creatives[] with action=failed, "
             f"got {[c.action for c in response.creatives]}"
         )
         assert not succeeded, f"Invalid creative must not be reported as created/updated, got {succeeded!r}"
+        errors = failed[0].errors
+        assert errors, "Failed creative must carry buyer-visible error details"
+        error_text = " ".join(error.message for error in errors)
+        assert "name" in error_text and "format_id" in error_text, (
+            f"Malformed-creative error must identify the missing creative fields, got: {error_text}"
+        )
+        assert "idempotency_key" not in error_text, (
+            f"Test stopped at request-key validation instead of creative validation: {error_text}"
+        )
 
 
 @pytest.mark.integration

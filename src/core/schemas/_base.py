@@ -12,7 +12,7 @@ from decimal import Decimal
 # --- V2.3 Pydantic Models (Bearer Auth, Restored & Complete) ---
 # --- MCP Status System (AdCP PR #77) ---
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, TypeAlias
 
 from src.core.enum_helpers import enum_value
 
@@ -118,6 +118,7 @@ from pydantic import (
     ConfigDict,
     Field,
     RootModel,
+    SkipValidation,
     model_serializer,
     model_validator,
 )
@@ -445,8 +446,8 @@ class CreateMediaBuySubmitted(AdCPCreateMediaBuySubmitted):
         return f"Media buy submitted for approval (task {self.task_id})."
 
 
-# Union type for the SYNCHRONOUS create_media_buy contract (adapter returns,
-# replay bodies of completed buys). Deliberately excludes CreateMediaBuySubmitted:
+# Union type for the SYNCHRONOUS create_media_buy adapter contract. Deliberately
+# excludes CreateMediaBuySubmitted:
 # adapters execute synchronously and can only confirm or fail; the submitted
 # task envelope is produced by the tool's approval branches and lives on
 # CreateMediaBuyResult.response (Success | Error | Submitted).
@@ -482,8 +483,7 @@ class CreateMediaBuyResult(TaskResultEnvelope):
 
     response: CreateMediaBuySuccess | CreateMediaBuyError | CreateMediaBuySubmitted
 
-    # Spec idempotency replay marker (AdCP 3.0.1 idempotency: top-level on the
-    # envelope / top of the structured result). Wrapper-owned: set True ONLY when
+    # Schema-compatible top-level replay marker (AdCP 3.1.1): True means
     # this response is a verbatim replay of a previously cached result (success
     # OR submitted — the replay test asserts True on a submitted replay). Injected
     # at response time, never stored in the cached body; omitted when False on
@@ -1707,7 +1707,7 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
     # identity at the transport layer (ResolvedIdentity), not from the request
     # payload, so account stays optional here.  idempotency_key inherits the
     # library's REQUIRED field (MinLen 16 + pattern) — a missing key rejects at
-    # the boundary as VALIDATION_ERROR (the AdCP 3.0.1 conformance storyboard
+    # the boundary as VALIDATION_ERROR (the AdCP 3.1.1 conformance storyboard
     # accepts it; the spec prose prefers INVALID_REQUEST).
     account: LibraryAccountReference | None = None  # type: ignore[assignment]
 
@@ -1945,20 +1945,95 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
 # minLength 16, maxLength 255, pattern ^[A-Za-z0-9_.:-]{16,255}$.
 _IDEMPOTENCY_KEY_MIN = 16
 _IDEMPOTENCY_KEY_MAX = 255
+_IDEMPOTENCY_KEY_PATTERN = r"^[A-Za-z0-9_.:-]{16,255}$"
 _IDEMPOTENCY_KEY_CHARSET = re.compile(r"^[A-Za-z0-9_.:-]+$")
+# Complement of the allowed charset — the single home for sanitizing internal
+# reconstructions (e.g. the legacy-approval synthetic key) to the spec pattern,
+# so a spec charset change lands here once, never in a call-site copy.
+_IDEMPOTENCY_KEY_DISALLOWED = re.compile(r"[^A-Za-z0-9_.:-]")
 
 
-def validate_idempotency_key_shape(key: str | None) -> None:
+def sanitize_to_idempotency_key_charset(value: str) -> str:
+    """Replace disallowed characters with '-' and clip to the spec max length."""
+    return _IDEMPOTENCY_KEY_DISALLOWED.sub("-", value)[:_IDEMPOTENCY_KEY_MAX]
+
+
+# REST must keep malformed JSON values intact until ``require_idempotency_key``
+# can emit the same AdCP VALIDATION_ERROR as MCP/A2A. ``SkipValidation`` does
+# that without weakening the public OpenAPI contract: generated clients still
+# see the pinned string/length/charset schema.
+RawIdempotencyKey: TypeAlias = Annotated[  # noqa: UP040 — FastAPI/Pydantic need runtime Annotated metadata
+    SkipValidation[str],
+    Field(
+        description="Required client-generated request key (AdCP 3.1.1, 16-255 characters).",
+        json_schema_extra={
+            "minLength": _IDEMPOTENCY_KEY_MIN,
+            "maxLength": _IDEMPOTENCY_KEY_MAX,
+            "pattern": _IDEMPOTENCY_KEY_PATTERN,
+        },
+    ),
+]
+
+# Read requests accept the same raw key shape as inert 3.1 envelope metadata,
+# but omission remains valid during the 3.1 grace window.  Keep the annotation
+# non-nullable in generated schemas while ``SkipValidation`` preserves an
+# explicit JSON null until the shared ingress validator can reject it with the
+# same buyer-facing AdCP envelope on every transport.
+RawOptionalIdempotencyKey: TypeAlias = Annotated[  # noqa: UP040 — FastAPI/Pydantic need runtime Annotated metadata
+    SkipValidation[str],
+    Field(
+        description="Optional inert request key (AdCP 3.1.1, 16-255 characters when supplied).",
+        json_schema_extra={
+            "minLength": _IDEMPOTENCY_KEY_MIN,
+            "maxLength": _IDEMPOTENCY_KEY_MAX,
+            "pattern": _IDEMPOTENCY_KEY_PATTERN,
+        },
+    ),
+]
+
+# ``revision`` is intentionally unsupported by this seller until optimistic
+# concurrency can be honored atomically.  Keep the raw wire value (including
+# explicit JSON null) intact until the shared update boundary can reject every
+# supplied value with the same fail-loud error.  ``SkipValidation`` does not
+# weaken discovery: MCP/OpenAPI still advertise the pinned integer/minimum-one
+# input shape, never null.
+RawUnsupportedRevision: TypeAlias = Annotated[  # noqa: UP040 — FastAPI/Pydantic need runtime Annotated metadata
+    SkipValidation[int],
+    Field(
+        description="Optimistic-concurrency revision. Not supported by this seller; rejected if supplied.",
+        # Discovery constraint only. Runtime values deliberately stay raw so
+        # explicit null and wrong types reach the shared unsupported guard.
+        json_schema_extra={"minimum": 1},
+    ),
+]
+
+
+def validate_idempotency_key_shape(key: str | None, *, allow_none: bool = True) -> None:
     """Enforce the AdCP idempotency_key length/charset constraint.
 
     Shared by create and update so both reject a malformed key identically. A
     length or character-set violation is a value/format error → VALIDATION_ERROR
     (per the idempotency storyboard and the value/range taxonomy), carrying a
-    buyer-facing suggestion. ``None`` is allowed here — required-ness is enforced
-    separately (and is deliberately relaxed on update).
+    buyer-facing suggestion. ``None`` is allowed by default because requiredness
+    is enforced separately at each mutating request-builder boundary. Read
+    ingress passes ``allow_none=False`` after detecting field presence, so an
+    explicitly supplied JSON null is rejected while omission keeps the 3.1
+    compatibility grace.
     """
     if key is None:
-        return
+        if allow_none:
+            return
+        raise AdCPValidationError(
+            "idempotency_key must be a string.",
+            field="idempotency_key",
+            suggestion="Provide idempotency_key as a string, not null.",
+        )
+    if not isinstance(key, str):
+        raise AdCPValidationError(
+            "idempotency_key must be a string.",
+            field="idempotency_key",
+            suggestion="Provide idempotency_key as a string, not a JSON number, boolean, array, or object.",
+        )
     if len(key) < _IDEMPOTENCY_KEY_MIN:
         raise AdCPValidationError(
             f"idempotency_key is too short ({len(key)} characters).",
@@ -1971,7 +2046,7 @@ def validate_idempotency_key_shape(key: str | None) -> None:
             field="idempotency_key",
             suggestion=f"Use an idempotency_key of at most {_IDEMPOTENCY_KEY_MAX} characters.",
         )
-    if not _IDEMPOTENCY_KEY_CHARSET.match(key):
+    if not _IDEMPOTENCY_KEY_CHARSET.fullmatch(key):
         raise AdCPValidationError(
             "idempotency_key contains characters outside [A-Za-z0-9_.:-].",
             field="idempotency_key",
@@ -1979,12 +2054,29 @@ def validate_idempotency_key_shape(key: str | None) -> None:
         )
 
 
+def require_idempotency_key(key: str | None) -> None:
+    """Enforce the spec-required idempotency key at a transport boundary.
+
+    AdCP 3.1.1 requires the field on every mutating task request. Requiredness
+    and shape are separate from the capability's replay guarantee: this seller
+    advertises idempotency support, and the tools that do not yet deduplicate
+    still MUST reject a missing key.
+    """
+    if key is None:
+        from src.core.exceptions import missing_idempotency_key_error
+
+        raise missing_idempotency_key_error()
+    validate_idempotency_key_shape(key)
+
+
 class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     """Update media buy request extending library type.
 
     Inherits all AdCP fields from library (paused, start_time, end_time,
     packages, push_notification_config, context, reporting_webhook, ext).
-    In adcp 3.9 all fields are optional (consolidated from oneOf variants).
+    The pinned AdCP 3.1.1 wire contract requires ``account``,
+    ``idempotency_key``, and ``media_buy_id``. Account resolution and required
+    idempotency validation happen at the protocol boundary described below.
 
     Overrides:
     - start_time: accept Literal["asap"] (backward compat with A2A path)
@@ -1995,16 +2087,15 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # adcp 4.3 makes account and idempotency_key required.  Override as optional:
-    # identity is resolved at the transport boundary, and update_media_buy's
-    # required-key enforcement is a deliberate fast-follow — create_media_buy
-    # enforces it today; the update BDD contract still encodes optional keys.
-    # Removable when the update BDD contract requires keys (the update_media_buy
-    # required-key fast-follow), at which point the idempotency_key override goes
-    # away and the library's required field applies.
+    # The SDK parent makes account and idempotency_key required. Keep both
+    # optional only on this INTERNAL model: identity supplies account, while all
+    # MCP/A2A/REST calls funnel through _build_update_request, which calls
+    # require_idempotency_key before constructing this model. The override keeps
+    # direct trusted _impl callers and existing unit fixtures usable; it is not a
+    # relaxation of the wire contract.
     account: LibraryAccountReference | None = None  # type: ignore[assignment]
-    # Optional on update (identity resolves at the boundary). When a key IS
-    # provided it must satisfy the AdCP idempotency_key constraint
+    # When a key is present on an internally constructed request it must still
+    # satisfy the AdCP idempotency_key constraint
     # (minLength 16, maxLength 255, ^[A-Za-z0-9_.:-]{16,255}$); enforced by
     # ``_check_idempotency_key`` below so a violation surfaces a buyer-facing
     # VALIDATION_ERROR + suggestion (a bare Field constraint cannot carry one).

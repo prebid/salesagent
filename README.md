@@ -4,8 +4,8 @@ An open-source implementation of the [Ad Context Protocol (AdCP)](https://adcont
 sales-agent role, maintained under Prebid.org. It lets AI agents discover and buy advertising
 inventory through standardized MCP and A2A interfaces.
 
-> **Status: alpha.** A pre-1.0 implementation of a pre-release protocol
-> (AdCP 3.1.0-beta.3), under active development. APIs still change between
+> **Status: alpha.** A pre-1.0 implementation of AdCP 3.1.1,
+> under active development. APIs still change between
 > releases — `v2.0.0` introduced breaking changes — so pin a version and expect
 > to adapt on upgrade. It is one of several AdCP sales-agent implementations,
 > not a sole or canonical reference. The codebase is substantial and functional
@@ -22,9 +22,8 @@ The Prebid Sales Agent is a server that:
 
 ## AdCP Compatibility
 
-This implementation targets **AdCP spec version 3.1.0-beta.3** via the `adcp==5.7.0`
-Python SDK. That spec version is a **beta** — request/response shapes are not yet
-frozen, and SDK bumps can change them. See
+This implementation targets **AdCP spec version 3.1.1** via the `adcp==6.6.0`
+Python SDK. SDK bumps can change request/response shapes. See
 [docs/adcp-spec-version.md](docs/adcp-spec-version.md) for the SDK-to-spec mapping
 and bump procedure. The pin is enforced by a CI guard
 (`tests/unit/test_adcp_spec_version.py`), which fails on drift.
@@ -75,8 +74,8 @@ Publishers deploy their own sales agent. Choose based on your needs:
 
 **Docker is the fastest** - it bundles PostgreSQL and just works. Cloud platforms require separate database setup.
 
-Because this is alpha software tracking a beta protocol, pin the version you deploy
-and re-test after every upgrade — minor releases can carry breaking changes.
+Because this implementation is alpha software, pin the version you deploy and
+re-test after every upgrade — releases can carry breaking changes.
 
 ### After Deployment
 
@@ -284,8 +283,11 @@ async with client:
     products = await client.tools.get_products(brief="video ads for sports content")
 
     # 2. Book a media buy. Each package references a product and one of its
-    #    pricing options. `idempotency_key` is REQUIRED (16-255 chars) — reusing
-    #    the same key makes retries safe (returns the original buy, no duplicate).
+    #    pricing options. `idempotency_key` is REQUIRED and shape-validated
+    #    (16-255 chars), but this seller currently advertises idempotency as
+    #    unsupported: reusing a key can execute twice. If the outcome is
+    #    ambiguous, do not retry automatically; this seller has no natural-key
+    #    lookup, so reconcile through buyer-side records or seller support first.
     result = await client.tools.create_media_buy(
         brand="acme.com",                     # domain shorthand for a BrandReference
         start_time="2026-08-01T00:00:00Z",    # ISO 8601, or "asap"

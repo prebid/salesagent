@@ -170,10 +170,15 @@ class TestGetAdcpCapabilitiesImpl:
         assert response.adcp is not None
         assert response.adcp.major_versions[0].root == 3
         assert SupportedProtocol.media_buy in response.supported_protocols
-        # Idempotency must declare supported=True since MediaBuyRepository.find_by_idempotency_key
-        # actually dedupes against idx_media_buys_idempotency_key.
-        assert response.adcp.idempotency.supported is True
-        assert response.adcp.idempotency.replay_ttl_seconds == 86400
+        # `supported` is one agent-wide claim, not per-tool: only
+        # create_media_buy deduplicates today, while update_media_buy/
+        # sync_accounts/sync_creatives validate-and-reexecute. False is the
+        # accurate blanket declaration under the binary discriminated union.
+        assert response.adcp.idempotency.supported is False
+        assert not hasattr(response.adcp.idempotency, "replay_ttl_seconds"), (
+            "IdempotencyUnsupported must not carry replay_ttl_seconds — the discriminated "
+            "union forbids it ('they have no meaning without replay support')"
+        )
         # Specialism declaration activates storyboard scenarios bundled under
         # sales-non-guaranteed (inventory_list_*, delivery_reporting, etc.).
         assert response.specialisms is not None
@@ -197,6 +202,172 @@ class TestGetAdcpCapabilitiesImpl:
         assert data["supported_protocols"] == ["media_buy"]
         assert "specialisms" in data
         assert data["specialisms"] == ["sales-non-guaranteed"]
+
+    def test_impl_echoes_request_context_minimal_path(self):
+        """Capabilities echoes the buyer's request context unchanged (#1512).
+
+        Even called directly, the minimal (no-tenant) response must carry the
+        request context back — the version-negotiation storyboard grades an
+        unchanged context echo, which previously vanished because the impl never
+        set ``context`` on the response.
+        """
+        from adcp.types import ContextObject, GetAdcpCapabilitiesRequest
+
+        from src.core.config_loader import current_tenant
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        current_tenant.set(None)
+        request_ctx = ContextObject(context_id="ctx-echo-minimal")
+        response = _get_adcp_capabilities_impl(GetAdcpCapabilitiesRequest(context=request_ctx), None)
+        assert response.context == request_ctx
+
+
+def _minimal_capabilities_response() -> GetAdcpCapabilitiesResponse:
+    """A minimal valid response, enough for the MCP wrapper's summary builder."""
+    from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+        Adcp,
+        Idempotency,
+        MajorVersion,
+    )
+
+    return GetAdcpCapabilitiesResponse(
+        adcp=Adcp(
+            major_versions=[MajorVersion(root=3)],
+            idempotency=Idempotency(supported=True, replay_ttl_seconds=86400),
+        ),
+        supported_protocols=[SupportedProtocol.media_buy],
+    )
+
+
+class TestGetAdcpCapabilitiesProtocolsThreading:
+    """The buyer's ``protocols`` selection must reach the impl request.
+
+    Both transport wrappers previously constructed the request with only
+    ``context`` — the ``protocols`` parameter was accepted at the boundary and
+    then dropped, so the impl never saw it (#1546). These tests pin the
+    threading; filter behavior is covered in TestGetAdcpCapabilitiesProtocolFiltering.
+    """
+
+    async def test_raw_wrapper_forwards_protocols_into_request(self):
+        """get_adcp_capabilities_raw passes protocols into GetAdcpCapabilitiesRequest."""
+        from src.core.tools.capabilities import get_adcp_capabilities_raw
+
+        identity = _make_capabilities_identity()
+        with patch("src.core.tools.capabilities._get_adcp_capabilities_impl") as mock_impl:
+            mock_impl.return_value = MagicMock()
+            await get_adcp_capabilities_raw(protocols=["media_buy"], context=None, identity=identity)
+
+        req = mock_impl.call_args.args[0]
+        assert req.protocols == ["media_buy"], "raw wrapper must thread protocols into the request, not drop it"
+
+    async def test_mcp_wrapper_forwards_protocols_into_request(self):
+        """get_adcp_capabilities (MCP wrapper) passes protocols into the request."""
+        from src.core.tools.capabilities import get_adcp_capabilities
+
+        with patch("src.core.tools.capabilities._get_adcp_capabilities_impl") as mock_impl:
+            mock_impl.return_value = _minimal_capabilities_response()
+            await get_adcp_capabilities(protocols=["media_buy"], context=None, ctx=None)
+
+        req = mock_impl.call_args.args[0]
+        assert req.protocols == ["media_buy"], "MCP wrapper must thread protocols into the request, not drop it"
+
+
+class TestGetAdcpCapabilitiesProtocolFiltering:
+    """The ``protocols`` filter actually narrows the response on every transport (#1546).
+
+    Reviewer probe: a direct impl call with ``protocols=["signals"]`` used to return
+    ``supported_protocols=["media_buy"]`` (the filter was ignored). It must now filter.
+    """
+
+    def _impl(self, protocols):
+        from adcp.types import GetAdcpCapabilitiesRequest
+
+        from src.core.config_loader import current_tenant
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        current_tenant.set(None)
+        req = GetAdcpCapabilitiesRequest(protocols=protocols)
+        return _get_adcp_capabilities_impl(req, None)
+
+    def test_no_filter_returns_full_supported_set(self):
+        response = self._impl(None)
+        assert response.supported_protocols == [SupportedProtocol.media_buy]
+
+    def test_filter_to_supported_protocol_returns_it(self):
+        response = self._impl(["media_buy"])
+        assert response.supported_protocols == [SupportedProtocol.media_buy]
+
+    def test_filter_intersects_dropping_unsupported(self):
+        # media_buy is supported, signals is not -> only media_buy survives.
+        response = self._impl(["media_buy", "signals"])
+        assert response.supported_protocols == [SupportedProtocol.media_buy]
+
+    def test_filter_to_only_unsupported_protocol_still_declares_the_true_set(self):
+        """protocols=["signals"] is schema-valid, so it is answered, not rejected.
+
+        ``supported_protocols`` is the agent's own declaration — the v3.1.1
+        response schema describes each listed value as committing the agent to
+        that protocol's compliance storyboard — so it reports what this agent
+        implements regardless of what the buyer asked about. Only the DOMAIN
+        DETAILS are filtered, which is what
+        ``capability-discovery.yaml::get_capabilities_filtered`` expects.
+        Rejecting the request instead used VALIDATION_ERROR for a payload that
+        violates no schema.
+        """
+        from src.core.enum_helpers import enum_value
+
+        response = self._impl(["signals"])
+
+        assert [enum_value(p) for p in response.supported_protocols] == ["media_buy"]
+        assert response.specialisms == []
+
+    def test_unknown_protocol_rejected_by_request_model(self):
+        """An unknown enum value is rejected when the request model is built (the
+        transport boundaries translate that to VALIDATION_ERROR)."""
+        from adcp.types import GetAdcpCapabilitiesRequest
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            GetAdcpCapabilitiesRequest(protocols=["marketing"])
+
+
+class TestParseProtocolsQuery:
+    """REST ``protocols`` query param normalization (repeated or CSV) (#1546)."""
+
+    def test_absent_param_means_no_filter(self):
+        """An absent param (None) or a genuinely empty list means 'no filter' (full set)."""
+        from src.routes.api_v1 import _parse_protocols_query
+
+        assert _parse_protocols_query(None) is None
+        assert _parse_protocols_query([]) is None
+
+    def test_present_but_blank_is_validation_error(self):
+        """``?protocols=`` (present but blank → [""]) is an explicit empty selection,
+        not 'no filter' — it must be a VALIDATION_ERROR, never the full set (#1546 re-review)."""
+        from src.core.exceptions import AdCPValidationError
+        from src.routes.api_v1 import _parse_protocols_query
+
+        with pytest.raises(AdCPValidationError):
+            _parse_protocols_query([""])
+
+    def test_repeated_params(self):
+        from src.routes.api_v1 import _parse_protocols_query
+
+        assert _parse_protocols_query(["media_buy", "signals"]) == ["media_buy", "signals"]
+
+    def test_csv_param_is_split(self):
+        from src.routes.api_v1 import _parse_protocols_query
+
+        assert _parse_protocols_query(["media_buy,signals"]) == ["media_buy", "signals"]
+
+    def test_mixed_and_trimmed(self):
+        from src.routes.api_v1 import _parse_protocols_query
+
+        assert _parse_protocols_query([" media_buy , signals ", "creative"]) == [
+            "media_buy",
+            "signals",
+            "creative",
+        ]
 
 
 class TestGetAdcpCapabilitiesWithTenant:
@@ -234,15 +405,21 @@ class TestGetAdcpCapabilitiesWithTenant:
                     tenant=mock_tenant,
                     protocol="mcp",
                 )
-                response = _get_adcp_capabilities_impl(None, identity)
+                from adcp.types import ContextObject, GetAdcpCapabilitiesRequest
+
+                request_ctx = ContextObject(context_id="ctx-full-echo")
+                response = _get_adcp_capabilities_impl(GetAdcpCapabilitiesRequest(context=request_ctx), identity)
+
+                # Full (tenant) path must echo the buyer's request context unchanged (#1512).
+                assert response.context == request_ctx
 
                 # Verify full response structure
                 assert response.adcp is not None
                 assert response.adcp.major_versions[0].root == 3
                 assert SupportedProtocol.media_buy in response.supported_protocols
-                # Full response must also declare idempotency support consistently.
-                assert response.adcp.idempotency.supported is True
-                assert response.adcp.idempotency.replay_ttl_seconds == 86400
+                # Full response carries the same seller-wide replay posture.
+                assert response.adcp.idempotency.supported is False
+                assert not hasattr(response.adcp.idempotency, "replay_ttl_seconds")
                 # Specialism declaration must be consistent across minimal and full paths.
                 assert response.specialisms is not None
                 assert AdcpSpecialism.sales_non_guaranteed in response.specialisms

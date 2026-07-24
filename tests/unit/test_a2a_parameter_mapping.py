@@ -53,6 +53,7 @@ class TestA2AParameterMapping:
             # Simulate A2A request with AdCP v2.0+ 'packages' field
             parameters = {
                 "media_buy_id": "mb_123",
+                "idempotency_key": "a2a-mapping-key-0001",
                 "paused": False,  # adcp 2.12.0+: paused=False means resume
                 "packages": [{"package_id": "pkg_1", "paused": False}],  # AdCP v2.12.0+ field name
             }
@@ -102,6 +103,7 @@ class TestA2AParameterMapping:
             # Legacy request format with 'updates' wrapper
             parameters = {
                 "media_buy_id": "mb_123",
+                "idempotency_key": "a2a-mapping-key-0002",
                 "updates": {
                     "packages": [{"package_id": "pkg_1", "budget": 5000.0, "status": "active"}]
                 },  # Legacy wrapper
@@ -119,6 +121,56 @@ class TestA2AParameterMapping:
             assert "packages" in call_kwargs, "Should have packages parameter"
             assert len(call_kwargs["packages"]) == 1, "Should have extracted 1 package"
             assert call_kwargs["packages"][0]["package_id"] == "pkg_1", "Package ID should match"
+
+    def test_update_media_buy_forwards_declared_update_fields(self):
+        """A2A must not silently discard declared update fields."""
+        import asyncio
+
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+        from src.core.tools.media_buy_update import REVISION_OMITTED
+
+        handler = AdCPRequestHandler()
+        parameters = {
+            "media_buy_id": "mb_123",
+            "idempotency_key": "a2a-update-key-0001",
+            "reporting_webhook": {"url": "https://buyer.example/report"},
+            "ext": {"buyer_ref": "ref-1"},
+            "currency": "EUR",
+            "pacing": "even",
+            "daily_budget": 25.0,
+        }
+
+        with (
+            patch("src.a2a_server.adcp_a2a_server.core_update_media_buy_tool") as mock_update,
+            patch(
+                "src.core.webhook_validator._validate_callback_url_with_policy",
+                return_value=(True, ""),
+            ),
+        ):
+            mock_update.return_value = {"status": "success"}
+
+            asyncio.run(handler._handle_update_media_buy_skill(parameters=parameters, identity=_MOCK_IDENTITY))
+
+            mock_update.assert_called_once_with(
+                media_buy_id="mb_123",
+                paused=None,
+                flight_start_date=None,
+                flight_end_date=None,
+                start_time=None,
+                end_time=None,
+                budget=None,
+                currency="EUR",
+                pacing="even",
+                daily_budget=25.0,
+                packages=None,
+                push_notification_config=None,
+                context=None,
+                reporting_webhook={"url": "https://buyer.example/report"},
+                ext={"buyer_ref": "ref-1"},
+                idempotency_key="a2a-update-key-0001",
+                revision=REVISION_OMITTED,
+                identity=_MOCK_IDENTITY,
+            )
 
     def test_update_media_buy_validates_required_parameters(self):
         """
@@ -304,6 +356,9 @@ class TestA2AParameterMapping:
             # Request missing required AdCP parameters
             incomplete_parameters = {
                 "po_number": "campaign_123",
+                # A valid key so this pins the missing-PARAMS error, not the
+                # missing-key error the hoisted key check now raises first.
+                "idempotency_key": "param-map-key-0123456789",
                 # Missing: brand, packages, start_time, end_time
             }
 

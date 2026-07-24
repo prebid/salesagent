@@ -53,10 +53,18 @@ def needs_v2_compat(adcp_version: str | None) -> bool:
     """
     if adcp_version is None:
         return True
+    # Since #1512/#1546, an explicit pre-3.0 *pin* is rejected at ingress by
+    # validate_adcp_version_pins (VERSION_UNSUPPORTED — majors validated by
+    # membership in the supported set), so a client-pinned "2.x" never reaches
+    # here. The live pre-3.0 inputs are the REST *Body models' "1.0.0" default
+    # (unpinned legacy clients) and unparseable strings; both resolve to v2
+    # compat below, so this comparison is still load-bearing.
     try:
         return Version(adcp_version) < V3_VERSION
     except InvalidVersion:
-        logger.warning(f"Unparseable adcp_version '{adcp_version}', defaulting to v2 compat")
+        # Do not echo the buyer-controlled value into logs: embedded control
+        # characters would let a request forge adjacent log records.
+        logger.warning("Unparseable adcp_version; defaulting to v2 compat")
         return True
 
 

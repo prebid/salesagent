@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.resolved_identity import ResolvedIdentity
+from tests.helpers import assert_envelope_shape
 
 
 class TestMCPAuthMiddlewareExists:
@@ -100,6 +101,10 @@ class TestMCPAuthMiddlewareBehavior:
         mock_context.message.name = "create_media_buy"  # auth-required
 
         mock_identity = MagicMock(spec=ResolvedIdentity)
+        # Auth-required tools now require an authenticated identity (AUTH before
+        # VERSION, #1546): the middleware rejects a principal-less identity, so
+        # this resolved identity must carry a principal_id to proceed.
+        mock_identity.principal_id = "principal-1"
         call_next = AsyncMock(return_value=MagicMock())
 
         with patch(
@@ -144,11 +149,19 @@ class TestMCPAuthMiddlewareBehavior:
 
     @pytest.mark.asyncio
     async def test_auth_failure_raises_before_tool_runs(self, middleware, mock_context):
-        """Auth-required tool with invalid token: error before tool body."""
+        """Auth-required tool with invalid token: translated AUTH envelope before the tool body.
+
+        The middleware translates the AdCPError to the two-layer envelope
+        (AdCPToolError) itself, since a raw middleware raise bypasses the tool
+        wrapper's error logging and would surface on the wire without a code.
+        """
         from src.core.exceptions import AdCPAuthenticationError
+        from src.core.tool_error_logging import AdCPToolError
 
         mock_context.message = MagicMock()
         mock_context.message.name = "create_media_buy"
+        application_context = {"correlation_id": "mcp-invalid-auth", "nullable": None}
+        mock_context.message.arguments = {"context": application_context}
 
         call_next = AsyncMock()
 
@@ -156,10 +169,47 @@ class TestMCPAuthMiddlewareBehavior:
             "src.core.mcp_auth_middleware.resolve_identity_from_context",
             side_effect=AdCPAuthenticationError("Invalid token"),
         ):
-            with pytest.raises(AdCPAuthenticationError):
+            with pytest.raises(AdCPToolError) as exc:
                 await middleware.on_call_tool(mock_context, call_next)
 
+        # Wire envelope carries the auth code — not a code-less error. The helper
+        # pins the full two-layer shape (adcp_error + errors[0]) and recovery.
+        assert_envelope_shape(exc.value, "AUTH_REQUIRED", recovery="correctable")
+        assert exc.value.envelope["context"] == application_context
         # Tool was NOT called
+        call_next.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_missing_token_rejected_before_tool_runs(self, middleware, mock_context):
+        """Auth-required tool with a MISSING token: AUTH rejected before the tool body.
+
+        AUTH before VERSION (#1546): resolve_identity raises for an INVALID token
+        but returns a principal-less identity for a MISSING one. Without the
+        middleware guard the request would fall through to the version check and
+        flip the error ordering on missing-vs-invalid. The middleware rejects the
+        principal-less identity, translating it to the same AUTH_REQUIRED
+        envelope, so the order and wire shape are stable across both cases.
+        """
+        from src.core.tool_error_logging import AdCPToolError
+
+        mock_context.message = MagicMock()
+        mock_context.message.name = "create_media_buy"  # auth-required
+        application_context = {"correlation_id": "mcp-missing-auth", "nullable": None}
+        mock_context.message.arguments = {"context": application_context}
+
+        principal_less = MagicMock(spec=ResolvedIdentity)
+        principal_less.principal_id = None
+        call_next = AsyncMock()
+
+        with patch(
+            "src.core.mcp_auth_middleware.resolve_identity_from_context",
+            return_value=principal_less,
+        ):
+            with pytest.raises(AdCPToolError) as exc:
+                await middleware.on_call_tool(mock_context, call_next)
+
+        assert_envelope_shape(exc.value, "AUTH_REQUIRED", recovery="correctable")
+        assert exc.value.envelope["context"] == application_context
         call_next.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -169,6 +219,7 @@ class TestMCPAuthMiddlewareBehavior:
         mock_context.message.name = "create_media_buy"
 
         mock_identity = MagicMock(spec=ResolvedIdentity)
+        mock_identity.principal_id = "principal-1"  # authenticated (AUTH before VERSION, #1546)
         call_next = AsyncMock(return_value=MagicMock())
 
         with (

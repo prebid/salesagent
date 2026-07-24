@@ -59,6 +59,47 @@ def wire_dict(ctx: dict) -> dict:
     return _require_response(ctx).model_dump(mode="json")
 
 
+def wire_error_envelope(ctx: dict) -> dict | None:
+    """Return the captured error-path wire envelope, or ``None`` when none exists.
+
+    The error-path analogue of :func:`wire_dict` / :func:`wire_field`. Callers
+    of this helper are already inside an error-assertion Then step, so
+    ``ctx["error"]`` is established — an operation failed. Every real-wire
+    dispatcher (REST/A2A/MCP) stashes ``TransportResult.wire_error_envelope``
+    whenever the dispatched operation errors, so ``ctx["result"]`` being
+    present with no envelope on a real-wire transport is not "no wire yet" —
+    it is the dispatcher failing to stash it, a bug this loud guard exists to
+    catch instead of silently masking it behind the lossy reconstructed
+    exception.
+
+    Three cases legitimately return ``None`` and are left to the caller to
+    fall back on ``ctx["error"]``: IMPL (no wire by definition); ``ctx["result"]``
+    itself absent (the rejection was raised before dispatch ever reached a
+    transport, independent of which one is parametrized); and
+    ``result.wire_capture_unavailable`` — A2A's documented "direct raw"
+    dispatch mode (e.g. ``CreativeSyncEnv``, which calls a ``*_raw()`` wrapper
+    directly, with no Task/Artifact framing to ever reconstruct wire from) has
+    no wire to capture BY DESIGN, permanently, not as a transient miss; a
+    dispatch mode that never promised captured wire cannot be the "dispatcher
+    regression" this guard exists to catch.
+    """
+    result = ctx.get("result")
+    transport = ctx.get("transport")
+    envelope = getattr(result, "wire_error_envelope", None) if result is not None else None
+    wire_capture_unavailable = getattr(result, "wire_capture_unavailable", False) if result is not None else False
+    if (
+        result is not None
+        and envelope is None
+        and transport not in (None, Transport.IMPL)
+        and not wire_capture_unavailable
+    ):
+        raise AssertionError(
+            f"{transport}: wire_error_envelope missing — env does not stash the error-path wire "
+            "envelope despite the dispatched operation failing"
+        )
+    return envelope
+
+
 def _require(ctx: dict, key: str, *, hint: str | None = None) -> object:
     """Return ``ctx[key]``, failing with a diagnostic if it is absent.
 

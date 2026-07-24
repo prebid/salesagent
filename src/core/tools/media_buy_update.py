@@ -19,6 +19,7 @@ from adcp.server.helpers import MEDIA_BUY_STATE_MACHINE, is_terminal_status, val
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import MediaBuyStatus
 from pydantic import Field
+from pydantic.fields import FieldInfo
 
 from src.core.tools.media_buy_list import _compute_status, normalize_persisted_media_buy_status
 
@@ -39,6 +40,7 @@ from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 from sqlalchemy import select
 
+from src.core.application_context import dump_adcp_response
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthorizationError,
@@ -79,11 +81,14 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AffectedPackage,
     Budget,
+    RawIdempotencyKey,
+    RawUnsupportedRevision,
     UpdateMediaBuyError,
     UpdateMediaBuyRequest,
     UpdateMediaBuyResult,
     UpdateMediaBuySubmitted,
     UpdateMediaBuySuccess,
+    require_idempotency_key,
 )
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.creatives import _sync_creatives_impl
@@ -97,6 +102,7 @@ from src.core.tools.financial_validation import (
 from src.core.transport_helpers import resolve_identity_from_context
 from src.core.utils import utc_flight_start
 from src.core.validation_helpers import adcp_validation_boundary, package_field_path
+from src.core.webhook_validator import require_valid_callback_config_urls, validated_callback_url_scope
 from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
@@ -105,6 +111,129 @@ from src.services.targeting_capabilities import (
     validate_property_targeting_allowed,
     validate_unknown_targeting_fields,
 )
+
+
+class _RevisionOmitted(int):
+    """Identity sentinel distinguishing an absent revision from JSON null."""
+
+    # Module reloads replace this private class, but already-imported transport
+    # wrappers can still hold an instance of the prior definition. A stable
+    # marker preserves omission across that reload boundary; JSON wire values
+    # cannot manufacture this internal Python attribute.
+    _adcp_revision_omitted = True
+
+
+REVISION_OMITTED = _RevisionOmitted(0)
+
+
+def revision_omitted_default() -> RawUnsupportedRevision:
+    """Return the shared omission sentinel for Pydantic default factories."""
+    return REVISION_OMITTED
+
+
+# A Pydantic default factory makes the MCP parameter optional without adding a
+# nullable type or an invalid ``default: null`` to tools/list.  Direct Python
+# calls receive this FieldInfo object itself, so the wrapper normalizes both it
+# and the factory-produced singleton below.
+_MCP_REVISION_DEFAULT: Any = Field(default_factory=revision_omitted_default)
+
+
+def _revision_was_omitted(revision: object) -> bool:
+    """Recognize omission after schema copies or a module reload.
+
+    FastMCP/Pydantic may copy either the ``FieldInfo`` signature default or the
+    default-factory value while constructing discovery schemas. Test isolation
+    can also reload this module after a transport imported the old sentinel.
+    Wire values can never be a ``FieldInfo`` or carry the private marker.
+    """
+    return isinstance(revision, FieldInfo) or getattr(revision, "_adcp_revision_omitted", False) is True
+
+
+def _revision_as_positive_int(revision: object) -> int | None:
+    """A supplied revision's NUMERIC value if it is a valid ``minimum: 1`` integer, else None.
+
+    Classifies on numeric VALUE, not Python type: the A2A JSON-RPC/protobuf
+    layer coerces every JSON integer to ``float``, so an ``isinstance(int)``
+    gate is unreachable there and would diverge A2A from MCP/REST for the same
+    wire value. Integer-valued floats (``7.0``) count as the integer; genuine
+    fractionals (``7.5``), strings (``"7"``), and booleans do not — those are
+    schema-invalid (the pinned v3.1.1 ``update-media-buy-request.json`` defines
+    ``revision`` as ``{type: integer, minimum: 1}``). Returns None for any
+    non-integer or below-minimum value, which the caller routes to
+    INVALID_REQUEST.
+    """
+    if isinstance(revision, bool):
+        return None
+    if isinstance(revision, int):
+        value = revision
+    elif isinstance(revision, float) and revision.is_integer():
+        value = int(revision)
+    else:
+        return None
+    return value if value >= 1 else None
+
+
+def validate_update_media_buy_protocol_fields(
+    *,
+    idempotency_key: str | None,
+    revision: object = REVISION_OMITTED,
+) -> None:
+    """Apply cheap update guards before any buyer-controlled DNS work.
+
+    Async transports call this before callback validation. The shared builder
+    calls it again so direct synchronous raw callers retain identical behavior.
+    AdCP 3.1.1 requires the idempotency key and defines revision as an atomic
+    optimistic-concurrency precondition (``update-media-buy-request.json``:
+    ``{type: integer, minimum: 1}``, optional). This seller does not implement
+    optimistic concurrency yet (#1607), so a supplied revision is rejected
+    fail-loud — but with the code that matches its VALUE, uniformly across all
+    three transports.
+    """
+    require_idempotency_key(idempotency_key)
+
+    # Omission means "no precondition supplied" — proceed.
+    #
+    # Explicit JSON null does NOT. An earlier revision accepted it on the theory
+    # that the SDK serializes an unset ``revision`` as null; it does not — at the
+    # pinned adcp 6.6.0, ``UpdateMediaBuyRequest(...).model_dump()`` OMITS the key
+    # entirely when it was never set. So no conformant client emits null here,
+    # while ``update-media-buy-request.json`` (v3.1.1) types the field
+    # ``{type: integer, minimum: 1}``, which a JSON null violates. It therefore
+    # falls through to the same INVALID_REQUEST branch as 0 / "7" / 7.5, matching
+    # how the sibling preconditions already treat null.
+    if _revision_was_omitted(revision):
+        return
+
+    # A supplied value is rejected, but the WIRE CODE depends on its value, not
+    # its Python type — so A2A (which floats every JSON int) converges with
+    # MCP/REST. A schema-valid revision (integer >= 1, incl. 7.0) names a field
+    # this seller does not support: verbatim UNSUPPORTED_FEATURE ("a requested
+    # feature or field is not supported by this seller"). The pinned BR-UC-003
+    # partition rows grade the implemented-feature CONFLICT (unwired for this
+    # seller, #1607); revision 0 / "7" / 7.5 are schema-invalid -> INVALID_REQUEST,
+    # matching those rows' below_min / wrong_type outcomes.
+    if _revision_as_positive_int(revision) is not None:
+        raise AdCPCapabilityNotSupportedError(
+            "This seller does not support optimistic-concurrency control via `revision`; the update was not applied.",
+            # Same offending field as the INVALID_REQUEST branch below, so
+            # errors[0].field points at `revision` either way. Omitting it here
+            # gave the buyer a remediation pointer for a malformed value but a
+            # null one for a valid-but-unsupported value — same field, same
+            # request, two different answers.
+            field="revision",
+            suggestion=(
+                "Retry the update without a `revision` field, or re-read the media buy's current state before updating."
+            ),
+        )
+    # A schema-INVALID value (below minimum:1, non-integer, wrong JSON type). The
+    # message describes the malformed VALUE the buyer sent — not an unsupported
+    # feature — which also keeps this raise textually distinct from the
+    # UNSUPPORTED_FEATURE branch above (no silent-drift copy).
+    raise AdCPInvalidRequestError(
+        "`revision` must be an integer >= 1 when supplied; the update was not applied.",
+        field="revision",
+        suggestion="Omit `revision`, or supply the media buy's current integer revision (minimum 1).",
+    )
 
 
 def _adcp_status_and_actions(
@@ -1438,13 +1567,37 @@ def _build_update_request(
     context: Any = None,
     reporting_webhook: Any = None,
     ext: Any = None,
-    idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
+    idempotency_key: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Required request key. This seller advertises idempotency support; replay is "
+                "implemented on create_media_buy today, so a repeated key here is validated and "
+                "accepted but not yet deduplicated."
+            )
+        ),
+    ] = None,
+    revision: RawUnsupportedRevision = REVISION_OMITTED,
 ) -> UpdateMediaBuyRequest:
     """Build UpdateMediaBuyRequest from flat parameters.
 
     Handles deprecated field mapping and budget object construction.
-    Used by both MCP wrapper and A2A raw function.
+    Used by MCP, A2A, and REST, making this the shared protocol boundary for
+    required request fields that the internal request model keeps optional.
     """
+    # AdCP 3.1.1 requires idempotency_key on every mutating request, including
+    # the tools this seller does not yet deduplicate. Validate
+    # requiredness and raw JSON type here, before Pydantic can coerce a numeric
+    # A2A value into a string, so every transport returns VALIDATION_ERROR.
+    validate_update_media_buy_protocol_fields(
+        idempotency_key=idempotency_key,
+        revision=revision,
+    )
+    require_valid_callback_config_urls(
+        push_notification_config=push_notification_config,
+        reporting_webhook=reporting_webhook,
+    )
+
     # Handle deprecated field names
     effective_start = start_time or flight_start_date
     effective_end = end_time or flight_end_date
@@ -1470,37 +1623,33 @@ def _build_update_request(
                 auto_pause_on_budget_exhaustion=None,
             )
 
-    # Build request with only non-None values (strict validation in dev mode)
-    request_params: dict[str, Any] = {}
-    if media_buy_id is not None:
-        request_params["media_buy_id"] = media_buy_id
-    if paused is not None:
-        request_params["paused"] = paused
-    if effective_start is not None:
-        request_params["start_time"] = effective_start
-    if effective_end is not None:
-        request_params["end_time"] = effective_end
-    if budget_obj is not None:
-        request_params["budget"] = budget_obj
-    if packages is not None:
-        request_params["packages"] = packages
-    if push_notification_config is not None:
-        request_params["push_notification_config"] = push_notification_config
-    if context is not None:
-        request_params["context"] = context
-    if reporting_webhook is not None:
-        request_params["reporting_webhook"] = reporting_webhook
-    if ext is not None:
-        request_params["ext"] = ext
-    if idempotency_key is not None:
-        request_params["idempotency_key"] = idempotency_key
+    # Build request with only non-None values (strict validation in dev mode).
+    # Collected via a dict comprehension rather than a branch-per-field so adding a
+    # tolerated field does not grow the function's cyclomatic complexity.
+    request_params: dict[str, Any] = {
+        key: value
+        for key, value in {
+            "media_buy_id": media_buy_id,
+            "paused": paused,
+            "start_time": effective_start,
+            "end_time": effective_end,
+            "budget": budget_obj,
+            "packages": packages,
+            "push_notification_config": push_notification_config,
+            "context": context,
+            "reporting_webhook": reporting_webhook,
+            "ext": ext,
+            "idempotency_key": idempotency_key,
+        }.items()
+        if value is not None
+    }
 
     with adcp_validation_boundary(context="update_media_buy request"):
         req = UpdateMediaBuyRequest(**request_params)
 
     # BR-RULE-022: reject empty updates (no updatable fields beyond identifier).
     # This is a SEMANTIC rejection of a schema-valid request (update fields are all
-    # optional per AdCP 3.1 GA update-media-buy-request.json), so the canonical code
+    # optional apart from the required idempotency key and identifier), so the canonical code
     # is INVALID_REQUEST — NOT VALIDATION_ERROR (which GA L3 error-handling reserves
     # for schema-validation failures: missing required fields / bad types / range).
     if not req.has_updatable_fields():
@@ -1519,6 +1668,7 @@ def _build_update_request(
 
 
 async def update_media_buy(
+    idempotency_key: RawIdempotencyKey,
     media_buy_id: Annotated[str | None, Field(description="Publisher media buy ID to update")] = None,
     paused: Annotated[bool | None, Field(description="True to pause campaign delivery, False to resume")] = None,
     flight_start_date: Annotated[str | None, Field(description="New campaign start date in YYYY-MM-DD format")] = None,
@@ -1536,7 +1686,7 @@ async def update_media_buy(
     context: ContextObject | None = None,  # payload-level context
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
-    idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
+    revision: RawUnsupportedRevision = _MCP_REVISION_DEFAULT,
     ctx: Context | ToolContext | None = None,
 ):
     """Update a media buy with campaign-level and/or package-level changes.
@@ -1562,7 +1712,8 @@ async def update_media_buy(
         context: Application-level context per adcp spec
         reporting_webhook: Webhook configuration for automated reporting delivery (optional, per AdCP spec)
         ext: Extension object for custom fields (optional, per AdCP spec)
-        idempotency_key: Idempotency key for retry safety (optional, per AdCP spec)
+        idempotency_key: Required AdCP request key. This seller validates it but
+            does not currently advertise a replay/deduplication guarantee.
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -1570,29 +1721,39 @@ async def update_media_buy(
     """
     # Construct spec-compliant request at the boundary — no model_dump needed
     # FastMCP already coerced JSON inputs to typed Pydantic models
-    req = _build_update_request(
-        media_buy_id=media_buy_id,
-        paused=paused,
-        flight_start_date=flight_start_date,
-        flight_end_date=flight_end_date,
-        budget=budget,
-        currency=currency,
-        start_time=start_time,
-        end_time=end_time,
-        pacing=pacing,
-        daily_budget=daily_budget,
-        packages=packages,
-        push_notification_config=push_notification_config,
-        context=context,
-        reporting_webhook=reporting_webhook,
-        ext=ext,
+    normalized_revision = REVISION_OMITTED if _revision_was_omitted(revision) else revision
+    validate_update_media_buy_protocol_fields(
         idempotency_key=idempotency_key,
+        revision=normalized_revision,
     )
+    async with validated_callback_url_scope(
+        push_notification_config=push_notification_config,
+        reporting_webhook=reporting_webhook,
+    ):
+        req = _build_update_request(
+            media_buy_id=media_buy_id,
+            paused=paused,
+            flight_start_date=flight_start_date,
+            flight_end_date=flight_end_date,
+            budget=budget,
+            currency=currency,
+            start_time=start_time,
+            end_time=end_time,
+            pacing=pacing,
+            daily_budget=daily_budget,
+            packages=packages,
+            push_notification_config=push_notification_config,
+            context=context,
+            reporting_webhook=reporting_webhook,
+            ext=ext,
+            idempotency_key=idempotency_key,
+            revision=normalized_revision,
+        )
     # Read identity and context_id pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
     response = _update_media_buy_impl(req=req, identity=identity, context_id=_ctx_id)
-    return ToolResult(content=str(response), structured_content=response)
+    return ToolResult(content=str(response), structured_content=dump_adcp_response(response, context=context))
 
 
 def update_media_buy_raw(
@@ -1615,7 +1776,8 @@ def update_media_buy_raw(
     context: ContextObject | None = None,  # payload-level context
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
-    idempotency_key: str | None = None,  # AdCP idempotency key for retry safety
+    idempotency_key: str | None = None,  # Required wire key; validated, accepted, not yet deduplicated (#1607).
+    revision: RawUnsupportedRevision = REVISION_OMITTED,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -1641,7 +1803,8 @@ def update_media_buy_raw(
         context: Application level context per adcp spec
         reporting_webhook: Webhook configuration for automated reporting delivery
         ext: Extension object for custom fields (optional, per AdCP spec)
-        idempotency_key: Idempotency key for retry safety (optional, per AdCP spec)
+        idempotency_key: Required AdCP request key. This seller validates it but
+            does not currently advertise a replay/deduplication guarantee.
         ctx: Context for authentication (deprecated, use identity)
         identity: Pre-resolved identity (if available)
 
@@ -1665,6 +1828,7 @@ def update_media_buy_raw(
         reporting_webhook=reporting_webhook,
         ext=ext,
         idempotency_key=idempotency_key,
+        revision=revision,
     )
     if identity is None:
         identity = resolve_identity_from_context(ctx, require_valid_token=True)

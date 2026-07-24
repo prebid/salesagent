@@ -17,19 +17,14 @@ from pathlib import Path
 
 import pytest
 
-from src.core.exceptions import INTERNAL_CODES, WIRE_STANDARD_CODES
+from src.core.exceptions import INTERNAL_CODES, SPEC_CODES, WIRE_STANDARD_CODES
 
 logger = logging.getLogger(__name__)
 
-# Spec-required codes not yet in SDK STANDARD_ERROR_CODES.
-# These are mandated by AdCP BDD feature files but the SDK hasn't added them yet.
-_SPEC_CODES = {
-    "BILLING_NOT_SUPPORTED",  # BR-UC-011 BR-RULE-059: unsupported billing model
-}
-
 # All acceptable codes: wire-standard (SDK + spec supplement) + justified
-# internal + spec-required literals
-_ALLOWED_CODES = set(WIRE_STANDARD_CODES) | INTERNAL_CODES | _SPEC_CODES
+# internal + spec-required passthroughs (SPEC_CODES is the single source of
+# truth for the latter in src/core/exceptions.py).
+_ALLOWED_CODES = set(WIRE_STANDARD_CODES) | INTERNAL_CODES | SPEC_CODES
 
 # Anchor scan paths on the test file's location so they resolve correctly
 # regardless of pytest's working directory (CI runs from the repo root;

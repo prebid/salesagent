@@ -58,6 +58,14 @@ services:
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
       ADCP_TESTING: ${ADCP_TESTING:-true}
       ADCP_AUTH_TEST_MODE: ${ADCP_AUTH_TEST_MODE:-true}
+      # Dedicated opt-in (NOT tied to ENVIRONMENT) that lets the callback SSRF gate
+      # accept the E2E webhook receiver, which is reached via the private-IP compose
+      # alias `tests` (ADCP_WEBHOOK_HOST). No real deployment sets this, so staging/dev
+      # still block private/internal callback targets (#1512).
+      ADCP_ALLOW_PRIVATE_WEBHOOKS: "true"
+      # Per-run secret for narrowly scoped live-server test controls. Empty in
+      # normal compose usage, which keeps those controls undiscoverable.
+      ADCP_TEST_CONTROL_TOKEN: ${ADCP_TEST_CONTROL_TOKEN:-}
       # The SERVER must know about the pinned in-network creative agent: sync/
       # create flows resolve format specs server-side, and references carry the
       # PUBLIC canonical agent_url — without this, the registry's connection
@@ -192,6 +200,7 @@ services:
       PYTEST_XDIST_AUTO_NUM_WORKERS: "${PYTEST_XDIST_AUTO_NUM_WORKERS:-1}"
       ADCP_TESTING: "true"
       ADCP_AUTH_TEST_MODE: "true"
+      ADCP_TEST_CONTROL_TOKEN: ${ADCP_TEST_CONTROL_TOKEN:-}
       CREATE_SAMPLE_DATA: "true"
       DELIVERY_WEBHOOK_INTERVAL: "5"
       # The source is bind-mounted, so the host's in-tree __pycache__ comes with

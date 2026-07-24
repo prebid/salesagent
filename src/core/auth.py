@@ -35,6 +35,7 @@ from src.core.database.models import Principal as ModelPrincipal
 # Canonical hint owned by exceptions.py (it is AdCPAuthenticationError's
 # class-level default suggestion); re-exported here for existing importers.
 from src.core.exceptions import AUTH_REQUIRED_SUGGESTION
+from src.core.http_utils import extract_auth_token
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 from src.core.schemas import Principal
 
@@ -217,23 +218,10 @@ def get_principal_from_context(
         else:
             logger.debug("No tenant detected from headers")
 
-    # NOW check for auth token (after tenant resolution)
-    # Accept either x-adcp-auth (preferred) or Authorization: Bearer (standard HTTP/MCP)
-    # This ensures compatibility with MCP clients that only support Authorization header
-    auth_token = _get_header_case_insensitive(headers, "x-adcp-auth")
-    auth_source = "x-adcp-auth" if auth_token else None
-
-    # If x-adcp-auth not present, try Authorization: Bearer (for Anthropic, standard MCP clients)
-    if not auth_token:
-        authorization_header = _get_header_case_insensitive(headers, "Authorization")
-        if authorization_header:
-            # RFC 6750 specifies "Bearer" but accept case-insensitive for compatibility
-            auth_header_lower = authorization_header.lower()
-            if auth_header_lower.startswith("bearer "):
-                potential_token = authorization_header[7:].strip()  # Remove "Bearer " prefix and whitespace
-                if potential_token:  # Only use if there's actually a token after the prefix
-                    auth_token = potential_token
-                    auth_source = "Authorization: Bearer"
+    # NOW check for auth token (after tenant resolution) via the shared
+    # primitive: x-adcp-auth (preferred), then Authorization: Bearer
+    # (standard HTTP/MCP clients) — see src.core.http_utils.extract_auth_token.
+    auth_token, auth_source = extract_auth_token(headers)
 
     if _VERBOSE_AUTH_LOG and auth_source:
         logger.info("Auth token found via: %s", auth_source)

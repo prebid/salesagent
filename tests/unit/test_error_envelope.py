@@ -116,22 +116,25 @@ class TestContextEcho:
         assert envelope["context"]["correlation_id"] == "orig"
         assert "new_key" not in envelope["context"]
 
-    def test_context_object_uses_exclude_none(self):
-        """``ContextObject`` serialization must drop unset optional fields.
-
-        ``_serialize_context`` invokes ``model_dump(mode="json", exclude_none=True)``
-        so the wire envelope only carries populated fields — matches the
-        spec's emit-only-populated-fields norm.
-        """
+    def test_context_object_omits_unset_fields_but_preserves_explicit_nulls(self):
+        """Opaque context must distinguish an omitted key from JSON null."""
         from adcp.types import ContextObject
 
-        ctx = ContextObject(correlation_id="cid")
+        ctx = ContextObject.model_validate(
+            {
+                "correlation_id": "cid",
+                "nullable": None,
+                "nested": {"value": None},
+            }
+        )
         exc = AdCPNotFoundError("x", context=ctx)
         envelope = build_two_layer_error_envelope(exc)
 
-        # Every emitted field must be non-None — exclude_none drops unset optionals
-        assert envelope["context"]["correlation_id"] == "cid"
-        assert all(v is not None for v in envelope["context"].values())
+        assert envelope["context"] == {
+            "correlation_id": "cid",
+            "nullable": None,
+            "nested": {"value": None},
+        }
 
     def test_three_paths_emit_consistent_context(self):
         """``to_dict``, ``to_adcp_error``, and envelope emit identical context payloads.

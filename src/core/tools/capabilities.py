@@ -9,7 +9,7 @@ This module follows the MCP/A2A shared implementation pattern from CLAUDE.md.
 import logging
 from datetime import UTC, datetime
 
-from adcp.types import GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
+from adcp.types import ContextObject, GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
 from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures
 from adcp.types.generated_poc.core.postal_area_support import (
     PostalAreaSupport,  # adcp 6.6: standalone GeoPostalAreas removed; capabilities use PostalAreaSupport
@@ -20,29 +20,143 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     Adcp,
     Execution,
     GeoMetros,
-    Idempotency,
     MajorVersion,
     MediaBuy,
     Portfolio,
     PublisherDomain,
     SupportedProtocol,
+    SupportedVersion,
     # FIXME(#1388): Targeting has a local subclass; import from src.core.schemas (Pattern #7/#4).
     Targeting,
 )
+from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import Idempotency3 as IdempotencyUnsupported
 from fastmcp.server.context import Context
 from fastmcp.tools.tool import ToolResult
 
+# Imported as a module (not by-name) so the advertised version block resolves
+# supported_adcp_versions / adcp_major_version / adcp_build_version through the
+# single canonical attribute on src.core.adcp_version. A by-name import binds a
+# private copy at import time, which a testing policy override (or a test patch)
+# applied at src.core.adcp_version.* would not reach — splitting what capabilities
+# advertises from what validate_adcp_version_pins negotiates.
+from src.core import adcp_version
+from src.core.application_context import dump_adcp_response
 from src.core.auth import get_principal_object, require_identity
-from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
+from src.core.validation_helpers import adcp_validation_boundary
 from src.services.targeting_capabilities import supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_PROTOCOLS: tuple[SupportedProtocol, ...] = (SupportedProtocol.media_buy,)
+
+
+def _requested_protocol_domains(req: GetAdcpCapabilitiesRequest | None) -> set[str] | None:
+    """The domains whose capability DETAILS the buyer asked for, or ``None`` for all.
+
+    The request's ``protocols`` filter selects which protocol domains' details the
+    response carries — ``get-adcp-capabilities-request.json`` (v3.1.1) describes it
+    as "Specific protocols to query capabilities for", and the graded
+    ``capability-discovery.yaml::get_capabilities_filtered`` step expects "the same
+    structure but only the requested domain details".
+
+    It deliberately does NOT narrow ``supported_protocols``. That field is the
+    agent's own declaration — the response schema describes its values as
+    committing the agent "to pass the baseline compliance storyboard" for each
+    protocol listed — so it reports what this agent implements, not a view of the
+    buyer's question. Filtering it made a request for an unsupported domain
+    unrepresentable (``minItems: 1``) and turned a schema-valid request into a
+    ``VALIDATION_ERROR``, which ``error-handling.mdx`` scopes to schema violations.
+    A non-overlapping filter is now an ordinary response: the true declaration,
+    with no details for a domain this agent does not serve.
+
+    Empty-array and unknown-enum inputs remain rejected by the request model
+    (``minItems: 1`` + the ``Protocol`` enum) at the transport boundary.
+    """
+    requested = req.protocols if req else None
+    if not requested:
+        return None
+    return {enum_value(p) for p in requested}
+
+
+_DEFAULT_SPECIALISMS: tuple[AdcpSpecialism, ...] = (AdcpSpecialism.sales_non_guaranteed,)
+
+
+def _build_capabilities_request(
+    protocols: list[str] | None,
+    context: ContextObject | None,
+) -> GetAdcpCapabilitiesRequest:
+    """Construct the negotiation request through the shared validation boundary.
+
+    One home for the MCP and A2A/REST wrappers so a new negotiation-relevant
+    field is added once, not in two byte-identical copies (same file, below the
+    R0801 duplication threshold, so the ratchet can't catch the drift). Forwards
+    the buyer's ``protocols`` (the impl filters the per-domain capability DETAILS
+    by it, never the ``supported_protocols`` declaration — see
+    ``_requested_protocol_domains``) and echoes ``context``; a bad ``protocols``
+    value becomes VALIDATION_ERROR
+    at this boundary rather than an untyped pydantic error.
+    """
+    with adcp_validation_boundary(context="get_adcp_capabilities request"):
+        return GetAdcpCapabilitiesRequest(protocols=protocols, context=context)
+
+
+def _build_adcp_block() -> Adcp:
+    """Build the ``adcp`` version/idempotency envelope block for the response.
+
+    Shared by both response paths (minimal, no-tenant and full-tenant) so the
+    advertised version envelope is declared in exactly one place and cannot
+    drift between them. ``major_versions`` / ``supported_versions`` come from
+    the in-repo ``ADVERTISED_ADCP_VERSIONS`` constant (adcp_version.py) and
+    ``build_version`` from the Sales Agent build (``get_version()``) — none is
+    read from the SDK spec pin, which is only a cross-check.
+    """
+    return Adcp(
+        major_versions=[MajorVersion(root=adcp_version.adcp_major_version())],
+        supported_versions=[SupportedVersion(root=v) for v in adcp_version.supported_adcp_versions()],
+        # Omitted entirely when the deployment version is not renderable as
+        # semver: the schema types it ``string`` and marks it optional, so an
+        # absent advisory field is conformant where a null would not be.
+        **adcp_version.advisory_build_version_field(),
+        # FIXME(#1607): the schema models `supported` as ONE agent-wide binary
+        # claim, but this agent's real behavior is genuinely mixed — neither
+        # value is fully truthful, and `false` below is the lesser-wrong
+        # choice, not a resolved one. `IdempotencyUnsupported`'s own semantics
+        # ("sending a key is a no-op ... the seller will NOT return
+        # IDEMPOTENCY_CONFLICT or IDEMPOTENCY_EXPIRED, and a naive retry WILL
+        # double-process") are FALSE for create_media_buy specifically: it
+        # still deduplicates a repeated key (verbatim replay of the stored
+        # success), still raises IDEMPOTENCY_CONFLICT on a same-key
+        # different-payload retry, and still raises IDEMPOTENCY_EXPIRED past
+        # the replay window. Every OTHER mutating tool (update_media_buy,
+        # sync_accounts, sync_creatives) validates and accepts the key but
+        # performs no cache read, so a retry re-executes and can double-spend
+        # or double-sync — which is what `supported=true` would have falsely
+        # promised was safe, for twelve of thirteen call sites. `false` was
+        # chosen as the narrower defect (create_media_buy behaving BETTER
+        # than advertised is safer than the other twelve behaving WORSE than
+        # advertised), not as a truthful declaration. Resolving this for real
+        # means either extending genuine replay/conflict/expired handling to
+        # every mutating tool (then flipping to true) or removing
+        # create_media_buy's dedup so false becomes wire-accurate — both are
+        # deliberately deferred: the first is a substantial feature build with
+        # real regression risk on spend-affecting update_media_buy, the second
+        # is an active regression of a working duplicate-booking safety net.
+        # Do not treat this line as closed by future drive-by cleanup without
+        # picking one of those two.
+        # The SDK generates the discriminated union as two classes named
+        # ``Idempotency`` (supported=True) and ``Idempotency3`` (supported=False)
+        # — the numeric suffix is a codegen artifact of the schema's own
+        # generation note ("code generators produce two named types
+        # (IdempotencySupported, IdempotencyUnsupported)"), imported here under
+        # a readable alias since the generated name carries no meaning.
+        idempotency=IdempotencyUnsupported(supported=False),
+    )
 
 
 # Mapping from adapter channel names to MediaChannel enum values
@@ -89,15 +203,31 @@ def _get_adcp_capabilities_impl(
     principal_id = identity.principal_id if identity else None
     tenant = identity.tenant if identity else None
 
+    # Echo the buyer's request context unchanged on the response. The
+    # version-negotiation storyboard grades ``field_present: context`` with an
+    # unchanged value; the error path (_version_unsupported_error) already echoes
+    # it, so the success path must too or context silently vanishes.
+    request_context = req.context if req else None
+
+    # Honor the buyer's `protocols` filter on every transport: return only the
+    # requested domains' DETAILS. `supported_protocols` stays the agent's own
+    # declaration — it commits this agent to each listed protocol's compliance
+    # storyboard, so it cannot be narrowed to whatever the buyer happened to ask
+    # about. Specialisms roll up to a parent protocol, so they are only advertised
+    # when that protocol is in view (today all _DEFAULT_SPECIALISMS roll up to
+    # media_buy).
+    supported_protocols = list(_DEFAULT_PROTOCOLS)
+    requested_domains = _requested_protocol_domains(req)
+    media_buy_requested = requested_domains is None or enum_value(SupportedProtocol.media_buy) in requested_domains
+    specialisms = list(_DEFAULT_SPECIALISMS) if media_buy_requested else []
+
     if not tenant:
         # Return minimal capabilities if no tenant context
         return GetAdcpCapabilitiesResponse(
-            adcp=Adcp(
-                major_versions=[MajorVersion(root=3)],
-                idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
-            ),
-            supported_protocols=[SupportedProtocol.media_buy],
-            specialisms=[AdcpSpecialism.sales_non_guaranteed],
+            adcp=_build_adcp_block(),
+            supported_protocols=supported_protocols,
+            specialisms=specialisms,
+            context=request_context,
         )
 
     # If we got here, tenant is truthy, which means identity was not None on line 84
@@ -108,6 +238,17 @@ def _get_adcp_capabilities_impl(
 
     # Log activity
     log_tool_activity(identity, "get_adcp_capabilities")
+
+    # media_buy is the only domain with detailed capabilities today; if the buyer
+    # filtered it out there is nothing further to compute or return.
+    if not media_buy_requested:
+        return GetAdcpCapabilitiesResponse(
+            adcp=_build_adcp_block(),
+            supported_protocols=supported_protocols,
+            specialisms=specialisms,
+            last_updated=datetime.now(UTC),
+            context=request_context,
+        )
 
     # Get adapter to determine channels and capabilities
     primary_channels: list[MediaChannel] = []
@@ -264,14 +405,12 @@ def _get_adcp_capabilities_impl(
     # failures don't block merge, and the public declaration forces
     # prioritization of the remaining gaps instead of hiding them.
     response = GetAdcpCapabilitiesResponse(
-        adcp=Adcp(
-            major_versions=[MajorVersion(root=3)],
-            idempotency=Idempotency(supported=True, replay_ttl_seconds=int(DEFAULT_REPLAY_TTL.total_seconds())),
-        ),
-        supported_protocols=[SupportedProtocol.media_buy],
-        specialisms=[AdcpSpecialism.sales_non_guaranteed],
+        adcp=_build_adcp_block(),
+        supported_protocols=supported_protocols,
+        specialisms=specialisms,
         media_buy=media_buy,
         last_updated=datetime.now(UTC),
+        context=request_context,
     )
 
     return response
@@ -279,6 +418,7 @@ def _get_adcp_capabilities_impl(
 
 async def get_adcp_capabilities(
     protocols: list[str] | None = None,
+    context: ContextObject | None = None,
     ctx: Context | None = None,
 ) -> ToolResult:
     """Get the capabilities of this AdCP sales agent.
@@ -286,7 +426,12 @@ async def get_adcp_capabilities(
     MCP tool wrapper aligned with adcp v3.x spec.
 
     Args:
-        protocols: Specific protocols to query (optional, currently ignored)
+        protocols: Specific protocols to filter by (optional). The impl returns only
+            these domains' capabilities; an unknown enum value or an empty array is a
+            VALIDATION_ERROR.
+        context: AdCP request context echoed unchanged on the response. Declared
+            here so the envelope-tolerance middleware does not strip it before it
+            reaches the request.
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -294,8 +439,7 @@ async def get_adcp_capabilities(
     """
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
-    # Build request object (currently minimal)
-    req = GetAdcpCapabilitiesRequest()
+    req = _build_capabilities_request(protocols, context)
 
     # Call shared implementation
     response = _get_adcp_capabilities_impl(req, identity)
@@ -317,12 +461,17 @@ async def get_adcp_capabilities(
 
     summary = "\n".join(summary_parts)
 
-    # Return ToolResult with human-readable text and structured data
-    return ToolResult(content=summary, structured_content=response)
+    # Return ToolResult with human-readable text and structured data.
+    # Serialize via the response model's own model_dump so the MCP wire matches the
+    # AdCP-canonical shape REST/A2A emit — in particular it OMITS an absent `context`
+    # (INV-2: context absence echoed as absence) rather than FastMCP's object
+    # serialization, which would emit `context: null` (a present field).
+    return ToolResult(content=summary, structured_content=dump_adcp_response(response, context=context))
 
 
 async def get_adcp_capabilities_raw(
     protocols: list[str] | None = None,
+    context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> GetAdcpCapabilitiesResponse:
@@ -331,7 +480,10 @@ async def get_adcp_capabilities_raw(
     Raw function without @mcp.tool decorator for A2A server use.
 
     Args:
-        protocols: Specific protocols to query (optional, currently ignored)
+        protocols: Specific protocols to filter by (optional). The impl returns only
+            these domains' capabilities; an unknown enum value or an empty array is a
+            VALIDATION_ERROR.
+        context: AdCP request context echoed unchanged on the response.
         ctx: FastMCP context (automatically provided)
         identity: Pre-resolved identity (preferred over ctx)
 
@@ -342,5 +494,5 @@ async def get_adcp_capabilities_raw(
         from src.core.transport_helpers import resolve_identity_from_context
 
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
-    req = GetAdcpCapabilitiesRequest()
+    req = _build_capabilities_request(protocols, context)
     return _get_adcp_capabilities_impl(req, identity)

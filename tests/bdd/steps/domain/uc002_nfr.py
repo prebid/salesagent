@@ -11,11 +11,10 @@ beads: salesagent-9vgz.92
 
 from __future__ import annotations
 
-import uuid
-
 from pytest_bdd import given, then
 
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.harness._idempotency import fresh_idempotency_key  # Shared by NFR follow-up requests.
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — NFR preconditions
@@ -63,6 +62,7 @@ def given_budget_below_minimum(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 # THEN steps — NFR enforcement (restructured scenarios)
 # ═══════════════════════════════════════════════════════════════════════
+# Legacy scenarios farther below remain covered by the dispatch-in-Then ratchet.
 
 
 @then("the operation should fail with authentication error")
@@ -211,7 +211,7 @@ def then_rate_limiting_enforced(ctx: dict) -> None:
     # rate-limit gate (when implemented) would surface as a RATE_LIMITED wire
     # envelope on a2a/mcp/rest.
     request_kwargs = deepcopy(ctx.get("request_kwargs", {}))
-    request_kwargs["idempotency_key"] = f"bdd-key-{uuid.uuid4().hex}"
+    request_kwargs["idempotency_key"] = fresh_idempotency_key("bdd-key")
     req = CreateMediaBuyRequest(**request_kwargs)
 
     rate_ctx: dict = {k: ctx[k] for k in ("env", "transport", "e2e_config") if k in ctx}

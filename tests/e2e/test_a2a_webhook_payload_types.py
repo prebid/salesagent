@@ -624,6 +624,18 @@ class TestProtocolWebhookWireFormat:
     raise SnakeCaseWireViolation in the capture classifier).
     """
 
+    @pytest.fixture(autouse=True)
+    def _allow_loopback_receiver(self, monkeypatch):
+        """Permit delivery to the loopback HTTP capture server (#1512 SSRF).
+
+        These hermetic tests are a trusted local harness whose receiver lives on
+        127.0.0.1 over plain HTTP — the exact case the dedicated
+        ``ADCP_ALLOW_PRIVATE_WEBHOOKS`` opt-in covers (the E2E compose stack sets the
+        same flag). Without it the SSRF validator correctly rejects the private/HTTP
+        target and no webhook is delivered.
+        """
+        monkeypatch.setenv("ADCP_ALLOW_PRIVATE_WEBHOOKS", "true")
+
     def _send_and_capture(self, payload) -> dict[str, Any]:
         """Send `payload` via the real service and return the classified capture."""
         import asyncio

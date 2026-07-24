@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -10,6 +9,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.schemas import CreateMediaBuyRequest
+from tests.harness._idempotency import fresh_idempotency_key
 
 
 def _future(days: int = 1) -> datetime:
@@ -20,16 +20,15 @@ def _future(days: int = 1) -> datetime:
 def _make_create_request(**overrides: Any) -> CreateMediaBuyRequest:
     """Build a minimal valid CreateMediaBuyRequest.
 
-    idempotency_key is required by adcp 4.3 and drives real replay/conflict
-    behavior against the persistent integration DB, so a per-call-unique key is
-    injected by default. Callers may override it (e.g. to deliberately reuse a
-    key) via the ``idempotency_key`` kwarg.
+    idempotency_key is required by AdCP 3.1.1 but is operationally inert while
+    the seller advertises support false. A unique default keeps test requests
+    independently traceable; callers may override it deliberately.
     """
     defaults: dict[str, Any] = {
         "brand": {"domain": "testbrand.com"},
         "start_time": _future(1),
         "end_time": _future(8),
-        "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+        "idempotency_key": fresh_idempotency_key("int-key"),
         "packages": [
             {
                 "product_id": "guaranteed_display",

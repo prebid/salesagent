@@ -931,7 +931,9 @@ Then an empty accounts array is returned (not an error)
 ### BR-RULE-055: Account Operation Authentication Policy
 **Obligation ID** BR-RULE-055-01
 **Layer** behavioral
-**Invariant:** sync_accounts requires valid auth. list_accounts works without auth but scopes results. Unauthenticated list returns empty array.
+**Invariant:** Both sync_accounts and list_accounts require valid auth. Every account row is scoped to the calling credential, so neither task has an unauthenticated projection; an unauthenticated call is AUTH_REQUIRED, and authentication is enforced before version-pin validation so an anonymous caller cannot learn supported_versions.
+
+**Spec grounding (AdCP 3.1.1):** `dist/docs/3.1.0/accounts/tasks/list_accounts.mdx` — "Returns all accounts the authenticated agent can operate on this vendor agent"; parameters return "only matching accounts visible to the authenticated caller". `dist/docs/3.1.0/accounts/overview.mdx` scopes the accessible set to "the authenticated credential". An earlier revision of this rule claimed an unauthenticated list returns an empty array; no spec text supports that projection, and it is what registered list_accounts as an auth-optional discovery task on MCP and A2A.
 **Scenario:**
 ```gherkin
 Given no valid authentication
@@ -940,7 +942,11 @@ Then AUTH_REQUIRED error is returned
 
 Given no authentication
 When list_accounts is called
-Then an empty accounts array is returned (not an error)
+Then AUTH_REQUIRED error is returned
+
+Given no authentication and an unsupported adcp_version pin
+When list_accounts is called
+Then AUTH_REQUIRED error is returned without disclosing supported_versions
 ```
 **Priority:** P0
 **Affected by 3.6:** Yes -- accounts domain is new in v3

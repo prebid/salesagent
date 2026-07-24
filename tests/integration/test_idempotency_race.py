@@ -1,7 +1,15 @@
 """Integration tests for idempotency_key race condition (TOCTOU).
 
-Verifies that when two concurrent requests with the same idempotency_key
-both pass the initial lookup and attempt to commit, the loser catches
+Verifies the loser's half of the TOCTOU race, driven DETERMINISTICALLY: these
+recipes do not spawn threads or open independent connections, they reproduce
+the state a losing request observes (the class docstrings say so individually,
+and this module docstring previously overstated it as "two concurrent
+requests"). The proxy is faithful for the error class -- the DB runs READ
+COMMITTED, so a genuinely concurrent duplicate insert raises the same
+unique_violation / IntegrityError these recipes raise -- but interleaving and
+timing are NOT graded here.
+
+When the loser catches
 IntegrityError and resolves to the winner — replaying the winner's verbatim
 cached success when visible, enforcing the payload-hash conflict rule even
 after the race, and FAILING CLOSED (transient SERVICE_UNAVAILABLE) when the
@@ -413,17 +421,14 @@ class TestDegradedFallbackScopeRules:
 
     @staticmethod
     def _create_kwargs(product, idem_key, *, po_number):
-        from datetime import timedelta
+        from tests.helpers import create_media_buy_kwargs
 
-        now = datetime.now(UTC)
-        return {
-            "brand": {"domain": "degraded-test.example.com"},
-            "packages": [{"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
-            "start_time": (now + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "end_time": (now + timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "po_number": po_number,
-            "idempotency_key": idem_key,
-        }
+        return create_media_buy_kwargs(
+            product,
+            idempotency_key=idem_key,
+            brand_domain="degraded-test.example.com",
+            po_number=po_number,
+        )
 
     def test_degraded_path_conflicts_on_mutated_payload(self, integration_db):
         """Same key + different canonical payload conflicts even with the cache row gone.

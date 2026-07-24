@@ -322,11 +322,10 @@ class SyncCreativesRequest(LibrarySyncCreativesRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # adcp 4.3 makes account and idempotency_key required.  Override as optional
-    # — identity is resolved at the transport boundary, and idempotency_key is
-    # generated at the transport boundary when not supplied by the caller.
+    # Account is resolved from the authenticated identity at the transport
+    # boundary. idempotency_key remains REQUIRED from the 3.1.1 SDK parent;
+    # transports preserve and validate it rather than fabricating one.
     account: LibraryAccountReference | None = None  # type: ignore[assignment]
-    idempotency_key: str | None = None  # type: ignore[assignment]
 
     creatives: list[Creative] = Field(
         ..., min_length=1, max_length=100, description="Array of creative assets to sync (create or update)"

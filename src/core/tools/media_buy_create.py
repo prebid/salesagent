@@ -39,6 +39,7 @@ from fastmcp.tools.tool import ToolResult
 from pydantic import BaseModel, Field, ValidationError
 from rich.console import Console
 
+from src.core.application_context import dump_adcp_response
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.exceptions import (
@@ -59,6 +60,10 @@ from src.core.exceptions import (
 )
 from src.core.helpers import enum_value
 from src.core.idempotency_canonical import canonical_payload_hash, canonical_request_hash
+from src.core.webhook_validator import (
+    require_valid_callback_config_urls,
+    validated_callback_url_scope,
+)
 
 
 class PackageAssignmentDict(TypedDict):
@@ -143,7 +148,10 @@ from src.core.schemas import (
     PackageRequest,
     Principal,
     Product,
+    RawIdempotencyKey,
     Targeting,
+    require_idempotency_key,
+    sanitize_to_idempotency_key_charset,
 )
 from src.core.schemas import (
     url as make_url,
@@ -161,6 +169,8 @@ from src.core.tools.financial_validation import (
 from src.core.validation_helpers import adcp_validation_boundary, format_validation_error, package_field_path
 from src.services.activity_feed import activity_feed
 from src.services.gam_product_config_service import GAMProductConfigService
+from src.services.setup_checklist_service import SetupIncompleteError, validate_setup_complete
+from src.services.slack_notifier import get_slack_notifier
 from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
@@ -792,11 +802,19 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                     for pkg in raw_request_data["packages"]:
                         pkg.pop("package_id", None)
 
-                # Buys stored before idempotency_key became required carry none in
-                # raw_request. This is an internal replay of an already-validated
-                # request (the approval path never consults the idempotency cache),
-                # so a synthetic spec-shaped key keeps reconstruction valid.
-                raw_request_data.setdefault("idempotency_key", f"legacy-approval-{media_buy_id}")
+                # Buys stored before idempotency_key became required may omit it or
+                # carry an explicit null in raw_request. This is an internal reconstruction
+                # of an already-validated request (the approval path never consults
+                # the idempotency cache), so a synthetic spec-shaped key keeps
+                # reconstruction valid. media_buy_id is system-generated and
+                # conforming today, but sanitize defensively so the synthetic key
+                # satisfies the spec constraint ^[A-Za-z0-9_.:-]{16,255}$ even for
+                # a historical or imported id.
+                if raw_request_data.get("idempotency_key") is None:
+                    safe_id = sanitize_to_idempotency_key_charset(str(media_buy_id))
+                    raw_request_data["idempotency_key"] = sanitize_to_idempotency_key_charset(
+                        f"legacy-approval-{safe_id}"
+                    )
 
                 request = CreateMediaBuyRequest(**raw_request_data)
                 # Mark this request as already approved to skip adapter's approval workflow
@@ -1623,9 +1641,6 @@ async def _validate_and_convert_format_ids(
     return validated_format_ids
 
 
-from src.services.setup_checklist_service import SetupIncompleteError, validate_setup_complete
-from src.services.slack_notifier import get_slack_notifier
-
 # Scope component of the idempotency cache key (see IdempotencyAttempt.tool_name).
 _IDEMPOTENCY_TOOL_NAME = "create_media_buy"
 
@@ -1861,7 +1876,8 @@ def _cache_and_return(
     if request_hash is None or not req.idempotency_key or identity.tenant_id is None or identity.principal_id is None:
         return result
 
-    # Errors are never cached (AdCP 3.0.1 security.mdx#idempotency rule 3). The
+    # Errors are never cached (idempotency rule 3, security.mdx#idempotency —
+    # introduced AdCP 3.0.1, unchanged at the pinned 3.1.1). The
     # real enforcement of that invariant is the error paths' early returns —
     # they return before reaching this helper, so every caller hands us a
     # success or a submitted task envelope (a pending-approval create is a
@@ -2067,7 +2083,7 @@ async def _create_media_buy_impl(
     # Cannot create context or workflow step without a valid principal.
     principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
 
-    # Idempotency (AdCP 3.0.1): a retry with the same key replays the ORIGINAL success
+    # Idempotency (AdCP 3.1.1): a retry with the same key replays the ORIGINAL success
     # verbatim; the same key with a different canonical payload is a conflict; errors are
     # never cached, so a retry after an error re-executes. The MediaBuy.idempotency_key
     # unique index remains the dup-booking backstop — this cache holds the response to
@@ -3578,7 +3594,7 @@ async def _create_media_buy_impl(
             error_msg = response.errors[0].message if response.errors else "Unknown error"
             error_code = response.errors[0].code if response.errors else "UNKNOWN"
             logger.error(f"[ADAPTER] Adapter returned error response: {error_code} - {error_msg}")
-            # Returned UNCACHED on purpose: errors are never cached (AdCP 3.0.1
+            # Returned UNCACHED on purpose: errors are never cached (AdCP 3.1.1
             # idempotency), so a retry with the same key re-executes instead of
             # replaying this failure. Pinned by TestErrorsAreNeverCached.
             return CreateMediaBuyResult(response=response, status=AdcpTaskStatus.failed.value)
@@ -4330,6 +4346,7 @@ def _build_create_media_buy_request(
     end_time: str | None,
     po_number: str | None,
     reporting_webhook: ReportingWebhook | None,
+    push_notification_config: PushNotificationConfig | dict[str, Any] | None = None,
     context: ContextObject | None,
     ext: dict[str, Any] | None,
     account: AccountReference | None,
@@ -4338,14 +4355,23 @@ def _build_create_media_buy_request(
 ) -> CreateMediaBuyRequest:
     """Shared boundary request construction for the MCP and A2A/REST wrappers.
 
-    One home for the field list, the brand string-shorthand coercion, the
-    idempotency omit-when-absent splat, and the ValidationError translation —
+    One home for the field list, the brand string-shorthand coercion, required
+    idempotency-key shape validation, and the ValidationError translation —
     a future request field lands here once instead of in wrapper lockstep.
     Transport-specific input coercions (A2A's ``to_reporting_webhook`` /
     ``to_context_object``) happen at the call site. ``brand`` is the exception:
     string/dict shorthand is normalized here via ``to_brand_reference`` so MCP,
     A2A, and REST share one funnel.
     """
+    # Validate the raw boundary value before Pydantic can aggregate it with
+    # unrelated request errors or rewrite a wrong JSON type. This keeps the
+    # buyer-facing code/message identical across MCP, A2A, and REST.
+    require_idempotency_key(idempotency_key)
+    require_valid_callback_config_urls(
+        push_notification_config=push_notification_config,
+        reporting_webhook=reporting_webhook,
+    )
+
     # brand string/dict/URL shorthand is normalized via ``to_brand_reference``
     # (#1537). The validation boundary (#1417) is the SINGLE translation point:
     # it turns a Pydantic ValidationError into a typed AdCPValidationError
@@ -4362,15 +4388,12 @@ def _build_create_media_buy_request(
             ext=ext,
             account=account,
             paused=paused,
-            # Omit-when-absent so a missing key rejects as "Field required",
-            # emitted as VALIDATION_ERROR (the 3.0.1 conformance storyboard
-            # accepts it; the spec prose prefers INVALID_REQUEST) — not as a
-            # None type error.
-            **({"idempotency_key": idempotency_key} if idempotency_key is not None else {}),
+            idempotency_key=idempotency_key,
         )
 
 
 async def create_media_buy(
+    idempotency_key: RawIdempotencyKey,
     brand: Annotated[
         BrandReference | dict[str, Any] | str | None,
         Field(
@@ -4396,16 +4419,6 @@ async def create_media_buy(
             description=(
                 "Optional account reference (by id or natural key) scoping this buy to a sub-account "
                 "the authenticated agent manages. Resolved against the tenant's accounts at the boundary."
-            ),
-        ),
-    ] = None,
-    idempotency_key: Annotated[
-        str | None,
-        Field(
-            description=(
-                "Client-supplied key for idempotent retries — REQUIRED per AdCP 3.0.1 "
-                "(16-255 chars). Retrying with the same key returns the original media buy "
-                "without creating a duplicate booking; omitting it rejects with VALIDATION_ERROR."
             ),
         ),
     ] = None,
@@ -4442,28 +4455,36 @@ async def create_media_buy(
         context: Application level context per AdCP spec
         ext: Extension object for custom fields (optional, per AdCP spec)
         account: Account reference scoping the buy to a sub-account the agent manages (optional)
-        idempotency_key: Client-supplied idempotency key (REQUIRED per AdCP 3.0.1) —
-            the same key replays the original success; a missing key rejects as
-            VALIDATION_ERROR
+        idempotency_key: Client-supplied idempotency key (REQUIRED per AdCP 3.1.1) —
+            the same key replays the original success verbatim; the same key with
+            a different payload rejects with IDEMPOTENCY_CONFLICT
         ctx: FastMCP context (automatically provided)
 
     Returns:
         ToolResult with CreateMediaBuyResponse data
     """
     # FastMCP already coerced JSON inputs to typed Pydantic models
-    req = _build_create_media_buy_request(
-        brand=brand,
-        packages=packages,
-        start_time=start_time,
-        end_time=end_time,
-        po_number=po_number,
+    # Preserve protocol validation precedence: reject a malformed key before
+    # spending resolver capacity on a buyer-controlled callback URL.
+    require_idempotency_key(idempotency_key)
+    async with validated_callback_url_scope(
+        push_notification_config=push_notification_config,
         reporting_webhook=reporting_webhook,
-        context=context,
-        ext=ext,
-        account=account,
-        idempotency_key=idempotency_key,
-        paused=paused,
-    )
+    ):
+        req = _build_create_media_buy_request(
+            brand=brand,
+            packages=packages,
+            start_time=start_time,
+            end_time=end_time,
+            po_number=po_number,
+            reporting_webhook=reporting_webhook,
+            push_notification_config=push_notification_config,
+            context=context,
+            ext=ext,
+            account=account,
+            idempotency_key=idempotency_key,
+            paused=paused,
+        )
 
     # Read identity, context_id, and the raw wire arguments pre-stashed by
     # MCPAuthMiddleware. The raw arguments (pre compat-normalization) are the
@@ -4489,7 +4510,7 @@ async def create_media_buy(
         context_id=_ctx_id,
         raw_wire_payload=raw_wire_payload,
     )
-    return ToolResult(content=str(result), structured_content=result)
+    return ToolResult(content=str(result), structured_content=dump_adcp_response(result, context=context))
 
 
 async def create_media_buy_raw(
@@ -4538,19 +4559,27 @@ async def create_media_buy_raw(
     """
     # A2A/REST send dict inputs; the two coercions below are this transport's
     # only divergence from the MCP wrapper — everything else is the shared builder.
-    req = _build_create_media_buy_request(
-        brand=brand,
-        packages=packages,
-        start_time=start_time,
-        end_time=end_time,
-        po_number=po_number,
-        reporting_webhook=to_reporting_webhook(reporting_webhook),
-        context=to_context_object(context),
-        ext=ext,
-        account=account,
-        idempotency_key=idempotency_key,
-        paused=paused,
-    )
+    normalized_reporting_webhook = to_reporting_webhook(reporting_webhook)
+    # Keep malformed-key precedence aligned with MCP before any DNS work.
+    require_idempotency_key(idempotency_key)
+    async with validated_callback_url_scope(
+        push_notification_config=push_notification_config,
+        reporting_webhook=normalized_reporting_webhook,
+    ):
+        req = _build_create_media_buy_request(
+            brand=brand,
+            packages=packages,
+            start_time=start_time,
+            end_time=end_time,
+            po_number=po_number,
+            reporting_webhook=normalized_reporting_webhook,
+            push_notification_config=push_notification_config,
+            context=to_context_object(context),
+            ext=ext,
+            account=account,
+            idempotency_key=idempotency_key,
+            paused=paused,
+        )
 
     if identity is None:
         from src.core.transport_helpers import resolve_identity_from_context

@@ -12,7 +12,7 @@ beads: salesagent-2rq, salesagent-zh85
 
 from __future__ import annotations
 
-import uuid
+import re
 from typing import Any
 from unittest.mock import ANY
 
@@ -21,6 +21,7 @@ from pytest_bdd import given, parsers, then, when
 from tests.bdd.steps._harness_db import db_session as _db_session
 from tests.bdd.steps._outcome_helpers import _get_response_field
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
+from tests.harness._idempotency import fresh_idempotency_key
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — request setup and account state
@@ -718,7 +719,8 @@ def when_send_create_media_buy(ctx: dict) -> None:
     ``create_media_buy`` through the parametrized wire transport (a2a/mcp/rest):
 
     - v3.1 idempotency scenarios (``ctx["idempotency_create"]``) dispatch flat
-      ``request_kwargs`` so the production idempotency replay path runs end-to-end.
+      ``request_kwargs`` so required-key validation and the production
+      idempotency replay path run end-to-end.
     - Manual-approval scenarios (``ctx["uc002_full_create"]``, PR #1567) dispatch
       the harness-seeded base request with a fresh idempotency key, carrying the
       Given-step account reference, so the submitted-envelope path runs end-to-end.
@@ -745,7 +747,7 @@ def when_send_create_media_buy(ctx: dict) -> None:
         from tests.bdd.steps.generic._dispatch import dispatch_request
 
         kwargs = _build_idempotency_request_kwargs(ctx)
-        kwargs["idempotency_key"] = f"uc002-manual-{uuid.uuid4().hex}"
+        kwargs["idempotency_key"] = fresh_idempotency_key("uc002-manual")
         account_ref = ctx.get("account_ref")
         if account_ref is not None:
             kwargs["account"] = account_ref.model_dump(mode="json", exclude_none=True)
@@ -1441,7 +1443,7 @@ def given_sandbox_account_other_agent(ctx: dict) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Hand-authored: Idempotency steps (adcp 3.12 / PR #1217 review)
+# Hand-authored: required key + idempotency replay behavior
 # ═══════════════════════════════════════════════════════════════════════
 
 
@@ -1515,13 +1517,11 @@ def _build_idempotency_request_kwargs(ctx: dict) -> dict:
     ctx["request_kwargs"] = {
         "brand": {"domain": "testbrand.com"},
         # Explicit, stable po_number so the canonical payload is byte-identical
-        # between the original create and the replay across ALL transports. The
-        # A2A wrapper no longer mints a random po_number when the caller omits
-        # one (it stays None for idempotency-hash + cross-transport parity), so
-        # this value is set explicitly here to keep the canonical payload —
-        # and therefore the idempotency hash — identical between the original
-        # create and the replay. A real buyer replaying an idempotent request
-        # resends their own po_number.
+        # between the original create and the replay across ALL transports —
+        # the canonical hash is computed over the request AS SENT, and a
+        # transport-minted random po_number would flip an honest replay into a
+        # conflict. A real buyer replaying an idempotent request resends their
+        # own po_number.
         "po_number": "PO-IDEMPOTENCY-REPLAY-001",
         "start_time": (now + timedelta(days=1)).isoformat(),
         "end_time": (now + timedelta(days=30)).isoformat(),
@@ -1536,9 +1536,32 @@ def _build_idempotency_request_kwargs(ctx: dict) -> dict:
     return ctx["request_kwargs"]
 
 
+def _persisted_media_buy_ids(ctx: dict) -> frozenset[str]:
+    """Read tenant/principal-scoped buy IDs from the scenario's production DB."""
+    from src.core.database.repositories import MediaBuyUoW
+
+    tenant = ctx.get("tenant")
+    principal = ctx.get("principal")
+    assert tenant is not None, "No tenant in ctx — cannot verify persisted media buys"
+    assert principal is not None, "No principal in ctx — cannot verify persisted media buys"
+
+    with MediaBuyUoW(tenant.tenant_id) as uow:
+        assert uow.media_buys is not None
+        return frozenset(buy.media_buy_id for buy in uow.media_buys.get_by_principal(principal.principal_id))
+
+
+def _expand_idempotency_key_fixture(value: str) -> str:
+    """Expand a declarative exact-length token without hand-counted literals."""
+    stripped = value.strip()
+    match = re.fullmatch(r"<(\d+)\s+char(?:acter)?s?(?:\s+string)?>", stripped, flags=re.IGNORECASE)
+    return "k" * int(match.group(1)) if match else stripped
+
+
 @given(parsers.parse('a valid create_media_buy request with idempotency_key "{key}"'))
+@given(parsers.parse('a create_media_buy request with idempotency_key "{key}"'))
 def given_valid_request_with_idempotency_key(ctx: dict, key: str) -> None:
-    """Build a valid create_media_buy request carrying a literal idempotency_key."""
+    """Build a create request carrying a literal or exact-length fixture key."""
+    key = _expand_idempotency_key_fixture(key)
     kwargs = _build_idempotency_request_kwargs(ctx)
     kwargs["idempotency_key"] = key
     ctx["idempotency_create"] = True
@@ -1569,9 +1592,10 @@ def given_media_buy_already_created_same_key(ctx: dict) -> None:
     """Perform a REAL first create through the parametrized transport.
 
     Dispatches the SAME request_kwargs (copied) so the canonical payload hash
-    matches the When-step replay. Records the original media_buy_id and the
-    adapter create_media_buy call count so the Then steps can assert the replay
-    returns the same id and does NOT re-invoke the adapter.
+    matches the When-step replay. Records the original media_buy_id, the
+    adapter create_media_buy call count, and the persisted media-buy snapshot
+    so the Then steps can assert the replay returns the same id, does NOT
+    re-invoke the adapter, and persists no second row.
     """
     from tests.bdd.steps.generic._dispatch import dispatch_request
 
@@ -1588,6 +1612,12 @@ def given_media_buy_already_created_same_key(ctx: dict) -> None:
 
     ctx["first_media_buy_id"] = media_buy_id
     ctx["adapter_calls_after_first_create"] = adapter_mock.create_media_buy.call_count
+    persisted_ids = _persisted_media_buy_ids(ctx)
+    assert media_buy_id in persisted_ids, (
+        f"First create returned media_buy_id={media_buy_id!r}, but the row was not persisted; "
+        f"tenant/principal rows={sorted(persisted_ids)!r}"
+    )
+    ctx["persisted_media_buy_ids_after_first"] = persisted_ids
 
 
 @given(parsers.parse("a valid create_media_buy request with:\n{datatable}"))
@@ -1657,12 +1687,8 @@ def given_idempotency_key_set(ctx: dict, value: str) -> None:
     value = value.strip()
     if value == "<not provided>":
         ctx["idempotency_key"] = None
-    elif value in {"<255 character string>", "<254 char string>"}:
-        ctx["idempotency_key"] = "k" * int("".join(c for c in value if c.isdigit()))
-    elif value in {"<256 chars>", "<256 char string>"}:
-        ctx["idempotency_key"] = "k" * 256
     else:
-        ctx["idempotency_key"] = value
+        ctx["idempotency_key"] = _expand_idempotency_key_fixture(value)
 
 
 @when(parsers.parse('the Buyer Agent sends the same create_media_buy request with idempotency_key "{key}"'))
@@ -1834,13 +1860,15 @@ def then_response_not_equals_remembered(ctx: dict, field: str, alias: str) -> No
 def then_response_includes_previously_created(ctx: dict, field: str) -> None:
     """Assert the idempotency replay returned the ORIGINAL create's value.
 
-    Asserts two things on the replay response:
+    Asserts three things on the replay response:
     1. ``response.<field>`` equals the value the FIRST create produced
        (recorded by the "already created" Given step), proving the replay
        served the original rather than minting a new media buy.
     2. The replay marker is set (``CreateMediaBuyResult.replayed is True``) —
-       this is what production injects on a verbatim cache hit, surfaced on
-       every transport by the harness response reconstruction.
+       what production injects on a verbatim cache hit, surfaced on every
+       transport by the harness response reconstruction.
+    3. The tenant/principal-scoped persisted media-buy set is UNCHANGED from
+       the post-first-create snapshot — the replay wrote no second row.
     """
     resp = ctx.get("response")
     assert resp is not None, "No response in ctx — replay scenario produced nothing"
@@ -1858,15 +1886,51 @@ def then_response_includes_previously_created(ctx: dict, field: str) -> None:
         f"Expected the replay marker (replayed=True) on the cached-hit response, got replayed={replayed!r}. "
         "Without it the buyer cannot tell the response was served from the idempotency cache."
     )
+    before = ctx.get("persisted_media_buy_ids_after_first")
+    assert isinstance(before, frozenset), "Prior-create Given did not record persisted media-buy IDs"
+    after = _persisted_media_buy_ids(ctx)
+    assert after == before, (
+        f"The replay changed the persisted media-buy set: before={sorted(before)!r}, after={sorted(after)!r} — "
+        "a verbatim replay must not persist a second row"
+    )
 
 
 @then(parsers.parse('the error should reference the missing "{field}" field'))
 def then_error_references_missing_field(ctx: dict, field: str) -> None:
-    """Assert the validation error names the missing required field.
+    """Assert the wire envelope names the missing required field.
 
-    The error message (or Pydantic field locations) must mention ``field`` so
-    the buyer knows which required field was omitted.
+    Wire-first, matching its three siblings (uc003 / uc006 / uc011) and the
+    neighbour below. It previously read the RECONSTRUCTED ``ctx["error"]`` and
+    substring-matched the message, which cannot distinguish the buyer's
+    remediation pointer from an incidental mention: the canonical missing-key
+    message contains "idempotency_key" regardless of what ``field`` the
+    envelope carries, so injecting a wrong ``field`` into the shared factory
+    reddened the three siblings and left this one green.
+
+    Routes through ``wire_error_envelope`` (single source of truth, shared
+    with the other wire-first Then steps in this module) rather than a local
+    ``result.wire_error_envelope is not None`` check: that local check could
+    not distinguish "IMPL/pre-dispatch, legitimately no wire" from "a real
+    transport failed to stash the wire" and silently fell back to the
+    reconstructed exception in both cases — the second case is a dispatcher
+    regression that must fail loud, not pass against a lossy reconstruction.
     """
+    from tests.bdd.steps._outcome_helpers import wire_error_envelope
+
+    result = ctx.get("result")
+    envelope = wire_error_envelope(ctx)
+    if envelope is not None:
+        result.assert_wire_error(
+            "VALIDATION_ERROR",
+            recovery="correctable",
+            message_substr=field,
+            field=field,
+        )
+        return
+
+    # Legitimately no wire (IMPL altitude, or a rejection raised before any
+    # transport). Fall back to the reconstructed error, but keep the pin as
+    # tight as the layer allows.
     error = ctx.get("error")
     assert error is not None, f"No error in ctx — expected a validation error naming the missing '{field}' field"
 
@@ -1879,8 +1943,53 @@ def then_error_references_missing_field(ctx: dict, field: str) -> None:
         )
         return
 
-    message = _get_error_message_for_step(error)
-    assert field in message, f"Validation error does not reference the missing '{field}' field. Message: {message!r}"
+    assert getattr(error, "field", None) == field, (
+        f"the rejection must name '{field}' as the offending field so the buyer can fix it; "
+        f"got field={getattr(error, 'field', None)!r}"
+    )
+
+
+@then(parsers.parse('the error should reference idempotency_key constraint "{violation}"'))
+def then_error_references_idempotency_key_constraint(ctx: dict, violation: str) -> None:
+    """Grade the exact idempotency constraint on the buyer-visible wire."""
+    result = ctx.get("result")
+    assert result is not None, "No TransportResult captured for idempotency_key validation"
+    result.assert_wire_error(
+        "VALIDATION_ERROR",
+        recovery="correctable",
+        require_suggestion=True,
+        message_substr="idempotency_key",
+        field="idempotency_key",
+    )
+
+    envelope = result.wire_error_envelope
+    assert isinstance(envelope, dict), "No canonical wire error envelope captured"
+    error = envelope["errors"][0]
+
+    expected_signals = {
+        "minLength 16 violated": "at least 16 characters",
+        "maxLength 255 violated": "at most 255 characters",
+        "pattern [A-Za-z0-9_.:-] violated": "[a-za-z0-9_.:-]",
+    }
+    assert violation in expected_signals, f"Unrecognized idempotency_key constraint oracle: {violation!r}"
+    wire_text = f"{error.get('message', '')} {error.get('suggestion', '')}".lower()
+    expected_signal = expected_signals[violation]
+    assert expected_signal in wire_text, (
+        f"Wire error did not prove {violation!r}; missing signal={expected_signal!r}, "
+        f"message={error.get('message')!r}, suggestion={error.get('suggestion')!r}"
+    )
+
+    request_key = ctx.get("idempotency_key")
+    assert isinstance(request_key, str), f"Scenario did not retain the invalid key: {request_key!r}"
+    if violation == "minLength 16 violated":
+        assert len(request_key) == 5, f"Short-key fixture drifted from 5 characters: {len(request_key)}"
+    elif violation == "maxLength 255 violated":
+        assert len(request_key) == 256, f"Over-max fixture must be exactly 256 characters: {len(request_key)}"
+    else:
+        assert 16 <= len(request_key) <= 255, f"Pattern fixture must isolate charset validation: {len(request_key)}"
+        assert re.fullmatch(r"[A-Za-z0-9_.:-]+", request_key) is None, (
+            f"Pattern fixture unexpectedly satisfies the allowed charset: {request_key!r}"
+        )
 
 
 def _get_error_message_for_step(error: object) -> str:

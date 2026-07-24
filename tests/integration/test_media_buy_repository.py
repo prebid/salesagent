@@ -351,15 +351,17 @@ class TestMediaBuyUoW:
 
 
 # ---------------------------------------------------------------------------
-# Idempotency key lookup (adcp 3.12)
+# Idempotency-key lookup (live dup-booking backstop under supported=true)
 # ---------------------------------------------------------------------------
 
 
 class TestIdempotencyKeyLookup:
-    """Repository correctly finds media buys by idempotency_key.
+    """Coverage for the live idempotency-key lookup helpers.
 
-    Core invariant: duplicate idempotency_key within (tenant, principal) returns
-    existing media buy, never creates a second row.
+    create_media_buy implements verbatim replay (supported=true), and the
+    degraded post-race path consults ``find_by_idempotency_key``
+    (media_buy_create.py, via the replay-window resolution) — these helpers are
+    on the live path, not dormant.
     """
 
     def test_find_by_idempotency_key_returns_existing(self, tenant_a, principal_a):
@@ -411,22 +413,28 @@ class TestIdempotencyKeyLookup:
             assert found_b.media_buy_id == "mb_idem_b"
 
     def test_create_from_request_stores_idempotency_key(self, tenant_a, principal_a):
-        """create_from_request persists idempotency_key to the database."""
+        """create_from_request persists idempotency_key + payload_hash to the routing columns.
+
+        Replay is implemented (supported=true), so the key lands in the
+        ``idempotency_key`` column (the dup-booking backstop) and the supplied
+        ``payload_hash`` in its column, in addition to the raw audit copy.
+        """
         from unittest.mock import MagicMock
 
-        from src.core.database.repositories.media_buy import MediaBuyRepository
+        from src.core.database.repositories import MediaBuyUoW
 
         idem_key = "create-test-uuid-123456"
+        payload_hash = "canonical-hash-abc123"
         mock_req = MagicMock()
-        mock_req.model_dump.return_value = {"test": True}
+        mock_req.model_dump.return_value = {"test": True, "idempotency_key": idem_key}
         mock_req.po_number = None
         mock_req.idempotency_key = idem_key
 
         from datetime import datetime
 
-        with get_db_session() as session:
-            repo = MediaBuyRepository(session, tenant_a)
-            buy = repo.create_from_request(
+        with MediaBuyUoW(tenant_a) as uow:
+            assert uow.media_buys is not None
+            buy = uow.media_buys.create_from_request(
                 media_buy_id="mb_idem_create",
                 req=mock_req,
                 principal_id=principal_a,
@@ -435,19 +443,23 @@ class TestIdempotencyKeyLookup:
                 currency="USD",
                 start_time=datetime(2026, 1, 1, tzinfo=UTC),
                 end_time=datetime(2026, 12, 31, tzinfo=UTC),
+                payload_hash=payload_hash,
             )
-            session.commit()
             assert buy.idempotency_key == idem_key
+            assert buy.payload_hash == payload_hash
+            assert buy.raw_request["idempotency_key"] == idem_key
 
-        # Verify persisted
-        with get_db_session() as session:
-            repo = MediaBuyRepository(session, tenant_a)
-            found = repo.find_by_idempotency_key(idem_key, principal_a)
+        # Verify persisted, and reachable via the keyed lookup the replay probe uses.
+        with MediaBuyUoW(tenant_a) as uow:
+            assert uow.media_buys is not None
+            found = uow.media_buys.find_by_idempotency_key(idem_key, principal_a)
             assert found is not None
             assert found.media_buy_id == "mb_idem_create"
+            assert found.idempotency_key == idem_key
+            assert found.payload_hash == payload_hash
 
     def test_get_by_id_or_idempotency_key_threads_account_id(self, integration_db):
-        """account_id scopes the idempotency-key fallback (spec: agent + account + key).
+        """account_id scopes the live legacy-key fallback.
 
         The lookup falls back from media_buy_id to idempotency_key; the account
         must reach find_by_idempotency_key, or the fallback silently forces

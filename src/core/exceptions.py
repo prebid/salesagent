@@ -14,7 +14,9 @@ import logging
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
+
+from src.core.application_context import serialize_application_context
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
@@ -92,7 +94,11 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     "UNSUPPORTED_TARGETING": "UNSUPPORTED_FEATURE",
     "PLACEMENT_TARGETING_NOT_SUPPORTED": "UNSUPPORTED_FEATURE",
     "UNSUPPORTED_ACTION": "UNSUPPORTED_FEATURE",
-    "BILLING_NOT_SUPPORTED": "UNSUPPORTED_FEATURE",
+    # NB: BILLING_NOT_SUPPORTED is deliberately NOT mapped. It is a distinct
+    # pinned-spec code (SDK ErrorCode enum member, buyer-visible via SPEC_CODES,
+    # BR-RULE-059) that the buyer must see verbatim — collapsing it to the generic
+    # UNSUPPORTED_FEATURE would erase the billing-specific meaning. It passes
+    # through translate_error_code() unchanged, matching the SPEC_CODES contract.
     # Resource lookup
     "NO_PACKAGES_FOUND": "PACKAGE_NOT_FOUND",
     # Resource state
@@ -135,9 +141,31 @@ INTERNAL_CODES: frozenset[str] = frozenset(
     }
 )
 
+# Buyer-visible wire codes allowed beyond the SDK's STANDARD_ERROR_CODES.
+# VERSION_UNSUPPORTED and BILLING_NOT_SUPPORTED are pinned-spec codes missing
+# from the SDK constant (the spec is authoritative; see adcp-spec-version.md).
+# Auth failures use the canonical AUTH_REQUIRED (see AdCPAuthenticationError);
+# the former project-specific AUTH_TOKEN_INVALID was retired in the #1417
+# error-code reconciliation. The historical SPEC_CODES name is retained as the
+# public input to the error-code compliance guards. Both members pass through
+# translate_error_code() unchanged.
+SPEC_CODES: frozenset[str] = frozenset(
+    {
+        "BILLING_NOT_SUPPORTED",  # Pinned spec, BR-UC-011 BR-RULE-059
+        "VERSION_UNSUPPORTED",  # Pinned spec: seller cannot honor the caller's release pin
+    }
+)
+
 # Sanity check: every mapping target must be a standard code.
 _NON_STANDARD_TARGETS = set(ERROR_CODE_MAPPING.values()) - set(WIRE_STANDARD_CODES)
 assert not _NON_STANDARD_TARGETS, f"ERROR_CODE_MAPPING contains non-standard targets: {_NON_STANDARD_TARGETS}"
+
+# Every code ``to_wire_error_code`` may return: the wire table plus the pinned-spec
+# codes, which ``translate_error_code`` and the compliance guard already treat as
+# legal wire codes. Without the SPEC_CODES union, routing an advisory carrying
+# BILLING_NOT_SUPPORTED / VERSION_UNSUPPORTED through the helper would collapse a
+# legal spec code to SERVICE_UNAVAILABLE.
+_GUARANTEED_WIRE_CODES: frozenset[str] = frozenset(WIRE_STANDARD_CODES) | SPEC_CODES
 
 
 def translate_error_code(code: str) -> str:
@@ -154,24 +182,24 @@ def translate_error_code(code: str) -> str:
 def to_wire_error_code(code: str) -> str:
     """Normalize a hand-built advisory code to a guaranteed-standard wire code.
 
-    Like ``translate_error_code`` but, unlike it, GUARANTEES the result is in
-    ``WIRE_STANDARD_CODES`` (the SDK's ``STANDARD_ERROR_CODES`` plus the
-    pinned-spec supplement): an internal-only code that has no mapping
-    entry (e.g. ``API_ERROR``, ``FLIGHT_NOT_FOUND``) would otherwise pass through
-    ``translate_error_code`` verbatim and leak. Use this for ``errors[]``
-    advisories, which serialize verbatim and never pass through the boundary
-    translator that handles raised ``AdCPError``s. Anything still non-standard
-    after translation collapses to ``SERVICE_UNAVAILABLE`` (the generic
-    server-side advisory), so no internal code can reach the buyer.
+    Like ``translate_error_code`` but, unlike it, GUARANTEES the result is a
+    legal wire code — ``WIRE_STANDARD_CODES`` (the SDK's ``STANDARD_ERROR_CODES``
+    plus ``_SPEC_SUPPLEMENT_CODES``) or ``SPEC_CODES``: an internal-only code
+    that has no mapping entry (e.g. ``API_ERROR``, ``FLIGHT_NOT_FOUND``) would
+    otherwise pass through ``translate_error_code`` verbatim and leak. Use this
+    for ``errors[]`` advisories, which serialize verbatim and never pass through
+    the boundary translator that handles raised ``AdCPError``s. Anything still
+    non-standard after translation collapses to ``SERVICE_UNAVAILABLE`` (the
+    generic server-side advisory), so no internal code can reach the buyer.
     """
     translated = translate_error_code(code)
-    return translated if translated in WIRE_STANDARD_CODES else "SERVICE_UNAVAILABLE"
+    return translated if translated in _GUARANTEED_WIRE_CODES else "SERVICE_UNAVAILABLE"
 
 
 def _serialize_context(
     context: ContextObject | dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Serialize an AdCP ContextObject (or dict) into a JSON-safe dict.
+    """Serialize an AdCP ContextObject (or dict) without losing buyer data.
 
     Single source of truth for context serialization — used by ``to_dict``,
     ``to_adcp_error``, and ``build_two_layer_error_envelope`` so all three
@@ -179,29 +207,21 @@ def _serialize_context(
 
     Behavior:
         - ``None`` → ``None`` (caller decides whether to omit the key).
-        - ``dict`` → shallow copy. Prevents aliasing footguns when one
-          serialization layer mutates its copy and accidentally mutates
-          the source context still held on the exception.
-        - ``ContextObject`` → ``model_dump(mode="json", exclude_none=True)``.
-          ``mode="json"`` coerces datetimes/UUIDs/etc. to JSON-serializable
-          primitives; ``exclude_none=True`` matches the spec's emit-only-
-          populated-fields norm.
+        - ``dict`` → detached copy, preserving every opaque JSON value.
+        - ``ContextObject`` → only unset schema fields are omitted; explicitly
+          supplied nulls remain present, as required for opaque context echo.
         - anything else → log a warning and return ``None``. This is reached
           from ``to_dict``/``to_adcp_error``/``build_two_layer_error_envelope``,
           all of which run inside exception handlers — raising here would shadow
           the original exception and the boundary translator would fail open
           with no envelope. A malformed context drops to ``None`` instead.
     """
-    if context is None:
-        return None
-    if isinstance(context, dict):
-        return dict(context)
-    if not isinstance(context, BaseModel):
+    serialized = serialize_application_context(context)
+    if context is not None and serialized is None:
         logger.warning(
             "_serialize_context expected dict or BaseModel, got %s; dropping context", type(context).__name__
         )
-        return None
-    return context.model_dump(mode="json", exclude_none=True)
+    return serialized
 
 
 class AdCPError(Exception):
@@ -423,6 +443,24 @@ class AdCPValidationError(AdCPError):
 
     _default_status_code: ClassVar[int] = 400
     _default_error_code: ClassVar[str] = "VALIDATION_ERROR"
+    _default_recovery: ClassVar[RecoveryHint] = "correctable"
+
+
+class AdCPVersionUnsupportedError(AdCPError):
+    """Caller pinned an AdCP release or major this seller cannot serve (400).
+
+    Release-precision ``adcp_version`` follows the exact/downshift rules in the
+    pinned Versioning & Governance prose; the deprecated integer
+    ``adcp_major_version`` remains supported through 3.x. The error-compliance
+    storyboard grades the unsupported-major probe as required and the release
+    sibling as advisory at 3.1. ``VERSION_UNSUPPORTED`` is a pinned-spec code
+    not yet in the SDK's ``STANDARD_ERROR_CODES`` — see ``SPEC_CODES``.
+    Recovery is ``correctable``: the buyer re-pins to an entry from the
+    authoritative ``supported_versions`` list and retries.
+    """
+
+    _default_status_code: ClassVar[int] = 400
+    _default_error_code: ClassVar[str] = "VERSION_UNSUPPORTED"
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
@@ -811,7 +849,7 @@ class AdCPIdempotencyConflictError(AdCPConflictError):
 
     Recovery=correctable: the buyer can fix this and resend — either replay the
     ORIGINAL bytes under the same key, or mint a fresh idempotency_key for the
-    new payload. This matches the AdCP 3.0.1 prose example envelope and the
+    new payload. This matches the pinned AdCP 3.1.1 standard error semantics and the
     conformance storyboard's stated expectation. The SDK's
     ``STANDARD_ERROR_CODES`` table classifies the code ``terminal``, but that
     table is only a default applied when no recovery is supplied — an explicit
@@ -836,8 +874,9 @@ class AdCPIdempotencyExpiredError(AdCPConflictError):
     buyer agent recovers autonomously — a natural-key existence check (e.g.
     ``get_media_buys`` by ``context.internal_campaign_id``) to learn whether the
     original request succeeded, then either accept that result or mint a fresh
-    idempotency_key for a new attempt. The 3.0.1 ``error-code.json`` enum
-    description classifies the code ``correctable`` (that buyer-recovery path),
+    idempotency_key for a new attempt. The ``error-code.json`` enum description
+    (introduced AdCP 3.0.1, unchanged at the pinned 3.1.1) classifies the code
+    ``correctable`` (that buyer-recovery path),
     and the recovery taxonomy reserves ``terminal`` for conditions requiring
     HUMAN action (account suspended, payment required) — not an agent-resolvable
     retry. The SDK's ``STANDARD_ERROR_CODES`` default table lists it ``terminal``,
@@ -1033,6 +1072,54 @@ INVALID_REQUEST_SUGGESTION = "check request parameters and fix"
 VALIDATION_ERROR_SUGGESTION = "review error details and fix field values"
 
 
+def missing_idempotency_key_error(
+    *,
+    details: dict[str, Any] | None = None,
+    context: ContextObject | dict[str, Any] | None = None,
+) -> AdCPValidationError:
+    """The canonical missing-``idempotency_key`` rejection — one home for its wire identity.
+
+    Every transport boundary that rejects an absent required key MUST emit this
+    error (message, ``field``, and suggestion byte-identical across MCP, A2A,
+    and REST): ``require_idempotency_key`` (the shared funnel + A2A skill
+    handlers), the ``normalize_to_adcp_error`` ValidationError branch (MCP
+    TypeAdapter rejects), and the REST ``RequestValidationError`` handler.
+    A transport-local copy of this literal is the drift this factory removes.
+    """
+    return AdCPValidationError(
+        "idempotency_key is required.",
+        field="idempotency_key",
+        suggestion="Provide a client-generated idempotency_key (16-255 characters, using only [A-Za-z0-9_.:-]).",
+        details=details,
+        context=context,
+    )
+
+
+# The pydantic error ``type``s that mean "a required field was not supplied".
+# MCP's TypeAdapter reports ``missing_argument`` for an absent tool argument;
+# FastAPI/pydantic body validation reports ``missing`` for an absent field.
+# One set so no boundary recognizes a narrower slice than another.
+_MISSING_FIELD_ERROR_TYPES: frozenset[str] = frozenset({"missing", "missing_argument"})
+
+
+def missing_idempotency_key_error_from_validation(
+    field: str | None,
+    errors: Sequence[Mapping[str, Any]],
+) -> AdCPValidationError | None:
+    """The canonical missing-key error IFF these validation errors ARE an absent idempotency_key.
+
+    One home for the RECOGNITION rule (which pydantic ``type``s count as
+    "missing") next to ``missing_idempotency_key_error`` (the wire identity),
+    so the MCP ``normalize_to_adcp_error`` branch and the REST
+    ``RequestValidationError`` handler can never drift their trigger predicate.
+    Returns ``None`` when this is not the missing-key case, so callers fall
+    through to their normal validation handling.
+    """
+    if field == "idempotency_key" and errors and errors[0].get("type") in _MISSING_FIELD_ERROR_TYPES:
+        return missing_idempotency_key_error(details=build_validation_error_details(errors))
+    return None
+
+
 def first_validation_error_field(validation_error: ValidationError) -> str | None:
     """Return the bracket-notation path of the first Pydantic error, or ``None``.
 
@@ -1070,7 +1157,11 @@ def build_validation_error_details(errors: Sequence[Mapping[str, Any]]) -> dict[
     }
 
 
-def normalize_to_adcp_error(exc: Exception) -> AdCPError:
+def normalize_to_adcp_error(
+    exc: Exception,
+    *,
+    context: Any = None,
+) -> AdCPError:
     """Normalize untyped exceptions to typed AdCPError subclasses.
 
     Single source of truth for the wrapping applied at all three transport
@@ -1081,17 +1172,35 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
     anything else wraps in base ``AdCPError`` (INTERNAL_ERROR).
     """
     if isinstance(exc, AdCPError):
-        return exc
-    if isinstance(exc, ValidationError):
+        typed = exc
+    elif isinstance(exc, ValidationError):
         errors = exc.errors()
-        return AdCPValidationError(
-            errors[0].get("msg") if errors else "Request failed schema validation",
-            field=first_validation_error_field(exc),
-            suggestion=VALIDATION_ERROR_SUGGESTION,
-            details=build_validation_error_details(errors),
-        )
-    if isinstance(exc, ValueError):
-        return AdCPValidationError(str(exc))
-    if isinstance(exc, PermissionError):
-        return AdCPAuthorizationError(str(exc))
-    return AdCPError(str(exc) or type(exc).__name__)
+        field = first_validation_error_field(exc)
+        missing_key = missing_idempotency_key_error_from_validation(field, errors)
+        if missing_key is not None:
+            typed = missing_key
+        else:
+            message = errors[0].get("msg") if errors else "Request failed schema validation"
+            typed = AdCPValidationError(
+                message,
+                field=field,
+                suggestion=VALIDATION_ERROR_SUGGESTION,
+                details=build_validation_error_details(errors),
+            )
+    elif isinstance(exc, ValueError):
+        typed = AdCPValidationError(str(exc))
+    elif isinstance(exc, PermissionError):
+        typed = AdCPAuthorizationError(str(exc))
+    else:
+        typed = AdCPError(str(exc) or type(exc).__name__)
+
+    # A raw transport boundary can still see a valid application context when
+    # request-model validation fails before a typed request exists. Attach that
+    # context only when the original exception did not already carry one.
+    # _serialize_context is deliberately non-throwing and rejects invalid
+    # candidates, so error translation cannot replace the buyer's real error.
+    if typed.context is None:
+        serialized_context = _serialize_context(context)
+        if serialized_context is not None:
+            typed.context = serialized_context
+    return typed

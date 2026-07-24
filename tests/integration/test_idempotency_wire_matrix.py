@@ -34,15 +34,14 @@ WIRE_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST]
 
 def _create_kwargs(product, *, idempotency_key, po_number="WIRE-1"):
     """One fixed payload; callers copy it per call so the canonical hash is stable."""
-    now = datetime.now(UTC)
-    return {
-        "brand": {"domain": "wire-matrix.example.com"},
-        "packages": [{"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
-        "start_time": (now + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "end_time": (now + timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "po_number": po_number,
-        "idempotency_key": idempotency_key,
-    }
+    from tests.helpers import create_media_buy_kwargs
+
+    return create_media_buy_kwargs(
+        product,
+        idempotency_key=idempotency_key,
+        brand_domain="wire-matrix.example.com",
+        po_number=po_number,
+    )
 
 
 @pytest.mark.parametrize("transport", WIRE_TRANSPORTS, ids=lambda t: t.value)
@@ -240,11 +239,14 @@ class TestMissingKeyWireMatrix:
         # never the synthesized fallback (a dead wire path must fail here).
         envelope = result.wire_error_envelope
         assert envelope is not None, f"missing-key rejection must carry the wire envelope on {transport.value}"
+        # The unified 3.1.1 boundary message — identical on every transport
+        # (require_idempotency_key / the normalize special-case), replacing the
+        # transport-specific TypeAdapter text this test originally pinned.
         assert_envelope_shape(
             envelope,
             "VALIDATION_ERROR",
             recovery="correctable",
-            message_substr="Required field is missing",
+            message_substr="idempotency_key is required.",
         )
         assert envelope["errors"][0].get("field") == "idempotency_key"
 
@@ -260,23 +262,35 @@ class TestWireLevelHashInput:
     silently dropped it would fall back to model hashing and replay here).
     """
 
-    def test_equivalent_but_differently_encoded_retry_conflicts(self, integration_db):
+    @pytest.mark.parametrize("transport", [Transport.REST, Transport.MCP, Transport.A2A])
+    def test_equivalent_but_differently_encoded_retry_conflicts(self, integration_db, transport):
+        """Every WIRE transport must thread the raw payload, not just REST.
+
+        Parametrized over all three after A2A was found threading nothing: its
+        skill handler omitted the kwarg, so the impl fell back to model hashing
+        and this retry REPLAYED on A2A while conflicting on MCP/REST — one
+        buyer request, two different equivalence keys. A REST-only version of
+        this test could not see that.
+        """
         key = f"wire-enc-{uuid.uuid4().hex}"
 
         with MediaBuyCreateEnv() as env:
             _tenant, _principal, product, _pricing = env.setup_media_buy_data()
             kwargs = _create_kwargs(product, idempotency_key=key)
 
-            first = env.call_via(Transport.REST, **dict(kwargs))
+            first = env.call_via(transport, **dict(kwargs))
             assert first.is_success, f"fresh create failed: {first.error}"
 
             # Same instant, different wire encoding: +00:00 instead of Z.
             reencoded = dict(kwargs)
             reencoded["start_time"] = reencoded["start_time"].replace("Z", "+00:00")
 
-            second = env.call_via(Transport.REST, **reencoded)
+            second = env.call_via(transport, **reencoded)
 
-        assert second.is_error, "a differently-encoded wire payload must not replay"
+        assert second.is_error, (
+            f"[{transport.value}] a differently-encoded wire payload must not replay — "
+            "this transport is hashing the model dump, not the payload as sent"
+        )
         assert_envelope_shape(second.wire_error_envelope, "IDEMPOTENCY_CONFLICT", recovery="correctable")
 
 
@@ -288,23 +302,43 @@ class TestCaptureUniformity:
     on the same transport or across transports.
     """
 
-    def test_cross_transport_identical_retry_replays(self, integration_db):
-        """The same payload dict created via REST replays when retried via MCP."""
+    @pytest.mark.parametrize(
+        ("first_transport", "second_transport"),
+        [
+            (Transport.REST, Transport.MCP),
+            (Transport.REST, Transport.A2A),
+            (Transport.A2A, Transport.REST),
+            (Transport.A2A, Transport.MCP),
+        ],
+    )
+    def test_cross_transport_identical_retry_replays(self, integration_db, first_transport, second_transport):
+        """An identical payload dict replays when retried on ANOTHER transport.
+
+        Every A2A pairing is new. A2A previously threaded no raw payload, so it
+        hashed the model dump while MCP/REST hashed the payload as sent — an
+        honest cross-transport retry got a spurious IDEMPOTENCY_CONFLICT. The
+        REST->MCP pairing alone could not see it, because both sides of that
+        pair captured correctly.
+        """
         key = f"wire-xport-{uuid.uuid4().hex}"
 
         with MediaBuyCreateEnv() as env:
             _tenant, _principal, product, _pricing = env.setup_media_buy_data()
             kwargs = _create_kwargs(product, idempotency_key=key)
 
-            first = env.call_via(Transport.REST, **dict(kwargs))
-            assert first.is_success, f"fresh REST create failed: {first.error}"
+            first = env.call_via(first_transport, **dict(kwargs))
+            assert first.is_success, f"fresh {first_transport.value} create failed: {first.error}"
 
-            second = env.call_via(Transport.MCP, **dict(kwargs))
-            assert second.is_success, f"MCP retry failed: {second.error}"
+            second = env.call_via(second_transport, **dict(kwargs))
+            assert second.is_success, (
+                f"{first_transport.value} -> {second_transport.value} retry failed: {second.error} — "
+                "an identical payload must not conflict across transports"
+            )
 
         assert second.payload.replayed is True, (
-            "identical payload dicts must hash equal across transports — "
-            "a transport-specific capture point (normalized vs raw) breaks this"
+            f"identical payload dicts must hash equal across transports "
+            f"({first_transport.value} -> {second_transport.value}) — a transport-specific "
+            "capture point (model dump vs raw wire) breaks this"
         )
         assert second.payload.response.media_buy_id == first.payload.response.media_buy_id
 

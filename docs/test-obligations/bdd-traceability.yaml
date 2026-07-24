@@ -1903,6 +1903,12 @@ mappings:
       business_rules: []
       status: new
   UC-003:
+    - adcp_scenario_id: "T-UC-003-local-required-idempotency-v311"
+      adcp_feature: "local-uc003-required-idempotency-v311.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-003-main-mcp"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-003-ext-dual-emit"
       adcp_feature: "BR-UC-002-media-buy-status-dual-emit.feature"
       obligation_id: null
@@ -4072,6 +4078,12 @@ mappings:
       business_rules: []
       status: new
   UC-006:
+    - adcp_scenario_id: "T-UC-006-local-idempotency-v311"
+      adcp_feature: "local-uc006-idempotency-v311.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main-sync"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-006-all-failed-success-variant"
       adcp_feature: "BR-UC-006-creatives-invariants.feature"
       obligation_id: null
@@ -6284,6 +6296,30 @@ mappings:
       upstream_refs: ["BR-UC-010-ext-d"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-010-local-capability-filter-v311"
+      adcp_feature: "local-uc010-capability-filter-v311.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-010-ext-d"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-local-capability-filter-invalid-v311"
+      adcp_feature: "local-uc010-capability-filter-v311.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-010-ext-d"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-local-capability-filter-empty-v311"
+      adcp_feature: "local-uc010-capability-filter-v311.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-010-ext-d"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-local-capability-filter-unsupported-v311"
+      adcp_feature: "local-uc010-capability-filter-v311.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-010-ext-d"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-010-ext-e-mcp"
       adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
       obligation_id: null
@@ -6566,6 +6602,24 @@ mappings:
       upstream_refs: ["BR-UC-010-ext-f", "BR-RULE-233"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-010-v31-version-unsupported-cross-major"
+      adcp_feature: "BR-UC-010-version-negotiation.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-010-ext-f", "BR-RULE-233"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-v31-version-unsupported-sub-min"
+      adcp_feature: "BR-UC-010-version-negotiation.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-010-ext-f", "BR-RULE-233"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-v31-version-unsupported-prerelease"
+      adcp_feature: "BR-UC-010-version-negotiation.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-010-ext-f", "BR-RULE-233"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-010-v31-request-signing-monotonicity"
       adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
       obligation_id: null
@@ -6615,11 +6669,29 @@ mappings:
       business_rules: []
       status: new
   UC-011:
+    - adcp_scenario_id: "T-UC-011-local-required-idempotency-v311"
+      adcp_feature: "local-uc011-required-idempotency-v311.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-main-sync"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-011-sync-brandless"
       adcp_feature: "BR-UC-011-account-validation.feature"
       obligation_id: null
       upstream_refs: ["BR-RULE-056"]
       business_rules: ["BR-RULE-056"]
+      status: new
+    - adcp_scenario_id: "T-UC-011-auth-before-version"
+      adcp_feature: "BR-UC-011-account-validation.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-auth-missing-before-version"
+      adcp_feature: "BR-UC-011-account-validation.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
       status: new
     - adcp_scenario_id: "T-UC-011-list-main"
       adcp_feature: "BR-UC-011-manage-accounts.feature"

@@ -54,22 +54,6 @@ def _envelope_from_adcp_error(exc: Exception) -> dict[str, Any] | None:
     return None
 
 
-def _wire_envelope_from_exception(exc: Exception) -> dict[str, Any] | None:
-    """Prefer the REAL wire envelope stashed by the harness; fall back to synthesized.
-
-    When the A2A pipeline reconstructs an AdCPError from a failed Task's
-    artifact DataPart, ``tests.harness._base._envelope_to_adcp_error``
-    attaches the captured envelope to the exception as
-    ``_wire_error_envelope``. This helper returns that real wire envelope
-    if present; otherwise falls back to ``_envelope_from_adcp_error``
-    (synthesized — same helper production calls).
-    """
-    real_wire = getattr(exc, "_wire_error_envelope", None)
-    if isinstance(real_wire, dict):
-        return real_wire
-    return _envelope_from_adcp_error(exc)
-
-
 def _envelope_from_mcp_error(exc: Exception) -> dict[str, Any] | None:
     """Extract the wire envelope from an MCP ToolError's JSON string."""
     from fastmcp.exceptions import ToolError
@@ -110,23 +94,50 @@ class ImplDispatcher:
 
 
 class A2ADispatcher:
-    """Dispatch via ``handler.on_message_send`` — exercises the full A2A pipeline.
+    """Dispatch via ``env.call_a2a`` — the A2A transport wrapper.
 
-    ``env.call_a2a`` drives ``AdCPRequestHandler.on_message_send`` end-to-end
-    (message parsing → skill routing → handler dispatch → ``_serialize_for_a2a``
-    → Task/Artifact framing). On a failed Task, the harness reconstructs the
-    ``AdCPError`` from the artifact DataPart and stashes the real wire
-    envelope on the exception via ``_wire_error_envelope`` — captured here
-    by ``_wire_envelope_from_exception``.
+    Two A2A call shapes exist across envs:
+
+    - **Full pipeline** (``_run_a2a_handler``): drives
+      ``AdCPRequestHandler.on_message_send`` end-to-end (message parsing →
+      skill routing → handler dispatch → ``_serialize_for_a2a`` →
+      Task/Artifact framing). On a failed Task, the harness reconstructs the
+      ``AdCPError`` from the artifact DataPart and stashes the REAL wire
+      envelope on the exception via ``_wire_error_envelope`` — surfaced here
+      as ``wire_error_envelope``.
+    - **Direct raw** (``*_raw``): no Task framing, so no stash. There is no
+      real wire; ``wire_error_envelope`` is ``None`` and the envelope
+      production WOULD emit is exposed on ``synthesized_error_envelope``.
+
+    Fields are split like ``McpDispatcher``: ``wire_error_envelope`` holds
+    ONLY captured wire (``None`` when the raw path was taken), and
+    ``synthesized_error_envelope`` always carries the boundary-builder output
+    for the caught exception. This keeps ``wire_error_envelope`` honest — a
+    raw-path env cannot masquerade its synthesized output as real wire.
     """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
         try:
             payload = env.call_a2a(**kwargs)
         except Exception as exc:
+            # `_wire_error_envelope` is set ONLY by the full-pipeline Task/
+            # Artifact reconstruction (tests.harness._base's envelope->
+            # exception helper) — a direct-raw exception (e.g. CreativeSyncEnv,
+            # which raises straight from *_raw()) never has the attribute at
+            # all. Its PRESENCE (not its value) is therefore the per-call
+            # signal for "this dispatch mode promised to capture wire" —
+            # exposed on TransportResult so callers like
+            # tests/bdd/steps/_outcome_helpers.wire_error_envelope can tell a
+            # legitimate no-wire dispatch apart from a stashing bug.
+            wire_capture_promised = hasattr(exc, "_wire_error_envelope")
             return TransportResult(
                 error=exc,
-                wire_error_envelope=_wire_envelope_from_exception(exc),
+                # Stash only — None on the raw path (no Task framing).
+                wire_error_envelope=getattr(exc, "_wire_error_envelope", None),
+                # What production WOULD emit for the same exception; the only
+                # honest error envelope for raw-path envs (e.g. CreativeSyncEnv).
+                synthesized_error_envelope=_envelope_from_adcp_error(exc),
+                wire_capture_unavailable=not wire_capture_promised,
             )
         # Real A2A wire: the artifact DataPart dict stashed by _run_a2a_handler
         # (declared on BaseTestEnv, reset per call_via — read directly so a
@@ -214,6 +225,7 @@ class McpDispatcher:
                 error = _unwrap_mcp_tool_error(exc)
             return TransportResult(
                 error=error,
+                raw_response=env._last_mcp_raw_response,
                 wire_error_envelope=wire,
                 # What production WOULD emit for the same exception — see the
                 # ImplDispatcher caveat; never a substitute for the wire field.
@@ -224,6 +236,7 @@ class McpDispatcher:
         return TransportResult(
             payload=payload,
             envelope={"transport": "mcp"},
+            raw_response=env._last_mcp_raw_response,
             wire_response=env._last_wire_response,
         )
 
@@ -244,6 +257,8 @@ class RestE2EDispatcher:
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
         import httpx
 
+        from tests.harness.transport import WireAuth
+
         if not env.e2e_config:
             return TransportResult(error=RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)"))
 
@@ -255,7 +270,9 @@ class RestE2EDispatcher:
         # but auth_token is None (principal_id=None boundary tests), omit the header
         # so the server rejects gracefully instead of httpx raising on a None header.
         headers: dict[str, str] = {"Content-Type": "application/json"}
-        if identity is not None:
+        if isinstance(identity, WireAuth):
+            headers.update(identity.headers)
+        elif identity is not None:
             if identity.auth_token is not None:
                 headers["x-adcp-auth"] = identity.auth_token
             tenant = getattr(identity, "tenant", None)
@@ -272,7 +289,12 @@ class RestE2EDispatcher:
 
         with httpx.Client(base_url=base_url, timeout=30) as client:
             method = getattr(env, "REST_METHOD", "post")
-            response = getattr(client, method)(endpoint, json=body, headers=headers)
+            request_kwargs: dict[str, Any] = {"headers": headers}
+            if method == "get":
+                request_kwargs["params"] = body
+            else:
+                request_kwargs["json"] = body
+            response = getattr(client, method)(endpoint, **request_kwargs)
 
         envelope = {
             "transport": "e2e_rest",

@@ -44,28 +44,14 @@ class ResolvedIdentity(BaseModel, frozen=True):
         return self.principal_id is not None and self.principal_id != ""
 
 
+# Token extraction lives in src.core.http_utils.extract_auth_token — the one
+# primitive shared by every transport boundary (this module, auth.py, and
+# UnifiedAuthMiddleware) so the header semantics cannot diverge. Keep the
+# historical private alias as a compatibility seam: existing callers import
+# ``resolved_identity._extract_auth_token`` even though its implementation is
+# now centralized in http_utils.
+from src.core.http_utils import extract_auth_token as _extract_auth_token
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
-
-
-def _extract_auth_token(headers: dict) -> tuple[str | None, str | None]:
-    """Extract auth token from headers.
-
-    Checks x-adcp-auth first, then Authorization: Bearer.
-
-    Returns:
-        (token, source) tuple — source is "x-adcp-auth" or "Authorization: Bearer"
-    """
-    token = _get_header_case_insensitive(headers, "x-adcp-auth")
-    if token:
-        return token, "x-adcp-auth"
-
-    authorization = _get_header_case_insensitive(headers, "Authorization")
-    if authorization and authorization.lower().startswith("bearer "):
-        potential_token = authorization[7:].strip()
-        if potential_token:
-            return potential_token, "Authorization: Bearer"
-
-    return None, None
 
 
 def _detect_tenant(headers: dict) -> tuple[str | None, dict | None]:

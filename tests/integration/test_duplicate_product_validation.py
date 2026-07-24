@@ -11,7 +11,6 @@ All tests in this file use float budget format per AdCP v2.2.0 spec:
 - Currency is determined by PricingOption, not Package
 """
 
-import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
@@ -21,6 +20,7 @@ from src.core.exceptions import AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
+from tests.harness._idempotency import fresh_idempotency_key
 from tests.helpers.adcp_factories import create_test_package_request
 
 
@@ -86,7 +86,7 @@ class TestDuplicateProductValidation:
                 packages=packages,
                 start_time=start_time,
                 end_time=end_time,
-                idempotency_key=f"int-key-{uuid.uuid4().hex}",
+                idempotency_key=fresh_idempotency_key("int-key"),
             )
             with pytest.raises(AdCPValidationError) as excinfo:
                 await _create_media_buy_impl(req=req, identity=identity)
@@ -167,7 +167,7 @@ class TestDuplicateProductValidation:
                 packages=packages,
                 start_time=start_time,
                 end_time=end_time,
-                idempotency_key=f"int-key-{uuid.uuid4().hex}",
+                idempotency_key=fresh_idempotency_key("int-key"),
             )
             with pytest.raises(AdCPValidationError) as excinfo:
                 await _create_media_buy_impl(req=req, identity=identity)
@@ -238,7 +238,7 @@ class TestDuplicateProductValidation:
                 packages=packages,
                 start_time=start_time,
                 end_time=end_time,
-                idempotency_key=f"int-key-{uuid.uuid4().hex}",
+                idempotency_key=fresh_idempotency_key("int-key"),
             )
             with pytest.raises((ValueError, Exception)) as exc_info:
                 await _create_media_buy_impl(req=req)

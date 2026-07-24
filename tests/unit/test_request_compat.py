@@ -7,7 +7,22 @@ The normalizer translates known deprecated AdCP field names to their current
 equivalents, mirroring the JS adcp-client's normalizeRequestParams() logic.
 """
 
-from src.core.request_compat import normalize_request_params, strip_unknown_params
+import logging
+
+import pytest
+
+from src.core.exceptions import AdCPValidationError
+from src.core.request_compat import (
+    ADCP_NEGOTIATION_FIELDS,
+    STANDARD_ADCP_READ_TOOLS,
+    _log_dropped_fields,
+    _strip_fields,
+    normalize_request_params,
+    strip_negotiation_fields,
+    strip_undeclared_envelope_fields,
+    strip_unknown_params,
+    validate_standard_read_idempotency_key,
+)
 
 # ---------------------------------------------------------------------------
 # 1. brand_manifest → brand (BrandReference)
@@ -332,11 +347,9 @@ class TestStripUnknownParams:
     """strip_unknown_params removes fields not in the known set."""
 
     def test_all_known_fields_pass_through(self):
-        cleaned, stripped = strip_unknown_params(
-            {"brief": "ads", "brand": {"domain": "acme.com"}},
-            {"brief", "brand"},
-        )
-        assert cleaned == {"brief": "ads", "brand": {"domain": "acme.com"}}
+        params = {"brief": "ads", "brand": {"domain": "acme.com"}}
+        cleaned, stripped = strip_unknown_params(params, {"brief", "brand"})
+        assert cleaned is params
         assert stripped == []
 
     def test_unknown_fields_removed(self):
@@ -367,3 +380,224 @@ class TestStripUnknownParams:
         )
         assert cleaned == {"brief": None}
         assert stripped == ["unknown"]
+
+
+class TestSharedStripFields:
+    """The shared strip primitive preserves ordering and object identity."""
+
+    def test_removes_requested_fields_and_sorts_names(self):
+        cleaned, stripped = _strip_fields(
+            {"keep": 1, "z_field": 2, "a_field": 3},
+            {"z_field", "a_field"},
+        )
+        assert cleaned == {"keep": 1}
+        assert stripped == ["a_field", "z_field"]
+
+    def test_no_match_returns_original_object(self):
+        params = {"keep": 1}
+        cleaned, stripped = _strip_fields(params, {"missing"})
+        assert cleaned is params
+        assert stripped == []
+
+
+class TestDroppedFieldLogging:
+    """All transports share the same dropped-field audit message."""
+
+    def test_logs_canonical_message(self, caplog):
+        with caplog.at_level(logging.DEBUG, logger="src.core.request_compat"):
+            _log_dropped_fields(
+                "get_products",
+                "AdCP negotiation",
+                ["adcp_major_version", "adcp_version"],
+            )
+
+        assert caplog.messages == [
+            "Dropped AdCP negotiation fields from get_products: adcp_major_version, adcp_version"
+        ]
+
+    def test_empty_drop_does_not_log(self, caplog):
+        with caplog.at_level(logging.DEBUG, logger="src.core.request_compat"):
+            _log_dropped_fields("get_products", "AdCP negotiation", [])
+
+        assert caplog.messages == []
+
+
+# ---------------------------------------------------------------------------
+# strip_negotiation_fields — AdCP version-negotiation envelope (#1512)
+# ---------------------------------------------------------------------------
+
+
+class TestStripNegotiationFields:
+    """adcp_version / adcp_major_version are stripped so strict MCP arg
+    validation does not reject conformant AdCP SDK clients (#1512)."""
+
+    def test_strips_both_negotiation_fields(self):
+        cleaned, stripped = strip_negotiation_fields(
+            {"brief": "ads", "adcp_version": "3.1", "adcp_major_version": 3},
+        )
+        assert cleaned == {"brief": "ads"}
+        assert stripped == ["adcp_major_version", "adcp_version"]
+
+    def test_strips_version_only(self):
+        cleaned, stripped = strip_negotiation_fields({"brief": "ads", "adcp_version": "3.1-beta.3"})
+        assert cleaned == {"brief": "ads"}
+        assert stripped == ["adcp_version"]
+
+    def test_no_negotiation_fields_returns_original_object(self):
+        params = {"brief": "ads"}
+        cleaned, stripped = strip_negotiation_fields(params)
+        assert cleaned is params  # unchanged object, no copy
+        assert stripped == []
+
+    def test_does_not_touch_real_tool_params(self):
+        cleaned, _ = strip_negotiation_fields({"account": {"account_id": "a1"}, "adcp_version": "3.1"})
+        assert cleaned == {"account": {"account_id": "a1"}}
+
+    def test_constant_holds_exactly_the_two_envelope_fields(self):
+        assert ADCP_NEGOTIATION_FIELDS == frozenset({"adcp_version", "adcp_major_version"})
+
+
+class TestStripUndeclaredEnvelopeFields:
+    """context/ext/push_notification_config are stripped only when the tool
+    does not declare them (schema-aware), so conformant clients aren't rejected
+    while tools that use these fields still receive them (#1512)."""
+
+    def test_strips_context_when_tool_does_not_declare_it(self):
+        cleaned, stripped = strip_undeclared_envelope_fields(
+            {"brief": "ads", "context": {"correlation_id": "c1"}},
+            known_params={"brief"},  # e.g. get_adcp_capabilities has no `context`
+        )
+        assert cleaned == {"brief": "ads"}
+        assert stripped == ["context"]
+
+    def test_keeps_context_when_tool_declares_it(self):
+        params = {"brief": "ads", "context": {"correlation_id": "c1"}}
+        cleaned, stripped = strip_undeclared_envelope_fields(
+            params,
+            known_params={"brief", "context"},  # e.g. get_products declares `context`
+        )
+        assert cleaned is params  # untouched
+        assert stripped == []
+
+    def test_strips_multiple_undeclared_envelope_fields(self):
+        cleaned, stripped = strip_undeclared_envelope_fields(
+            {"brief": "ads", "context": {}, "ext": {}, "push_notification_config": {}},
+            known_params={"brief"},
+        )
+        assert cleaned == {"brief": "ads"}
+        assert stripped == ["context", "ext", "push_notification_config"]
+
+    def test_none_known_params_strips_nothing(self):
+        params = {"brief": "ads", "context": {}}
+        cleaned, stripped = strip_undeclared_envelope_fields(params, known_params=None)
+        assert cleaned is params
+        assert stripped == []
+
+    def test_does_not_touch_non_envelope_unknowns(self):
+        # Only the standard envelope set is in scope here; other unknowns are
+        # left for the production strip / dev fail-loud path.
+        cleaned, stripped = strip_undeclared_envelope_fields(
+            {"context": {}, "some_business_field": 1}, known_params={"brief"}
+        )
+        assert cleaned == {"some_business_field": 1}
+        assert stripped == ["context"]
+
+
+def _sdk_read_only_tool_names() -> frozenset[str]:
+    """Tool names the pinned SDK annotates ``readOnlyHint: True``."""
+    from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
+
+    return frozenset(
+        definition["name"]
+        for definition in ADCP_TOOL_DEFINITIONS
+        if (definition.get("annotations") or {}).get("readOnlyHint")
+    )
+
+
+def _seller_registered_tool_names() -> frozenset[str]:
+    """Tool names this seller registers, read from the ``_register_tool`` calls in core.main.
+
+    Parsed rather than imported so the derivation costs nothing at collection
+    time and cannot be perturbed by server import side effects.
+    """
+    import ast
+    from pathlib import Path
+
+    main_py = Path(__file__).resolve().parents[2] / "src" / "core" / "main.py"
+    tree = ast.parse(main_py.read_text(encoding="utf-8"))
+    return frozenset(
+        node.args[0].id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_register_tool"
+        and node.args
+        and isinstance(node.args[0], ast.Name)
+    )
+
+
+def _derived_standard_reads() -> frozenset[str]:
+    """The standard reads: SDK-annotated read-only tools this seller actually exposes."""
+    return _sdk_read_only_tool_names() & _seller_registered_tool_names()
+
+
+class TestStandardReadIdempotencyEnvelope:
+    """Pinned 3.1 reads validate a supplied key but accept omission."""
+
+    _EXPECTED_REGISTERED_READS = _derived_standard_reads()
+
+    def test_read_registry_is_exact_and_includes_registered_list_tasks(self):
+        """The ingress set equals (SDK read-only tools) ∩ (tools this seller registers).
+
+        Derived from BOTH sources rather than compared against a second copy of
+        the same literal: a hand-maintained expectation in this file restates
+        the constant it is checking, so registering a ninth read — or the SDK
+        reclassifying one of the eight — moves nothing red.
+        """
+        assert STANDARD_ADCP_READ_TOOLS == self._EXPECTED_REGISTERED_READS, (
+            "STANDARD_ADCP_READ_TOOLS has drifted from the derivation. "
+            f"Missing from the constant: {sorted(self._EXPECTED_REGISTERED_READS - STANDARD_ADCP_READ_TOOLS)}; "
+            f"no longer derivable: {sorted(STANDARD_ADCP_READ_TOOLS - self._EXPECTED_REGISTERED_READS)}"
+        )
+
+    def test_the_derivation_itself_is_not_empty(self):
+        """An empty derivation would make the equality above trivially satisfiable."""
+        assert len(self._EXPECTED_REGISTERED_READS) >= 8
+
+    @pytest.mark.parametrize("tool_name", sorted(_EXPECTED_REGISTERED_READS))
+    def test_valid_supplied_key_is_accepted_for_every_registered_read(self, tool_name):
+        validate_standard_read_idempotency_key(
+            tool_name,
+            {"idempotency_key": "valid-read-key-0001"},
+        )
+
+    @pytest.mark.parametrize("tool_name", sorted(_EXPECTED_REGISTERED_READS))
+    def test_omitted_key_gets_the_31_read_grace(self, tool_name):
+        validate_standard_read_idempotency_key(tool_name, {})
+
+    @pytest.mark.parametrize(
+        ("value", "message"),
+        [
+            (None, "must be a string"),
+            (123, "must be a string"),
+            ("short", "too short"),
+            ("a" * 256, "too long"),
+            ("valid-read-key-0001!", "contains characters"),
+            ("valid-read-key-0001\n", "contains characters"),
+        ],
+        ids=("null", "numeric", "short", "long", "invalid-char", "trailing-newline"),
+    )
+    def test_malformed_supplied_key_uses_one_shape_validator(self, value, message):
+        with pytest.raises(AdCPValidationError, match=message) as exc_info:
+            validate_standard_read_idempotency_key(
+                "get_products",
+                {"idempotency_key": value},
+            )
+
+        assert exc_info.value.field == "idempotency_key"
+
+    def test_nonstandard_local_tool_is_unchanged(self):
+        validate_standard_read_idempotency_key(
+            "list_authorized_properties",
+            {"idempotency_key": None},
+        )

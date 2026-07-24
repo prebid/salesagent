@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import functools
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from pydantic import BaseModel
@@ -89,10 +91,30 @@ class E2EConfig:
     Attributes:
         base_url: Docker stack URL (e.g., ``http://localhost:8092``).
         postgres_url: Docker PostgreSQL URL for factory data writes.
+        test_control_token: Per-run secret for server-visible E2E setup. Normal
+            protocol requests never receive this token.
     """
 
     base_url: str
     postgres_url: str
+    test_control_token: str | None = None
+
+
+@dataclass(frozen=True)
+class WireAuth:
+    """Raw request headers used to exercise a transport's real auth boundary.
+
+    Passing a :class:`WireAuth` as the ``identity`` override tells the harness
+    not to inject a pre-resolved ``ResolvedIdentity``. Each transport receives
+    only the state it would get from its ingress layer, so token extraction and
+    principal resolution remain production code under test.
+    """
+
+    headers: Mapping[str, str]
+
+    def __post_init__(self) -> None:
+        """Snapshot caller-owned mappings so a request cannot mutate later."""
+        object.__setattr__(self, "headers", MappingProxyType(dict(self.headers)))
 
 
 @dataclass(frozen=True)
@@ -105,8 +127,8 @@ class TransportResult:
         error: Exception raised during dispatch, if any.
         raw_response: Unprocessed transport response (httpx.Response, ToolResult, etc.).
         wire_response: Serialized success-path response body as a dict, captured
-            from the real wire (REST HTTP JSON body, MCP structured_content, A2A
-            artifact DataPart). ``None`` on error and on IMPL (no wire — serialize
+            from the real wire (REST/E2E REST HTTP JSON body, MCP
+            structured_content, A2A artifact DataPart). ``None`` on error and on IMPL (no wire — serialize
             the typed ``payload`` instead). Lets success-path tests assert the
             actual serialized shape (e.g. the v3.1 format_id federation contract).
         wire_error_envelope: Raw two-layer error envelope dict captured from
@@ -132,6 +154,16 @@ class TransportResult:
     wire_response: dict[str, Any] | None = None
     wire_error_envelope: dict[str, Any] | None = None
     synthesized_error_envelope: dict[str, Any] | None = None
+    # True ONLY when the dispatcher can positively confirm this call's error
+    # path never had the opportunity to capture real wire — e.g. A2A's
+    # documented "direct raw" mode (env.call_a2a delegates to a *_raw()
+    # wrapper with no Task/Artifact framing to reconstruct from), or a failed
+    # envelope reconstruction. A `wire_error_envelope is None` result on a
+    # real-wire transport is a dispatcher-stashing BUG unless this flag says
+    # otherwise — see tests/bdd/steps/_outcome_helpers.wire_error_envelope,
+    # which uses this to distinguish "should have captured but didn't" from
+    # "this dispatch mode never promised to."
+    wire_capture_unavailable: bool = False
 
     @property
     def is_success(self) -> bool:
@@ -148,6 +180,7 @@ class TransportResult:
         recovery: str | None = None,
         require_suggestion: bool = False,
         message_substr: str | None = None,
+        field: str | None = None,
     ) -> None:
         """Assert this result carries the AdCP two-layer wire error ``code``.
 
@@ -179,3 +212,10 @@ class TransportResult:
         if require_suggestion:
             suggestion = extract_wire_suggestion(envelope)
             assert suggestion, f"Expected a non-empty suggestion in the {code} wire envelope: {envelope}"
+        if field is not None:
+            # Delegates to the one home for the two-layer field pin — step
+            # modules that hand-rolled it had already drifted (one copy checked
+            # only errors[0], so a top-layer regression was invisible there).
+            from tests.helpers import assert_envelope_field
+
+            assert_envelope_field(envelope, field)

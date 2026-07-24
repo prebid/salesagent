@@ -940,7 +940,7 @@ def then_no_new_ad_platform_order(ctx: dict) -> None:
     # (baseline). The replay must not book another.
     adapter_instance = env.mock["adapter"].return_value
     after = adapter_instance.create_media_buy.call_count
-    assert after <= baseline, (
+    assert after == baseline, (
         f"Adapter create_media_buy was called {after} time(s) total, but only "
         f"{baseline} (the original) is allowed — the replay re-booked an ad platform order "
         "instead of serving the cached response"

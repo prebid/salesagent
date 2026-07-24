@@ -3,7 +3,6 @@
 Tests the full flow: create product with pricing_options → get products → create media buy.
 """
 
-import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -17,6 +16,7 @@ from src.core.schemas import CreateMediaBuyRequest, GetProductsRequest, PricingM
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.products import _get_products_impl
+from tests.harness._idempotency import fresh_idempotency_key
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
@@ -289,7 +289,7 @@ async def test_create_media_buy_with_cpm_fixed_pricing(setup_tenant_with_pricing
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+        idempotency_key=fresh_idempotency_key("int-key"),
         packages=[
             create_test_package_request(
                 product_id="prod_cpm_fixed",
@@ -325,7 +325,7 @@ async def test_create_media_buy_with_cpm_auction_pricing(setup_tenant_with_prici
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+        idempotency_key=fresh_idempotency_key("int-key"),
         packages=[
             create_test_package_request(
                 product_id="prod_cpm_auction",
@@ -362,7 +362,7 @@ async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+        idempotency_key=fresh_idempotency_key("int-key"),
         packages=[
             create_test_package_request(
                 product_id="prod_cpm_auction",
@@ -402,7 +402,7 @@ async def test_create_media_buy_with_cpcv_pricing(setup_tenant_with_pricing_prod
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+        idempotency_key=fresh_idempotency_key("int-key"),
         packages=[
             create_test_package_request(
                 product_id="prod_cpcv",
@@ -438,7 +438,7 @@ async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+        idempotency_key=fresh_idempotency_key("int-key"),
         packages=[
             create_test_package_request(
                 product_id="prod_cpcv",
@@ -477,7 +477,7 @@ async def test_create_media_buy_multi_pricing_choose_cpp(setup_tenant_with_prici
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+        idempotency_key=fresh_idempotency_key("int-key"),
         packages=[
             create_test_package_request(
                 product_id="prod_multi",
@@ -513,7 +513,7 @@ async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pr
     start_time, end_time = _get_future_date_range()
     request = CreateMediaBuyRequest(
         brand={"domain": "testbrand.com"},
-        idempotency_key=f"int-key-{uuid.uuid4().hex}",
+        idempotency_key=fresh_idempotency_key("int-key"),
         packages=[
             create_test_package_request(
                 product_id="prod_cpm_fixed",  # Only offers CPM

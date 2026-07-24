@@ -55,7 +55,9 @@ def test_create_media_buy_boundary_validation_preserves_field_suggestion():
 
     error = exc_info.value
     assert error.field == "idempotency_key"
-    assert error.suggestion == ("Provide the required 'idempotency_key' field and resend the request.")
+    assert error.suggestion == (
+        "Provide a client-generated idempotency_key (16-255 characters, using only [A-Za-z0-9_.:-])."
+    )
 
 
 def test_brand_target_audience_must_be_string():

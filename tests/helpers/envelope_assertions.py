@@ -16,13 +16,52 @@ the envelope now requires updating exactly one helper.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from tests.harness.transport import Transport, TransportResult
+
+
+def error_envelope_for_raw_a2a_env(result: TransportResult, transport: Transport) -> dict[str, Any] | None:
+    """Pick the error envelope to assert on for an env whose A2A path is the raw wrapper.
+
+    Some envs (e.g. ``CreativeSyncEnv``) route ``call_a2a`` through the direct
+    ``*_raw`` wrapper rather than ``_run_a2a_handler`` — no Task framing, so no
+    captured wire. For those envs the transports that observe real wire bytes are
+    **REST and MCP** (``wire_error_envelope``); **IMPL and A2A** have only the
+    boundary-builder output (``synthesized_error_envelope``).
+
+    This is deliberately per-transport, not a ``wire or synthesized`` fallback: a
+    ``None`` ``wire_error_envelope`` on REST/MCP is a genuine boundary regression
+    and must surface as a failed ``assert_envelope_shape``, not be silently masked
+    by falling back to the synthesized value.
+    """
+    from tests.harness.transport import Transport
+
+    if transport in (Transport.REST, Transport.MCP):
+        return result.wire_error_envelope
+    return result.synthesized_error_envelope
 
 
 def assert_no_raw_validation_leak(message: str) -> None:
     """Assert a buyer-facing validation message omits raw Pydantic internals."""
     assert "input_value" not in message, f"raw Pydantic input leaked into validation message: {message!r}"
     assert "errors.pydantic.dev" not in message, f"Pydantic documentation URL leaked into message: {message!r}"
+
+
+def assert_envelope_field(envelope: dict, field: str) -> None:
+    """Assert BOTH envelope layers name ``field`` as the offending field.
+
+    The buyer's remediation pointer lives in two places — ``adcp_error.field``
+    and ``errors[0].field`` — and a boundary can drop one while keeping the
+    other. Three step modules hand-rolled this check and one of the copies
+    omitted the top layer, so a top-layer regression was invisible wherever
+    that copy was used. One home, so the copies cannot drift again.
+    """
+    errors_field = (envelope.get("errors") or [{}])[0].get("field")
+    assert errors_field == field, f"errors[0].field={errors_field!r}, expected {field!r}"
+    adcp_field = (envelope.get("adcp_error") or {}).get("field")
+    assert adcp_field == field, f"adcp_error.field={adcp_field!r}, expected {field!r}"
 
 
 def assert_envelope_shape(

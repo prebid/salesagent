@@ -9,7 +9,7 @@ Verifies that:
 
 from adcp.server.helpers import STANDARD_ERROR_CODES
 
-from src.core.exceptions import ERROR_CODE_MAPPING, INTERNAL_CODES, AdCPError
+from src.core.exceptions import ERROR_CODE_MAPPING, INTERNAL_CODES, SPEC_CODES, AdCPError
 
 
 class TestErrorCodeMapping:
@@ -53,9 +53,10 @@ class TestErrorCodeMapping:
         """
         from src.core.exceptions import WIRE_STANDARD_CODES
 
-        # Spec-required codes not yet in WIRE_STANDARD_CODES' supplement
-        spec_codes = {"BILLING_NOT_SUPPORTED"}
-        allowed = set(WIRE_STANDARD_CODES) | INTERNAL_CODES | spec_codes
+        # Spec-required passthrough codes not yet in WIRE_STANDARD_CODES'
+        # supplement (SPEC_CODES is the single source of truth in
+        # src/core/exceptions.py).
+        allowed = set(WIRE_STANDARD_CODES) | INTERNAL_CODES | SPEC_CODES
         violations = []
         for cls in AdCPError.iter_concrete_subclasses():
             code = cls._default_error_code

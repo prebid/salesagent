@@ -66,7 +66,7 @@ from tests.harness.media_buy_update import MediaBuyUpdateEnv
 from tests.harness.product import ProductEnv
 
 # Transport helpers
-from tests.harness.transport import Transport, TransportResult
+from tests.harness.transport import Transport, TransportResult, WireAuth
 
 __all__ = [
     # Helpers
@@ -91,4 +91,5 @@ __all__ = [
     # Transport
     "Transport",
     "TransportResult",
+    "WireAuth",
 ]

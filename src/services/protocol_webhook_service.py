@@ -16,91 +16,44 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
 import requests
 from a2a.types import Task, TaskStatusUpdateEvent
-from adcp import extract_webhook_result_data, get_adcp_signed_headers_for_webhook
+from adcp import extract_webhook_result_data, sign_legacy_webhook, to_wire_dict
 from adcp.types import McpWebhookPayload
-from google.protobuf.json_format import MessageToDict
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.lifecycle import register_shutdown
+from src.core.logging_config import scrub_control_chars
+from src.core.security.webhook_http import (
+    BEARER_AUTH_SCHEME,
+    HMAC_AUTH_SCHEME,
+    UnsafeWebhookTargetError,
+    create_pinned_webhook_session,
+    is_auth_scheme,
+    post_webhook_status_async,
+)
 
 logger = logging.getLogger(__name__)
 
 
-# FIXME(gh-#1299): behaviour-identical backport of adcp 5.4.0
-# ``adcp.to_wire_dict`` + ``_normalize_a2a_task_state_to_v03`` (adcp #602).
-# salesagent is pinned to adcp 4.3.0, which predates that public seam.
-# Delete this block and call ``adcp.to_wire_dict()`` directly once salesagent
-# bumps adcp to the version that ships it.
-def _normalize_message_role(message: dict[str, Any]) -> None:
-    """Rewrite a2a-sdk 1.0 ``ROLE_*`` to the A2A 0.3 lowercase wire form."""
-    role = message.get("role")
-    if isinstance(role, str) and role.startswith("ROLE_"):
-        message["role"] = role[len("ROLE_") :].lower()
+def _canonical_body_bytes(payload_dict: dict[str, Any]) -> bytes:
+    """Serialize a webhook payload to the canonical on-wire bytes.
 
-
-def _normalize_a2a_task_state_to_v03(payload: dict[str, Any]) -> None:
-    """Rewrite a2a-sdk 1.0 ``TASK_STATE_*`` / ``ROLE_*`` enums to A2A 0.3
-    lowercase wire strings in-place. Buyer receivers parse the 0.3 shape
-    (``"state": "completed"``); the 1.0 protobuf JSON emitter produces
-    ``"state": "TASK_STATE_COMPLETED"`` by default.
+    Compact separators (``","``/``":"``) per the adcp canonical form
+    (adcontextprotocol/adcp#2478) — byte-for-byte identical to what
+    ``sign_legacy_webhook`` computes its HMAC over. These EXACT bytes are both
+    signed and transmitted (``data=<bytes>``, never ``json=``), so the signature
+    can never cover different bytes than the receiver sees on the wire.
     """
-    status = payload.get("status")
-    if isinstance(status, dict):
-        state = status.get("state")
-        if isinstance(state, str) and state.startswith("TASK_STATE_"):
-            # Spec uses hyphens for multi-word states (e.g. "auth-required").
-            status["state"] = state[len("TASK_STATE_") :].lower().replace("_", "-")
-        message = status.get("message")
-        if isinstance(message, dict):
-            _normalize_message_role(message)
-    history = payload.get("history")
-    if isinstance(history, list):
-        for entry in history:
-            if isinstance(entry, dict):
-                _normalize_message_role(entry)
-    if "role" in payload:
-        _normalize_message_role(payload)
-
-
-def _to_wire_dict(payload: Any) -> dict[str, Any]:
-    """Serialize any AdCP webhook payload to a JSON-ready dict.
-
-    Behaviour-identical backport of adcp 5.4.0 ``adcp.to_wire_dict``:
-
-    * a2a ``Task`` / ``TaskStatusUpdateEvent`` (protobuf, a2a-sdk 1.0+) ->
-      ``MessageToDict(preserving_proto_field_name=False)`` so JSON keys are
-      the A2A wire camelCase (``id``, ``contextId``, ``taskId``), then enum
-      values normalized from the 1.0 form (``TASK_STATE_COMPLETED``,
-      ``ROLE_AGENT``) to the 0.3-spec lowercase form (``completed``,
-      ``agent``).
-    * Any Pydantic model (``McpWebhookPayload`` ...) ->
-      ``model_dump(mode="json", exclude_none=True)``.
-    * ``Mapping`` -> coerced to ``dict`` (legacy hand-built passthrough).
-    """
-    if isinstance(payload, (Task, TaskStatusUpdateEvent)):
-        data: dict[str, Any] = MessageToDict(payload, preserving_proto_field_name=False)
-        _normalize_a2a_task_state_to_v03(data)
-        return data
-    if hasattr(payload, "model_dump"):
-        return cast(dict[str, Any], payload.model_dump(mode="json", exclude_none=True))
-    if isinstance(payload, Mapping):
-        return dict(payload)
-    raise TypeError(
-        f"Unsupported webhook payload type {type(payload).__name__}: expected "
-        "a2a Task / TaskStatusUpdateEvent (protobuf), an AdCP Pydantic model "
-        "(e.g. McpWebhookPayload), or a Mapping[str, Any]."
-    )
+    return json.dumps(payload_dict, separators=(",", ":")).encode("utf-8")
 
 
 def _normalize_localhost_for_docker(url: str) -> str:
@@ -133,7 +86,7 @@ class ProtocolWebhookService:
     """
 
     def __init__(self):
-        self._session = requests.Session()
+        self._session = create_pinned_webhook_session()
 
     async def send_notification(
         self,
@@ -155,8 +108,12 @@ class ProtocolWebhookService:
         """
         if not push_notification_config or not push_notification_config.url:
             # TODO: @yusuf - Double check logging actually works for Task, TaskStatusUpdateEvent and McpWebhookPayload types
+            # Log the payload's TYPE, not its content: the payload carries
+            # buyer-controlled strings, and this seam runs in plain-text log
+            # mode on self-hosted deploys.
             logger.debug(
-                f"No webhook URL configured in the push notification. Here's payload: {payload}, skipping notification"
+                "No webhook URL configured in the push notification; skipping notification (payload type: %s)",
+                type(payload).__name__,
             )
             return False
 
@@ -175,31 +132,44 @@ class ProtocolWebhookService:
             ),
             # DO NOT log authentication_token - security risk
         }
-        logger.info(f"push_notification_config (sanitized): {safe_config}")
+        logger.info(f"push_notification_config (sanitized): {scrub_control_chars(str(safe_config))}")
 
-        # Serialize payload to dict at the delivery boundary (for HMAC signing
-        # and JSON send). Single seam: a2a protobuf -> camelCase + A2A 0.3
-        # lowercase enum values; Pydantic -> model_dump; Mapping -> dict.
-        payload_dict: dict[str, Any] = _to_wire_dict(payload)
+        # The pinned SDK owns the canonical A2A protobuf / MCP Pydantic wire
+        # conversion; do not fork that behavior locally.
+        payload_dict: dict[str, Any] = to_wire_dict(payload)
+
+        # Serialize the body to exact bytes ONCE. Whatever we sign, we transmit
+        # THESE bytes verbatim (``data=body_bytes`` in _post, never ``json=`` which
+        # would re-serialize with spaced separators and break the signature).
+        body_bytes: bytes
 
         # Apply authentication based on schemes
         if (
-            push_notification_config.authentication_type == "HMAC-SHA256"
+            is_auth_scheme(push_notification_config.authentication_type, HMAC_AUTH_SCHEME)
             and push_notification_config.authentication_token
         ):
-            # Sign payload with HMAC-SHA256
+            # Legacy HMAC-SHA256 profile. sign_legacy_webhook returns the signature
+            # headers AND the exact compact body bytes it signed — we send those bytes,
+            # guaranteeing the HMAC covers precisely what the receiver verifies.
             timestamp = str(int(time.time()))
-            get_adcp_signed_headers_for_webhook(
-                headers, push_notification_config.authentication_token, timestamp, payload_dict
+            sig_headers, body_bytes = sign_legacy_webhook(
+                push_notification_config.authentication_token, payload_dict, timestamp=timestamp
             )
-
-        elif push_notification_config.authentication_type == "Bearer" and push_notification_config.authentication_token:
-            # Use Bearer token authentication
-            headers["Authorization"] = f"Bearer {push_notification_config.authentication_token}"
+            headers.update(sig_headers)
+        else:
+            # Bearer or unauthenticated: no signature, but still transmit the canonical
+            # compact bytes so the body is deterministic and matches the signed form used
+            # everywhere else.
+            body_bytes = _canonical_body_bytes(payload_dict)
+            if (
+                is_auth_scheme(push_notification_config.authentication_type, BEARER_AUTH_SCHEME)
+                and push_notification_config.authentication_token
+            ):
+                headers["Authorization"] = f"Bearer {push_notification_config.authentication_token}"
 
         # Send notification with retry logic and logging
         return await self._send_with_retry_and_logging(
-            url=url, payload=payload_dict, headers=headers, metadata=metadata
+            url=url, payload=payload_dict, body=body_bytes, headers=headers, metadata=metadata
         )
 
     @staticmethod
@@ -245,19 +215,26 @@ class ProtocolWebhookService:
                 )
                 session.commit()
         except Exception as e:
-            logger.error(f"Failed to write webhook delivery log: {e}")
+            logger.error(f"Failed to write webhook delivery log: {scrub_control_chars(str(e))}")
 
     async def _send_with_retry_and_logging(
         self,
         url: str,
         payload: dict[str, Any],
+        body: bytes,
         headers: dict,
         metadata: dict[str, Any],
         max_attempts: int = 3,
     ) -> bool:
-        """Send webhook with exponential backoff retry logic, logging, and audit trail."""
-        # Calculate payload size for metrics
-        payload_size_bytes = len(json.dumps(payload).encode("utf-8"))
+        """Send webhook with exponential backoff retry logic, logging, and audit trail.
+
+        ``body`` is the exact serialized bytes to transmit — the same bytes any
+        signature header covers. It is sent verbatim via ``data=`` so the wire body
+        can never diverge from the signed body. ``payload`` is the parsed dict, used
+        only for metadata extraction (task_id, notification_type, sequence).
+        """
+        # Payload size metric reflects the ACTUAL transmitted bytes.
+        payload_size_bytes = len(body)
 
         task_type = metadata["task_type"] if "task_type" in metadata else None
         tenant_id = metadata["tenant_id"] if "tenant_id" in metadata else None
@@ -290,18 +267,30 @@ class ProtocolWebhookService:
 
         for attempt in range(max_attempts):
             try:
-                logger.info(f"Sending webhook for task {task_id} to {url} (attempt {attempt + 1}/{max_attempts})")
+                logger.info(f"Sending webhook for task {task_id} (attempt {attempt + 1}/{max_attempts})")
 
-                def _post() -> requests.Response:
-                    return self._session.post(url, json=payload, headers=headers, timeout=10.0)
-
-                response = await asyncio.to_thread(_post)
-                response.raise_for_status()
+                status_code = await post_webhook_status_async(
+                    self._session,
+                    url,
+                    body=body,
+                    headers=headers,
+                    timeout=10.0,
+                )
+                # Require a 2xx. raise_for_status() does NOT raise for 3xx, and with
+                # redirects disabled a 3xx is a REFUSED redirect — a failed delivery,
+                # not a success. Treat any non-2xx uniformly via the HTTPError path.
+                if not (200 <= status_code < 300):
+                    response = requests.Response()
+                    response.status_code = status_code
+                    raise requests.HTTPError(
+                        f"Webhook returned non-2xx status {status_code}",
+                        response=response,
+                    )
 
                 # Calculate response time
                 response_time_ms = int((time.time() - start_time) * 1000)
 
-                logger.info(f"Successfully sent webhook for task {task_id} (status: {response.status_code})")
+                logger.info(f"Successfully sent webhook for task {task_id} (status: {status_code})")
 
                 # Write to webhook_delivery_log (success)
                 if (
@@ -321,7 +310,7 @@ class ProtocolWebhookService:
                         sequence_number=sequence_number,
                         notification_type=notification_type,
                         attempt_count=attempt + 1,
-                        http_status_code=response.status_code,
+                        http_status_code=status_code,
                         payload_size_bytes=payload_size_bytes,
                         response_time_ms=response_time_ms,
                         completed_at=datetime.now(UTC),
@@ -337,13 +326,17 @@ class ProtocolWebhookService:
                 return True
 
             except requests.HTTPError as e:
-                status_code = e.response.status_code if e.response else None
+                error_status_code = e.response.status_code if e.response is not None else None
                 response_time_ms = int((time.time() - start_time) * 1000)
-                error_message = f"HTTP {status_code}: {str(e)}"
+                error_message = f"HTTP {error_status_code}: {str(e)}"
 
-                # Don't retry on 4xx errors (client errors - permanent failures)
-                if status_code and 400 <= status_code < 500:
-                    logger.error(f"Webhook failed for task {task_id} with client error {status_code} - not retrying")
+                # Refused redirects and client errors are permanent for this
+                # delivery attempt. Retrying cannot make a 3xx/4xx target safe
+                # or valid, and would multiply outbound traffic.
+                if error_status_code and 300 <= error_status_code < 500:
+                    logger.error(
+                        f"Webhook failed for task {task_id} with permanent HTTP {error_status_code} - not retrying"
+                    )
 
                     # Write to webhook_delivery_log (failed)
                     if (
@@ -363,7 +356,7 @@ class ProtocolWebhookService:
                             sequence_number=sequence_number,
                             notification_type=notification_type,
                             attempt_count=attempt + 1,
-                            http_status_code=status_code,
+                            http_status_code=error_status_code,
                             error_message=error_message,
                             payload_size_bytes=payload_size_bytes,
                             response_time_ms=response_time_ms,
@@ -372,7 +365,7 @@ class ProtocolWebhookService:
 
                     # Log to audit system (failure)
                     if audit_logger:
-                        audit_logger.log_warning(f"{task_type} webhook failed with client error {status_code}")
+                        audit_logger.log_warning(f"{task_type} webhook failed with permanent HTTP {error_status_code}")
 
                     return False
 
@@ -380,7 +373,7 @@ class ProtocolWebhookService:
                 if attempt < max_attempts - 1:
                     wait_seconds = min(2**attempt, 60)  # Exponential backoff, max 60 seconds
                     logger.warning(
-                        f"Webhook failed for task {task_id}: HTTP {status_code}. "
+                        f"Webhook failed for task {task_id}: HTTP {error_status_code}. "
                         f"Retrying in {wait_seconds}s (attempt {attempt + 1}/{max_attempts})"
                     )
 
@@ -391,8 +384,7 @@ class ProtocolWebhookService:
                         and tenant_id
                         and principal_id
                     ):
-                        next_retry = datetime.now(UTC).replace(microsecond=0)
-                        next_retry = next_retry.replace(second=next_retry.second + int(wait_seconds))
+                        next_retry = datetime.now(UTC).replace(microsecond=0) + timedelta(seconds=wait_seconds)
                         self._write_delivery_log(
                             log_id=log_id,
                             tenant_id=tenant_id,
@@ -404,7 +396,7 @@ class ProtocolWebhookService:
                             sequence_number=sequence_number,
                             notification_type=notification_type,
                             attempt_count=attempt + 1,
-                            http_status_code=status_code,
+                            http_status_code=error_status_code,
                             error_message=error_message,
                             payload_size_bytes=payload_size_bytes,
                             response_time_ms=response_time_ms,
@@ -413,7 +405,9 @@ class ProtocolWebhookService:
 
                     await asyncio.sleep(wait_seconds)
                 else:
-                    logger.error(f"Webhook failed for task {task_id} after {max_attempts} attempts: HTTP {status_code}")
+                    logger.error(
+                        f"Webhook failed for task {task_id} after {max_attempts} attempts: HTTP {error_status_code}"
+                    )
 
                     # Write to webhook_delivery_log (failed after all retries)
                     if (
@@ -433,7 +427,7 @@ class ProtocolWebhookService:
                             sequence_number=sequence_number,
                             notification_type=notification_type,
                             attempt_count=max_attempts,
-                            http_status_code=status_code,
+                            http_status_code=error_status_code,
                             error_message=error_message,
                             payload_size_bytes=payload_size_bytes,
                             response_time_ms=response_time_ms,
@@ -445,6 +439,15 @@ class ProtocolWebhookService:
                         audit_logger.log_warning(f"{task_type} webhook failed after {max_attempts} attempts")
 
                     return False
+
+            except UnsafeWebhookTargetError as e:
+                # SSRF, embedded-credential, and proxy-bypass refusals are
+                # deterministic policy failures. Never retry them as if they
+                # were transient network outages.
+                logger.error(f"Webhook target refused for task {task_id} - not retrying ({type(e).__name__})")
+                if audit_logger:
+                    audit_logger.log_warning(f"{task_type} webhook target refused by security policy")
+                return False
 
             except requests.RequestException as e:
                 response_time_ms = int((time.time() - start_time) * 1000)
@@ -460,7 +463,8 @@ class ProtocolWebhookService:
                     await asyncio.sleep(wait_seconds)
                 else:
                     logger.error(
-                        f"Webhook failed for task {task_id} after {max_attempts} attempts: {type(e).__name__} - {e}"
+                        f"Webhook failed for task {task_id} after {max_attempts} attempts: "
+                        f"{type(e).__name__} - {scrub_control_chars(str(e))}"
                     )
 
                     # Write to webhook_delivery_log (failed)
@@ -494,7 +498,7 @@ class ProtocolWebhookService:
                     return False
 
             except Exception as e:
-                logger.error(f"Unexpected error sending webhook for task {task_id}: {e}")
+                logger.error(f"Unexpected error sending webhook for task {task_id}: {scrub_control_chars(str(e))}")
 
                 # Write to webhook_delivery_log (unexpected failure)
                 if (

@@ -237,7 +237,10 @@ class TestA2AJsonRpcProtocol:
 
     def test_response_has_jsonrpc_field(self, client, auth_headers):
         """Response must have jsonrpc: '2.0' field."""
-        payload = _build_jsonrpc("get_products", {"brief": "test"})
+        payload = _build_jsonrpc(
+            "get_products",
+            {"brief": "test", "idempotency_key": "valid-read-key-0001"},
+        )
         response = client.post("/a2a", json=payload, headers=auth_headers)
         body = response.json()
         assert body.get("jsonrpc") == "2.0", "Response must have jsonrpc: '2.0'"
@@ -285,6 +288,36 @@ class TestA2AResponseShape:
             data = _extract_artifact_data(result)
             assert "products" in data, "get_products response must have 'products' field"
             assert isinstance(data["products"], list)
+
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
+    @patch("src.core.tools.products._get_products_impl")
+    def test_explicit_null_read_key_is_a_real_a2a_validation_envelope(
+        self,
+        mock_impl,
+        mock_resolve,
+        client,
+        auth_headers,
+    ):
+        """A2A rejects supplied null before the read handler, not as a server error."""
+        from tests.helpers import assert_envelope_shape
+
+        response = client.post(
+            "/a2a",
+            json=_build_jsonrpc(
+                "get_products",
+                {"brief": "test", "idempotency_key": None},
+            ),
+            headers=auth_headers,
+        )
+        data = _extract_artifact_data(_extract_jsonrpc_result(response))
+
+        assert_envelope_shape(
+            data,
+            "VALIDATION_ERROR",
+            recovery="correctable",
+            message_substr="idempotency_key must be a string",
+        )
+        mock_impl.assert_not_called()
 
     @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.core.tools.media_buy_create._create_media_buy_impl")
@@ -339,7 +372,13 @@ class TestA2AResponseShape:
 
         mock_impl.return_value = SyncCreativesResponse(creatives=[], failed_creatives=[])
 
-        payload = _build_jsonrpc("sync_creatives", {"creatives": []})
+        payload = _build_jsonrpc(
+            "sync_creatives",
+            {
+                "creatives": [],
+                "idempotency_key": "unit-test-key-a2a-shape-0001",
+            },
+        )
         response = client.post("/a2a", json=payload, headers=auth_headers)
         body = response.json()
 
@@ -348,6 +387,73 @@ class TestA2AResponseShape:
             assert "creatives" in data or "synced_creatives" in data, (
                 "sync_creatives response must have 'creatives' field"
             )
+
+    @pytest.mark.parametrize(
+        ("skill", "parameters"),
+        [
+            ("sync_accounts", {"accounts": [], "idempotency_key": 123}),
+            ("sync_creatives", {"creatives": [], "idempotency_key": 123}),
+        ],
+    )
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
+    def test_sync_rejects_non_string_idempotency_key_on_wire(
+        self, mock_resolve, skill, parameters, client, auth_headers
+    ):
+        """A raw A2A JSON number is buyer-correctable, never a transient server error."""
+        from tests.helpers import assert_envelope_shape
+
+        response = client.post("/a2a", json=_build_jsonrpc(skill, parameters), headers=auth_headers)
+        data = _extract_artifact_data(_extract_jsonrpc_result(response))
+
+        assert_envelope_shape(
+            data,
+            "VALIDATION_ERROR",
+            recovery="correctable",
+            message_substr="idempotency_key must be a string",
+        )
+
+    @pytest.mark.parametrize(
+        ("parameters", "message_substr"),
+        [
+            ({"creatives": []}, "idempotency_key is required"),
+            ({"creatives": [], "idempotency_key": None}, "idempotency_key is required"),
+            ({"creatives": [], "idempotency_key": ""}, "idempotency_key is too short"),
+            ({"creatives": [], "idempotency_key": "short-key"}, "idempotency_key is too short"),
+            ({"creatives": [], "idempotency_key": "a" * 256}, "idempotency_key is too long"),
+            (
+                {"creatives": [], "idempotency_key": "valid-key-length-0001!"},
+                "idempotency_key contains characters",
+            ),
+            (
+                {"creatives": [], "idempotency_key": "valid-key-length-0001\n"},
+                "idempotency_key contains characters",
+            ),
+            ({"creatives": [], "idempotency_key": 123}, "idempotency_key must be a string"),
+        ],
+        ids=("missing", "null", "empty", "short", "long", "invalid-char", "trailing-newline", "numeric"),
+    )
+    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
+    def test_sync_creatives_invalid_key_matrix_is_real_wire_and_never_calls_core(
+        self, mock_resolve, parameters, message_substr, client, auth_headers
+    ):
+        """The real A2A handler owns malformed-key rejection, not the raw seam."""
+        from tests.helpers import assert_envelope_shape
+
+        with patch("src.a2a_server.adcp_a2a_server.core_sync_creatives_tool") as mock_core:
+            response = client.post(
+                "/a2a",
+                json=_build_jsonrpc("sync_creatives", parameters),
+                headers=auth_headers,
+            )
+
+        data = _extract_artifact_data(_extract_jsonrpc_result(response))
+        assert_envelope_shape(
+            data,
+            "VALIDATION_ERROR",
+            recovery="correctable",
+            message_substr=message_substr,
+        )
+        mock_core.assert_not_called()
 
     @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.a2a_server.adcp_a2a_server.core_list_creatives_tool")
@@ -385,13 +491,17 @@ class TestA2AResponseShape:
             revision=1,
         )
 
-        payload = _build_jsonrpc("update_media_buy", {"media_buy_id": "mb-test-1", "paused": False})
+        payload = _build_jsonrpc(
+            "update_media_buy",
+            {
+                "media_buy_id": "mb-test-1",
+                "paused": False,
+                "idempotency_key": "a2a-shape-key-0001",
+            },
+        )
         response = client.post("/a2a", json=payload, headers=auth_headers)
-        body = response.json()
-
-        if "result" in body:
-            data = _extract_artifact_data(body["result"])
-            assert "media_buy_id" in data, "update_media_buy response must have 'media_buy_id'"
+        data = _extract_artifact_data(_extract_jsonrpc_result(response))
+        assert "media_buy_id" in data, "update_media_buy response must have 'media_buy_id'"
 
     @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.a2a_server.adcp_a2a_server.core_get_media_buy_delivery_tool")

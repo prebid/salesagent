@@ -14,6 +14,7 @@ from typing import Any, NoReturn, cast, get_args
 from fastapi.responses import JSONResponse
 from fastmcp.exceptions import ToolError
 from fastmcp.server import Context as FastMCPContext
+from pydantic import BaseModel
 
 from src.core.exceptions import (
     ERROR_CODE_MAPPING,
@@ -260,6 +261,32 @@ def record_boundary_error(
         logger.warning("Failed to log %s error to audit log: %s", transport_upper, e)
 
 
+def record_boundary_error_for_identity(
+    transport: str,
+    operation: str,
+    error: Exception,
+    identity: Any,
+) -> None:
+    """``record_boundary_error`` with the log fields read off a ``ResolvedIdentity``.
+
+    The transport boundaries (MCP middleware, A2A dispatch) that catch an error
+    *before* the tool wrapper runs all need the same identity-to-log-fields
+    projection: ``tenant_id`` and ``principal_id`` off the resolved identity,
+    with ``principal_id`` degrading to ``"anonymous"`` for the downstream sinks.
+    ``getattr`` is used (not attribute access) because a boundary may hold a
+    partially-built or ``None`` identity when the failure is exactly that auth
+    or negotiation ran before a full identity was resolved. Folding it here
+    keeps that projection in one place instead of hand-rolled at each boundary.
+    """
+    record_boundary_error(
+        transport,
+        operation,
+        error,
+        tenant_id=getattr(identity, "tenant_id", None),
+        principal_id=getattr(identity, "principal_id", None) or "anonymous",
+    )
+
+
 def _log_tool_error(tool_name: str, error: Exception, tenant_id: str | None, principal_id: str | None) -> None:
     """Backwards-compatible MCP wrapper for record_boundary_error.
 
@@ -269,7 +296,7 @@ def _log_tool_error(tool_name: str, error: Exception, tenant_id: str | None, pri
     record_boundary_error("mcp", tool_name, error, tenant_id=tenant_id, principal_id=principal_id)
 
 
-def _translate_to_tool_error(error: Exception) -> NoReturn:
+def translate_to_tool_error(error: Exception, *, context: Any = None) -> NoReturn:
     """Translate typed exceptions to AdCPToolError at the MCP boundary.
 
     AdCPError → AdCPToolError carrying a two-layer envelope built by
@@ -291,8 +318,26 @@ def _translate_to_tool_error(error: Exception) -> NoReturn:
     # AdCPError; the wrap-vs-passthrough branches produce byte-identical
     # AdCPToolError values, so the function unconditionally builds the
     # envelope and chains the original exception for traceback fidelity.
-    typed = normalize_to_adcp_error(error)
+    typed = normalize_to_adcp_error(error, context=context)
     raise AdCPToolError(build_two_layer_error_envelope(typed), status_code=typed.status_code) from error
+
+
+def _reject_at_mcp_boundary(
+    tool_name: str,
+    error: AdCPError,
+    identity: Any,
+    *,
+    context: Any = None,
+) -> NoReturn:
+    """Record and translate a typed error rejected before MCP tool dispatch.
+
+    MCP middleware failures bypass ``with_error_logging`` because the tool
+    wrapper never runs. Both middleware layers therefore use this boundary
+    helper to keep observability and the two-layer wire translation coupled.
+    """
+    error = normalize_to_adcp_error(error, context=context)
+    record_boundary_error_for_identity("mcp", tool_name, error, identity)
+    translate_to_tool_error(error)
 
 
 def _handle_tool_exception(tool_func: Callable, error: Exception, args: tuple, kwargs: dict) -> NoReturn:
@@ -320,7 +365,12 @@ def _handle_tool_exception(tool_func: Callable, error: Exception, args: tuple, k
 
     tenant_id, principal_id = _extract_tenant_and_principal(context) if context else (None, None)
     _log_tool_error(tool_func.__name__, error, tenant_id, principal_id)
-    _translate_to_tool_error(error)
+    application_context = kwargs.get("context")
+    if application_context is None:
+        request = kwargs.get("req")
+        if isinstance(request, BaseModel) and "context" in type(request).model_fields:
+            application_context = request.model_dump(include={"context"}, mode="python").get("context")
+    translate_to_tool_error(error, context=application_context)
 
 
 def with_error_logging(tool_func: Callable) -> Callable:

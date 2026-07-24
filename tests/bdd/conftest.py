@@ -69,6 +69,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_brand_shorthand",
     "tests.bdd.steps.domain.compat_normalization",
+    "tests.bdd.steps.domain.uc010_version_negotiation",
 ]
 
 # ---------------------------------------------------------------------------
@@ -2102,9 +2103,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Graduated: T-UC-019-partition-principal-invalid identity_missing (impl/a2a/mcp pass)
             # — moved to _UC019_PARAM_XFAIL for selective identity_missing exclusion.
             # Extension errors — error code mismatches / not implemented.
-            # ext-a (no-auth get_media_buys): once wired, the missing-credentials
-            # path emits AUTH_TOKEN_INVALID, not the spec's AUTH_REQUIRED — a
-            # pre-existing auth-code gap unrelated to this PR's status work.
+            # ext-a (no-auth get_media_buys): not wired yet. (The former
+            # AUTH_TOKEN_INVALID-vs-AUTH_REQUIRED code gap was resolved by the
+            # #1417 reconciliation — the path now emits the spec's AUTH_REQUIRED.)
             "T-UC-019-ext-a",
             "T-UC-019-ext-b",
             "T-UC-019-ext-c",
@@ -2799,13 +2800,12 @@ _TRANSPORT_SPECIFIC_TAGS = {"rest", "mcp", "a2a"}
 # create_media_buy on the wire, so they now parametrize across a2a/mcp/rest.)
 _IMPL_ONLY: set[tuple[str, str]] = set()
 
-# UC-002 idempotency scenarios wired to MediaBuyCreateEnv (run a real
-# create_media_buy across all 4 transports). Only these two @idempotency-key
-# tags are live; the rest stay blanket-xfailed in _harness_env until their
-# production gaps + steps are wired.
+# UC-002 required-key and idempotency-replay scenarios wired to
+# MediaBuyCreateEnv (run a real create_media_buy across all 4 transports).
 _UC002_IDEMPOTENCY_WIRED: set[str] = {
     "T-UC-002-v31-idempotency-replay",
     "T-UC-002-v31-idempotency-missing",
+    "T-UC-002-v31-idempotency-pattern-invalid",
 }
 
 # UC-002 manual-approval scenario wired to MediaBuyCreateEnv (PR #1567 round-2 item 2):
@@ -2815,6 +2815,29 @@ _UC002_IDEMPOTENCY_WIRED: set[str] = {
 # scenarios (reject/approve flows) stay dormant until their steps are wired.
 _UC002_MANUAL_APPROVAL_WIRED: set[str] = {
     "T-UC-002-alt-manual",
+}
+
+# UC-010 scenarios wired to CapabilitiesEnv — the schema-derived
+# VERSION_UNSUPPORTED set plus the hand-authored release-resolution boundaries
+# in BR-UC-010-version-negotiation.feature (#1546). Any OTHER UC-010 scenario
+# that binds steps raises RuntimeError at the harness gate (fail-loud, not
+# auto-xfail — the makereport hook covers only StepDefinitionNotFoundError /
+# NotImplementedError); scenarios with no @scenario binding are never collected.
+_UC010_VERSION_NEGOTIATION_WIRED: set[str] = {
+    "T-UC-010-v31-version-unsupported",
+    "T-UC-010-v31-version-unsupported-major-fallback",
+    "T-UC-010-v31-version-unsupported-build-version-advisory",
+    "T-UC-010-v31-version-unsupported-details-bounds",
+    "T-UC-010-v31-version-unsupported-cross-major",
+    "T-UC-010-v31-version-unsupported-sub-min",
+    "T-UC-010-v31-version-unsupported-prerelease",
+}
+
+_UC010_CAPABILITY_FILTER_WIRED: set[str] = {
+    "T-UC-010-local-capability-filter-v311",
+    "T-UC-010-local-capability-filter-invalid-v311",
+    "T-UC-010-local-capability-filter-empty-v311",
+    "T-UC-010-local-capability-filter-unsupported-v311",
 }
 
 
@@ -2941,7 +2964,11 @@ def e2e_stack():
         postgres_url = (
             f"postgresql://adcp_user:secure_password_change_me@localhost:{os.environ.get('POSTGRES_PORT', '5435')}/adcp"
         )
-    return E2EConfig(base_url=base_url, postgres_url=postgres_url)
+    return E2EConfig(
+        base_url=base_url,
+        postgres_url=postgres_url,
+        test_control_token=os.environ.get("ADCP_TEST_CONTROL_TOKEN"),
+    )
 
 
 def _reset_e2e_db(e2e_config) -> None:
@@ -3078,6 +3105,8 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "UC-011"
     if any(t.startswith("T-UC-018") for t in marker_names):
         return "UC-018"
+    if any(t.startswith("T-UC-010") for t in marker_names):
+        return "UC-010"
     if any(t.startswith("T-UC-019") for t in marker_names):
         return "UC-019"
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
@@ -3253,13 +3282,10 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 # Tells the shared When step to dispatch a FULL create through
                 # the parametrized transport (not account resolution). (PR #1567)
                 ctx["uc002_full_create"] = True
-            # v3.1 idempotency replay/missing scenarios — MediaBuyCreateEnv runs a
-            # real create_media_buy through every transport (the replay scenario
-            # creates once, then sends the same key again to exercise the
-            # production replay path). Only the two wired tags go live here; the
-            # remaining @idempotency-key scenarios (in-flight, expired, conflict,
-            # pattern, canonical) stay blanket-xfailed below until their
-            # production gaps + steps are wired.
+            # Required-key validation and idempotency replay run a real
+            # create_media_buy through every wire transport (a2a/mcp/rest). The
+            # replay scenario creates once, then repeats the same key and proves
+            # the second call replays the original without re-executing.
             from tests.harness.media_buy_create import MediaBuyCreateEnv
 
             with _db_scope_for(request, e2e_config), MediaBuyCreateEnv(e2e_config=e2e_config) as env:
@@ -3299,7 +3325,12 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             "T-UC-003-approval-tenant",
             "T-UC-003-approval-adapter",
         }
-        if any(t.startswith("T-UC-003-ext-") for t in marker_names) or (marker_names & _UC003_TARGETING_OVERLAY):
+        _UC003_REQUIRED_IDEMPOTENCY = {"T-UC-003-local-required-idempotency-v311"}
+        if (
+            any(t.startswith("T-UC-003-ext-") for t in marker_names)
+            or (marker_names & _UC003_TARGETING_OVERLAY)
+            or (marker_names & _UC003_REQUIRED_IDEMPOTENCY)
+        ):
             # Extension/error scenarios: budget, currency, auth, creative,
             # placement, keyword, and immutable-field validation on the update
             # path. MediaBuyDualEnv extends MediaBuyCreateEnv with update-module
@@ -3361,7 +3392,12 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
     elif uc == "UC-006":
         marker_names = {m.name for m in request.node.iter_markers()}
-        if marker_names & {"account", "creative-invariant", "BR-RULE-034"}:
+        if marker_names & {
+            "account",
+            "creative-invariant",
+            "creative-idempotency-v311",
+            "BR-RULE-034",
+        }:
             # CreativeSyncEnv exercises the full sync_creatives transport wrappers.
             # @account scenarios drive account resolution (enrich_identity_with_account());
             # @creative-invariant scenarios (#1399 R3-F2) drive the success-variant
@@ -3369,9 +3405,14 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # @BR-RULE-034 scenarios drive cross-principal isolation (triple-key
             # creative lookup) — dormant until the cross-principal existence-gate
             # fix (PR #1430 review) made the surface safe to grade.
-            from tests.harness.creative_sync import CreativeSyncEnv
+            # The hand-authored v3.1.1 idempotency companion is also graded now
+            # that every sync transport requires and validates the buyer-supplied
+            # key. Keep it out of the generated adcp-req feature until that
+            # derivative source is reconciled with the pinned authoritative spec.
+            from tests.harness.creative_sync import CreativeSyncEnv, CreativeSyncIdempotencyWireEnv
 
-            with _db_scope_for(request, e2e_config), CreativeSyncEnv(e2e_config=e2e_config) as env:
+            env_cls = CreativeSyncIdempotencyWireEnv if "creative-idempotency-v311" in marker_names else CreativeSyncEnv
+            with _db_scope_for(request, e2e_config), env_cls(e2e_config=e2e_config) as env:
                 ctx["env"] = env
                 yield
         else:
@@ -3418,6 +3459,39 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             pytest.xfail(
                 "UC-018 harness wired only for the @list-after-sync (#1405), @concept-id (#1407), "
                 "and @BR-RULE-034 isolation (#1503) scenarios"
+            )
+
+    elif uc == "UC-010":
+        # Wired: the schema-derived VERSION_UNSUPPORTED scenarios and the
+        # hand-authored resolution boundaries (#1546). CapabilitiesEnv carries
+        # the negotiation envelope through each transport's boundary validation.
+        # The generated driver collects only scenarios with complete bindings;
+        # the hand-authored filter companion replaces its stale ext-d cases.
+        marker_names = {m.name for m in request.node.iter_markers()}
+        # @context scenarios (BR-RULE-043 / POST-S9): the impl already echoes
+        # req.context unchanged and the MCP/A2A wrappers + the REST GET context=
+        # query param all forward it — CapabilitiesEnv grades the round-trip on
+        # every transport.
+        if (
+            marker_names & _UC010_VERSION_NEGOTIATION_WIRED
+            or marker_names & _UC010_CAPABILITY_FILTER_WIRED
+            or "context" in marker_names
+        ):
+            from tests.harness.capabilities import CapabilitiesEnv
+
+            # _db_scope_for: per-test integration_db for in-process transports;
+            # over e2e_rest, point production at the live server DB instead so
+            # the env's factory writes and any in-process read-backs see the
+            # same database (an unconditional integration_db repointed the cached
+            # engine at an empty per-test DB and collided on the shared tenant).
+            with _db_scope_for(request, e2e_config), CapabilitiesEnv(e2e_config=e2e_config) as env:
+                env.setup_default_data()
+                ctx["env"] = env
+                yield
+        else:
+            raise RuntimeError(
+                "A UC-010 scenario was collected without explicit CapabilitiesEnv wiring; "
+                "bind it deliberately instead of masking it with xfail"
             )
 
     elif uc == "UC-011":

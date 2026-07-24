@@ -11,6 +11,8 @@ from fastmcp.server.dependencies import get_http_headers
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.tools.tool import ToolResult
 
+from src.core.exceptions import AdCPAuthenticationError, AdCPError
+from src.core.tool_error_logging import _reject_at_mcp_boundary
 from src.core.transport_helpers import resolve_identity_from_context
 
 logger = logging.getLogger(__name__)
@@ -21,7 +23,6 @@ AUTH_OPTIONAL_TOOLS = frozenset(
     {
         "get_adcp_capabilities",
         "get_products",
-        "list_accounts",
         "list_creative_formats",
         "list_authorized_properties",
     }
@@ -43,11 +44,29 @@ class MCPAuthMiddleware(Middleware):
     ) -> ToolResult:
         tool_name = context.message.name
         require_auth = tool_name not in AUTH_OPTIONAL_TOOLS
+        application_context = (context.message.arguments or {}).get("context")
 
-        identity = resolve_identity_from_context(
-            context.fastmcp_context,
-            require_valid_token=require_auth,
-        )
+        # AUTH before VERSION (cross-transport parity, #1546). resolve_identity
+        # raises for an INVALID token; a MISSING token returns a principal-less
+        # identity, so reject that here too — otherwise an auth-required tool
+        # falls through to RequestCompatMiddleware's version check and a bad pin
+        # is rejected with VERSION_UNSUPPORTED (disclosing supported_versions)
+        # before the auth gap is reported. A raw AdCPError raised from a
+        # middleware bypasses the tool wrapper's with_error_logging, so it must
+        # be translated to the two-layer envelope HERE (same as
+        # RequestCompatMiddleware's version-error path) — otherwise the wire
+        # error carries no code/recovery. A2A enforces the same order in
+        # on_message_send; REST via the version-after-auth deps.
+        identity = None
+        try:
+            identity = resolve_identity_from_context(
+                context.fastmcp_context,
+                require_valid_token=require_auth,
+            )
+            if require_auth and (identity is None or not identity.principal_id):
+                raise AdCPAuthenticationError("Authentication required")
+        except AdCPError as exc:
+            _reject_at_mcp_boundary(tool_name, exc, identity, context=application_context)
 
         if context.fastmcp_context:
             await context.fastmcp_context.set_state("identity", identity, serializable=False)

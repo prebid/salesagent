@@ -132,10 +132,17 @@ class TestNonScalarConceptValueDropped:
             # Dropped to None → exclude_none omits the keys from the wire entirely.
             assert "concept_id" not in creative
             assert "concept_name" not in creative
-            # Observability (No Quiet Failures): the drop is surfaced in logs, not silent.
-            warnings_logged = " ".join(str(c) for c in mock_logger.warning.call_args_list)
-            assert "Dropping non-scalar concept value" in warnings_logged, (
-                f"expected the non-scalar drop warning; logger.warning calls: {mock_logger.warning.call_args_list}"
+            # Observability (No Quiet Failures): BOTH corrupt values are surfaced in
+            # logs, not silent. Production logs lazily (msg, type-name arg), so match
+            # the drop message and collect the lazy args rather than a rendered string.
+            warning_calls = mock_logger.warning.call_args_list
+            dropped_types = [
+                call.args[1]
+                for call in warning_calls
+                if call.args and "Dropping non-scalar concept value" in str(call.args[0])
+            ]
+            assert dropped_types == ["list", "dict"], (
+                f"expected both drop warnings (list then dict); logger.warning calls: {warning_calls}"
             )
 
 

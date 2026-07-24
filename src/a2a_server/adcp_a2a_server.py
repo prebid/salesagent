@@ -4,9 +4,9 @@ Prebid Sales Agent A2A Server using official a2a-sdk library.
 Supports both standard A2A message format and JSON-RPC 2.0.
 """
 
-import copy
 import json
 import logging
+import math
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 
@@ -53,6 +53,8 @@ from adcp.types import ContextObject, CreativeAsset, GeneratedTaskStatus
 from google.protobuf import json_format, struct_pb2
 from pydantic import BaseModel
 
+from src.core.adcp_version import validate_adcp_version_pins
+from src.core.application_context import dump_adcp_response
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import AUTH_REQUIRED_SUGGESTION
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
@@ -68,11 +70,23 @@ from src.core.exceptions import (
     build_two_layer_error_envelope,
     normalize_to_adcp_error,
 )
+from src.core.logging_config import scrub_control_chars
+from src.core.request_compat import (
+    DROPPED_FIELDS_NEGOTIATION,
+    DROPPED_FIELDS_UNDECLARED_ENVELOPE,
+    STANDARD_ADCP_READ_TOOLS,
+    _log_dropped_fields,
+    normalize_request_params,
+    strip_negotiation_fields,
+    strip_undeclared_envelope_fields,
+    validate_standard_read_idempotency_key,
+)
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import coerce_creative_filters, to_account_reference, to_brand_reference
-from src.core.schemas import CreativeStatusEnum
+from src.core.schemas import CreateMediaBuyRequest, CreativeStatusEnum
+from src.core.schemas._base import require_idempotency_key
 from src.core.tool_context import ToolContext
-from src.core.tool_error_logging import record_boundary_error
+from src.core.tool_error_logging import record_boundary_error, record_boundary_error_for_identity
 from src.core.tools import (
     create_media_buy_raw as core_create_media_buy_tool,
 )
@@ -108,13 +122,35 @@ from src.core.tools import (
 from src.core.tools import (
     update_performance_index_raw as core_update_performance_index_tool,
 )
+from src.core.tools.media_buy_update import REVISION_OMITTED, validate_update_media_buy_protocol_fields
 from src.core.validation_helpers import (
     adcp_validation_boundary,
 )
 from src.core.version import get_version
+from src.core.webhook_validator import (
+    require_valid_callback_config_urls,
+    validated_callback_url_scope,
+)
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
+
+
+def _restore_a2a_integer_version_pin(params: dict[str, Any]) -> dict[str, Any]:
+    """Restore an integral major pin after protobuf ``Struct`` decoding.
+
+    A2A ``DataPart.data`` is backed by protobuf ``Struct``, whose only numeric
+    representation is ``double``. Consequently a JSON integer such as
+    ``adcp_major_version: 3`` reaches the handler as Python ``3.0``. Rebuild
+    that integer at this transport boundary so the protocol core can remain
+    strict about accepting only integer major pins. Fractional, non-finite,
+    boolean, and all other values are left untouched for the core validator to
+    reject. Preserve the original mapping when no repair is needed.
+    """
+    major = params.get("adcp_major_version")
+    if type(major) is not float or not math.isfinite(major) or not major.is_integer():
+        return params
+    return {**params, "adcp_major_version": int(major)}
 
 
 def _dict_to_value(d: dict) -> struct_pb2.Value:
@@ -142,15 +178,57 @@ def _dict_to_struct(d: dict) -> struct_pb2.Struct:
 DISCOVERY_SKILLS = frozenset(
     {
         "get_adcp_capabilities",  # Agent capabilities (always public per AdCP spec)
-        "list_accounts",  # Account discovery (public, returns empty for unauthed per BR-RULE-055)
         "list_creative_formats",  # Creative specifications (always public)
         "list_authorized_properties",  # Property catalog (always public)
         "get_products",  # Conditional: depends on tenant brand_manifest_policy setting
     }
 )
 
+# Skills whose handler receives the raw DataPart params for the idempotency
+# payload hash. Only create_media_buy deduplicates retries today; the other
+# mutating skills validate and accept the key without a cache read, so they
+# take no wire payload. Extend alongside the dedupe implementation, never ahead
+# of it — a threaded payload with no cache probe is a guarantee we do not keep.
+_RAW_WIRE_PAYLOAD_SKILLS = frozenset({"create_media_buy"})
 
-def _internal_error_for(operation: str, exc: Exception) -> InternalError:
+
+def _json_safe_wire_params(parameters: dict) -> dict | None:
+    """The DataPart params reduced to their JSON form — the hash input.
+
+    A real A2A request arrives as a protobuf ``Struct``, so its params decode
+    to JSON primitives and this is a no-op. In-process callers can hand the
+    handler already-typed sub-objects (a ``FormatId`` inside a creative, say),
+    and RFC 8785 canonicalization raises on those — which would turn a
+    perfectly valid create into a boundary error. Normalizing each model to
+    ``model_dump(mode="json")`` yields exactly the JSON the same request would
+    have carried on the wire, so the in-process and over-the-wire hashes agree
+    instead of one of them crashing.
+    """
+
+    def to_json_form(value: Any) -> Any:
+        if isinstance(value, BaseModel):
+            return value.model_dump(mode="json")
+        raise TypeError(f"unhashable wire value of type {type(value).__name__}")
+
+    try:
+        return json.loads(json.dumps(parameters, default=to_json_form))
+    except (TypeError, ValueError):
+        # Not reducible to JSON, so it cannot be what a buyer sent on the wire.
+        # Fall back to model hashing rather than failing the request; the
+        # cross-transport wire matrix pins that real wire payloads take the
+        # branch above.
+        logger.debug("A2A params are not JSON-reducible; idempotency falls back to model hashing", exc_info=True)
+        # None, never {} — an empty dict would hash every non-reducible request
+        # to the SAME value, colliding unrelated buyers under one key.
+        return None
+
+
+def _internal_error_for(
+    operation: str,
+    exc: Exception,
+    *,
+    context: Any = None,
+) -> InternalError:
     """Canonical InternalError shape for non-skill A2A boundary failures.
 
     Skill handlers raise typed ``AdCPError`` (or untyped exceptions that the
@@ -177,8 +255,56 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     """
     return InternalError(
         message=f"{operation} failed: {exc}",
-        data=build_two_layer_error_envelope(normalize_to_adcp_error(exc)),
+        # Delegate the envelope composition to the single source of truth so
+        # both the failed-skill DataPart and this JSON-RPC error.data stay
+        # byte-identical (normalize_to_adcp_error → two-layer envelope).
+        data=AdCPRequestHandler._build_error_envelope(exc, context=context),
     )
+
+
+def _unambiguous_invocation_context(
+    skill_invocations: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Return the shared application context for a multi-skill A2A request.
+
+    A top-level transport failure (authentication, callback validation, or
+    identity resolution) happens before an individual skill owns the error.
+    Echo a context only when every supplied context agrees; emitting one of
+    several conflicting contexts would falsely attribute the whole request.
+    Invocations that omit context do not create a conflict.
+    """
+    supplied: list[dict[str, Any]] = []
+    for invocation in skill_invocations:
+        parameters = invocation.get("parameters")
+        if not isinstance(parameters, dict):
+            continue
+        candidate = parameters.get("context")
+        if isinstance(candidate, dict):
+            supplied.append(dict(candidate))
+
+    if not supplied:
+        return None
+    first = supplied[0]
+    return first if all(candidate == first for candidate in supplied[1:]) else None
+
+
+def _validate_envelope_tolerant[RequestModelT: BaseModel](
+    params: dict[str, Any], model: type[RequestModelT], *, operation: str
+) -> RequestModelT:
+    """``model.model_validate`` after stripping AdCP envelope fields the model doesn't declare.
+
+    A2A parity with the MCP RequestCompatMiddleware's schema-aware envelope strip
+    (Step 4): a conformant SDK client may attach standard AdCP envelope framing
+    (``ext``/``push_notification_config``/``idempotency_key``/...) to any request. A
+    handler that ``model_validate``s the full parameter dict against a strict
+    (``extra="forbid"`` in dev/CI) request model would otherwise reject the
+    undeclared framing with extra_forbidden. Strip only the envelope fields this
+    model does not declare — fields it does declare still flow through. Negotiation
+    fields are handled earlier in ``_handle_explicit_skill``.
+    """
+    cleaned, dropped_env = strip_undeclared_envelope_fields(params, set(model.model_fields))
+    _log_dropped_fields(operation, DROPPED_FIELDS_UNDECLARED_ENVELOPE, dropped_env)
+    return model.model_validate(cleaned)
 
 
 class AdCPRequestHandler(RequestHandler):
@@ -191,7 +317,7 @@ class AdCPRequestHandler(RequestHandler):
         logger.info("AdCP Request Handler initialized for direct function calls")
 
     @staticmethod
-    def _build_error_envelope(exc: Exception) -> dict[str, Any]:
+    def _build_error_envelope(exc: Exception, *, context: Any = None) -> dict[str, Any]:
         """Build a spec-compliant two-layer envelope for any exception.
 
         Single source of truth for "wrap-arbitrary-exception → wire envelope"
@@ -207,10 +333,15 @@ class AdCPRequestHandler(RequestHandler):
         as ``MCP_ERROR``.
         """
 
-        return build_two_layer_error_envelope(normalize_to_adcp_error(exc))
+        return build_two_layer_error_envelope(normalize_to_adcp_error(exc, context=context))
 
     @staticmethod
-    def _build_failed_skill_result(skill_name: str, exc: Exception) -> dict[str, Any]:
+    def _build_failed_skill_result(
+        skill_name: str,
+        exc: Exception,
+        *,
+        context: Any = None,
+    ) -> dict[str, Any]:
         """Build the dispatcher result dict for a failed skill invocation.
 
         Both the typed-AdCPError branch and the untyped fallthrough land here so
@@ -221,7 +352,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         return {
             "skill": skill_name,
-            "error_envelope": AdCPRequestHandler._build_error_envelope(exc),
+            "error_envelope": AdCPRequestHandler._build_error_envelope(exc, context=context),
             "success": False,
         }
 
@@ -250,14 +381,14 @@ class AdCPRequestHandler(RequestHandler):
 
         Args:
             auth_token: Bearer token from Authorization header (None for unauthenticated)
-            require_valid_token: If True, auth failures raise A2AError
+            require_valid_token: If True, auth failures raise AdCPAuthenticationError
             context: ServerCallContext from SDK (None when called directly in tests).
 
         Returns:
             ResolvedIdentity with tenant and (optionally) principal info
 
         Raises:
-            A2AError: If require_valid_token=True and authentication fails
+            AdCPAuthenticationError: If require_valid_token=True and authentication fails
         """
         from src.core.resolved_identity import resolve_identity
         from src.core.testing_hooks import AdCPTestContext
@@ -266,29 +397,26 @@ class AdCPRequestHandler(RequestHandler):
         headers = auth_ctx.headers if auth_ctx else {}
 
         if require_valid_token and not auth_token:
-            raise InvalidRequestError(message="Missing authentication token")
+            raise AdCPAuthenticationError("Missing authentication token")
 
         # Extract testing context from A2A request headers (same as MCP does)
         testing_context = AdCPTestContext.from_headers(headers)
 
-        try:
-            identity = resolve_identity(
-                headers=headers,
-                auth_token=auth_token,
-                require_valid_token=require_valid_token,
-                protocol="a2a",
-                testing_context=testing_context,
-            )
-        except AdCPAuthenticationError as e:
-            raise InvalidRequestError(message=str(e)) from e
+        identity = resolve_identity(
+            headers=headers,
+            auth_token=auth_token,
+            require_valid_token=require_valid_token,
+            protocol="a2a",
+            testing_context=testing_context,
+        )
 
         if require_valid_token:
             if not identity.principal_id:
-                raise InvalidRequestError(message="Authentication token is invalid or expired.")
+                raise AdCPAuthenticationError("Authentication token is invalid or expired.")
 
             if not identity.tenant:
-                raise InvalidRequestError(
-                    message=f"Unable to determine tenant from authentication. Principal: {identity.principal_id}"
+                raise AdCPAuthenticationError(
+                    f"Unable to determine tenant from authentication. Principal: {identity.principal_id}"
                 )
 
             tenant_id = identity.tenant_id or identity.tenant.get("tenant_id", "unknown")
@@ -360,7 +488,37 @@ class AdCPRequestHandler(RequestHandler):
                 tenant_id=tenant_id,
             )
         except Exception as e:
-            logger.warning("Failed to log A2A operation: %s", e)
+            logger.warning("Failed to log A2A operation: %s", scrub_control_chars(str(e)))
+
+    def _validate_push_callback(self, push_notification_config: Any, identity: ResolvedIdentity | None) -> None:
+        """Guard a client-supplied push callback before it is persisted (#1512 SSRF).
+
+        Two controls, both required:
+
+        1. **Authentication.** A push callback is only meaningful for an
+           authenticated caller with an async task to notify. An anonymous
+           (auth-optional discovery) request supplying a callback has no
+           legitimate use, and honoring it would let an unauthenticated party
+           drive an outbound POST from the seller — so it is refused.
+        2. **SSRF validation.** The callback URL must pass the same shared
+           callback guard the media-buy delivery path uses (blocks
+           loopback, link-local/metadata ``169.254.169.254``, and RFC-1918
+           targets), closing the internal-endpoint / cloud-metadata
+           exfiltration vector.
+
+        Raises :class:`AdCPValidationError` (correctable) on either failure, so
+        the callback is never stored and the later status/failure webhook has
+        nothing to deliver.
+        """
+        url = push_notification_config.url if push_notification_config else None
+        if not url:
+            return
+        if identity is None or not identity.is_authenticated:
+            raise AdCPValidationError(
+                "push_notification_config requires authentication; an unauthenticated request cannot register a callback.",
+                suggestion="Authenticate before supplying a push notification callback.",
+            )
+        require_valid_callback_config_urls(push_notification_config=push_notification_config)
 
     async def _send_protocol_webhook(
         self,
@@ -390,6 +548,20 @@ class AdCPRequestHandler(RequestHandler):
             url = webhook_config.url
             if not url:
                 logger.info("[red]No push notification URL present; skipping webhook[/red]")
+                return
+
+            # Defense-in-depth: re-validate at delivery time to catch a DNS-rebinding /
+            # TOCTOU change between registration and delivery, and to guard any callback
+            # that reached storage through a path other than on_message_send (#1512).
+            callback_config = {"url": url}
+            try:
+                async with validated_callback_url_scope(push_notification_config=callback_config):
+                    require_valid_callback_config_urls(push_notification_config=callback_config)
+            except AdCPValidationError as exc:
+                logger.error(
+                    "Push notification URL failed SSRF re-validation at delivery, skipping: %s",
+                    scrub_control_chars(str(exc)),
+                )
                 return
 
             auth = webhook_config.authentication if webhook_config.HasField("authentication") else None
@@ -442,7 +614,9 @@ class AdCPRequestHandler(RequestHandler):
             )
         except Exception as e:
             # Don't fail the task if webhook fails
-            logger.warning("Failed to send protocol-level webhook for task %s: %s", task.id, e)
+            logger.warning(
+                "Failed to send protocol-level webhook for task %s: %s", task.id, scrub_control_chars(str(e))
+            )
 
     def _reconstruct_response_object(self, skill_name: str, data: dict) -> Any:
         """Reconstruct a response object from skill result data to call __str__().
@@ -519,7 +693,7 @@ class AdCPRequestHandler(RequestHandler):
             if response_class:
                 return response_class(**data)
         except Exception as e:
-            logger.debug("Could not reconstruct response object for %s: %s", skill_name, e)
+            logger.debug("Could not reconstruct response object for %s: %s", skill_name, scrub_control_chars(str(e)))
         return None
 
     async def on_message_send(
@@ -540,7 +714,10 @@ class AdCPRequestHandler(RequestHandler):
         Returns:
             Task object or Message response
         """
-        logger.info("Handling message/send request: %s", params)
+        logger.info(
+            "Handling message/send request: keys=%s",
+            sorted(params.keys()) if isinstance(params, dict) else type(params).__name__,
+        )
 
         # Parse message for both text and structured data parts
         message = params.message
@@ -561,8 +738,14 @@ class AdCPRequestHandler(RequestHandler):
                         # Support both "input" (A2A spec) and "parameters" (legacy) for skill params
                         params_data = data.get("input") or data.get("parameters", {})
                         skill_invocations.append({"skill": data["skill"], "parameters": params_data})
+                        # Reached BEFORE the auth gate below, so both the skill
+                        # name and the parameter keys are unauthenticated,
+                        # attacker-chosen strings — scrub them or a DataPart can
+                        # forge adjacent records in plain-text log mode.
                         logger.info(
-                            f"Found explicit skill invocation: {data['skill']} with params: {list(params_data.keys())}"
+                            "Found explicit skill invocation: %s with params: %s",
+                            scrub_control_chars(data["skill"]),
+                            scrub_control_chars(list(params_data.keys())),
                         )
 
         # Combine text for natural language fallback
@@ -578,10 +761,6 @@ class AdCPRequestHandler(RequestHandler):
         push_notification_config: TaskPushNotificationConfig | None = None
         if params.HasField("configuration") and params.configuration.HasField("task_push_notification_config"):
             push_notification_config = params.configuration.task_push_notification_config
-            if push_notification_config.url:
-                logger.info(
-                    f"Protocol-level push notification config provided for task {task_id}: {push_notification_config.url}"
-                )
 
         # Prepare task metadata (JSON-serializable only — protobuf Struct)
         task_metadata: dict[str, Any] = {
@@ -591,17 +770,19 @@ class AdCPRequestHandler(RequestHandler):
         if skill_invocations:
             task_metadata["skills_requested"] = [inv["skill"] for inv in skill_invocations]
 
+        # Pre-skill failures have no single invocation to source context from.
+        # Preserve the buyer's application context only when the request has
+        # one unambiguous value across all supplied skill contexts.
+        request_application_context = _unambiguous_invocation_context(skill_invocations)
+
         task = Task(
             id=task_id,
             context_id=context_id,
             status=TaskStatus(state=TaskState.TASK_STATE_WORKING),
             metadata=_dict_to_struct(task_metadata),
         )
-        # Store push notification config outside protobuf metadata (not JSON-serializable)
-        if push_notification_config:
-            self._task_push_configs[task_id] = push_notification_config
-        self.tasks[task_id] = task
 
+        identity: ResolvedIdentity | None = None
         try:
             # Get authentication token
             auth_token = self._get_auth_token(context)
@@ -629,6 +810,7 @@ class AdCPRequestHandler(RequestHandler):
                         AdCPAuthRequiredError(
                             "Authentication required - Bearer token required in Authorization header",
                             suggestion=AUTH_REQUIRED_SUGGESTION,
+                            context=request_application_context,
                         )
                     ),
                 )
@@ -636,12 +818,76 @@ class AdCPRequestHandler(RequestHandler):
             # ── Transport boundary: resolve identity ONCE ──
             # Like REST's _resolve_auth(), identity is resolved here and passed
             # to all downstream handlers. No handler should call resolve_identity().
-            identity: ResolvedIdentity | None = None
-            if auth_token:
-                identity = self._resolve_a2a_identity(auth_token, require_valid_token=requires_auth, context=context)
-            elif not requires_auth:
+            if requires_auth:
+                identity = self._resolve_a2a_identity(auth_token, require_valid_token=True, context=context)
+            elif auth_token:
+                identity = self._resolve_a2a_identity(auth_token, require_valid_token=False, context=context)
+            else:
                 # Unauthenticated discovery request — resolve tenant from headers only
                 identity = self._resolve_a2a_identity(None, require_valid_token=False, context=context)
+
+            # Persist task/callback state only after authentication has resolved.
+            # Otherwise an unauthenticated request could retain attacker-owned
+            # callback state or reach the generic failure-webhook path. The guard
+            # below enforces that: an anonymous caller cannot register a callback,
+            # and any callback URL must pass SSRF validation before it is stored
+            # (#1512) — otherwise a discovery request could drive an outbound POST
+            # to an internal/metadata endpoint via the later status webhook.
+            if push_notification_config:
+                try:
+                    async with validated_callback_url_scope(
+                        push_notification_config=push_notification_config,
+                    ):
+                        self._validate_push_callback(push_notification_config, identity)
+                except AdCPValidationError as callback_exc:
+                    # A rejected callback is a buyer-CORRECTABLE error, not a server
+                    # fault. Surface it as a FAILED Task carrying the two-layer envelope
+                    # DataPart (VALIDATION_ERROR) — the same shape as a failed skill —
+                    # instead of letting it fall through to the outer handler, which
+                    # would emit a JSON-RPC -32603 InternalError — a server-fault class
+                    # for a buyer input error, and one whose ``data`` survival on the
+                    # real NETWORK wire is unverified (in-process the mounted app
+                    # carries it; the v0.3 adapter has been observed dropping it on
+                    # E2E — reconciliation tracked upstream). The callback is never
+                    # stored, so no
+                    # webhook can be driven (#1512). Boundary parity: the
+                    # per-skill AdCPError path records to the audit/activity sinks
+                    # via record_boundary_error_for_identity, and MCP/REST record
+                    # buyer validation errors uniformly — so this rejection does too
+                    # (identity is already resolved here; auth precedes callback
+                    # validation).
+                    record_boundary_error_for_identity("a2a", "push_notification_config", callback_exc, identity)
+                    logger.warning(
+                        "Rejected push_notification_config callback: %s", scrub_control_chars(str(callback_exc))
+                    )
+                    task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
+                    del task.artifacts[:]
+                    task.artifacts.append(
+                        Artifact(
+                            artifact_id="error_1",
+                            name="processing_error",
+                            parts=[
+                                Part(
+                                    data=_dict_to_value(
+                                        self._build_error_envelope(
+                                            callback_exc,
+                                            context=request_application_context,
+                                        )
+                                    )
+                                )
+                            ],
+                        )
+                    )
+                    self.tasks[task_id] = task
+                    return task
+                self._task_push_configs[task_id] = push_notification_config
+                if push_notification_config.url:
+                    logger.info(
+                        "Protocol-level push notification config provided for task %s: %s",
+                        task_id,
+                        scrub_control_chars(push_notification_config.url),
+                    )
+            self.tasks[task_id] = task
 
             # Route: Handle explicit skill invocations first, then natural language fallback
             if skill_invocations:
@@ -650,7 +896,11 @@ class AdCPRequestHandler(RequestHandler):
                 for invocation in skill_invocations:
                     skill_name = invocation["skill"]
                     parameters = invocation["parameters"]
-                    logger.info("Processing explicit skill: %s with parameters: %s", skill_name, parameters)
+                    logger.info(
+                        "Processing explicit skill: %s with parameter keys: %s",
+                        skill_name,
+                        sorted(parameters.keys()) if isinstance(parameters, dict) else type(parameters).__name__,
+                    )
 
                     try:
                         result = await self._handle_explicit_skill(
@@ -672,11 +922,18 @@ class AdCPRequestHandler(RequestHandler):
                         # errors. Mirrors the SDK's _send_adcp_error reference for
                         # storyboard scenarios that exercise invalid-state
                         # transitions on an otherwise-routable skill.
-                        # NOTE: logging happens in ``_handle_explicit_skill``'s
-                        # except branch (with audit log + activity feed); duplicating
-                        # the logger call here would produce two messages for the
-                        # same failure.
-                        results.append(self._build_failed_skill_result(skill_name, e))
+                        # NOTE: logging happens inside ``_handle_explicit_skill``
+                        # (with audit log + activity feed) — both at its
+                        # version-validation raise site and in its handler
+                        # except branch; duplicating the logger call here would
+                        # produce two messages for the same failure.
+                        results.append(
+                            self._build_failed_skill_result(
+                                skill_name,
+                                e,
+                                context=parameters.get("context"),
+                            )
+                        )
                     except Exception as e:
                         # Untyped fallthrough — same envelope shape as the AdCPError
                         # branch so storyboard runners can `JSON.parse` the DataPart
@@ -688,14 +945,14 @@ class AdCPRequestHandler(RequestHandler):
                         # (AdCPError/ValueError/PermissionError) failures were already
                         # recorded inside _handle_explicit_skill, so this only fires for
                         # genuinely-unexpected exceptions that escaped it.
-                        record_boundary_error(
-                            "a2a",
-                            skill_name,
-                            e,
-                            tenant_id=getattr(identity, "tenant_id", None),
-                            principal_id=getattr(identity, "principal_id", None) or "anonymous",
+                        record_boundary_error_for_identity("a2a", skill_name, e, identity)
+                        results.append(
+                            self._build_failed_skill_result(
+                                skill_name,
+                                e,
+                                context=parameters.get("context"),
+                            )
                         )
-                        results.append(self._build_failed_skill_result(skill_name, e))
 
                 # Check for submitted status (manual approval required) - return early without artifacts
                 # Per AdCP spec, async operations should return Task with status=submitted and no artifacts
@@ -813,7 +1070,7 @@ class AdCPRequestHandler(RequestHandler):
                             log_details,
                         )
                     except Exception as e:
-                        logger.warning("Could not log skill invocations: %s", e)
+                        logger.warning("Could not log skill invocations: %s", scrub_control_chars(str(e)))
 
             # Natural language fallback (existing keyword-based routing)
             elif any(word in combined_text for word in ["product", "inventory", "available", "catalog"]):
@@ -972,21 +1229,37 @@ class AdCPRequestHandler(RequestHandler):
             # Send protocol-level webhook notification if configured
             await self._send_protocol_webhook(task, status=task_status_str)
 
+        except AdCPAuthenticationError as e:
+            # Authentication failures are JSON-RPC errors, not task failures.
+            # In particular, never notify an unauthenticated caller's supplied
+            # push URL: that would turn the failure path into an SSRF primitive.
+            # Route through the identity-aware helper: at an auth failure the
+            # identity is None, so tenant_id degrades to None and the activity-feed
+            # + audit writes are correctly skipped (a fabricated "unknown" tenant
+            # would otherwise drive those sinks for an unauthenticated caller).
+            # CLASS SYMMETRY with the missing-token rejection above: an invalid
+            # bearer is a CLIENT auth error, so it surfaces as JSON-RPC
+            # InvalidRequestError carrying the AUTH_REQUIRED envelope in data —
+            # never InternalError (-32603), the server-fault class.
+            contextual_error = normalize_to_adcp_error(e, context=request_application_context)
+            record_boundary_error_for_identity("a2a", "message_processing", contextual_error, identity)
+            raise InvalidRequestError(
+                message=str(contextual_error),
+                data=build_two_layer_error_envelope(contextual_error),
+            ) from e
         except A2AError:
             # Re-raise A2AError as-is (will be caught by JSON-RPC handler)
             raise
         except Exception as e:
-            # Use identity resolved at transport boundary (if available)
-            err_tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
-            err_principal_id = (identity.principal_id or "unknown") if identity else "unknown"
-
-            record_boundary_error(
-                "a2a",
-                "message_processing",
-                e,
-                tenant_id=err_tenant_id,
-                principal_id=err_principal_id,
-            )
+            # Route through the identity-aware helper, exactly like the
+            # AdCPAuthenticationError branch above: a non-auth failure can reach
+            # here with identity still None (e.g. an error raised during identity
+            # resolution, before it is assigned). A fabricated "unknown" tenant is
+            # truthy, so record_boundary_error would wrongly drive the activity-feed
+            # + audit writes for a caller with no resolved tenant. Degrading
+            # tenant_id to None via the helper skips those sinks correctly.
+            contextual_error = normalize_to_adcp_error(e, context=request_application_context)
+            record_boundary_error_for_identity("a2a", "message_processing", contextual_error, identity)
 
             # Send protocol-level webhook notification for failure if configured
             task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
@@ -999,14 +1272,27 @@ class AdCPRequestHandler(RequestHandler):
                 Artifact(
                     artifact_id="error_1",
                     name="processing_error",
-                    parts=[Part(data=_dict_to_value(self._build_error_envelope(e)))],
+                    parts=[
+                        Part(
+                            data=_dict_to_value(
+                                self._build_error_envelope(
+                                    contextual_error,
+                                    context=request_application_context,
+                                )
+                            )
+                        )
+                    ],
                 )
             )
 
             await self._send_protocol_webhook(task, status="failed")
 
             # Raise A2A error instead of creating failed task
-            raise _internal_error_for("message processing", e)
+            raise _internal_error_for(
+                "message processing",
+                contextual_error,
+                context=request_application_context,
+            )
 
         self.tasks[task_id] = task
         return task
@@ -1126,8 +1412,6 @@ class AdCPRequestHandler(RequestHandler):
         tool_context = None
         try:
             auth_token = self._get_auth_token(context)
-            if not auth_token:
-                raise InvalidRequestError(message="Missing authentication token")
             identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "get_push_notification_config")
 
@@ -1189,8 +1473,6 @@ class AdCPRequestHandler(RequestHandler):
         tool_context = None
         try:
             auth_token = self._get_auth_token(context)
-            if not auth_token:
-                raise InvalidRequestError(message="Missing authentication token")
             identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "set_push_notification_config")
 
@@ -1203,6 +1485,17 @@ class AdCPRequestHandler(RequestHandler):
 
             if not url:
                 raise InvalidParamsError(message="Missing required parameter: url")
+
+            # SSRF: validate the buyer-supplied callback URL before persisting it.
+            # This is a public authenticated A2A entry point; without this gate a
+            # metadata/loopback URL could be stored and later POSTed to by the
+            # delivery path. Same env-gated gate the media-buy callback path uses.
+            callback_config = {"url": url}
+            try:
+                async with validated_callback_url_scope(push_notification_config=callback_config):
+                    require_valid_callback_config_urls(push_notification_config=callback_config)
+            except AdCPValidationError as exc:
+                raise InvalidParamsError(message=f"Invalid callback url: {exc}") from exc
 
             auth_type = None
             auth_token_value = None
@@ -1263,8 +1556,6 @@ class AdCPRequestHandler(RequestHandler):
         tool_context = None
         try:
             auth_token = self._get_auth_token(context)
-            if not auth_token:
-                raise InvalidRequestError(message="Missing authentication token")
             identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "list_push_notification_configs")
 
@@ -1321,8 +1612,6 @@ class AdCPRequestHandler(RequestHandler):
         tool_context = None
         try:
             auth_token = self._get_auth_token(context)
-            if not auth_token:
-                raise InvalidRequestError(message="Missing authentication token")
             identity = self._resolve_a2a_identity(auth_token, context=context)
             tool_context = self._make_tool_context(identity, "delete_push_notification_config")
 
@@ -1387,7 +1676,7 @@ class AdCPRequestHandler(RequestHandler):
         if isinstance(response, dict):
             return response
 
-        response_data = response.model_dump(mode="json")
+        response_data = dump_adcp_response(response)
         response_data["message"] = str(response)
 
         # Derive success from errors field if present, default True otherwise
@@ -1420,13 +1709,68 @@ class AdCPRequestHandler(RequestHandler):
             Dictionary containing the skill result
 
         Raises:
-            ValueError: For unknown skills or invalid parameters
+            AdCPAuthenticationError: A protected skill has no authenticated identity.
+            AdCPError: Version negotiation or skill-domain validation fails.
+            A2AError: The skill name or A2A protocol request is invalid.
         """
-        # The buyer's wire payload, captured BEFORE the pnc protocol-layer
-        # injection, deprecated-field normalization, and any handler mutations —
-        # the idempotency payload-hash input (AdCP defines equivalence over the
-        # request as sent). Deep copy: downstream steps mutate nested dicts.
-        raw_wire_payload = copy.deepcopy(parameters)
+        # Pin AUTH-before-VERSION at the explicit-skill boundary as well as the
+        # top-level transport resolver. This guard is defensive (normal A2A
+        # requests arrive with a pre-resolved identity), but direct dispatcher
+        # callers must not be able to disclose supported_versions before auth.
+        if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
+            auth_exc = AdCPAuthenticationError("Authentication required for skill invocation")
+            record_boundary_error_for_identity("a2a", skill_name, auth_exc, identity)
+            raise auth_exc
+
+        # The DataPart params AS SENT — the idempotency payload-hash input, the
+        # A2A analogue of MCPAuthMiddleware's pre-compat capture and
+        # RestCompatMiddleware's pre-rewrite body bytes. Taken here, before the
+        # read-key drop, negotiation strip, and deprecated-field normalization
+        # below: AdCP defines payload equivalence over the request the buyer
+        # sent, so capturing post-normalization would let a seller-side compat
+        # table change flip an honest retry into a conflict mid-TTL. Without
+        # this, create_media_buy falls back to model-dump hashing and A2A
+        # computes a DIFFERENT equivalence key than MCP/REST for one request.
+        raw_wire_payload = _json_safe_wire_params(parameters)
+
+        # Version-negotiation parity with the MCP RequestCompatMiddleware:
+        # reject an unsupported AdCP pin after the authentication guard and
+        # before any handler's strict ``model_validate``. Raises
+        # AdCPVersionUnsupportedError, which the dispatch's ``except AdCPError``
+        # handler renders as a VERSION_UNSUPPORTED failed-Task envelope; it is
+        # recorded here (not in the handler try-block below, which this raise
+        # never reaches) so version rejections land on the same observability
+        # surface as every other boundary error. See #1512.
+
+        # protobuf Struct decodes every JSON number as float. Reconstruct an
+        # integral legacy major pin before validation; semantically the buyer
+        # sent an integer, matching MCP/REST negotiation behavior.
+        parameters = _restore_a2a_integer_version_pin(parameters)
+
+        try:
+            validate_adcp_version_pins(parameters)
+            # Authentication already ran above, and VERSION wins when both the
+            # version and inert read key are malformed.
+            validate_standard_read_idempotency_key(skill_name, parameters)
+        except AdCPError as boundary_exc:
+            record_boundary_error_for_identity("a2a", skill_name, boundary_exc, identity)
+            raise
+
+        # On standard reads a valid supplied key is validated inert envelope
+        # metadata (the 3.1 grace accepts omission). Consume it before strict
+        # task-model validation; malformed supplied values were rejected above.
+        if skill_name in STANDARD_ADCP_READ_TOOLS and "idempotency_key" in parameters:
+            parameters = {key: value for key, value in parameters.items() if key != "idempotency_key"}
+            _log_dropped_fields(skill_name, DROPPED_FIELDS_UNDECLARED_ENVELOPE, ["idempotency_key"])
+
+        # Strip the negotiation envelope fields (adcp_version /
+        # adcp_major_version) that every AdCP SDK client injects on each
+        # request: the strict request models (GetMediaBuysRequest, ...) use
+        # extra="forbid" in dev/CI, so an undeclared adcp_major_version would
+        # raise extra_forbidden and make the agent uncallable by conformant
+        # SDK clients (#1512).
+        parameters, dropped_negotiation = strip_negotiation_fields(parameters)
+        _log_dropped_fields(skill_name, DROPPED_FIELDS_NEGOTIATION, dropped_negotiation)
 
         # Inject push_notification_config into parameters for skills that need it
         # Serialize protobuf to dict at the transport boundary — _impl accepts dict
@@ -1441,16 +1785,11 @@ class AdCPRequestHandler(RequestHandler):
                 auth["schemes"] = [scheme_value] if scheme_value else []
             parameters = {**parameters, "push_notification_config": pnc_dict}
         # Normalize deprecated fields before any handler sees the parameters
-        from src.core.request_compat import normalize_request_params
 
         compat_result = normalize_request_params(skill_name, parameters)
         parameters = compat_result.params
 
         logger.info("Handling explicit skill: %s with parameters: %s", skill_name, list(parameters.keys()))
-
-        # Validate identity for non-discovery skills
-        if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
-            raise InvalidRequestError(message="Authentication required for skill invocation")
 
         # Map skill names to handlers. Handler signatures are heterogeneous
         # (discovery skills accept ``identity: ResolvedIdentity | None``; the rest
@@ -1491,11 +1830,15 @@ class AdCPRequestHandler(RequestHandler):
 
         try:
             handler = skill_handlers[skill_name]
+            # Only the skills that actually deduplicate retries take the wire
+            # payload; the rest validate-and-accept the key without a cache
+            # read, so threading it would imply a guarantee they do not make.
+            # Extend this set as dedupe reaches the other mutating tools.
+            wire_payload_kwargs = (
+                {"raw_wire_payload": raw_wire_payload} if skill_name in _RAW_WIRE_PAYLOAD_SKILLS else {}
+            )
             # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
-            if skill_name == "create_media_buy":
-                result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload)
-            else:
-                result = await handler(parameters, identity)
+            result = await handler(parameters, identity, **wire_payload_kwargs)
             # Serialize at the boundary — models become dicts with protocol fields
             return self._serialize_for_a2a(result)
         except A2AError:
@@ -1511,14 +1854,8 @@ class AdCPRequestHandler(RequestHandler):
 
             # Defensive about identity shape — test fixtures sometimes pass a
             # string or partially-built identity instead of ResolvedIdentity.
-            # record_boundary_error handles None tenant_id internally.
-            record_boundary_error(
-                "a2a",
-                skill_name,
-                normalized,
-                tenant_id=getattr(identity, "tenant_id", None),
-                principal_id=getattr(identity, "principal_id", None) or "anonymous",
-            )
+            # record_boundary_error_for_identity handles None tenant_id internally.
+            record_boundary_error_for_identity("a2a", skill_name, normalized, identity)
 
             if normalized is not e:
                 raise normalized from e
@@ -1549,21 +1886,21 @@ class AdCPRequestHandler(RequestHandler):
             identity=identity,
         )
 
-        # Apply v2 compat for pre-3.0 clients at the boundary
-        from src.core.version_compat import apply_version_compat
-
-        adcp_version = parameters.get("adcp_version")
+        # A2A serializes v3 responses only. The negotiation envelope is
+        # validated and stripped at dispatch (unsupported pins are rejected
+        # there), so no per-request pin reaches this handler to
+        # gate the legacy v2-compat serialization on — and apply_version_compat
+        # is a no-op for dict payloads regardless.
         if isinstance(response, dict):
-            response_data = response
-        else:
-            # Capture human-readable message before converting to dict
-            message = str(response)
-            response_data = response.model_dump(mode="json")
-            # Add protocol fields that _serialize_for_a2a would add for Pydantic models,
-            # since returning a dict bypasses that logic
-            response_data["message"] = message
-            response_data.setdefault("success", True)
-        return apply_version_compat("get_products", response_data, adcp_version)
+            return response
+        # Capture human-readable message before converting to dict
+        message = str(response)
+        response_data = dump_adcp_response(response)
+        # Add protocol fields that _serialize_for_a2a would add for Pydantic models,
+        # since returning a dict bypasses that logic
+        response_data["message"] = message
+        response_data.setdefault("success", True)
+        return response_data
 
     async def _handle_create_media_buy_skill(
         self,
@@ -1585,18 +1922,13 @@ class AdCPRequestHandler(RequestHandler):
         tool_context = self._make_tool_context(identity, "create_media_buy")
 
         # Parse parameters into typed request model (validation at A2A boundary)
-        from src.core.schemas import CreateMediaBuyRequest
 
         # Pre-process: A2A field name translations
         params = {**parameters}
         if "custom_targeting" in params:
             params.setdefault("targeting_overlay", params.pop("custom_targeting"))
-        # No server-minted defaults for buyer payload fields: a randomized
-        # po_number would change the request's canonical idempotency hash, so an
-        # identical A2A retry would reject as IDEMPOTENCY_CONFLICT instead of
-        # replaying — and the stored payload would diverge from the same request
-        # sent via MCP/REST (cross-transport parity). po_number stays None when
-        # the buyer omits it, exactly like the other transports.
+        # No server-minted defaults for buyer payload fields. po_number stays
+        # None when the buyer omits it, exactly like the other transports.
         # buyer_ref removed in adcp 3.12
 
         # push_notification_config is an A2A *transport-layer* parameter
@@ -1611,14 +1943,21 @@ class AdCPRequestHandler(RequestHandler):
         push_notification_config = params.pop("push_notification_config", None)
 
         # Normalize explicit brand through the shared coercion funnel (#1324).
-        # Keep params JSON-serializable: raw_wire_payload falls back to params for
-        # direct handler callers, and idempotency hashes RFC 8785 over that dict.
-        # to_brand_reference returns None only for None input (excluded above); every
-        # other input returns BrandReference or raises typed AdCPValidationError.
+        # to_brand_reference returns None only for None input (excluded above);
+        # every other input returns BrandReference or raises typed
+        # AdCPValidationError.
         if params.get("brand") is not None:
             brand_ref = to_brand_reference(params["brand"])
             assert brand_ref is not None  # None only for None input; excluded by guard
             params["brand"] = brand_ref.model_dump(mode="json")
+
+        # Required-key precedence parity with the MCP/REST boundaries and the
+        # sync siblings: idempotency_key is the FIRST required field the MCP
+        # TypeAdapter checks, so when it AND other params are absent MCP names
+        # the missing key. Run this BEFORE the missing-params presence check so
+        # A2A emits the same canonical missing-key error (one home in
+        # src.core.exceptions), not "Missing required AdCP parameters".
+        require_idempotency_key(params.get("idempotency_key"))
 
         # Validate required AdCP parameters (packages is optional in model but required by spec).
         # Raise typed AdCPValidationError so the outer dispatcher's `except AdCPError` branch
@@ -1635,10 +1974,10 @@ class AdCPRequestHandler(RequestHandler):
 
         # Validate via the shared boundary so every A2A handler emits the same
         # field + message + buyer-facing suggestion (AdCP POST-F3, #1417):
-        # idempotency_key_missing / duplicate_product_id rejections include a
-        # non-empty suggestion derived by adcp_validation_boundary.
+        # duplicate_product_id rejections include a non-empty suggestion
+        # derived by adcp_validation_boundary.
         with adcp_validation_boundary():
-            req = CreateMediaBuyRequest.model_validate(params)
+            req = _validate_envelope_tolerant(params, CreateMediaBuyRequest, operation="create_media_buy")
 
         # Call core function with validated parameters and identity.
         # Per AdCP 4.3 (commit 3c604130) targeting_overlay and budgets live on each
@@ -1659,20 +1998,23 @@ class AdCPRequestHandler(RequestHandler):
             account=to_account_reference(params.get("account")),
             idempotency_key=params.get("idempotency_key"),
             identity=identity,
-            # The DataPart params AS SENT (pre-normalization, pre-mutation) are
-            # the idempotency payload-hash input; the post-processed dict is the
-            # fallback only for direct handler callers.
-            raw_wire_payload=raw_wire_payload if raw_wire_payload is not None else params,
+            # The DataPart params as sent, captured pre-normalization by
+            # _handle_explicit_skill. Without it the impl falls back to
+            # model-dump hashing, which folds in schema defaults and normalizes
+            # timestamp spellings — so A2A would compute a different
+            # equivalence key than MCP/REST for the same buyer request.
+            raw_wire_payload=raw_wire_payload,
         )
 
         return response
 
     async def _handle_sync_creatives_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit sync_creatives skill invocation (AdCP spec endpoint)."""
-        # DEBUG: Log incoming parameters
-        logger.info("[A2A sync_creatives] Received parameters keys: %s", list(parameters.keys()))
-        logger.info("[A2A sync_creatives] assignments param: %s", parameters.get("assignments"))
-        logger.info("[A2A sync_creatives] creatives count: %s", len(parameters.get("creatives", [])))
+        logger.debug(
+            "[A2A sync_creatives] parameter keys: %s, creatives: %d",
+            scrub_control_chars(sorted(parameters.keys())),
+            len(parameters.get("creatives", [])),
+        )
 
         # Create ToolContext from A2A auth info and resolve identity
         tool_context = self._make_tool_context(identity, "sync_creatives")
@@ -1689,30 +2031,46 @@ class AdCPRequestHandler(RequestHandler):
         # Pre-process format_id: upgrade legacy strings to FormatId models.
         from src.core.format_cache import upgrade_legacy_format_id
 
+        require_idempotency_key(parameters.get("idempotency_key"))
         with adcp_validation_boundary(context="sync_creatives request"):
             creatives = []
             for c in parameters["creatives"]:
-                if isinstance(c, dict) and "format_id" in c:
-                    c = {**c, "format_id": upgrade_legacy_format_id(c["format_id"])}
-                creatives.append(CreativeAsset(**c) if isinstance(c, dict) else c)
+                if isinstance(c, dict):
+                    # Mirror the impl's normalization (_sync.py ~L172): `assets` is a
+                    # REQUIRED CreativeAsset field, but a static creative may legitimately
+                    # omit it — the impl defaults it to {}. Do the same here so the A2A
+                    # boundary does not reject creatives the impl would have accepted.
+                    c = {**c, "assets": c.get("assets", {})}
+                    if "format_id" in c:
+                        c = {**c, "format_id": upgrade_legacy_format_id(c["format_id"])}
+                    creatives.append(CreativeAsset(**c))
+                else:
+                    creatives.append(c)
 
             ctx_param = parameters.get("context")
             context = ContextObject(**ctx_param) if isinstance(ctx_param, dict) else ctx_param
 
-        # Call core function with spec-compliant parameters (AdCP v2.5)
-        response = core_sync_creatives_tool(
-            creatives=creatives,
-            # AdCP 2.5: Full upsert semantics (patch parameter removed)
-            creative_ids=parameters.get("creative_ids"),
-            assignments=parameters.get("assignments"),
-            delete_missing=parameters.get("delete_missing", False),
-            dry_run=parameters.get("dry_run", False),
-            validation_mode=parameters.get("validation_mode", "strict"),
-            push_notification_config=parameters.get("push_notification_config"),
-            context=context,
-            account=to_account_reference(parameters.get("account")),
-            identity=identity,
-        )
+        push_notification_config = parameters.get("push_notification_config")
+
+        # Call core with the proof task-local rather than exposing it as a
+        # buyer-visible raw parameter. The sync guard verifies the exact URL.
+        async with validated_callback_url_scope(
+            push_notification_config=push_notification_config,
+        ):
+            response = core_sync_creatives_tool(
+                creatives=creatives,
+                # AdCP 2.5: Full upsert semantics (patch parameter removed)
+                creative_ids=parameters.get("creative_ids"),
+                assignments=parameters.get("assignments"),
+                delete_missing=parameters.get("delete_missing", False),
+                dry_run=parameters.get("dry_run", False),
+                validation_mode=parameters.get("validation_mode", "strict"),
+                push_notification_config=push_notification_config,
+                context=context,
+                account=to_account_reference(parameters.get("account")),
+                idempotency_key=parameters.get("idempotency_key"),
+                identity=identity,
+            )
 
         return response
 
@@ -1837,9 +2195,12 @@ class AdCPRequestHandler(RequestHandler):
         # Import and call the core implementation
         from src.core.tools.capabilities import get_adcp_capabilities_raw
 
-        # Call core function with identity
+        # Call core function with identity, forwarding the buyer's request
+        # context so it is echoed unchanged on the response (#1512). The A2A path
+        # strips only negotiation fields, so context survives in `parameters`.
         response = await get_adcp_capabilities_raw(
             protocols=parameters.get("protocols"),
+            context=parameters.get("context"),
             identity=identity,
         )
 
@@ -1881,8 +2242,14 @@ class AdCPRequestHandler(RequestHandler):
     async def _handle_list_accounts_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit list_accounts skill invocation.
 
-        Authentication is OPTIONAL per BR-RULE-055 — unauthenticated calls
-        return an empty account list.
+        Authentication is REQUIRED. ``dist/docs/3.1.0/accounts/tasks/list_accounts.mdx``
+        (v3.1.1) defines the task as returning "all accounts the authenticated
+        agent can operate on" — every row is scoped to the calling credential,
+        so there is no unauthenticated projection of this task. The skill is
+        therefore absent from ``DISCOVERY_SKILLS``: leaving it there let an
+        unauthenticated caller reach the version check first and learn
+        ``supported_versions`` from a VERSION_UNSUPPORTED rejection, while the
+        ``_impl`` it fronts raises AUTH_REQUIRED regardless.
         """
         from src.core.schemas.account import ListAccountsRequest
 
@@ -1903,6 +2270,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         from src.core.schemas.account import SyncAccountsRequest
 
+        require_idempotency_key(parameters.get("idempotency_key"))
         # Same context string as the REST route's boundary (klkg parity).
         with adcp_validation_boundary(context="sync_accounts request"):
             request = SyncAccountsRequest(
@@ -1910,6 +2278,7 @@ class AdCPRequestHandler(RequestHandler):
                 delete_missing=parameters.get("delete_missing", False),
                 dry_run=parameters.get("dry_run", False),
                 context=parameters.get("context"),
+                idempotency_key=parameters.get("idempotency_key"),
             )
         return await core_sync_accounts_tool(req=request, identity=identity)
 
@@ -1978,18 +2347,40 @@ class AdCPRequestHandler(RequestHandler):
                 context=params.get("context"),
             )
 
-        # Call core function with validated fields + raw nested structures and identity
-        response = core_update_media_buy_tool(
-            media_buy_id=req.media_buy_id or "",
-            paused=req.paused,
-            start_time=params.get("start_time"),
-            end_time=params.get("end_time"),
-            budget=params.get("budget"),
-            packages=params.get("packages"),
-            push_notification_config=params.get("push_notification_config"),
-            context=params.get("context"),
-            identity=identity,
+        # Reject cheap protocol failures before spending resolver capacity on a
+        # buyer-controlled callback URL. Preserve revision presence: explicit
+        # JSON null is supplied, while omission uses the helper's sentinel.
+        revision = params["revision"] if "revision" in params else REVISION_OMITTED
+        validate_update_media_buy_protocol_fields(
+            idempotency_key=params.get("idempotency_key"),
+            revision=revision,
         )
+        push_notification_config = params.get("push_notification_config")
+        reporting_webhook = params.get("reporting_webhook")
+        async with validated_callback_url_scope(
+            push_notification_config=push_notification_config,
+            reporting_webhook=reporting_webhook,
+        ):
+            response = core_update_media_buy_tool(
+                media_buy_id=req.media_buy_id or "",
+                paused=req.paused,
+                flight_start_date=params.get("flight_start_date"),
+                flight_end_date=params.get("flight_end_date"),
+                start_time=params.get("start_time"),
+                end_time=params.get("end_time"),
+                budget=params.get("budget"),
+                currency=params.get("currency"),
+                pacing=params.get("pacing"),
+                daily_budget=params.get("daily_budget"),
+                packages=params.get("packages"),
+                push_notification_config=push_notification_config,
+                context=params.get("context"),
+                reporting_webhook=reporting_webhook,
+                ext=params.get("ext"),
+                idempotency_key=params.get("idempotency_key"),
+                identity=identity,
+                revision=revision,
+            )
 
         return response
 
@@ -2002,8 +2393,10 @@ class AdCPRequestHandler(RequestHandler):
         include_snapshot = params.pop("include_snapshot", False)
         # No REST route exists for get_media_buys; context string follows the
         # same "<tool> request" convention as the sibling boundaries (klkg).
+        # Envelope-tolerant validation runs inside the boundary so AdCP framing
+        # fields are stripped first and any residual error is still translated.
         with adcp_validation_boundary(context="get_media_buys request"):
-            req = GetMediaBuysRequest.model_validate(params)
+            req = _validate_envelope_tolerant(params, GetMediaBuysRequest, operation="get_media_buys")
         response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
 
         return response
@@ -2031,7 +2424,11 @@ class AdCPRequestHandler(RequestHandler):
             params["media_buy_ids"] = [params.pop("media_buy_id")]
 
         with adcp_validation_boundary():
-            req = GetMediaBuyDeliveryRequest.model_validate(params)
+            req = _validate_envelope_tolerant(
+                params,
+                GetMediaBuyDeliveryRequest,
+                operation="get_media_buy_delivery",
+            )
 
         # Call core function with validated fields (all optional per AdCP spec).
         # Every _impl parameter MUST be forwarded (Critical Pattern #5 —
@@ -2066,7 +2463,11 @@ class AdCPRequestHandler(RequestHandler):
         from src.core.schemas import UpdatePerformanceIndexRequest
 
         with adcp_validation_boundary():
-            req = UpdatePerformanceIndexRequest.model_validate(parameters)
+            req = _validate_envelope_tolerant(
+                parameters,
+                UpdatePerformanceIndexRequest,
+                operation="update_performance_index",
+            )
 
         # Call core function with validated fields and identity
         response = core_update_performance_index_tool(

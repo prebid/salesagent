@@ -53,6 +53,18 @@ def _mock_response() -> GetProductsResponse:
     return GetProductsResponse(products=[])
 
 
+def _response_with_fixed_price(fixed_price: float = 5.0) -> GetProductsResponse:
+    """A GetProductsResponse whose single product carries a fixed-price CPM option.
+
+    The pricing-option model is what apply_version_compat reads to derive the
+    v2-compat fields (is_fixed / rate), so the response must carry a real model
+    (not a pre-dumped dict) for the transform to fire.
+    """
+    from tests.helpers.adcp_factories import make_get_products_response_with_pricing
+
+    return make_get_products_response_with_pricing(fixed_price=fixed_price)
+
+
 def _capture_req_via_get_products(brand):
     """Run the real MCP get_products wrapper with `brand`; return the req handed to the impl."""
     from src.core.tools.products import get_products
@@ -331,20 +343,26 @@ class TestRestGetProductsWrapper:
         data = response.json()
         assert "products" in data
 
-    def test_rest_applies_version_compat(self):
-        """REST endpoint applies version compat based on adcp_version in body."""
+    def _post_products(self, body: dict):
+        """POST /api/v1/products (no query pins) with a fixed-price product."""
+        return self._post_products_to("/api/v1/products", body)
+
+    def test_rest_forwards_and_echoes_request_context(self):
+        """REST /products forwards the buyer's context so the response echoes it (#1512).
+
+        REST was the only transport dropping context (MCP/A2A forward it and the impl
+        already echoes ``req.context``). Asserts the actual wire JSON, mutation-sensitive
+        to the REST forward: if the handler drops context, ``req.context`` is None and the
+        echoed response context is absent.
+        """
+
+        async def _echo_context_impl(req, identity):
+            resp = _response_with_fixed_price(fixed_price=5.0)
+            resp.context = req.context  # mirror the production impl's context echo
+            return resp
+
         identity = PrincipalFactory.make_identity(protocol="rest")
-
-        with (
-            patch(
-                "src.core.tools.products._get_products_impl",
-                new_callable=AsyncMock,
-                return_value=_mock_response(),
-            ),
-            patch("src.routes.api_v1.apply_version_compat") as mock_compat,
-        ):
-            mock_compat.return_value = {"products": [], "legacy": True}
-
+        with patch("src.core.tools.products._get_products_impl", new=_echo_context_impl):
             from starlette.testclient import TestClient
 
             from src.app import app
@@ -353,16 +371,139 @@ class TestRestGetProductsWrapper:
             app.dependency_overrides[_require_auth_dep] = lambda: identity
             app.dependency_overrides[_resolve_auth_dep] = lambda: identity
             try:
-                client = TestClient(app)
-                response = client.post(
-                    "/api/v1/products",
-                    json={"brief": "ads", "adcp_version": "2.0.0"},
+                response = TestClient(app).post(
+                    "/api/v1/products", json={"brief": "ads", "context": {"context_id": "ctx-rest-echo"}}
                 )
             finally:
                 app.dependency_overrides.clear()
 
-        mock_compat.assert_called_once()
         assert response.status_code == 200
+        assert response.json()["context"] == {"context_id": "ctx-rest-echo"}
+
+    def _post_products_to(self, url: str, body: dict):
+        """POST to a products URL (optionally carrying query version pins).
+
+        apply_version_compat is NOT mocked — the assertion is on the real wire
+        JSON, so the transform must actually run against the returned model.
+        """
+        identity = PrincipalFactory.make_identity(protocol="rest")
+
+        with patch(
+            "src.core.tools.products._get_products_impl",
+            new_callable=AsyncMock,
+            return_value=_response_with_fixed_price(fixed_price=5.0),
+        ):
+            from starlette.testclient import TestClient
+
+            from src.app import app
+            from src.core.auth_context import _require_auth_dep, _resolve_auth_dep
+
+            app.dependency_overrides[_require_auth_dep] = lambda: identity
+            app.dependency_overrides[_resolve_auth_dep] = lambda: identity
+            try:
+                return TestClient(app).post(url, json=body)
+            finally:
+                app.dependency_overrides.clear()
+
+    def test_rest_unpinned_client_gets_v2_compat_fields_on_the_wire(self):
+        """Unpinned REST client (Body "1.0.0" default) gets v2-compat pricing on the wire.
+
+        Regression for the dict-passthrough no-op (#1546 review): the endpoint must
+        pass the response MODEL to apply_version_compat, not a pre-dumped dict, or
+        the v2 fields are never derived. Asserts the ACTUAL REST JSON, not that the
+        helper was merely called.
+        """
+        response = self._post_products({"brief": "ads"})  # no adcp_version → "1.0.0" default
+
+        assert response.status_code == 200
+        po = response.json()["products"][0]["pricing_options"][0]
+        assert po["is_fixed"] is True, f"unpinned legacy client should get v2-compat is_fixed: {po}"
+        assert po["rate"] == 5.0, f"v2-compat rate must mirror fixed_price: {po}"
+
+    def test_rest_v3_pin_gets_clean_response_no_compat_fields(self):
+        """A same-major v3 pin gets a clean v3 response — proving the compat is version-gated.
+
+        Guards against a regression that unconditionally applies v2 compat: pinning
+        a supported release must NOT inject the v2 is_fixed/rate fields.
+        """
+        from src.core.adcp_version import supported_adcp_versions
+
+        response = self._post_products({"brief": "ads", "adcp_version": supported_adcp_versions()[0]})
+
+        assert response.status_code == 200
+        po = response.json()["products"][0]["pricing_options"][0]
+        assert "is_fixed" not in po, f"v3 client must get a clean response, got v2 fields: {po}"
+        assert "rate" not in po
+
+    def test_rest_query_release_pin_gets_clean_response(self):
+        """A v3 release pinned via the QUERY string gets clean v3, not the v2 shape (#1512).
+
+        Response compat previously gated on GetProductsBody.adcp_version alone
+        (default "1.0.0"), which a query pin never populates — so a v3 query client
+        was silently served is_fixed/rate.
+        """
+        from urllib.parse import quote
+
+        from src.core.adcp_version import supported_adcp_versions
+
+        response = self._post_products_to(
+            f"/api/v1/products?adcp_version={quote(supported_adcp_versions()[0])}", {"brief": "ads"}
+        )
+
+        assert response.status_code == 200
+        po = response.json()["products"][0]["pricing_options"][0]
+        assert "is_fixed" not in po, f"query v3 pin must get a clean response, got v2 fields: {po}"
+        assert "rate" not in po
+
+    def test_rest_body_major_pin_gets_clean_response(self):
+        """A v3 pin via the deprecated body adcp_major_version gets clean v3 (#1512)."""
+        from src.core.adcp_version import adcp_major_version
+
+        response = self._post_products({"brief": "ads", "adcp_major_version": adcp_major_version()})
+
+        assert response.status_code == 200
+        po = response.json()["products"][0]["pricing_options"][0]
+        assert "is_fixed" not in po, f"body major={adcp_major_version()} pin must get a clean response: {po}"
+        assert "rate" not in po
+
+    def test_rest_query_major_pin_gets_clean_response(self):
+        """A v3 pin via the QUERY adcp_major_version gets clean v3 (#1512)."""
+        from src.core.adcp_version import adcp_major_version
+
+        response = self._post_products_to(
+            f"/api/v1/products?adcp_major_version={adcp_major_version()}", {"brief": "ads"}
+        )
+
+        assert response.status_code == 200
+        po = response.json()["products"][0]["pricing_options"][0]
+        assert "is_fixed" not in po, f"query major={adcp_major_version()} pin must get a clean response: {po}"
+        assert "rate" not in po
+
+    def test_rest_conflicting_query_and_body_pins_rejected(self):
+        """Conflicting query vs body release pins are rejected before any response is built (#1512)."""
+        from src.core.adcp_version import supported_adcp_versions
+
+        response = self._post_products_to(
+            "/api/v1/products?adcp_version=4.0", {"brief": "ads", "adcp_version": supported_adcp_versions()[0]}
+        )
+
+        assert response.status_code == 400
+        assert response.json()["adcp_error"]["code"] == "VALIDATION_ERROR"
+
+    def test_rest_matching_query_and_body_pins_pass_clean(self):
+        """The same v3 release pinned in BOTH query and body is accepted and served clean (#1512)."""
+        from urllib.parse import quote
+
+        from src.core.adcp_version import supported_adcp_versions
+
+        pin = supported_adcp_versions()[0]
+        response = self._post_products_to(
+            f"/api/v1/products?adcp_version={quote(pin)}", {"brief": "ads", "adcp_version": pin}
+        )
+
+        assert response.status_code == 200
+        po = response.json()["products"][0]["pricing_options"][0]
+        assert "is_fixed" not in po, f"matching v3 pins must get a clean response: {po}"
 
 
 # ---------------------------------------------------------------------------
