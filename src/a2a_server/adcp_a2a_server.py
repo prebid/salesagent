@@ -1033,42 +1033,68 @@ class AdCPRequestHandler(RequestHandler):
         # result is already Task | Message — yield it directly
         yield result
 
+    def _get_task_or_raise(self, task_id: str) -> Task:
+        """Return the in-memory task, or raise ``TaskNotFoundError``.
+
+        A bare ``None`` return makes the SDK synthesize a generic internal error;
+        the A2A spec defines ``TaskNotFoundError`` for an unknown task id, so
+        raising it is the correct thing to do here and is what an A2A client
+        should be able to react to precisely.
+
+        What a client sees TODAY is still ``-32603``, not the spec's ``-32001``:
+        this app builds its A2A routes with ``enable_v0_3_compat=True``
+        (``src/app.py:306``), so requests dispatch through
+        ``a2a.compat.v0_3.jsonrpc_adapter``, whose ``handle_request`` ends in a
+        bare ``except Exception -> CoreInternalError`` with no ``A2AError -> code``
+        mapping — the mapping the SDK's own main dispatcher performs. Returning
+        ``None`` produces the same ``-32603`` there, so the code cannot be fixed
+        at this layer (#1670). Raising the right type is still correct and is what
+        will surface ``-32001`` the moment that gap closes; the xfail'd
+        live-server test pins the current reality.
+
+        The requested id is put on both the message and structured ``data``.
+        Only the message reaches a client today: the same compat adapter that
+        flattens the code to ``-32603`` rebuilds the error as
+        ``CoreInternalError(message=str(e))``, which drops ``data`` — driving
+        the real route returns ``data: null``. Populating it is still correct
+        and becomes readable when #1670 closes, the same as the code.
+
+        Shared by ``on_get_task`` and ``on_cancel_task`` so both surface the
+        same error.
+        """
+        task = self.tasks.get(task_id)
+        if task is None:
+            raise TaskNotFoundError(message=f"Task not found: {task_id}", data={"task_id": task_id})
+        return task
+
     async def on_get_task(
         self,
         params: GetTaskRequest,
         context: ServerCallContext,
-    ) -> Task | None:
+    ) -> Task:
         """Handle 'tasks/get' method to retrieve task status.
 
-        Args:
-            params: Parameters specifying the task ID
-            context: Server call context
-
-        Returns:
-            Task object if found, otherwise None
+        Raises ``TaskNotFoundError`` for an unknown task id — see
+        ``_get_task_or_raise`` (and #1670 for why the wire code is still -32603).
         """
-        task_id = params.id
-        return self.tasks.get(task_id)
+        return self._get_task_or_raise(params.id)
 
     async def on_cancel_task(
         self,
         params: CancelTaskRequest,
         context: ServerCallContext,
-    ) -> Task | None:
+    ) -> Task:
         """Handle 'tasks/cancel' method to cancel a task.
 
-        Args:
-            params: Parameters specifying the task ID
-            context: Server call context
-
-        Returns:
-            Task object with canceled status, or None if not found
+        Raises ``TaskNotFoundError`` for an unknown task id — cancelling a task
+        that does not exist is the same not-found condition as get, not a silent
+        no-op. See ``_get_task_or_raise`` (and #1670 for why the wire code is
+        still -32603).
         """
-        task_id = params.id
-        task = self.tasks.get(task_id)
-        if task:
-            task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_CANCELED))
-            self.tasks[task_id] = task
+        task = self._get_task_or_raise(params.id)
+        # CopyFrom mutates the stored Task in place — self.tasks already holds
+        # this exact reference, so re-storing it would rebind the same object.
+        task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_CANCELED))
         return task
 
     async def on_list_tasks(
