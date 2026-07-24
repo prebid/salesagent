@@ -449,7 +449,12 @@ def _version_unsupported_error(
             **advisory_build_version_field(),
         },
         suggestion="Re-pin adcp_version to a supported_versions entry and retry the request.",
-        context=context if isinstance(context, dict) else None,
+        # Narrowing to dict-or-None happens once, centrally, at serialization
+        # time (src.core.exceptions._serialize_context /
+        # serialize_application_context) — every AdCPError.__init__ stores
+        # ``context`` as given, so a second narrowing here was a duplicate of
+        # that boundary decision, not a distinct one.
+        context=context,
     )
 
 
@@ -474,7 +479,9 @@ def _version_malformed_error(field: str, echo_value: Any, *, context: Any = None
         field=field,
         details={field: echo},
         suggestion="Send a well-formed adcp_version (MAJOR.MINOR) or omit the field.",
-        context=context if isinstance(context, dict) else None,
+        # See _version_unsupported_error above: narrowing happens centrally at
+        # serialization time, not at each raise site.
+        context=context,
     )
 
 
