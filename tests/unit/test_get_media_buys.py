@@ -614,11 +614,11 @@ class TestTargetingOverlayRoundTrip:
         """A single bad package_config row must not crash the response.
 
         Corrupted row → targeting_overlay=None for THAT package + one
-        ``TARGETING_REHYDRATION_FAILED`` entry on ``response.errors``. The
-        rest of the buy still renders (round-trip resilience). Catches only
-        ``TypeError`` (real corruption) — pydantic ``ValidationError`` is
-        intentionally NOT caught so dev/CI canary fires on field-declaration
-        drift (CLAUDE.md "No Quiet Failures").
+        ``CONFIGURATION_ERROR`` advisory on ``response.errors`` (message marked
+        ``TARGETING_REHYDRATION_FAILED``). The rest of the buy still renders
+        (round-trip resilience). Catches only ``TypeError`` (real corruption) —
+        pydantic ``ValidationError`` is intentionally NOT caught so dev/CI
+        canary fires on field-declaration drift (CLAUDE.md "No Quiet Failures").
         """
         buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
         # Bad row: package_config["targeting_overlay"] is a list, not a dict
@@ -647,13 +647,13 @@ class TestTargetingOverlayRoundTrip:
         assert good_response_pkg.targeting_overlay.property_list.list_id == "v1"
 
         # Failure surfaced via the response errors channel — buyer can reconcile.
-        # Platform code ``TARGETING_REHYDRATION_FAILED`` (open vocabulary) +
-        # ``recovery="terminal"`` (seller/admin must repair the row; retrying
-        # cannot help — creatives/_processing.py admin-fixable-defect pattern).
+        # Wire ``CONFIGURATION_ERROR`` + ``recovery="terminal"`` (seller/admin
+        # must repair; retry cannot help). Message prefix keeps the routing
+        # marker for BR-RULE-294 graders.
         assert response.errors is not None
         assert len(response.errors) == 1
         err = response.errors[0]
-        assert err.code == "TARGETING_REHYDRATION_FAILED"
+        assert err.code == "CONFIGURATION_ERROR"
         assert "TARGETING_REHYDRATION_FAILED" in err.message
         assert err.field is not None and "targeting_overlay" in err.field
         # BR-RULE-294 / UC-019: seller-side imperative suggestion (buyer cannot

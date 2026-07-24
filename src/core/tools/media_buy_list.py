@@ -210,7 +210,7 @@ def _get_media_buys_impl(
             # before the targeting_overlay rename (see media_buy_create.py:638-642).
             # A single corrupted package_config row must not crash the whole tenant's
             # get_media_buys response — log the bad row, surface a non-fatal
-            # TARGETING_REHYDRATION_FAILED on the response's errors channel, and
+            # CONFIGURATION_ERROR (TARGETING_REHYDRATION_FAILED message) on errors[], and
             # set this package's targeting_overlay=None so the rest of the buy
             # still renders.
             #
@@ -236,18 +236,15 @@ def _get_media_buys_impl(
                         exc,
                     )
                     # Seller-side persisted-data integrity failure (buyer cannot
-                    # fix the row). Platform code is open-vocabulary on
-                    # error.json ``code`` (string, not a closed enum) — emit
-                    # ``TARGETING_REHYDRATION_FAILED`` so callers can route on
-                    # the code, not message grepping. ``recovery="terminal"``
-                    # matches AdCP error.json (terminal = human/seller action)
-                    # and the creatives/_processing.py pattern for
-                    # admin-fixable defects (``AdCPConfigurationError`` →
-                    # ``recovery="terminal"``); retrying get_media_buys cannot
-                    # repair a corrupt package_config row.
+                    # fix the row). Wire code ``CONFIGURATION_ERROR`` +
+                    # ``recovery="terminal"`` is the pinned AdCP enum pair for
+                    # seller-operator repair (MUST NOT auto-retry). Keep the
+                    # ``TARGETING_REHYDRATION_FAILED:`` message prefix as a
+                    # routing marker; creatives/_processing.py uses the same
+                    # terminal profile for admin-fixable defects.
                     hydration_errors.append(
                         Error(  # structural-guard: advisory per-package result in GetMediaBuysResponse.errors[]
-                            code="TARGETING_REHYDRATION_FAILED",
+                            code="CONFIGURATION_ERROR",
                             message=(
                                 f"TARGETING_REHYDRATION_FAILED: targeting overlay for "
                                 f"package '{pkg_id}' on media buy '{buy.media_buy_id}' "

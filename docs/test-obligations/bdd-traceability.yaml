@@ -11141,6 +11141,12 @@ mappings:
       upstream_refs: ["BR-RULE-294"]
       business_rules: ["BR-RULE-294"]
       status: new
+    - adcp_scenario_id: "T-UC-019-boundary-targeting-overlay-multi"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-294"]
+      business_rules: ["BR-RULE-294"]
+      status: new
     - adcp_scenario_id: "T-UC-019-storyboard-post-create-status-poll"
       adcp_feature: "BR-UC-019-query-media-buys.feature"
       obligation_id: null

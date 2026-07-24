@@ -530,7 +530,7 @@ def given_package_targeting_overlay_is_string(ctx: dict, pkg_id: str) -> None:
 
     ``Targeting(**"not a dict")`` raises ``TypeError``; production catches that
     narrowly, nulls the overlay, and appends a non-fatal
-    ``TARGETING_REHYDRATION_FAILED`` advisory (``recovery=terminal``). Buyer-facing
+    ``CONFIGURATION_ERROR`` advisory (``recovery=terminal``; message marked TARGETING_REHYDRATION_FAILED). Buyer-facing
     INV-3 is graded on the wire ``errors[]`` Thens, not server-side logs.
     """
     _mutate_package_targeting(ctx, pkg_id, overlay="not a dict", legacy=None, clear_modern=False)
@@ -2884,13 +2884,11 @@ def then_no_rehydration_error_for_package(ctx: dict, pkg_id: str) -> None:
 
 
 @then(
-    parsers.parse(
-        'response.errors[] should include a TARGETING_REHYDRATION_FAILED entry with suggestion referencing "{token}"'
-    )
+    parsers.parse('response.errors[] should include a CONFIGURATION_ERROR entry with suggestion referencing "{token}"')
 )
 def then_errors_include_rehydration_with_suggestion(ctx: dict, token: str) -> None:
-    """Assert a TARGETING_REHYDRATION_FAILED advisory carries a seller-facing suggestion."""
-    then_response_errors_include_code(ctx, "TARGETING_REHYDRATION_FAILED")
+    """Assert a CONFIGURATION_ERROR rehydration advisory carries a seller-facing suggestion."""
+    then_response_errors_include_code(ctx, "CONFIGURATION_ERROR")
     suggestion = str(_error_attr(_require_matched(ctx), "suggestion") or "").lower()
     assert token.lower() in suggestion, f"Expected suggestion to reference {token!r}, got {suggestion!r}"
 
@@ -2904,13 +2902,13 @@ def then_both_packages_targeting_null(ctx: dict, pkg1: str, pkg2: str) -> None:
 
 @then(
     parsers.parse(
-        'response.errors[] should include two TARGETING_REHYDRATION_FAILED entries each with suggestion referencing "{token}"'
+        'response.errors[] should include two CONFIGURATION_ERROR entries each with suggestion referencing "{token}"'
     )
 )
 def then_two_rehydration_errors_with_suggestion(ctx: dict, token: str) -> None:
-    """Assert exactly two TARGETING_REHYDRATION_FAILED advisories, each with suggestion."""
-    errors = [e for e in _response_errors(ctx) if _error_attr(e, "code") == "TARGETING_REHYDRATION_FAILED"]
-    assert len(errors) == 2, f"Expected 2 TARGETING_REHYDRATION_FAILED entries, got {len(errors)}"
+    """Assert exactly two CONFIGURATION_ERROR rehydration advisories, each with suggestion."""
+    errors = [e for e in _response_errors(ctx) if _error_attr(e, "code") == "CONFIGURATION_ERROR"]
+    assert len(errors) == 2, f"Expected 2 CONFIGURATION_ERROR entries, got {len(errors)}"
     for err in errors:
         suggestion = str(_error_attr(err, "suggestion") or "").lower()
         assert token.lower() in suggestion, f"Expected suggestion to reference {token!r}, got {suggestion!r}"
@@ -2941,28 +2939,26 @@ def then_corrupted_null_siblings_ok(ctx: dict) -> None:
 
 @then(
     parsers.parse(
-        'response.errors[] should include exactly one TARGETING_REHYDRATION_FAILED entry with suggestion referencing "{token}"'
+        'response.errors[] should include exactly one CONFIGURATION_ERROR entry with suggestion referencing "{token}"'
     )
 )
 def then_exactly_one_rehydration_with_suggestion(ctx: dict, token: str) -> None:
-    """Assert exactly one TARGETING_REHYDRATION_FAILED advisory with suggestion token."""
-    errors = [e for e in _response_errors(ctx) if _error_attr(e, "code") == "TARGETING_REHYDRATION_FAILED"]
-    assert len(errors) == 1, f"Expected 1 TARGETING_REHYDRATION_FAILED entry, got {len(errors)}"
+    """Assert exactly one CONFIGURATION_ERROR rehydration advisory with suggestion token."""
+    errors = [e for e in _response_errors(ctx) if _error_attr(e, "code") == "CONFIGURATION_ERROR"]
+    assert len(errors) == 1, f"Expected 1 CONFIGURATION_ERROR entry, got {len(errors)}"
     ctx["matched_response_error"] = errors[0]
     suggestion = str(_error_attr(errors[0], "suggestion") or "").lower()
     assert token.lower() in suggestion, f"Expected suggestion to reference {token!r}, got {suggestion!r}"
 
 
 @then(
-    parsers.parse(
-        'response.errors[] should include exactly one TARGETING_REHYDRATION_FAILED entry for ("{mb_id}", "{pkg_id}")'
-    )
+    parsers.parse('response.errors[] should include exactly one CONFIGURATION_ERROR entry for ("{mb_id}", "{pkg_id}")')
 )
 def then_exactly_one_rehydration_for_pair(ctx: dict, mb_id: str, pkg_id: str) -> None:
-    """Assert exactly one TARGETING_REHYDRATION_FAILED advisory for the (buy, package) pair."""
+    """Assert exactly one CONFIGURATION_ERROR rehydration advisory for the (buy, package) pair."""
     real_mb = _resolve_media_buy_id(ctx, mb_id)
-    errors = [e for e in _response_errors(ctx) if _error_attr(e, "code") == "TARGETING_REHYDRATION_FAILED"]
-    assert len(errors) == 1, f"Expected 1 TARGETING_REHYDRATION_FAILED entry, got {len(errors)}"
+    errors = [e for e in _response_errors(ctx) if _error_attr(e, "code") == "CONFIGURATION_ERROR"]
+    assert len(errors) == 1, f"Expected 1 CONFIGURATION_ERROR entry, got {len(errors)}"
     err = errors[0]
     message = str(_error_attr(err, "message") or "")
     field = str(_error_attr(err, "field") or "")
