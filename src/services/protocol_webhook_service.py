@@ -33,8 +33,11 @@ from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.lifecycle import register_shutdown
 from src.core.logging_config import scrub_control_chars
 from src.core.security.webhook_http import (
+    BEARER_AUTH_SCHEME,
+    HMAC_AUTH_SCHEME,
     UnsafeWebhookTargetError,
     create_pinned_webhook_session,
+    is_auth_scheme,
     post_webhook_status_async,
 )
 
@@ -142,7 +145,7 @@ class ProtocolWebhookService:
 
         # Apply authentication based on schemes
         if (
-            push_notification_config.authentication_type == "HMAC-SHA256"
+            is_auth_scheme(push_notification_config.authentication_type, HMAC_AUTH_SCHEME)
             and push_notification_config.authentication_token
         ):
             # Legacy HMAC-SHA256 profile. sign_legacy_webhook returns the signature
@@ -159,7 +162,7 @@ class ProtocolWebhookService:
             # everywhere else.
             body_bytes = _canonical_body_bytes(payload_dict)
             if (
-                push_notification_config.authentication_type == "Bearer"
+                is_auth_scheme(push_notification_config.authentication_type, BEARER_AUTH_SCHEME)
                 and push_notification_config.authentication_token
             ):
                 headers["Authorization"] = f"Bearer {push_notification_config.authentication_token}"

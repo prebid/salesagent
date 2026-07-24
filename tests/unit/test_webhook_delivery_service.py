@@ -284,7 +284,8 @@ def test_authentication_headers(webhook_service, mock_db_session):
         # Test bearer auth
         mock_config = MagicMock()
         mock_config.url = "https://example.com/webhook"
-        mock_config.authentication_type = "bearer"
+        # The AdCP scheme spelling (core/push_notification_config.json v3.1.1).
+        mock_config.authentication_type = "Bearer"
         mock_config.authentication_token = "secret_token"
         mock_config.validation_token = "validation_token"
         mock_config.webhook_secret = None

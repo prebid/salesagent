@@ -395,9 +395,21 @@ class TestSendWebhookEnhancedBearerAuth:
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-08
     """
 
-    def test_bearer_token_sent_in_authorization_header(self, integration_db):
-        """When authentication_type='bearer' and authentication_token is set,
-        Authorization header is sent with 'Bearer <token>'.
+    @pytest.mark.parametrize(
+        "configured_scheme",
+        ["Bearer", "bearer"],
+        ids=["adcp-spelling", "legacy-lowercase-row"],
+    )
+    def test_bearer_token_sent_in_authorization_header(self, integration_db, configured_scheme):
+        """A configured Bearer scheme puts 'Bearer <token>' on the wire.
+
+        ``core/push_notification_config.json`` (v3.1.1) enumerates the scheme as
+        ``Bearer``, and the A2A/REST intake stores ``authentication.scheme``
+        verbatim — so the CAPITALIZED spelling is what a conformant config
+        actually carries. Pinning only the lowercase spelling let an
+        exact-match comparison ship that delivered every conformant Bearer
+        webhook with no Authorization header at all. The legacy row is kept as
+        a second case because pre-existing rows hold it.
 
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-08
         """
@@ -415,7 +427,7 @@ class TestSendWebhookEnhancedBearerAuth:
                 tenant=tenant,
                 principal=principal,
                 url="https://bearer.example.com/webhook",
-                authentication_type="bearer",
+                authentication_type=configured_scheme,
                 authentication_token="my-secret-token-xyz",
             )
 

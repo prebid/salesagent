@@ -32,10 +32,12 @@ from src.core.database.repositories.push_notification_config import PushNotifica
 from src.core.database.repositories.uow import PushNotificationConfigUoW
 from src.core.logging_config import scrub_control_chars
 from src.core.security.webhook_http import (
+    BEARER_AUTH_SCHEME,
     WEBHOOK_DELIVERY_DEADLINE_SECONDS,
     WEBHOOK_DELIVERY_MAX_WORKERS,
     UnsafeWebhookTargetError,
     create_pinned_webhook_session,
+    is_auth_scheme,
     post_webhook_status,
 )
 
@@ -301,7 +303,7 @@ class WebhookDeliveryService:
                 totals["ctr"] = ctr
 
             logger.info(
-                f"📤 Delivery webhook #{sequence_number} for {media_buy_id}: "
+                f"📤 Delivery webhook #{sequence_number} for {scrub_control_chars(media_buy_id)}: "
                 f"{impressions:,} imps, ${spend:,.2f} "
                 f"[{notification_type}{'|adjusted' if is_adjusted else ''}]"
             )
@@ -318,7 +320,7 @@ class WebhookDeliveryService:
 
         except Exception as e:
             logger.error(
-                f"❌ Failed to send delivery webhook for {media_buy_id}: {scrub_control_chars(str(e))}",
+                f"❌ Failed to send delivery webhook for {scrub_control_chars(media_buy_id)}: {scrub_control_chars(str(e))}",
                 exc_info=True,
             )
             return False
@@ -472,7 +474,7 @@ class WebhookDeliveryService:
                 logger.warning(
                     f"⚠️ Webhook secret for {scrub_control_chars(config.url)} is too weak (min 32 characters required)"
                 )
-        if config.authentication_type == "bearer" and config.authentication_token:
+        if is_auth_scheme(config.authentication_type, BEARER_AUTH_SCHEME) and config.authentication_token:
             headers["Authorization"] = f"Bearer {config.authentication_token}"
         return headers
 

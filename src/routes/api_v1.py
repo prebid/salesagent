@@ -136,7 +136,11 @@ def _merge_rest_version_pins(
                     "body_value": body_value,
                 },
                 suggestion=f"Send {field} in one location, or send the same value in both.",
-                context=context if isinstance(context, dict) else None,
+                # The NEGOTIATED context, not the body's: this function resolves
+                # context query-then-body, so reading ``body.get("context")``
+                # here dropped a query-supplied context from the one error the
+                # buyer gets back — the echo contract holds on error too.
+                context=merged.get("context"),
             )
         merged[field] = body_value
     return merged

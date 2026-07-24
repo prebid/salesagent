@@ -18,6 +18,25 @@ from src.core.webhook_validator import (
     webhook_url_has_embedded_credentials,
 )
 
+# AdCP legacy webhook authentication schemes, spelled exactly as the protocol
+# does. ``core/push_notification_config.json`` (v3.1.1) enumerates
+# ``['Bearer']`` and ``['HMAC-SHA256']``, and the A2A/REST intake stores
+# ``authentication.scheme`` verbatim — so a conformant config is capitalized.
+# Comparing against a lowercase literal silently produced an unauthenticated
+# delivery, which is why every comparison now goes through ``is_auth_scheme``.
+BEARER_AUTH_SCHEME = "Bearer"
+HMAC_AUTH_SCHEME = "HMAC-SHA256"
+
+
+def is_auth_scheme(configured: str | None, scheme: str) -> bool:
+    """Match a stored ``authentication_type`` against an AdCP scheme, case-insensitively.
+
+    The comparison is case-insensitive because rows predating the protocol
+    spelling exist; the canonical spelling is the constant, not the stored value.
+    """
+    return configured is not None and configured.casefold() == scheme.casefold()
+
+
 WEBHOOK_DNS_TIMEOUT_SECONDS = 2.0
 WEBHOOK_DELIVERY_DEADLINE_SECONDS = 12.0
 WEBHOOK_DELIVERY_MAX_WORKERS = 4
