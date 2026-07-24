@@ -30,11 +30,12 @@ def make_pending_media_buy(integration_db):
     """Factory for a pending-approval media buy wired for the admin approve/reject webhook path.
 
     Builds (via factories + ContextManager production APIs — no session.add in the
-    test body) a tenant + principal, a pending_approval media buy, an active
-    PushNotificationConfig at WEBHOOK_URL, and a tenant-scoped approval workflow step
-    whose ObjectWorkflowMapping ties it to the media buy with action "reject". All rows
-    are committed (factories persist on commit; ContextManager commits its own writes)
-    so the Flask route's separate get_db_session() sees them.
+    test body) a tenant + principal, a pending_approval media buy with an approved
+    CreativeAssignment (required for the approve finalize/webhook path after #1696),
+    an active PushNotificationConfig at WEBHOOK_URL, and a tenant-scoped approval
+    workflow step whose ObjectWorkflowMapping ties it to the media buy with action
+    "reject". All rows are committed (factories persist on commit; ContextManager
+    commits its own writes) so the Flask route's separate get_db_session() sees them.
 
     ``request_data_context``: optional dict stored as ``request_data["context"]`` on
     the workflow step — drives the approve webhook's context-echo branch.
@@ -48,6 +49,8 @@ def make_pending_media_buy(integration_db):
     from src.core.database.database_session import get_engine
     from tests.factories import (
         ALL_FACTORIES,
+        CreativeAssignmentFactory,
+        CreativeFactory,
         MediaBuyFactory,
         MediaPackageFactory,
         PricingOptionFactory,
@@ -103,6 +106,19 @@ def make_pending_media_buy(integration_db):
                 "budget": 5000.0,
                 "pricing_option_id": "cpm_usd_fixed",
             },
+        )
+        # Approved creative assignment required for finalize (#1696 Hold): zero
+        # assignments parks at pending_creatives and skips adapter + approve webhook.
+        creative = CreativeFactory(
+            tenant=tenant,
+            principal=principal,
+            creative_id="cre_reject_wh_1",
+            approved=True,
+        )
+        CreativeAssignmentFactory(
+            creative=creative,
+            media_buy=media_buy,
+            package_id="pkg_reject_wh_1",
         )
         PushNotificationConfigFactory(
             tenant=tenant,
