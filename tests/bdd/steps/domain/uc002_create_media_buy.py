@@ -1906,9 +1906,20 @@ def then_error_references_missing_field(ctx: dict, field: str) -> None:
     message contains "idempotency_key" regardless of what ``field`` the
     envelope carries, so injecting a wrong ``field`` into the shared factory
     reddened the three siblings and left this one green.
+
+    Routes through ``wire_error_envelope`` (single source of truth, shared
+    with the other wire-first Then steps in this module) rather than a local
+    ``result.wire_error_envelope is not None`` check: that local check could
+    not distinguish "IMPL/pre-dispatch, legitimately no wire" from "a real
+    transport failed to stash the wire" and silently fell back to the
+    reconstructed exception in both cases — the second case is a dispatcher
+    regression that must fail loud, not pass against a lossy reconstruction.
     """
+    from tests.bdd.steps._outcome_helpers import wire_error_envelope
+
     result = ctx.get("result")
-    if result is not None and result.wire_error_envelope is not None:
+    envelope = wire_error_envelope(ctx)
+    if envelope is not None:
         result.assert_wire_error(
             "VALIDATION_ERROR",
             recovery="correctable",
@@ -1917,9 +1928,9 @@ def then_error_references_missing_field(ctx: dict, field: str) -> None:
         )
         return
 
-    # No wire was captured (IMPL altitude, or a rejection raised before any
-    # transport). Fall back to the reconstructed error rather than failing the
-    # scenario, but keep the pin as tight as the layer allows.
+    # Legitimately no wire (IMPL altitude, or a rejection raised before any
+    # transport). Fall back to the reconstructed error, but keep the pin as
+    # tight as the layer allows.
     error = ctx.get("error")
     assert error is not None, f"No error in ctx — expected a validation error naming the missing '{field}' field"
 
