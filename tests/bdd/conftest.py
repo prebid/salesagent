@@ -1080,6 +1080,27 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             if tag in marker_names:
                 item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
 
+        # --- UC-010: pricing degrade partition — MCP serializes explicit null (#1710) ---
+        # When the adapter reports no pricing models the field must be ABSENT on
+        # the wire (minItems: 1 forbids [], the non-nullable array schema forbids
+        # null). REST/A2A omit the key via exclude-none; MCP's structured_content
+        # serializes an explicit `null`, which the pinned 3.1.1 response schema
+        # rejects. Pre-existing and repo-wide (~12 sibling optionals), tracked in
+        # #1710 — strict, so the transport-level exclude-none fix surfaces as an
+        # xpass here instead of being silently swallowed.
+        if "T-UC-010-pricing-degrade" in marker_names and is_mcp:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason=(
+                        "SPEC-PRODUCTION GAP (#1710): MCP structured_content emits "
+                        "supported_pricing_models: null when the field is absent; the pinned "
+                        "3.1.1 schema types it as a non-nullable array. REST/A2A omit the key "
+                        "correctly."
+                    ),
+                    strict=True,
+                )
+            )
+
         # UC-006: assignment_package_validation — PACKAGE_NOT_FOUND outcome not
         # wired in the Then step dispatch (raises ValueError). The production
         # error is AdCPNotFoundError('NOT_FOUND'), spec demands 'PACKAGE_NOT_FOUND'.
@@ -3426,12 +3447,17 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
     elif uc == "UC-010":
         # get_adcp_capabilities — CapabilitiesEnv mocks nothing: the answer is
         # derived from the tenant row, its publisher partnerships and the bound
-        # ad-server adapter, all of which are real here. Only @T-UC-010-pricing
-        # (POST-S10) has step definitions today; the other ~77 scenarios xfail
-        # fast at the fixture (mirrors UC-018) rather than spinning up a DB per
-        # scenario only to auto-xfail at the first missing step.
+        # ad-server adapter, all of which are real here (the degrade partitions
+        # pin the resolved adapter's pricing surface via
+        # env.set_adapter_pricing_models, nothing else). The three POST-S10
+        # scenarios — @T-UC-010-pricing, @T-UC-010-pricing-degrade,
+        # @T-UC-010-pricing-offenum — have step definitions today; the other
+        # ~77 scenarios xfail fast at the fixture (mirrors UC-018) rather than
+        # spinning up a DB per scenario only to auto-xfail at the first missing
+        # step.
         marker_names = {m.name for m in request.node.iter_markers()}
-        if "T-UC-010-pricing" in marker_names:
+        _uc010_wired = {"T-UC-010-pricing", "T-UC-010-pricing-degrade", "T-UC-010-pricing-offenum"}
+        if marker_names & _uc010_wired:
             from tests.harness.capabilities import CapabilitiesEnv
 
             with _db_scope_for(request, e2e_config), CapabilitiesEnv(e2e_config=e2e_config) as env:
@@ -3441,7 +3467,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["principal"] = principal
                 yield
         else:
-            pytest.xfail("UC-010 harness wired only for the @T-UC-010-pricing scenario")
+            pytest.xfail(
+                "UC-010 harness wired only for the @T-UC-010-pricing / -pricing-degrade / -pricing-offenum scenarios"
+            )
 
     elif uc == "UC-011":
         marker_names = {m.name for m in request.node.iter_markers()}

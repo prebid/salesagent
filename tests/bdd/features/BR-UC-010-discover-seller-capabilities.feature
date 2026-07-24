@@ -116,11 +116,37 @@ Feature: BR-UC-010 Discover Seller Capabilities
   Scenario: Capabilities response includes supported pricing models
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
-    When the Buyer Agent calls get_adcp_capabilities MCP tool
+    When the Buyer Agent requests capabilities
     Then media_buy.supported_pricing_models should be a non-empty array
     And each pricing model should be a valid pricing-model enum value
     # POST-S10: Buyer knows supported pricing models across seller's portfolio
     # POST-S10: Buyer knows the supported pricing models
+    # Local edit (PR #1677 round 4): the When is transport-blind because this
+    # scenario carries no transport tag and runs on a2a/mcp/rest(+e2e_rest); the
+    # family-wide "MCP tool" reword rides with the #1709 harness pass. Mirror
+    # upstream in adcp-req.
+
+  @T-UC-010-pricing-degrade @partition @post-s10
+  Scenario: Pricing models degrade to absent when the adapter reports none
+    Given a tenant is resolvable from the request context
+    And the tenant's adapter reports no pricing models
+    When the Buyer Agent requests capabilities
+    Then media_buy.supported_pricing_models should be absent from the wire body
+    # POST-S10 degrade contract (PR #1677): an empty/unrecognized surface is
+    # "unknown" — minItems: 1 forbids [] and the non-nullable array forbids null,
+    # so the field must be OMITTED and the read must still succeed.
+    # Local partition added in PR #1677 round 4; mirror upstream in adcp-req.
+
+  @T-UC-010-pricing-offenum @partition @post-s10
+  Scenario: Unrecognized pricing models are skipped and recognized ones survive
+    Given a tenant is resolvable from the request context
+    And the tenant's adapter reports pricing models "CPM, shady_deal"
+    When the Buyer Agent requests capabilities
+    Then media_buy.supported_pricing_models should be exactly "cpm"
+    # POST-S10 degrade contract (PR #1677): mixed case folds in ("CPM" -> cpm),
+    # off-enum never reaches the wire ("shady_deal" is skipped + logged), and the
+    # read succeeds instead of 500-ing on an ad server's spelling.
+    # Local partition added in PR #1677 round 4; mirror upstream in adcp-req.
 
   @T-UC-010-audience-caps @main-flow @post-s12
   Scenario: Capabilities response includes audience targeting capabilities when feature enabled

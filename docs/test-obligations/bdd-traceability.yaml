@@ -6176,6 +6176,18 @@ mappings:
       upstream_refs: ["BR-UC-010-main-mcp"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-010-pricing-degrade"
+      adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-010-main-mcp"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-pricing-offenum"
+      adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-010-main-mcp"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-010-audience-caps"
       adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
       obligation_id: null
