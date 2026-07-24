@@ -34,8 +34,13 @@ def test_first_validation_error_field_is_owned_by_exception_leaf_module():
     assert first_validation_error_field.__module__ == "src.core.exceptions"
 
 
-def test_create_media_buy_boundary_validation_preserves_field_suggestion():
-    """Boundary request construction keeps the current field-specific hint."""
+def test_create_media_buy_boundary_validation_emits_canonical_suggestion():
+    """Boundary emits the per-code canonical suggestion, still reporting the field path.
+
+    The offending field is still surfaced as ``field``; the ``suggestion`` is the
+    VALIDATION_ERROR canonical enumMetadata text (uniform across transports), not a
+    field-specific hint.
+    """
     from src.core.tools.media_buy_create import _build_create_media_buy_request
 
     with pytest.raises(AdCPValidationError) as exc_info:
@@ -54,8 +59,31 @@ def test_create_media_buy_boundary_validation_preserves_field_suggestion():
         )
 
     error = exc_info.value
+    assert error.error_code == "VALIDATION_ERROR"
     assert error.field == "idempotency_key"
-    assert error.suggestion == ("Provide the required 'idempotency_key' field and resend the request.")
+    assert error.suggestion == "review error details and fix field values"
+
+
+def test_canonical_suggestions_are_actionable():
+    """Every per-code canonical suggestion the boundary emits must pass the BDD
+    harness's actionability check (``then_error_has_fix_suggestion``).
+
+    The harness accepts a suggestion only if it contains an imperative verb from
+    ``FIX_SUGGESTION_ACTION_VERBS``. The spec-canonical VALIDATION_ERROR text
+    ("review error details and fix field values") relies on "review"/"fix". If a
+    future edit drops those verbs from the harness list — or a constant drifts to
+    non-actionable wording — a graduating sandbox-validation scenario would red on
+    spec-correct output; this pins that alignment so it reddens HERE first.
+    """
+    from src.core.exceptions import INVALID_REQUEST_SUGGESTION, VALIDATION_ERROR_SUGGESTION
+    from tests.bdd.steps.generic.then_error import FIX_SUGGESTION_ACTION_VERBS, suggestion_has_action_verb
+
+    for suggestion in (VALIDATION_ERROR_SUGGESTION, INVALID_REQUEST_SUGGESTION):
+        assert suggestion_has_action_verb(suggestion), (
+            f"Canonical suggestion {suggestion!r} contains no harness action verb "
+            f"({', '.join(sorted(FIX_SUGGESTION_ACTION_VERBS))}) — a graduating BDD "
+            "scenario asserting actionable guidance would fail on spec-correct output."
+        )
 
 
 def test_brand_target_audience_must_be_string():

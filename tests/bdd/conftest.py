@@ -180,9 +180,26 @@ _XFAIL_TAGS: dict[str, str] = {
     # FIXME(salesagent-12nd): UC-002 ASAP — response doesn't expose resolved start_time
     "T-UC-002-alt-asap": "response lacks resolved start_time field — spec-production gap",
     # FIXME(salesagent-fie): UC-002 error code mismatch — Pydantic VALIDATION_ERROR vs spec INVALID_REQUEST
-    "T-UC-002-inv-087-5": "duplicate optimization_goals priority: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
-    "T-UC-002-inv-087-6": "empty optimization_goals array: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
-    "T-UC-002-inv-087-7": "per_ad_spend without value_field: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
+    # Deliberate uniform divergence (NOT a gap): the boundary emits VALIDATION_ERROR for these
+    # schema-validation failures while the storyboard grades INVALID_REQUEST — see the CODE-choice
+    # note in adcp_validation_boundary. Scenario asserts the storyboard code, so it stays xfailed.
+    "T-UC-002-inv-087-5": "duplicate optimization_goals priority: boundary emits VALIDATION_ERROR, storyboard grades INVALID_REQUEST — deliberate divergence",
+    "T-UC-002-inv-087-6": "empty optimization_goals array: boundary emits VALIDATION_ERROR, storyboard grades INVALID_REQUEST — deliberate divergence",
+    "T-UC-002-inv-087-7": "per_ad_spend without value_field: boundary emits VALIDATION_ERROR, storyboard grades INVALID_REQUEST — deliberate divergence",
+    # FIXME(#1652): BR-RULE-015 INV-6 — production DOES validate asset_type (the CreativeAsset
+    # discriminated union raises union_tag_not_found), but the WIRE outcome differs per transport
+    # and none matches the scenario's graded "VALIDATION_ERROR referencing asset_type" shape:
+    #   a2a / rest: creative processing rejects with CREATIVE_REJECTED (not VALIDATION_ERROR) — fails
+    #               the earlier validation-error Then.
+    #   mcp: an earlier crash in the idempotency canonical hash (media_buy_create.py
+    #        canonical_payload_hash(raw_wire_payload) -> rfc8785 chokes on a live FormatId ->
+    #        CanonicalizationError) is normalized to VALIDATION_ERROR "unsupported type: FormatId";
+    #        passes Thens 1-2 off that crash envelope, fails Then#3 (message is FormatId, not asset_type).
+    #        (a2a/rest use canonical_request_hash(req), which model_dumps the FormatId, so they don't hit
+    #        it.) That FormatId crash is a separate production bug (tracked in #1679).
+    # Strict-xfailed until the code reconciles (fix the mcp crash AND surface the asset_type rejection
+    # as VALIDATION_ERROR, or reconcile the scenario to CREATIVE_REJECTED); flips XPASS->FAILED then.
+    "T-UC-002-inv-015-6": "asset_type IS validated but wire code differs per transport (a2a/rest CREATIVE_REJECTED; mcp FormatId CanonicalizationError) — not yet the graded VALIDATION_ERROR",
     # FIXME(beads-dul): disclosure_positions filter not implemented in production
     # Note: violated/nofield pass vacuously (field rejected at schema level)
     "T-UC-005-inv-049-8-holds": "disclosure_positions filter not implemented",
@@ -286,10 +303,11 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-002-ext-j": "adapter failure raises exception, no failed result envelope or suggestion — spec-production gap",
     "T-UC-002-inv-026-2": "INVALID_CREATIVES error lacks suggestion field",
     "T-UC-002-inv-026-4": "INVALID_CREATIVES error lacks suggestion field",
-    # Graduated (#1417/gh8p.10): the request-construction boundary now derives a
-    # field-aware suggestion (suggest_validation_fix) and attaches it to the
-    # AdCPValidationError, so a missing idempotency_key rejects with a non-empty
-    # wire suggestion. T-UC-002-v31-idempotency-missing passes.
+    # Graduated (#1417/gh8p.10): the request-construction boundary attaches the
+    # canonical VALIDATION_ERROR suggestion ("review error details and fix field
+    # values") to the AdCPValidationError (the offending field is surfaced
+    # separately on the ``field`` path), so a missing idempotency_key rejects with
+    # a non-empty wire suggestion. T-UC-002-v31-idempotency-missing passes.
     # FIXME(salesagent-9vgz.17): optimization_goals not in adcp v3.6.0 or production schemas
     # PackageRequest(extra='forbid') rejects the field with generic validation error,
     # not spec-expected UNSUPPORTED_FEATURE / INVALID_REQUEST with structured codes.
@@ -3225,6 +3243,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             any(t.startswith("T-UC-002-ext-") for t in marker_names)
             or "nfr-highvalue" in marker_names
             or "T-UC-002-nfr-001-enforcement" in marker_names
+            or "T-UC-002-inv-015-6" in marker_names
         ):
             # Extension/error scenarios: budget validation, pricing errors, etc.
             # Plus the nfr-highvalue >$10k Seller-alert scenario (#1417),
@@ -3270,8 +3289,6 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["default_product"] = product
                 ctx["default_pricing_option"] = pricing_option
                 yield
-        elif "T-UC-002-inv-015-6" in marker_names:
-            pytest.xfail("T-UC-002-inv-015-6 create_media_buy harness wiring is tracked in #1652")
         else:
             # Restore the xfail guard every other use case keeps on its catch-all:
             # non-account / non-extension UC-002 scenarios are NOT yet wired (no
@@ -3412,6 +3429,8 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             with _db_scope_for(request, e2e_config), CreativeListEnv(e2e_config=e2e_config) as env:
                 ctx["env"] = env
                 yield
+        # FIXME(#1652): dormant list_creatives validation scenario, pending real-harness wiring
+        # (allowlisted in test_architecture_bdd_no_dormant_scenario_xfail._KNOWN_DORMANT).
         elif "T-UC-018-ext-c" in marker_names:
             pytest.xfail("T-UC-018-ext-c list_creatives validation harness wiring is tracked in #1652")
         else:

@@ -289,10 +289,10 @@ Feature: BR-UC-002 Create Media Buy
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
     Then the response should indicate a validation error
-    And the error code should be "INVALID_REQUEST"
+    And the error code should be "VALIDATION_ERROR"
     And the error should reference the unresolvable asset_type discriminator
     And the error should include "suggestion" field
-    # BR-RULE-015 INV-6: assets value lacking asset_type or carrying an unregistered value (not one of the 14 AssetVariant types) -> INVALID_REQUEST
+    # BR-RULE-015 INV-6: assets value lacking asset_type or carrying an unregistered value (not one of the 14 AssetVariant types). Prose maps this schema failure to INVALID_REQUEST; the boundary deliberately emits VALIDATION_ERROR uniformly (storyboards accept either -- see adcp_validation_boundary).
     # --- ext-h: Format ID Validation Failure ---
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/create-media-buy-request.json
 
@@ -2578,11 +2578,13 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the result should be <outcome>
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/create-media-buy-request.json
+    # BR-RULE-015 asset-discriminator: prose maps this schema failure to INVALID_REQUEST; the boundary
+    # deliberately emits VALIDATION_ERROR uniformly (matches @T-UC-002-inv-015-6; see adcp_validation_boundary).
 
     Examples: Boundary values
-      | boundary_point                                          | outcome                               |
-      | asset slot value with missing asset_type discriminator  | error INVALID_REQUEST with suggestion |
-      | asset slot value with unknown asset_type value          | error INVALID_REQUEST with suggestion |
+      | boundary_point                                          | outcome                                |
+      | asset slot value with missing asset_type discriminator  | error VALIDATION_ERROR with suggestion |
+      | asset slot value with unknown asset_type value          | error VALIDATION_ERROR with suggestion |
 
   @T-UC-002-boundary-targeting-collection-list @boundary @targeting-overlay @collection-list @br-rule-014
   Scenario Outline: v3.1 targeting_overlay collection-list boundary validation - <boundary_point>

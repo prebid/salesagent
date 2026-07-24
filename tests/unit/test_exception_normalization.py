@@ -54,8 +54,11 @@ def test_a2a_validation_boundary_preserves_contextual_error_format():
 
     assert "Invalid parameters:" in exc_info.value.message
     assert "packages.0.product_id: Required field is missing" in exc_info.value.message
+    assert exc_info.value.error_code == "VALIDATION_ERROR"
     assert exc_info.value.field == "packages[0].product_id"
-    assert exc_info.value.suggestion == ("Provide the required 'packages.0.product_id' field and resend the request.")
+    # Boundary emits the per-code canonical suggestion (uniform across transports);
+    # the offending field path is still surfaced via `field` above.
+    assert exc_info.value.suggestion == "review error details and fix field values"
     assert exc_info.value.details == {
         "validation_errors": [
             {

@@ -99,9 +99,7 @@ class TestGuardDetector:
         # Passing suggestion= by hand is STILL the disease (duplicates the
         # boundary, drops field=) — a detector keying on "no suggestion kwarg"
         # would miss it.
-        assert _detect(
-            "raise AdCPValidationError(format_validation_error(e), suggestion=suggest_validation_fix(e)) from e"
-        )
+        assert _detect("raise AdCPValidationError(format_validation_error(e), suggestion=_derive_hint(e)) from e")
 
     def test_positive_subclass_still_handrolled(self):
         # A SUBCLASS wrapping the formatter is the same disease — a matcher
