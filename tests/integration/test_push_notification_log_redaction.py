@@ -38,6 +38,31 @@ pytestmark = [pytest.mark.integration]
 
 _SECRET = "buyer-webhook-bearer-SECRET-should-never-be-logged"
 
+# Deliberately shorter than the SDK's >=32-char credential floor, so
+# ``PushNotificationConfig.model_validate`` REJECTS it at the media_buy_create
+# log site — the wire shape that regressed CI on the round-3 push (the buyer's
+# own endpoint accepts credentials the SDK schema refuses).
+_SHORT_SECRET = "short-wire-SECRET"
+
+
+def _rendered(calls) -> str:
+    """Render logger calls (message template + args + kwargs) into one string."""
+    return "\n".join(str(call.args) + str(call.kwargs) for call in calls)
+
+
+def _pnc_info_calls(mock_logger) -> list:
+    """The ``info`` calls whose template is about the push-notification config.
+
+    Matched by normalized template so it covers all three sites
+    ("push_notification_config: %s" and "[MCP/A2A] Registering push notification
+    config ...").
+    """
+    return [
+        call
+        for call in mock_logger.info.call_args_list
+        if call.args and "push" in str(call.args[0]).lower() and "notif" in str(call.args[0]).lower()
+    ]
+
 
 def _assert_log_redacted(mock_logger) -> None:
     """Assert a patched logger's info calls carry the redacted view and no secret.
@@ -47,28 +72,42 @@ def _assert_log_redacted(mock_logger) -> None:
     would suppress the record, so this observes the real log site rather than a
     caplog buffer.
     """
-    calls = mock_logger.info.call_args_list
     # The credential itself never appears in ANY log call (asserted first: it is the
     # security failure, and it is what a raw-wire-dict log site trips) ...
-    logged = "\n".join(str(call.args) + str(call.kwargs) for call in calls)
+    logged = _rendered(mock_logger.info.call_args_list)
     assert _SECRET not in logged, "buyer webhook credential leaked to the logs (#1617)"
     # ... and the push-notification-config log line specifically ran through the
-    # redactor. Scoped to that call — matched by normalized template so it covers all
-    # three sites ("push_notification_config: %s" and "[MCP/A2A] Registering push
-    # notification config ...") — so the presence assert can't pass on some unrelated
-    # info line that happened to carry the sentinel. At the two DB-model sites this is
-    # the assertion the deletion oracle reddens, because the model's own repr masks
-    # the token.
-    pnc_calls = [
-        call
-        for call in calls
-        if call.args and "push" in str(call.args[0]).lower() and "notif" in str(call.args[0]).lower()
-    ]
+    # redactor. Scoped to that call so the presence assert can't pass on some
+    # unrelated info line that happened to carry the sentinel. At the two DB-model
+    # sites this is the assertion the deletion oracle reddens, because the model's
+    # own repr masks the token.
+    pnc_calls = _pnc_info_calls(mock_logger)
     assert pnc_calls, (
         "no push-notification-config log call was emitted — the log site did not run (test guards nothing)"
     )
-    pnc_logged = "\n".join(str(call.args) + str(call.kwargs) for call in pnc_calls)
-    assert REDACTED in pnc_logged, "the push-notification log line did not run redacted — this test guards nothing"
+    assert REDACTED in _rendered(pnc_calls), (
+        "the push-notification log line did not run redacted — this test guards nothing"
+    )
+
+
+def _run_create_media_buy_with_pnc(pnc: dict):
+    """Drive the real create-media-buy registration path, module logger patched.
+
+    Shared by the valid-credential and SDK-rejected-credential cases: identical
+    setup and path, only the wire config differs.
+    """
+    from src.core.tools.media_buy_create import _create_media_buy_impl
+    from src.core.transport_helpers import enrich_identity_with_account
+
+    req = _make_request()
+    with patch("src.core.tools.media_buy_create.logger") as mock_logger:
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            env.setup_product_chain(tenant)
+            env._commit_factory_data()
+            identity = enrich_identity_with_account(env.identity, req.account)
+            result = asyncio.run(_create_media_buy_impl(req=req, identity=identity, push_notification_config=pnc))
+    return result, mock_logger
 
 
 @pytest.mark.requires_db
@@ -79,26 +118,60 @@ def test_create_media_buy_registration_log_redacts_webhook_credential(integratio
     ``_SECRET`` here (this site receives the A2A wire dict, which has no masking
     repr, so both assertions bite).
     """
-    from src.core.tools.media_buy_create import _create_media_buy_impl
-    from src.core.transport_helpers import enrich_identity_with_account
-
     pnc = {
         "id": "pnc_redact",
         "url": "https://buyer.example/webhook",
         "authentication": {"schemes": ["Bearer"], "credentials": _SECRET},
     }
-    req = _make_request()
-
-    with patch("src.core.tools.media_buy_create.logger") as mock_logger:
-        with _env() as env:
-            tenant, _principal = env.setup_default_data()
-            env.setup_product_chain(tenant)
-            env._commit_factory_data()
-            identity = enrich_identity_with_account(env.identity, req.account)
-            result = asyncio.run(_create_media_buy_impl(req=req, identity=identity, push_notification_config=pnc))
+    result, mock_logger = _run_create_media_buy_with_pnc(pnc)
 
     assert isinstance(result.response, CreateMediaBuySuccess)
     _assert_log_redacted(mock_logger)
+
+
+@pytest.mark.requires_db
+def test_create_media_buy_survives_sdk_rejected_credential_and_withholds_it(integration_db):
+    """A wire credential the SDK schema rejects must neither crash creation nor leak.
+
+    Pins the ``except ValidationError`` fallback at media_buy_create's
+    registration log site — the branch that regressed CI in round 3 (an 18-char
+    e2e credential made ``model_validate`` raise and the media buy went to
+    ``failed``; fixed in 947bdcd4). The sibling test above feeds a >=32-char
+    credential, so without this case the fallback is never executed by the suite.
+
+    Deletion oracles: drop the try/except and (1) reddens (creation crashes);
+    make the fallback log the raw wire dict and (2) reddens (this site gets the
+    A2A wire dict — no masking repr in the way, the secret lands in the log);
+    drop the log line and (3) reddens, so the pass is not vacuous.
+    """
+    from adcp import PushNotificationConfig
+    from pydantic import ValidationError
+
+    pnc = {
+        "id": "pnc_short",
+        "url": "https://buyer.example/webhook",
+        "authentication": {"schemes": ["Bearer"], "credentials": _SHORT_SECRET},
+    }
+    # Premise guard: the fallback only runs if the SDK actually rejects this
+    # credential. If a future SDK bump relaxes the >=32-char floor, fail loudly
+    # here instead of silently degrading into a duplicate of the sibling test.
+    with pytest.raises(ValidationError):
+        PushNotificationConfig.model_validate(pnc)
+
+    result, mock_logger = _run_create_media_buy_with_pnc(pnc)
+
+    # (1) A redaction built for a log line must never break media-buy creation.
+    assert isinstance(result.response, CreateMediaBuySuccess)
+    # (2) The secret is withheld on the fallback path too.
+    assert _SHORT_SECRET not in _rendered(mock_logger.info.call_args_list), (
+        "buyer webhook credential leaked on the ValidationError fallback path (#1617)"
+    )
+    # (3) The registration log line still ran, carrying the fallback's empty view.
+    pnc_calls = _pnc_info_calls(mock_logger)
+    assert pnc_calls, "no push-notification-config log call was emitted — the fallback assertions are vacuous"
+    assert any(len(call.args) > 1 and call.args[1] == {} for call in pnc_calls), (
+        "the fallback did not log the empty redacted view"
+    )
 
 
 @pytest.fixture
