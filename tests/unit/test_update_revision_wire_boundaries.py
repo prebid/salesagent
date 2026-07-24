@@ -85,15 +85,18 @@ async def test_mcp_valid_revision_is_rejected_as_unsupported_feature() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mcp_explicit_null_revision_reaches_impl() -> None:
-    """An explicit JSON null equals omission — the SDK models revision as ``int | None = None``.
+async def test_mcp_explicit_null_revision_is_invalid_request() -> None:
+    """An explicit JSON null is schema-invalid, not a spelling of omission.
 
-    A conformant client that never set revision serializes null; rejecting it
-    would reject a correct caller. Null proceeds to _impl exactly like omission.
+    ``update-media-buy-request.json`` (v3.1.1) types ``revision`` as
+    ``{type: integer, minimum: 1}``, which null violates — and no conformant
+    client emits it: at the pinned adcp 6.6.0 an unset ``revision`` is OMITTED
+    from ``UpdateMediaBuyRequest.model_dump()``, not serialized as null. It
+    therefore lands on INVALID_REQUEST with 0 / "7" / 7.5.
     """
     with (
         patch("src.core.mcp_auth_middleware.resolve_identity_from_context", return_value=_IDENTITY),
-        patch("src.core.tools.media_buy_update._update_media_buy_impl", return_value=_success_result()) as mock_impl,
+        patch("src.core.tools.media_buy_update._update_media_buy_impl") as mock_impl,
     ):
         async with Client(mcp) as client:
             result = await client.call_tool(
@@ -102,13 +105,14 @@ async def test_mcp_explicit_null_revision_reaches_impl() -> None:
                 raise_on_error=False,
             )
 
-    assert not result.is_error, result.content
-    assert result.structured_content["media_buy_id"] == "mb-revision-boundary"
-    mock_impl.assert_called_once_with(
-        req=UpdateMediaBuyRequest(**_VALID_REQUEST),
-        identity=_IDENTITY,
-        context_id=None,
+    assert result.is_error
+    assert_envelope_shape(
+        json.loads(result.content[0].text),
+        "INVALID_REQUEST",
+        recovery="correctable",
+        message_substr="must be an integer",
     )
+    mock_impl.assert_not_called()
 
 
 def test_rest_omitted_revision_reaches_impl() -> None:
@@ -137,14 +141,14 @@ def test_rest_omitted_revision_reaches_impl() -> None:
     )
 
 
-def test_rest_explicit_null_revision_reaches_impl() -> None:
-    """REST explicit null equals omission — proceeds to _impl, not a rejection."""
+def test_rest_explicit_null_revision_is_invalid_request() -> None:
+    """REST parity: an explicit null is the schema violation MCP rejects too."""
     rest_identity = _IDENTITY.model_copy(update={"protocol": "rest"})
     body = {key: value for key, value in _VALID_REQUEST.items() if key != "media_buy_id"}
     body["revision"] = None
     with (
         patch("src.core.resolved_identity.resolve_identity", return_value=rest_identity),
-        patch("src.core.tools.media_buy_update._update_media_buy_impl", return_value=_success_result()) as mock_impl,
+        patch("src.core.tools.media_buy_update._update_media_buy_impl") as mock_impl,
     ):
         client = TestClient(app, raise_server_exceptions=False)
         try:
@@ -156,13 +160,14 @@ def test_rest_explicit_null_revision_reaches_impl() -> None:
         finally:
             client.close()
 
-    assert response.status_code == 200, response.text
-    assert response.json()["media_buy_id"] == "mb-revision-boundary"
-    mock_impl.assert_called_once_with(
-        req=UpdateMediaBuyRequest(**_VALID_REQUEST),
-        identity=rest_identity,
-        context_id=None,
+    assert response.status_code == 400, response.text
+    assert_envelope_shape(
+        response.json(),
+        "INVALID_REQUEST",
+        recovery="correctable",
+        message_substr="must be an integer",
     )
+    mock_impl.assert_not_called()
 
 
 def test_rest_valid_revision_is_rejected_as_unsupported_feature() -> None:

@@ -3,8 +3,11 @@
 # - dist/schemas/3.1.1/protocol/get-adcp-capabilities-request.json (`protocols` enum + minItems: 1)
 # - dist/compliance/3.1.1/universal/capability-discovery.yaml#get_capabilities_filtered
 # The supported-only request is the published graded case. Invalid/empty inputs
-# are schema-grounded; the valid-but-unsupported case is a local, ungraded
-# fail-loud decision because the response's supported_protocols has minItems: 1.
+# are schema-grounded. A valid protocol the seller does not implement is NOT an
+# error: the graded step scopes the filter to "only the requested domain
+# details", and the response schema describes each supported_protocols value as
+# committing the agent to that protocol's compliance storyboard — so the field
+# is this agent's declaration, never a projection of the buyer's question.
 
 @UC-010 @capability-filter @adcp-3.1.1
 Feature: UC-010 AdCP 3.1.1 capability protocol filtering
@@ -30,6 +33,7 @@ Feature: UC-010 AdCP 3.1.1 capability protocol filtering
     Then the protocols filter should fail with a correctable VALIDATION_ERROR
 
   @T-UC-010-local-capability-filter-unsupported-v311 @ungraded
-  Scenario: A valid protocol the seller does not support fails loudly
+  Scenario: A valid protocol the seller does not implement still declares the true set
     When the Buyer queries capabilities with protocols ["signals"]
-    Then the protocols filter should fail with a correctable VALIDATION_ERROR
+    Then supported_protocols on the wire should equal ["media_buy"]
+    And no protocol detail sections should be present on the wire

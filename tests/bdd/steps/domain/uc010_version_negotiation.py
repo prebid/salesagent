@@ -434,6 +434,22 @@ def then_only_requested_protocol_sections_present(ctx: dict) -> None:
     assert unexpected == {}, f"Unrequested protocol sections were present: {sorted(unexpected)}"
 
 
+@then("no protocol detail sections should be present on the wire")
+def then_no_protocol_sections_present(ctx: dict) -> None:
+    """A filter naming no implemented domain yields the declaration and no details.
+
+    The declaration (``supported_protocols``) still reports what this agent
+    implements; what the filter removes is the per-domain capability body.
+    """
+    response_body = wire_dict(ctx)
+    present = {
+        protocol: response_body[protocol]
+        for protocol in ("media_buy", "signals", "governance", "sponsored_intelligence", "creative")
+        if response_body.get(protocol) is not None
+    }
+    assert present == {}, f"Detail sections present for an unrequested-only filter: {sorted(present)}"
+
+
 @then("the protocols filter should fail with a correctable VALIDATION_ERROR")
 def then_protocols_filter_validation_error(ctx: dict) -> None:
     """Schema and no-overlap rejections must survive each real wire boundary."""

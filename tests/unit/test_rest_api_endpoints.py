@@ -59,10 +59,15 @@ class TestCapabilitiesProtocolsQuery:
         assert response.status_code == 200
         assert response.json()["supported_protocols"] == ["media_buy"]
 
-    def test_only_unsupported_protocol_is_validation_error(self):
+    def test_only_unsupported_protocol_still_declares_the_true_set(self):
+        """A schema-valid filter naming no supported domain is answered, not rejected.
+
+        ``supported_protocols`` declares what this agent implements; the filter
+        narrows domain details only.
+        """
         response = client.get("/api/v1/capabilities?protocols=signals")
-        assert response.status_code == 400
-        assert_envelope_shape(response.json(), "VALIDATION_ERROR", recovery="correctable")
+        assert response.status_code == 200
+        assert response.json()["supported_protocols"] == ["media_buy"]
 
     def test_unknown_protocol_is_validation_error(self):
         response = client.get("/api/v1/capabilities?protocols=marketing")

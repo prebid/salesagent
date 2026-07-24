@@ -191,11 +191,17 @@ def validate_update_media_buy_protocol_fields(
     """
     require_idempotency_key(idempotency_key)
 
-    # Omission and explicit JSON null both mean "no precondition supplied": the
-    # SDK models revision as ``int | None = None``, so a conformant client that
-    # never set it serializes null — treating null as a rejection would reject
-    # a correct caller. Proceed in both cases.
-    if _revision_was_omitted(revision) or revision is None:
+    # Omission means "no precondition supplied" — proceed.
+    #
+    # Explicit JSON null does NOT. An earlier revision accepted it on the theory
+    # that the SDK serializes an unset ``revision`` as null; it does not — at the
+    # pinned adcp 6.6.0, ``UpdateMediaBuyRequest(...).model_dump()`` OMITS the key
+    # entirely when it was never set. So no conformant client emits null here,
+    # while ``update-media-buy-request.json`` (v3.1.1) types the field
+    # ``{type: integer, minimum: 1}``, which a JSON null violates. It therefore
+    # falls through to the same INVALID_REQUEST branch as 0 / "7" / 7.5, matching
+    # how the sibling preconditions already treat null.
+    if _revision_was_omitted(revision):
         return
 
     # A supplied value is rejected, but the WIRE CODE depends on its value, not

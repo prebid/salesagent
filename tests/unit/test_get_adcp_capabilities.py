@@ -299,14 +299,24 @@ class TestGetAdcpCapabilitiesProtocolFiltering:
         response = self._impl(["media_buy", "signals"])
         assert response.supported_protocols == [SupportedProtocol.media_buy]
 
-    def test_filter_to_only_unsupported_protocol_is_validation_error(self):
-        """protocols=["signals"] against a media_buy-only seller must NOT return the
-        default set — the response can't be empty (minItems=1), so it's a VALIDATION_ERROR."""
-        from src.core.exceptions import AdCPValidationError
+    def test_filter_to_only_unsupported_protocol_still_declares_the_true_set(self):
+        """protocols=["signals"] is schema-valid, so it is answered, not rejected.
 
-        with pytest.raises(AdCPValidationError) as exc:
-            self._impl(["signals"])
-        assert exc.value.field == "protocols"
+        ``supported_protocols`` is the agent's own declaration — the v3.1.1
+        response schema describes each listed value as committing the agent to
+        that protocol's compliance storyboard — so it reports what this agent
+        implements regardless of what the buyer asked about. Only the DOMAIN
+        DETAILS are filtered, which is what
+        ``capability-discovery.yaml::get_capabilities_filtered`` expects.
+        Rejecting the request instead used VALIDATION_ERROR for a payload that
+        violates no schema.
+        """
+        from src.core.enum_helpers import enum_value
+
+        response = self._impl(["signals"])
+
+        assert [enum_value(p) for p in response.supported_protocols] == ["media_buy"]
+        assert response.specialisms == []
 
     def test_unknown_protocol_rejected_by_request_model(self):
         """An unknown enum value is rejected when the request model is built (the

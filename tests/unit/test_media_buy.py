@@ -1547,8 +1547,10 @@ class TestUpdateMediaBuySchemaCompliance:
         _build_update_request is the single boundary every transport (MCP/A2A/REST)
         routes through. Classifying on numeric value (not Python type) keeps
         A2A — which floats every JSON integer — converged with MCP/REST. Explicit
-        JSON null equals omission (the SDK models revision as ``int | None = None``),
-        so it proceeds rather than rejecting a conformant caller.
+        JSON null is schema-invalid, not a spelling of omission: at the pinned
+        adcp 6.6.0 an unset ``revision`` is OMITTED from
+        ``UpdateMediaBuyRequest.model_dump()``, so no conformant client ever
+        sends null, and ``{type: integer, minimum: 1}`` rejects it like 0/"5"/7.5.
         """
         from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPInvalidRequestError
         from src.core.tools.media_buy_update import _build_update_request
@@ -1589,11 +1591,14 @@ class TestUpdateMediaBuySchemaCompliance:
                 f"got field={exc_info.value.field!r}"
             )
 
-        # Explicit JSON null equals omission — proceeds, does not reject.
-        req_null = _build_update_request(
-            media_buy_id="mb_1", paused=True, idempotency_key=_UPDATE_IDEMPOTENCY_KEY, revision=None
-        )
-        assert req_null.media_buy_id == "mb_1"
+        # Explicit JSON null is schema-invalid — rejects like the other
+        # malformed spellings above, matching the wire code and field name.
+        with pytest.raises(AdCPInvalidRequestError) as exc_info:
+            _build_update_request(
+                media_buy_id="mb_1", paused=True, idempotency_key=_UPDATE_IDEMPOTENCY_KEY, revision=None
+            )
+        assert exc_info.value.error_code == "INVALID_REQUEST"
+        assert exc_info.value.field == "revision"
 
         # Truly absent revision (the normal case) still builds a valid request.
         req = _build_update_request(media_buy_id="mb_1", paused=True, idempotency_key=_UPDATE_IDEMPOTENCY_KEY)

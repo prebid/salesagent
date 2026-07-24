@@ -44,7 +44,6 @@ from src.core.application_context import dump_adcp_response
 from src.core.auth import get_principal_object, require_identity
 from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.database.repositories.uow import TenantConfigUoW
-from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
@@ -58,36 +57,32 @@ logger = logging.getLogger(__name__)
 _DEFAULT_PROTOCOLS: tuple[SupportedProtocol, ...] = (SupportedProtocol.media_buy,)
 
 
-def _filter_supported_protocols(req: GetAdcpCapabilitiesRequest | None) -> list[SupportedProtocol]:
-    """Intersect the seller's supported protocols with the buyer's ``protocols`` filter.
+def _requested_protocol_domains(req: GetAdcpCapabilitiesRequest | None) -> set[str] | None:
+    """The domains whose capability DETAILS the buyer asked for, or ``None`` for all.
 
-    No filter (``req.protocols is None``) returns the full supported set. Otherwise
-    return the supported intersection, matched by enum value. A valid request with
-    no overlap (for example ``["signals"]`` against this media_buy-only seller) is
-    rejected with ``VALIDATION_ERROR`` because the response schema requires at least
-    one ``supported_protocols`` entry; returning the unfiltered default would lie
-    about the requested view. Empty-array and unknown-enum inputs are rejected by the
-    request model (minItems=1 + the ``Protocol`` enum) at the transport boundary.
+    The request's ``protocols`` filter selects which protocol domains' details the
+    response carries — ``get-adcp-capabilities-request.json`` (v3.1.1) describes it
+    as "Specific protocols to query capabilities for", and the graded
+    ``capability-discovery.yaml::get_capabilities_filtered`` step expects "the same
+    structure but only the requested domain details".
+
+    It deliberately does NOT narrow ``supported_protocols``. That field is the
+    agent's own declaration — the response schema describes its values as
+    committing the agent "to pass the baseline compliance storyboard" for each
+    protocol listed — so it reports what this agent implements, not a view of the
+    buyer's question. Filtering it made a request for an unsupported domain
+    unrepresentable (``minItems: 1``) and turned a schema-valid request into a
+    ``VALIDATION_ERROR``, which ``error-handling.mdx`` scopes to schema violations.
+    A non-overlapping filter is now an ordinary response: the true declaration,
+    with no details for a domain this agent does not serve.
+
+    Empty-array and unknown-enum inputs remain rejected by the request model
+    (``minItems: 1`` + the ``Protocol`` enum) at the transport boundary.
     """
-    full = list(_DEFAULT_PROTOCOLS)
     requested = req.protocols if req else None
     if not requested:
-        return full
-    requested_values = {enum_value(p) for p in requested}
-    filtered = [p for p in full if enum_value(p) in requested_values]
-    if not filtered:
-        # The response's supported_protocols is minItems=1, so "none of your
-        # requested protocols is supported" cannot be an empty list — it is a
-        # VALIDATION_ERROR. The buyer learns the seller offers none of what they
-        # asked for, instead of being handed the unfiltered default set.
-        supported = ", ".join(enum_value(p) for p in full)
-        raise AdCPValidationError(
-            f"None of the requested protocols {sorted(requested_values)} are supported "
-            f"by this seller (supported: {supported}).",
-            field="protocols",
-            suggestion=f"Request one of the supported protocols: {supported}.",
-        )
-    return filtered
+        return None
+    return {enum_value(p) for p in requested}
 
 
 _DEFAULT_SPECIALISMS: tuple[AdcpSpecialism, ...] = (AdcpSpecialism.sales_non_guaranteed,)
@@ -102,8 +97,10 @@ def _build_capabilities_request(
     One home for the MCP and A2A/REST wrappers so a new negotiation-relevant
     field is added once, not in two byte-identical copies (same file, below the
     R0801 duplication threshold, so the ratchet can't catch the drift). Forwards
-    the buyer's ``protocols`` (the impl filters ``supported_protocols`` by it)
-    and echoes ``context``; a bad ``protocols`` value becomes VALIDATION_ERROR
+    the buyer's ``protocols`` (the impl filters the per-domain capability DETAILS
+    by it, never the ``supported_protocols`` declaration — see
+    ``_requested_protocol_domains``) and echoes ``context``; a bad ``protocols``
+    value becomes VALIDATION_ERROR
     at this boundary rather than an untyped pydantic error.
     """
     with adcp_validation_boundary(context="get_adcp_capabilities request"):
@@ -123,7 +120,10 @@ def _build_adcp_block() -> Adcp:
     return Adcp(
         major_versions=[MajorVersion(root=adcp_version.adcp_major_version())],
         supported_versions=[SupportedVersion(root=v) for v in adcp_version.supported_adcp_versions()],
-        build_version=adcp_version.adcp_build_version(),
+        # Omitted entirely when the deployment version is not renderable as
+        # semver: the schema types it ``string`` and marks it optional, so an
+        # absent advisory field is conformant where a null would not be.
+        **adcp_version.advisory_build_version_field(),
         # The official 3.1.1 schema models this as a discriminated union.
         # create_media_buy implements verbatim replay (same key replays the
         # stored success; a conflicting payload rejects), so the seller
@@ -185,11 +185,15 @@ def _get_adcp_capabilities_impl(
     request_context = req.context if req else None
 
     # Honor the buyer's `protocols` filter on EVERY transport (#1546): return only the
-    # requested domains' capabilities, not the unfiltered default set. Specialisms roll
-    # up to a parent protocol, so they are only advertised when that protocol survives
-    # the filter (today all _DEFAULT_SPECIALISMS roll up to media_buy).
-    supported_protocols = _filter_supported_protocols(req)
-    media_buy_requested = SupportedProtocol.media_buy in supported_protocols
+    # requested domains' DETAILS. `supported_protocols` stays the agent's own
+    # declaration — it commits this agent to each listed protocol's compliance
+    # storyboard, so it cannot be narrowed to whatever the buyer happened to ask
+    # about. Specialisms roll up to a parent protocol, so they are only advertised
+    # when that protocol is in view (today all _DEFAULT_SPECIALISMS roll up to
+    # media_buy).
+    supported_protocols = list(_DEFAULT_PROTOCOLS)
+    requested_domains = _requested_protocol_domains(req)
+    media_buy_requested = requested_domains is None or enum_value(SupportedProtocol.media_buy) in requested_domains
     specialisms = list(_DEFAULT_SPECIALISMS) if media_buy_requested else []
 
     if not tenant:
