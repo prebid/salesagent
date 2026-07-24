@@ -26,10 +26,12 @@ ipr_fetch_sigs_and_commits() {
 # Shared verify orchestration for ipr-check / ipr-sign / ci.yml ipr-gate.
 # Args: repository, pull number, pr author login; remaining args forwarded to
 # ``ipr_verify.py verify`` (e.g. Path B ``--missing-message`` / ``--ok-message``).
+# Local ``author_login`` avoids SC2153 vs env PR_AUTHOR (same pattern as
+# repository/pull_number vs REPO/PR_NUMBER above).
 ipr_verify_pr() {
   local repository="${1:?repository required}"
   local pull_number="${2:?pull number required}"
-  local pr_author="${3:?pr author required}"
+  local author_login="${3:?pr author required}"
   shift 3
   local tmp rc=0
   tmp="$(mktemp -d)"
@@ -40,7 +42,7 @@ ipr_verify_pr() {
   python3 scripts/ci/ipr_verify.py verify \
     --sigs "${tmp}/sigs.json" \
     --commits "${tmp}/commits.json" \
-    --pr-author "${pr_author}" \
+    --pr-author "${author_login}" \
     "$@" || rc=$?
   rm -rf "${tmp}"
   return "${rc}"
