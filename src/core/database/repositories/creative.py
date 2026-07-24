@@ -100,7 +100,7 @@ class CreativeRepository:
         self,
         principal_id: str,
         *,
-        status: str | None = None,
+        statuses: list[str] | None = None,
         format: str | None = None,
         tags: list[str] | None = None,
         created_after: datetime | None = None,
@@ -133,8 +133,13 @@ class CreativeRepository:
                 Creative.creative_id == CreativeAssignment.creative_id,
             ).where(CreativeAssignment.media_buy_id.in_(media_buy_ids))
 
-        if status:
-            stmt = stmt.where(Creative.status == status)
+        # statuses filter (CreativeFilters.statuses in core/creative-filters.json): "match
+        # any of these statuses". Applied inside the already tenant+principal-scoped
+        # statement, so it can only narrow, never widen. Mirrors
+        # MediaBuyRepository.get_by_principal (same list[str] param, same `is not None` gate
+        # so an explicit [] narrows to nothing rather than being ignored).
+        if statuses is not None:
+            stmt = stmt.where(Creative.status.in_(statuses))
 
         if format:
             stmt = stmt.where(Creative.format == format)

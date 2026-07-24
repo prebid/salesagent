@@ -22,14 +22,14 @@ ext-c contract (validation failure → VALIDATION_ERROR + suggestion).
 import pytest
 
 from tests.harness import CreativeListEnv
-from tests.harness.transport import Transport
+from tests.harness.transport import ALL_WIRE, Transport
 from tests.helpers import assert_envelope_shape
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
-# Wire transports only — IMPL has no wire envelope (and the dict→CreativeFilters
-# coercion under test happens at the transport boundary, not in _impl).
-_ALL_WIRE = [Transport.A2A, Transport.MCP, Transport.REST]
+# ALL_WIRE (a2a/mcp/rest) is the shared wire-transport set — IMPL has no wire envelope
+# (and the dict→CreativeFilters coercion under test happens at the transport boundary,
+# not in _impl).
 
 
 def _seed_authenticated_principal(env: CreativeListEnv):
@@ -45,7 +45,7 @@ def _seed_authenticated_principal(env: CreativeListEnv):
 class TestConceptIdsFilterValidation:
     """Malformed concept_ids filter is rejected, with a spec envelope on every wire transport."""
 
-    @pytest.mark.parametrize("transport", _ALL_WIRE)
+    @pytest.mark.parametrize("transport", ALL_WIRE)
     def test_empty_concept_ids_array_is_rejected(self, integration_db, transport):
         """filters={'concept_ids': []} violates minItems:1 → rejected on every transport."""
         with CreativeListEnv() as env:
@@ -58,7 +58,7 @@ class TestConceptIdsFilterValidation:
                 f"got payload {result.payload!r}"
             )
 
-    @pytest.mark.parametrize("transport", _ALL_WIRE)
+    @pytest.mark.parametrize("transport", ALL_WIRE)
     def test_empty_concept_ids_emits_validation_envelope(self, integration_db, transport):
         """Wire transports surface the two-layer VALIDATION_ERROR envelope with a suggestion."""
         with CreativeListEnv() as env:
