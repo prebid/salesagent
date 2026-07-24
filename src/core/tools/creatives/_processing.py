@@ -18,7 +18,7 @@ from adcp.types import CreativeAsset
 from adcp.types import Error as AdCPErrorDetail
 from pydantic import BaseModel
 
-from src.core.exceptions import AdCPConfigurationError
+from src.core.exceptions import AdCPConfigurationError, to_wire_error_code
 from src.core.helpers import _extract_format_info, _validate_creative_assets
 from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
 from src.core.validation_helpers import run_async_in_sync_context
@@ -45,13 +45,23 @@ def _failed_sync_result(
     for an assignment referencing an unknown creative_id (matching the
     strict-mode ``AdCPCreativeNotFoundError`` raise since 287c93099),
     ``VALIDATION_ERROR`` for other correctable causes.
+
+    ``code`` is normalized through ``to_wire_error_code`` here — the single choke
+    point for every call site. These advisory ``errors[]`` entries serialize
+    verbatim and never pass through the boundary translator that handles raised
+    ``AdCPError``s, so a caller forwarding a raw typed-exception code (e.g.
+    ``e.error_code`` on the ``except AdCPError`` path) would otherwise leak an
+    internal-only code (``FORMAT_NOT_FOUND`` → ``INVALID_REQUEST``,
+    ``INTERNAL_ERROR`` → ``SERVICE_UNAVAILABLE``) to the buyer. Already-standard
+    codes pass through unchanged. Mirrors the sibling advisory builder at
+    ``media_buy_delivery.py`` (``code=to_wire_error_code(e.code)``).
     """
     return SyncCreativeResult(
         creative_id=creative_id,
         action="failed",
         errors=[
             AdCPErrorDetail(  # structural-guard: advisory per-creative result in SyncCreativeResult.errors[]
-                code=code, message=error_msg, recovery=recovery
+                code=to_wire_error_code(code), message=error_msg, recovery=recovery
             )
         ],
         review_feedback=None,
