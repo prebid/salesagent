@@ -172,9 +172,9 @@ class TestApproveRoutesHoldBehavior:
         assert status == 200
         assert response.get_json()["success"] is True
         assert media_buy.status == "pending_creatives"
-        mock_eval.assert_called_once()
+        mock_eval.assert_called_once_with(db, tenant_id="t1", media_buy_id="mb_hold")
         mock_execute.assert_not_called()
-        db.commit.assert_called()
+        assert db.commit.called
 
     def test_approve_media_buy_zero_assignments_holds_without_execute(self):
         from src.admin.app import create_app
@@ -233,7 +233,7 @@ class TestApproveRoutesHoldBehavior:
 
         assert result == "redirected"
         assert media_buy.status == "pending_creatives"
-        mock_eval.assert_called_once()
+        mock_eval.assert_called_once_with(db, tenant_id="t1", media_buy_id="mb_hold")
         mock_execute.assert_not_called()
-        db.commit.assert_called()
-        mock_redirect.assert_called()
+        assert db.commit.called
+        mock_redirect.assert_called_once_with("/detail")
