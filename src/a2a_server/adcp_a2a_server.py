@@ -112,6 +112,11 @@ from src.core.validation_helpers import (
     adcp_validation_boundary,
 )
 from src.core.version import get_version
+from src.core.webhook_validator import (
+    reject_unsafe_webhook_registration_url,
+    webhook_ssrf_suggestion,
+    webhook_url_for_log,
+)
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -119,9 +124,6 @@ logger = logging.getLogger(__name__)
 
 def _invalid_params_from_ssrf_error(exc: Exception) -> InvalidParamsError:
     """Wrap an SSRF rejection as A2A InvalidParamsError with AdCP ``data`` envelope."""
-    from src.core.exceptions import AdCPValidationError
-    from src.core.webhook_validator import webhook_ssrf_suggestion
-
     if isinstance(exc, AdCPValidationError):
         adcp_err = exc
     else:
@@ -148,9 +150,6 @@ def _reject_unsafe_a2a_webhook_url(url: str) -> None:
     cannot drift from the tool-path gate. AdCP tool wrappers raise ``AdCPValidationError``
     directly for the same helper.
     """
-    from src.core.exceptions import AdCPValidationError
-    from src.core.webhook_validator import reject_unsafe_webhook_registration_url
-
     try:
         reject_unsafe_webhook_registration_url(url, field="push_notification_config.url")
     except AdCPValidationError as e:
@@ -626,15 +625,10 @@ class AdCPRequestHandler(RequestHandler):
             push_notification_config = params.configuration.task_push_notification_config
             if push_notification_config.url:
                 _reject_unsafe_a2a_webhook_url(push_notification_config.url)
-                from src.core.webhook_validator import (
-                    UNPARSEABLE_WEBHOOK_URL_FOR_LOG,
-                    sanitize_webhook_url_for_log,
-                )
-
                 logger.info(
                     "Protocol-level push notification config provided for task %s: %s",
                     task_id,
-                    sanitize_webhook_url_for_log(push_notification_config.url) or UNPARSEABLE_WEBHOOK_URL_FOR_LOG,
+                    webhook_url_for_log(push_notification_config.url),
                 )
 
         # Prepare task metadata (JSON-serializable only — protobuf Struct)

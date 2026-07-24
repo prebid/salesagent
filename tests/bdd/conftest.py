@@ -2831,6 +2831,14 @@ _ADMIN_TAG_PREFIX = "T-ADMIN-"
 # variant would 404). get_media_buys (UC-019) is A2A/MCP-only.
 _NO_REST_UC_TAG_PREFIXES = ("T-UC-019-",)
 
+# Send-time webhook scenarios that assert in-process mock/circuit-breaker state.
+# Do NOT append e2e_rest (false-green) and do NOT grow _UC004_E2E_WEBHOOK_INTERNAL_TAGS.
+_NO_E2E_REST_TAGS: frozenset[str] = frozenset(
+    {
+        "T-UC-004-webhook-ssrf-blocked",
+    }
+)
+
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     """Parametrize BDD scenarios across the wire transports (a2a/mcp/rest).
@@ -2886,8 +2894,11 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         ids = ["a2a", "mcp"]
 
     if os.environ.get("BDD_E2E_ENABLED") == "true" and not no_rest_uc:
-        transports.append(Transport.E2E_REST)
-        ids.append("e2e_rest")
+        # In-process-only webhook scenarios have no e2e-observable surface —
+        # skip e2e_rest rather than xfail (shrink-only ratchet / false-green).
+        if not (marker_names & _NO_E2E_REST_TAGS):
+            transports.append(Transport.E2E_REST)
+            ids.append("e2e_rest")
 
     metafunc.parametrize("ctx", transports, ids=ids, indirect=True)
 

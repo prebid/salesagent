@@ -16,6 +16,7 @@ from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
+from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
 
 from ._assignments import _process_assignments
 from ._processing import _create_new_creative, _failed_sync_result, _update_existing_creative
@@ -99,22 +100,16 @@ def _sync_creatives_impl(
             webhook_url = push_notification_config.get("url")
         else:
             webhook_url = str(push_notification_config.url) if push_notification_config.url else None
+        reject_unsafe_webhook_registration_url(
+            webhook_url,
+            field="push_notification_config.url",
+            context=context,
+        )
         if webhook_url is not None and str(webhook_url).strip():
-            from src.core.webhook_validator import (
-                UNPARSEABLE_WEBHOOK_URL_FOR_LOG,
-                reject_unsafe_webhook_registration_url,
-                sanitize_webhook_url_for_log,
-            )
-
-            reject_unsafe_webhook_registration_url(
-                str(webhook_url),
-                field="push_notification_config.url",
-                context=context,
-            )
             # Log scheme+host+path only — never credentials / full auth blob.
             logger.info(
                 "[sync_creatives] Push notification webhook URL: %s",
-                sanitize_webhook_url_for_log(str(webhook_url)) or UNPARSEABLE_WEBHOOK_URL_FOR_LOG,
+                webhook_url_for_log(str(webhook_url)),
             )
 
     # Track actions per creative for AdCP-compliant response

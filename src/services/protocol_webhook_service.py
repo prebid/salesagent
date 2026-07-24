@@ -34,9 +34,8 @@ from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.lifecycle import register_shutdown
 from src.core.webhook_validator import (
-    UNPARSEABLE_WEBHOOK_URL_FOR_LOG,
     reject_unsafe_outbound_webhook_url,
-    sanitize_webhook_url_for_log,
+    webhook_url_for_log,
 )
 
 logger = logging.getLogger(__name__)
@@ -306,7 +305,7 @@ class ProtocolWebhookService:
 
         for attempt in range(max_attempts):
             try:
-                safe_url = sanitize_webhook_url_for_log(url) or UNPARSEABLE_WEBHOOK_URL_FOR_LOG
+                safe_url = webhook_url_for_log(url)
                 logger.info(
                     "Sending webhook for task %s to %s (attempt %s/%s)",
                     task_id,

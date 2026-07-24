@@ -213,6 +213,28 @@ def test_reject_unsafe_webhook_registration_url_raises_validation_error() -> Non
     assert exc_info.value.recovery == "correctable"
 
 
+@pytest.mark.parametrize("blank", [None, "", "   "])
+def test_reject_unsafe_webhook_registration_url_noop_on_blank(blank: str | None) -> None:
+    """Blank / missing URL is not a rejection — callers extract-then-call unconditionally."""
+    reject_unsafe_webhook_registration_url(blank, field="push_notification_config.url")
+
+
+def test_sanitize_webhook_url_for_log_strips_credentials_query_and_fragment() -> None:
+    from src.core.webhook_validator import (
+        UNPARSEABLE_WEBHOOK_URL_FOR_LOG,
+        sanitize_webhook_url_for_log,
+        webhook_url_for_log,
+    )
+
+    dirty = "https://user:pass@buyer.example.com:8443/hook?token=abc#frag"
+    assert sanitize_webhook_url_for_log(dirty) == "https://buyer.example.com/hook"
+    assert webhook_url_for_log(dirty) == "https://buyer.example.com/hook"
+    assert sanitize_webhook_url_for_log(None) is None
+    assert sanitize_webhook_url_for_log("not-a-url") is None
+    assert webhook_url_for_log(None) == UNPARSEABLE_WEBHOOK_URL_FOR_LOG
+    assert webhook_url_for_log("not-a-url") == UNPARSEABLE_WEBHOOK_URL_FOR_LOG
+
+
 def test_reject_unsafe_webhook_registration_url_allows_public() -> None:
     # Registration skips DNS — fixture hostnames must not NXDOMAIN-fail.
     reject_unsafe_webhook_registration_url("https://buyer.example.com/hook", field="push_notification_config.url")

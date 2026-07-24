@@ -158,6 +158,7 @@ from src.core.tools.financial_validation import (
 
 # Import get_product_catalog from main (after refactor)
 from src.core.validation_helpers import adcp_validation_boundary, format_validation_error, package_field_path
+from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
 from src.services.activity_feed import activity_feed
 from src.services.gam_product_config_service import GAMProductConfigService
 from src.services.targeting_capabilities import (
@@ -2052,18 +2053,20 @@ async def _create_media_buy_impl(
     # SSRF gate at registration — after auth so unauthenticated callers get AUTH
     # first. Must run before workflow metadata / DB writes.
     # Use str(url): library ReportingWebhook.url is pydantic AnyUrl, not str.
-    from src.core.webhook_validator import reject_unsafe_webhook_registration_url
-
     if req.reporting_webhook:
         rw_url = getattr(req.reporting_webhook, "url", None)
-        if rw_url is not None and str(rw_url).strip():
-            reject_unsafe_webhook_registration_url(str(rw_url), field="reporting_webhook.url", context=req.context)
+        reject_unsafe_webhook_registration_url(
+            str(rw_url) if rw_url is not None else None,
+            field="reporting_webhook.url",
+            context=req.context,
+        )
     if push_notification_config:
         pnc_url = push_notification_config.get("url")
-        if pnc_url is not None and str(pnc_url).strip():
-            reject_unsafe_webhook_registration_url(
-                str(pnc_url), field="push_notification_config.url", context=req.context
-            )
+        reject_unsafe_webhook_registration_url(
+            str(pnc_url) if pnc_url is not None else None,
+            field="push_notification_config.url",
+            context=req.context,
+        )
 
     # Validate setup completion (only in production, skip for testing)
     if not testing_ctx.dry_run and not testing_ctx.test_session_id:
@@ -2148,10 +2151,6 @@ async def _create_media_buy_impl(
         # persist via repository upsert (registration gate + defense in depth).
         if push_notification_config:
             from src.core.database.repositories import PushNotificationConfigUoW
-            from src.core.webhook_validator import (
-                UNPARSEABLE_WEBHOOK_URL_FOR_LOG,
-                sanitize_webhook_url_for_log,
-            )
 
             url = push_notification_config.get("url")
             authentication = push_notification_config.get("authentication", {})
@@ -2159,7 +2158,7 @@ async def _create_media_buy_impl(
             logger.info(
                 "[MCP/A2A] Registering push notification config id=%s url=%s",
                 push_notification_config.get("id"),
-                sanitize_webhook_url_for_log(str(url) if url else None) or UNPARSEABLE_WEBHOOK_URL_FOR_LOG,
+                webhook_url_for_log(str(url) if url else None),
             )
 
             # Match the pre-gate: whitespace-only URL must not reach upsert.

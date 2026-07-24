@@ -365,6 +365,8 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
 
   @T-UC-004-webhook-ssrf-blocked @async @extension @ext-g @webhook-reliability @webhook @error
   Scenario: Blocked outbound webhook URL skips delivery without POST
+    # In-process only (a2a/mcp/rest): asserts env.mock post count + circuit-breaker
+    # failure_count — not e2e_rest-parametrized (no live-observable surface yet).
     Given a media buy "mb-001" with an active reporting_webhook
     And the outbound webhook URL is blocked by SSRF validation
     When the system attempts to deliver a webhook report

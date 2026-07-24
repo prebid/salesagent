@@ -92,13 +92,24 @@ def sanitize_webhook_url_for_log(url: str | None) -> str | None:
     return None
 
 
+def webhook_url_for_log(url: str | None) -> str:
+    """Total log helper: sanitized URL or the unparseable placeholder (never raw)."""
+    return sanitize_webhook_url_for_log(url) or UNPARSEABLE_WEBHOOK_URL_FOR_LOG
+
+
 def reject_unsafe_webhook_registration_url(
-    url: str,
+    url: str | None,
     *,
     field: str,
     context: ContextObject | dict[str, Any] | None = None,
 ) -> None:
-    """Raise AdCPValidationError when ``url`` fails the registration SSRF gate."""
+    """Raise AdCPValidationError when ``url`` fails the registration SSRF gate.
+
+    Blank / whitespace-only / ``None`` URLs are a no-op (not a rejection) so
+    callers can extract-then-call unconditionally.
+    """
+    if url is None or not str(url).strip():
+        return
     is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(str(url))
     if not is_valid:
         raise AdCPValidationError(
@@ -128,7 +139,7 @@ def reject_unsafe_outbound_webhook_url(
     log.error(
         "%s webhook URL failed SSRF validation (url=%s): %s",
         kind,
-        sanitize_webhook_url_for_log(url) or UNPARSEABLE_WEBHOOK_URL_FOR_LOG,
+        webhook_url_for_log(url),
         error_msg,
     )
     return True, error_msg

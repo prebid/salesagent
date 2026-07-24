@@ -22,9 +22,8 @@ from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowSte
 from src.core.database.models import Context as DBContext
 from src.core.exceptions import AdCPError, build_two_layer_error_envelope, normalize_to_adcp_error
 from src.core.webhook_validator import (
-    UNPARSEABLE_WEBHOOK_URL_FOR_LOG,
-    sanitize_webhook_url_for_log,
     validate_webhook_task_type,
+    webhook_url_for_log,
 )
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -39,7 +38,7 @@ def _log_webhook_send_outcome(config_url: str, sent: bool) -> None:
     ``config_url`` is sanitized to ``scheme://host/path`` so credentials in
     userinfo/query never reach the console (AdCP L1 SSRF log hygiene).
     """
-    safe_url = sanitize_webhook_url_for_log(config_url) or UNPARSEABLE_WEBHOOK_URL_FOR_LOG
+    safe_url = webhook_url_for_log(config_url)
     if sent:
         console.print(f"[green]✅ Webhook sent successfully for {safe_url}[/green]")
     else:
@@ -864,9 +863,7 @@ class ContextManager(DatabaseManager):
 
                     service = get_protocol_webhook_service()
 
-                    safe_webhook_url = (
-                        sanitize_webhook_url_for_log(push_notification_config.url) or UNPARSEABLE_WEBHOOK_URL_FOR_LOG
-                    )
+                    safe_webhook_url = webhook_url_for_log(push_notification_config.url)
                     console.print(
                         f"[cyan]📤 Sending webhook to {safe_webhook_url} for {mapping.object_type} {mapping.object_id}[/cyan]"
                     )
