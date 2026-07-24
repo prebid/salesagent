@@ -4,11 +4,7 @@ from typing import Any
 
 from adcp.types import ContextObject
 
-from src.core.application_context import (
-    MAX_CONTEXT_DEPTH,
-    dump_adcp_response,
-    serialize_application_context,
-)
+from src.core.application_context import dump_adcp_response, serialize_application_context
 from src.core.schemas.product import GetProductsResponse
 
 
@@ -43,32 +39,31 @@ def test_plain_context_is_detached_recursively() -> None:
     assert serialized == {"nested": {"value": None}}
 
 
-def test_context_at_the_depth_bound_is_echoed_unchanged() -> None:
-    """Everything a conformant buyer can send survives the detach untouched."""
-    raw = _nested_context(MAX_CONTEXT_DEPTH)
+def test_deeply_nested_plain_context_survives_intact() -> None:
+    """No depth ceiling: ``core/context.json`` sets none, so none is enforced.
+
+    ``copy.deepcopy`` exhausts CPython's call stack around 500 levels — an
+    earlier version of this function used it and silently dropped context past
+    a 100-level bound, violating the normative echo contract for perfectly
+    schema-valid input. The iterative detach in ``_detach`` has no such limit:
+    a context nested 5,000 objects deep — an order of magnitude past both the
+    old bound and the recursion ceiling it was avoiding — is echoed exactly.
+    """
+    raw = _nested_context(5000)
 
     assert serialize_application_context(raw) == raw
 
 
-def test_context_past_the_depth_bound_is_dropped_not_raised(caplog) -> None:
-    """Callers run inside exception handlers; a secondary failure must not escape.
-
-    ``copy.deepcopy`` exhausts the interpreter stack around 500 levels, so an
-    unbounded detach turned a buyer's error envelope into a bare 500.
+def test_deeply_nested_typed_context_survives_intact() -> None:
+    """The ``ContextObject`` branch must not hand a deep structure to Pydantic's
+    own serializer, whose internal recursion guard trips independently of
+    Python's — reading ``model_extra`` directly and detaching it ourselves
+    sidesteps that guard entirely.
     """
-    raw = _nested_context(MAX_CONTEXT_DEPTH + 1)
+    raw = _nested_context(5000)
+    context = ContextObject.model_validate(raw)
 
-    with caplog.at_level("WARNING", logger="src.core.application_context"):
-        assert serialize_application_context(raw) is None
-
-    assert "nests deeper than" in caplog.text
-
-
-def test_deeply_nested_typed_context_is_dropped_not_raised() -> None:
-    """The ``ContextObject`` branch dumps opaque extras and must degrade too."""
-    context = ContextObject.model_validate(_nested_context(MAX_CONTEXT_DEPTH * 8))
-
-    assert serialize_application_context(context) is None
+    assert serialize_application_context(context) == raw
 
 
 def test_response_dump_restores_lossless_context_and_omits_absence() -> None:

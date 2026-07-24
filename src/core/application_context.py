@@ -8,97 +8,96 @@ optional fields but not for caller-owned context: an explicitly supplied JSON
 
 from __future__ import annotations
 
-import logging
-from copy import deepcopy
 from typing import Any
 
 from pydantic import BaseModel
 
-logger = logging.getLogger(__name__)
-
 _CONTEXT_UNSET = object()
 
-# Deepest buyer-supplied context nesting this agent will detach and echo.
-#
-# ``context`` is opaque per ``core/context.json`` (v3.1.1) and the schema sets
-# no depth ceiling, so the bound exists purely to keep serialization inside the
-# interpreter's stack: ``copy.deepcopy`` exhausts the default recursion limit at
-# roughly 500 levels and ``json.dumps`` (the response renderer) at roughly
-# 25,000. Both run INSIDE exception handlers, where a ``RecursionError`` would
-# escape as a bare 500 with no envelope. 100 levels is far beyond any real
-# correlation payload while staying an order of magnitude clear of the copy
-# ceiling, so conformant traffic is echoed unchanged and only pathological
-# nesting degrades — to a dropped context, never to a masked error.
-MAX_CONTEXT_DEPTH = 100
 
+def _detach(value: Any) -> Any:
+    """Deep-copy JSON containers with an explicit heap stack, never Python recursion.
 
-class _ContextTooDeepError(Exception):
-    """Internal signal that a context exceeds ``MAX_CONTEXT_DEPTH``."""
+    ``context`` is opaque per ``core/context.json`` (v3.1.1) and the schema sets
+    no depth ceiling, so this agent must be able to echo a context of ANY
+    nesting depth unchanged — the normative echo contract
+    (``context-sessions.mdx``) requires accepted context to survive the round
+    trip exactly, and every caller of this module runs inside an exception
+    handler or a response builder, where silently dropping the buyer's context
+    (or raising) would violate that contract or mask the original error.
 
-
-def _detach_bounded(value: Any, depth: int) -> Any:
-    """Recursively detach JSON containers, refusing to descend past the bound.
-
-    Recursion here is safe precisely because it is bounded: at most
-    ``MAX_CONTEXT_DEPTH`` frames, versus the unbounded descent of ``deepcopy``
-    that this replaces. Non-container leaves are deep-copied individually so a
-    later mutation of the request object still cannot change an emitted
-    response.
+    ``copy.deepcopy`` and Pydantic's own JSON serializer both recurse per
+    nesting level and exhaust their respective recursion guards on a
+    pathologically deep structure (~500 levels for CPython's call stack;
+    pydantic-core's cycle detector separately caps out around the same order).
+    This function instead walks the structure with an explicit Python list as
+    the traversal stack — heap-allocated, so its capacity is bounded by
+    available memory, not a fixed recursion limit. JSON scalars (str / int /
+    float / bool / None) are immutable, so they are assigned directly rather
+    than copied; only dict/list containers are cloned, which is sufficient to
+    guarantee a later mutation of the source object cannot change an already-
+    emitted response.
     """
-    if isinstance(value, dict | list):
-        if depth > MAX_CONTEXT_DEPTH:
-            raise _ContextTooDeepError
-        if isinstance(value, dict):
-            return {key: _detach_bounded(item, depth + 1) for key, item in value.items()}
-        return [_detach_bounded(item, depth + 1) for item in value]
-    return deepcopy(value)
+    if isinstance(value, dict):
+        root: Any = {}
+    elif isinstance(value, list):
+        root = []
+    else:
+        return value
+
+    stack: list[tuple[Any, Any]] = [(value, root)]
+    while stack:
+        source, dest = stack.pop()
+        items = source.items() if isinstance(source, dict) else enumerate(source)
+        for key, item in items:
+            if isinstance(item, dict):
+                child: Any = {}
+                stack.append((item, child))
+            elif isinstance(item, list):
+                child = []
+                stack.append((item, child))
+            else:
+                child = item
+            if isinstance(dest, dict):
+                dest[key] = child
+            else:
+                dest.append(child)
+    return root
 
 
 def serialize_application_context(context: Any) -> dict[str, Any] | None:
     """Return a detached, JSON-safe context without deleting explicit nulls.
 
-    ``exclude_unset=True`` omits fields the generated ``ContextObject`` merely
-    declares, while ``exclude_none=False`` preserves fields the buyer actually
-    supplied with a JSON-null value. Plain dictionaries are detached so a
-    later mutation of the request object cannot change an emitted response.
-    Invalid non-object values return ``None``; callers use this function while
-    already handling another result/error and must not mask it with a secondary
-    serialization failure.
-
-    That last guarantee is why nesting deeper than ``MAX_CONTEXT_DEPTH`` — and
-    a ``RecursionError`` from dumping a deeply nested model — degrade to a
-    logged ``None`` rather than propagating: every caller runs inside an
-    exception handler or a response builder, so raising here would replace the
-    buyer's envelope with an unhandled 500.
+    Plain dictionaries are detached directly. A ``ContextObject`` declares no
+    schema-owned fields at all — ``core/context.json`` types it as a bare
+    opaque object — so every buyer-supplied key lives in ``model_extra`` as
+    plain JSON containers already; reading it directly and detaching it
+    ourselves (rather than calling ``context.model_dump()``) avoids handing a
+    deeply nested structure to Pydantic's serializer, whose own internal
+    recursion guard is exactly the failure mode this function exists to avoid.
+    ``exclude=`` the extra keys so a future schema revision's declared fields
+    (currently none) still dump through Pydantic's ordinary — and shallow —
+    path, then merge the two: declared fields can never collide with extras by
+    construction. ``exclude_unset=True`` omits fields the model merely
+    declares; ``exclude_none=False`` preserves an explicit JSON ``null`` the
+    buyer actually supplied. Invalid non-object values return ``None``;
+    callers use this function while already handling another result/error and
+    must not mask it with a secondary serialization failure.
     """
     if context is None:
         return None
     if isinstance(context, dict):
-        raw: dict[str, Any] = context
-    elif isinstance(context, BaseModel):
-        try:
-            raw = context.model_dump(
-                mode="json",
-                exclude_unset=True,
-                exclude_none=False,
-            )
-        except (RecursionError, ValueError):
-            # Pydantic reports runaway nesting as ValueError("Circular reference
-            # detected (depth exceeded)") rather than RecursionError, so both
-            # spellings of "too deep to dump" degrade the same way.
-            logger.warning("application context model is too deeply nested to serialize; dropping context")
-            return None
-    else:
-        return None
-
-    try:
-        return dict(_detach_bounded(raw, 1))
-    except _ContextTooDeepError:
-        logger.warning(
-            "application context nests deeper than %d levels; dropping context",
-            MAX_CONTEXT_DEPTH,
+        return _detach(context)
+    if isinstance(context, BaseModel):
+        extra = context.model_extra or {}
+        declared = context.model_dump(
+            mode="json",
+            exclude=set(extra),
+            exclude_unset=True,
+            exclude_none=False,
         )
-        return None
+        return _detach({**declared, **extra})
+    return None
 
 
 def _response_context(response: Any) -> Any:
@@ -129,7 +128,7 @@ def dump_adcp_response(
     flattened result wrapper's inner response) is used.
     """
     if isinstance(response, dict):
-        data = deepcopy(response)
+        data = _detach(response)
     else:
         data = response.model_dump(mode=mode, **kwargs)
 
