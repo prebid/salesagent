@@ -83,7 +83,7 @@ def _allow_private_webhook_targets() -> bool:
 
     A DEDICATED opt-in (``ADCP_ALLOW_PRIVATE_WEBHOOKS``), deliberately NOT tied to
     ``ENVIRONMENT``: a real staging/dev deployment that serves buyers must still block
-    private/internal targets, so gating on "not production" was too broad (#1512). This
+    private/internal targets, so gating on "not production" was too broad. This
     flag is set ONLY by the E2E harness, whose webhook receiver lives on the compose
     network / loopback. Cloud-metadata and link-local targets stay blocked even when it
     is set.
@@ -192,7 +192,7 @@ def _validate_callback_url_with_policy(url: str, *, allow_private: bool) -> tupl
     if is_valid:
         return True, ""
 
-    # Info-disclosure guard (#1546): never hand the resolved IP / matched CIDR
+    # Info-disclosure guard: never hand the resolved IP / matched CIDR
     # range back to the buyer — that is an SSRF oracle. Log the precise reason
     # server-side (scrubbed: the detail embeds buyer-controlled URL fragments,
     # and VT/FF/ESC survive urlparse); return a generic message. The
@@ -278,7 +278,7 @@ class WebhookURLValidator:
 
     @classmethod
     def validate_callback_url(cls, url: str) -> tuple[bool, str]:
-        """Env-gated validation for a buyer-supplied push callback URL (#1512).
+        """Env-gated validation for a buyer-supplied push callback URL.
 
         The single gate used at callback registration AND delivery. By default —
         production, staging, and ordinary dev — it requires HTTPS and blocks all

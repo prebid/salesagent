@@ -117,8 +117,14 @@ def given_version_unsupported_at_boundary(ctx: dict, boundary_point: str) -> Non
 # ── When ─────────────────────────────────────────────────────────────
 
 
-@when(parsers.parse('the Buyer Agent calls get_adcp_capabilities MCP tool with adcp_version "{version}"'))
+@when(parsers.parse('the Buyer Agent calls get_adcp_capabilities with adcp_version "{version}"'))
 def when_call_capabilities_with_version_pin(ctx: dict, version: str) -> None:
+    # Transport-neutral phrasing: this step does not fix a transport (unlike
+    # when_call_capabilities_with_context_mcp/_a2a below), so the scenario
+    # dispatches through whatever ctx["transport"] the outer parametrization
+    # already set — mcp/a2a/rest, matching BR-UC-010-version-negotiation.feature's
+    # own header ("locks them on the real MCP, A2A, and REST wire"). The prose
+    # previously said "MCP tool" while running on all three.
     ctx["pinned_version"] = version
     dispatch_request(ctx, adcp_version=version)
 

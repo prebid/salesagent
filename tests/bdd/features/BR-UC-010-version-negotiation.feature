@@ -24,7 +24,7 @@ Feature: BR-UC-010 Version Negotiation (hand-authored companion)
   @T-UC-010-v31-version-unsupported-cross-major @v31 @extension @ext-f @error @post-f4 @boundary @partition
   Scenario Outline: A release pin from a different major is unsupported - <pin>
     Given the seller speaks adcp release-precision versions "3.0", "3.1"
-    When the Buyer Agent calls get_adcp_capabilities MCP tool with adcp_version "<pin>"
+    When the Buyer Agent calls get_adcp_capabilities with adcp_version "<pin>"
     Then the response should be a VERSION_UNSUPPORTED error
     And the error details should include supported_versions as a non-empty array
     And the Buyer Agent must select the next adcp_version from supported_versions
@@ -39,7 +39,7 @@ Feature: BR-UC-010 Version Negotiation (hand-authored companion)
   @T-UC-010-v31-version-unsupported-sub-min @v31 @extension @ext-f @error @post-f4 @boundary
   Scenario: A stable same-major pin below every supported release is unsupported
     Given the seller speaks adcp release-precision versions "3.1", "3.2"
-    When the Buyer Agent calls get_adcp_capabilities MCP tool with adcp_version "3.0"
+    When the Buyer Agent calls get_adcp_capabilities with adcp_version "3.0"
     Then the response should be a VERSION_UNSUPPORTED error
     And the error details should include supported_versions as a non-empty array
     And the Buyer Agent must select the next adcp_version from supported_versions
@@ -49,7 +49,7 @@ Feature: BR-UC-010 Version Negotiation (hand-authored companion)
   @T-UC-010-v31-version-unsupported-prerelease @v31 @extension @ext-f @error @post-f4 @boundary
   Scenario: An unmatched prerelease pin is not range-resolved to a stable release
     Given the seller speaks adcp release-precision versions "3.0", "3.1"
-    When the Buyer Agent calls get_adcp_capabilities MCP tool with adcp_version "3.1-beta"
+    When the Buyer Agent calls get_adcp_capabilities with adcp_version "3.1-beta"
     Then the response should be a VERSION_UNSUPPORTED error
     And the error details should include supported_versions as a non-empty array
     And the Buyer Agent must select the next adcp_version from supported_versions
