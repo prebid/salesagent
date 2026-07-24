@@ -393,78 +393,67 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 attributes.flag_modified(step, "comments")
 
                 if media_buy and media_buy.status == "pending_approval":
-                    # Check if all creatives are approved before moving to scheduled
-                    from src.core.database.models import Creative, CreativeAssignment
-
-                    stmt_assignments = select(CreativeAssignment).filter_by(
-                        tenant_id=tenant_id, media_buy_id=media_buy_id
+                    # Shared Hold predicate (#1696): zero assignments or unapproved
+                    # creatives → pending_creatives; never finalize on hold.
+                    from src.admin.services.media_buy_creative_readiness import (
+                        evaluate_creative_finalize_readiness,
                     )
-                    assignments = db_session.scalars(stmt_assignments).all()
 
-                    all_creatives_approved = True
-                    if assignments:
-                        creative_ids = [a.creative_id for a in assignments]
-                        stmt_creatives = select(Creative).filter(
-                            Creative.tenant_id == tenant_id, Creative.creative_id.in_(creative_ids)
-                        )
-                        creatives = db_session.scalars(stmt_creatives).all()
-
-                        # Check if any creatives are not approved
-                        for creative in creatives:
-                            if creative.status != "approved":
-                                all_creatives_approved = False
-                                break
-                    else:
-                        # No creatives assigned yet
-                        all_creatives_approved = False
-
-                    # Update status based on creative approval state
-                    if all_creatives_approved:
-                        if media_buy.start_time and media_buy.end_time:
-                            # Compute flight window
-                            if media_buy.start_time:
-                                start_time = (
-                                    media_buy.start_time.astimezone(UTC)
-                                    if media_buy.start_time.tzinfo
-                                    else media_buy.start_time.replace(tzinfo=UTC)
-                                )
-
-                            if media_buy.end_time:
-                                end_time = (
-                                    media_buy.end_time.astimezone(UTC)
-                                    if media_buy.end_time.tzinfo
-                                    else media_buy.end_time.replace(tzinfo=UTC)
-                                )
-
-                            now = datetime.now(UTC)
-                            if now < start_time:
-                                media_buy.status = "scheduled"
-                            elif now > end_time:
-                                media_buy.status = "completed"
-                            else:
-                                media_buy.status = "active"
-                        else:
-                            # No start or end time - set to active
-                            media_buy.status = "active"
-                    else:
-                        # Keep it in a state that shows it needs creative approval
-                        # Use "draft" which will be displayed as "needs_approval" or "needs_creatives" by readiness service
-                        media_buy.status = "draft"
+                    readiness = evaluate_creative_finalize_readiness(
+                        db_session, tenant_id=tenant_id, media_buy_id=media_buy_id
+                    )
 
                     media_buy.approved_at = datetime.now(UTC)
                     media_buy.approved_by = user_email
+
+                    if not readiness.ready:
+                        media_buy.status = "pending_creatives"
+                        db_session.commit()
+                        if readiness.hold_reason == "no_assignments":
+                            flash(
+                                "Media buy approved! Waiting for creatives to be assigned and approved before creating in GAM.",
+                                "info",
+                            )
+                        else:
+                            n = len(readiness.unapproved_creative_ids)
+                            flash(
+                                f"Media buy approved! Waiting for {n} creative(s) to be approved before creating in GAM.",
+                                "info",
+                            )
+                        return redirect(
+                            url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
+                        )
+
+                    if media_buy.start_time and media_buy.end_time:
+                        start_time = (
+                            media_buy.start_time.astimezone(UTC)
+                            if media_buy.start_time.tzinfo
+                            else media_buy.start_time.replace(tzinfo=UTC)
+                        )
+                        end_time = (
+                            media_buy.end_time.astimezone(UTC)
+                            if media_buy.end_time.tzinfo
+                            else media_buy.end_time.replace(tzinfo=UTC)
+                        )
+                        now = datetime.now(UTC)
+                        if now < start_time:
+                            media_buy.status = "scheduled"
+                        elif now > end_time:
+                            media_buy.status = "completed"
+                        else:
+                            media_buy.status = "active"
+                    else:
+                        media_buy.status = "active"
+
                     db_session.commit()
 
-                    # Execute adapter creation for approved media buy
-                    # This creates the order/line items in GAM (or other adapter)
-                    # Uses the same logic as auto-approved media buys
+                    # Ready arm only: create order/line items in adapter
                     from src.core.tools.media_buy_create import execute_approved_media_buy
 
                     logger.info(f"[APPROVAL] Executing adapter creation for approved media buy {media_buy_id}")
                     success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
 
                     if not success:
-                        # Adapter creation failed - update status and show error
                         with get_db_session() as error_session:
                             error_repo = MediaBuyRepository(error_session, tenant_id)
                             error_buy = error_repo.update_status(media_buy_id, "failed")
@@ -478,7 +467,6 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
 
                     logger.info(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}")
 
-                    # Send webhook notification to buyer
                     webhook_config = None
                     if media_buy_data and media_buy_data["push_notification_url"]:
                         stmt_webhook = (
@@ -497,14 +485,8 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         approve_repo = MediaBuyRepository(db_session, tenant_id)
                         all_packages = approve_repo.get_packages(media_buy_id)
 
-                        # Echo the buyer's request context (shared helper, also used by
-                        # the creative approval webhook in blueprints/creatives.py).
                         approve_context = echo_context(request_data)
 
-                        # The buy IS committed at this point, so a confirmed Success
-                        # (status/confirmed_at/revision from the subclass defaults) is
-                        # semantically correct here — route through the sync_success()
-                        # factory like every sibling construction site (PR #1567 round-2 cleanup).
                         create_media_buy_approved_result = CreateMediaBuySuccess.sync_success(
                             media_buy_id=media_buy_id,
                             packages=[Package(package_id=x.package_id) for x in all_packages],
@@ -512,12 +494,8 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         )
                         metadata = _media_buy_webhook_metadata(step_data, tenant_id, media_buy_id, media_buy_data)
 
-                        # Determine protocol type from workflow step request_data
-                        protocol = step_data["request_data"].get(
-                            "protocol", "mcp"
-                        )  # Default to MCP for backward compatibility
+                        protocol = step_data["request_data"].get("protocol", "mcp")
 
-                        # Create appropriate webhook payload based on protocol
                         if protocol == "a2a":
                             create_media_buy_approved_payload = create_a2a_webhook_payload(
                                 task_id=step_data["step_id"],
@@ -526,9 +504,6 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                                 context_id=step_data["context_id"],
                             )
                         else:
-                            # tool_name is untrusted (workflow_steps DB column).
-                            # Validate a COPY for the SDK payload; metadata keeps
-                            # the original label (salesagent-yi3s, salesagent-yk7o).
                             create_media_buy_approved_payload = create_mcp_webhook_payload(
                                 task_id=step_data["step_id"],
                                 task_type=validate_webhook_task_type(step_data.get("tool_name", "create_media_buy")),
