@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from tests.bdd import xfail_taxonomy
+
 # Known mock-incompatible e2e_rest BDD scenarios — these dispatch over real HTTP
 # to the separate server, so in-process mock injection (set_registry_formats /
 # set_adapter_response / account billing-state fixtures) is invisible to it and
@@ -98,17 +100,17 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Gener
 
         if call.excinfo.errisinstance(StepDefinitionNotFoundError):
             report.outcome = "skipped"
-            report.wasxfail = f"Step definition not found: {call.excinfo.value}"
+            report.wasxfail = xfail_taxonomy.step_definition_not_found(call.excinfo.value)
         elif call.excinfo.errisinstance(NotImplementedError):
             report.outcome = "skipped"
-            report.wasxfail = f"Not implemented: {call.excinfo.value}"
+            report.wasxfail = xfail_taxonomy.not_implemented(call.excinfo.value)
         elif call.excinfo.errisinstance(E2EUnsupportedSetup):
             # A mock-setup intent the live e2e stack has no surface for. The
             # reason is declared at the env method (not a nodeid ledger), so it
             # is visible in the report. Non-strict xfail — in-process transports
             # of the same scenario still run normally.
             report.outcome = "skipped"
-            report.wasxfail = f"impl-only setup declared in env: {call.excinfo.value}"
+            report.wasxfail = xfail_taxonomy.e2e_unsupported_setup(call.excinfo.value)
 
 
 # ---------------------------------------------------------------------------
@@ -3271,7 +3273,9 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["default_pricing_option"] = pricing_option
                 yield
         elif "T-UC-002-inv-015-6" in marker_names:
-            pytest.xfail("T-UC-002-inv-015-6 create_media_buy harness wiring is tracked in #1652")
+            pytest.xfail(
+                f"T-UC-002-inv-015-6 create_media_buy harness {xfail_taxonomy.NOT_YET_WIRED} (tracked in #1652)"
+            )
         else:
             # Restore the xfail guard every other use case keeps on its catch-all:
             # non-account / non-extension UC-002 scenarios are NOT yet wired (no
@@ -3279,7 +3283,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # "Account reference is required"). Mirror UC-003/004/006/011: xfail them
             # until each is explicitly wired into a run branch above. Dropping this
             # line is what flipped ~800 dormant scenarios from xfail to fail.
-            pytest.xfail("UC-002 harness not yet wired for non-extension scenarios")
+            pytest.xfail(f"UC-002 harness {xfail_taxonomy.NOT_YET_WIRED} for non-extension scenarios")
 
     elif uc == "UC-003":
         marker_names = {m.name for m in request.node.iter_markers()}
@@ -3356,7 +3360,8 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 yield
         else:
             pytest.xfail(
-                "UC-003 harness not yet wired for non-extension scenarios (full graduation pending, PR #1567 follow-up)"
+                f"UC-003 harness {xfail_taxonomy.NOT_YET_WIRED} for non-extension scenarios "
+                "(full graduation pending, PR #1567 follow-up)"
             )
 
     elif uc == "UC-006":
@@ -3375,7 +3380,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["env"] = env
                 yield
         else:
-            pytest.xfail("UC-006 harness not yet wired for non-account scenarios")
+            pytest.xfail(f"UC-006 harness {xfail_taxonomy.NOT_YET_WIRED} for non-account scenarios")
 
     elif uc == "UC-005":
         from tests.harness.creative_formats import CreativeFormatsEnv
@@ -3413,11 +3418,13 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["env"] = env
                 yield
         elif "T-UC-018-ext-c" in marker_names:
-            pytest.xfail("T-UC-018-ext-c list_creatives validation harness wiring is tracked in #1652")
+            pytest.xfail(
+                f"T-UC-018-ext-c list_creatives validation harness {xfail_taxonomy.NOT_YET_WIRED} (tracked in #1652)"
+            )
         else:
             pytest.xfail(
-                "UC-018 harness wired only for the @list-after-sync (#1405), @concept-id (#1407), "
-                "and @BR-RULE-034 isolation (#1503) scenarios"
+                f"UC-018 harness {xfail_taxonomy.NOT_YET_WIRED} outside the @list-after-sync (#1405), "
+                "@concept-id (#1407), and @BR-RULE-034 isolation (#1503) scenarios"
             )
 
     elif uc == "UC-011":
@@ -3437,7 +3444,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["env"] = env
                 yield
         else:
-            pytest.xfail(f"UC-011 harness not yet wired for markers: {marker_names}")
+            pytest.xfail(f"UC-011 harness {xfail_taxonomy.NOT_YET_WIRED} for markers: {marker_names}")
 
     elif uc == "ADMIN":
         request.getfixturevalue("integration_db")
@@ -3504,7 +3511,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["default_pricing_option"] = pricing_option
                 yield
         else:
-            pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
+            pytest.xfail(f"UC-004 harness {xfail_taxonomy.NOT_YET_WIRED} for type: {harness_type}")
     elif uc == "UC-GET-PRODUCTS":
         from tests.harness.product import ProductEnv
 
@@ -3529,4 +3536,4 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             ctx["principal"] = principal
             yield
     else:
-        pytest.xfail(f"No harness wired for {uc}")
+        pytest.xfail(xfail_taxonomy.no_harness_wired(uc))
