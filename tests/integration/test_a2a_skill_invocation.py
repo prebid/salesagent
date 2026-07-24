@@ -21,6 +21,7 @@ from a2a.types import (
     SendMessageRequest,
     Task,
     TaskNotCancelableError,
+    TaskNotFoundError,
     TaskState,
     TaskStatus,
 )
@@ -371,7 +372,9 @@ class TestA2ASkillInvocation:
     @pytest.mark.asyncio
     async def test_durable_cancel_is_tenant_isolated(self, handler, sample_tenant, sample_principal):
         """The durable cancel is tenant-scoped: a cancel authenticated as a DIFFERENT tenant
-        must neither resolve nor mutate another tenant's task."""
+        must neither resolve nor mutate another tenant's task — surfaced as TaskNotFoundError,
+        the same not-found signal an unknown task id gets (no distinction between "doesn't
+        exist" and "not yours" leaks to the caller)."""
         from tests.factories import PrincipalFactory
 
         external_task_id = "task_durable_cancel_3"
@@ -388,9 +391,8 @@ class TestA2ASkillInvocation:
         )
         handler._get_auth_token = MagicMock(return_value="other-tenant-token")
         with patch.object(handler, "_resolve_a2a_identity", return_value=other_identity):
-            task = await handler.on_cancel_task(CancelTaskRequest(id=external_task_id), context=None)
-
-        assert task is None, "durable cancel must not cross tenant boundaries"
+            with pytest.raises(TaskNotFoundError):
+                await handler.on_cancel_task(CancelTaskRequest(id=external_task_id), context=None)
 
     @pytest.mark.asyncio
     async def test_cancel_of_terminal_in_memory_task_is_not_cancelable(self, handler, mock_identity):
@@ -422,7 +424,8 @@ class TestA2ASkillInvocation:
     ):
         """[Round-13 B1] A same-tenant sibling principal must not read another principal's
         in-memory task via the public on_get_task — for BOTH a terminal and a nonterminal
-        victim task present in memory (task ids are bearer-ish; the map key alone is not authz)."""
+        victim task present in memory (task ids are bearer-ish; the map key alone is not authz).
+        Surfaced as TaskNotFoundError, the same not-found signal an unknown id gets."""
         from a2a.types import GetTaskRequest
 
         sibling = self._same_tenant_other_identity(sample_tenant)
@@ -435,8 +438,8 @@ class TestA2ASkillInvocation:
             )
             handler._get_auth_token = MagicMock(return_value="sibling-token")
             with patch.object(handler, "_resolve_a2a_identity", return_value=sibling):
-                seen = await handler.on_get_task(GetTaskRequest(id=task_id), context=None)
-            assert seen is None, f"sibling principal must not read the victim's in-memory task (state={state})"
+                with pytest.raises(TaskNotFoundError):
+                    await handler.on_get_task(GetTaskRequest(id=task_id), context=None)
 
     @pytest.mark.asyncio
     async def test_cancel_in_memory_task_is_principal_isolated(
@@ -445,7 +448,8 @@ class TestA2ASkillInvocation:
         """[Round-13 B1] A same-tenant sibling principal must not cancel another principal's
         in-memory task via the public on_cancel_task; the victim task stays untouched. Covers
         both a nonterminal victim (must not be mutated to CANCELED) and a terminal victim (must
-        not even be observable → returns None, not TaskNotCancelableError)."""
+        not even be observable → TaskNotFoundError, the same not-found signal an unknown id
+        gets, not TaskNotCancelableError which would confirm the task's existence/state)."""
         sibling = self._same_tenant_other_identity(sample_tenant)
 
         nonterminal_id = "task_inmem_iso_cancel_working"
@@ -463,14 +467,14 @@ class TestA2ASkillInvocation:
 
         handler._get_auth_token = MagicMock(return_value="sibling-token")
         with patch.object(handler, "_resolve_a2a_identity", return_value=sibling):
-            nonterminal_result = await handler.on_cancel_task(CancelTaskRequest(id=nonterminal_id), context=None)
-            terminal_result = await handler.on_cancel_task(CancelTaskRequest(id=terminal_id), context=None)
+            with pytest.raises(TaskNotFoundError):
+                await handler.on_cancel_task(CancelTaskRequest(id=nonterminal_id), context=None)
+            with pytest.raises(TaskNotFoundError):
+                await handler.on_cancel_task(CancelTaskRequest(id=terminal_id), context=None)
 
-        assert nonterminal_result is None, "sibling must not cancel the victim's in-memory task"
         assert handler.tasks[nonterminal_id].status.state == TaskState.TASK_STATE_WORKING, (
             "the victim's in-memory task must not be mutated by a sibling's cancel"
         )
-        assert terminal_result is None, "sibling must not even observe the victim's terminal task (no leak)"
         assert handler.tasks[terminal_id].status.state == TaskState.TASK_STATE_COMPLETED
 
     def _same_tenant_other_identity(self, sample_tenant):
@@ -503,7 +507,8 @@ class TestA2ASkillInvocation:
     @pytest.mark.asyncio
     async def test_durable_cancel_is_principal_isolated(self, handler, sample_tenant, sample_principal, mock_identity):
         """[Round-12 B2] A DIFFERENT principal in the SAME tenant must not be able to
-        cancel another principal's workflow via its task id."""
+        cancel another principal's workflow via its task id — surfaced as TaskNotFoundError,
+        the same not-found signal an unknown id gets."""
         external_task_id = "task_prin_iso_cancel"
         self._persist_a2a_step(
             sample_tenant["tenant_id"],
@@ -517,8 +522,8 @@ class TestA2ASkillInvocation:
         with patch.object(
             handler, "_resolve_a2a_identity", return_value=self._same_tenant_other_identity(sample_tenant)
         ):
-            task = await handler.on_cancel_task(CancelTaskRequest(id=external_task_id), context=None)
-        assert task is None, "durable cancel must not cross principal boundaries within a tenant"
+            with pytest.raises(TaskNotFoundError):
+                await handler.on_cancel_task(CancelTaskRequest(id=external_task_id), context=None)
 
         # The owner still sees the step untouched (non-terminal → WORKING skeleton).
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
