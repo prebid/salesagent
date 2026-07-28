@@ -66,10 +66,23 @@ def parse_raw_output(raw_path: Path) -> dict:
     }
 
 
-def _store_key(kind: str, step: StepRecord | dict[str, Any], fallback_name: str = "") -> str:
-    """Kind-scoped dedupe key so triage and deep traces do not collide."""
+def _normalize_step(step: dict[str, Any], fallback_name: str = "") -> StepRecord:
+    """Coerce a JSON step blob into the fixed six-key StepRecord shape."""
     name = step.get("function_name") or fallback_name
-    return f"{kind}:{name}:{step.get('line_number', 0)}"
+    return {
+        "file_path": str(step.get("file_path") or "unknown"),
+        "line_number": int(step.get("line_number") or 0),
+        "step_type": str(step.get("step_type") or "then"),
+        "step_text": str(step.get("step_text") or ""),
+        "function_name": str(name or ""),
+        "source_text": str(step.get("source_text") or ""),
+    }
+
+
+def _store_key(kind: str, step: StepRecord, fallback_name: str = "") -> str:
+    """Kind-scoped dedupe key so triage and deep traces do not collide."""
+    name = step["function_name"] or fallback_name
+    return f"{kind}:{name}:{step['line_number']}"
 
 
 def _placeholder_step(func_name: str) -> StepRecord:
@@ -102,7 +115,9 @@ def _load_existing_keys(store_path: Path) -> set[str]:
     existing_keys: set[str] = set()
     for obj in iter_jsonl_records(store_path):
         step = obj.get("step", {})
-        existing_keys.add(_store_key(str(obj.get("kind")), step))
+        if not isinstance(step, dict):
+            step = {}
+        existing_keys.add(_store_key(str(obj.get("kind")), _normalize_step(step)))
     return existing_keys
 
 
@@ -110,7 +125,7 @@ def _append_if_new(
     f: TextIO,
     kind: str,
     r: dict[str, Any],
-    step_lookup: dict[str, StepRecord | dict[str, Any]],
+    step_lookup: dict[str, StepRecord],
     existing_keys: set[str],
     record: dict[str, Any],
 ) -> bool:
@@ -135,13 +150,15 @@ def write_to_store(parsed: dict, store_path: Path, step_index_path: Path | None)
 
     # We need the step index to get file/line info.
     # If not available, write with func_name only (partial records).
-    step_lookup: dict[str, StepRecord | dict[str, Any]] = {}
+    step_lookup: dict[str, StepRecord] = {}
     if step_index_path is not None:
         for obj in iter_jsonl_records(step_index_path):
             step = obj.get("step", {})
+            if not isinstance(step, dict):
+                continue
             name = step.get("function_name")
             if name:
-                step_lookup[name] = step
+                step_lookup[str(name)] = _normalize_step(step)
 
     new_triage = 0
     new_deep = 0

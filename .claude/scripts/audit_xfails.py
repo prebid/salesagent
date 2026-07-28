@@ -44,13 +44,14 @@ from collections import Counter, defaultdict
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import NamedTuple, TypedDict, cast
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from bdd_audit_common import (  # noqa: E402
+    _short_base,
     extract_scenario_base,
     extract_transport,
     extract_uc,
@@ -549,17 +550,26 @@ def classify_xfail(
     return entry
 
 
+class XpassBuckets(NamedTuple):
+    """Named xpass buckets so callers cannot swap graduate/confirm/partial."""
+
+    graduate: set[str]
+    confirm: set[str]
+    partial_passing: dict[str, set[str]]
+    partial_missing: dict[str, set[str]]
+
+
 def classify_xpassed(
     all_tests: list[dict],
-) -> tuple[set[str], set[str], dict[str, set[str]], dict[str, set[str]]]:
+) -> XpassBuckets:
     """Classify xpassed scenario bases into graduate / confirm / partial.
 
     Graduation is relative to transports *present for that base* across the
     full result set (not a hardcoded impl/a2a/mcp/rest universe). Single-
-    transport and e2e_rest-only present sets land in ``confirm_bases``
+    transport and e2e_rest-only present sets land in ``confirm``
     (STALE_CONFIRM) rather than firm graduation.
 
-    Returns ``(graduate_bases, confirm_bases, partial_passing, partial_missing)``.
+    Returns ``XpassBuckets(graduate, confirm, partial_passing, partial_missing)``.
     """
     xpassed_bases = {extract_scenario_base(t["nodeid"]) for t in all_tests if t.get("outcome") == "xpassed"}
     graduate: set[str] = set()
@@ -577,15 +587,15 @@ def classify_xpassed(
         elif grade.passing:
             partial_passing[base] = grade.passing
             partial_missing[base] = grade.missing
-    return graduate, confirm, partial_passing, partial_missing
+    return XpassBuckets(
+        graduate=graduate,
+        confirm=confirm,
+        partial_passing=partial_passing,
+        partial_missing=partial_missing,
+    )
 
 
 # ── Report generator ──────────────────────────────────────────────────
-
-
-def _short_base(base: str) -> str:
-    """Shorten a scenario base to the final ``::`` segment for report bullets."""
-    return base.split("::")[-1] if "::" in base else base
 
 
 def _render_base_list(lines: list[str], entries: Sequence[XfailEntry], header: str) -> None:
@@ -760,18 +770,18 @@ def main() -> None:
 
     # Step 4: Classify xpassed tests (needs full suite for present-transport set)
     print("Classifying xpassed tests...")
-    graduate_bases, confirm_bases, partial_passing, partial_missing = classify_xpassed(all_tests)
-    print(f"  {len(graduate_bases)} pass all present transports (graduation candidates)")
-    print(f"  {len(confirm_bases)} need confirmation (single-/e2e_rest-only)")
-    print(f"  {len(partial_passing)} pass some transports (partial)")
+    buckets = classify_xpassed(all_tests)
+    print(f"  {len(buckets.graduate)} pass all present transports (graduation candidates)")
+    print(f"  {len(buckets.confirm)} need confirmation (single-/e2e_rest-only)")
+    print(f"  {len(buckets.partial_passing)} pass some transports (partial)")
 
     # Step 5: Classify each xfailed test
     print("Classifying xfailed tests...")
     report = AuditReport(
         total_xfailed=len(xfailed_tests),
         total_xpassed=len(xpassed_tests),
-        partial_passing=partial_passing,
-        partial_missing=partial_missing,
+        partial_passing=buckets.partial_passing,
+        partial_missing=buckets.partial_missing,
     )
 
     seen_drift: set[str] = set()
@@ -791,9 +801,9 @@ def main() -> None:
     for test in xpassed_tests:
         base = extract_scenario_base(test["nodeid"])
         transport = extract_transport(test["nodeid"])
-        if base in graduate_bases:
+        if base in buckets.graduate:
             category = "STALE"
-        elif base in confirm_bases:
+        elif base in buckets.confirm:
             category = "STALE_CONFIRM"
         else:
             category = "PARTIAL_PASS"
@@ -827,9 +837,9 @@ def main() -> None:
             count = len(report.by_category.get(cat, []))
             if count > 0:
                 print(f"  {cat}: {count}")
-        print(f"\n  STALE (graduation candidates): {len(graduate_bases)} scenarios")
-        print(f"  STALE_CONFIRM (needs confirmation): {len(confirm_bases)} scenarios")
-        print(f"  PARTIAL_PASS: {len(partial_passing)} scenarios")
+        print(f"\n  STALE (graduation candidates): {len(buckets.graduate)} scenarios")
+        print(f"  STALE_CONFIRM (needs confirmation): {len(buckets.confirm)} scenarios")
+        print(f"  PARTIAL_PASS: {len(buckets.partial_passing)} scenarios")
         if report.line_drift_warnings:
             print(f"  line-drift warnings: {len(report.line_drift_warnings)}")
 

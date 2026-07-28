@@ -44,6 +44,14 @@ class GradeResult(NamedTuple):
     needs_confirmation: bool
 
 
+class CoverageResult(NamedTuple):
+    """Named coverage so callers cannot swap graduates/passing/missing."""
+
+    graduates: bool
+    passing: set[str]
+    missing: set[str]
+
+
 # Outcomes that count as "this transport passed for the scenario base".
 _PASSING_OUTCOMES = frozenset({"passed", "xpassed"})
 # Outcomes that block graduation for a present transport.
@@ -64,6 +72,11 @@ def extract_transport(nodeid: str) -> str | None:
 def extract_scenario_base(nodeid: str) -> str:
     """Strip the trailing parametrize bracket suffix to get the scenario base."""
     return re.sub(r"\[.*\]$", "", nodeid)
+
+
+def _short_base(base: str) -> str:
+    """Shorten a scenario base to the final ``::`` segment for report bullets."""
+    return base.split("::")[-1] if "::" in base else base
 
 
 def extract_uc(text: str) -> str:
@@ -87,19 +100,20 @@ def extract_longrepr_e_line(longrepr: str) -> str:
 
 def transport_coverage(
     outcomes_by_transport: Mapping[str, str],
-) -> tuple[bool, set[str], set[str]]:
+) -> CoverageResult:
     """Grade a scenario base from per-transport outcomes.
 
     Graduation is relative to transports *present for that base* in the result
     set — not a hardcoded four-transport universe. A UC that only parametrizes
     ``a2a``+``mcp`` graduates when both pass; ``rest`` is not "missing".
 
-    Returns ``(graduates, passing, missing)`` where ``missing`` is the set of
-    present transports that did not pass (failed/xfailed or unknown outcome).
+    Returns ``CoverageResult(graduates, passing, missing)`` where ``missing`` is
+    the set of present transports that did not pass (failed/xfailed or unknown
+    outcome).
     """
     present = set(outcomes_by_transport)
     if not present:
-        return False, set(), set()
+        return CoverageResult(graduates=False, passing=set(), missing=set())
 
     passing = {t for t, outcome in outcomes_by_transport.items() if outcome in _PASSING_OUTCOMES}
     failing = {t for t, outcome in outcomes_by_transport.items() if outcome in _FAILING_OUTCOMES}
@@ -108,7 +122,7 @@ def transport_coverage(
     # (failing ⊆ missing for standard pytest outcomes; keep both checks so an
     # unexpected outcome cannot silently graduate.)
     graduates = bool(present) and present <= passing and not failing
-    return graduates, passing, missing
+    return CoverageResult(graduates=graduates, passing=passing, missing=missing)
 
 
 def _worst_transport_outcome(outcomes: list[str]) -> str:
@@ -164,13 +178,13 @@ def grade_base(
     (e2e_rest xfails are non-strict because e2e is environment-dependent).
     """
     outcomes = outcomes_by_transport_for_base(base, nodeid_outcomes)
-    graduates, passing, missing = transport_coverage(outcomes)
+    coverage = transport_coverage(outcomes)
     present_count = len(outcomes)
-    needs_confirmation = bool(graduates and (present_count == 1 or passing == {"e2e_rest"}))
+    needs_confirmation = bool(coverage.graduates and (present_count == 1 or coverage.passing == {"e2e_rest"}))
     return GradeResult(
-        graduates=graduates,
-        passing=passing,
-        missing=missing,
+        graduates=coverage.graduates,
+        passing=coverage.passing,
+        missing=coverage.missing,
         present_count=present_count,
         needs_confirmation=needs_confirmation,
     )

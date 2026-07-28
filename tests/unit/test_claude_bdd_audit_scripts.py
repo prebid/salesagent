@@ -94,27 +94,27 @@ class TestClassifyXpass:
         all_entries = [
             self._entry(bdd_full_audit, f"tests/bdd/test_uc004.py::test_s[{t}]") for t in ("a2a", "mcp", "rest")
         ]
-        bucket, cat, detail, present_n = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
-        assert bucket == "FIX_NOW"
-        assert cat == "GRADUATE"
-        assert present_n == 3
-        assert "All 3 present transports pass" in detail
+        result = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
+        assert result.bucket == "FIX_NOW"
+        assert result.category == "GRADUATE"
+        assert result.present_count == 3
+        assert "All 3 present transports pass" in result.detail
 
     def test_two_transport_uc_graduates_without_rest(self, bdd_full_audit) -> None:
         """UC-019 style (a2a+mcp only) must not demand rest."""
         all_entries = [self._entry(bdd_full_audit, f"tests/bdd/test_uc019.py::test_s[{t}]") for t in ("a2a", "mcp")]
-        _, cat, detail, present_n = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
-        assert cat == "GRADUATE"
-        assert present_n == 2
-        assert "All 2 present transports pass" in detail
+        result = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
+        assert result.category == "GRADUATE"
+        assert result.present_count == 2
+        assert "All 2 present transports pass" in result.detail
 
     def test_single_transport_needs_confirmation(self, bdd_full_audit) -> None:
         """Single-/e2e_rest-only present sets must not auto-graduate."""
         all_entries = [self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[e2e_rest]")]
-        _, cat, detail, present_n = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
-        assert cat == "GRADUATE_CONFIRM"
-        assert present_n == 1
-        assert "needs confirmation" in detail
+        result = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
+        assert result.category == "GRADUATE_CONFIRM"
+        assert result.present_count == 1
+        assert "needs confirmation" in result.detail
 
     def test_single_non_e2e_transport_needs_confirmation(self, bdd_full_audit) -> None:
         """Lone a2a must hit present_count==1 even when not e2e_rest.
@@ -123,11 +123,11 @@ class TestClassifyXpass:
         ``present_count == 1`` load-bearing on its own.
         """
         all_entries = [self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[a2a]")]
-        _, cat, detail, present_n = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
-        assert cat == "GRADUATE_CONFIRM"
-        assert present_n == 1
-        assert "needs confirmation" in detail
-        assert "a2a" in detail
+        result = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
+        assert result.category == "GRADUATE_CONFIRM"
+        assert result.present_count == 1
+        assert "needs confirmation" in result.detail
+        assert "a2a" in result.detail
 
     def test_mixed_outline_examples_same_transport_not_graduate(self, bdd_full_audit) -> None:
         """Outline rows: failing first + passing last must not graduate.
@@ -139,8 +139,8 @@ class TestClassifyXpass:
             self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_o[e2e_rest-ex1]", "xfailed"),
             self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_o[e2e_rest-ex2]", "xpassed"),
         ]
-        _, cat, _, _ = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
-        assert cat == "PARTIAL_XPASS"
+        result = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
+        assert result.category == "PARTIAL_XPASS"
 
     def test_strict_subset_is_partial_xpass(self, bdd_full_audit) -> None:
         all_entries = [
@@ -148,11 +148,11 @@ class TestClassifyXpass:
             self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[mcp]", "xfailed"),
             self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[rest]", "xfailed"),
         ]
-        bucket, cat, detail, _ = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
-        assert bucket == "FIX_NOW"
-        assert cat == "PARTIAL_XPASS"
-        assert "missing" in detail
-        assert "mcp" in detail
+        result = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
+        assert result.bucket == "FIX_NOW"
+        assert result.category == "PARTIAL_XPASS"
+        assert "missing" in result.detail
+        assert "mcp" in result.detail
 
     def test_generate_work_items_splits_graduate_and_partial(self, bdd_full_audit) -> None:
         graduate = [
@@ -205,31 +205,31 @@ class TestClassifyXpassedAudit:
         all_tests = [
             {"nodeid": f"tests/bdd/test_uc004.py::test_s[{t}]", "outcome": "xpassed"} for t in ("a2a", "mcp", "rest")
         ]
-        graduate, confirm, partial_passing, partial_missing = audit_xfails.classify_xpassed(all_tests)
-        assert len(graduate) == 1
-        assert confirm == set()
-        assert partial_passing == {}
-        assert partial_missing == {}
+        buckets = audit_xfails.classify_xpassed(all_tests)
+        assert len(buckets.graduate) == 1
+        assert buckets.confirm == set()
+        assert buckets.partial_passing == {}
+        assert buckets.partial_missing == {}
 
     def test_e2e_rest_only_needs_confirmation_not_stale(self, audit_xfails) -> None:
         """Mirror bdd_full_audit GRADUATE_CONFIRM — lone e2e_rest must not be STALE."""
         base = "tests/bdd/test_uc004.py::test_s"
         all_tests = [{"nodeid": f"{base}[e2e_rest]", "outcome": "xpassed"}]
-        graduate, confirm, partial_passing, partial_missing = audit_xfails.classify_xpassed(all_tests)
-        assert graduate == set()
-        assert confirm == {base}
-        assert partial_passing == {}
-        assert partial_missing == {}
+        buckets = audit_xfails.classify_xpassed(all_tests)
+        assert buckets.graduate == set()
+        assert buckets.confirm == {base}
+        assert buckets.partial_passing == {}
+        assert buckets.partial_missing == {}
 
     def test_single_non_e2e_transport_needs_confirmation_not_stale(self, audit_xfails) -> None:
         """Lone a2a must confirm via present_count==1 (not the e2e_rest disjunct)."""
         base = "tests/bdd/test_uc004.py::test_s"
         all_tests = [{"nodeid": f"{base}[a2a]", "outcome": "xpassed"}]
-        graduate, confirm, partial_passing, partial_missing = audit_xfails.classify_xpassed(all_tests)
-        assert graduate == set()
-        assert confirm == {base}
-        assert partial_passing == {}
-        assert partial_missing == {}
+        buckets = audit_xfails.classify_xpassed(all_tests)
+        assert buckets.graduate == set()
+        assert buckets.confirm == {base}
+        assert buckets.partial_passing == {}
+        assert buckets.partial_missing == {}
 
     def test_strict_subset_is_partial(self, audit_xfails) -> None:
         """Mirror test_strict_subset_is_partial_xpass — pin the partial branch."""
@@ -239,11 +239,11 @@ class TestClassifyXpassedAudit:
             {"nodeid": f"{base}[mcp]", "outcome": "xfailed"},
             {"nodeid": f"{base}[rest]", "outcome": "xfailed"},
         ]
-        graduate, confirm, partial_passing, partial_missing = audit_xfails.classify_xpassed(all_tests)
-        assert graduate == set()
-        assert confirm == set()
-        assert partial_passing == {base: {"a2a"}}
-        assert partial_missing == {base: {"mcp", "rest"}}
+        buckets = audit_xfails.classify_xpassed(all_tests)
+        assert buckets.graduate == set()
+        assert buckets.confirm == set()
+        assert buckets.partial_passing == {base: {"a2a"}}
+        assert buckets.partial_missing == {base: {"mcp", "rest"}}
 
     def test_mixed_outline_examples_same_transport_do_not_graduate(self, audit_xfails) -> None:
         """Last-wins would graduate; worst-outcome must keep graduate empty.
@@ -256,11 +256,11 @@ class TestClassifyXpassedAudit:
             {"nodeid": f"{base}[e2e_rest-ex1]", "outcome": "xfailed"},
             {"nodeid": f"{base}[e2e_rest-ex2]", "outcome": "xpassed"},
         ]
-        graduate, confirm, partial_passing, partial_missing = audit_xfails.classify_xpassed(all_tests)
-        assert graduate == set()
-        assert confirm == set()
-        assert partial_passing == {}  # no passing transport after worst-outcome aggregate
-        assert partial_missing == {}
+        buckets = audit_xfails.classify_xpassed(all_tests)
+        assert buckets.graduate == set()
+        assert buckets.confirm == set()
+        assert buckets.partial_passing == {}  # no passing transport after worst-outcome aggregate
+        assert buckets.partial_missing == {}
 
 
 class TestSalvageDedupe:
@@ -397,6 +397,32 @@ class TestPrematureXfailCrashMatch:
         assert len(warnings) == 1
         assert "line-drift/stale-json?" in warnings[0]
 
+    def test_in_range_crash_in_known_step_file_no_drift_warning(self, audit_xfails, tmp_path: Path) -> None:
+        """Negative pin: in-range crash in a known premature step file → no drift warning."""
+        source = self._premature_source()
+        steps_file = tmp_path / "steps.py"
+        steps_file.write_text(source)
+        premature = audit_xfails.find_premature_xfails(tmp_path)
+        assert len(premature) == 1
+        step = premature[0]
+        mid = (step.lineno + step.end_lineno) // 2
+        assert step.lineno <= mid <= step.end_lineno
+        test = {
+            "nodeid": "t::s[a2a]",
+            "wasxfail": "",
+            "keywords": [],
+            "setup": {"outcome": "passed"},
+            "call": {
+                "outcome": "skipped",
+                "crash": {
+                    "path": str(steps_file.resolve()),
+                    "lineno": mid,
+                    "message": "_pytest.outcomes.XFailed: not ready",
+                },
+            },
+        }
+        assert audit_xfails.crash_line_drift_warnings(test, premature) == []
+
     def test_crash_in_different_file_in_range_is_not_premature(self, audit_xfails, tmp_path: Path) -> None:
         """Path-equality must reject: in-range lineno in a *different* file.
 
@@ -512,3 +538,13 @@ class TestGradeResultNamedFields:
         assert grade.present_count == 1
         assert grade.passing == {"a2a"}
         assert grade.missing == set()
+
+    def test_transport_coverage_named_fields(self, bdd_audit_common) -> None:
+        coverage = bdd_audit_common.transport_coverage({"a2a": "xpassed", "mcp": "xfailed"})
+        assert coverage.graduates is False
+        assert coverage.passing == {"a2a"}
+        assert coverage.missing == {"mcp"}
+
+    def test_short_base(self, bdd_audit_common) -> None:
+        assert bdd_audit_common._short_base("tests/bdd/test_uc004.py::test_s") == "test_s"
+        assert bdd_audit_common._short_base("bare") == "bare"

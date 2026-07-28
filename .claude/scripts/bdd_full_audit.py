@@ -23,12 +23,14 @@ import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from bdd_audit_common import (  # noqa: E402
+    _short_base,
     extract_longrepr_e_line,
     extract_scenario_base,
     extract_transport,
@@ -286,8 +288,17 @@ def classify_xfail(entry: TestEntry, tag_reasons: dict[str, str]) -> tuple[str, 
     return "XFAIL_IT", "NOT_IMPLEMENTED", reason
 
 
-def classify_xpass(entry: TestEntry, all_entries: list[TestEntry]) -> tuple[str, str, str, int]:
-    """Classify an xpassed test. Returns (bucket, category, detail, present_count).
+class ClassifiedXpass(NamedTuple):
+    """Named xpass classification so callers cannot swap adjacent str fields."""
+
+    bucket: str
+    category: str
+    detail: str
+    present_count: int
+
+
+def classify_xpass(entry: TestEntry, all_entries: list[TestEntry]) -> ClassifiedXpass:
+    """Classify an xpassed test.
 
     FIX_NOW either way: GRADUATE when every transport *present for this base*
     passed (remove the stale xfail tag); GRADUATE_CONFIRM when that present
@@ -299,23 +310,25 @@ def classify_xpass(entry: TestEntry, all_entries: list[TestEntry]) -> tuple[str,
     grade = grade_base(base, ((e.nodeid, e.outcome) for e in all_entries))
     if grade.graduates:
         if grade.needs_confirmation:
-            return (
-                "FIX_NOW",
-                "GRADUATE_CONFIRM",
-                f"All {grade.present_count} present transports pass (needs confirmation): {sorted(grade.passing)}",
-                grade.present_count,
+            return ClassifiedXpass(
+                bucket="FIX_NOW",
+                category="GRADUATE_CONFIRM",
+                detail=(
+                    f"All {grade.present_count} present transports pass (needs confirmation): {sorted(grade.passing)}"
+                ),
+                present_count=grade.present_count,
             )
-        return (
-            "FIX_NOW",
-            "GRADUATE",
-            f"All {grade.present_count} present transports pass: {sorted(grade.passing)}",
-            grade.present_count,
+        return ClassifiedXpass(
+            bucket="FIX_NOW",
+            category="GRADUATE",
+            detail=f"All {grade.present_count} present transports pass: {sorted(grade.passing)}",
+            present_count=grade.present_count,
         )
-    return (
-        "FIX_NOW",
-        "PARTIAL_XPASS",
-        f"Passes: {sorted(grade.passing)}, missing: {sorted(grade.missing)}",
-        grade.present_count,
+    return ClassifiedXpass(
+        bucket="FIX_NOW",
+        category="PARTIAL_XPASS",
+        detail=f"Passes: {sorted(grade.passing)}, missing: {sorted(grade.missing)}",
+        present_count=grade.present_count,
     )
 
 
@@ -366,7 +379,7 @@ def generate_work_items(
             transports = {extract_transport(e.nodeid) for e in group} - {None}
             rep_error = group[0].error
             transport_note = f" [{','.join(sorted(transports))}]" if transports else ""
-            scenario_name = base.split("::")[-1] if "::" in base else base
+            scenario_name = _short_base(base)
 
             cat_desc = {**FIX_NOW, **XFAIL_IT, **FEATURE_FIX}.get(cat, cat)
             items.append(
@@ -384,8 +397,8 @@ def generate_work_items(
     # ── 2. Xpassed tests → FIX_NOW (graduate when all present transports pass) ─
     grad_groups: dict[tuple[str, str, int], list[TestEntry]] = defaultdict(list)
     for entry in xpassed:
-        _, cat, detail, present_n = classify_xpass(entry, all_entries)
-        grad_groups[(cat, detail, present_n)].append(entry)
+        classified = classify_xpass(entry, all_entries)
+        grad_groups[(classified.category, classified.detail, classified.present_count)].append(entry)
 
     for (cat, detail, present_n), entries in grad_groups.items():
         uc = extract_uc(entries[0].nodeid) if entries else "MIXED"
