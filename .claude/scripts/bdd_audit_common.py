@@ -27,10 +27,22 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping
+from typing import NamedTuple
 
 # `[` anchor + `(?:-|])` tail delimiter recognizes full ids (including
 # `e2e_rest`); alternation order is not load-bearing for that match.
 _TRANSPORT_RE = re.compile(r"\[(e2e_rest|impl|a2a|mcp|rest)(?:-|])")
+
+
+class GradeResult(NamedTuple):
+    """Named grade so callers cannot swap the two bools positionally."""
+
+    graduates: bool
+    passing: set[str]
+    missing: set[str]
+    present_count: int
+    needs_confirmation: bool
+
 
 # Outcomes that count as "this transport passed for the scenario base".
 _PASSING_OUTCOMES = frozenset({"passed", "xpassed"})
@@ -140,14 +152,13 @@ def outcomes_by_transport_for_base(
 def grade_base(
     base: str,
     nodeid_outcomes: Iterable[tuple[str, str]],
-) -> tuple[bool, set[str], set[str], int, bool]:
+) -> GradeResult:
     """Grade one scenario base end-to-end for both audit classifiers.
 
     Composes ``outcomes_by_transport_for_base`` + ``transport_coverage`` and
     applies the single-/e2e_rest-only confirmation gate so callers never
     re-wire that pipeline (or re-scan for ``present_count``).
 
-    Returns ``(graduates, passing, missing, present_count, needs_confirmation)``.
     ``needs_confirmation`` is True when every present transport passed but the
     present set is a single transport or ``e2e_rest``-only — do not auto-graduate
     (e2e_rest xfails are non-strict because e2e is environment-dependent).
@@ -156,4 +167,10 @@ def grade_base(
     graduates, passing, missing = transport_coverage(outcomes)
     present_count = len(outcomes)
     needs_confirmation = bool(graduates and (present_count == 1 or passing == {"e2e_rest"}))
-    return graduates, passing, missing, present_count, needs_confirmation
+    return GradeResult(
+        graduates=graduates,
+        passing=passing,
+        missing=missing,
+        present_count=present_count,
+        needs_confirmation=needs_confirmation,
+    )

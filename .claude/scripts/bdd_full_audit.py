@@ -296,28 +296,26 @@ def classify_xpass(entry: TestEntry, all_entries: list[TestEntry]) -> tuple[str,
     PARTIAL_XPASS when only a subset of the present transports passed.
     """
     base = extract_scenario_base(entry.nodeid)
-    graduates, passing, missing, present_n, needs_confirmation = grade_base(
-        base, ((e.nodeid, e.outcome) for e in all_entries)
-    )
-    if graduates:
-        if needs_confirmation:
+    grade = grade_base(base, ((e.nodeid, e.outcome) for e in all_entries))
+    if grade.graduates:
+        if grade.needs_confirmation:
             return (
                 "FIX_NOW",
                 "GRADUATE_CONFIRM",
-                f"All {present_n} present transports pass (needs confirmation): {sorted(passing)}",
-                present_n,
+                f"All {grade.present_count} present transports pass (needs confirmation): {sorted(grade.passing)}",
+                grade.present_count,
             )
         return (
             "FIX_NOW",
             "GRADUATE",
-            f"All {present_n} present transports pass: {sorted(passing)}",
-            present_n,
+            f"All {grade.present_count} present transports pass: {sorted(grade.passing)}",
+            grade.present_count,
         )
     return (
         "FIX_NOW",
         "PARTIAL_XPASS",
-        f"Passes: {sorted(passing)}, missing: {sorted(missing)}",
-        present_n,
+        f"Passes: {sorted(grade.passing)}, missing: {sorted(grade.missing)}",
+        grade.present_count,
     )
 
 

@@ -44,6 +44,7 @@ from collections import Counter, defaultdict
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TypedDict, cast
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
@@ -57,6 +58,19 @@ from bdd_audit_common import (  # noqa: E402
 )
 
 # ── Data classes ──────────────────────────────────────────────────────
+
+
+class CrashInfo(TypedDict, total=False):
+    """pytest-json-report crash slice under setup/call (path + lineno)."""
+
+    path: str
+    lineno: int
+
+
+class PhaseResult(TypedDict, total=False):
+    """pytest-json-report phase dict; only ``crash`` is read by helpers here."""
+
+    crash: CrashInfo
 
 
 @dataclass
@@ -270,12 +284,14 @@ def _iter_crash_locations(test: dict) -> Iterator[tuple[Path, int]]:
     normalization used by both premature matching and line-drift warnings.
     """
     for phase in ("setup", "call"):
-        ph = test.get(phase) or {}
-        if not isinstance(ph, dict):
+        ph_raw = test.get(phase) or {}
+        if not isinstance(ph_raw, dict):
             continue
-        crash = ph.get("crash") or {}
-        if not isinstance(crash, dict):
+        ph: PhaseResult = cast(PhaseResult, ph_raw)
+        crash_raw = ph.get("crash") or {}
+        if not isinstance(crash_raw, dict):
             continue
+        crash: CrashInfo = cast(CrashInfo, crash_raw)
         cpath = crash.get("path")
         clineno = crash.get("lineno")
         if not cpath or clineno is None:
@@ -552,19 +568,37 @@ def classify_xpassed(
     partial_missing: dict[str, set[str]] = {}
     nodeid_outcomes = [(t["nodeid"], t["outcome"]) for t in all_tests]
     for base in xpassed_bases:
-        graduates, passing, missing, _present_n, needs_confirmation = grade_base(base, nodeid_outcomes)
-        if graduates:
-            if needs_confirmation:
+        grade = grade_base(base, nodeid_outcomes)
+        if grade.graduates:
+            if grade.needs_confirmation:
                 confirm.add(base)
             else:
                 graduate.add(base)
-        elif passing:
-            partial_passing[base] = passing
-            partial_missing[base] = missing
+        elif grade.passing:
+            partial_passing[base] = grade.passing
+            partial_missing[base] = grade.missing
     return graduate, confirm, partial_passing, partial_missing
 
 
 # ── Report generator ──────────────────────────────────────────────────
+
+
+def _short_base(base: str) -> str:
+    """Shorten a scenario base to the final ``::`` segment for report bullets."""
+    return base.split("::")[-1] if "::" in base else base
+
+
+def _render_base_list(lines: list[str], entries: Sequence[XfailEntry], header: str) -> None:
+    """Append a deduped scenario-base bullet list under ``header``."""
+    if not entries:
+        return
+    lines.extend(["", header, ""])
+    seen: set[str] = set()
+    for entry in sorted(entries, key=lambda x: x.scenario_base):
+        if entry.scenario_base in seen:
+            continue
+        seen.add(entry.scenario_base)
+        lines.append(f"- {_short_base(entry.scenario_base)}")
 
 
 def generate_report(report: AuditReport, output_path: Path | None = None) -> str:
@@ -598,21 +632,9 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
         "UNCLASSIFIED": "No matching pattern found",
     }
 
-    for cat in [
-        "PRODUCTION_GAP",
-        "TRANSPORT_GAP",
-        "HARNESS_GAP",
-        "PARTIAL_IMPL",
-        "MISSING_STEP",
-        "PREMATURE_XFAIL",
-        "STALE",
-        "STALE_CONFIRM",
-        "PARTIAL_PASS",
-        "UNCLASSIFIED",
-    ]:
+    for cat, desc in category_desc.items():
         entries = report.by_category.get(cat, [])
         pct = len(entries) / report.total_xfailed * 100 if report.total_xfailed else 0
-        desc = category_desc.get(cat, "")
         lines.append(f"| {cat} | {len(entries)} | {pct:.0f}% | {desc} |")
 
     lines.extend(["", "### By use case", ""])
@@ -639,32 +661,18 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
             f"- **All present transports (graduation candidates)**: {len([e for e in report.xpassed_entries if e.category == 'STALE'])}",
             f"- **Needs confirmation (single-/e2e_rest-only)**: {len([e for e in report.xpassed_entries if e.category == 'STALE_CONFIRM'])}",
             f"- **Partial pass (keep investigating)**: {len([e for e in report.xpassed_entries if e.category == 'PARTIAL_PASS'])}",
-            "",
         ]
     )
 
-    # STALE details
     stale = [e for e in report.xpassed_entries if e.category == "STALE"]
-    if stale:
-        seen_bases = set()
-        lines.append("### Graduation candidates (all present transports pass)")
-        lines.append("")
-        for e in sorted(stale, key=lambda x: x.scenario_base):
-            if e.scenario_base not in seen_bases:
-                seen_bases.add(e.scenario_base)
-                short = e.scenario_base.split("::")[-1] if "::" in e.scenario_base else e.scenario_base
-                lines.append(f"- {short}")
+    _render_base_list(lines, stale, "### Graduation candidates (all present transports pass)")
 
-    # STALE_CONFIRM details
     stale_confirm = [e for e in report.xpassed_entries if e.category == "STALE_CONFIRM"]
-    if stale_confirm:
-        seen_confirm = set()
-        lines.extend(["", "### Graduation needs confirmation (single-/e2e_rest-only)", ""])
-        for e in sorted(stale_confirm, key=lambda x: x.scenario_base):
-            if e.scenario_base not in seen_confirm:
-                seen_confirm.add(e.scenario_base)
-                short = e.scenario_base.split("::")[-1] if "::" in e.scenario_base else e.scenario_base
-                lines.append(f"- {short}")
+    _render_base_list(
+        lines,
+        stale_confirm,
+        "### Graduation needs confirmation (single-/e2e_rest-only)",
+    )
 
     # Partial pass details
     partial = [e for e in report.xpassed_entries if e.category == "PARTIAL_PASS"]
@@ -672,17 +680,15 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
         lines.extend(["", "### Partial pass (some transports only)", ""])
         if report.partial_passing:
             for base, transports in sorted(report.partial_passing.items()):
-                short = base.split("::")[-1] if "::" in base else base
                 missing = sorted(report.partial_missing.get(base, set()))
-                lines.append(f"- {short} — passes: {sorted(transports)}, missing: {missing}")
+                lines.append(f"- {_short_base(base)} — passes: {sorted(transports)}, missing: {missing}")
         else:
             seen_bases: dict[str, set[str | None]] = {}
             for e in partial:
                 seen_bases.setdefault(e.scenario_base, set()).add(e.transport)
 
             for base, transports in sorted(seen_bases.items()):
-                short = base.split("::")[-1] if "::" in base else base
-                lines.append(f"- {short} — passes: {sorted(t for t in transports if t)}")
+                lines.append(f"- {_short_base(base)} — passes: {sorted(t for t in transports if t)}")
 
     if report.line_drift_warnings:
         lines.extend(["", "## Line-drift / stale bdd.json warnings", ""])

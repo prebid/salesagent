@@ -16,7 +16,18 @@ import json
 import re
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, TextIO, TypedDict
+
+
+class StepRecord(TypedDict):
+    """Fixed six-key step shape written into the JSONL store."""
+
+    file_path: str
+    line_number: int
+    step_type: str
+    step_text: str
+    function_name: str
+    source_text: str
 
 
 def parse_raw_output(raw_path: Path) -> dict:
@@ -55,13 +66,13 @@ def parse_raw_output(raw_path: Path) -> dict:
     }
 
 
-def _store_key(kind: str, step: dict, fallback_name: str = "") -> str:
+def _store_key(kind: str, step: StepRecord | dict[str, Any], fallback_name: str = "") -> str:
     """Kind-scoped dedupe key so triage and deep traces do not collide."""
     name = step.get("function_name") or fallback_name
     return f"{kind}:{name}:{step.get('line_number', 0)}"
 
 
-def _placeholder_step(func_name: str) -> dict:
+def _placeholder_step(func_name: str) -> StepRecord:
     """Minimal step record when the step index is unavailable."""
     return {
         "file_path": "unknown",
@@ -99,7 +110,7 @@ def _append_if_new(
     f: TextIO,
     kind: str,
     r: dict[str, Any],
-    step_lookup: dict[str, dict[str, Any]],
+    step_lookup: dict[str, StepRecord | dict[str, Any]],
     existing_keys: set[str],
     record: dict[str, Any],
 ) -> bool:
@@ -124,11 +135,13 @@ def write_to_store(parsed: dict, store_path: Path, step_index_path: Path | None)
 
     # We need the step index to get file/line info.
     # If not available, write with func_name only (partial records).
-    step_lookup = {}
+    step_lookup: dict[str, StepRecord | dict[str, Any]] = {}
     if step_index_path is not None:
         for obj in iter_jsonl_records(step_index_path):
             step = obj.get("step", {})
-            step_lookup[step.get("function_name")] = step
+            name = step.get("function_name")
+            if name:
+                step_lookup[name] = step
 
     new_triage = 0
     new_deep = 0

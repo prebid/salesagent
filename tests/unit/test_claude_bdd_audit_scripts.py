@@ -116,6 +116,19 @@ class TestClassifyXpass:
         assert present_n == 1
         assert "needs confirmation" in detail
 
+    def test_single_non_e2e_transport_needs_confirmation(self, bdd_full_audit) -> None:
+        """Lone a2a must hit present_count==1 even when not e2e_rest.
+
+        e2e_rest-only cases trip both disjuncts; this pin makes
+        ``present_count == 1`` load-bearing on its own.
+        """
+        all_entries = [self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[a2a]")]
+        _, cat, detail, present_n = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
+        assert cat == "GRADUATE_CONFIRM"
+        assert present_n == 1
+        assert "needs confirmation" in detail
+        assert "a2a" in detail
+
     def test_mixed_outline_examples_same_transport_not_graduate(self, bdd_full_audit) -> None:
         """Outline rows: failing first + passing last must not graduate.
 
@@ -202,6 +215,16 @@ class TestClassifyXpassedAudit:
         """Mirror bdd_full_audit GRADUATE_CONFIRM — lone e2e_rest must not be STALE."""
         base = "tests/bdd/test_uc004.py::test_s"
         all_tests = [{"nodeid": f"{base}[e2e_rest]", "outcome": "xpassed"}]
+        graduate, confirm, partial_passing, partial_missing = audit_xfails.classify_xpassed(all_tests)
+        assert graduate == set()
+        assert confirm == {base}
+        assert partial_passing == {}
+        assert partial_missing == {}
+
+    def test_single_non_e2e_transport_needs_confirmation_not_stale(self, audit_xfails) -> None:
+        """Lone a2a must confirm via present_count==1 (not the e2e_rest disjunct)."""
+        base = "tests/bdd/test_uc004.py::test_s"
+        all_tests = [{"nodeid": f"{base}[a2a]", "outcome": "xpassed"}]
         graduate, confirm, partial_passing, partial_missing = audit_xfails.classify_xpassed(all_tests)
         assert graduate == set()
         assert confirm == {base}
@@ -455,3 +478,37 @@ class TestReportIteratesFixNowDict:
         )
         assert "### PARTIAL_XPASS" in report
         assert "PARTIAL_XPASS" in bdd_full_audit.FIX_NOW
+
+
+class TestAuditXfailsReportDry:
+    """Pin audit_xfails.generate_report iterates category_desc (no twin list)."""
+
+    def test_category_table_includes_stale_confirm_from_desc(self, audit_xfails) -> None:
+        report = audit_xfails.AuditReport(total_xfailed=0, total_xpassed=1)
+        entry = audit_xfails.XfailEntry(
+            nodeid="tests/bdd/test_uc004.py::test_s[a2a]",
+            scenario_base="tests/bdd/test_uc004.py::test_s",
+            transport="a2a",
+            category="STALE_CONFIRM",
+            reason="needs confirmation",
+        )
+        report.xpassed_entries.append(entry)
+        text = audit_xfails.generate_report(report)
+        assert "| STALE_CONFIRM |" in text
+        assert "### Graduation needs confirmation" in text
+        assert "- test_s" in text
+
+
+class TestGradeResultNamedFields:
+    """grade_base returns GradeResult — callers must read fields by name."""
+
+    def test_grade_result_fields(self, bdd_audit_common) -> None:
+        grade = bdd_audit_common.grade_base(
+            "tests/bdd/test_uc004.py::test_s",
+            [("tests/bdd/test_uc004.py::test_s[a2a]", "xpassed")],
+        )
+        assert grade.graduates is True
+        assert grade.needs_confirmation is True
+        assert grade.present_count == 1
+        assert grade.passing == {"a2a"}
+        assert grade.missing == set()
