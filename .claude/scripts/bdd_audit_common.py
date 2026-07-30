@@ -74,7 +74,7 @@ def extract_scenario_base(nodeid: str) -> str:
     return re.sub(r"\[.*\]$", "", nodeid)
 
 
-def _short_base(base: str) -> str:
+def short_base(base: str) -> str:
     """Shorten a scenario base to the final ``::`` segment for report bullets."""
     return base.split("::")[-1] if "::" in base else base
 
@@ -173,14 +173,16 @@ def grade_base(
     applies the single-/e2e_rest-only confirmation gate so callers never
     re-wire that pipeline (or re-scan for ``present_count``).
 
-    ``needs_confirmation`` is True when every present transport passed but the
-    present set is a single transport or ``e2e_rest``-only — do not auto-graduate
-    (e2e_rest xfails are non-strict because e2e is environment-dependent).
+    ``needs_confirmation`` is True when every present transport passed but only
+    one transport is present — do not auto-graduate (a lone ``e2e_rest`` is the
+    common case; e2e xfails are non-strict because e2e is environment-dependent).
     """
     outcomes = outcomes_by_transport_for_base(base, nodeid_outcomes)
     coverage = transport_coverage(outcomes)
     present_count = len(outcomes)
-    needs_confirmation = bool(coverage.graduates and (present_count == 1 or coverage.passing == {"e2e_rest"}))
+    # When graduates, passing == present, so passing == {"e2e_rest"} implies
+    # present_count == 1; keep a single disjunct that matches the real meaning.
+    needs_confirmation = bool(coverage.graduates and present_count == 1)
     return GradeResult(
         graduates=coverage.graduates,
         passing=coverage.passing,

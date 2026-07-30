@@ -51,11 +51,11 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from bdd_audit_common import (  # noqa: E402
-    _short_base,
     extract_scenario_base,
     extract_transport,
     extract_uc,
     grade_base,
+    short_base,
 )
 
 # ── Data classes ──────────────────────────────────────────────────────
@@ -608,7 +608,7 @@ def _render_base_list(lines: list[str], entries: Sequence[XfailEntry], header: s
         if entry.scenario_base in seen:
             continue
         seen.add(entry.scenario_base)
-        lines.append(f"- {_short_base(entry.scenario_base)}")
+        lines.append(f"- {short_base(entry.scenario_base)}")
 
 
 def generate_report(report: AuditReport, output_path: Path | None = None) -> str:
@@ -691,14 +691,14 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
         if report.partial_passing:
             for base, transports in sorted(report.partial_passing.items()):
                 missing = sorted(report.partial_missing.get(base, set()))
-                lines.append(f"- {_short_base(base)} — passes: {sorted(transports)}, missing: {missing}")
+                lines.append(f"- {short_base(base)} — passes: {sorted(transports)}, missing: {missing}")
         else:
             seen_bases: dict[str, set[str | None]] = {}
             for e in partial:
                 seen_bases.setdefault(e.scenario_base, set()).add(e.transport)
 
             for base, transports in sorted(seen_bases.items()):
-                lines.append(f"- {_short_base(base)} — passes: {sorted(t for t in transports if t)}")
+                lines.append(f"- {short_base(base)} — passes: {sorted(t for t in transports if t)}")
 
     if report.line_drift_warnings:
         lines.extend(["", "## Line-drift / stale bdd.json warnings", ""])

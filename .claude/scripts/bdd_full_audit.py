@@ -30,12 +30,12 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from bdd_audit_common import (  # noqa: E402
-    _short_base,
     extract_longrepr_e_line,
     extract_scenario_base,
     extract_transport,
     extract_uc,
     grade_base,
+    short_base,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -379,7 +379,7 @@ def generate_work_items(
             transports = {extract_transport(e.nodeid) for e in group} - {None}
             rep_error = group[0].error
             transport_note = f" [{','.join(sorted(transports))}]" if transports else ""
-            scenario_name = _short_base(base)
+            scenario_name = short_base(base)
 
             cat_desc = {**FIX_NOW, **XFAIL_IT, **FEATURE_FIX}.get(cat, cat)
             items.append(

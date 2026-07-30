@@ -312,6 +312,64 @@ class TestSalvageDedupe:
         triage = [r for r in records if r["kind"] == "triage"]
         assert len(triage) == 1
 
+    def test_step_index_normalizes_real_lines_and_dedupes(self, salvage_audit, tmp_path: Path) -> None:
+        """step_index path: normalize real file/line; identical dedupe; distinct lines survive."""
+        store = tmp_path / "store.jsonl"
+        step_index = tmp_path / "steps.jsonl"
+        step_index.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "step": {
+                                "file_path": "tests/bdd/steps/a.py",
+                                "line_number": "42",
+                                "step_type": "then",
+                                "step_text": "a",
+                                "function_name": "then_a",
+                                "source_text": "pass",
+                            }
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "step": {
+                                "file_path": "tests/bdd/steps/b.py",
+                                "line_number": 99,
+                                "step_type": "then",
+                                "step_text": "b",
+                                "function_name": "then_b",
+                                "source_text": "pass",
+                            }
+                        }
+                    ),
+                ]
+            )
+            + "\n"
+        )
+        parsed = {
+            "pass1": [
+                {"index": 1, "func_name": "then_a", "verdict": "FLAG"},
+                {"index": 2, "func_name": "then_a", "verdict": "FLAG"},
+                {"index": 3, "func_name": "then_b", "verdict": "PASS"},
+            ],
+            "pass2": [],
+            "pass1_total": 3,
+            "pass2_total": 0,
+            "pass2_crashed_at": 0,
+        }
+        salvage_audit.write_to_store(parsed, store, step_index)
+        records = [json.loads(line) for line in store.read_text().splitlines() if line.strip()]
+        triage = [r for r in records if r["kind"] == "triage"]
+        assert len(triage) == 2
+        by_name = {r["step"]["function_name"]: r["step"] for r in triage}
+        assert by_name["then_a"]["file_path"] == "tests/bdd/steps/a.py"
+        assert by_name["then_a"]["line_number"] == 42
+        assert by_name["then_b"]["file_path"] == "tests/bdd/steps/b.py"
+        assert by_name["then_b"]["line_number"] == 99
+        assert by_name["then_a"]["file_path"] != "unknown"
+        assert by_name["then_a"]["line_number"] != 0
+
 
 class TestPrematureXfailCrashMatch:
     """PREMATURE_XFAIL matches setup/call crash path+lineno → enclosing step."""
@@ -546,5 +604,5 @@ class TestGradeResultNamedFields:
         assert coverage.missing == {"mcp"}
 
     def test_short_base(self, bdd_audit_common) -> None:
-        assert bdd_audit_common._short_base("tests/bdd/test_uc004.py::test_s") == "test_s"
-        assert bdd_audit_common._short_base("bare") == "bare"
+        assert bdd_audit_common.short_base("tests/bdd/test_uc004.py::test_s") == "test_s"
+        assert bdd_audit_common.short_base("bare") == "bare"

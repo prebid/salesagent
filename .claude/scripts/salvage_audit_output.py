@@ -30,12 +30,31 @@ class StepRecord(TypedDict):
     source_text: str
 
 
-def parse_raw_output(raw_path: Path) -> dict:
+class ParsedRow(TypedDict, total=False):
+    """Fixed-shape row from ``parse_raw_output`` (pass-1 and/or pass-2 fields)."""
+
+    index: int
+    func_name: str
+    verdict: str
+    severity: str
+
+
+class ParsedOutput(TypedDict):
+    """Structured salvage parse of a partial inspect_bdd_steps run."""
+
+    pass1: list[ParsedRow]
+    pass2: list[ParsedRow]
+    pass1_total: int
+    pass2_total: int
+    pass2_crashed_at: int
+
+
+def parse_raw_output(raw_path: Path) -> ParsedOutput:
     """Parse the raw terminal output into structured results."""
     text = raw_path.read_text()
 
-    pass1_results = []  # (func_name, verdict)
-    pass2_results = []  # (func_name, severity)
+    pass1_results: list[ParsedRow] = []
+    pass2_results: list[ParsedRow] = []
 
     # Parse Pass 1 lines: [N/370] then_xxx... FLAG/PASS
     for m in re.finditer(r"\[(\d+)/\d+\]\s+(then_\w+)\.\.\.\s+(FLAG|PASS)", text):
@@ -87,14 +106,7 @@ def _store_key(kind: str, step: StepRecord, fallback_name: str = "") -> str:
 
 def _placeholder_step(func_name: str) -> StepRecord:
     """Minimal step record when the step index is unavailable."""
-    return {
-        "file_path": "unknown",
-        "line_number": 0,
-        "step_type": "then",
-        "step_text": "",
-        "function_name": func_name,
-        "source_text": "",
-    }
+    return _normalize_step({}, func_name)
 
 
 def iter_jsonl_records(path: Path) -> Iterator[dict[str, Any]]:
@@ -124,14 +136,15 @@ def _load_existing_keys(store_path: Path) -> set[str]:
 def _append_if_new(
     f: TextIO,
     kind: str,
-    r: dict[str, Any],
+    r: ParsedRow,
     step_lookup: dict[str, StepRecord],
     existing_keys: set[str],
     record: dict[str, Any],
 ) -> bool:
     """Write ``record`` once per kind-scoped key. Returns True if written."""
-    step_info = step_lookup.get(r["func_name"], _placeholder_step(r["func_name"]))
-    key = _store_key(kind, step_info, r["func_name"])
+    func_name = r["func_name"]
+    step_info = step_lookup.get(func_name, _placeholder_step(func_name))
+    key = _store_key(kind, step_info, func_name)
     if key in existing_keys:
         return False
     payload = {**record, "kind": kind, "step": step_info}
@@ -140,7 +153,7 @@ def _append_if_new(
     return True
 
 
-def write_to_store(parsed: dict, store_path: Path, step_index_path: Path | None) -> None:
+def write_to_store(parsed: ParsedOutput, store_path: Path, step_index_path: Path | None) -> None:
     """Write parsed results to the JSONL store.
 
     Since we only have function names (not full BddStepInfo), we write
