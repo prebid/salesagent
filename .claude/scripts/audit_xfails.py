@@ -24,21 +24,26 @@ Graduation criteria (STALE → remove xfail):
        (a2a/mcp/rest, plus e2e_rest when in the result set; not a hardcoded
        four-transport universe — #1417 dropped impl from BDD parametrization)
     2. Present set is not single-transport / e2e_rest-only (those are
-       STALE_CONFIRM — e2e_rest xfails are non-strict / environment-dependent)
-    3. Then steps are PASS in inspector report (if available)
+       STALE_CONFIRM — confirm before removing tags; many e2e xfails are
+       still strict=True in conftest)
+    3. Artifact must include e2e_rest somewhere; if the whole artifact lacks
+       e2e_rest (tox bdd half-run), every graduation routes to STALE_CONFIRM
 
 PREMATURE_XFAIL matching uses crash path+lineno against live step files.
-Run this audit against a bdd.json produced from the *current* tree; a stale
-artifact's linenos drift outside step ranges and reclassify as PRODUCTION_GAP
-(with an explicit line-drift warning when a crash hits a known step file
-outside every scanned range).
+Container-rooted crash paths (``root: "/app"``) are remapped onto the host
+repo root. Run this audit against a bdd.json produced from the *current*
+tree; a stale artifact's linenos drift outside step ranges and reclassify
+as PRODUCTION_GAP (with an explicit line-drift warning when a crash hits a
+known step file outside every scanned range).
+
+Xfail *reasons* are read from ``setup.crash.message`` / ``call.crash.message``
+(pytest-json-report does not emit ``wasxfail``).
 """
 
 from __future__ import annotations
 
 import ast
 import json
-import re
 import sys
 from collections import Counter, defaultdict
 from collections.abc import Iterator, Sequence
@@ -51,10 +56,14 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from bdd_audit_common import (  # noqa: E402
+    artifact_transport_census,
     extract_scenario_base,
     extract_transport,
     extract_uc,
     grade_base,
+    load_e2e_rest_known_failure_bases,
+    parse_conftest_xfail_tags,
+    remap_container_path,
     short_base,
 )
 
@@ -62,16 +71,19 @@ from bdd_audit_common import (  # noqa: E402
 
 
 class CrashInfo(TypedDict, total=False):
-    """pytest-json-report crash slice under setup/call (path + lineno)."""
+    """pytest-json-report crash slice under setup/call (path + lineno + message)."""
 
     path: str
     lineno: int
+    message: str
 
 
 class PhaseResult(TypedDict, total=False):
-    """pytest-json-report phase dict; only ``crash`` is read by helpers here."""
+    """pytest-json-report phase dict; ``crash`` / ``longrepr`` used by helpers."""
 
     crash: CrashInfo
+    longrepr: str
+    outcome: str
 
 
 @dataclass
@@ -113,100 +125,11 @@ class AuditReport:
 
 
 # ── Conftest parser ───────────────────────────────────────────────────
+# Canonical implementation lives in bdd_audit_common; re-export for callers
+# and tests that import from this module.
 
 
-def parse_conftest_xfail_tags(conftest_path: Path) -> dict[str, tuple[str, str]]:
-    """Parse conftest.py to extract tag → (reason, mechanism) mappings.
-
-    Returns dict mapping tag string to (reason, mechanism) where mechanism
-    is one of: 'production_gap', 'transport_gap', 'harness_gap', 'partial_impl'.
-    """
-    text = conftest_path.read_text()
-    tag_map: dict[str, tuple[str, str]] = {}
-
-    # _XFAIL_TAGS dict: tag → reason (production gaps)
-    for match in re.finditer(r'"(T-[^"]+)":\s*"([^"]+)"', text):
-        tag, reason = match.group(1), match.group(2)
-        tag_map[tag] = (reason, "production_gap")
-
-    # _REST_XFAIL_TAGS set: REST transport gaps
-    in_rest_block = False
-    for line in text.split("\n"):
-        if "_REST_XFAIL_TAGS" in line and "{" in line:
-            in_rest_block = True
-            continue
-        if in_rest_block:
-            if "}" in line:
-                in_rest_block = False
-                continue
-            m = re.search(r'"(T-[^"]+)"', line)
-            if m:
-                tag_map[m.group(1)] = ("REST endpoint drops filter params", "transport_gap")
-
-    # _UC026_XFAIL_TAGS, _UC019_XFAIL_TAGS, etc. — sets with production/harness gaps
-    for set_match in re.finditer(
-        r"(_UC\d+_XFAIL_TAGS)\s*(?::\s*set\[str\])?\s*=\s*\{([^}]+)\}",
-        text,
-        re.DOTALL,
-    ):
-        set_name = set_match.group(1)
-        block = set_match.group(2)
-        # Determine mechanism from context
-        mechanism = "production_gap"
-        if "harness" in set_name.lower() or "env" in set_name.lower():
-            mechanism = "harness_gap"
-
-        for tag_m in re.finditer(r'"(T-[^"]+)"', block):
-            tag = tag_m.group(1)
-            if tag not in tag_map:  # Don't overwrite more specific classifications
-                tag_map[tag] = (f"from {set_name}", mechanism)
-
-    # _UC004_PARTITION_TAGS, _UC004_BOUNDARY_TAGS — partial impl
-    for set_match in re.finditer(
-        r"(_UC\d+_(?:PARTITION|BOUNDARY)_TAGS)\s*(?::\s*set\[str\])?\s*=\s*\{([^}]+)\}",
-        text,
-        re.DOTALL,
-    ):
-        set_name = set_match.group(1)
-        block = set_match.group(2)
-        for tag_m in re.finditer(r'"(T-[^"]+)"', block):
-            tag = tag_m.group(1)
-            if tag not in tag_map:
-                tag_map[tag] = (f"partition/boundary from {set_name}", "partial_impl")
-
-    # _UC005_PARTIAL_TAGS
-    for set_match in re.finditer(r"(_UC\d+_PARTIAL_TAGS)\s*=\s*\{([^}]+)\}", text, re.DOTALL):
-        block = set_match.group(2)
-        for tag_m in re.finditer(r'"(T-[^"]+)"', block):
-            tag = tag_m.group(1)
-            if tag not in tag_map:
-                tag_map[tag] = ("partial implementation", "partial_impl")
-
-    # MCP selective xfails
-    for match in re.finditer(r'"(T-[^"]+)".*?reason="([^"]+)"', text):
-        tag, reason = match.group(1), match.group(2)
-        if tag not in tag_map and "MCP" in reason.upper():
-            tag_map[tag] = (reason, "transport_gap")
-
-    # _UC002_VALIDATION_XFAIL, _UC006_VALIDATION_XFAIL — selective xfails
-    for match in re.finditer(r'\(\s*"(T-[^"]+)",\s*\{[^}]*\},\s*"([^"]+)"\s*\)', text):
-        tag, reason = match.group(1), match.group(2)
-        if tag not in tag_map:
-            tag_map[tag] = (reason, "production_gap")
-
-    # _UC004_XFAIL_TAGS dict with tuples: tag → (reason, strict)
-    for match in re.finditer(r'"(T-UC-004[^"]+)":\s*\(\s*"([^"]+)",\s*(True|False)\s*\)', text):
-        tag, reason = match.group(1), match.group(2)
-        if tag not in tag_map:
-            tag_map[tag] = (reason, "production_gap")
-
-    # _UC003_EXT_XFAILS dict
-    for match in re.finditer(r'"(T-UC-003[^"]+)":\s*"([^"]+)"', text):
-        tag, reason = match.group(1), match.group(2)
-        if tag not in tag_map:
-            tag_map[tag] = (reason, "production_gap")
-
-    return tag_map
+# parse_conftest_xfail_tags imported from bdd_audit_common above.
 
 
 # ── Step-level xfail detector ────────────────────────────────────────
@@ -223,9 +146,9 @@ def find_premature_xfails(steps_dir: Path) -> list[PrematureXfail]:
 
     for py_file in steps_dir.rglob("*.py"):
         try:
-            source = py_file.read_text()
+            source = py_file.read_text(encoding="utf-8")
             tree = ast.parse(source)
-        except SyntaxError:
+        except (SyntaxError, UnicodeDecodeError):
             continue
 
         resolved = py_file.resolve()
@@ -278,12 +201,41 @@ def find_premature_xfails(steps_dir: Path) -> list[PrematureXfail]:
     return premature
 
 
-def _iter_crash_locations(test: dict) -> Iterator[tuple[Path, int]]:
-    """Yield resolved ``(path, lineno)`` for setup/call crash sites on a test.
+def _crash_reason_text(test: dict) -> str:
+    """Read xfail/failure reason from setup/call crash.message (or longrepr).
+
+    pytest-json-report does not emit ``wasxfail``; real artifacts carry the
+    reason on ``setup.crash.message`` / ``call.crash.message``.
+    """
+    for phase in ("setup", "call"):
+        ph_raw = test.get(phase) or {}
+        if not isinstance(ph_raw, dict):
+            continue
+        crash_raw = ph_raw.get("crash") or {}
+        if isinstance(crash_raw, dict):
+            message = crash_raw.get("message")
+            if message:
+                return str(message)
+        longrepr = ph_raw.get("longrepr")
+        if longrepr:
+            return str(longrepr)
+    return ""
+
+
+def _iter_crash_locations(
+    test: dict,
+    *,
+    artifact_root: str | None = None,
+    host_root: Path | None = None,
+) -> Iterator[tuple[Path, int]]:
+    """Yield remapped ``(path, lineno)`` for setup/call crash sites on a test.
 
     Owns the shared phase loop, crash-dict guarding, and path/lineno
     normalization used by both premature matching and line-drift warnings.
+    Container-rooted paths (artifact ``root``, e.g. ``/app``) are remapped
+    onto ``host_root`` so host step scans match.
     """
+    host = host_root or Path.cwd()
     for phase in ("setup", "call"):
         ph_raw = test.get(phase) or {}
         if not isinstance(ph_raw, dict):
@@ -298,7 +250,12 @@ def _iter_crash_locations(test: dict) -> Iterator[tuple[Path, int]]:
         if not cpath or clineno is None:
             continue
         try:
-            yield Path(cpath).resolve(), int(clineno)
+            resolved = remap_container_path(
+                str(cpath),
+                artifact_root=artifact_root,
+                host_root=host,
+            )
+            yield resolved, int(clineno)
         except (OSError, TypeError, ValueError):
             continue
 
@@ -306,11 +263,14 @@ def _iter_crash_locations(test: dict) -> Iterator[tuple[Path, int]]:
 def match_premature_by_crash(
     test: dict,
     premature_xfails: Sequence[PrematureXfail],
+    *,
+    artifact_root: str | None = None,
+    host_root: Path | None = None,
 ) -> PrematureXfail | None:
     """Map setup/call crash path+lineno to an enclosing premature step."""
     if not premature_xfails:
         return None
-    for resolved, line in _iter_crash_locations(test):
+    for resolved, line in _iter_crash_locations(test, artifact_root=artifact_root, host_root=host_root):
         for step in premature_xfails:
             if resolved == step.path and step.lineno <= line <= step.end_lineno:
                 return step
@@ -320,6 +280,9 @@ def match_premature_by_crash(
 def crash_line_drift_warnings(
     test: dict,
     premature_xfails: Sequence[PrematureXfail],
+    *,
+    artifact_root: str | None = None,
+    host_root: Path | None = None,
 ) -> list[str]:
     """Warn when a crash hits a known premature step file outside every range.
 
@@ -331,7 +294,7 @@ def crash_line_drift_warnings(
         return []
     known_paths = {step.path for step in premature_xfails}
     warnings: list[str] = []
-    for resolved, line in _iter_crash_locations(test):
+    for resolved, line in _iter_crash_locations(test, artifact_root=artifact_root, host_root=host_root):
         if resolved not in known_paths:
             continue
         in_any = any(step.path == resolved and step.lineno <= line <= step.end_lineno for step in premature_xfails)
@@ -346,13 +309,17 @@ def crash_line_drift_warnings(
 # ── JSON test result parser ───────────────────────────────────────────
 
 
-def parse_test_results(json_path: Path) -> tuple[list[dict], list[dict], list[dict]]:
-    """Parse BDD JSON results into (xfailed, xpassed, all_tests)."""
-    data = json.loads(json_path.read_text())
+def parse_test_results(json_path: Path) -> tuple[list[dict], list[dict], list[dict], dict]:
+    """Parse BDD JSON results into (xfailed, xpassed, all_tests, data).
+
+    Returns the raw ``data`` dict so callers can read ``root`` for path remap
+    and refuse empty artifacts.
+    """
+    data = json.loads(json_path.read_text(encoding="utf-8"))
     all_tests = list(data["tests"])
     xfailed = [t for t in all_tests if t["outcome"] == "xfailed"]
     xpassed = [t for t in all_tests if t["outcome"] == "xpassed"]
-    return xfailed, xpassed, all_tests
+    return xfailed, xpassed, all_tests, data
 
 
 def extract_tags(test_entry: dict) -> set[str]:
@@ -371,13 +338,16 @@ def classify_xfail(
     test: dict,
     tag_map: dict[str, tuple[str, str]],
     premature_xfails: Sequence[PrematureXfail],
+    *,
+    artifact_root: str | None = None,
+    host_root: Path | None = None,
 ) -> XfailEntry:
     """Classify a single xfailed test."""
     nodeid = test["nodeid"]
     transport = extract_transport(nodeid)
     base = extract_scenario_base(nodeid)
     tags = extract_tags(test)
-    wasxfail = test.get("wasxfail", "")
+    reason_text = _crash_reason_text(test)
 
     entry = XfailEntry(
         nodeid=nodeid,
@@ -388,8 +358,8 @@ def classify_xfail(
 
     # Priority 0: Premature step-level pytest.xfail() (AST scan)
     # Match via setup/call crash path+lineno → enclosing step. pytest-json-report
-    # does not emit step function names into wasxfail/longrepr/nodeid.
-    matched = match_premature_by_crash(test, premature_xfails)
+    # does not emit step function names into crash.message/longrepr/nodeid.
+    matched = match_premature_by_crash(test, premature_xfails, artifact_root=artifact_root, host_root=host_root)
     if matched is not None:
         entry.category = "PREMATURE_XFAIL"
         entry.reason = f"step {matched.name} calls pytest.xfail() before production code"
@@ -397,21 +367,26 @@ def classify_xfail(
         return entry
 
     # Priority 1: Missing step definition (auto-xfail from pytest hook)
-    if "Step definition not found" in wasxfail:
+    if "Step definition not found" in reason_text or "StepDefinitionNotFoundError" in reason_text:
         entry.category = "MISSING_STEP"
-        entry.reason = wasxfail
+        entry.reason = reason_text
         entry.xfail_source = "conftest:auto"
         return entry
 
-    # Priority 2: No harness environment
-    if "No harness environment" in wasxfail or "not implemented" in wasxfail.lower():
+    # Priority 2: No harness environment / harness not wired
+    reason_lower = reason_text.lower()
+    if (
+        "No harness environment" in reason_text
+        or "harness not yet wired" in reason_lower
+        or "harness not wired" in reason_lower
+    ):
         entry.category = "HARNESS_GAP"
-        entry.reason = wasxfail
+        entry.reason = reason_text
         entry.xfail_source = "conftest:auto"
         return entry
 
-    # Priority 3: Match against conftest tag map
-    for tag in tags:
+    # Priority 3: Match against conftest tag map (deterministic tag order)
+    for tag in sorted(tags):
         if tag in tag_map:
             reason, mechanism = tag_map[tag]
             entry.reason = reason
@@ -498,8 +473,8 @@ def classify_xfail(
 
     # Priority 4f: Any remaining T-UC-* tag means conftest xfail matched but parser missed it
     if any(t.startswith("T-UC-") for t in tags):
-        # Infer from tag content
-        sample_tag = next(t for t in tags if t.startswith("T-UC-"))
+        # Infer from tag content (sorted for deterministic choice)
+        sample_tag = next(t for t in sorted(tags) if t.startswith("T-UC-"))
         if "webhook" in sample_tag or "attr-" in sample_tag or "dim-" in sample_tag:
             entry.category = "PRODUCTION_GAP"
             entry.reason = f"feature not implemented (from tag {sample_tag})"
@@ -515,38 +490,37 @@ def classify_xfail(
         entry.xfail_source = "conftest:inferred:tag-prefix"
         return entry
 
-    # Priority 5: Check wasxfail reason text for clues
-    if wasxfail:
-        reason_lower = wasxfail.lower()
+    # Priority 5: Check crash-message reason text for clues
+    if reason_text:
         if "rest" in reason_lower and ("endpoint" in reason_lower or "drops" in reason_lower):
             entry.category = "TRANSPORT_GAP"
-            entry.reason = wasxfail
+            entry.reason = reason_text
             entry.xfail_source = "conftest:reason"
             return entry
         if "mcp" in reason_lower and "wrapper" in reason_lower:
             entry.category = "TRANSPORT_GAP"
-            entry.reason = wasxfail
+            entry.reason = reason_text
             entry.xfail_source = "conftest:reason"
             return entry
         if any(kw in reason_lower for kw in ["not implemented", "gap", "spec-production", "not yet"]):
             entry.category = "PRODUCTION_GAP"
-            entry.reason = wasxfail
+            entry.reason = reason_text
             entry.xfail_source = "conftest:reason"
             return entry
         if any(kw in reason_lower for kw in ["harness", "env", "wired"]):
             entry.category = "HARNESS_GAP"
-            entry.reason = wasxfail
+            entry.reason = reason_text
             entry.xfail_source = "conftest:reason"
             return entry
         # Has a reason but doesn't match known patterns
         entry.category = "PRODUCTION_GAP"  # Default for tagged xfails with reasons
-        entry.reason = wasxfail
+        entry.reason = reason_text
         entry.xfail_source = "conftest:reason"
         return entry
 
     # Priority 6: Unclassified
     entry.category = "UNCLASSIFIED"
-    entry.reason = "no wasxfail reason and no matching tag"
+    entry.reason = "no crash-message reason and no matching tag"
     return entry
 
 
@@ -561,13 +535,25 @@ class XpassBuckets(NamedTuple):
 
 def classify_xpassed(
     all_tests: list[dict],
+    *,
+    force_confirm: bool = False,
+    ledger_bases: set[str] | None = None,
 ) -> XpassBuckets:
     """Classify xpassed scenario bases into graduate / confirm / partial.
 
     Graduation is relative to transports *present for that base* across the
     full result set (not a hardcoded impl/a2a/mcp/rest universe). Single-
     transport and e2e_rest-only present sets land in ``confirm``
-    (STALE_CONFIRM) rather than firm graduation.
+    (STALE_CONFIRM) rather than firm graduation. When the artifact lacks
+    e2e_rest entirely (``force_confirm``), every graduation routes to confirm.
+    Bases in the e2e_rest known-failures ledger without a present e2e_rest row
+    also confirm (ledger markers are outside conftest tags).
+
+    ``mixed_examples`` bases (present transports, none passing after aggregate)
+    land in the partial bucket so listing counts match.
+
+    Failed outcomes participate in the grade scan (parity with bdd_full_audit)
+    so a base mixing failed + xpassed does not ignore the failed transport.
 
     Returns ``XpassBuckets(graduate, confirm, partial_passing, partial_missing)``.
     """
@@ -577,14 +563,20 @@ def classify_xpassed(
     partial_passing: dict[str, set[str]] = {}
     partial_missing: dict[str, set[str]] = {}
     nodeid_outcomes = [(t["nodeid"], t["outcome"]) for t in all_tests]
+    ledger = ledger_bases or set()
     for base in xpassed_bases:
-        grade = grade_base(base, nodeid_outcomes)
+        grade = grade_base(base, nodeid_outcomes, force_confirm=force_confirm)
+        # Ledger-only markers: do not firm-graduate when e2e_rest is absent for base.
+        if grade.graduates and not grade.needs_confirmation and base in ledger:
+            if "e2e_rest" not in grade.passing and "e2e_rest" not in grade.missing:
+                confirm.add(base)
+                continue
         if grade.graduates:
             if grade.needs_confirmation:
                 confirm.add(base)
             else:
                 graduate.add(base)
-        elif grade.passing:
+        elif grade.passing or grade.mixed_examples:
             partial_passing[base] = grade.passing
             partial_missing[base] = grade.missing
     return XpassBuckets(
@@ -648,8 +640,10 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
         lines.append(f"| {cat} | {len(entries)} | {pct:.0f}% | {desc} |")
 
     lines.extend(["", "### By use case", ""])
-    lines.append("| UC | PROD_GAP | TRANSPORT | HARNESS | PARTIAL | MISSING | PREMATURE | STALE | UNCLASS | Total |")
-    lines.append("|" + "|".join(["---"] * 10) + "|")
+    lines.append(
+        "| UC | PROD_GAP | TRANSPORT | HARNESS | PARTIAL | MISSING | PREMATURE | STALE | STALE_CONFIRM | UNCLASS | Total |"
+    )
+    lines.append("|" + "|".join(["---"] * 11) + "|")
 
     all_ucs = sorted(report.by_uc.keys())
     for uc in all_ucs:
@@ -659,7 +653,8 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
             f"| {uc} | {counts.get('PRODUCTION_GAP', 0)} | {counts.get('TRANSPORT_GAP', 0)} | "
             f"{counts.get('HARNESS_GAP', 0)} | {counts.get('PARTIAL_IMPL', 0)} | "
             f"{counts.get('MISSING_STEP', 0)} | {counts.get('PREMATURE_XFAIL', 0)} | "
-            f"{counts.get('STALE', 0)} | {counts.get('UNCLASSIFIED', 0)} | {total} |"
+            f"{counts.get('STALE', 0)} | {counts.get('STALE_CONFIRM', 0)} | "
+            f"{counts.get('UNCLASSIFIED', 0)} | {total} |"
         )
 
     # Xpassed section
@@ -684,22 +679,18 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
         "### Graduation needs confirmation (single-/e2e_rest-only)",
     )
 
-    # Partial pass details
+    # Partial pass details — list from the same dict the counts use
     partial = [e for e in report.xpassed_entries if e.category == "PARTIAL_PASS"]
     if partial:
         lines.extend(["", "### Partial pass (some transports only)", ""])
-        if report.partial_passing:
-            for base, transports in sorted(report.partial_passing.items()):
-                missing = sorted(report.partial_missing.get(base, set()))
-                lines.append(f"- {short_base(base)} — passes: {sorted(transports)}, missing: {missing}")
-        else:
-            seen_bases: dict[str, set[str | None]] = {}
-            for e in partial:
-                seen_bases.setdefault(e.scenario_base, set()).add(e.transport)
-
-            for base, transports in sorted(seen_bases.items()):
-                lines.append(f"- {short_base(base)} — passes: {sorted(t for t in transports if t)}")
-
+        listed_bases = set(report.partial_passing.keys()) | set(report.partial_missing.keys())
+        # Ensure every PARTIAL_PASS base appears (mixed_examples may have empty passing)
+        for e in partial:
+            listed_bases.add(e.scenario_base)
+        for base in sorted(listed_bases):
+            transports = report.partial_passing.get(base, set())
+            missing = sorted(report.partial_missing.get(base, set()))
+            lines.append(f"- {short_base(base)} — passes: {sorted(transports)}, missing: {missing}")
     if report.line_drift_warnings:
         lines.extend(["", "## Line-drift / stale bdd.json warnings", ""])
         for warning in report.line_drift_warnings:
@@ -740,17 +731,36 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
 def main() -> None:
     import argparse
 
+    repo_root = Path(__file__).resolve().parent.parent.parent
     parser = argparse.ArgumentParser(description="Deterministic BDD xfail audit")
     parser.add_argument("json_path", help="Path to bdd.json test results")
     parser.add_argument("--output", "-o", help="Output markdown path", default=None)
-    parser.add_argument("--conftest", help="Path to conftest.py", default="tests/bdd/conftest.py")
-    parser.add_argument("--steps-dir", help="Path to step definitions", default="tests/bdd/steps")
-    parser.add_argument("--inspector-report", help="Path to inspector report for cross-reference", default=None)
+    parser.add_argument(
+        "--conftest",
+        help="Path to conftest.py",
+        default=str(repo_root / "tests" / "bdd" / "conftest.py"),
+    )
+    parser.add_argument(
+        "--steps-dir",
+        help="Path to step definitions",
+        default=str(repo_root / "tests" / "bdd" / "steps"),
+    )
+    parser.add_argument(
+        "--repo-root",
+        help="Host repo root for remapping container crash paths (default: inferred)",
+        default=str(repo_root),
+    )
+    parser.add_argument(
+        "--e2e-ledger",
+        help="Path to e2e_rest_known_failures.txt",
+        default=str(repo_root / "tests" / "bdd" / "e2e_rest_known_failures.txt"),
+    )
     args = parser.parse_args()
 
     json_path = Path(args.json_path)
     conftest_path = Path(args.conftest)
     steps_dir = Path(args.steps_dir)
+    host_root = Path(args.repo_root)
     output_path = Path(args.output) if args.output else None
 
     # Step 1: Parse conftest xfail tags
@@ -765,14 +775,36 @@ def main() -> None:
 
     # Step 3: Parse test results
     print(f"Parsing {json_path}...")
-    xfailed_tests, xpassed_tests, all_tests = parse_test_results(json_path)
-    print(f"  {len(xfailed_tests)} xfailed, {len(xpassed_tests)} xpassed")
+    xfailed_tests, xpassed_tests, all_tests, data = parse_test_results(json_path)
+    print(f"  Parsed {len(all_tests)} tests ({len(xfailed_tests)} xfailed, {len(xpassed_tests)} xpassed)")
+    if not all_tests:
+        print("ERROR: artifact contains 0 tests — refusing to emit an all-clear report.")
+        print('  Empty {"tests": []} is indistinguishable from a full suite with nothing to fix.')
+        raise SystemExit(2)
+
+    artifact_root = data.get("root")
+    if isinstance(artifact_root, str):
+        print(f"  Artifact root: {artifact_root} (crash paths remapped onto {host_root})")
+    else:
+        artifact_root = None
+
+    census = artifact_transport_census((t["nodeid"], t["outcome"]) for t in all_tests)
+    force_confirm = census.incomplete_e2e
+    if force_confirm:
+        print(
+            "  WARNING: e2e_rest appears for no base in this artifact — "
+            "every graduation routes to STALE_CONFIRM (incomplete tox/bdd half-run)."
+        )
+    elif census.has_e2e_rest and census.transports_seen == frozenset({"e2e_rest"}):
+        print("  NOTE: only e2e_rest transport present in artifact.")
+
+    ledger_bases = load_e2e_rest_known_failure_bases(Path(args.e2e_ledger))
 
     # Step 4: Classify xpassed tests (needs full suite for present-transport set)
     print("Classifying xpassed tests...")
-    buckets = classify_xpassed(all_tests)
+    buckets = classify_xpassed(all_tests, force_confirm=force_confirm, ledger_bases=ledger_bases)
     print(f"  {len(buckets.graduate)} pass all present transports (graduation candidates)")
-    print(f"  {len(buckets.confirm)} need confirmation (single-/e2e_rest-only)")
+    print(f"  {len(buckets.confirm)} need confirmation (single-/e2e_rest-only / incomplete)")
     print(f"  {len(buckets.partial_passing)} pass some transports (partial)")
 
     # Step 5: Classify each xfailed test
@@ -786,12 +818,20 @@ def main() -> None:
 
     seen_drift: set[str] = set()
     for test in xfailed_tests:
-        for warning in crash_line_drift_warnings(test, premature_xfails):
+        for warning in crash_line_drift_warnings(
+            test, premature_xfails, artifact_root=artifact_root, host_root=host_root
+        ):
             if warning not in seen_drift:
                 seen_drift.add(warning)
                 report.line_drift_warnings.append(warning)
                 print(f"  WARNING: {warning}")
-        entry = classify_xfail(test, tag_map, premature_xfails)
+        entry = classify_xfail(
+            test,
+            tag_map,
+            premature_xfails,
+            artifact_root=artifact_root,
+            host_root=host_root,
+        )
         report.entries.append(entry)
         report.by_category[entry.category].append(entry)
         uc = extract_uc(entry.nodeid)

@@ -4,9 +4,10 @@ Parses the raw terminal output from a crashed/interrupted run and writes
 results into the JSONL store so the next run can resume from where it stopped.
 
 Usage:
-    python3 .claude/scripts/salvage_audit_output.py \
-        .claude/reports/bdd-step-audit-raw-output.txt \
-        --store .claude/reports/bdd-step-audit.jsonl
+    python3 .claude/scripts/salvage_audit_output.py \\
+        .claude/reports/bdd-step-audit-raw-output.txt \\
+        --store .claude/reports/bdd-step-audit.jsonl \\
+        --step-index .claude/reports/bdd-step-index.jsonl
 """
 
 from __future__ import annotations
@@ -14,20 +15,16 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, TextIO, TypedDict
 
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
 
-class StepRecord(TypedDict):
-    """Fixed six-key step shape written into the JSONL store."""
-
-    file_path: str
-    line_number: int
-    step_type: str
-    step_text: str
-    function_name: str
-    source_text: str
+from bdd_audit_common import StepRecord, strip_ansi  # noqa: E402
 
 
 class ParsedRow(TypedDict, total=False):
@@ -50,8 +47,13 @@ class ParsedOutput(TypedDict):
 
 
 def parse_raw_output(raw_path: Path) -> ParsedOutput:
-    """Parse the raw terminal output into structured results."""
-    text = raw_path.read_text()
+    """Parse the raw terminal output into structured results.
+
+    Strips ANSI color codes before matching so colored captures parse the
+    same as plain text. Asserts ``len(pass1) == pass1_total`` when the
+    totals line is present (inconsistent captures raise ``ValueError``).
+    """
+    text = strip_ansi(raw_path.read_text(encoding="utf-8", errors="replace"))
 
     pass1_results: list[ParsedRow] = []
     pass2_results: list[ParsedRow] = []
@@ -69,12 +71,18 @@ def parse_raw_output(raw_path: Path) -> ParsedOutput:
     # Extract totals
     pass1_total = 0
     pass2_total = 0
-    m = re.search(r"(\d+) flagged, (\d+) passed", text)
-    if m:
-        pass1_total = int(m.group(1)) + int(m.group(2))
-    m = re.search(r"Pass 2: Deep Trace.*?(\d+) functions", text)
-    if m:
-        pass2_total = int(m.group(1))
+    m1 = re.search(r"(\d+) flagged, (\d+) passed", text)
+    if m1:
+        pass1_total = int(m1.group(1)) + int(m1.group(2))
+    m2 = re.search(r"Pass 2: Deep Trace.*?(\d+) functions", text)
+    if m2:
+        pass2_total = int(m2.group(1))
+
+    if pass1_total and len(pass1_results) != pass1_total:
+        raise ValueError(
+            f"pass1 row count {len(pass1_results)} != pass1_total {pass1_total} "
+            "(ANSI-stripped parse inconsistent — check capture)"
+        )
 
     return {
         "pass1": pass1_results,
@@ -113,7 +121,7 @@ def iter_jsonl_records(path: Path) -> Iterator[dict[str, Any]]:
     """Yield parsed JSON objects from a JSONL file (skip blanks / bad lines)."""
     if not path.exists():
         return
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if not line.strip():
             continue
         try:
@@ -220,6 +228,12 @@ def main():
     parser = argparse.ArgumentParser(description="Salvage partial audit output into JSONL store")
     parser.add_argument("raw_output", type=Path, help="Raw terminal output file")
     parser.add_argument("--store", type=Path, default=Path(".claude/reports/bdd-step-audit.jsonl"))
+    parser.add_argument(
+        "--step-index",
+        type=Path,
+        default=None,
+        help="JSONL step index for file/line normalization (defaults to --store if omitted)",
+    )
     args = parser.parse_args()
 
     if not args.raw_output.exists():
@@ -233,7 +247,8 @@ def main():
     print(f"  Pass 2: {len(parsed['pass2'])} results (of {parsed['pass2_total']} expected)")
     print()
 
-    write_to_store(parsed, args.store, args.store)
+    step_index = args.step_index if args.step_index is not None else args.store
+    write_to_store(parsed, args.store, step_index)
 
 
 if __name__ == "__main__":

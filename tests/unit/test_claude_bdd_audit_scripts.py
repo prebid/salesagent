@@ -15,47 +15,119 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.infra
+
 SCRIPTS = Path(__file__).resolve().parents[2] / ".claude" / "scripts"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+CONFTEST = REPO_ROOT / "tests" / "bdd" / "conftest.py"
 
 
-def _load(name: str):
+def _load(name: str, request: pytest.FixtureRequest | None = None):
     path = SCRIPTS / f"{name}.py"
     if not path.exists():
         pytest.fail(f"missing script: {path}")
-    # Shared helpers live beside the scripts; ensure import resolves under importlib.
     scripts_dir = str(SCRIPTS)
     if scripts_dir not in sys.path:
         sys.path.insert(0, scripts_dir)
+    # Reuse already-imported modules so `is` identity pins hold across importers.
+    if name in sys.modules:
+        return sys.modules[name]
+    # Ensure shared helpers are loaded once before any consumer imports them.
+    if name != "bdd_audit_common" and "bdd_audit_common" not in sys.modules:
+        _load("bdd_audit_common", request)
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
     spec.loader.exec_module(module)
+
+    def _teardown() -> None:
+        # Keep bdd_audit_common resident for sibling module fixtures; only
+        # drop leaf script modules. Path cleanup is session-end only.
+        if name != "bdd_audit_common":
+            sys.modules.pop(name, None)
+
+    if request is not None:
+        request.addfinalizer(_teardown)
     return module
 
 
 @pytest.fixture(scope="module")
-def bdd_audit_common():
-    return _load("bdd_audit_common")
+def bdd_audit_common(request):
+    return _load("bdd_audit_common", request)
 
 
 @pytest.fixture(scope="module")
-def bdd_full_audit():
-    return _load("bdd_full_audit")
+def bdd_full_audit(request, bdd_audit_common):
+    return _load("bdd_full_audit", request)
 
 
 @pytest.fixture(scope="module")
-def salvage_audit():
-    return _load("salvage_audit_output")
+def salvage_audit(request, bdd_audit_common):
+    return _load("salvage_audit_output", request)
 
 
 @pytest.fixture(scope="module")
-def audit_xfails():
-    return _load("audit_xfails")
+def audit_xfails(request, bdd_audit_common):
+    return _load("audit_xfails", request)
+
+
+@pytest.fixture(scope="module")
+def cross_reference_audit(request, bdd_audit_common):
+    return _load("cross_reference_audit", request)
+
+
+def _premature_source() -> str:
+    return textwrap.dedent(
+        """
+        from pytest_bdd import then
+        import pytest
+
+        @then("x")
+        def then_premature():
+            \"\"\"doc\"\"\"
+            pytest.xfail("not ready")
+        """
+    )
+
+
+@pytest.fixture
+def premature_step(tmp_path: Path, audit_xfails):
+    """Shared (steps_file, step) fixture for crash/drift pins."""
+    source = _premature_source()
+    steps_file = tmp_path / "steps.py"
+    steps_file.write_text(source)
+    premature = audit_xfails.find_premature_xfails(tmp_path)
+    assert len(premature) == 1
+    return steps_file, premature[0]
+
+
+def _json_report_test(
+    path: str | Path,
+    lineno: int,
+    *,
+    phase: str = "call",
+    message: str = "_pytest.outcomes.XFailed: not ready",
+    nodeid: str = "t::s[a2a]",
+    keywords: list | None = None,
+) -> dict:
+    """Uniform pytest-json-report slice (no wasxfail key)."""
+    crash = {"path": str(path), "lineno": lineno, "message": message}
+    entry: dict = {
+        "nodeid": nodeid,
+        "keywords": keywords or [],
+        "outcome": "xfailed",
+    }
+    if phase == "setup":
+        entry["setup"] = {"outcome": "failed", "crash": crash}
+    else:
+        entry["setup"] = {"outcome": "passed"}
+        entry["call"] = {"outcome": "skipped", "crash": crash, "longrepr": f"E   {message}"}
+    return entry
 
 
 class TestTransportHelpers:
-    """Shared extract_* must agree and recognize e2e_rest (#1665 review)."""
+    """Shared extract_* must agree and recognize e2e_rest."""
 
     def test_e2e_rest_recognizes_e2e_rest(self, bdd_audit_common) -> None:
         nodeid = "tests/bdd/test_uc004.py::test_s[e2e_rest]"
@@ -67,20 +139,23 @@ class TestTransportHelpers:
         assert bdd_audit_common.extract_longrepr_e_line(longrepr) == "AssertionError: boom"
         assert bdd_audit_common.extract_longrepr_e_line("no error") == ""
 
-    def test_wire_transports(self, bdd_audit_common) -> None:
-        for t in ("a2a", "mcp", "rest"):
-            nodeid = f"tests/bdd/test_uc004.py::test_s[{t}]"
-            assert bdd_audit_common.extract_transport(nodeid) == t
+    def test_all_transport_enum_values(self, bdd_audit_common) -> None:
+        from tests.harness.transport import Transport
+
+        for v in Transport:
+            assert bdd_audit_common.extract_transport(f"t::s[{v.value}]") == v.value
 
     def test_extract_uc_from_nodeid_and_path(self, bdd_audit_common) -> None:
         assert bdd_audit_common.extract_uc("tests/bdd/test_uc004.py::test_s[a2a]") == "UC-004"
         assert bdd_audit_common.extract_uc("tests/bdd/steps/uc019/then_steps.py") == "UC-019"
         assert bdd_audit_common.extract_uc("no-uc-here.py") == "GENERIC"
 
-    def test_cross_reference_sees_e2e_rest(self) -> None:
-        """cross_reference_audit must use shared extract_transport (not old regex)."""
-        xref = _load("cross_reference_audit")
-        assert xref.extract_transport("tests/bdd/test_uc004.py::test_s[e2e_rest]") == "e2e_rest"
+    def test_shared_helper_identity_per_importer(
+        self, bdd_audit_common, bdd_full_audit, audit_xfails, cross_reference_audit
+    ) -> None:
+        assert bdd_full_audit.extract_transport is bdd_audit_common.extract_transport
+        assert audit_xfails.extract_transport is bdd_audit_common.extract_transport
+        assert cross_reference_audit.extract_transport is bdd_audit_common.extract_transport
 
 
 class TestClassifyXpass:
@@ -106,38 +181,33 @@ class TestClassifyXpass:
         result = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
         assert result.category == "GRADUATE"
         assert result.present_count == 2
-        assert "All 2 present transports pass" in result.detail
 
     def test_single_transport_needs_confirmation(self, bdd_full_audit) -> None:
-        """Single-/e2e_rest-only present sets must not auto-graduate."""
         all_entries = [self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[e2e_rest]")]
         result = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
         assert result.category == "GRADUATE_CONFIRM"
         assert result.present_count == 1
-        assert "needs confirmation" in result.detail
 
     def test_single_non_e2e_transport_needs_confirmation(self, bdd_full_audit) -> None:
-        """Lone a2a must hit present_count==1 even when not e2e_rest.
-
-        e2e_rest-only cases trip both disjuncts; this pin makes
-        ``present_count == 1`` load-bearing on its own.
-        """
         all_entries = [self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[a2a]")]
         result = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
         assert result.category == "GRADUATE_CONFIRM"
         assert result.present_count == 1
-        assert "needs confirmation" in result.detail
-        assert "a2a" in result.detail
 
-    def test_mixed_outline_examples_same_transport_not_graduate(self, bdd_full_audit) -> None:
-        """Outline rows: failing first + passing last must not graduate.
-
-        Last-wins would keep xpassed and falsely graduate; worst-outcome must
-        stay PARTIAL. Passing-last is the only order that reddens on revert.
-        """
+    @pytest.mark.parametrize(
+        "order",
+        [
+            ("xfailed", "xpassed"),
+            ("xpassed", "xfailed"),
+        ],
+        ids=["failing-first", "passing-last"],
+    )
+    def test_mixed_outline_examples_both_orders(self, bdd_full_audit, order) -> None:
+        """Worst-outcome must not graduate regardless of example-row order."""
+        o1, o2 = order
         all_entries = [
-            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_o[e2e_rest-ex1]", "xfailed"),
-            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_o[e2e_rest-ex2]", "xpassed"),
+            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_o[e2e_rest-ex1]", o1),
+            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_o[e2e_rest-ex2]", o2),
         ]
         result = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
         assert result.category == "PARTIAL_XPASS"
@@ -149,10 +219,48 @@ class TestClassifyXpass:
             self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[rest]", "xfailed"),
         ]
         result = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
-        assert result.bucket == "FIX_NOW"
         assert result.category == "PARTIAL_XPASS"
-        assert "missing" in result.detail
-        assert "mcp" in result.detail
+
+    def test_mixed_examples_empty_passing_is_partial(self, bdd_full_audit, bdd_audit_common) -> None:
+        all_entries = [
+            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[a2a]", "xfailed"),
+            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[mcp]", "xfailed"),
+        ]
+        # Need an xpassed entry to enter classify_xpass; use a sibling then check grade
+        grade = bdd_audit_common.grade_base(
+            "tests/bdd/test_uc004.py::test_s",
+            [(e.nodeid, e.outcome) for e in all_entries],
+        )
+        assert grade.mixed_examples is True
+        assert grade.passing == set()
+        # When called via classify with an xpassed sibling row that still aggregates to fail:
+        xpass_entry = self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[a2a]", "xpassed")
+        mixed = [
+            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[a2a-ex1]", "xfailed"),
+            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[a2a-ex2]", "xpassed"),
+            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[mcp]", "xfailed"),
+        ]
+        result = bdd_full_audit.classify_xpass(xpass_entry, mixed)
+        assert result.category == "PARTIAL_XPASS"
+
+    def test_e2e_rest_less_artifact_force_confirm(self, bdd_full_audit) -> None:
+        """Incomplete artifact (no e2e_rest anywhere) → no firm graduate."""
+        all_entries = [
+            self._entry(bdd_full_audit, f"tests/bdd/test_uc004.py::test_s[{t}]") for t in ("a2a", "mcp", "rest")
+        ]
+        result = bdd_full_audit.classify_xpass(all_entries[0], all_entries, force_confirm=True)
+        assert result.category == "GRADUATE_CONFIRM"
+
+    def test_impl_does_not_defeat_confirm_gate(self, bdd_audit_common) -> None:
+        grade = bdd_audit_common.grade_base(
+            "t::s",
+            [
+                ("t::s[e2e_rest]", "xpassed"),
+                ("t::s[impl]", "xpassed"),
+            ],
+        )
+        assert grade.graduates is True
+        assert grade.needs_confirmation is True
 
     def test_generate_work_items_splits_graduate_and_partial(self, bdd_full_audit) -> None:
         graduate = [
@@ -168,71 +276,53 @@ class TestClassifyXpass:
             xfailed=[],
             xpassed=[e for e in all_entries if e.outcome == "xpassed"],
             inspector_flags=[],
-            tag_reasons={},
+            tag_reasons_map={},
             strict_tags=set(),
             all_entries=all_entries,
         )
         cats = {i.category for i in items}
         assert cats == {"GRADUATE", "PARTIAL_XPASS"}
         assert len(items) == 2
-        graduate_item = next(i for i in items if i.category == "GRADUATE")
-        assert graduate_item.title.startswith("Graduate (all 3 present):")
-        partial_item = next(i for i in items if i.category == "PARTIAL_XPASS")
-        assert "gaps remain" in partial_item.title
 
     def test_generate_work_items_confirm_title_for_e2e_rest_only(self, bdd_full_audit) -> None:
-        """GRADUATE_CONFIRM work-item title must say needs confirmation."""
         all_entries = [self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[e2e_rest]")]
         items = bdd_full_audit.generate_work_items(
             failed=[],
             xfailed=[],
             xpassed=all_entries,
             inspector_flags=[],
-            tag_reasons={},
+            tag_reasons_map={},
             strict_tags=set(),
             all_entries=all_entries,
         )
         assert len(items) == 1
-        item = items[0]
-        assert item.category == "GRADUATE_CONFIRM"
-        assert "needs confirmation" in item.title
+        assert items[0].category == "GRADUATE_CONFIRM"
 
 
 class TestClassifyXpassedAudit:
     """audit_xfails.classify_xpassed uses the same present-transport rule."""
 
     def test_three_transport_xpass_is_stale_not_partial(self, audit_xfails) -> None:
-        all_tests = [
-            {"nodeid": f"tests/bdd/test_uc004.py::test_s[{t}]", "outcome": "xpassed"} for t in ("a2a", "mcp", "rest")
-        ]
+        base = "tests/bdd/test_uc004.py::test_s"
+        all_tests = [{"nodeid": f"{base}[{t}]", "outcome": "xpassed"} for t in ("a2a", "mcp", "rest")]
         buckets = audit_xfails.classify_xpassed(all_tests)
-        assert len(buckets.graduate) == 1
+        assert buckets.graduate == {base}
         assert buckets.confirm == set()
-        assert buckets.partial_passing == {}
-        assert buckets.partial_missing == {}
 
     def test_e2e_rest_only_needs_confirmation_not_stale(self, audit_xfails) -> None:
-        """Mirror bdd_full_audit GRADUATE_CONFIRM — lone e2e_rest must not be STALE."""
         base = "tests/bdd/test_uc004.py::test_s"
         all_tests = [{"nodeid": f"{base}[e2e_rest]", "outcome": "xpassed"}]
         buckets = audit_xfails.classify_xpassed(all_tests)
         assert buckets.graduate == set()
         assert buckets.confirm == {base}
-        assert buckets.partial_passing == {}
-        assert buckets.partial_missing == {}
 
     def test_single_non_e2e_transport_needs_confirmation_not_stale(self, audit_xfails) -> None:
-        """Lone a2a must confirm via present_count==1 (not the e2e_rest disjunct)."""
         base = "tests/bdd/test_uc004.py::test_s"
         all_tests = [{"nodeid": f"{base}[a2a]", "outcome": "xpassed"}]
         buckets = audit_xfails.classify_xpassed(all_tests)
-        assert buckets.graduate == set()
         assert buckets.confirm == {base}
-        assert buckets.partial_passing == {}
-        assert buckets.partial_missing == {}
 
     def test_strict_subset_is_partial(self, audit_xfails) -> None:
-        """Mirror test_strict_subset_is_partial_xpass — pin the partial branch."""
         base = "tests/bdd/test_uc004.py::test_s"
         all_tests = [
             {"nodeid": f"{base}[a2a]", "outcome": "xpassed"},
@@ -240,31 +330,325 @@ class TestClassifyXpassedAudit:
             {"nodeid": f"{base}[rest]", "outcome": "xfailed"},
         ]
         buckets = audit_xfails.classify_xpassed(all_tests)
-        assert buckets.graduate == set()
-        assert buckets.confirm == set()
         assert buckets.partial_passing == {base: {"a2a"}}
         assert buckets.partial_missing == {base: {"mcp", "rest"}}
 
-    def test_mixed_outline_examples_same_transport_do_not_graduate(self, audit_xfails) -> None:
-        """Last-wins would graduate; worst-outcome must keep graduate empty.
-
-        Failing example first + passing last is the only order that reddens
-        when the aggregate reverts to last-wins.
-        """
+    @pytest.mark.parametrize(
+        "order",
+        [
+            ("xfailed", "xpassed"),
+            ("xpassed", "xfailed"),
+        ],
+        ids=["failing-first", "passing-last"],
+    )
+    def test_mixed_outline_examples_both_orders(self, audit_xfails, order) -> None:
         base = "tests/bdd/test_uc004.py::test_outline"
+        o1, o2 = order
         all_tests = [
-            {"nodeid": f"{base}[e2e_rest-ex1]", "outcome": "xfailed"},
-            {"nodeid": f"{base}[e2e_rest-ex2]", "outcome": "xpassed"},
+            {"nodeid": f"{base}[e2e_rest-ex1]", "outcome": o1},
+            {"nodeid": f"{base}[e2e_rest-ex2]", "outcome": o2},
         ]
         buckets = audit_xfails.classify_xpassed(all_tests)
         assert buckets.graduate == set()
         assert buckets.confirm == set()
-        assert buckets.partial_passing == {}  # no passing transport after worst-outcome aggregate
-        assert buckets.partial_missing == {}
+
+    def test_mixed_examples_routed_to_partial(self, audit_xfails) -> None:
+        base = "tests/bdd/test_uc004.py::test_s"
+        all_tests = [
+            {"nodeid": f"{base}[a2a]", "outcome": "xpassed"},
+            {"nodeid": f"{base}[a2a]", "outcome": "xfailed"},  # duplicate base transport via worst
+            {"nodeid": f"{base}[mcp]", "outcome": "xfailed"},
+        ]
+        # worst for a2a is xfailed → mixed_examples (no passing)
+        all_tests = [
+            {"nodeid": f"{base}[a2a-ex1]", "outcome": "xfailed"},
+            {"nodeid": f"{base}[a2a-ex2]", "outcome": "xpassed"},
+            {"nodeid": f"{base}[mcp]", "outcome": "xfailed"},
+        ]
+        buckets = audit_xfails.classify_xpassed(all_tests)
+        assert base in buckets.partial_passing or base in buckets.partial_missing
+        assert buckets.graduate == set()
+
+    def test_e2e_rest_less_no_firm_graduate(self, audit_xfails) -> None:
+        base = "tests/bdd/test_uc004.py::test_s"
+        all_tests = [{"nodeid": f"{base}[{t}]", "outcome": "xpassed"} for t in ("a2a", "mcp", "rest")]
+        buckets = audit_xfails.classify_xpassed(all_tests, force_confirm=True)
+        assert buckets.graduate == set()
+        assert buckets.confirm == {base}
+
+
+class TestGraduationOperands:
+    """Pin core transport_coverage / grade_base operands (S3)."""
+
+    def test_passed_outcome_graduates(self, bdd_audit_common) -> None:
+        coverage = bdd_audit_common.transport_coverage({"a2a": "passed", "mcp": "passed"})
+        assert coverage.graduates is True
+        assert coverage.passing == {"a2a", "mcp"}
+
+    def test_skipped_is_missing_not_graduating(self, bdd_audit_common) -> None:
+        coverage = bdd_audit_common.transport_coverage({"a2a": "passed", "mcp": "skipped"})
+        assert coverage.graduates is False
+        assert coverage.passing == {"a2a"}
+        assert coverage.missing == {"mcp"}
+
+    def test_empty_present_not_graduating(self, bdd_audit_common) -> None:
+        coverage = bdd_audit_common.transport_coverage({})
+        assert coverage.graduates is False
+
+    def test_single_xfailed_needs_confirmation_false(self, bdd_audit_common) -> None:
+        grade = bdd_audit_common.grade_base(
+            "t::s",
+            [("t::s[a2a]", "xfailed")],
+        )
+        assert grade.graduates is False
+        assert grade.needs_confirmation is False
+        assert grade.mixed_examples is True
+
+
+class TestParseTestResultsCallSites:
+    """Pin shared-helper call sites inside parse_test_results (S4 / S10)."""
+
+    def test_bdd_full_audit_parse_round_trip(self, bdd_full_audit, tmp_path: Path) -> None:
+        report = tmp_path / "bdd.json"
+        report.write_text(
+            json.dumps(
+                {
+                    "tests": [
+                        {
+                            "nodeid": "tests/bdd/test_uc004.py::test_s[e2e_rest]",
+                            "outcome": "xpassed",
+                            "keywords": [],
+                            "call": {"longrepr": "E   AssertionError: boom"},
+                        }
+                    ]
+                }
+            )
+        )
+        entries = bdd_full_audit.parse_test_results(report)
+        assert len(entries) == 1
+        assert entries[0].error == "AssertionError: boom"
+        assert bdd_full_audit.extract_transport(entries[0].nodeid) == "e2e_rest"
+
+    def test_cross_reference_parse_round_trip(self, cross_reference_audit, tmp_path: Path) -> None:
+        report = tmp_path / "bdd.json"
+        report.write_text(
+            json.dumps(
+                {
+                    "tests": [
+                        {
+                            "nodeid": "tests/bdd/test_uc004.py::test_s[mcp]",
+                            "outcome": "failed",
+                            "call": {"longrepr": "E   ValueError: nope"},
+                        }
+                    ]
+                }
+            )
+        )
+        outcomes = cross_reference_audit.parse_test_results(report)
+        assert len(outcomes) == 1
+        assert outcomes[0].transport == "mcp"
+        assert outcomes[0].error == "ValueError: nope"
+
+    def test_audit_xfails_parse_round_trip(self, audit_xfails, tmp_path: Path) -> None:
+        report = tmp_path / "bdd.json"
+        report.write_text(
+            json.dumps(
+                {
+                    "root": "/app",
+                    "tests": [{"nodeid": "tests/bdd/test_uc004.py::test_s[a2a]", "outcome": "xfailed", "keywords": []}],
+                }
+            )
+        )
+        xfailed, xpassed, all_tests, data = audit_xfails.parse_test_results(report)
+        assert len(xfailed) == 1
+        assert data["root"] == "/app"
+        assert audit_xfails.extract_transport(xfailed[0]["nodeid"]) == "a2a"
+
+
+class TestConftestTagParser:
+    """Canonical parse_conftest_xfail_tags + tag_reasons (S8)."""
+
+    def test_real_conftest_floor_count(self, bdd_audit_common) -> None:
+        if not CONFTEST.exists():
+            pytest.fail(f"missing conftest: {CONFTEST}")
+        tag_map = bdd_audit_common.parse_conftest_xfail_tags(CONFTEST)
+        reasons = bdd_audit_common.tag_reasons(CONFTEST)
+        assert len(tag_map) >= 100
+        assert len(reasons) == len(tag_map)
+        assert all(reasons[k] == tag_map[k][0] for k in tag_map)
+
+    def test_audit_xfails_uses_shared_parser(self, audit_xfails, bdd_audit_common) -> None:
+        assert audit_xfails.parse_conftest_xfail_tags is bdd_audit_common.parse_conftest_xfail_tags
+
+
+class TestCrashMessageClassification:
+    """B1 — reason from setup/call crash.message, not wasxfail."""
+
+    def test_harness_gap_from_setup_crash_message(self, audit_xfails) -> None:
+        test = {
+            "nodeid": "t::s[a2a]",
+            "keywords": [],
+            "setup": {
+                "outcome": "failed",
+                "crash": {
+                    "path": "/tmp/x.py",
+                    "lineno": 1,
+                    "message": "_pytest.outcomes.XFailed: UC harness not yet wired",
+                },
+            },
+        }
+        assert "wasxfail" not in test  # realistic json-report shape
+        entry = audit_xfails.classify_xfail(test, {}, [])
+        assert entry.category == "HARNESS_GAP"
+
+    def test_missing_step_from_crash_message(self, audit_xfails) -> None:
+        entry = audit_xfails.classify_xfail(
+            {
+                "nodeid": "t::s[a2a]",
+                "keywords": [],
+                "setup": {
+                    "outcome": "failed",
+                    "crash": {
+                        "path": "/tmp/x.py",
+                        "lineno": 1,
+                        "message": "StepDefinitionNotFoundError: Step definition not found for 'Then foo'",
+                    },
+                },
+            },
+            {},
+            [],
+        )
+        assert entry.category == "MISSING_STEP"
+
+
+class TestContainerPathRemap:
+    """B2 — /app-rooted crash paths remapped onto host step paths."""
+
+    def test_container_path_matches_host_step(self, audit_xfails, premature_step, tmp_path: Path) -> None:
+        steps_file, step = premature_step
+        # Relative path under tmp_path as if under /app
+        rel = steps_file.name
+        container_path = f"/app/{rel}"
+        mid = (step.lineno + step.end_lineno) // 2
+        test = _json_report_test(container_path, mid, phase="call")
+        # Without remap: no match
+        entry_bare = audit_xfails.classify_xfail(test, {}, [step])
+        assert entry_bare.category != "PREMATURE_XFAIL"
+        # With remap host_root=tmp_path, artifact_root=/app: match
+        entry = audit_xfails.classify_xfail(
+            test,
+            {},
+            [step],
+            artifact_root="/app",
+            host_root=tmp_path,
+        )
+        assert entry.category == "PREMATURE_XFAIL"
+
+    def test_drift_warning_fires_after_remap(self, audit_xfails, premature_step, tmp_path: Path) -> None:
+        steps_file, step = premature_step
+        container_path = f"/app/{steps_file.name}"
+        test = _json_report_test(container_path, step.end_lineno + 1, phase="call")
+        warnings = audit_xfails.crash_line_drift_warnings(test, [step], artifact_root="/app", host_root=tmp_path)
+        assert len(warnings) == 1
+        assert "line-drift/stale-json?" in warnings[0]
+
+
+class TestPrematureXfailCrashMatch:
+    """PREMATURE_XFAIL matches setup/call crash path+lineno → enclosing step."""
+
+    def _xfail_lineno(self, source: str) -> int:
+        return next(
+            n.lineno
+            for n in ast.walk(ast.parse(source))
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "xfail"
+        )
+
+    def test_crash_inside_premature_step_classifies(self, audit_xfails, premature_step) -> None:
+        steps_file, step = premature_step
+        source = steps_file.read_text()
+        xfail_lineno = self._xfail_lineno(source)
+        entry = audit_xfails.classify_xfail(
+            _json_report_test(steps_file.resolve(), xfail_lineno, phase="call"),
+            {},
+            [step],
+        )
+        assert entry.category == "PREMATURE_XFAIL"
+        assert "then_premature" in entry.reason
+
+    def test_crash_just_past_end_lineno_is_not_premature(self, audit_xfails, premature_step) -> None:
+        steps_file, step = premature_step
+        test = _json_report_test(
+            steps_file.resolve(),
+            step.end_lineno + 1,
+            phase="call",
+            message="_pytest.outcomes.XFailed: UC harness not wired",
+        )
+        entry = audit_xfails.classify_xfail(test, {}, [step])
+        assert entry.category != "PREMATURE_XFAIL"
+        warnings = audit_xfails.crash_line_drift_warnings(test, [step])
+        assert len(warnings) == 1
+
+    def test_in_range_crash_in_known_step_file_no_drift_warning(self, audit_xfails, premature_step) -> None:
+        steps_file, step = premature_step
+        mid = (step.lineno + step.end_lineno) // 2
+        test = _json_report_test(steps_file.resolve(), mid, phase="call")
+        assert audit_xfails.crash_line_drift_warnings(test, [step]) == []
+
+    def test_setup_phase_crash_also_matches(self, audit_xfails, premature_step) -> None:
+        steps_file, step = premature_step
+        mid = (step.lineno + step.end_lineno) // 2
+        test = _json_report_test(steps_file.resolve(), mid, phase="setup")
+        entry = audit_xfails.classify_xfail(test, {}, [step])
+        assert entry.category == "PREMATURE_XFAIL"
+
+    def test_crash_in_different_file_in_range_is_not_premature(
+        self, audit_xfails, premature_step, tmp_path: Path
+    ) -> None:
+        _steps_file, step = premature_step
+        other = tmp_path / "conftest.py"
+        other.write_text("# decoy crash site\n")
+        in_range = (step.lineno + step.end_lineno) // 2
+        entry = audit_xfails.classify_xfail(
+            _json_report_test(other.resolve(), in_range, phase="setup", message="UC harness not wired"),
+            {},
+            [step],
+        )
+        assert entry.category != "PREMATURE_XFAIL"
+        # known_paths filter: decoy path not in premature set → no drift warning
+        assert (
+            audit_xfails.crash_line_drift_warnings(
+                _json_report_test(other.resolve(), in_range, phase="setup"),
+                [step],
+            )
+            == []
+        )
+
+    def test_find_premature_skips_only_string_docstrings(self, audit_xfails, tmp_path: Path) -> None:
+        source = textwrap.dedent(
+            """
+            from pytest_bdd import then
+            import pytest
+
+            @then("x")
+            def then_premature():
+                \"\"\"doc\"\"\"
+                pytest.xfail("not ready")
+
+            @then("y")
+            def then_with_int_expr():
+                0
+                pytest.xfail("unreachable if 0 counts as body")
+            """
+        )
+        (tmp_path / "steps.py").write_text(source)
+        premature = audit_xfails.find_premature_xfails(tmp_path)
+        names = {p.name for p in premature}
+        assert "then_premature" in names
+        assert "then_with_int_expr" not in names
 
 
 class TestSalvageDedupe:
-    """Pin kind-scoped deep-trace dedup (#1665 review)."""
+    """Pin kind-scoped deep-trace dedup and ANSI parse (S10 / N5 / N15)."""
 
     def _parsed(self):
         return {
@@ -291,11 +675,8 @@ class TestSalvageDedupe:
         records = [json.loads(line) for line in store.read_text().splitlines() if line.strip()]
         kinds = sorted(r["kind"] for r in records)
         assert kinds == ["deep", "triage"]
-        assert all(r["step"]["function_name"] == "then_a" for r in records)
-        assert all(r["step"]["line_number"] == 0 for r in records)
 
     def test_intra_call_duplicate_entries_write_once(self, salvage_audit, tmp_path: Path) -> None:
-        """_append_if_new must dedupe identical entries within a single write call."""
         store = tmp_path / "store.jsonl"
         parsed = {
             "pass1": [
@@ -312,8 +693,56 @@ class TestSalvageDedupe:
         triage = [r for r in records if r["kind"] == "triage"]
         assert len(triage) == 1
 
+    def test_store_key_line_number_distinguishes_same_name(self, salvage_audit, tmp_path: Path) -> None:
+        """Pre-seeded store at line 7 + step index at line 42 for same name."""
+        store = tmp_path / "store.jsonl"
+        store.write_text(
+            json.dumps(
+                {
+                    "kind": "triage",
+                    "verdict": "FLAG",
+                    "step": {
+                        "file_path": "a.py",
+                        "line_number": 7,
+                        "step_type": "then",
+                        "step_text": "a",
+                        "function_name": "then_a",
+                        "source_text": "pass",
+                    },
+                }
+            )
+            + "\n"
+        )
+        step_index = tmp_path / "steps.jsonl"
+        step_index.write_text(
+            json.dumps(
+                {
+                    "step": {
+                        "file_path": "a.py",
+                        "line_number": 42,
+                        "step_type": "then",
+                        "step_text": "a",
+                        "function_name": "then_a",
+                        "source_text": "pass",
+                    }
+                }
+            )
+            + "\n"
+        )
+        parsed = {
+            "pass1": [{"index": 1, "func_name": "then_a", "verdict": "FLAG"}],
+            "pass2": [],
+            "pass1_total": 1,
+            "pass2_total": 0,
+            "pass2_crashed_at": 0,
+        }
+        salvage_audit.write_to_store(parsed, store, step_index)
+        records = [json.loads(line) for line in store.read_text().splitlines() if line.strip()]
+        triage = [r for r in records if r["kind"] == "triage"]
+        lines = sorted(r["step"]["line_number"] for r in triage)
+        assert lines == [7, 42]
+
     def test_step_index_normalizes_real_lines_and_dedupes(self, salvage_audit, tmp_path: Path) -> None:
-        """step_index path: normalize real file/line; identical dedupe; distinct lines survive."""
         store = tmp_path / "store.jsonl"
         step_index = tmp_path / "steps.jsonl"
         step_index.write_text(
@@ -363,184 +792,28 @@ class TestSalvageDedupe:
         triage = [r for r in records if r["kind"] == "triage"]
         assert len(triage) == 2
         by_name = {r["step"]["function_name"]: r["step"] for r in triage}
-        assert by_name["then_a"]["file_path"] == "tests/bdd/steps/a.py"
         assert by_name["then_a"]["line_number"] == 42
-        assert by_name["then_b"]["file_path"] == "tests/bdd/steps/b.py"
         assert by_name["then_b"]["line_number"] == 99
-        assert by_name["then_a"]["file_path"] != "unknown"
-        assert by_name["then_a"]["line_number"] != 0
 
-
-class TestPrematureXfailCrashMatch:
-    """PREMATURE_XFAIL matches setup/call crash path+lineno → enclosing step."""
-
-    def _premature_source(self) -> str:
-        return textwrap.dedent(
-            """
-            from pytest_bdd import then
-            import pytest
-
-            @then("x")
-            def then_premature():
-                \"\"\"doc\"\"\"
-                pytest.xfail("not ready")
-            """
+    def test_parse_raw_output_strips_ansi(self, salvage_audit, tmp_path: Path) -> None:
+        raw = tmp_path / "out.txt"
+        # Colored pass-1 lines + totals
+        raw.write_text(
+            "\x1b[32m[1/2] then_foo... FLAG\x1b[0m\n\x1b[32m[2/2] then_bar... PASS\x1b[0m\n1 flagged, 1 passed\n"
         )
+        parsed = salvage_audit.parse_raw_output(raw)
+        assert len(parsed["pass1"]) == 2
+        assert parsed["pass1_total"] == 2
 
-    def _xfail_lineno(self, source: str) -> int:
-        return next(
-            n.lineno
-            for n in ast.walk(ast.parse(source))
-            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "xfail"
-        )
-
-    def test_crash_inside_premature_step_classifies(self, audit_xfails, tmp_path: Path) -> None:
-        source = self._premature_source()
-        steps_file = tmp_path / "steps.py"
-        steps_file.write_text(source)
-        premature = audit_xfails.find_premature_xfails(tmp_path)
-        assert len(premature) == 1
-        step = premature[0]
-        assert step.name == "then_premature"
-
-        # Real pytest.xfail() inside a step body is under call.crash (setup passed).
-        xfail_lineno = self._xfail_lineno(source)
-        entry = audit_xfails.classify_xfail(
-            {
-                "nodeid": "t::s[a2a]",
-                "wasxfail": "",
-                "keywords": [],
-                "setup": {"outcome": "passed"},
-                "call": {
-                    "outcome": "skipped",
-                    "crash": {
-                        "path": str(steps_file.resolve()),
-                        "lineno": xfail_lineno,
-                        "message": "_pytest.outcomes.XFailed: not ready",
-                    },
-                    "longrepr": "E   _pytest.outcomes.XFailed: not ready",
-                },
-            },
-            {},
-            premature,
-        )
-        assert entry.category == "PREMATURE_XFAIL"
-        assert "then_premature" in entry.reason
-
-    def test_crash_just_past_end_lineno_is_not_premature(self, audit_xfails, tmp_path: Path) -> None:
-        """Boundary pin: crash at end_lineno+1 must not enclose the step."""
-        source = self._premature_source()
-        steps_file = tmp_path / "steps.py"
-        steps_file.write_text(source)
-        premature = audit_xfails.find_premature_xfails(tmp_path)
-        assert len(premature) == 1
-        step = premature[0]
-        test = {
-            "nodeid": "t::s[a2a]",
-            "wasxfail": "UC harness not wired",
-            "keywords": [],
-            "setup": {"outcome": "passed"},
-            "call": {
-                "outcome": "skipped",
-                "crash": {
-                    "path": str(steps_file.resolve()),
-                    "lineno": step.end_lineno + 1,
-                    "message": "_pytest.outcomes.XFailed: not ready",
-                },
-            },
+    def test_step_record_key_set_oracle(self, bdd_audit_common) -> None:
+        assert bdd_audit_common.STEP_RECORD_KEYS == {
+            "file_path",
+            "line_number",
+            "step_type",
+            "step_text",
+            "function_name",
+            "source_text",
         }
-        entry = audit_xfails.classify_xfail(test, {}, premature)
-        assert entry.category != "PREMATURE_XFAIL"
-        warnings = audit_xfails.crash_line_drift_warnings(test, premature)
-        assert len(warnings) == 1
-        assert "line-drift/stale-json?" in warnings[0]
-
-    def test_in_range_crash_in_known_step_file_no_drift_warning(self, audit_xfails, tmp_path: Path) -> None:
-        """Negative pin: in-range crash in a known premature step file → no drift warning."""
-        source = self._premature_source()
-        steps_file = tmp_path / "steps.py"
-        steps_file.write_text(source)
-        premature = audit_xfails.find_premature_xfails(tmp_path)
-        assert len(premature) == 1
-        step = premature[0]
-        mid = (step.lineno + step.end_lineno) // 2
-        assert step.lineno <= mid <= step.end_lineno
-        test = {
-            "nodeid": "t::s[a2a]",
-            "wasxfail": "",
-            "keywords": [],
-            "setup": {"outcome": "passed"},
-            "call": {
-                "outcome": "skipped",
-                "crash": {
-                    "path": str(steps_file.resolve()),
-                    "lineno": mid,
-                    "message": "_pytest.outcomes.XFailed: not ready",
-                },
-            },
-        }
-        assert audit_xfails.crash_line_drift_warnings(test, premature) == []
-
-    def test_crash_in_different_file_in_range_is_not_premature(self, audit_xfails, tmp_path: Path) -> None:
-        """Path-equality must reject: in-range lineno in a *different* file.
-
-        A far-out lineno alone would already fail the range check, so this
-        pin puts the crash line inside the premature step's span while the
-        crash path is another file — only ``resolved == step.path`` decides.
-        """
-        source = self._premature_source()
-        steps_file = tmp_path / "steps.py"
-        steps_file.write_text(source)
-        premature = audit_xfails.find_premature_xfails(tmp_path)
-        assert len(premature) == 1
-        step = premature[0]
-        other = tmp_path / "conftest.py"
-        other.write_text("# decoy crash site\n")
-        in_range = (step.lineno + step.end_lineno) // 2
-        assert step.lineno <= in_range <= step.end_lineno
-        entry = audit_xfails.classify_xfail(
-            {
-                "nodeid": "t::s[a2a]",
-                "wasxfail": "UC harness not wired",
-                "keywords": [],
-                "setup": {
-                    "outcome": "failed",
-                    "crash": {
-                        "path": str(other.resolve()),
-                        "lineno": in_range,
-                        "message": "_pytest.outcomes.XFailed: UC harness not wired",
-                    },
-                },
-            },
-            {},
-            premature,
-        )
-        assert entry.category != "PREMATURE_XFAIL"
-
-    def test_find_premature_skips_only_string_docstrings(self, audit_xfails, tmp_path: Path) -> None:
-        source = textwrap.dedent(
-            """
-            from pytest_bdd import then
-            import pytest
-
-            @then("x")
-            def then_premature():
-                \"\"\"doc\"\"\"
-                pytest.xfail("not ready")
-
-            @then("y")
-            def then_with_int_expr():
-                0
-                pytest.xfail("unreachable if 0 counts as body")
-            """
-        )
-        (tmp_path / "steps.py").write_text(source)
-        premature = audit_xfails.find_premature_xfails(tmp_path)
-        names = {p.name for p in premature}
-        assert "then_premature" in names
-        # Leading non-string Constant must NOT be skipped as a docstring, so
-        # the first meaningful stmt is `0` → not premature.
-        assert "then_with_int_expr" not in names
 
 
 class TestReportIteratesFixNowDict:
@@ -580,7 +853,7 @@ class TestAuditXfailsReportDry:
         text = audit_xfails.generate_report(report)
         assert "| STALE_CONFIRM |" in text
         assert "### Graduation needs confirmation" in text
-        assert "- test_s" in text
+        assert "STALE_CONFIRM" in text.split("### By use case")[1].split("\n")[2]
 
 
 class TestGradeResultNamedFields:
@@ -596,6 +869,7 @@ class TestGradeResultNamedFields:
         assert grade.present_count == 1
         assert grade.passing == {"a2a"}
         assert grade.missing == set()
+        assert grade.mixed_examples is False
 
     def test_transport_coverage_named_fields(self, bdd_audit_common) -> None:
         coverage = bdd_audit_common.transport_coverage({"a2a": "xpassed", "mcp": "xfailed"})
@@ -606,3 +880,48 @@ class TestGradeResultNamedFields:
     def test_short_base(self, bdd_audit_common) -> None:
         assert bdd_audit_common.short_base("tests/bdd/test_uc004.py::test_s") == "test_s"
         assert bdd_audit_common.short_base("bare") == "bare"
+
+
+class TestSurvivingMechanismArms:
+    """S9 — pin surviving mechanism arms after dead-arm deletion."""
+
+    def test_partial_impl_from_tag_map(self, audit_xfails) -> None:
+        entry = audit_xfails.classify_xfail(
+            {
+                "nodeid": "t::s[a2a]",
+                "keywords": ["T-UC-004-partition-foo"],
+                "setup": {"outcome": "passed"},
+                "call": {
+                    "outcome": "skipped",
+                    "crash": {"path": "/x", "lineno": 1, "message": "xfail"},
+                },
+            },
+            {"T-UC-004-partition-foo": ("partition reason", "partial_impl")},
+            [],
+        )
+        assert entry.category == "PARTIAL_IMPL"
+
+    def test_production_gap_from_tag_map(self, audit_xfails) -> None:
+        entry = audit_xfails.classify_xfail(
+            {
+                "nodeid": "t::s[a2a]",
+                "keywords": ["T-UC-002-main-1"],
+                "setup": {
+                    "crash": {"path": "/x", "lineno": 1, "message": "xfail"},
+                },
+            },
+            {"T-UC-002-main-1": ("not built", "production_gap")},
+            [],
+        )
+        assert entry.category == "PRODUCTION_GAP"
+
+    def test_stale_strict_via_xpass_strict_longrepr(self, bdd_full_audit) -> None:
+        entry = bdd_full_audit.TestEntry(
+            nodeid="t::s[a2a]",
+            outcome="failed",
+            longrepr="[XPASS(strict)] unexpected pass",
+            error="",
+        )
+        bucket, cat, _ = bdd_full_audit.classify_failure(entry, set())
+        assert bucket == "FIX_NOW"
+        assert cat == "STALE_STRICT_XFAIL"

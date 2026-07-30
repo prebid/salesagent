@@ -18,7 +18,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import ast
 import json
 import sys
 from collections import defaultdict
@@ -34,8 +33,6 @@ from bdd_audit_common import (  # noqa: E402
     extract_transport,
     extract_uc,
 )
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 @dataclass
@@ -58,7 +55,7 @@ class TestOutcome:
 
 def parse_inspector_json(path: Path) -> list[InspectorFlag]:
     """Parse inspector JSON output."""
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     flags = []
     for entry in data:
         flags.append(
@@ -76,7 +73,7 @@ def parse_inspector_json(path: Path) -> list[InspectorFlag]:
 
 def parse_test_results(path: Path) -> list[TestOutcome]:
     """Parse bdd.json test results."""
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     outcomes = []
     for t in data["tests"]:
         nodeid = t["nodeid"]
@@ -96,73 +93,6 @@ def parse_test_results(path: Path) -> list[TestOutcome]:
     return outcomes
 
 
-def map_steps_to_functions(steps_dir: Path) -> dict[str, list[str]]:
-    """Map step function names to the Gherkin patterns they handle.
-
-    Returns dict: function_name -> list of step text patterns.
-    """
-    func_to_patterns: dict[str, list[str]] = defaultdict(list)
-
-    for py_file in steps_dir.rglob("*.py"):
-        try:
-            tree = ast.parse(py_file.read_text())
-        except SyntaxError:
-            continue
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef):
-                for decorator in node.decorator_list:
-                    # Match @given("..."), @when("..."), @then("...")
-                    if isinstance(decorator, ast.Call) and decorator.args:
-                        arg = decorator.args[0]
-                        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                            func_to_patterns[node.name].append(arg.value)
-    return func_to_patterns
-
-
-def find_tests_using_step(
-    step_function: str,
-    step_patterns: list[str],
-    test_outcomes: list[TestOutcome],
-) -> list[TestOutcome]:
-    """Find tests that likely use a given step function.
-
-    Heuristic: match on function name components or step text keywords.
-    """
-    # Extract keywords from function name (e.g., "then_budget_validated" -> ["budget", "validated"])
-    func_keywords = set(step_function.replace("then_", "").replace("given_", "").replace("when_", "").split("_"))
-    # Remove very common words
-    func_keywords -= {
-        "the",
-        "is",
-        "a",
-        "an",
-        "and",
-        "or",
-        "not",
-        "should",
-        "be",
-        "has",
-        "have",
-        "with",
-        "for",
-        "in",
-        "of",
-        "to",
-    }
-
-    # Extract UC from file path
-    matching = []
-    for outcome in test_outcomes:
-        nodeid_lower = outcome.nodeid.lower()
-        # Check if multiple keywords from function name appear in test nodeid
-        matches = sum(1 for kw in func_keywords if kw in nodeid_lower)
-        if matches >= 2 or (matches >= 1 and len(func_keywords) <= 2):
-            matching.append(outcome)
-
-    return matching
-
-
 def generate_report(
     flags: list[InspectorFlag],
     outcomes: list[TestOutcome],
@@ -174,7 +104,7 @@ def generate_report(
     lines.append("")
 
     # Summary
-    outcome_counts = defaultdict(int)
+    outcome_counts: dict[str, int] = defaultdict(int)
     for o in outcomes:
         outcome_counts[o.outcome] += 1
 
@@ -182,7 +112,9 @@ def generate_report(
     lines.append("")
     lines.append(f"- **Inspector flags**: {len(flags)} step functions flagged")
     lines.append(
-        f"- **Test results**: {len(outcomes)} tests ({outcome_counts['passed']} passed, {outcome_counts['failed']} failed, {outcome_counts['xfailed']} xfailed, {outcome_counts['xpassed']} xpassed)"
+        f"- **Test results**: {len(outcomes)} tests ({outcome_counts['passed']} passed, "
+        f"{outcome_counts['failed']} failed, {outcome_counts['xfailed']} xfailed, "
+        f"{outcome_counts['xpassed']} xpassed)"
     )
     lines.append("")
 
@@ -279,7 +211,10 @@ def main():
 
     print("Parsing test results...", file=sys.stderr)
     outcomes = parse_test_results(Path(args.results))
-    print(f"  {len(outcomes)} tests", file=sys.stderr)
+    print(f"  Parsed {len(outcomes)} tests", file=sys.stderr)
+    if not outcomes:
+        print('ERROR: artifact contains 0 tests — refusing empty {"tests": []}.', file=sys.stderr)
+        raise SystemExit(2)
 
     print("Generating cross-reference...", file=sys.stderr)
     report = generate_report(flags, outcomes, Path(args.output))

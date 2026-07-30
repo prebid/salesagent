@@ -14,9 +14,16 @@ import argparse
 import ast
 import os
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from bdd_audit_common import StepRecord  # noqa: E402
 
 STEP_DECORATOR_NAMES = {"given", "when", "then"}
 
@@ -25,7 +32,10 @@ STEP_DECORATOR_NAMES = {"given", "when", "then"}
 
 @dataclass
 class BddStepInfo:
-    """Metadata for a single BDD step function."""
+    """Metadata for a single BDD step function.
+
+    Field set matches ``bdd_audit_common.StepRecord`` (JSONL store shape).
+    """
 
     file_path: str
     line_number: int
@@ -33,6 +43,29 @@ class BddStepInfo:
     step_text: str
     function_name: str
     source_text: str
+
+    def to_record(self) -> StepRecord:
+        """Serialize to the canonical six-key StepRecord TypedDict."""
+        return {
+            "file_path": self.file_path,
+            "line_number": self.line_number,
+            "step_type": self.step_type,
+            "step_text": self.step_text,
+            "function_name": self.function_name,
+            "source_text": self.source_text,
+        }
+
+    @classmethod
+    def from_record(cls, record: StepRecord) -> BddStepInfo:
+        """Build from a StepRecord (e.g. JSONL store entry)."""
+        return cls(
+            file_path=record["file_path"],
+            line_number=record["line_number"],
+            step_type=record["step_type"],
+            step_text=record["step_text"],
+            function_name=record["function_name"],
+            source_text=record["source_text"],
+        )
 
 
 @dataclass
@@ -73,6 +106,7 @@ def _extract_step_text(decorator: ast.Call) -> str | None:
             and arg.func.attr == "parse"
             and arg.args
             and isinstance(arg.args[0], ast.Constant)
+            and isinstance(arg.args[0].value, str)
         ):
             return arg.args[0].value
     # Form C: @then(parsers.re(r"regex pattern"))
@@ -82,6 +116,7 @@ def _extract_step_text(decorator: ast.Call) -> str | None:
             and arg.func.attr == "re"
             and arg.args
             and isinstance(arg.args[0], ast.Constant)
+            and isinstance(arg.args[0].value, str)
         ):
             return arg.args[0].value
     return None
@@ -173,7 +208,7 @@ def _format_steps_for_triage(steps: list[BddStepInfo]) -> str:
     return "\n".join(parts)
 
 
-def _run_claude(prompt: str, model: str = "sonnet") -> str:
+def _run_claude(prompt: str, model: str = "sonnet", timeout: int = 120) -> str:
     """Run claude -p and return the text output."""
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
     result = subprocess.run(
@@ -181,12 +216,17 @@ def _run_claude(prompt: str, model: str = "sonnet") -> str:
         capture_output=True,
         text=True,
         env=env,
-        timeout=120,
+        timeout=timeout,
     )
     return result.stdout.strip()
 
 
-def run_pass1_triage(steps: list[BddStepInfo], batch_size: int = 10) -> list[TriageResult]:
+def run_pass1_triage(
+    steps: list[BddStepInfo],
+    batch_size: int = 10,
+    *,
+    timeout: int = 120,
+) -> list[TriageResult]:
     """Run Pass 1 triage on steps, batched for efficiency."""
     results: list[TriageResult] = []
 
@@ -194,7 +234,7 @@ def run_pass1_triage(steps: list[BddStepInfo], batch_size: int = 10) -> list[Tri
         batch = steps[batch_start : batch_start + batch_size]
         prompt = TRIAGE_PROMPT_TEMPLATE.format(steps_block=_format_steps_for_triage(batch))
 
-        output = _run_claude(prompt, model="sonnet")
+        output = _run_claude(prompt, model="sonnet", timeout=timeout)
 
         # Parse responses
         for line in output.splitlines():
@@ -312,6 +352,8 @@ def _collect_context_for_step(step: BddStepInfo) -> str:
 
 def run_pass2_deep_trace(
     flagged: list[TriageResult],
+    *,
+    timeout: int = 120,
 ) -> list[DeepTraceResult]:
     """Run Pass 2 deep trace on flagged steps with Opus."""
     results: list[DeepTraceResult] = []
@@ -330,7 +372,7 @@ def run_pass2_deep_trace(
             context=context,
         )
 
-        output = _run_claude(prompt, model="opus")
+        output = _run_claude(prompt, model="opus", timeout=timeout)
 
         # Parse structured response
         claims = ""
@@ -393,8 +435,8 @@ def generate_report(
     if deep_results:
         # Group by severity
         by_severity: dict[str, list[DeepTraceResult]] = {}
-        for r in deep_results:
-            by_severity.setdefault(r.severity, []).append(r)
+        for deep in deep_results:
+            by_severity.setdefault(deep.severity, []).append(deep)
 
         lines.append("## Issues by Severity")
         lines.append("")
@@ -405,24 +447,24 @@ def generate_report(
                 continue
             lines.append(f"### {severity} ({len(items)})")
             lines.append("")
-            for r in items:
-                rel_path = r.step.file_path
+            for deep in items:
+                rel_path = deep.step.file_path
                 # Try to make path relative
                 try:
-                    rel_path = str(Path(r.step.file_path).relative_to(Path.cwd()))
+                    rel_path = str(Path(deep.step.file_path).relative_to(Path.cwd()))
                 except ValueError:
                     pass
                 lines.extend(
                     [
-                        f"#### `{r.step.function_name}` ({rel_path}:{r.step.line_number})",
+                        f"#### `{deep.step.function_name}` ({rel_path}:{deep.step.line_number})",
                         "",
-                        f'**Step text**: "{r.step.step_text}"',
+                        f'**Step text**: "{deep.step.step_text}"',
                         "",
-                        f"**Claims**: {r.claims}",
+                        f"**Claims**: {deep.claims}",
                         "",
-                        f"**Actually tests**: {r.actually_tests}",
+                        f"**Actually tests**: {deep.actually_tests}",
                         "",
-                        f"**Recommendation**: {r.recommendation}",
+                        f"**Recommendation**: {deep.recommendation}",
                         "",
                     ]
                 )
@@ -432,9 +474,11 @@ def generate_report(
         lines.append("")
         lines.append("| # | Function | Step Text | Reason |")
         lines.append("|---|----------|-----------|--------|")
-        for i, r in enumerate(flagged, 1):
-            step_text_short = r.step.step_text[:60] + "..." if len(r.step.step_text) > 60 else r.step.step_text
-            lines.append(f"| {i} | `{r.step.function_name}` | {step_text_short} | {r.reason} |")
+        for i, triage in enumerate(flagged, 1):
+            step_text_short = (
+                triage.step.step_text[:60] + "..." if len(triage.step.step_text) > 60 else triage.step.step_text
+            )
+            lines.append(f"| {i} | `{triage.step.function_name}` | {step_text_short} | {triage.reason} |")
         lines.append("")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -470,6 +514,18 @@ def main() -> None:
         default=True,
         help="Only inspect Then steps (default: true)",
     )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=120,
+        help="Per-claude-call timeout in seconds (default: 120; parallel slices use 600)",
+    )
+    parser.add_argument(
+        "--features-dir",
+        type=Path,
+        default=None,
+        help="Unused (kept for inspect_parallel.sh CLI compatibility)",
+    )
     args = parser.parse_args()
 
     # Determine output path
@@ -490,7 +546,7 @@ def main() -> None:
 
     # Pass 1: Triage
     print("\n=== Pass 1: Triage (Sonnet) ===")
-    triage_results = run_pass1_triage(target_steps)
+    triage_results = run_pass1_triage(target_steps, timeout=args.timeout)
     flagged = [r for r in triage_results if r.verdict == "FLAG"]
     print(f"  {len(flagged)} flagged, {len(triage_results) - len(flagged)} passed")
 
@@ -498,7 +554,7 @@ def main() -> None:
     deep_results: list[DeepTraceResult] = []
     if not args.pass1_only and flagged:
         print(f"\n=== Pass 2: Deep Trace (Opus) — {len(flagged)} functions ===")
-        deep_results = run_pass2_deep_trace(flagged)
+        deep_results = run_pass2_deep_trace(flagged, timeout=args.timeout)
         for r in deep_results:
             print(f"  [{r.severity}] {r.step.function_name}: {r.recommendation[:80]}")
 

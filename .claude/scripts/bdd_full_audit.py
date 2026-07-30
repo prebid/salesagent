@@ -30,18 +30,22 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from bdd_audit_common import (  # noqa: E402
+    artifact_transport_census,
     extract_longrepr_e_line,
     extract_scenario_base,
     extract_transport,
     extract_uc,
     grade_base,
+    load_e2e_rest_known_failure_bases,
     short_base,
+    tag_reasons,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 INSPECTOR_DIR = PROJECT_ROOT / ".claude" / "reports" / "inspect-all-steps"
 CONFTEST_PATH = PROJECT_ROOT / "tests" / "bdd" / "conftest.py"
 STEPS_DIR = PROJECT_ROOT / "tests" / "bdd" / "steps"
+E2E_LEDGER_PATH = PROJECT_ROOT / "tests" / "bdd" / "e2e_rest_known_failures.txt"
 
 
 # ── Category taxonomy ────────────────────────────────────────────────
@@ -74,7 +78,6 @@ FIX_NOW = {
 XFAIL_IT = {
     "PROD_BEHAVIOR": "Production behavior differs from spec — xfail with reason",
     "PROD_BUG": "Production code crashes/errors — xfail with reason",
-    "TRANSPORT_GAP": "Works on some transports, not all — xfail per-transport",
     "NOT_IMPLEMENTED": "Feature specified in Gherkin, not built yet — already xfailed",
     "PARTIAL_IMPL": "Some partition values work, others don't — already xfailed",
 }
@@ -130,12 +133,12 @@ def parse_test_results(json_path: Path) -> list[TestEntry]:
 
 def parse_inspector_reports() -> list[InspectorFlag]:
     """Parse all inspector markdown reports for flagged steps."""
-    flags = []
+    flags: list[InspectorFlag] = []
     if not INSPECTOR_DIR.exists():
         return flags
 
     for md_file in INSPECTOR_DIR.glob("*.md"):
-        content = md_file.read_text()
+        content = md_file.read_text(encoding="utf-8", errors="replace")
         # Parse table rows: | # | `func_name` | step text | reason |
         for m in re.finditer(
             r"\|\s*\d+\s*\|\s*`(\w+)`\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|",
@@ -158,32 +161,26 @@ def parse_inspector_reports() -> list[InspectorFlag]:
     return flags
 
 
-def parse_conftest_xfail_tags() -> dict[str, str]:
-    """Parse conftest.py for tag → reason mappings."""
-    tag_reasons: dict[str, str] = {}
-    if not CONFTEST_PATH.exists():
-        return tag_reasons
-
-    content = CONFTEST_PATH.read_text()
-    # Match patterns like "T-UC-004-xxx": "reason string"
-    # or "T-UC-004-xxx": {"reason": "...", "strict": True}
-    for m in re.finditer(
-        r'"(T-[^"]+)"\s*:\s*(?:"([^"]+)"|{[^}]*"reason"\s*:\s*"([^"]+)")',
-        content,
-    ):
-        tag = m.group(1)
-        reason = m.group(2) or m.group(3) or ""
-        tag_reasons[tag] = reason
-    return tag_reasons
+def parse_conftest_xfail_tags(conftest_path: Path | None = None) -> dict[str, str]:
+    """Parse conftest.py for tag → reason mappings (shared projection)."""
+    path = conftest_path or CONFTEST_PATH
+    if not path.exists():
+        return {}
+    return tag_reasons(path)
 
 
 def parse_conftest_strict_tags() -> set[str]:
-    """Parse conftest.py for tags with strict=True."""
+    """Parse conftest.py for tags with strict=True in nested-dict form.
+
+    Note: most live ``strict=True`` markers are pytest.mark kwargs, not this
+    dict form — the reachable STALE_STRICT_XFAIL arm keys on ``XPASS(strict)``
+    in longrepr instead.
+    """
     strict_tags: set[str] = set()
     if not CONFTEST_PATH.exists():
         return strict_tags
 
-    content = CONFTEST_PATH.read_text()
+    content = CONFTEST_PATH.read_text(encoding="utf-8", errors="replace")
     for m in re.finditer(
         r'"(T-[^"]+)"\s*:\s*\{[^}]*"strict"\s*:\s*True',
         content,
@@ -205,21 +202,21 @@ def parse_conftest_strict_tags() -> set[str]:
 #   6. Step code wrong? → FIX_NOW:STEP_BUG
 
 
-def classify_failure(entry: TestEntry, strict_tags: set[str]) -> tuple[str, str, str]:
+def classify_failure(entry: TestEntry, _strict_tags: set[str]) -> tuple[str, str, str]:
     """Classify a failed test. Returns (bucket, category, detail).
 
     bucket: FIX_NOW | XFAIL_IT | FEATURE_FIX
+
+    ``_strict_tags`` retained for call-site compatibility; the reachable
+    STALE_STRICT_XFAIL arm keys on ``XPASS(strict)`` in longrepr (the
+    nested-dict conftest form yields 0 tags against the live file).
     """
     error = entry.error
     longrepr = entry.longrepr
 
-    # ── FIX_NOW: stale strict xfail ──────────────────────────────────
+    # ── FIX_NOW: stale strict xfail (reachable via XPASS(strict) in longrepr) ─
     if "XPASS(strict)" in longrepr or "XPASS(strict)" in error:
         return "FIX_NOW", "STALE_STRICT_XFAIL", "Remove strict xfail tag"
-
-    for kw in entry.keywords:
-        if kw in strict_tags and "XPASS" in longrepr:
-            return "FIX_NOW", "STALE_STRICT_XFAIL", f"Strict tag {kw}"
 
     # ── FIX_NOW: fixture not populated ───────────────────────────────
     if "is not None" in longrepr and ("has no" in error or "not None" in error):
@@ -254,11 +251,11 @@ def classify_failure(entry: TestEntry, strict_tags: set[str]) -> tuple[str, str,
         return "XFAIL_IT", "PROD_BEHAVIOR", error
 
     # "Expected error_code" — production error doesn't include expected field
-    if "Expected error_code" in error or "error_code" in error:
+    if "error_code" in error:
         return "XFAIL_IT", "PROD_BEHAVIOR", error
 
     # Context echo failures — production doesn't echo context back
-    if "Context echo failed" in error or "context" in error.lower() and "echo" in error.lower():
+    if "context" in error.lower() and "echo" in error.lower():
         return "XFAIL_IT", "PROD_BEHAVIOR", error
 
     # ── FIX_NOW: step implementation bug (last resort) ───────────────
@@ -268,23 +265,18 @@ def classify_failure(entry: TestEntry, strict_tags: set[str]) -> tuple[str, str,
     return "FIX_NOW", "STEP_BUG", error or "Unknown failure"
 
 
-def classify_xfail(entry: TestEntry, tag_reasons: dict[str, str]) -> tuple[str, str, str]:
+def classify_xfail(entry: TestEntry, tag_reasons_map: dict[str, str]) -> tuple[str, str, str]:
     """Classify an xfailed test. Returns (bucket, category, reason).
 
     All xfails are XFAIL_IT by definition — they're already marked.
     """
-    tags = [k for k in entry.keywords if k.startswith("T-")]
-
-    for tag in tags:
-        reason = tag_reasons.get(tag, "")
-        if "transport" in reason.lower() or "not forwarded" in reason.lower():
-            return "XFAIL_IT", "TRANSPORT_GAP", reason
+    tags = sorted(k for k in entry.keywords if k.startswith("T-"))
 
     if "partition" in entry.nodeid or "boundary" in entry.nodeid:
-        reason = tag_reasons.get(tags[0], "Partition/boundary xfail") if tags else "Partition/boundary xfail"
+        reason = tag_reasons_map.get(tags[0], "Partition/boundary xfail") if tags else "Partition/boundary xfail"
         return "XFAIL_IT", "PARTIAL_IMPL", reason
 
-    reason = tag_reasons.get(tags[0], "Feature not implemented") if tags else "Feature not implemented"
+    reason = tag_reasons_map.get(tags[0], "Feature not implemented") if tags else "Feature not implemented"
     return "XFAIL_IT", "NOT_IMPLEMENTED", reason
 
 
@@ -297,17 +289,39 @@ class ClassifiedXpass(NamedTuple):
     present_count: int
 
 
-def classify_xpass(entry: TestEntry, all_entries: list[TestEntry]) -> ClassifiedXpass:
+def classify_xpass(
+    entry: TestEntry,
+    all_entries: list[TestEntry],
+    *,
+    force_confirm: bool = False,
+    ledger_bases: set[str] | None = None,
+) -> ClassifiedXpass:
     """Classify an xpassed test.
 
     FIX_NOW either way: GRADUATE when every transport *present for this base*
     passed (remove the stale xfail tag); GRADUATE_CONFIRM when that present
-    set is a single transport or e2e_rest-only (needs human confirmation —
-    e2e_rest xfails are non-strict because e2e is environment-dependent);
-    PARTIAL_XPASS when only a subset of the present transports passed.
+    set is a single transport or e2e_rest-only, or when the artifact lacks
+    e2e_rest entirely; PARTIAL_XPASS when only a subset passed — including
+    ``mixed_examples`` (present transports, none passing after aggregate).
     """
     base = extract_scenario_base(entry.nodeid)
-    grade = grade_base(base, ((e.nodeid, e.outcome) for e in all_entries))
+    grade = grade_base(
+        base,
+        ((e.nodeid, e.outcome) for e in all_entries),
+        force_confirm=force_confirm,
+    )
+    ledger = ledger_bases or set()
+    if grade.graduates and not grade.needs_confirmation and base in ledger:
+        if "e2e_rest" not in grade.passing and "e2e_rest" not in grade.missing:
+            return ClassifiedXpass(
+                bucket="FIX_NOW",
+                category="GRADUATE_CONFIRM",
+                detail=(
+                    f"All {grade.present_count} present transports pass "
+                    f"(ledger-marked, needs confirmation): {sorted(grade.passing)}"
+                ),
+                present_count=grade.present_count,
+            )
     if grade.graduates:
         if grade.needs_confirmation:
             return ClassifiedXpass(
@@ -324,6 +338,7 @@ def classify_xpass(entry: TestEntry, all_entries: list[TestEntry]) -> Classified
             detail=f"All {grade.present_count} present transports pass: {sorted(grade.passing)}",
             present_count=grade.present_count,
         )
+    # mixed_examples and partial both land in PARTIAL_XPASS
     return ClassifiedXpass(
         bucket="FIX_NOW",
         category="PARTIAL_XPASS",
@@ -353,9 +368,12 @@ def generate_work_items(
     xfailed: list[TestEntry],
     xpassed: list[TestEntry],
     inspector_flags: list[InspectorFlag],
-    tag_reasons: dict[str, str],
+    tag_reasons_map: dict[str, str],
     strict_tags: set[str],
     all_entries: list[TestEntry],
+    *,
+    force_confirm: bool = False,
+    ledger_bases: set[str] | None = None,
 ) -> list[WorkItem]:
     """Generate actionable work items grouped by 3 buckets."""
     items: list[WorkItem] = []
@@ -376,12 +394,11 @@ def generate_work_items(
             by_scenario[extract_scenario_base(e.nodeid)].append(e)
 
         for base, group in by_scenario.items():
-            transports = {extract_transport(e.nodeid) for e in group} - {None}
+            transports = {t for e in group if (t := extract_transport(e.nodeid)) is not None}
             rep_error = group[0].error
             transport_note = f" [{','.join(sorted(transports))}]" if transports else ""
             scenario_name = short_base(base)
 
-            cat_desc = {**FIX_NOW, **XFAIL_IT, **FEATURE_FIX}.get(cat, cat)
             items.append(
                 WorkItem(
                     title=f"[{uc}] {scenario_name[:50]}{transport_note}",
@@ -397,7 +414,7 @@ def generate_work_items(
     # ── 2. Xpassed tests → FIX_NOW (graduate when all present transports pass) ─
     grad_groups: dict[tuple[str, str, int], list[TestEntry]] = defaultdict(list)
     for entry in xpassed:
-        classified = classify_xpass(entry, all_entries)
+        classified = classify_xpass(entry, all_entries, force_confirm=force_confirm, ledger_bases=ledger_bases)
         grad_groups[(classified.category, classified.detail, classified.present_count)].append(entry)
 
     for (cat, detail, present_n), entries in grad_groups.items():
@@ -424,7 +441,7 @@ def generate_work_items(
     xfail_groups: dict[tuple[str, str], list[TestEntry]] = defaultdict(list)
     for entry in xfailed:
         uc = extract_uc(entry.nodeid)
-        _, cat, _ = classify_xfail(entry, tag_reasons)
+        _, cat, _ = classify_xfail(entry, tag_reasons_map)
         xfail_groups[(uc, cat)].append(entry)
 
     for (uc, cat), entries in xfail_groups.items():
@@ -550,17 +567,17 @@ def generate_report(
 
     if xfail_it:
         # Split: newly-failed (need xfail tags added) vs already-xfailed (just summarize)
-        newly_failed = [i for i in xfail_it if i.category in ("PROD_BEHAVIOR", "PROD_BUG", "TRANSPORT_GAP")]
+        newly_failed = [i for i in xfail_it if i.category in ("PROD_BEHAVIOR", "PROD_BUG")]
         already_xfailed = [i for i in xfail_it if i.category in ("NOT_IMPLEMENTED", "PARTIAL_IMPL")]
 
         if newly_failed:
             lines.append("### Needs xfail tags (newly exposed by assertion strengthening)")
             lines.append("")
-            by_cat: dict[str, list[WorkItem]] = defaultdict(list)
+            newly_by_cat: dict[str, list[WorkItem]] = defaultdict(list)
             for item in newly_failed:
-                by_cat[item.category].append(item)
+                newly_by_cat[item.category].append(item)
 
-            for cat, cat_items in by_cat.items():
+            for cat, cat_items in newly_by_cat.items():
                 cat_desc = XFAIL_IT.get(cat, cat)
                 total = sum(i.test_count for i in cat_items)
                 lines.append(f"**{cat}** — {cat_desc} ({len(cat_items)} items, {total} tests)")
@@ -604,7 +621,7 @@ def generate_report(
     lines.append("|----|---------|----------|-------------|-------------|")
     for uc in sorted(by_uc.keys()):
         uc_items = by_uc[uc]
-        by_b = defaultdict(int)
+        by_b: dict[str, int] = defaultdict(int)
         for i in uc_items:
             by_b[i.bucket] += i.test_count
         total_t = sum(i.test_count for i in uc_items)
@@ -632,24 +649,46 @@ def main():
     parser = argparse.ArgumentParser(description="Full BDD audit")
     parser.add_argument("json_path", help="Path to bdd.json test results")
     parser.add_argument("--output", "-o", help="Output markdown file path")
+    parser.add_argument(
+        "--conftest",
+        help="Path to conftest.py",
+        default=str(CONFTEST_PATH),
+    )
     args = parser.parse_args()
 
     json_path = Path(args.json_path)
     output_path = Path(args.output) if args.output else None
+    conftest_path = Path(args.conftest)
 
     print("Parsing test results...", file=sys.stderr)
     entries = parse_test_results(json_path)
     summary = Counter(e.outcome for e in entries)
-    print(f"  {len(entries)} tests: {dict(summary)}", file=sys.stderr)
+    print(f"  Parsed {len(entries)} tests: {dict(summary)}", file=sys.stderr)
+    if not entries:
+        print(
+            'ERROR: artifact contains 0 tests — refusing empty {"tests": []} all-clear.',
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
 
     failed = [e for e in entries if e.outcome == "failed"]
     xfailed = [e for e in entries if e.outcome == "xfailed"]
     xpassed = [e for e in entries if e.outcome == "xpassed"]
 
+    census = artifact_transport_census((e.nodeid, e.outcome) for e in entries)
+    force_confirm = census.incomplete_e2e
+    if force_confirm:
+        print(
+            "  WARNING: e2e_rest appears for no base — every graduation routes to GRADUATE_CONFIRM.",
+            file=sys.stderr,
+        )
+
     print("Parsing conftest xfail tags...", file=sys.stderr)
-    tag_reasons = parse_conftest_xfail_tags()
+    tag_reasons_map = parse_conftest_xfail_tags(conftest_path)
     strict_tags = parse_conftest_strict_tags()
-    print(f"  {len(tag_reasons)} tag reasons, {len(strict_tags)} strict tags", file=sys.stderr)
+    print(f"  {len(tag_reasons_map)} tag reasons, {len(strict_tags)} strict tags", file=sys.stderr)
+
+    ledger_bases = load_e2e_rest_known_failure_bases(E2E_LEDGER_PATH)
 
     print("Parsing inspector reports...", file=sys.stderr)
     inspector_flags = parse_inspector_reports()
@@ -661,9 +700,11 @@ def main():
         xfailed=xfailed,
         xpassed=xpassed,
         inspector_flags=inspector_flags,
-        tag_reasons=tag_reasons,
+        tag_reasons_map=tag_reasons_map,
         strict_tags=strict_tags,
         all_entries=entries,
+        force_confirm=force_confirm,
+        ledger_bases=ledger_bases,
     )
     print(f"  {len(items)} work items generated", file=sys.stderr)
 

@@ -1,13 +1,15 @@
 """Shared helpers for BDD audit meta-tooling scripts.
 
-Used by ``bdd_full_audit.py``, ``audit_xfails.py``, and
-``cross_reference_audit.py`` so transport / scenario / UC parsing and
-graduation bucketing cannot drift apart.
+Used by ``bdd_full_audit.py``, ``audit_xfails.py``, ``cross_reference_audit.py``,
+``salvage_audit_output.py``, and ``scripts/graduate_pending.py`` so transport /
+scenario / UC parsing and graduation bucketing cannot drift apart.
 
 Transport vocabulary mirrors ``tests/bdd/conftest.py`` parametrize ids after
 #1417: ``a2a`` / ``mcp`` / ``rest``, plus ``e2e_rest`` when in-network is
 enabled. Legacy ``impl`` remains recognized for historical bdd.json files but
-is never required for graduation.
+is never required for graduation and does not inflate the single-transport
+confirmation gate. ``e2e_mcp`` / ``e2e_a2a`` are recognized so unrecognized
+transports are not silently dropped from coverage.
 
 Report-bucket vocabulary (intentional split, same underlying coverage grade):
 ``bdd_full_audit`` labels partial xpass as ``PARTIAL_XPASS`` / full as
@@ -16,22 +18,38 @@ Report-bucket vocabulary (intentional split, same underlying coverage grade):
 tokens without a deliberate cross-script rename. The shared ``grade_base``
 helper owns the confirmation gate so both classifiers cannot drift.
 
-``parse_conftest_xfail_tags`` stays per-script on purpose: ``audit_xfails``
-returns ``tag → (reason, mechanism)`` for classification, while
-``bdd_full_audit`` returns the simpler ``tag → reason`` map for report
-titles. Those contracts diverge; sharing a single parser would force one
-consumer onto the other's shape.
+Canonical conftest tag parsing lives here as ``parse_conftest_xfail_tags``
+(``tag → (reason, mechanism)``). Callers that only need reasons use
+``tag_reasons`` (a one-line projection) — not a second parser.
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping
-from typing import NamedTuple
+from pathlib import Path
+from typing import NamedTuple, TypedDict
 
 # `[` anchor + `(?:-|])` tail delimiter recognizes full ids (including
-# `e2e_rest`); alternation order is not load-bearing for that match.
-_TRANSPORT_RE = re.compile(r"\[(e2e_rest|impl|a2a|mcp|rest)(?:-|])")
+# `e2e_rest` / `e2e_mcp` / `e2e_a2a`); longer e2e_* alternatives come first.
+_TRANSPORT_RE = re.compile(r"\[(e2e_rest|e2e_mcp|e2e_a2a|impl|a2a|mcp|rest)(?:-|])")
+
+# ANSI CSI / OSC sequences — strip before salvage regex matching.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07")
+
+
+class StepRecord(TypedDict):
+    """Canonical six-key step shape for the JSONL store (producer + consumer)."""
+
+    file_path: str
+    line_number: int
+    step_type: str
+    step_text: str
+    function_name: str
+    source_text: str
+
+
+STEP_RECORD_KEYS: frozenset[str] = frozenset(StepRecord.__annotations__)
 
 
 class GradeResult(NamedTuple):
@@ -42,6 +60,7 @@ class GradeResult(NamedTuple):
     missing: set[str]
     present_count: int
     needs_confirmation: bool
+    mixed_examples: bool
 
 
 class CoverageResult(NamedTuple):
@@ -52,18 +71,30 @@ class CoverageResult(NamedTuple):
     missing: set[str]
 
 
+class ArtifactCensus(NamedTuple):
+    """Transport presence across an entire bdd.json artifact."""
+
+    transports_seen: frozenset[str]
+    has_e2e_rest: bool
+    incomplete_e2e: bool  # e2e_rest absent for every base → force CONFIRM
+
+
 # Outcomes that count as "this transport passed for the scenario base".
 _PASSING_OUTCOMES = frozenset({"passed", "xpassed"})
 # Outcomes that block graduation for a present transport.
 _FAILING_OUTCOMES = frozenset({"failed", "xfailed"})
 
+# Legacy transport that must not defeat the single-transport confirm gate.
+_LEGACY_GATE_EXCLUDE = frozenset({"impl"})
+
 
 def extract_transport(nodeid: str) -> str | None:
     """Extract transport id from a parametrized pytest nodeid.
 
-    Recognizes ``a2a``, ``mcp``, ``rest``, ``e2e_rest``, and legacy ``impl``.
-    Returns ``None`` when the nodeid has no known transport param (e.g. admin
-    scenarios without wire-transport parametrization).
+    Recognizes ``a2a``, ``mcp``, ``rest``, ``e2e_rest``, ``e2e_mcp``,
+    ``e2e_a2a``, and legacy ``impl``. Returns ``None`` when the nodeid has no
+    known transport param (e.g. admin scenarios without wire-transport
+    parametrization).
     """
     m = _TRANSPORT_RE.search(nodeid)
     return m.group(1) if m else None
@@ -76,7 +107,7 @@ def extract_scenario_base(nodeid: str) -> str:
 
 def short_base(base: str) -> str:
     """Shorten a scenario base to the final ``::`` segment for report bullets."""
-    return base.split("::")[-1] if "::" in base else base
+    return base.rsplit("::", 1)[-1]
 
 
 def extract_uc(text: str) -> str:
@@ -98,6 +129,11 @@ def extract_longrepr_e_line(longrepr: str) -> str:
     return ""
 
 
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences so salvage regexes match colored captures."""
+    return _ANSI_RE.sub("", text)
+
+
 def transport_coverage(
     outcomes_by_transport: Mapping[str, str],
 ) -> CoverageResult:
@@ -108,8 +144,8 @@ def transport_coverage(
     ``a2a``+``mcp`` graduates when both pass; ``rest`` is not "missing".
 
     Returns ``CoverageResult(graduates, passing, missing)`` where ``missing`` is
-    the set of present transports that did not pass (failed/xfailed or unknown
-    outcome).
+    the set of present transports that did not pass (failed/xfailed/skipped or
+    unknown outcome).
     """
     present = set(outcomes_by_transport)
     if not present:
@@ -118,10 +154,10 @@ def transport_coverage(
     passing = {t for t, outcome in outcomes_by_transport.items() if outcome in _PASSING_OUTCOMES}
     failing = {t for t, outcome in outcomes_by_transport.items() if outcome in _FAILING_OUTCOMES}
     missing = present - passing
-    # Graduate only when every present transport passed and none failed/xfailed.
-    # (failing ⊆ missing for standard pytest outcomes; keep both checks so an
-    # unexpected outcome cannot silently graduate.)
-    graduates = bool(present) and present <= passing and not failing
+    # Graduate when every present transport passed. ``not failing`` is
+    # belt-and-braces: for standard pytest outcomes failing ⊆ missing, so
+    # ``present <= passing`` already excludes fail/xfail; keep both.
+    graduates = present <= passing and not failing
     return CoverageResult(graduates=graduates, passing=passing, missing=missing)
 
 
@@ -163,9 +199,51 @@ def outcomes_by_transport_for_base(
     return {t: _worst_transport_outcome(outs) for t, outs in collected.items()}
 
 
+def artifact_transport_census(
+    nodeid_outcomes: Iterable[tuple[str, str]],
+) -> ArtifactCensus:
+    """Census transports present anywhere in an artifact.
+
+    When ``e2e_rest`` never appears, the default tox ``bdd`` job silently
+    dropped the 5th transport — every firm graduation must route to CONFIRM.
+    """
+    seen: set[str] = set()
+    for nodeid, _outcome in nodeid_outcomes:
+        transport = extract_transport(nodeid)
+        if transport:
+            seen.add(transport)
+    has_e2e = "e2e_rest" in seen
+    return ArtifactCensus(
+        transports_seen=frozenset(seen),
+        has_e2e_rest=has_e2e,
+        incomplete_e2e=not has_e2e,
+    )
+
+
+def load_e2e_rest_known_failure_bases(ledger_path: Path) -> set[str]:
+    """Scenario bases listed in ``tests/bdd/e2e_rest_known_failures.txt``.
+
+    Non-strict ledger xfails live outside conftest tags; a GRADUATE verdict
+    that only clears conftest would still leave ledger markers. When the
+    artifact is e2e-incomplete, these bases must not firm-graduate.
+    """
+    if not ledger_path.is_file():
+        return set()
+    bases: set[str] = set()
+    for line in ledger_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        # Ledger lines are full nodeids or bare scenario refs.
+        bases.add(extract_scenario_base(stripped))
+    return bases
+
+
 def grade_base(
     base: str,
     nodeid_outcomes: Iterable[tuple[str, str]],
+    *,
+    force_confirm: bool = False,
 ) -> GradeResult:
     """Grade one scenario base end-to-end for both audit classifiers.
 
@@ -174,19 +252,143 @@ def grade_base(
     re-wire that pipeline (or re-scan for ``present_count``).
 
     ``needs_confirmation`` is True when every present transport passed but only
-    one transport is present — do not auto-graduate (a lone ``e2e_rest`` is the
-    common case; e2e xfails are non-strict because e2e is environment-dependent).
+    one *non-legacy* transport is present, or when ``force_confirm`` is set
+    (artifact-wide e2e_rest absence / ledger awareness). Lone ``e2e_rest`` is
+    the common single-transport case; many e2e xfails are still ``strict=True``
+    in conftest — do not claim they are non-strict.
+
+    ``mixed_examples`` is True when the base has present transports but none
+    passed (every present transport failed/xfailed/skipped after aggregate).
     """
     outcomes = outcomes_by_transport_for_base(base, nodeid_outcomes)
     coverage = transport_coverage(outcomes)
     present_count = len(outcomes)
-    # When graduates, passing == present, so passing == {"e2e_rest"} implies
-    # present_count == 1; keep a single disjunct that matches the real meaning.
-    needs_confirmation = bool(coverage.graduates and present_count == 1)
+    gate_transports = {t for t in outcomes if t not in _LEGACY_GATE_EXCLUDE}
+    gate_count = len(gate_transports) if gate_transports else present_count
+    needs_confirmation = bool(coverage.graduates and (gate_count <= 1 or force_confirm))
+    mixed_examples = bool(present_count > 0 and not coverage.passing)
     return GradeResult(
         graduates=coverage.graduates,
         passing=coverage.passing,
         missing=coverage.missing,
         present_count=present_count,
         needs_confirmation=needs_confirmation,
+        mixed_examples=mixed_examples,
     )
+
+
+def parse_conftest_xfail_tags(conftest_path: Path) -> dict[str, tuple[str, str]]:
+    """Parse conftest.py to extract tag → (reason, mechanism) mappings.
+
+    Returns dict mapping tag string to (reason, mechanism) where mechanism
+    is one of: 'production_gap', 'transport_gap', 'harness_gap', 'partial_impl'.
+
+    Covers dict forms (``_XFAIL_TAGS``, ``_UC004_XFAIL_TAGS`` tuples,
+    ``_UC003_EXT_XFAILS``), set forms (``_UC*_XFAIL_TAGS``, partition/boundary/
+    partial), MCP selective reason= kwargs, and validation tuple forms.
+    """
+    text = conftest_path.read_text(encoding="utf-8", errors="replace")
+    tag_map: dict[str, tuple[str, str]] = {}
+
+    # _XFAIL_TAGS dict: tag → reason (production gaps)
+    for match in re.finditer(r'"(T-[^"]+)":\s*"([^"]+)"', text):
+        tag, reason = match.group(1), match.group(2)
+        tag_map[tag] = (reason, "production_gap")
+
+    # _UC026_XFAIL_TAGS, _UC019_XFAIL_TAGS, etc. — sets with production/harness gaps
+    for set_match in re.finditer(
+        r"(_UC\d+_XFAIL_TAGS)\s*(?::\s*set\[str\])?\s*=\s*\{([^}]+)\}",
+        text,
+        re.DOTALL,
+    ):
+        set_name = set_match.group(1)
+        block = set_match.group(2)
+        mechanism = "production_gap"
+        if "harness" in set_name.lower() or "env" in set_name.lower():
+            mechanism = "harness_gap"
+
+        for tag_m in re.finditer(r'"(T-[^"]+)"', block):
+            tag = tag_m.group(1)
+            if tag not in tag_map:
+                tag_map[tag] = (f"from {set_name}", mechanism)
+
+    # _UC004_PARTITION_TAGS, _UC004_BOUNDARY_TAGS — partial impl
+    for set_match in re.finditer(
+        r"(_UC\d+_(?:PARTITION|BOUNDARY)_TAGS)\s*(?::\s*set\[str\])?\s*=\s*\{([^}]+)\}",
+        text,
+        re.DOTALL,
+    ):
+        set_name = set_match.group(1)
+        block = set_match.group(2)
+        for tag_m in re.finditer(r'"(T-[^"]+)"', block):
+            tag = tag_m.group(1)
+            if tag not in tag_map:
+                tag_map[tag] = (f"partition/boundary from {set_name}", "partial_impl")
+
+    # _UC005_PARTIAL_TAGS
+    for set_match in re.finditer(r"(_UC\d+_PARTIAL_TAGS)\s*=\s*\{([^}]+)\}", text, re.DOTALL):
+        block = set_match.group(2)
+        for tag_m in re.finditer(r'"(T-[^"]+)"', block):
+            tag = tag_m.group(1)
+            if tag not in tag_map:
+                tag_map[tag] = ("partial implementation", "partial_impl")
+
+    # MCP selective xfails
+    for match in re.finditer(r'"(T-[^"]+)".*?reason="([^"]+)"', text):
+        tag, reason = match.group(1), match.group(2)
+        if tag not in tag_map and "MCP" in reason.upper():
+            tag_map[tag] = (reason, "transport_gap")
+
+    # _UC002_VALIDATION_XFAIL, _UC006_VALIDATION_XFAIL — selective xfails
+    for match in re.finditer(r'\(\s*"(T-[^"]+)",\s*\{[^}]*\},\s*"([^"]+)"\s*\)', text):
+        tag, reason = match.group(1), match.group(2)
+        if tag not in tag_map:
+            tag_map[tag] = (reason, "production_gap")
+
+    # _UC004_XFAIL_TAGS dict with tuples: tag → (reason, strict)
+    for match in re.finditer(r'"(T-UC-004[^"]+)":\s*\(\s*"([^"]+)",\s*(True|False)\s*\)', text):
+        tag, reason = match.group(1), match.group(2)
+        if tag not in tag_map:
+            tag_map[tag] = (reason, "production_gap")
+
+    # _UC003_EXT_XFAILS dict
+    for match in re.finditer(r'"(T-UC-003[^"]+)":\s*"([^"]+)"', text):
+        tag, reason = match.group(1), match.group(2)
+        if tag not in tag_map:
+            tag_map[tag] = (reason, "production_gap")
+
+    # Dict form with nested reason key (legacy / alternate)
+    for m in re.finditer(
+        r'"(T-[^"]+)"\s*:\s*\{[^}]*"reason"\s*:\s*"([^"]+)"',
+        text,
+    ):
+        tag, reason = m.group(1), m.group(2)
+        if tag not in tag_map:
+            tag_map[tag] = (reason, "production_gap")
+
+    return tag_map
+
+
+def tag_reasons(conftest_path: Path) -> dict[str, str]:
+    """Projection of ``parse_conftest_xfail_tags`` to ``tag → reason`` only."""
+    return {k: v[0] for k, v in parse_conftest_xfail_tags(conftest_path).items()}
+
+
+def remap_container_path(
+    cpath: str,
+    *,
+    artifact_root: str | None,
+    host_root: Path,
+) -> Path:
+    """Remap a container-rooted crash path onto the host repo root.
+
+    Real ``run_all_tests.sh`` artifacts declare ``root: "/app"`` and store
+    crash paths as ``/app/tests/...``. Host step scans use the worktree path;
+    without remapping, premature matching and drift warnings never fire.
+    """
+    if artifact_root:
+        root = artifact_root.rstrip("/")
+        if cpath == root or cpath.startswith(root + "/"):
+            rel = cpath[len(root) :].lstrip("/")
+            return (host_root / rel).resolve()
+    return Path(cpath).resolve()

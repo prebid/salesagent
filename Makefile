@@ -87,7 +87,7 @@ lint:
 	uv run ruff check .
 
 typecheck:
-	uv run mypy src/ --config-file=mypy.ini
+	uv run mypy src/ .claude/scripts/ --config-file=mypy.ini
 
 test-fast:
 	uv run pytest tests/unit/ -x

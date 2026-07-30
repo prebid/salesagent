@@ -28,17 +28,17 @@ fi
 OUTPUT_DIR="${1:-.claude/reports/inspect-parallel-$(date +%d%m%y_%H%M)}"
 mkdir -p "$OUTPUT_DIR"
 
-# Patch timeout=120 → 600 for long parallel slices. Do not try to flip
-# --then-only here: its argparse block is multiline, so a single-line sed
-# never matched. Parallel runs keep Then-only (inspector default=True) and
-# use --pass1-only below; Given/When would need --no-then-only or a
-# multiline-aware patch.
-PATCHED="/tmp/inspect_bdd_parallel.py"
-sed -E 's/timeout=[0-9]+/timeout=600/' "$INSPECTOR" > "$PATCHED"
+# Temp workspace for slice dirs (mktemp — concurrent worktrees must not collide).
+WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/inspect-parallel.XXXXXX")"
+cleanup() {
+    rm -rf "$WORK_ROOT"
+}
+trap cleanup EXIT
 
 echo "=== Parallel BDD Step Inspection ==="
 echo "Inspector: $INSPECTOR"
 echo "Output:    $OUTPUT_DIR"
+echo "Work root: $WORK_ROOT"
 echo ""
 
 # Define slices: name → list of step files
@@ -55,8 +55,7 @@ SLICES[generic]="$STEPS_DIR/domain/admin_accounts.py $STEPS_DIR/domain/uc002_nfr
 # Prepare temp dirs and launch
 PIDS=()
 for name in "${!SLICES[@]}"; do
-    slice_dir="/tmp/inspect-slice-$name"
-    rm -rf "$slice_dir"
+    slice_dir="$WORK_ROOT/inspect-slice-$name"
     mkdir -p "$slice_dir"
 
     # Copy files into slice dir
@@ -67,10 +66,12 @@ for name in "${!SLICES[@]}"; do
     file_count=$(ls "$slice_dir"/*.py 2>/dev/null | wc -l | tr -d ' ')
     echo "Launching $name ($file_count files)..."
 
-    python3 "$PATCHED" \
+    # Use --timeout=600 (no sed patch) so concurrent runs share one inspector.
+    python3 "$INSPECTOR" \
         --steps-dir "$slice_dir" \
         --output "$OUTPUT_DIR/$name.md" \
         --pass1-only \
+        --timeout 600 \
         > "$OUTPUT_DIR/$name.log" 2>&1 &
     PIDS+=("$!:$name")
 done
