@@ -790,7 +790,7 @@ def main() -> None:
     # Step 3: Parse test results (shared empty guard + census)
     print(f"Parsing {json_path}...")
     loaded = load_bdd_artifact(json_path)
-    all_tests = loaded.tests
+    all_tests = cast(list[TestReportEntry], loaded.tests)
     xfailed_tests = [t for t in all_tests if t["outcome"] == "xfailed"]
     xpassed_tests = [t for t in all_tests if t["outcome"] == "xpassed"]
     print(f"  Parsed {len(all_tests)} tests ({len(xfailed_tests)} xfailed, {len(xpassed_tests)} xpassed)")

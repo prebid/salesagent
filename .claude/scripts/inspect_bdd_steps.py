@@ -15,10 +15,11 @@ import ast
 import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
@@ -53,7 +54,9 @@ class BddStepInfo:
     @classmethod
     def from_record(cls, record: StepRecord) -> BddStepInfo:
         """Build from a StepRecord (e.g. JSONL store entry) via STEP_RECORD_KEYS."""
-        return cls(**{key: record[key] for key in STEP_RECORD_KEYS})  # type: ignore[arg-type]
+        # Cast through Mapping so mypy accepts dynamic TypedDict key iteration.
+        raw: Mapping[str, Any] = cast(Mapping[str, Any], record)
+        return cls(**{key: raw[key] for key in STEP_RECORD_KEYS})
 
 
 @dataclass
