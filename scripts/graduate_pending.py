@@ -18,7 +18,6 @@ Usage:
 
 from __future__ import annotations
 
-import json
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -28,32 +27,25 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from bdd_audit_common import (  # noqa: E402
-    artifact_transport_census,
     extract_scenario_base,
     extract_transport,
     grade_base,
+    load_bdd_artifact,
+    load_e2e_rest_known_failure_bases,
     short_base,
 )
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_E2E_LEDGER_PATH = _REPO_ROOT / "tests" / "bdd" / "e2e_rest_known_failures.txt"
 
-def analyze(report_path: str) -> dict:
+
+def analyze(report_path: str, *, ledger_path: Path | None = None) -> dict:
     """Analyze JSON report and return graduation candidates via shared grade_base."""
-    with open(report_path) as f:
-        data = json.load(f)
-
-    tests = list(data["tests"])
-    if not tests:
-        print('ERROR: artifact contains 0 tests — refusing empty {"tests": []}.', file=sys.stderr)
-        raise SystemExit(2)
-
-    nodeid_outcomes = [(t["nodeid"], t["outcome"]) for t in tests]
-    census = artifact_transport_census(nodeid_outcomes)
-    force_confirm = census.incomplete_e2e
-    if force_confirm:
-        print(
-            "WARNING: e2e_rest appears for no base — every graduation routes to confirm.",
-            file=sys.stderr,
-        )
+    loaded = load_bdd_artifact(Path(report_path))
+    tests = loaded.tests
+    nodeid_outcomes = loaded.nodeid_outcomes
+    force_confirm = loaded.force_confirm
+    ledger = load_e2e_rest_known_failure_bases(ledger_path or _E2E_LEDGER_PATH)
 
     # Collect tags per scenario base
     test_tags: dict[str, set[str]] = {}
@@ -72,7 +64,12 @@ def analyze(report_path: str) -> dict:
     graduate_partial: list[tuple[str, str, dict[str, str]]] = []
 
     for base in sorted(xpassed_bases):
-        grade = grade_base(base, nodeid_outcomes, force_confirm=force_confirm)
+        grade = grade_base(
+            base,
+            nodeid_outcomes,
+            force_confirm=force_confirm,
+            ledger_member=base in ledger,
+        )
         scenario = short_base(base)
         if grade.graduates:
             if grade.needs_confirmation:
@@ -172,7 +169,7 @@ def print_report(analysis: dict) -> None:
         b = len(tag_blockers.get(tag, []))
         print(f"    {tag} ({c} pass, {b} blocked)")
 
-    # Individual rows that pass all transports but belong to unsafe tags
+    # Individual rows that pass all present transports but belong to unsafe tags
     orphan_rows = []
     for sc, base in grad_all:
         tags = analysis["test_tags"].get(base, set())

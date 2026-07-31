@@ -32,6 +32,7 @@ from bdd_audit_common import (  # noqa: E402
     extract_longrepr_e_line,
     extract_transport,
     extract_uc,
+    load_bdd_artifact,
 )
 
 
@@ -72,10 +73,10 @@ def parse_inspector_json(path: Path) -> list[InspectorFlag]:
 
 
 def parse_test_results(path: Path) -> list[TestOutcome]:
-    """Parse bdd.json test results."""
-    data = json.loads(path.read_text(encoding="utf-8"))
+    """Parse bdd.json test results via shared ``load_bdd_artifact``."""
+    loaded = load_bdd_artifact(path)
     outcomes = []
-    for t in data["tests"]:
+    for t in loaded.tests:
         nodeid = t["nodeid"]
         transport = extract_transport(nodeid)
 
@@ -210,11 +211,9 @@ def main():
     print(f"  {len(flags)} flags", file=sys.stderr)
 
     print("Parsing test results...", file=sys.stderr)
+    # load_bdd_artifact (via parse_test_results) owns empty guard + census warning
     outcomes = parse_test_results(Path(args.results))
     print(f"  Parsed {len(outcomes)} tests", file=sys.stderr)
-    if not outcomes:
-        print('ERROR: artifact contains 0 tests — refusing empty {"tests": []}.', file=sys.stderr)
-        raise SystemExit(2)
 
     print("Generating cross-reference...", file=sys.stderr)
     report = generate_report(flags, outcomes, Path(args.output))

@@ -77,6 +77,31 @@ def cross_reference_audit(request, bdd_audit_common):
     return _load("cross_reference_audit", request)
 
 
+@pytest.fixture(scope="module")
+def graduate_pending(request, bdd_audit_common):
+    """Load scripts/graduate_pending.py (sibling of .claude/scripts)."""
+    path = REPO_ROOT / "scripts" / "graduate_pending.py"
+    if not path.exists():
+        pytest.fail(f"missing script: {path}")
+    scripts_dir = str(SCRIPTS)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    name = "graduate_pending"
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+
+    def _teardown() -> None:
+        sys.modules.pop(name, None)
+
+    request.addfinalizer(_teardown)
+    return module
+
+
 def _premature_source() -> str:
     return textwrap.dedent(
         """
@@ -297,6 +322,25 @@ class TestClassifyXpass:
         )
         assert len(items) == 1
         assert items[0].category == "GRADUATE_CONFIRM"
+        assert "needs confirmation" in items[0].title
+
+    def test_generate_work_items_plain_graduate_title(self, bdd_full_audit) -> None:
+        all_entries = [
+            self._entry(bdd_full_audit, f"tests/bdd/test_uc004.py::test_s[{t}]") for t in ("a2a", "mcp", "rest")
+        ]
+        items = bdd_full_audit.generate_work_items(
+            failed=[],
+            xfailed=[],
+            xpassed=all_entries,
+            inspector_flags=[],
+            tag_reasons_map={},
+            strict_tags=set(),
+            all_entries=all_entries,
+        )
+        assert len(items) == 1
+        assert items[0].category == "GRADUATE"
+        assert items[0].title.startswith("Graduate (all 3 present)")
+        assert "needs confirmation" not in items[0].title
 
 
 class TestClassifyXpassedAudit:
@@ -354,11 +398,6 @@ class TestClassifyXpassedAudit:
 
     def test_mixed_examples_routed_to_partial(self, audit_xfails) -> None:
         base = "tests/bdd/test_uc004.py::test_s"
-        all_tests = [
-            {"nodeid": f"{base}[a2a]", "outcome": "xpassed"},
-            {"nodeid": f"{base}[a2a]", "outcome": "xfailed"},  # duplicate base transport via worst
-            {"nodeid": f"{base}[mcp]", "outcome": "xfailed"},
-        ]
         # worst for a2a is xfailed → mixed_examples (no passing)
         all_tests = [
             {"nodeid": f"{base}[a2a-ex1]", "outcome": "xfailed"},
@@ -366,13 +405,22 @@ class TestClassifyXpassedAudit:
             {"nodeid": f"{base}[mcp]", "outcome": "xfailed"},
         ]
         buckets = audit_xfails.classify_xpassed(all_tests)
-        assert base in buckets.partial_passing or base in buckets.partial_missing
+        assert buckets.partial_passing == {base: set()}
+        assert buckets.partial_missing == {base: {"a2a", "mcp"}}
         assert buckets.graduate == set()
 
     def test_e2e_rest_less_no_firm_graduate(self, audit_xfails) -> None:
         base = "tests/bdd/test_uc004.py::test_s"
         all_tests = [{"nodeid": f"{base}[{t}]", "outcome": "xpassed"} for t in ("a2a", "mcp", "rest")]
         buckets = audit_xfails.classify_xpassed(all_tests, force_confirm=True)
+        assert buckets.graduate == set()
+        assert buckets.confirm == {base}
+
+    def test_ledger_member_without_e2e_rest_confirms(self, audit_xfails) -> None:
+        """Ledger-marked base with no e2e_rest row must confirm, not firm-graduate."""
+        base = "tests/bdd/test_uc004.py::test_s"
+        all_tests = [{"nodeid": f"{base}[{t}]", "outcome": "xpassed"} for t in ("a2a", "mcp", "rest")]
+        buckets = audit_xfails.classify_xpassed(all_tests, ledger_bases={base})
         assert buckets.graduate == set()
         assert buckets.confirm == {base}
 
@@ -854,6 +902,142 @@ class TestAuditXfailsReportDry:
         assert "| STALE_CONFIRM |" in text
         assert "### Graduation needs confirmation" in text
         assert "STALE_CONFIRM" in text.split("### By use case")[1].split("\n")[2]
+
+
+class TestArtifactCensusAndLedger:
+    """Pin census → force_confirm and ledger parser (Jul-31 safety net)."""
+
+    def test_census_with_e2e_rest_is_complete(self, bdd_audit_common) -> None:
+        census = bdd_audit_common.artifact_transport_census(
+            [
+                ("t::s[a2a]", "xpassed"),
+                ("t::s[e2e_rest]", "xpassed"),
+            ]
+        )
+        assert census.has_e2e_rest is True
+        assert census.incomplete_e2e is False
+
+    def test_census_without_e2e_rest_is_incomplete(self, bdd_audit_common) -> None:
+        census = bdd_audit_common.artifact_transport_census(
+            [
+                ("t::s[a2a]", "xpassed"),
+                ("t::s[mcp]", "xpassed"),
+                ("t::s[rest]", "xpassed"),
+            ]
+        )
+        assert census.has_e2e_rest is False
+        assert census.incomplete_e2e is True
+
+    def test_load_e2e_rest_known_failure_bases(self, bdd_audit_common, tmp_path: Path) -> None:
+        ledger = tmp_path / "ledger.txt"
+        ledger.write_text(
+            "# comment\ntests/bdd/test_uc004.py::test_s[e2e_rest]\n\ntests/bdd/test_uc019.py::test_other\n"
+        )
+        bases = bdd_audit_common.load_e2e_rest_known_failure_bases(ledger)
+        assert bases == {
+            "tests/bdd/test_uc004.py::test_s",
+            "tests/bdd/test_uc019.py::test_other",
+        }
+
+    def test_load_bdd_artifact_empty_refuses(self, bdd_audit_common, tmp_path: Path) -> None:
+        report = tmp_path / "empty.json"
+        report.write_text(json.dumps({"tests": []}))
+        with pytest.raises(SystemExit) as exc:
+            bdd_audit_common.load_bdd_artifact(report)
+        assert exc.value.code == 2
+
+    def test_load_bdd_artifact_sets_force_confirm(self, bdd_audit_common, tmp_path: Path) -> None:
+        report = tmp_path / "bdd.json"
+        report.write_text(
+            json.dumps(
+                {
+                    "root": "/app",
+                    "tests": [
+                        {"nodeid": "t::s[a2a]", "outcome": "xpassed"},
+                        {"nodeid": "t::s[mcp]", "outcome": "xpassed"},
+                    ],
+                }
+            )
+        )
+        loaded = bdd_audit_common.load_bdd_artifact(report)
+        assert loaded.force_confirm is True
+        assert loaded.artifact_root == "/app"
+        assert len(loaded.tests) == 2
+
+    def test_grade_base_ledger_member_confirms(self, bdd_audit_common) -> None:
+        grade = bdd_audit_common.grade_base(
+            "t::s",
+            [("t::s[a2a]", "xpassed"), ("t::s[mcp]", "xpassed"), ("t::s[rest]", "xpassed")],
+            ledger_member=True,
+        )
+        assert grade.graduates is True
+        assert grade.needs_confirmation is True
+
+
+class TestGraduatePendingAnalyze:
+    """Pin graduate_pending.analyze three-way split + empty refusal."""
+
+    def test_empty_artifact_exits_2(self, graduate_pending, tmp_path: Path) -> None:
+        report = tmp_path / "empty.json"
+        report.write_text(json.dumps({"tests": []}))
+        with pytest.raises(SystemExit) as exc:
+            graduate_pending.analyze(str(report))
+        assert exc.value.code == 2
+
+    def test_three_way_split_and_ledger(self, graduate_pending, tmp_path: Path) -> None:
+        report = tmp_path / "bdd.json"
+        report.write_text(
+            json.dumps(
+                {
+                    "tests": [
+                        # firm graduate (3 transports, not ledger)
+                        {"nodeid": "tests/bdd/test_uc004.py::test_full[a2a]", "outcome": "xpassed", "keywords": []},
+                        {"nodeid": "tests/bdd/test_uc004.py::test_full[mcp]", "outcome": "xpassed", "keywords": []},
+                        {"nodeid": "tests/bdd/test_uc004.py::test_full[rest]", "outcome": "xpassed", "keywords": []},
+                        # confirm via single transport
+                        {"nodeid": "tests/bdd/test_uc004.py::test_one[a2a]", "outcome": "xpassed", "keywords": []},
+                        # partial
+                        {"nodeid": "tests/bdd/test_uc004.py::test_part[a2a]", "outcome": "xpassed", "keywords": []},
+                        {"nodeid": "tests/bdd/test_uc004.py::test_part[mcp]", "outcome": "xfailed", "keywords": []},
+                    ]
+                }
+            )
+        )
+        ledger = tmp_path / "ledger.txt"
+        ledger.write_text("")  # empty ledger
+        analysis = graduate_pending.analyze(str(report), ledger_path=ledger)
+        assert analysis["force_confirm"] is True  # no e2e_rest in artifact
+        # force_confirm routes all graduates to confirm
+        assert analysis["graduate_all"] == []
+        confirm_bases = {base for _, base in analysis["graduate_confirm"]}
+        assert "tests/bdd/test_uc004.py::test_full" in confirm_bases
+        assert "tests/bdd/test_uc004.py::test_one" in confirm_bases
+        partial_bases = {base for _, base, _ in analysis["graduate_partial"]}
+        assert "tests/bdd/test_uc004.py::test_part" in partial_bases
+
+    def test_ledger_routes_to_confirm_when_e2e_present(self, graduate_pending, tmp_path: Path) -> None:
+        base = "tests/bdd/test_uc004.py::test_s"
+        report = tmp_path / "bdd.json"
+        report.write_text(
+            json.dumps(
+                {
+                    "tests": [
+                        {"nodeid": f"{base}[a2a]", "outcome": "xpassed", "keywords": []},
+                        {"nodeid": f"{base}[mcp]", "outcome": "xpassed", "keywords": []},
+                        {"nodeid": f"{base}[rest]", "outcome": "xpassed", "keywords": []},
+                        # e2e_rest present elsewhere so force_confirm is False
+                        {"nodeid": "tests/bdd/test_other.py::test_e[e2e_rest]", "outcome": "passed", "keywords": []},
+                    ]
+                }
+            )
+        )
+        ledger = tmp_path / "ledger.txt"
+        ledger.write_text(f"{base}\n")
+        analysis = graduate_pending.analyze(str(report), ledger_path=ledger)
+        assert analysis["force_confirm"] is False
+        assert analysis["graduate_all"] == []
+        confirm_bases = {b for _, b in analysis["graduate_confirm"]}
+        assert base in confirm_bases
 
 
 class TestGradeResultNamedFields:

@@ -18,12 +18,13 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from bdd_audit_common import StepRecord  # noqa: E402
+from bdd_audit_common import STEP_RECORD_KEYS, StepRecord  # noqa: E402
 
 STEP_DECORATOR_NAMES = {"given", "when", "then"}
 
@@ -32,9 +33,10 @@ STEP_DECORATOR_NAMES = {"given", "when", "then"}
 
 @dataclass
 class BddStepInfo:
-    """Metadata for a single BDD step function.
+    """Thin adapter over ``bdd_audit_common.StepRecord`` (JSONL store shape).
 
-    Field set matches ``bdd_audit_common.StepRecord`` (JSONL store shape).
+    Fields mirror ``STEP_RECORD_KEYS``; ``to_record`` / ``from_record`` iterate
+    that key set so adding or renaming a field cannot drift silently.
     """
 
     file_path: str
@@ -45,27 +47,13 @@ class BddStepInfo:
     source_text: str
 
     def to_record(self) -> StepRecord:
-        """Serialize to the canonical six-key StepRecord TypedDict."""
-        return {
-            "file_path": self.file_path,
-            "line_number": self.line_number,
-            "step_type": self.step_type,
-            "step_text": self.step_text,
-            "function_name": self.function_name,
-            "source_text": self.source_text,
-        }
+        """Serialize to the canonical StepRecord TypedDict via STEP_RECORD_KEYS."""
+        return cast(StepRecord, {key: getattr(self, key) for key in STEP_RECORD_KEYS})
 
     @classmethod
     def from_record(cls, record: StepRecord) -> BddStepInfo:
-        """Build from a StepRecord (e.g. JSONL store entry)."""
-        return cls(
-            file_path=record["file_path"],
-            line_number=record["line_number"],
-            step_type=record["step_type"],
-            step_text=record["step_text"],
-            function_name=record["function_name"],
-            source_text=record["source_text"],
-        )
+        """Build from a StepRecord (e.g. JSONL store entry) via STEP_RECORD_KEYS."""
+        return cls(**{key: record[key] for key in STEP_RECORD_KEYS})  # type: ignore[arg-type]
 
 
 @dataclass

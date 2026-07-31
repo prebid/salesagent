@@ -30,12 +30,12 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from bdd_audit_common import (  # noqa: E402
-    artifact_transport_census,
     extract_longrepr_e_line,
     extract_scenario_base,
     extract_transport,
     extract_uc,
     grade_base,
+    load_bdd_artifact,
     load_e2e_rest_known_failure_bases,
     short_base,
     tag_reasons,
@@ -305,23 +305,13 @@ def classify_xpass(
     ``mixed_examples`` (present transports, none passing after aggregate).
     """
     base = extract_scenario_base(entry.nodeid)
+    ledger = ledger_bases or set()
     grade = grade_base(
         base,
         ((e.nodeid, e.outcome) for e in all_entries),
         force_confirm=force_confirm,
+        ledger_member=base in ledger,
     )
-    ledger = ledger_bases or set()
-    if grade.graduates and not grade.needs_confirmation and base in ledger:
-        if "e2e_rest" not in grade.passing and "e2e_rest" not in grade.missing:
-            return ClassifiedXpass(
-                bucket="FIX_NOW",
-                category="GRADUATE_CONFIRM",
-                detail=(
-                    f"All {grade.present_count} present transports pass "
-                    f"(ledger-marked, needs confirmation): {sorted(grade.passing)}"
-                ),
-                present_count=grade.present_count,
-            )
     if grade.graduates:
         if grade.needs_confirmation:
             return ClassifiedXpass(
@@ -407,7 +397,7 @@ def generate_work_items(
                     uc=uc,
                     test_count=len(group),
                     details=rep_error[:150],
-                    sample_tests=[e.nodeid.split("::")[-1][:80] for e in group[:3]],
+                    sample_tests=[short_base(e.nodeid)[:80] for e in group[:3]],
                 )
             )
 
@@ -433,7 +423,7 @@ def generate_work_items(
                 uc=uc,
                 test_count=len(entries),
                 details=detail,
-                sample_tests=[e.nodeid.split("::")[-1][:80] for e in entries[:5]],
+                sample_tests=[short_base(e.nodeid)[:80] for e in entries[:5]],
             )
         )
 
@@ -454,7 +444,7 @@ def generate_work_items(
                 uc=uc,
                 test_count=len(entries),
                 details=f"{len(entries)} tests already xfailed",
-                sample_tests=[e.nodeid.split("::")[-1][:80] for e in entries[:3]],
+                sample_tests=[short_base(e.nodeid)[:80] for e in entries[:3]],
             )
         )
 
@@ -661,27 +651,24 @@ def main():
     conftest_path = Path(args.conftest)
 
     print("Parsing test results...", file=sys.stderr)
-    entries = parse_test_results(json_path)
+    loaded = load_bdd_artifact(json_path)
+    entries = [
+        TestEntry(
+            nodeid=t["nodeid"],
+            outcome=t["outcome"],
+            keywords=t.get("keywords", []),
+            error=extract_longrepr_e_line(t.get("call", {}).get("longrepr", "")),
+            longrepr=(t.get("call", {}).get("longrepr", "") or "")[:1000],
+        )
+        for t in loaded.tests
+    ]
     summary = Counter(e.outcome for e in entries)
     print(f"  Parsed {len(entries)} tests: {dict(summary)}", file=sys.stderr)
-    if not entries:
-        print(
-            'ERROR: artifact contains 0 tests — refusing empty {"tests": []} all-clear.',
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
 
     failed = [e for e in entries if e.outcome == "failed"]
     xfailed = [e for e in entries if e.outcome == "xfailed"]
     xpassed = [e for e in entries if e.outcome == "xpassed"]
-
-    census = artifact_transport_census((e.nodeid, e.outcome) for e in entries)
-    force_confirm = census.incomplete_e2e
-    if force_confirm:
-        print(
-            "  WARNING: e2e_rest appears for no base — every graduation routes to GRADUATE_CONFIRM.",
-            file=sys.stderr,
-        )
+    force_confirm = loaded.force_confirm
 
     print("Parsing conftest xfail tags...", file=sys.stderr)
     tag_reasons_map = parse_conftest_xfail_tags(conftest_path)

@@ -49,18 +49,18 @@ from collections import Counter, defaultdict
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import NamedTuple, TypedDict, cast
+from typing import Any, NamedTuple, TypedDict, cast
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from bdd_audit_common import (  # noqa: E402
-    artifact_transport_census,
     extract_scenario_base,
     extract_transport,
     extract_uc,
     grade_base,
+    load_bdd_artifact,
     load_e2e_rest_known_failure_bases,
     parse_conftest_xfail_tags,
     remap_container_path,
@@ -84,6 +84,16 @@ class PhaseResult(TypedDict, total=False):
     crash: CrashInfo
     longrepr: str
     outcome: str
+
+
+class TestReportEntry(TypedDict, total=False):
+    """One pytest-json-report test entry (container for CrashInfo/PhaseResult)."""
+
+    nodeid: str
+    outcome: str
+    keywords: list[str]
+    setup: PhaseResult
+    call: PhaseResult
 
 
 @dataclass
@@ -201,29 +211,34 @@ def find_premature_xfails(steps_dir: Path) -> list[PrematureXfail]:
     return premature
 
 
-def _crash_reason_text(test: dict) -> str:
+def _iter_phase_dicts(test: TestReportEntry) -> Iterator[PhaseResult]:
+    """Yield setup/call phase dicts in canonical order with dict-guarding."""
+    for phase in ("setup", "call"):
+        ph_raw = test.get(phase) or {}
+        if isinstance(ph_raw, dict):
+            yield cast(PhaseResult, ph_raw)
+
+
+def _crash_reason_text(test: TestReportEntry) -> str:
     """Read xfail/failure reason from setup/call crash.message (or longrepr).
 
     pytest-json-report does not emit ``wasxfail``; real artifacts carry the
     reason on ``setup.crash.message`` / ``call.crash.message``.
     """
-    for phase in ("setup", "call"):
-        ph_raw = test.get(phase) or {}
-        if not isinstance(ph_raw, dict):
-            continue
-        crash_raw = ph_raw.get("crash") or {}
+    for ph in _iter_phase_dicts(test):
+        crash_raw = ph.get("crash") or {}
         if isinstance(crash_raw, dict):
             message = crash_raw.get("message")
             if message:
                 return str(message)
-        longrepr = ph_raw.get("longrepr")
+        longrepr = ph.get("longrepr")
         if longrepr:
             return str(longrepr)
     return ""
 
 
 def _iter_crash_locations(
-    test: dict,
+    test: TestReportEntry,
     *,
     artifact_root: str | None = None,
     host_root: Path | None = None,
@@ -236,11 +251,7 @@ def _iter_crash_locations(
     onto ``host_root`` so host step scans match.
     """
     host = host_root or Path.cwd()
-    for phase in ("setup", "call"):
-        ph_raw = test.get(phase) or {}
-        if not isinstance(ph_raw, dict):
-            continue
-        ph: PhaseResult = cast(PhaseResult, ph_raw)
+    for ph in _iter_phase_dicts(test):
         crash_raw = ph.get("crash") or {}
         if not isinstance(crash_raw, dict):
             continue
@@ -261,7 +272,7 @@ def _iter_crash_locations(
 
 
 def match_premature_by_crash(
-    test: dict,
+    test: TestReportEntry,
     premature_xfails: Sequence[PrematureXfail],
     *,
     artifact_root: str | None = None,
@@ -278,7 +289,7 @@ def match_premature_by_crash(
 
 
 def crash_line_drift_warnings(
-    test: dict,
+    test: TestReportEntry,
     premature_xfails: Sequence[PrematureXfail],
     *,
     artifact_root: str | None = None,
@@ -309,20 +320,22 @@ def crash_line_drift_warnings(
 # ── JSON test result parser ───────────────────────────────────────────
 
 
-def parse_test_results(json_path: Path) -> tuple[list[dict], list[dict], list[dict], dict]:
+def parse_test_results(
+    json_path: Path,
+) -> tuple[list[TestReportEntry], list[TestReportEntry], list[TestReportEntry], dict[str, Any]]:
     """Parse BDD JSON results into (xfailed, xpassed, all_tests, data).
 
-    Returns the raw ``data`` dict so callers can read ``root`` for path remap
-    and refuse empty artifacts.
+    Returns the raw ``data`` dict so callers can read ``root`` for path remap.
+    Empty-artifact refusal lives in ``load_bdd_artifact`` (used by ``main``).
     """
     data = json.loads(json_path.read_text(encoding="utf-8"))
-    all_tests = list(data["tests"])
+    all_tests: list[TestReportEntry] = list(data["tests"])
     xfailed = [t for t in all_tests if t["outcome"] == "xfailed"]
     xpassed = [t for t in all_tests if t["outcome"] == "xpassed"]
     return xfailed, xpassed, all_tests, data
 
 
-def extract_tags(test_entry: dict) -> set[str]:
+def extract_tags(test_entry: TestReportEntry) -> set[str]:
     """Extract BDD tags from test entry keywords."""
     tags = set()
     for kw in test_entry.get("keywords", []):
@@ -335,7 +348,7 @@ def extract_tags(test_entry: dict) -> set[str]:
 
 
 def classify_xfail(
-    test: dict,
+    test: TestReportEntry,
     tag_map: dict[str, tuple[str, str]],
     premature_xfails: Sequence[PrematureXfail],
     *,
@@ -534,7 +547,7 @@ class XpassBuckets(NamedTuple):
 
 
 def classify_xpassed(
-    all_tests: list[dict],
+    all_tests: list[TestReportEntry],
     *,
     force_confirm: bool = False,
     ledger_bases: set[str] | None = None,
@@ -547,7 +560,8 @@ def classify_xpassed(
     (STALE_CONFIRM) rather than firm graduation. When the artifact lacks
     e2e_rest entirely (``force_confirm``), every graduation routes to confirm.
     Bases in the e2e_rest known-failures ledger without a present e2e_rest row
-    also confirm (ledger markers are outside conftest tags).
+    also confirm (ledger markers are outside conftest tags — via
+    ``grade_base(..., ledger_member=...)``).
 
     ``mixed_examples`` bases (present transports, none passing after aggregate)
     land in the partial bucket so listing counts match.
@@ -565,12 +579,12 @@ def classify_xpassed(
     nodeid_outcomes = [(t["nodeid"], t["outcome"]) for t in all_tests]
     ledger = ledger_bases or set()
     for base in xpassed_bases:
-        grade = grade_base(base, nodeid_outcomes, force_confirm=force_confirm)
-        # Ledger-only markers: do not firm-graduate when e2e_rest is absent for base.
-        if grade.graduates and not grade.needs_confirmation and base in ledger:
-            if "e2e_rest" not in grade.passing and "e2e_rest" not in grade.missing:
-                confirm.add(base)
-                continue
+        grade = grade_base(
+            base,
+            nodeid_outcomes,
+            force_confirm=force_confirm,
+            ledger_member=base in ledger,
+        )
         if grade.graduates:
             if grade.needs_confirmation:
                 confirm.add(base)
@@ -773,30 +787,18 @@ def main() -> None:
     premature_xfails = find_premature_xfails(steps_dir)
     print(f"  Found {len(premature_xfails)} premature xfail functions: {sorted(p.name for p in premature_xfails)}")
 
-    # Step 3: Parse test results
+    # Step 3: Parse test results (shared empty guard + census)
     print(f"Parsing {json_path}...")
-    xfailed_tests, xpassed_tests, all_tests, data = parse_test_results(json_path)
+    loaded = load_bdd_artifact(json_path)
+    all_tests = loaded.tests
+    xfailed_tests = [t for t in all_tests if t["outcome"] == "xfailed"]
+    xpassed_tests = [t for t in all_tests if t["outcome"] == "xpassed"]
     print(f"  Parsed {len(all_tests)} tests ({len(xfailed_tests)} xfailed, {len(xpassed_tests)} xpassed)")
-    if not all_tests:
-        print("ERROR: artifact contains 0 tests — refusing to emit an all-clear report.")
-        print('  Empty {"tests": []} is indistinguishable from a full suite with nothing to fix.')
-        raise SystemExit(2)
 
-    artifact_root = data.get("root")
-    if isinstance(artifact_root, str):
+    artifact_root = loaded.artifact_root
+    if artifact_root:
         print(f"  Artifact root: {artifact_root} (crash paths remapped onto {host_root})")
-    else:
-        artifact_root = None
-
-    census = artifact_transport_census((t["nodeid"], t["outcome"]) for t in all_tests)
-    force_confirm = census.incomplete_e2e
-    if force_confirm:
-        print(
-            "  WARNING: e2e_rest appears for no base in this artifact — "
-            "every graduation routes to STALE_CONFIRM (incomplete tox/bdd half-run)."
-        )
-    elif census.has_e2e_rest and census.transports_seen == frozenset({"e2e_rest"}):
-        print("  NOTE: only e2e_rest transport present in artifact.")
+    force_confirm = loaded.force_confirm
 
     ledger_bases = load_e2e_rest_known_failure_bases(Path(args.e2e_ledger))
 

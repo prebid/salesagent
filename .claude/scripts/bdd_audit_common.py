@@ -25,10 +25,12 @@ Canonical conftest tag parsing lives here as ``parse_conftest_xfail_tags``
 
 from __future__ import annotations
 
+import json
 import re
+import sys
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import NamedTuple, TypedDict
+from typing import Any, NamedTuple, TypedDict
 
 # `[` anchor + `(?:-|])` tail delimiter recognizes full ids (including
 # `e2e_rest` / `e2e_mcp` / `e2e_a2a`); longer e2e_* alternatives come first.
@@ -77,6 +79,15 @@ class ArtifactCensus(NamedTuple):
     transports_seen: frozenset[str]
     has_e2e_rest: bool
     incomplete_e2e: bool  # e2e_rest absent for every base → force CONFIRM
+
+
+class LoadedArtifact(NamedTuple):
+    """Shared bdd.json load: tests, outcomes, and census-driven force_confirm."""
+
+    tests: list[dict[str, Any]]
+    nodeid_outcomes: list[tuple[str, str]]
+    force_confirm: bool
+    artifact_root: str | None
 
 
 # Outcomes that count as "this transport passed for the scenario base".
@@ -239,23 +250,60 @@ def load_e2e_rest_known_failure_bases(ledger_path: Path) -> set[str]:
     return bases
 
 
+def load_bdd_artifact(path: Path) -> LoadedArtifact:
+    """Load bdd.json with the shared empty-artifact guard and transport census.
+
+    Empty ``{"tests": []}`` is indistinguishable from a clean run — refuse with
+    exit 2 and one canonical stderr message. When ``e2e_rest`` is absent from
+    the whole artifact, ``force_confirm`` is True and a single warning is
+    emitted on stderr so all four consumers grade identically.
+    """
+    data = json.loads(path.read_text(encoding="utf-8"))
+    tests = list(data.get("tests") or [])
+    if not tests:
+        print(
+            'ERROR: artifact contains 0 tests — refusing empty {"tests": []}.',
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    nodeid_outcomes = [(t["nodeid"], t["outcome"]) for t in tests]
+    census = artifact_transport_census(nodeid_outcomes)
+    force_confirm = census.incomplete_e2e
+    if force_confirm:
+        print(
+            "WARNING: e2e_rest appears for no base — every graduation routes to confirm.",
+            file=sys.stderr,
+        )
+    root = data.get("root")
+    artifact_root = root if isinstance(root, str) else None
+    return LoadedArtifact(
+        tests=tests,
+        nodeid_outcomes=nodeid_outcomes,
+        force_confirm=force_confirm,
+        artifact_root=artifact_root,
+    )
+
+
 def grade_base(
     base: str,
     nodeid_outcomes: Iterable[tuple[str, str]],
     *,
     force_confirm: bool = False,
+    ledger_member: bool = False,
 ) -> GradeResult:
     """Grade one scenario base end-to-end for both audit classifiers.
 
     Composes ``outcomes_by_transport_for_base`` + ``transport_coverage`` and
-    applies the single-/e2e_rest-only confirmation gate so callers never
-    re-wire that pipeline (or re-scan for ``present_count``).
+    applies the confirmation gate so callers never re-wire that pipeline (or
+    re-scan for ``present_count``).
 
     ``needs_confirmation`` is True when every present transport passed but only
-    one *non-legacy* transport is present, or when ``force_confirm`` is set
-    (artifact-wide e2e_rest absence / ledger awareness). Lone ``e2e_rest`` is
-    the common single-transport case; many e2e xfails are still ``strict=True``
-    in conftest — do not claim they are non-strict.
+    one *non-legacy* transport is present, when ``force_confirm`` is set
+    (artifact-wide e2e_rest absence), or when ``ledger_member`` is True and
+    ``e2e_rest`` is absent for this base (ledger-awareness). Lone ``e2e_rest``
+    is the common single-transport case; many e2e xfails are still
+    ``strict=True`` in conftest — do not claim they are non-strict.
 
     ``mixed_examples`` is True when the base has present transports but none
     passed (every present transport failed/xfailed/skipped after aggregate).
@@ -266,6 +314,14 @@ def grade_base(
     gate_transports = {t for t in outcomes if t not in _LEGACY_GATE_EXCLUDE}
     gate_count = len(gate_transports) if gate_transports else present_count
     needs_confirmation = bool(coverage.graduates and (gate_count <= 1 or force_confirm))
+    if (
+        coverage.graduates
+        and not needs_confirmation
+        and ledger_member
+        and "e2e_rest" not in coverage.passing
+        and "e2e_rest" not in coverage.missing
+    ):
+        needs_confirmation = True
     mixed_examples = bool(present_count > 0 and not coverage.passing)
     return GradeResult(
         graduates=coverage.graduates,
