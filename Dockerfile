@@ -16,7 +16,7 @@ FROM --platform=$TARGETPLATFORM ghcr.io/astral-sh/uv:${UV_VERSION}@${UV_IMAGE_DI
 # binaries lag the latest Go patch, so their embedded stdlib fails the release
 # Trivy gate on freshly-published Go CVEs; building here keeps it current.
 # Digest is the multi-arch manifest list for golang:1.26-trixie (resolves per TARGETPLATFORM).
-FROM golang:1.26-trixie@sha256:68b7145ec43d1820b9a56704554b53d1520aa2a15cb5233e374188a31b2a1bce AS supercronic
+FROM golang:1.26-trixie@sha256:4ee9ffa999b4583ce281939cdff828763083610292f252279a0cee77473bd9a7 AS supercronic
 ENV CGO_ENABLED=0
 RUN go install github.com/aptible/supercronic@v0.2.46
 
