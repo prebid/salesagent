@@ -43,19 +43,20 @@ Xfail *reasons* are read from ``setup.crash.message`` / ``call.crash.message``
 from __future__ import annotations
 
 import ast
-import json
 import sys
 from collections import Counter, defaultdict
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, NamedTuple, TypedDict, cast
+from typing import NamedTuple, TypedDict, cast
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from bdd_audit_common import (  # noqa: E402
+    E2E_LEDGER_PATH,
+    REPO_ROOT,
     extract_scenario_base,
     extract_transport,
     extract_uc,
@@ -320,19 +321,31 @@ def crash_line_drift_warnings(
 # ── JSON test result parser ───────────────────────────────────────────
 
 
-def parse_test_results(
-    json_path: Path,
-) -> tuple[list[TestReportEntry], list[TestReportEntry], list[TestReportEntry], dict[str, Any]]:
-    """Parse BDD JSON results into (xfailed, xpassed, all_tests, data).
+class ParsedTestResults(NamedTuple):
+    """Named parse so xfailed/xpassed/all_tests slots cannot be swapped."""
 
-    Returns the raw ``data`` dict so callers can read ``root`` for path remap.
-    Empty-artifact refusal lives in ``load_bdd_artifact`` (used by ``main``).
+    xfailed: list[TestReportEntry]
+    xpassed: list[TestReportEntry]
+    all_tests: list[TestReportEntry]
+    artifact_root: str | None
+
+
+def parse_test_results(json_path: Path) -> ParsedTestResults:
+    """Parse BDD JSON results via the shared ``load_bdd_artifact`` seam.
+
+    Empty-artifact refusal + census live in ``load_bdd_artifact`` (same path
+    ``main`` uses).
     """
-    data = json.loads(json_path.read_text(encoding="utf-8"))
-    all_tests: list[TestReportEntry] = list(data["tests"])
+    loaded = load_bdd_artifact(json_path)
+    all_tests: list[TestReportEntry] = cast(list[TestReportEntry], loaded.tests)
     xfailed = [t for t in all_tests if t["outcome"] == "xfailed"]
     xpassed = [t for t in all_tests if t["outcome"] == "xpassed"]
-    return xfailed, xpassed, all_tests, data
+    return ParsedTestResults(
+        xfailed=xfailed,
+        xpassed=xpassed,
+        all_tests=all_tests,
+        artifact_root=loaded.artifact_root,
+    )
 
 
 def extract_tags(test_entry: TestReportEntry) -> set[str]:
@@ -585,12 +598,11 @@ def classify_xpassed(
             force_confirm=force_confirm,
             ledger_member=base in ledger,
         )
-        if grade.graduates:
-            if grade.needs_confirmation:
-                confirm.add(base)
-            else:
-                graduate.add(base)
-        elif grade.passing or grade.mixed_examples:
+        if grade.bucket == "confirm":
+            confirm.add(base)
+        elif grade.bucket == "graduate":
+            graduate.add(base)
+        elif grade.bucket == "partial":
             partial_passing[base] = grade.passing
             partial_missing[base] = grade.missing
     return XpassBuckets(
@@ -735,7 +747,7 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
     if output_path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(text)
-        print(f"Report written to {output_path}")
+        print(f"Report written to {output_path}", file=sys.stderr)
     return text
 
 
@@ -745,29 +757,28 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
 def main() -> None:
     import argparse
 
-    repo_root = Path(__file__).resolve().parent.parent.parent
     parser = argparse.ArgumentParser(description="Deterministic BDD xfail audit")
     parser.add_argument("json_path", help="Path to bdd.json test results")
     parser.add_argument("--output", "-o", help="Output markdown path", default=None)
     parser.add_argument(
         "--conftest",
         help="Path to conftest.py",
-        default=str(repo_root / "tests" / "bdd" / "conftest.py"),
+        default=str(REPO_ROOT / "tests" / "bdd" / "conftest.py"),
     )
     parser.add_argument(
         "--steps-dir",
         help="Path to step definitions",
-        default=str(repo_root / "tests" / "bdd" / "steps"),
+        default=str(REPO_ROOT / "tests" / "bdd" / "steps"),
     )
     parser.add_argument(
         "--repo-root",
         help="Host repo root for remapping container crash paths (default: inferred)",
-        default=str(repo_root),
+        default=str(REPO_ROOT),
     )
     parser.add_argument(
         "--e2e-ledger",
         help="Path to e2e_rest_known_failures.txt",
-        default=str(repo_root / "tests" / "bdd" / "e2e_rest_known_failures.txt"),
+        default=str(E2E_LEDGER_PATH),
     )
     args = parser.parse_args()
 
@@ -778,39 +789,54 @@ def main() -> None:
     output_path = Path(args.output) if args.output else None
 
     # Step 1: Parse conftest xfail tags
-    print("Parsing conftest.py xfail tags...")
+    print("Parsing conftest.py xfail tags...", file=sys.stderr)
     tag_map = parse_conftest_xfail_tags(conftest_path)
-    print(f"  Found {len(tag_map)} tag → reason mappings")
+    print(f"  Found {len(tag_map)} tag → reason mappings", file=sys.stderr)
 
     # Step 2: Find premature xfails in step functions
-    print("Scanning step functions for premature xfails...")
+    print("Scanning step functions for premature xfails...", file=sys.stderr)
     premature_xfails = find_premature_xfails(steps_dir)
-    print(f"  Found {len(premature_xfails)} premature xfail functions: {sorted(p.name for p in premature_xfails)}")
+    print(
+        f"  Found {len(premature_xfails)} premature xfail functions: {sorted(p.name for p in premature_xfails)}",
+        file=sys.stderr,
+    )
 
     # Step 3: Parse test results (shared empty guard + census)
-    print(f"Parsing {json_path}...")
+    print(f"Parsing {json_path}...", file=sys.stderr)
     loaded = load_bdd_artifact(json_path)
     all_tests = cast(list[TestReportEntry], loaded.tests)
     xfailed_tests = [t for t in all_tests if t["outcome"] == "xfailed"]
     xpassed_tests = [t for t in all_tests if t["outcome"] == "xpassed"]
-    print(f"  Parsed {len(all_tests)} tests ({len(xfailed_tests)} xfailed, {len(xpassed_tests)} xpassed)")
+    print(
+        f"  Parsed {len(all_tests)} tests ({len(xfailed_tests)} xfailed, {len(xpassed_tests)} xpassed)",
+        file=sys.stderr,
+    )
 
     artifact_root = loaded.artifact_root
     if artifact_root:
-        print(f"  Artifact root: {artifact_root} (crash paths remapped onto {host_root})")
+        print(
+            f"  Artifact root: {artifact_root} (crash paths remapped onto {host_root})",
+            file=sys.stderr,
+        )
     force_confirm = loaded.force_confirm
 
     ledger_bases = load_e2e_rest_known_failure_bases(Path(args.e2e_ledger))
 
     # Step 4: Classify xpassed tests (needs full suite for present-transport set)
-    print("Classifying xpassed tests...")
+    print("Classifying xpassed tests...", file=sys.stderr)
     buckets = classify_xpassed(all_tests, force_confirm=force_confirm, ledger_bases=ledger_bases)
-    print(f"  {len(buckets.graduate)} pass all present transports (graduation candidates)")
-    print(f"  {len(buckets.confirm)} need confirmation (single-/e2e_rest-only / incomplete)")
-    print(f"  {len(buckets.partial_passing)} pass some transports (partial)")
+    print(
+        f"  {len(buckets.graduate)} pass all present transports (graduation candidates)",
+        file=sys.stderr,
+    )
+    print(
+        f"  {len(buckets.confirm)} need confirmation (single-/e2e_rest-only / incomplete)",
+        file=sys.stderr,
+    )
+    print(f"  {len(buckets.partial_passing)} pass some transports (partial)", file=sys.stderr)
 
     # Step 5: Classify each xfailed test
-    print("Classifying xfailed tests...")
+    print("Classifying xfailed tests...", file=sys.stderr)
     report = AuditReport(
         total_xfailed=len(xfailed_tests),
         total_xpassed=len(xpassed_tests),
@@ -826,7 +852,7 @@ def main() -> None:
             if warning not in seen_drift:
                 seen_drift.add(warning)
                 report.line_drift_warnings.append(warning)
-                print(f"  WARNING: {warning}")
+                print(f"  WARNING: {warning}", file=sys.stderr)
         entry = classify_xfail(
             test,
             tag_map,
@@ -859,14 +885,14 @@ def main() -> None:
         report.xpassed_entries.append(entry)
 
     # Step 7: Generate report
-    print("\nGenerating report...")
+    print("\nGenerating report...", file=sys.stderr)
     text = generate_report(report, output_path)
 
     if not output_path:
         print(text)
     else:
-        # Print summary to stdout
-        print("\n=== SUMMARY ===")
+        # Progress summary on stderr so stdout stays report-only when piped
+        print("\n=== SUMMARY ===", file=sys.stderr)
         for cat in [
             "PRODUCTION_GAP",
             "TRANSPORT_GAP",
@@ -878,12 +904,12 @@ def main() -> None:
         ]:
             count = len(report.by_category.get(cat, []))
             if count > 0:
-                print(f"  {cat}: {count}")
-        print(f"\n  STALE (graduation candidates): {len(buckets.graduate)} scenarios")
-        print(f"  STALE_CONFIRM (needs confirmation): {len(buckets.confirm)} scenarios")
-        print(f"  PARTIAL_PASS: {len(buckets.partial_passing)} scenarios")
+                print(f"  {cat}: {count}", file=sys.stderr)
+        print(f"\n  STALE (graduation candidates): {len(buckets.graduate)} scenarios", file=sys.stderr)
+        print(f"  STALE_CONFIRM (needs confirmation): {len(buckets.confirm)} scenarios", file=sys.stderr)
+        print(f"  PARTIAL_PASS: {len(buckets.partial_passing)} scenarios", file=sys.stderr)
         if report.line_drift_warnings:
-            print(f"  line-drift warnings: {len(report.line_drift_warnings)}")
+            print(f"  line-drift warnings: {len(report.line_drift_warnings)}", file=sys.stderr)
 
 
 if __name__ == "__main__":

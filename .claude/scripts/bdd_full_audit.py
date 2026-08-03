@@ -17,7 +17,6 @@ Usage:
 
 from __future__ import annotations
 
-import json
 import re
 import sys
 from collections import Counter, defaultdict
@@ -30,6 +29,8 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from bdd_audit_common import (  # noqa: E402
+    E2E_LEDGER_PATH,
+    REPO_ROOT,
     extract_longrepr_e_line,
     extract_scenario_base,
     extract_transport,
@@ -38,14 +39,14 @@ from bdd_audit_common import (  # noqa: E402
     load_bdd_artifact,
     load_e2e_rest_known_failure_bases,
     short_base,
+    short_nodeid,
     tag_reasons,
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+PROJECT_ROOT = REPO_ROOT
 INSPECTOR_DIR = PROJECT_ROOT / ".claude" / "reports" / "inspect-all-steps"
 CONFTEST_PATH = PROJECT_ROOT / "tests" / "bdd" / "conftest.py"
 STEPS_DIR = PROJECT_ROOT / "tests" / "bdd" / "steps"
-E2E_LEDGER_PATH = PROJECT_ROOT / "tests" / "bdd" / "e2e_rest_known_failures.txt"
 
 
 # ── Category taxonomy ────────────────────────────────────────────────
@@ -112,23 +113,22 @@ class InspectorFlag:
 # ── Parsing ──────────────────────────────────────────────────────────
 
 
+def _test_entry_from_raw(t: dict) -> TestEntry:
+    """Build a TestEntry from one bdd.json test dict (null-safe longrepr)."""
+    longrepr = t.get("call", {}).get("longrepr") or ""
+    return TestEntry(
+        nodeid=t["nodeid"],
+        outcome=t["outcome"],
+        keywords=t.get("keywords", []),
+        error=extract_longrepr_e_line(longrepr),
+        longrepr=longrepr[:1000],
+    )
+
+
 def parse_test_results(json_path: Path) -> list[TestEntry]:
-    """Parse bdd.json into TestEntry list."""
-    data = json.loads(json_path.read_text())
-    entries = []
-    for t in data["tests"]:
-        longrepr = t.get("call", {}).get("longrepr", "")
-        error = extract_longrepr_e_line(longrepr)
-        entries.append(
-            TestEntry(
-                nodeid=t["nodeid"],
-                outcome=t["outcome"],
-                keywords=t.get("keywords", []),
-                error=error,
-                longrepr=longrepr[:1000],
-            )
-        )
-    return entries
+    """Parse bdd.json into TestEntry list via shared ``load_bdd_artifact``."""
+    loaded = load_bdd_artifact(json_path)
+    return [_test_entry_from_raw(t) for t in loaded.tests]
 
 
 def parse_inspector_reports() -> list[InspectorFlag]:
@@ -169,26 +169,6 @@ def parse_conftest_xfail_tags(conftest_path: Path | None = None) -> dict[str, st
     return tag_reasons(path)
 
 
-def parse_conftest_strict_tags() -> set[str]:
-    """Parse conftest.py for tags with strict=True in nested-dict form.
-
-    Note: most live ``strict=True`` markers are pytest.mark kwargs, not this
-    dict form — the reachable STALE_STRICT_XFAIL arm keys on ``XPASS(strict)``
-    in longrepr instead.
-    """
-    strict_tags: set[str] = set()
-    if not CONFTEST_PATH.exists():
-        return strict_tags
-
-    content = CONFTEST_PATH.read_text(encoding="utf-8", errors="replace")
-    for m in re.finditer(
-        r'"(T-[^"]+)"\s*:\s*\{[^}]*"strict"\s*:\s*True',
-        content,
-    ):
-        strict_tags.add(m.group(1))
-    return strict_tags
-
-
 # ── Classification ───────────────────────────────────────────────────
 #
 # Decision tree for failed tests:
@@ -202,14 +182,13 @@ def parse_conftest_strict_tags() -> set[str]:
 #   6. Step code wrong? → FIX_NOW:STEP_BUG
 
 
-def classify_failure(entry: TestEntry, _strict_tags: set[str]) -> tuple[str, str, str]:
+def classify_failure(entry: TestEntry) -> tuple[str, str, str]:
     """Classify a failed test. Returns (bucket, category, detail).
 
     bucket: FIX_NOW | XFAIL_IT | FEATURE_FIX
 
-    ``_strict_tags`` retained for call-site compatibility; the reachable
-    STALE_STRICT_XFAIL arm keys on ``XPASS(strict)`` in longrepr (the
-    nested-dict conftest form yields 0 tags against the live file).
+    STALE_STRICT_XFAIL keys on ``XPASS(strict)`` in longrepr (not a dead
+    conftest-tag scan).
     """
     error = entry.error
     longrepr = entry.longrepr
@@ -312,16 +291,14 @@ def classify_xpass(
         force_confirm=force_confirm,
         ledger_member=base in ledger,
     )
-    if grade.graduates:
-        if grade.needs_confirmation:
-            return ClassifiedXpass(
-                bucket="FIX_NOW",
-                category="GRADUATE_CONFIRM",
-                detail=(
-                    f"All {grade.present_count} present transports pass (needs confirmation): {sorted(grade.passing)}"
-                ),
-                present_count=grade.present_count,
-            )
+    if grade.bucket == "confirm":
+        return ClassifiedXpass(
+            bucket="FIX_NOW",
+            category="GRADUATE_CONFIRM",
+            detail=(f"All {grade.present_count} present transports pass (needs confirmation): {sorted(grade.passing)}"),
+            present_count=grade.present_count,
+        )
+    if grade.bucket == "graduate":
         return ClassifiedXpass(
             bucket="FIX_NOW",
             category="GRADUATE",
@@ -359,7 +336,6 @@ def generate_work_items(
     xpassed: list[TestEntry],
     inspector_flags: list[InspectorFlag],
     tag_reasons_map: dict[str, str],
-    strict_tags: set[str],
     all_entries: list[TestEntry],
     *,
     force_confirm: bool = False,
@@ -374,7 +350,7 @@ def generate_work_items(
 
     for entry in failed:
         uc = extract_uc(entry.nodeid)
-        bucket, cat, _ = classify_failure(entry, strict_tags)
+        bucket, cat, _ = classify_failure(entry)
         fail_groups[(uc, bucket, cat)].append(entry)
 
     for (uc, bucket, cat), entries in fail_groups.items():
@@ -397,7 +373,7 @@ def generate_work_items(
                     uc=uc,
                     test_count=len(group),
                     details=rep_error[:150],
-                    sample_tests=[short_base(e.nodeid)[:80] for e in group[:3]],
+                    sample_tests=[short_nodeid(e.nodeid) for e in group[:3]],
                 )
             )
 
@@ -423,7 +399,7 @@ def generate_work_items(
                 uc=uc,
                 test_count=len(entries),
                 details=detail,
-                sample_tests=[short_base(e.nodeid)[:80] for e in entries[:5]],
+                sample_tests=[short_nodeid(e.nodeid) for e in entries[:5]],
             )
         )
 
@@ -444,7 +420,7 @@ def generate_work_items(
                 uc=uc,
                 test_count=len(entries),
                 details=f"{len(entries)} tests already xfailed",
-                sample_tests=[short_base(e.nodeid)[:80] for e in entries[:3]],
+                sample_tests=[short_nodeid(e.nodeid) for e in entries[:3]],
             )
         )
 
@@ -644,6 +620,11 @@ def main():
         help="Path to conftest.py",
         default=str(CONFTEST_PATH),
     )
+    parser.add_argument(
+        "--e2e-ledger",
+        help="Path to e2e_rest_known_failures.txt",
+        default=str(E2E_LEDGER_PATH),
+    )
     args = parser.parse_args()
 
     json_path = Path(args.json_path)
@@ -652,16 +633,7 @@ def main():
 
     print("Parsing test results...", file=sys.stderr)
     loaded = load_bdd_artifact(json_path)
-    entries = [
-        TestEntry(
-            nodeid=t["nodeid"],
-            outcome=t["outcome"],
-            keywords=t.get("keywords", []),
-            error=extract_longrepr_e_line(t.get("call", {}).get("longrepr", "")),
-            longrepr=(t.get("call", {}).get("longrepr", "") or "")[:1000],
-        )
-        for t in loaded.tests
-    ]
+    entries = [_test_entry_from_raw(t) for t in loaded.tests]
     summary = Counter(e.outcome for e in entries)
     print(f"  Parsed {len(entries)} tests: {dict(summary)}", file=sys.stderr)
 
@@ -672,10 +644,9 @@ def main():
 
     print("Parsing conftest xfail tags...", file=sys.stderr)
     tag_reasons_map = parse_conftest_xfail_tags(conftest_path)
-    strict_tags = parse_conftest_strict_tags()
-    print(f"  {len(tag_reasons_map)} tag reasons, {len(strict_tags)} strict tags", file=sys.stderr)
+    print(f"  {len(tag_reasons_map)} tag reasons", file=sys.stderr)
 
-    ledger_bases = load_e2e_rest_known_failure_bases(E2E_LEDGER_PATH)
+    ledger_bases = load_e2e_rest_known_failure_bases(Path(args.e2e_ledger))
 
     print("Parsing inspector reports...", file=sys.stderr)
     inspector_flags = parse_inspector_reports()
@@ -688,7 +659,6 @@ def main():
         xpassed=xpassed,
         inspector_flags=inspector_flags,
         tag_reasons_map=tag_reasons_map,
-        strict_tags=strict_tags,
         all_entries=entries,
         force_confirm=force_confirm,
         ledger_bases=ledger_bases,

@@ -30,7 +30,7 @@ import re
 import sys
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any, NamedTuple, TypedDict
+from typing import Any, Literal, NamedTuple, TypedDict
 
 # `[` anchor + `(?:-|])` tail delimiter recognizes full ids (including
 # `e2e_rest` / `e2e_mcp` / `e2e_a2a`); longer e2e_* alternatives come first.
@@ -38,6 +38,12 @@ _TRANSPORT_RE = re.compile(r"\[(e2e_rest|e2e_mcp|e2e_a2a|impl|a2a|mcp|rest)(?:-|
 
 # ANSI CSI / OSC sequences — strip before salvage regex matching.
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07")
+
+# Shared repo / ledger paths — one name for every consumer (CLI override OK).
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+E2E_LEDGER_PATH = REPO_ROOT / "tests" / "bdd" / "e2e_rest_known_failures.txt"
+
+GradeBucket = Literal["graduate", "confirm", "partial"]
 
 
 class StepRecord(TypedDict):
@@ -55,7 +61,14 @@ STEP_RECORD_KEYS: frozenset[str] = frozenset(StepRecord.__annotations__)
 
 
 class GradeResult(NamedTuple):
-    """Named grade so callers cannot swap the two bools positionally."""
+    """Named grade so callers cannot swap the two bools positionally.
+
+    ``bucket`` is the graduate/confirm/partial verdict consumers switch on —
+    do not re-derive it from ``graduates`` / ``needs_confirmation`` /
+    ``passing`` / ``mixed_examples``. ``outcomes`` is the per-transport
+    aggregated map already computed for the grade (do not hand-roll it).
+    ``bucket`` is ``None`` only for the degenerate empty-present case.
+    """
 
     graduates: bool
     passing: set[str]
@@ -63,6 +76,8 @@ class GradeResult(NamedTuple):
     present_count: int
     needs_confirmation: bool
     mixed_examples: bool
+    bucket: GradeBucket | None
+    outcomes: dict[str, str]
 
 
 class CoverageResult(NamedTuple):
@@ -119,6 +134,11 @@ def extract_scenario_base(nodeid: str) -> str:
 def short_base(base: str) -> str:
     """Shorten a scenario base to the final ``::`` segment for report bullets."""
     return base.rsplit("::", 1)[-1]
+
+
+def short_nodeid(nodeid: str, limit: int = 80) -> str:
+    """Shorten a full nodeid to the final ``::`` segment, truncated to ``limit``."""
+    return short_base(nodeid)[:limit]
 
 
 def extract_uc(text: str) -> str:
@@ -323,6 +343,13 @@ def grade_base(
     ):
         needs_confirmation = True
     mixed_examples = bool(present_count > 0 and not coverage.passing)
+    bucket: GradeBucket | None
+    if coverage.graduates:
+        bucket = "confirm" if needs_confirmation else "graduate"
+    elif coverage.passing or mixed_examples:
+        bucket = "partial"
+    else:
+        bucket = None
     return GradeResult(
         graduates=coverage.graduates,
         passing=coverage.passing,
@@ -330,6 +357,8 @@ def grade_base(
         present_count=present_count,
         needs_confirmation=needs_confirmation,
         mixed_examples=mixed_examples,
+        bucket=bucket,
+        outcomes=outcomes,
     )
 
 

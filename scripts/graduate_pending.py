@@ -18,34 +18,45 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import sys
 from collections import defaultdict
 from pathlib import Path
+from typing import TypedDict
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent.parent / ".claude" / "scripts"
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from bdd_audit_common import (  # noqa: E402
+    E2E_LEDGER_PATH,
     extract_scenario_base,
-    extract_transport,
     grade_base,
     load_bdd_artifact,
     load_e2e_rest_known_failure_bases,
     short_base,
 )
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-_E2E_LEDGER_PATH = _REPO_ROOT / "tests" / "bdd" / "e2e_rest_known_failures.txt"
+
+class GraduationAnalysis(TypedDict):
+    """Fixed seven-key payload from ``analyze`` (mypy-checked field names)."""
+
+    graduate_all: list[tuple[str, str]]
+    graduate_confirm: list[tuple[str, str]]
+    graduate_partial: list[tuple[str, str, dict[str, str]]]
+    tag_candidates: dict[str, list[tuple[str, str]]]
+    tag_blockers: dict[str, list[tuple[str, str, dict[str, str]]]]
+    test_tags: dict[str, set[str]]
+    force_confirm: bool
 
 
-def analyze(report_path: str, *, ledger_path: Path | None = None) -> dict:
+def analyze(report_path: str, *, ledger_path: Path | None = None) -> GraduationAnalysis:
     """Analyze JSON report and return graduation candidates via shared grade_base."""
     loaded = load_bdd_artifact(Path(report_path))
     tests = loaded.tests
     nodeid_outcomes = loaded.nodeid_outcomes
     force_confirm = loaded.force_confirm
-    ledger = load_e2e_rest_known_failure_bases(ledger_path or _E2E_LEDGER_PATH)
+    ledger = load_e2e_rest_known_failure_bases(ledger_path or E2E_LEDGER_PATH)
 
     # Collect tags per scenario base
     test_tags: dict[str, set[str]] = {}
@@ -71,22 +82,16 @@ def analyze(report_path: str, *, ledger_path: Path | None = None) -> dict:
             ledger_member=base in ledger,
         )
         scenario = short_base(base)
-        if grade.graduates:
-            if grade.needs_confirmation:
-                graduate_confirm.append((scenario, base))
-            else:
-                graduate_all.append((scenario, base))
-        elif grade.passing or grade.mixed_examples:
-            outcomes = {
-                t: o
-                for nid, o in nodeid_outcomes
-                if extract_scenario_base(nid) == base and (t := extract_transport(nid))
-            }
-            graduate_partial.append((scenario, base, outcomes))
+        if grade.bucket == "confirm":
+            graduate_confirm.append((scenario, base))
+        elif grade.bucket == "graduate":
+            graduate_all.append((scenario, base))
+        elif grade.bucket == "partial":
+            graduate_partial.append((scenario, base, grade.outcomes))
 
     # Group by tag for tag-level graduation
     tag_candidates: dict[str, list[tuple[str, str]]] = defaultdict(list)
-    tag_blockers: dict[str, list[tuple[str, str, dict]]] = defaultdict(list)
+    tag_blockers: dict[str, list[tuple[str, str, dict[str, str]]]] = defaultdict(list)
 
     for scenario, base in graduate_all:
         tags = test_tags.get(base, set())
@@ -111,7 +116,7 @@ def analyze(report_path: str, *, ledger_path: Path | None = None) -> dict:
     }
 
 
-def print_report(analysis: dict) -> None:
+def print_report(analysis: GraduationAnalysis) -> None:
     """Print human-readable graduation report."""
     grad_all = analysis["graduate_all"]
     grad_confirm = analysis["graduate_confirm"]
@@ -182,18 +187,21 @@ def print_report(analysis: dict) -> None:
         print("  (These need row-level graduation, not tag-level)")
 
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: uv run python scripts/graduate_pending.py <json-report> [--apply]")
-        sys.exit(1)
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Graduate @pending BDD tests that pass")
+    parser.add_argument("report_path", help="Path to pytest JSON report")
+    parser.add_argument("--apply", action="store_true", help="Print graduation apply hints")
+    parser.add_argument(
+        "--e2e-ledger",
+        default=str(E2E_LEDGER_PATH),
+        help="Path to e2e_rest_known_failures.txt",
+    )
+    args = parser.parse_args()
 
-    report_path = sys.argv[1]
-    apply = "--apply" in sys.argv
-
-    analysis = analyze(report_path)
+    analysis = analyze(args.report_path, ledger_path=Path(args.e2e_ledger))
     print_report(analysis)
 
-    if apply:
+    if args.apply:
         print(f"\n{'=' * 70}")
         print("APPLYING GRADUATIONS")
         print(f"{'=' * 70}")

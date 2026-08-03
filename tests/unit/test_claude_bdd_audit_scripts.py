@@ -302,7 +302,6 @@ class TestClassifyXpass:
             xpassed=[e for e in all_entries if e.outcome == "xpassed"],
             inspector_flags=[],
             tag_reasons_map={},
-            strict_tags=set(),
             all_entries=all_entries,
         )
         cats = {i.category for i in items}
@@ -317,7 +316,6 @@ class TestClassifyXpass:
             xpassed=all_entries,
             inspector_flags=[],
             tag_reasons_map={},
-            strict_tags=set(),
             all_entries=all_entries,
         )
         assert len(items) == 1
@@ -334,7 +332,6 @@ class TestClassifyXpass:
             xpassed=all_entries,
             inspector_flags=[],
             tag_reasons_map={},
-            strict_tags=set(),
             all_entries=all_entries,
         )
         assert len(items) == 1
@@ -466,7 +463,7 @@ class TestParseTestResultsCallSites:
                             "nodeid": "tests/bdd/test_uc004.py::test_s[e2e_rest]",
                             "outcome": "xpassed",
                             "keywords": [],
-                            "call": {"longrepr": "E   AssertionError: boom"},
+                            "call": {"longrepr": None},
                         }
                     ]
                 }
@@ -474,7 +471,8 @@ class TestParseTestResultsCallSites:
         )
         entries = bdd_full_audit.parse_test_results(report)
         assert len(entries) == 1
-        assert entries[0].error == "AssertionError: boom"
+        assert entries[0].error == ""
+        assert entries[0].longrepr == ""
         assert bdd_full_audit.extract_transport(entries[0].nodeid) == "e2e_rest"
 
     def test_cross_reference_parse_round_trip(self, cross_reference_audit, tmp_path: Path) -> None:
@@ -507,9 +505,9 @@ class TestParseTestResultsCallSites:
                 }
             )
         )
-        xfailed, xpassed, all_tests, data = audit_xfails.parse_test_results(report)
+        xfailed, xpassed, all_tests, artifact_root = audit_xfails.parse_test_results(report)
         assert len(xfailed) == 1
-        assert data["root"] == "/app"
+        assert artifact_root == "/app"
         assert audit_xfails.extract_transport(xfailed[0]["nodeid"]) == "a2a"
 
 
@@ -845,13 +843,29 @@ class TestSalvageDedupe:
 
     def test_parse_raw_output_strips_ansi(self, salvage_audit, tmp_path: Path) -> None:
         raw = tmp_path / "out.txt"
-        # Colored pass-1 lines + totals
+        # Interleaved ANSI inside the matched span (real rich/pytest coloring).
+        # Whole-line wrappers would still match with strip_ansi neutered.
         raw.write_text(
-            "\x1b[32m[1/2] then_foo... FLAG\x1b[0m\n\x1b[32m[2/2] then_bar... PASS\x1b[0m\n1 flagged, 1 passed\n"
+            "[1/2] \x1b[1mthen_foo\x1b[0m... \x1b[31mFLAG\x1b[0m\n"
+            "[2/2] \x1b[1mthen_bar\x1b[0m... \x1b[32mPASS\x1b[0m\n"
+            "1 flagged, 1 passed\n"
         )
         parsed = salvage_audit.parse_raw_output(raw)
         assert len(parsed["pass1"]) == 2
+        assert parsed["pass1"][0]["func_name"] == "then_foo"
+        assert parsed["pass1"][0]["verdict"] == "FLAG"
         assert parsed["pass1_total"] == 2
+
+    def test_parse_raw_output_raises_on_row_total_mismatch(self, salvage_audit, tmp_path: Path) -> None:
+        raw = tmp_path / "out.txt"
+        # Same interleaved fixture; totals disagree with row count → ValueError guard.
+        raw.write_text(
+            "[1/2] \x1b[1mthen_foo\x1b[0m... \x1b[31mFLAG\x1b[0m\n"
+            "[2/2] \x1b[1mthen_bar\x1b[0m... \x1b[32mPASS\x1b[0m\n"
+            "50 flagged, 49 passed\n"
+        )
+        with pytest.raises(ValueError, match="pass1 row count"):
+            salvage_audit.parse_raw_output(raw)
 
     def test_step_record_key_set_oracle(self, bdd_audit_common) -> None:
         assert bdd_audit_common.STEP_RECORD_KEYS == {
@@ -1054,6 +1068,8 @@ class TestGradeResultNamedFields:
         assert grade.passing == {"a2a"}
         assert grade.missing == set()
         assert grade.mixed_examples is False
+        assert grade.bucket == "confirm"
+        assert grade.outcomes == {"a2a": "xpassed"}
 
     def test_transport_coverage_named_fields(self, bdd_audit_common) -> None:
         coverage = bdd_audit_common.transport_coverage({"a2a": "xpassed", "mcp": "xfailed"})
@@ -1064,6 +1080,10 @@ class TestGradeResultNamedFields:
     def test_short_base(self, bdd_audit_common) -> None:
         assert bdd_audit_common.short_base("tests/bdd/test_uc004.py::test_s") == "test_s"
         assert bdd_audit_common.short_base("bare") == "bare"
+
+    def test_short_nodeid(self, bdd_audit_common) -> None:
+        assert bdd_audit_common.short_nodeid("tests/bdd/test_uc004.py::test_s[a2a]") == "test_s[a2a]"
+        assert bdd_audit_common.short_nodeid("x" * 100, limit=10) == "x" * 10
 
 
 class TestSurvivingMechanismArms:
@@ -1106,6 +1126,6 @@ class TestSurvivingMechanismArms:
             longrepr="[XPASS(strict)] unexpected pass",
             error="",
         )
-        bucket, cat, _ = bdd_full_audit.classify_failure(entry, set())
+        bucket, cat, _ = bdd_full_audit.classify_failure(entry)
         assert bucket == "FIX_NOW"
         assert cat == "STALE_STRICT_XFAIL"
