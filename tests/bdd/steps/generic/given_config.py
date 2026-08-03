@@ -15,6 +15,7 @@ from collections.abc import Sequence
 
 from pytest_bdd import given, parsers
 
+from tests.bdd.steps._datatable import datatable_to_dicts
 from tests.bdd.steps.generic._registry import sync_registry as _sync_registry
 from tests.factories.format import (
     CATEGORY_MAP,
@@ -39,16 +40,6 @@ def _add_format(ctx: dict, fmt: object) -> None:
         ctx["registry_formats"] = []
         ctx["_config_replaced"] = True
     ctx["registry_formats"].append(fmt)
-
-
-def _datatable_to_dicts(datatable: Sequence[Sequence[object]]) -> list[dict[str, str]]:
-    """Convert pytest-bdd raw datatable (list of lists) to list of dicts.
-
-    The first row is treated as column headers. Remaining rows become dicts
-    keyed by those headers.
-    """
-    headers = [str(cell) for cell in datatable[0]]
-    return [{headers[i]: str(cell) for i, cell in enumerate(row)} for row in datatable[1:]]
 
 
 # ── Format by type + asset type ──────────────────────────────────────
@@ -120,7 +111,7 @@ def given_registry_format_with_asset_group(ctx: dict, name: str, type_a: str, ty
 @given(parsers.parse('the registry has format "{name}" with renders:'))
 def given_registry_format_with_renders(ctx: dict, name: str, datatable: Sequence[Sequence[object]]) -> None:
     """Register a format with render dimensions from a data table."""
-    rows = _datatable_to_dicts(datatable)
+    rows = datatable_to_dicts(datatable)
     renders = [make_renders(width=int(row["width"]), height=int(row["height"])) for row in rows]
     fmt = FormatFactory.build(name=name, renders=renders)
     _add_format(ctx, fmt)
@@ -199,7 +190,7 @@ def given_registry_format_no_disclosure(ctx: dict, name: str) -> None:
 @given(parsers.parse('the registry has format "{name}" with output_format_ids:'))
 def given_registry_format_output_ids(ctx: dict, name: str, datatable: Sequence[Sequence[object]]) -> None:
     """Register a format with output_format_ids from a data table."""
-    rows = _datatable_to_dicts(datatable)
+    rows = datatable_to_dicts(datatable)
     ids = [FormatIdFactory.build(agent_url=row["agent_url"], id=row["id"]) for row in rows]
     fmt = FormatFactory.build(name=name, output_format_ids=ids)
     _add_format(ctx, fmt)
@@ -217,7 +208,7 @@ def given_registry_format_no_output_ids(ctx: dict, name: str) -> None:
 @given(parsers.parse('the registry has format "{name}" with input_format_ids:'))
 def given_registry_format_input_ids(ctx: dict, name: str, datatable: Sequence[Sequence[object]]) -> None:
     """Register a format with input_format_ids from a data table."""
-    rows = _datatable_to_dicts(datatable)
+    rows = datatable_to_dicts(datatable)
     ids = [FormatIdFactory.build(agent_url=row["agent_url"], id=row["id"]) for row in rows]
     fmt = FormatFactory.build(name=name, input_format_ids=ids)
     _add_format(ctx, fmt)
@@ -238,7 +229,7 @@ def given_registry_format_no_input_ids(ctx: dict, name: str) -> None:
 @given("the registry has formats:")
 def given_registry_formats_table(ctx: dict, datatable: Sequence[Sequence[object]]) -> None:
     """Register multiple formats from a data table with name and type columns."""
-    rows = _datatable_to_dicts(datatable)
+    rows = datatable_to_dicts(datatable)
     formats = [FormatFactory.build(name=row["name"], type=CATEGORY_MAP.get(row["type"])) for row in rows]
     ctx["registry_formats"] = formats
     _sync_registry(ctx)
