@@ -55,8 +55,10 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from bdd_audit_common import (  # noqa: E402
+    CONFTEST_PATH,
     E2E_LEDGER_PATH,
     REPO_ROOT,
+    STEPS_DIR,
     extract_scenario_base,
     extract_transport,
     extract_uc,
@@ -763,12 +765,12 @@ def main() -> None:
     parser.add_argument(
         "--conftest",
         help="Path to conftest.py",
-        default=str(REPO_ROOT / "tests" / "bdd" / "conftest.py"),
+        default=str(CONFTEST_PATH),
     )
     parser.add_argument(
         "--steps-dir",
         help="Path to step definitions",
-        default=str(REPO_ROOT / "tests" / "bdd" / "steps"),
+        default=str(STEPS_DIR),
     )
     parser.add_argument(
         "--repo-root",

@@ -524,34 +524,34 @@ def main() -> None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
         args.output = Path(f".claude/reports/bdd-step-audit-{timestamp}.md")
 
-    print(f"Scanning {args.steps_dir} for BDD step functions...")
+    print(f"Scanning {args.steps_dir} for BDD step functions...", file=sys.stderr)
     all_steps = extract_bdd_steps(args.steps_dir)
-    print(f"  Found {len(all_steps)} step functions total")
+    print(f"  Found {len(all_steps)} step functions total", file=sys.stderr)
 
     # Filter to Then steps for assertion completeness
     if args.then_only:
         target_steps = [s for s in all_steps if s.step_type == "then"]
-        print(f"  Filtering to {len(target_steps)} Then steps")
+        print(f"  Filtering to {len(target_steps)} Then steps", file=sys.stderr)
     else:
         target_steps = all_steps
 
     # Pass 1: Triage
-    print("\n=== Pass 1: Triage (Sonnet) ===")
+    print("\n=== Pass 1: Triage (Sonnet) ===", file=sys.stderr)
     triage_results = run_pass1_triage(target_steps, timeout=args.timeout)
     flagged = [r for r in triage_results if r.verdict == "FLAG"]
-    print(f"  {len(flagged)} flagged, {len(triage_results) - len(flagged)} passed")
+    print(f"  {len(flagged)} flagged, {len(triage_results) - len(flagged)} passed", file=sys.stderr)
 
     # Pass 2: Deep trace (if not pass1-only)
     deep_results: list[DeepTraceResult] = []
     if not args.pass1_only and flagged:
-        print(f"\n=== Pass 2: Deep Trace (Opus) — {len(flagged)} functions ===")
+        print(f"\n=== Pass 2: Deep Trace (Opus) — {len(flagged)} functions ===", file=sys.stderr)
         deep_results = run_pass2_deep_trace(flagged, timeout=args.timeout)
         for r in deep_results:
-            print(f"  [{r.severity}] {r.step.function_name}: {r.recommendation[:80]}")
+            print(f"  [{r.severity}] {r.step.function_name}: {r.recommendation[:80]}", file=sys.stderr)
 
     # Generate report
     generate_report(all_steps, triage_results, deep_results, args.output)
-    print(f"\nReport written to {args.output}")
+    print(f"\nReport written to {args.output}", file=sys.stderr)
 
 
 if __name__ == "__main__":

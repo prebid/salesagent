@@ -39,9 +39,11 @@ _TRANSPORT_RE = re.compile(r"\[(e2e_rest|e2e_mcp|e2e_a2a|impl|a2a|mcp|rest)(?:-|
 # ANSI CSI / OSC sequences — strip before salvage regex matching.
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07")
 
-# Shared repo / ledger paths — one name for every consumer (CLI override OK).
+# Shared repo / ledger / BDD-tree paths — one name for every consumer (CLI override OK).
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 E2E_LEDGER_PATH = REPO_ROOT / "tests" / "bdd" / "e2e_rest_known_failures.txt"
+CONFTEST_PATH = REPO_ROOT / "tests" / "bdd" / "conftest.py"
+STEPS_DIR = REPO_ROOT / "tests" / "bdd" / "steps"
 
 GradeBucket = Literal["graduate", "confirm", "partial"]
 

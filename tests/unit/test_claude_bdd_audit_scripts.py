@@ -531,39 +531,33 @@ class TestCrashMessageClassification:
     """B1 — reason from setup/call crash.message, not wasxfail."""
 
     def test_harness_gap_from_setup_crash_message(self, audit_xfails) -> None:
-        test = {
-            "nodeid": "t::s[a2a]",
-            "keywords": [],
-            "setup": {
-                "outcome": "failed",
-                "crash": {
-                    "path": "/tmp/x.py",
-                    "lineno": 1,
-                    "message": "_pytest.outcomes.XFailed: UC harness not yet wired",
-                },
-            },
-        }
+        test = _json_report_test(
+            "/tmp/x.py", 1, phase="setup", message="_pytest.outcomes.XFailed: UC harness not yet wired"
+        )
         assert "wasxfail" not in test  # realistic json-report shape
         entry = audit_xfails.classify_xfail(test, {}, [])
         assert entry.category == "HARNESS_GAP"
 
     def test_missing_step_from_crash_message(self, audit_xfails) -> None:
-        entry = audit_xfails.classify_xfail(
-            {
-                "nodeid": "t::s[a2a]",
-                "keywords": [],
-                "setup": {
-                    "outcome": "failed",
-                    "crash": {
-                        "path": "/tmp/x.py",
-                        "lineno": 1,
-                        "message": "StepDefinitionNotFoundError: Step definition not found for 'Then foo'",
-                    },
-                },
-            },
-            {},
-            [],
+        # Real pytest-bdd wording is "Step definition is not found" (not "not
+        # found for") — only the StepDefinitionNotFoundError type name matches
+        # on real data. See test_missing_step_from_bare_error_type below.
+        test = _json_report_test(
+            "/tmp/x.py",
+            1,
+            phase="setup",
+            message="StepDefinitionNotFoundError: Step definition is not found: Then foo. "
+            'Line 3 in scenario "Do the thing"',
         )
+        entry = audit_xfails.classify_xfail(test, {}, [])
+        assert entry.category == "MISSING_STEP"
+
+    def test_missing_step_from_bare_error_type(self, audit_xfails) -> None:
+        # Pin the load-bearing disjunct alone: no "Step definition not found"
+        # human phrase anywhere in the message, only the bare error type name.
+        test = _json_report_test("/tmp/x.py", 1, phase="setup", message="StepDefinitionNotFoundError")
+        assert "Step definition not found" not in test["setup"]["crash"]["message"]
+        entry = audit_xfails.classify_xfail(test, {}, [])
         assert entry.category == "MISSING_STEP"
 
 
@@ -841,6 +835,47 @@ class TestSalvageDedupe:
         assert by_name["then_a"]["line_number"] == 42
         assert by_name["then_b"]["line_number"] == 99
 
+    def test_non_numeric_line_number_degrades_instead_of_raising(self, salvage_audit) -> None:
+        """iter_jsonl_records tolerates corrupt JSONL; _normalize_step must too.
+
+        A non-numeric ``line_number`` (hand-edited store, foreign producer)
+        must degrade to ``0`` here, not raise and abort the whole salvage
+        read path one call down from the loader's deliberate tolerance.
+        """
+        record = salvage_audit._normalize_step({"function_name": "then_x", "line_number": "unknown"})
+        assert record["line_number"] == 0
+        assert record["function_name"] == "then_x"
+
+    def test_write_to_store_survives_corrupt_line_number_in_step_index(self, salvage_audit, tmp_path: Path) -> None:
+        store = tmp_path / "store.jsonl"
+        step_index = tmp_path / "steps.jsonl"
+        step_index.write_text(
+            json.dumps(
+                {
+                    "step": {
+                        "file_path": "tests/bdd/steps/a.py",
+                        "line_number": "not-a-number",
+                        "step_type": "then",
+                        "step_text": "a",
+                        "function_name": "then_a",
+                        "source_text": "pass",
+                    }
+                }
+            )
+            + "\n"
+        )
+        parsed = {
+            "pass1": [{"index": 1, "func_name": "then_a", "verdict": "FLAG"}],
+            "pass2": [],
+            "pass1_total": 1,
+            "pass2_total": 0,
+            "pass2_crashed_at": 0,
+        }
+        # Must not raise ValueError — this is the exact degraded input salvage exists to rescue.
+        salvage_audit.write_to_store(parsed, store, step_index)
+        records = [json.loads(line) for line in store.read_text().splitlines() if line.strip()]
+        assert records[0]["step"]["line_number"] == 0
+
     def test_parse_raw_output_strips_ansi(self, salvage_audit, tmp_path: Path) -> None:
         raw = tmp_path / "out.txt"
         # Interleaved ANSI inside the matched span (real rich/pytest coloring).
@@ -987,6 +1022,26 @@ class TestArtifactCensusAndLedger:
         assert grade.graduates is True
         assert grade.needs_confirmation is True
 
+    def test_grade_base_ledger_member_with_e2e_rest_present_does_not_confirm(self, bdd_audit_common) -> None:
+        """The ledger-confirm gate is keyed on e2e_rest ABSENCE for this base.
+
+        A ledger member whose e2e_rest row is present *and passing* must not
+        route to confirm on that account — the guard exists to catch bases
+        that skip e2e_rest, not ones that genuinely ran and passed it.
+        """
+        grade = bdd_audit_common.grade_base(
+            "t::s",
+            [
+                ("t::s[a2a]", "xpassed"),
+                ("t::s[mcp]", "xpassed"),
+                ("t::s[rest]", "xpassed"),
+                ("t::s[e2e_rest]", "xpassed"),
+            ],
+            ledger_member=True,
+        )
+        assert grade.graduates is True
+        assert grade.needs_confirmation is False
+
 
 class TestGraduatePendingAnalyze:
     """Pin graduate_pending.analyze three-way split + empty refusal."""
@@ -1053,6 +1108,39 @@ class TestGraduatePendingAnalyze:
         confirm_bases = {b for _, b in analysis["graduate_confirm"]}
         assert base in confirm_bases
 
+    def test_non_ledger_base_firm_graduates_when_e2e_present(self, graduate_pending, tmp_path: Path) -> None:
+        """graduate_all must be non-empty for the case it exists to hold.
+
+        Multi-transport, not on the ledger, and e2e_rest present in the
+        artifact so force_confirm is False — this base must firm-graduate,
+        not route to confirm. Reverting the firm-graduate routing in
+        ``graduate_pending.analyze`` (or the ledger/force_confirm gates)
+        must move this base out of ``graduate_all``.
+        """
+        base = "tests/bdd/test_uc004.py::test_firm"
+        report = tmp_path / "bdd.json"
+        report.write_text(
+            json.dumps(
+                {
+                    "tests": [
+                        {"nodeid": f"{base}[a2a]", "outcome": "xpassed", "keywords": []},
+                        {"nodeid": f"{base}[mcp]", "outcome": "xpassed", "keywords": []},
+                        {"nodeid": f"{base}[rest]", "outcome": "xpassed", "keywords": []},
+                        # e2e_rest present elsewhere so force_confirm is False
+                        {"nodeid": "tests/bdd/test_other.py::test_e[e2e_rest]", "outcome": "passed", "keywords": []},
+                    ]
+                }
+            )
+        )
+        ledger = tmp_path / "ledger.txt"
+        ledger.write_text("")  # base is not a ledger member
+        analysis = graduate_pending.analyze(str(report), ledger_path=ledger)
+        assert analysis["force_confirm"] is False
+        graduate_bases = {b for _, b in analysis["graduate_all"]}
+        confirm_bases = {b for _, b in analysis["graduate_confirm"]}
+        assert base in graduate_bases
+        assert base not in confirm_bases
+
 
 class TestGradeResultNamedFields:
     """grade_base returns GradeResult — callers must read fields by name."""
@@ -1090,30 +1178,22 @@ class TestSurvivingMechanismArms:
     """S9 — pin surviving mechanism arms after dead-arm deletion."""
 
     def test_partial_impl_from_tag_map(self, audit_xfails) -> None:
+        test = _json_report_test(
+            "/x", 1, phase="call", message="xfail", nodeid="t::s[a2a]", keywords=["T-UC-004-partition-foo"]
+        )
         entry = audit_xfails.classify_xfail(
-            {
-                "nodeid": "t::s[a2a]",
-                "keywords": ["T-UC-004-partition-foo"],
-                "setup": {"outcome": "passed"},
-                "call": {
-                    "outcome": "skipped",
-                    "crash": {"path": "/x", "lineno": 1, "message": "xfail"},
-                },
-            },
+            test,
             {"T-UC-004-partition-foo": ("partition reason", "partial_impl")},
             [],
         )
         assert entry.category == "PARTIAL_IMPL"
 
     def test_production_gap_from_tag_map(self, audit_xfails) -> None:
+        test = _json_report_test(
+            "/x", 1, phase="setup", message="xfail", nodeid="t::s[a2a]", keywords=["T-UC-002-main-1"]
+        )
         entry = audit_xfails.classify_xfail(
-            {
-                "nodeid": "t::s[a2a]",
-                "keywords": ["T-UC-002-main-1"],
-                "setup": {
-                    "crash": {"path": "/x", "lineno": 1, "message": "xfail"},
-                },
-            },
+            test,
             {"T-UC-002-main-1": ("not built", "production_gap")},
             [],
         )

@@ -93,12 +93,26 @@ def parse_raw_output(raw_path: Path) -> ParsedOutput:
     }
 
 
+def _as_int(value: Any) -> int:
+    """Coerce to int, tolerating the degraded input salvage exists to rescue.
+
+    ``iter_jsonl_records`` deliberately skips corrupt JSONL lines rather than
+    raising; a parsed-but-malformed ``line_number`` (non-numeric, hand-edited,
+    or from a foreign producer) must degrade to ``0`` here too, not abort the
+    whole read path one call down.
+    """
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _normalize_step(step: dict[str, Any], fallback_name: str = "") -> StepRecord:
     """Coerce a JSON step blob into the fixed six-key StepRecord shape."""
     name = step.get("function_name") or fallback_name
     return {
         "file_path": str(step.get("file_path") or "unknown"),
-        "line_number": int(step.get("line_number") or 0),
+        "line_number": _as_int(step.get("line_number")),
         "step_type": str(step.get("step_type") or "then"),
         "step_text": str(step.get("step_text") or ""),
         "function_name": str(name or ""),
@@ -217,11 +231,11 @@ def write_to_store(parsed: ParsedOutput, store_path: Path, step_index_path: Path
             ):
                 new_deep += 1
 
-    print(f"Salvaged to {store_path}:")
-    print(f"  Pass 1: {new_triage} new triage results (of {len(parsed['pass1'])} total)")
-    print(f"  Pass 2: {new_deep} new deep trace results (of {len(parsed['pass2'])} total)")
-    print(f"  Pass 2 crashed at: {parsed['pass2_crashed_at']}/{parsed['pass2_total']}")
-    print(f"  Remaining: {parsed['pass2_total'] - len(parsed['pass2'])} Opus calls needed")
+    print(f"Salvaged to {store_path}:", file=sys.stderr)
+    print(f"  Pass 1: {new_triage} new triage results (of {len(parsed['pass1'])} total)", file=sys.stderr)
+    print(f"  Pass 2: {new_deep} new deep trace results (of {len(parsed['pass2'])} total)", file=sys.stderr)
+    print(f"  Pass 2 crashed at: {parsed['pass2_crashed_at']}/{parsed['pass2_total']}", file=sys.stderr)
+    print(f"  Remaining: {parsed['pass2_total'] - len(parsed['pass2'])} Opus calls needed", file=sys.stderr)
 
 
 def main():
@@ -237,15 +251,14 @@ def main():
     args = parser.parse_args()
 
     if not args.raw_output.exists():
-        print(f"ERROR: {args.raw_output} not found")
-        return
+        print(f"ERROR: {args.raw_output} not found", file=sys.stderr)
+        raise SystemExit(2)
 
     parsed = parse_raw_output(args.raw_output)
 
-    print(f"Parsed from {args.raw_output}:")
-    print(f"  Pass 1: {len(parsed['pass1'])} results")
-    print(f"  Pass 2: {len(parsed['pass2'])} results (of {parsed['pass2_total']} expected)")
-    print()
+    print(f"Parsed from {args.raw_output}:", file=sys.stderr)
+    print(f"  Pass 1: {len(parsed['pass1'])} results", file=sys.stderr)
+    print(f"  Pass 2: {len(parsed['pass2'])} results (of {parsed['pass2_total']} expected)", file=sys.stderr)
 
     step_index = args.step_index if args.step_index is not None else args.store
     write_to_store(parsed, args.store, step_index)

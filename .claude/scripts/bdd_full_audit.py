@@ -29,6 +29,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from bdd_audit_common import (  # noqa: E402
+    CONFTEST_PATH,
     E2E_LEDGER_PATH,
     REPO_ROOT,
     extract_longrepr_e_line,
@@ -45,8 +46,6 @@ from bdd_audit_common import (  # noqa: E402
 
 PROJECT_ROOT = REPO_ROOT
 INSPECTOR_DIR = PROJECT_ROOT / ".claude" / "reports" / "inspect-all-steps"
-CONFTEST_PATH = PROJECT_ROOT / "tests" / "bdd" / "conftest.py"
-STEPS_DIR = PROJECT_ROOT / "tests" / "bdd" / "steps"
 
 
 # ── Category taxonomy ────────────────────────────────────────────────
