@@ -10,6 +10,14 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import PublisherPartner, Tenant
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.properties import _list_authorized_properties_impl
+from tests.factories import PublisherPartnerFactory, TenantFactory
+from tests.harness._base import IntegrationEnv
+
+
+class _PropertiesEnv(IntegrationEnv):
+    """Bare integration env for list_authorized_properties tests."""
+
+    EXTERNAL_PATCHES: dict[str, str] = {}
 
 
 @pytest.mark.requires_db
@@ -291,3 +299,78 @@ def test_list_authorized_properties_tenant_isolation(integration_db):
         assert "tenantb-pub1.com" in response_b.publisher_domains
         assert "tenanta-pub1.com" not in response_b.publisher_domains
         assert "tenanta-pub2.com" not in response_b.publisher_domains
+
+
+@pytest.mark.requires_db
+def test_list_authorized_properties_omits_primary_channels_when_unset(integration_db):
+    """Unset supported_channels on all partners -> primary_channels omitted."""
+    with _PropertiesEnv() as env:
+        tenant = TenantFactory(tenant_id="test_channels_unset", subdomain="chunset")
+        PublisherPartnerFactory(tenant=tenant, publisher_domain="alpha.com")
+        PublisherPartnerFactory(tenant=tenant, publisher_domain="beta.com", supported_channels=None)
+        env._commit_factory_data()
+
+    identity = ResolvedIdentity(
+        tenant_id="test_channels_unset",
+        tenant={"tenant_id": "test_channels_unset"},
+        protocol="mcp",
+    )
+    response = _list_authorized_properties_impl(req=None, identity=identity)
+
+    assert response.primary_channels is None
+    assert "primary_channels" not in response.model_dump()
+
+
+@pytest.mark.requires_db
+def test_list_authorized_properties_primary_channels_union(integration_db):
+    """Populated supported_channels -> primary_channels is sorted deduped union."""
+    with _PropertiesEnv() as env:
+        tenant = TenantFactory(tenant_id="test_channels_union", subdomain="chunion")
+        PublisherPartnerFactory(
+            tenant=tenant,
+            publisher_domain="one.com",
+            supported_channels=["display", "ctv"],
+        )
+        PublisherPartnerFactory(
+            tenant=tenant,
+            publisher_domain="two.com",
+            supported_channels=["ctv", "olv"],
+        )
+        PublisherPartnerFactory(tenant=tenant, publisher_domain="three.com")
+        env._commit_factory_data()
+
+    identity = ResolvedIdentity(
+        tenant_id="test_channels_union",
+        tenant={"tenant_id": "test_channels_union"},
+        protocol="mcp",
+    )
+    response = _list_authorized_properties_impl(req=None, identity=identity)
+
+    assert response.primary_channels == ["ctv", "display", "olv"]
+
+
+@pytest.mark.requires_db
+def test_list_authorized_properties_skips_unknown_channels(integration_db, caplog):
+    """Unknown channel values are skipped; valid channels still returned."""
+    import logging
+
+    with _PropertiesEnv() as env:
+        tenant = TenantFactory(tenant_id="test_channels_unknown", subdomain="chunknown")
+        PublisherPartnerFactory(
+            tenant=tenant,
+            publisher_domain="bad.com",
+            supported_channels=["display", "not_a_real_channel"],
+        )
+        env._commit_factory_data()
+
+    identity = ResolvedIdentity(
+        tenant_id="test_channels_unknown",
+        tenant={"tenant_id": "test_channels_unknown"},
+        protocol="mcp",
+    )
+
+    with caplog.at_level(logging.WARNING):
+        response = _list_authorized_properties_impl(req=None, identity=identity)
+
+    assert response.primary_channels == ["display"]
+    assert any("not_a_real_channel" in record.message for record in caplog.records)

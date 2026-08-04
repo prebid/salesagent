@@ -24,9 +24,20 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListAuthorizedPropertiesRequest, ListAuthorizedPropertiesResponse
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
+from src.core.tools.capabilities import normalize_channel_strings
 from src.core.validation_helpers import safe_parse_json_field
 
 logger = logging.getLogger(__name__)
+
+
+def _aggregate_primary_channels(publishers) -> list[str] | None:
+    """Union explicitly-declared supported_channels across publisher partners."""
+    raw_channels: list[str] = []
+    for partner in publishers:
+        if partner.supported_channels:
+            raw_channels.extend(partner.supported_channels)
+    normalized = normalize_channel_strings(raw_channels)
+    return normalized or None
 
 
 def _list_authorized_properties_impl(
@@ -147,6 +158,10 @@ def _list_authorized_properties_impl(
             # Only add optional fields if they have actual values
             if advertising_policies_text:
                 response_data["advertising_policies"] = advertising_policies_text
+
+            primary_channels = _aggregate_primary_channels(all_publishers)
+            if primary_channels:
+                response_data["primary_channels"] = primary_channels
 
             response = ListAuthorizedPropertiesResponse(**response_data)
 

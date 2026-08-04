@@ -910,3 +910,42 @@ class TestAdvertisingPolicyOmittedWhenDisabled:
             result = _list_authorized_properties_impl(req=None, identity=identity)
 
         assert result.advertising_policies is None
+
+
+class TestPrimaryChannelsDisclosure:
+    """Phase 1 channel disclosure via PublisherPartner.supported_channels.
+
+    Covers: UC-007-SCHEMA-02
+    """
+
+    def test_primary_channels_omitted_when_no_partner_declares_channels(self):
+        """Partners without supported_channels do not contribute to primary_channels."""
+        from src.core.tools.properties import _list_authorized_properties_impl
+
+        tenant = _make_mock_tenant("tenant-ch")
+        identity = _make_identity(tenant)
+        publishers = [_make_publisher("example.com")]
+
+        patches = _patch_impl_dependencies(tenant, publishers=publishers)
+        with patches["db"], patches["audit"], patches["log_activity"]:
+            response = _list_authorized_properties_impl(req=None, identity=identity)
+
+        assert response.primary_channels is None
+        assert "primary_channels" not in response.model_dump()
+
+    def test_primary_channels_union_from_partner_supported_channels(self):
+        """primary_channels is the union of explicitly declared partner channels."""
+        from src.core.tools.properties import _list_authorized_properties_impl
+
+        tenant = _make_mock_tenant("tenant-ch2")
+        identity = _make_identity(tenant)
+        pub_a = _make_publisher("one.com")
+        pub_a.supported_channels = ["display", "video"]
+        pub_b = _make_publisher("two.com")
+        pub_b.supported_channels = ["ctv"]
+
+        patches = _patch_impl_dependencies(tenant, publishers=[pub_a, pub_b])
+        with patches["db"], patches["audit"], patches["log_activity"]:
+            response = _list_authorized_properties_impl(req=None, identity=identity)
+
+        assert response.primary_channels == ["ctv", "display", "olv"]

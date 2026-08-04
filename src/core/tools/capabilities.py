@@ -68,7 +68,36 @@ CHANNEL_MAPPING: dict[str, MediaChannel] = {
     "influencer": MediaChannel.influencer,
     "affiliate": MediaChannel.affiliate,
     "product_placement": MediaChannel.product_placement,
+    "sponsored_intelligence": MediaChannel.sponsored_intelligence,
 }
+
+
+def normalize_channel_strings(raw: list[str]) -> list[str]:
+    """Validate and normalize channel strings to canonical MediaChannel values.
+
+    Unknown values are logged and skipped. Aliases (e.g. video -> olv) resolve
+    via CHANNEL_MAPPING. Returns sorted deduplicated canonical enum values.
+    """
+    canonical_values = {member.value for member in MediaChannel}
+    seen: set[str] = set()
+    normalized: list[str] = []
+
+    for channel in raw:
+        key = channel.lower().strip()
+        if key in CHANNEL_MAPPING:
+            value = CHANNEL_MAPPING[key].value
+        elif key in canonical_values:
+            value = key
+        else:
+            logger.warning("Unknown channel value %r; skipping", channel)
+            continue
+
+        if value not in seen:
+            seen.add(value)
+            normalized.append(value)
+
+    normalized.sort()
+    return normalized
 
 
 def _get_adcp_capabilities_impl(
