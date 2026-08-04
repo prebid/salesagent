@@ -13,8 +13,8 @@ class TestNormalizeChannelStrings:
     def test_skips_unknown_values(self, caplog):
         import logging
 
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.WARNING, logger="src.core.tools.capabilities"):
             result = normalize_channel_strings(["display", "native"])
 
         assert result == ["display"]
-        assert any("native" in record.message for record in caplog.records)
+        assert any("native" in record.getMessage() for record in caplog.records)

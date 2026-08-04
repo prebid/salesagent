@@ -8,9 +8,8 @@ import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PublisherPartner, Tenant
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.properties import _list_authorized_properties_impl
-from tests.factories import PublisherPartnerFactory, TenantFactory
+from tests.factories import PublisherPartnerFactory, PrincipalFactory, TenantFactory
 from tests.harness._base import IntegrationEnv
 
 
@@ -63,11 +62,7 @@ def test_list_authorized_properties_reads_from_publisher_partner(integration_db)
         session.commit()
 
         # Pass identity directly to the impl function
-        identity = ResolvedIdentity(
-            tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant"},
-            protocol="mcp",
-        )
+        identity = PrincipalFactory.make_identity(tenant_id="test_tenant")
         response = _list_authorized_properties_impl(req=None, identity=identity)
 
         # Verify all registered publishers are returned (regardless of verification status)
@@ -126,11 +121,7 @@ def test_list_authorized_properties_returns_all_registered_publishers(integratio
         session.commit()
 
         # Pass identity directly to the impl function
-        identity = ResolvedIdentity(
-            tenant_id="test_tenant2",
-            tenant={"tenant_id": "test_tenant2"},
-            protocol="mcp",
-        )
+        identity = PrincipalFactory.make_identity(tenant_id="test_tenant2")
         response = _list_authorized_properties_impl(req=None, identity=identity)
 
         # Verify all registered publishers are returned (regardless of verification status)
@@ -157,11 +148,7 @@ def test_list_authorized_properties_returns_empty_when_no_publishers(integration
         session.commit()
 
         # Pass identity directly - should return empty list, not error
-        identity = ResolvedIdentity(
-            tenant_id="test_tenant3",
-            tenant={"tenant_id": "test_tenant3"},
-            protocol="mcp",
-        )
+        identity = PrincipalFactory.make_identity(tenant_id="test_tenant3")
         response = _list_authorized_properties_impl(req=None, identity=identity)
 
         # Verify empty response with helpful description
@@ -212,11 +199,7 @@ def test_list_authorized_properties_returns_sorted_domains(integration_db):
         session.commit()
 
         # Pass identity directly to the impl function
-        identity = ResolvedIdentity(
-            tenant_id="test_tenant4",
-            tenant={"tenant_id": "test_tenant4"},
-            protocol="mcp",
-        )
+        identity = PrincipalFactory.make_identity(tenant_id="test_tenant4")
         response = _list_authorized_properties_impl(req=None, identity=identity)
 
         # Verify domains are sorted
@@ -273,11 +256,7 @@ def test_list_authorized_properties_tenant_isolation(integration_db):
         session.commit()
 
         # Query tenant A
-        identity_a = ResolvedIdentity(
-            tenant_id="tenant_a",
-            tenant={"tenant_id": "tenant_a"},
-            protocol="mcp",
-        )
+        identity_a = PrincipalFactory.make_identity(tenant_id="tenant_a")
         response_a = _list_authorized_properties_impl(req=None, identity=identity_a)
 
         # Verify only Tenant A publishers returned
@@ -287,11 +266,7 @@ def test_list_authorized_properties_tenant_isolation(integration_db):
         assert "tenantb-pub1.com" not in response_a.publisher_domains
 
         # Query tenant B
-        identity_b = ResolvedIdentity(
-            tenant_id="tenant_b",
-            tenant={"tenant_id": "tenant_b"},
-            protocol="mcp",
-        )
+        identity_b = PrincipalFactory.make_identity(tenant_id="tenant_b")
         response_b = _list_authorized_properties_impl(req=None, identity=identity_b)
 
         # Verify only Tenant B publishers returned
@@ -310,11 +285,7 @@ def test_list_authorized_properties_omits_primary_channels_when_unset(integratio
         PublisherPartnerFactory(tenant=tenant, publisher_domain="beta.com", supported_channels=None)
         env._commit_factory_data()
 
-    identity = ResolvedIdentity(
-        tenant_id="test_channels_unset",
-        tenant={"tenant_id": "test_channels_unset"},
-        protocol="mcp",
-    )
+    identity = PrincipalFactory.make_identity(tenant_id="test_channels_unset")
     response = _list_authorized_properties_impl(req=None, identity=identity)
 
     assert response.primary_channels is None
@@ -339,11 +310,7 @@ def test_list_authorized_properties_primary_channels_union(integration_db):
         PublisherPartnerFactory(tenant=tenant, publisher_domain="three.com")
         env._commit_factory_data()
 
-    identity = ResolvedIdentity(
-        tenant_id="test_channels_union",
-        tenant={"tenant_id": "test_channels_union"},
-        protocol="mcp",
-    )
+    identity = PrincipalFactory.make_identity(tenant_id="test_channels_union")
     response = _list_authorized_properties_impl(req=None, identity=identity)
 
     assert response.primary_channels == ["ctv", "display", "olv"]
@@ -363,14 +330,10 @@ def test_list_authorized_properties_skips_unknown_channels(integration_db, caplo
         )
         env._commit_factory_data()
 
-    identity = ResolvedIdentity(
-        tenant_id="test_channels_unknown",
-        tenant={"tenant_id": "test_channels_unknown"},
-        protocol="mcp",
-    )
+    identity = PrincipalFactory.make_identity(tenant_id="test_channels_unknown")
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.WARNING, logger="src.core.tools.capabilities"):
         response = _list_authorized_properties_impl(req=None, identity=identity)
 
     assert response.primary_channels == ["display"]
-    assert any("not_a_real_channel" in record.message for record in caplog.records)
+    assert any("not_a_real_channel" in record.getMessage() for record in caplog.records)
