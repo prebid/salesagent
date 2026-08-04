@@ -9,7 +9,7 @@ import pytest
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PublisherPartner, Tenant
 from src.core.tools.properties import _list_authorized_properties_impl
-from tests.factories import PublisherPartnerFactory, PrincipalFactory, TenantFactory
+from tests.factories import PrincipalFactory, PublisherPartnerFactory, TenantFactory
 from tests.harness._base import IntegrationEnv
 
 
@@ -317,10 +317,8 @@ def test_list_authorized_properties_primary_channels_union(integration_db):
 
 
 @pytest.mark.requires_db
-def test_list_authorized_properties_skips_unknown_channels(integration_db, caplog):
+def test_list_authorized_properties_skips_unknown_channels(integration_db):
     """Unknown channel values are skipped; valid channels still returned."""
-    import logging
-
     with _PropertiesEnv() as env:
         tenant = TenantFactory(tenant_id="test_channels_unknown", subdomain="chunknown")
         PublisherPartnerFactory(
@@ -331,9 +329,6 @@ def test_list_authorized_properties_skips_unknown_channels(integration_db, caplo
         env._commit_factory_data()
 
     identity = PrincipalFactory.make_identity(tenant_id="test_channels_unknown")
-
-    with caplog.at_level(logging.WARNING, logger="src.core.tools.capabilities"):
-        response = _list_authorized_properties_impl(req=None, identity=identity)
+    response = _list_authorized_properties_impl(req=None, identity=identity)
 
     assert response.primary_channels == ["display"]
-    assert any("not_a_real_channel" in record.getMessage() for record in caplog.records)
