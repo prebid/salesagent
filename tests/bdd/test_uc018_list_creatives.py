@@ -64,9 +64,8 @@ from typing import Any
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from tests.bdd.steps._outcome_helpers import _require_response
+from tests.bdd.steps._outcome_helpers import _require_response, wire_field
 from tests.bdd.steps.generic._auth import authenticate_env_as
-from tests.harness.transport import Transport
 from tests.helpers.pinned_schema import validate_against_pinned_schema
 
 # Three genuinely-different formats (display / video / audio) for the "three
@@ -336,32 +335,10 @@ def when_list_creatives_concept_ids(ctx: dict, concept_list: str) -> None:
     _call_via(ctx, ctx.get("transport"), filters=filters)
 
 
-def _wire_creatives(ctx: dict) -> list[dict[str, Any]]:
-    """Return the creatives array as the buyer sees it on the wire.
-
-    REST/A2A/MCP stash the real serialized response on ``ctx["wire_response"]``
-    (CreativeListEnv stashes on all three wire transports), so the concept-field
-    assertions check the actual on-the-wire bytes rather than a re-serialization.
-    Falls back to the production serializer only when no wire was captured (e.g. a
-    non-stashing path), so the step still has data to assert on.
-    """
-    wire = ctx.get("wire_response")
-    transport = ctx.get("transport")
-    # Loud guard (mirrors uc005_format_id_shape): a real-wire transport (a2a/mcp/rest/
-    # e2e_rest) that didn't stash wire_response must trip here, not silently fall back
-    # to a model_dump re-serialization and undercut the "real wire bytes" claim. IMPL
-    # (and the unparametrized None default) legitimately have no wire.
-    if wire is None and transport not in (None, Transport.IMPL):
-        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
-    if wire is not None:
-        return wire["creatives"]
-    return _serialized_response(ctx)["creatives"]
-
-
 @then(parsers.parse('the creatives array should only include creatives belonging to concept "{concept_id}"'))
 def then_only_creatives_in_concept(ctx: dict, concept_id: str) -> None:
     """Assert every returned creative belongs to the requested concept (and the set is non-empty)."""
-    creatives = _wire_creatives(ctx)
+    creatives = wire_field(ctx, "creatives")
     assert creatives, f"list_creatives returned no creatives for concept {concept_id!r}"
     offenders = [
         {"creative_id": entry.get("creative_id"), "concept_id": entry.get("concept_id")}
@@ -380,7 +357,7 @@ def then_only_creatives_in_concept(ctx: dict, concept_id: str) -> None:
 @then(parsers.parse('each returned creative should carry concept_id "{concept_id}" and a concept_name'))
 def then_each_creative_carries_concept(ctx: dict, concept_id: str) -> None:
     """Assert each returned creative exposes concept_id (== requested) and a non-empty concept_name."""
-    creatives = _wire_creatives(ctx)
+    creatives = wire_field(ctx, "creatives")
     assert creatives, "list_creatives returned an empty creatives array"
     for entry in creatives:
         assert entry.get("concept_id") == concept_id, (
@@ -418,7 +395,7 @@ def then_each_creative_carries_concept(ctx: dict, concept_id: str) -> None:
 # creative_id against the per-principal id sets recorded at seed time — CreativeFactory
 # assigns a globally-unique creative_id per row, so the two principals' id sets are
 # disjoint and the isolation assertion is well-formed. Assertions read
-# ctx["wire_response"] (the real serialized bytes on a2a/mcp/rest) via _wire_creatives,
+# ctx["wire_response"] (the real serialized bytes on a2a/mcp/rest) via wire_field,
 # satisfying the "actual wire bytes" constraint.
 
 _ISOLATION_CREATIVES_KEY = "isolation_creatives_by_principal"
@@ -486,13 +463,13 @@ def _returned_creative_ids(ctx: dict) -> set[str]:
     wire, so a returned creative's owner is identified by which seeded id set its
     creative_id came from.
     """
-    return {entry["creative_id"] for entry in _wire_creatives(ctx)}
+    return {entry["creative_id"] for entry in wire_field(ctx, "creatives")}
 
 
 @then(parsers.parse("the response contains exactly {count:d} creatives"))
 def then_response_contains_exactly_n_creatives(ctx: dict, count: int) -> None:
     """Assert the wire response carries exactly *count* creatives (all fit on page 1)."""
-    creatives = _wire_creatives(ctx)
+    creatives = wire_field(ctx, "creatives")
     assert len(creatives) == count, (
         f"expected exactly {count} creatives, got {len(creatives)}: "
         f"{sorted(entry.get('creative_id') for entry in creatives)}"

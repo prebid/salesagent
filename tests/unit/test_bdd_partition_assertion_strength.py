@@ -10,6 +10,14 @@ WRONG content for the field being tested. The function SHOULD reject it
 (raise AssertionError) but currently accepts it (bug).
 
 When the bug is fixed, these tests will pass.
+
+Updated for salesagent-9csh: the assertion now reads ``wire_dict(ctx)`` instead of
+``getattr(response, "media_buy_deliveries")`` (the disease this ticket retires), so
+the crafted ctx carries a wire-shaped ``ctx["wire_response"]`` dict, not a
+``MagicMock`` response whose ``media_buy_deliveries`` attribute the new code path
+never reads. A bare ``response=MagicMock()`` with no ``wire_response`` would make
+``wire_dict``'s IMPL fallback call ``.model_dump()`` on the mock, silently
+discarding this test's carefully-set WRONG content instead of exercising it.
 """
 
 from __future__ import annotations
@@ -36,13 +44,9 @@ class TestPartitionAssertionStrength:
         """
         fn = _get_assert_fn()
 
-        mock_delivery = MagicMock()
-        mock_delivery.status = "active"  # WRONG — filter asked for "paused"
-        mock_response = MagicMock()
-        mock_response.media_buy_deliveries = [mock_delivery]
-
         ctx = {
-            "response": mock_response,
+            "response": MagicMock(),  # presence-only; content comes from wire_response
+            "wire_response": {"media_buy_deliveries": [{"status": "active"}]},  # WRONG — filter asked for "paused"
             "media_buys": {"mb-1": {"status": "active"}, "mb-2": {"status": "paused"}},
             "request_params": {"status_filter": ["paused"]},
         }
@@ -65,13 +69,9 @@ class TestPartitionAssertionStrength:
         """valid + resolution field → response with WRONG media buys must be rejected."""
         fn = _get_assert_fn()
 
-        mock_delivery = MagicMock()
-        mock_delivery.media_buy_id = "mb-999"  # WRONG — requested mb-001
-        mock_response = MagicMock()
-        mock_response.media_buy_deliveries = [mock_delivery]
-
         ctx = {
-            "response": mock_response,
+            "response": MagicMock(),  # presence-only; content comes from wire_response
+            "wire_response": {"media_buy_deliveries": [{"media_buy_id": "mb-999"}]},  # WRONG — requested mb-001
             "request_params": {"media_buy_ids": ["mb-001"]},
         }
 

@@ -149,7 +149,7 @@ tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status
 # The UC-018 pair matters most: BR-RULE-034
 # principal scoping is a TENANT-ISOLATION obligation, and it passes for the right reason --
 # then_none_belong_to carries an explicit anti-vacuity guard, then_all_creatives_belong_to
-# asserts set equality, and _wire_creatives raises rather than falling back. So a real
+# asserts set equality, and wire_field(ctx, "creatives") raises rather than falling back. So a real
 # isolation guarantee was being recorded as broken.
 
 # --- newly VISIBLE production gap (2) — GH #1776 — added 2026-07-28 ---

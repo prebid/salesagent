@@ -66,6 +66,21 @@ def wire_dict(ctx: dict) -> dict:
     return _require_response(ctx).model_dump(mode="json")
 
 
+def wire_packages(ctx: dict) -> list[dict[str, Any]]:
+    """Collect every package across every delivery as the buyer sees it on the WIRE.
+
+    The wire-reading twin of a typed ``resp.media_buy_deliveries[].by_package`` walk.
+    Reads through :func:`wire_dict`, inheriting its loud guard: a real-wire transport that
+    stashed no body raises instead of silently degrading to the typed payload. A boolean
+    truncation flag serialized as the string "true" is the concrete case a typed read misses:
+    it reconstructs to ``True`` and a typed oracle passes on a non-conformant wire. (A field
+    that is DROPPED is still caught by a typed reader, since it reconstructs to ``None`` — the
+    blind spot is coercion, not absence.)
+    """
+    wire = wire_dict(ctx)
+    return [pkg for d in wire.get("media_buy_deliveries") or [] for pkg in d.get("by_package") or []]
+
+
 def _require(ctx: dict, key: str, *, hint: str | None = None) -> Any:
     """Return ``ctx[key]``, failing with a diagnostic if it is absent.
 

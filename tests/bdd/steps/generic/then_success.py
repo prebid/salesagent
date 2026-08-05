@@ -112,10 +112,16 @@ def then_response_contains_array(ctx: dict, field: str) -> None:
 
 @then("the response should include sandbox equals true")
 def then_sandbox_true(ctx: dict) -> None:
-    """Assert response includes sandbox: true."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
-    assert getattr(resp, "sandbox", None) is True, f"Expected sandbox=True, got {getattr(resp, 'sandbox', None)}"
+    """Assert response includes sandbox: true, on the WIRE.
+
+    Graded with ``is True`` off ``wire_field`` — a flag serialized as the wire string
+    "true" (which the typed payload would coerce back to a real bool) fails here,
+    matching :func:`tests.bdd.steps.domain.uc004_delivery.then_no_billing`.
+    """
+    from tests.bdd.steps._outcome_helpers import wire_field
+
+    sandbox = wire_field(ctx, "sandbox")
+    assert sandbox is True, f"Expected sandbox=True, got {sandbox!r}"
 
 
 @then("the response should not include a sandbox field")
@@ -125,6 +131,15 @@ def then_no_sandbox_field(ctx: dict) -> None:
     Checks model_dump() (what API consumers see), not the Python attribute.
     A field present with value None still serializes as ``{"sandbox": null}``
     which counts as "including a sandbox field".
+
+    NOT migrated to wire_dict(ctx) (attempted during salesagent-9csh's sweep
+    verification, reverted): doing so surfaces that MCP's wire response DOES include
+    ``sandbox: null`` for production accounts (REST/A2A correctly omit it), which is a
+    real, pre-existing, PROJECT-WIDE gap — every ``ToolResult(structured_content=...)``
+    call site in src/core/tools/ passes the raw model without ``exclude_none=True``
+    (confirmed: only products.py even attempts model_dump, and it too omits
+    exclude_none). Fixing that belongs to its own properly-scoped ticket, not a UC-004
+    test-seam change — see salesagent-oyiv.7.
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none found"

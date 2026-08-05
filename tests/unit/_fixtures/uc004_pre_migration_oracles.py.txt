@@ -1,0 +1,374 @@
+# FROZEN SNAPSHOT — pre-migration bodies of the UC-004 package oracles.
+#
+# Verbatim copies (commit 567e9a3c9) of the six functions in
+# _TYPED_PACKAGE_ORACLE_ALLOWLIST plus the helpers they route through, kept as a
+# .txt data fixture so the superset proof in
+# test_architecture_bdd_wire_discipline_rekeyed_meta.py survives the migration
+# that deletes these bodies from the tree. Do not edit; do not import.
+#
+# Positive controls (must be flagged by the re-keyed detector):
+#   then_geo_system, then_placement_sorted, then_placement_sorted_fallback,
+#   then_packages_include_field, then_packages_include_breakdown,
+#   then_packages_include_two
+# Negative controls (must NOT be flagged):
+#   then_field_true, then_packages_limited (already wire-graded),
+#   _inject_placement_data (Given-side fixture mutator, not an assertion),
+#   then_webhook_payload_has_metrics (reads the webhook POST wire, never ctx["response"])
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+from pytest_bdd import parsers, then
+
+from tests.bdd.steps._outcome_helpers import _require_response, wire_dict
+
+
+def _collect_all_packages(resp: Any) -> list[Any]:
+    """Collect all packages across all deliveries in a response."""
+    return [pkg for d in resp.media_buy_deliveries for pkg in d.by_package]
+
+
+def _wire_packages(ctx: dict) -> list[dict[str, Any]]:
+    """Collect every package across every delivery as the buyer sees it on the WIRE.
+
+    The wire-reading twin of :func:`_collect_all_packages`, and the one reader the
+    breakdown/truncation oracles go through. ``_collect_all_packages`` walks the
+    harness-reconstructed typed payload, whose fields are already coerced to their
+    declared types — so a wire value that coerces back to the right type is invisible
+    to it. A boolean truncation flag serialized as the string "true" is the concrete
+    case: it reconstructs to ``True`` and the typed oracle passes on a non-conformant
+    wire. (A field that is DROPPED is still caught by the typed reader, since it
+    reconstructs to None — the blind spot is coercion, not absence.)
+
+    Reads through ``wire_dict``, inheriting its loud guard: a real-wire transport that
+    stashed no body raises instead of silently degrading to the typed payload.
+    """
+    wire = wire_dict(ctx)
+    return [pkg for d in wire.get("media_buy_deliveries") or [] for pkg in d.get("by_package") or []]
+
+
+def _assert_placements_sorted_by(packages: list[Any], metric: str, *, fallback: bool) -> None:
+    """Assert by_placement entries are sorted by the given metric descending.
+
+    If by_placement is not populated or the metric is absent from entries,
+    xfails with a targeted production gap message.
+    """
+    checked = False
+    for pkg in packages:
+        placements = getattr(pkg, "by_placement", None) or []
+        if not placements or not isinstance(placements, list):
+            continue
+        # Need at least 2 placements to verify sort order
+        if isinstance(placements[0], dict):
+            first_val = placements[0].get(metric)
+        else:
+            first_val = getattr(placements[0], metric, None)
+        if first_val is None:
+            suffix = " (fallback)" if fallback else ""
+            pytest.xfail(
+                f"PRODUCTION GAP: by_placement entries lack metric '{metric}'"
+                f"{suffix} for sort verification — sorting not implemented"
+            )
+        values = []
+        for p in placements:
+            val = p.get(metric) if isinstance(p, dict) else getattr(p, metric, None)
+            if val is not None:
+                values.append(val)
+        assert values == sorted(values, reverse=True), (
+            f"Placement breakdown not sorted by '{metric}' descending: {values}"
+        )
+        checked = True
+    if not checked:
+        pytest.xfail("PRODUCTION GAP: no packages have by_placement data to verify sort")
+
+
+def _get_last_webhook_payload(ctx: dict) -> dict[str, Any]:
+    """Extract the JSON payload from the most recent webhook POST call."""
+    mock_post = ctx["env"].mock["post"]
+    assert mock_post.called, "No webhook POST was made"
+    call_kwargs = mock_post.call_args_list[-1][1]  # kwargs of last call
+    payload = call_kwargs.get("json") or call_kwargs.get("data") or {}
+    assert payload, f"Webhook POST had no JSON payload: {call_kwargs}"
+    return payload
+
+
+@then(parsers.parse('the response geo breakdown should use classification system "{system}"'))
+def then_geo_system(ctx: dict, system: str) -> None:
+    """Assert geo breakdown entries use the expected classification system.
+
+    Asserts what the response DOES provide (media_buy_id, deliveries, totals),
+    then xfails on the specific missing field (by_geo with system).
+    """
+    assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found"
+    assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
+    assert resp.reporting_period is not None, "Expected reporting_period"
+
+    # Check if by_geo is populated on any package
+    packages = _collect_all_packages(resp)
+    has_geo = any(getattr(pkg, "by_geo", None) for pkg in packages)
+    if not has_geo:
+        pytest.xfail(
+            f"PRODUCTION GAP: by_geo breakdown not populated in response — "
+            f"cannot verify classification system '{system}'"
+        )
+    # Geo data is present (the xfail above covers its absence), so every entry must
+    # declare the system it classified by. No `if geo_system is not None` guard: the
+    # scenario NAMES the system it expects, so an entry declaring none leaves that
+    # claim ungraded, which is the whole defect class of GH #1751.
+    #
+    # GeoBreakdown.system is `str | None` in the schema, but AdCP 3.1.1 requires it in
+    # the field description for the metro/postal_area levels this step runs for, and
+    # the step text asserts a specific system either way.
+    checked = 0
+    for pkg in packages:
+        by_geo = getattr(pkg, "by_geo", None) or []
+        for entry in by_geo:
+            geo_system = entry.get("system") if isinstance(entry, dict) else getattr(entry, "system", None)
+            assert geo_system == system, (
+                f"Geo breakdown system mismatch in package {getattr(pkg, 'package_id', '?')!r}: "
+                f"expected {system!r}, got {geo_system!r}"
+            )
+            checked += 1
+    assert checked >= 1, (
+        f"No by_geo entries were graded, so 'uses classification system {system}' asserted nothing "
+        f"— {len(packages)} package(s) reported a by_geo list, all empty"
+    )
+
+
+@then(parsers.parse('the response placement breakdown should be sorted by "{metric}"'))
+def then_placement_sorted(ctx: dict, metric: str) -> None:
+    """Assert placement breakdown is sorted by the given metric descending.
+
+    Asserts what the response DOES provide (deliveries, packages),
+    then verifies sort order if by_placement is populated with the metric.
+    """
+    assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found"
+    assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
+    assert resp.reporting_period is not None, "Expected reporting_period"
+
+    packages = _collect_all_packages(resp)
+    _assert_placements_sorted_by(packages, metric, fallback=False)
+
+
+@then(parsers.parse('the response placement breakdown should be sorted by "{metric}" (fallback)'))
+def then_placement_sorted_fallback(ctx: dict, metric: str) -> None:
+    """Assert placement breakdown uses fallback sort metric.
+
+    Asserts what the response DOES provide (deliveries, packages),
+    then verifies sort order if by_placement is populated.
+    """
+    assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found"
+    assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
+    assert resp.reporting_period is not None, "Expected reporting_period"
+
+    packages = _collect_all_packages(resp)
+    _assert_placements_sorted_by(packages, metric, fallback=True)
+
+
+@then(parsers.parse('the response packages should include "{field}"'))
+def then_packages_include_field(ctx: dict, field: str) -> None:
+    """Assert every package has the named field populated with a valid value.
+
+    Verifies the field is non-None and, for numeric fields, is a proper
+    numeric type. For string fields, verifies non-empty.
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found"
+    packages = _collect_all_packages(resp)
+    checked = 0
+    for pkg in packages:
+        value = getattr(pkg, field)
+        assert value is not None, f"Package {pkg.package_id!r} missing field {field!r}"
+        # Type-specific validation
+        if isinstance(value, str):
+            assert value, f"Package {pkg.package_id!r} field {field!r} is empty string"
+        elif isinstance(value, list):
+            # List fields should be non-empty
+            assert value, f"Package {pkg.package_id!r} field {field!r} is empty list"
+        checked += 1
+    assert checked >= 1, "Response has no packages to check"
+
+
+@then(parsers.parse('the response packages should include "{field}" breakdown arrays'))
+def then_packages_include_breakdown(ctx: dict, field: str) -> None:
+    """Assert every package has a non-empty breakdown list for the named field.
+
+    Verifies structural correctness (field is a list), content (each entry
+    has impressions), and dimensional segmentation (each entry carries the
+    dimension identifier, e.g. "device_type" for "by_device_type").
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found"
+    packages = _collect_all_packages(resp)
+    checked = 0
+    # Derive the dimension identifier from the field name: "by_device_type" -> "device_type"
+    dimension_key = field[3:] if field.startswith("by_") else field
+    for pkg in packages:
+        value = getattr(pkg, field)
+        assert isinstance(value, list), f"Package {pkg.package_id!r} missing '{field}' breakdown array: {value!r}"
+        assert value, f"Package {pkg.package_id!r} has empty '{field}' breakdown"
+        # Each breakdown entry must have impressions AND the dimension identifier
+        identifiers_seen: set[str] = set()
+        for entry in value:
+            entry_impressions = (
+                entry.get("impressions") if isinstance(entry, dict) else getattr(entry, "impressions", None)
+            )
+            assert entry_impressions is not None, f"Breakdown entry in {pkg.package_id!r}.{field} missing 'impressions'"
+            # Dimension identifier: proves data is actually segmented
+            dim_value = entry.get(dimension_key) if isinstance(entry, dict) else getattr(entry, dimension_key, None)
+            if dim_value is None:
+                pytest.xfail(
+                    f"PRODUCTION GAP: breakdown entry in {pkg.package_id!r}.{field} "
+                    f"missing dimension identifier '{dimension_key}' — "
+                    f"entries are not segmented by dimension"
+                )
+            assert dim_value, (
+                f"Breakdown entry in {pkg.package_id!r}.{field} has empty "
+                f"dimension identifier '{dimension_key}': {dim_value!r}"
+            )
+            identifiers_seen.add(str(dim_value))
+        # With multiple entries, dimension identifiers should be distinct
+        if len(value) > 1:
+            assert len(identifiers_seen) > 1, (
+                f"Package {pkg.package_id!r}.{field} has {len(value)} entries "
+                f"but only 1 distinct '{dimension_key}' value: {identifiers_seen} — "
+                f"not truly segmented by dimension"
+            )
+        checked += 1
+    assert checked >= 1, "Response has no packages to check"
+
+
+@then(parsers.parse('the response packages should include "{f1}" and "{f2}" breakdowns'))
+def then_packages_include_two(ctx: dict, f1: str, f2: str) -> None:
+    """Assert every package has both named breakdown fields as non-empty lists."""
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found"
+    packages = _collect_all_packages(resp)
+    checked = 0
+    for pkg in packages:
+        for field in (f1, f2):
+            value = getattr(pkg, field, None)
+            assert isinstance(value, list), f"Package {pkg.package_id!r} missing '{field}' breakdown: {value!r}"
+            assert value, f"Package {pkg.package_id!r} has empty '{field}' breakdown list"
+        checked += 1
+    assert checked >= 1, "Response has no packages to check"
+
+
+@then(parsers.parse('"{field}" should be true'))
+def then_field_true(ctx: dict, field: str) -> None:
+    """Assert the named field is True on every package in the response.
+
+    Truncation flags (by_geo_truncated, by_device_type_truncated) live on
+    PackageDelivery, not on the top-level response object.
+
+    Graded on the WIRE via :func:`_wire_packages`, and with ``is True`` — so a flag
+    serialized as the string "true" (which the typed payload would coerce back to a
+    boolean) fails here. Absence fails too, as it must: the response schema requires
+    by_*_truncated whenever the matching by_* array is present.
+    """
+    packages = _wire_packages(ctx)
+    assert packages, "Response has no packages to check"
+    for pkg in packages:
+        value = pkg.get(field)
+        assert value is True, f"Expected response package.{field} to be True, got {value!r}"
+
+
+@then(parsers.parse('the response packages should include "{field}" with at most {n:d} entries'))
+def then_packages_limited(ctx: dict, field: str, n: int) -> None:
+    """Assert every package has at most n entries in the named breakdown field.
+
+    Verifies the count constraint and that entries are properly typed (list
+    of dicts/objects with at least one field populated).
+
+    Graded on the WIRE via :func:`_wire_packages` — the buyer's view, not the
+    coerced typed payload.
+    """
+    packages = _wire_packages(ctx)
+    checked = 0
+    for pkg in packages:
+        pkg_id = pkg.get("package_id")
+        value = pkg.get(field)
+        assert isinstance(value, list), f"Package {pkg_id!r} missing '{field}' as a list: {value!r}"
+        actual_count = len(value)
+        assert actual_count <= n, f"Package {pkg_id!r} '{field}' has {actual_count} entries, expected at most {n}"
+        # Each entry must be a non-empty dict or object (not bare None)
+        for entry in value:
+            assert entry is not None, f"Package {pkg_id!r} '{field}' contains a None entry"
+        checked += 1
+    assert checked >= 1, "Response has no packages to check"
+
+
+def _inject_placement_data(ctx: dict) -> None:
+    """Ensure adapter responses include placement breakdown data.
+
+    If responses already exist, mutate them. Otherwise, register a default
+    response for each media buy known in ctx. This must be called from Given
+    steps that declare placement support, before the When step dispatches.
+    """
+    env = ctx["env"]
+    if env._adapter_responses:
+        for resp in env._adapter_responses.values():
+            for pkg in resp.by_package:
+                if pkg.by_placement is None:
+                    pkg.by_placement = _DEFAULT_PLACEMENT_DATA
+    else:
+        media_buys = ctx.get("media_buys", {})
+        for label in media_buys:
+            real_id = _resolve_media_buy_id(ctx, label)
+            env.set_adapter_response(
+                media_buy_id=real_id,
+                by_placement=_DEFAULT_PLACEMENT_DATA,
+            )
+
+
+@then(parsers.parse('the payload should include delivery metrics for "{mb_id}"'))
+def then_webhook_payload_has_metrics(ctx: dict, mb_id: str) -> None:
+    """Assert webhook payload includes delivery metrics for the requested buy.
+
+    Verifies ID mapping and that the payload carries concrete numeric metric
+    values (impressions, spend) — not just structural presence.  The
+    reporting_period check is left to its dedicated Then step.
+    """
+    payload = _get_last_webhook_payload(ctx)
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+    # ID mapping: payload media_buy_id must match the requested buy
+    assert payload.get("media_buy_id") == real_id, (
+        f"Expected payload media_buy_id == {real_id!r}, got {payload.get('media_buy_id')!r}"
+    )
+
+    # Metrics: the payload must carry concrete numeric delivery data.
+    # Look in totals, then by_package, then top-level — whatever the payload shape.
+    totals = payload.get("totals") or payload.get("aggregated_totals") or {}
+    impressions = totals.get("impressions") if isinstance(totals, dict) else None
+    spend = totals.get("spend") if isinstance(totals, dict) else None
+
+    # Fallback: check by_package or top-level keys
+    if impressions is None:
+        pkgs = payload.get("by_package") or []
+        if pkgs:
+            impressions = sum(p.get("impressions", 0) for p in pkgs if isinstance(p, dict))
+            spend = sum(p.get("spend", 0) for p in pkgs if isinstance(p, dict))
+        else:
+            impressions = payload.get("impressions")
+            spend = payload.get("spend")
+
+    assert impressions is not None, (
+        f"Webhook payload for {real_id!r} missing delivery metric 'impressions': payload keys={list(payload.keys())}"
+    )
+    assert isinstance(impressions, (int, float)) and impressions > 0, (
+        f"Expected positive numeric impressions for {real_id!r}, got {impressions!r}"
+    )
+    assert spend is not None, (
+        f"Webhook payload for {real_id!r} missing delivery metric 'spend': payload keys={list(payload.keys())}"
+    )
+    assert isinstance(spend, (int, float)) and spend > 0, (
+        f"Expected positive numeric spend for {real_id!r}, got {spend!r}"
+    )
+

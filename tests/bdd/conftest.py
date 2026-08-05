@@ -555,7 +555,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         #   sets _active_update + _update_target_id, so RestE2EDispatcher PUTs the real
         #   /api/v1/media-buys/{id} route (src/routes/api_v1.py:345) and stashes the raw
         #   HTTP JSON as wire_response; task_id/NOT-contain steps grade that wire via
-        #   _submitted_wire_dict (loud failure if wire_response missing on non-IMPL).
+        #   wire_dict (loud failure if wire_response missing on non-IMPL).
         # - T-UC-003-approval-tenant → GRADUATE — BR-RULE-017 INV-2: same real-wire path;
         #   status "submitted" asserted on the typed payload parsed from the live wire.
         # - T-UC-003-approval-adapter → GRADUATE — BR-RULE-017 INV-3: same real-wire path;
