@@ -47,11 +47,17 @@ from src.core.schemas.creative import ListCreativeFormatsResponse
 from src.core.schemas.delivery import GetCreativeDeliveryResponse, GetMediaBuyDeliveryResponse
 
 # Pinned AdCP schema fixtures. Source of truth is adcontextprotocol/adcp at the
-# immutable commit 04f59d2d5 (tag v3.1-04f59d2d5, 2026-05-13) — an INTENTIONAL frozen
-# reference point for AdCP 3.1. Upstream ships constantly and `/schemas/latest` drifts,
-# so we deliberately do NOT track it: the schemas are vendored (committed) and read
-# offline. To advance the pin, run tests/fixtures/adcp_schemas_pinned/_refresh.py.
-_PINNED_SHA = "04f59d2d56d3d77033162c310e99a1188e4eb419"
+# immutable commit named by tests/fixtures/adcp_schemas_pinned/_refresh.py's own
+# PINNED_SHA (tag v3.1.1, salesagent-ulft) — an INTENTIONAL frozen reference point.
+# Upstream ships constantly and `/schemas/latest` drifts, so we deliberately do NOT
+# track it: the schemas are vendored (committed) and read offline. To advance the
+# pin, run tests/fixtures/adcp_schemas_pinned/_refresh.py. This constant is
+# informational only (used in an error message below) but is still a hand-maintained
+# mirror of _refresh.py's PINNED_SHA — test_adcp_spec_version.py's
+# test_vendored_schema_pin_matches_spec_version guards it against drifting again
+# (salesagent-ulft found it stale here too: still 04f59d2d5/"AdCP 3.1" after the
+# fixtures were re-vendored at 3.1.1).
+_PINNED_SHA = "467fd93d77112baf9e094e18980119edcd3a4d07"
 _PINNED_SCHEMA_DIR = Path(__file__).parent.parent / "fixtures" / "adcp_schemas_pinned"
 
 # Map AdCP schema refs to Pydantic model classes. Keys are the pinned schema `$id`

@@ -60,6 +60,20 @@ def _refresh_pinned_sha() -> str:
     return match.group(1)
 
 
+def _alignment_test_pinned_sha() -> str:
+    """The informational _PINNED_SHA mirror in test_pydantic_schema_alignment.py.
+
+    salesagent-ulft (sweep-verify): a second hand-maintained copy of the same
+    commit, used only in an error message there. Found stale (still 04f59d2d5)
+    even after this file's own _EXPECTED_PINNED_SHA was updated in the same
+    ticket — guard it too so a third drift can't happen silently.
+    """
+    src = (_REPO_ROOT / "tests" / "unit" / "test_pydantic_schema_alignment.py").read_text()
+    match = re.search(r'_PINNED_SHA = "([0-9a-f]{40})"', src)
+    assert match, 'test_pydantic_schema_alignment.py no longer carries a _PINNED_SHA = "<40-char sha>" constant'
+    return match.group(1)
+
+
 def test_vendored_schema_pin_matches_spec_version() -> None:
     """The offline-vendored schema fixture must track EXPECTED_SPEC_VERSION.
 
@@ -78,6 +92,10 @@ def test_vendored_schema_pin_matches_spec_version() -> None:
         f"to {EXPECTED_SPEC_VERSION}, also update _refresh.py's PINNED_SHA to the new tag's commit, "
         "re-run tests/fixtures/adcp_schemas_pinned/_refresh.py to re-vendor the fixtures, and update "
         "_EXPECTED_PINNED_SHA here to match. See docs/adcp-spec-version.md 'Bumping the spec version'."
+    )
+    assert _alignment_test_pinned_sha() == _EXPECTED_PINNED_SHA, (
+        f"test_pydantic_schema_alignment.py's _PINNED_SHA ({_alignment_test_pinned_sha()}) does not "
+        f"match this test's _EXPECTED_PINNED_SHA ({_EXPECTED_PINNED_SHA}). Update it in the same change."
     )
 
 
