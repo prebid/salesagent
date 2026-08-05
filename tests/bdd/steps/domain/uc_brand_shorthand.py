@@ -8,7 +8,7 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.domain.uc002_create_media_buy import _get_response_field
 from tests.bdd.steps.generic._brand_param import parse_brand_gherkin_param
-from tests.bdd.steps.generic._dispatch import dispatch_raw_kwargs
+from tests.bdd.steps.generic._dispatch import dispatch_typed_or_malformed
 from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
 
@@ -21,11 +21,18 @@ def given_media_buy_creation_tenant(ctx: dict) -> None:
 
 @when(parsers.parse("the buyer sends create_media_buy with brand {brand}"))
 def when_send_create_media_buy_with_brand(ctx: dict, brand: str) -> None:
-    """Dispatch create_media_buy with a brand value (JSON dict or bare/quoted string)."""
+    """Dispatch create_media_buy with a brand value (JSON dict or bare/quoted string).
+
+    The Examples table mixes well-formed and deliberately malformed brand
+    shapes (BR-UC-BRAND-SHORTHAND.feature) — dispatch_typed_or_malformed lets
+    production, not test code, reject the malformed rows.
+    """
+    from src.core.schemas import CreateMediaBuyRequest
+
     kwargs = _ensure_request_defaults(ctx)
     kwargs["brand"] = parse_brand_gherkin_param(brand)
     kwargs["po_number"] = f"PO-BRAND-{uuid.uuid4().hex[:8]}"
-    dispatch_raw_kwargs(ctx, **kwargs)
+    dispatch_typed_or_malformed(ctx, CreateMediaBuyRequest, **kwargs)
 
 
 @then("the create_media_buy request succeeds")

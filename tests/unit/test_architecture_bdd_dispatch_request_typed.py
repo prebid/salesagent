@@ -10,10 +10,11 @@ regression statically: a BDD step file that copies the old
 ``dispatch_request(ctx, some_field=value)`` shape fails the moment it is written,
 not the moment its scenario happens to run.
 
-The negative-path twin, ``dispatch_malformed_request(ctx, **raw)``, and the
-deprecated legacy form, ``dispatch_raw_kwargs(ctx, **kwargs)`` (salesagent-oyiv.4
-tracks its retirement), both still accept flat kwargs by design -- this guard is
-scoped to the ``dispatch_request`` name only.
+The negative-path twin, ``dispatch_malformed_request(ctx, **raw)``, still
+accepts flat kwargs by design -- this guard is scoped to the
+``dispatch_request`` name only. (The old deprecated legacy form,
+``dispatch_raw_kwargs``, that also accepted flat kwargs was retired once its
+last call site migrated.)
 """
 
 from __future__ import annotations
@@ -21,7 +22,11 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from tests.unit._architecture_helpers import assert_detector_catches_ast_snippets, iter_call_expressions, rel
+from tests.unit._architecture_helpers import (
+    assert_detector_catches_ast_snippets,
+    iter_call_expressions,
+    iter_module_trees,
+)
 
 _BDD_STEPS_ROOT = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
@@ -39,18 +44,12 @@ def _find_missing_req_violations(tree: ast.Module) -> list[int]:
     return violations
 
 
-def _iter_bdd_step_files() -> list[Path]:
-    return sorted(p for p in _BDD_STEPS_ROOT.rglob("*.py") if "__pycache__" not in str(p))
-
-
 def test_dispatch_request_call_sites_all_pass_req() -> None:
     """Every real ``dispatch_request(...)`` call site in tests/bdd/steps/ passes req=."""
     violations: dict[str, list[int]] = {}
-    for path in _iter_bdd_step_files():
-        rel_path = rel(path)
+    for tree, rel_path in iter_module_trees([_BDD_STEPS_ROOT]):
         if rel_path == _DEFINITION_FILE:
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         lines = _find_missing_req_violations(tree)
         if lines:
             violations[rel_path] = lines
@@ -92,11 +91,11 @@ def test_detector_allows_req_kwarg_dispatch_request() -> None:
 
 
 def test_detector_ignores_sibling_dispatch_functions() -> None:
-    """dispatch_malformed_request / dispatch_raw_kwargs accept flat kwargs by design."""
+    """dispatch_malformed_request / dispatch_typed_or_malformed accept flat kwargs by design."""
     source = (
         "def when_something(ctx):\n"
         "    dispatch_malformed_request(ctx, sampling_method='random')\n"
-        "    dispatch_raw_kwargs(ctx, brand={'domain': 'x.com'})\n"
+        "    dispatch_typed_or_malformed(ctx, SomeModel, brand={'domain': 'x.com'})\n"
     )
     tree = ast.parse(source, filename="<sibling-functions>")
     assert not _find_missing_req_violations(tree)

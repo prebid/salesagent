@@ -60,13 +60,27 @@ class MediaBuyListEnv(IntegrationEnv):
         return self._run_mcp_wrapper(get_media_buys, GetMediaBuysResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
-        """Convert kwargs to GetMediaBuysBody shape for REST POST."""
-        body: dict[str, Any] = {}
-        for key in ("media_buy_ids", "status_filter", "account_id", "context"):
-            if key in kwargs and kwargs[key] is not None:
-                body[key] = kwargs[key]
-        if kwargs.get("include_snapshot"):
-            body["include_snapshot"] = True
+        """Convert kwargs to GetMediaBuysBody shape for REST POST.
+
+        With ``req=`` (a validated GetMediaBuysRequest): delegates to
+        serialize_request so the wire carries the real ``account`` shape (a
+        nested reference, not a flat ``account_id`` the old allowlist here
+        never matched) plus ``include_snapshot`` merged in — it's a real
+        transport param, not a request-model field, so serialize_request
+        never sees it. Without ``req=`` (dispatch_malformed_request path):
+        returns the remaining kwargs verbatim, matching the base class's
+        no-``req`` contract — production, not the test process, rejects them.
+        """
+        from tests.harness._base import serialize_request
+
+        include_snapshot = kwargs.pop("include_snapshot", None)
+        req = kwargs.pop("req", None)
+        if req is not None:
+            body = serialize_request(req)
+        else:
+            body = dict(kwargs)
+        if include_snapshot is not None:
+            body["include_snapshot"] = include_snapshot
         return body
 
     def parse_rest_response(self, data: dict[str, Any]) -> GetMediaBuysResponse:

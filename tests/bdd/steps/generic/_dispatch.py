@@ -1,6 +1,6 @@
 """Shared dispatch helpers for BDD domain step definitions.
 
-Three named entry points (salesagent-hwji), replacing the single polymorphic
+Named entry points (salesagent-hwji), replacing the single polymorphic
 ``dispatch_request`` that used to accept either a validated request model OR raw
 flat kwargs indistinguishably:
 
@@ -13,11 +13,16 @@ flat kwargs indistinguishably:
   (``dispatched_request(ctx)`` in ``_outcome_helpers.py``) can raise loudly naming
   the malformed channel instead of silently handing a Then-step a shape it never
   asked for.
-- :func:`dispatch_raw_kwargs` — DEPRECATED. The old polymorphic form, kept ONLY
-  for call sites outside UC-004 that salesagent-oyiv.4 has not yet migrated.
-  Records ``ctx["dispatched_kwargs"]``. Do not add new call sites.
+- :func:`dispatch_typed_or_malformed` — tries building the request model; falls
+  back to :func:`dispatch_malformed_request` on validation failure. For
+  scenario-outline sites whose Examples rows mix well-formed and deliberately
+  malformed payloads, where the step can't know in advance which it got.
+- :func:`dispatch_request_with_extra` — :func:`dispatch_request` plus a real
+  transport-level parameter that is NOT part of the AdCP request model (e.g.
+  ``include_snapshot`` on ``get_media_buys``). Keeps :func:`dispatch_request`'s
+  own signature clean for the common case.
 
-All three share the same transport-dispatch mechanics (:func:`_dispatch`):
+All entry points share the same transport-dispatch mechanics (:func:`_dispatch`):
 resolve ``ctx["transport"]``, call ``env.call_via``, store the outcome. Used
 across UC-004, UC-011, and other domain step files.
 """
@@ -137,16 +142,47 @@ def dispatch_malformed_request(ctx: dict, *, identity: Any = _SENTINEL, **raw: A
     _dispatch(ctx, dict(raw), identity)
 
 
-def dispatch_raw_kwargs(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> None:
-    """DEPRECATED — salesagent-oyiv.4 deletes this; do not add call sites.
+def dispatch_typed_or_malformed(
+    ctx: dict, model_cls: type[BaseModel], *, identity: Any = _SENTINEL, **kwargs: Any
+) -> None:
+    """Dispatch ``kwargs`` typed if it validates, malformed otherwise.
 
-    The old polymorphic dispatch form: accepted either flat kwargs or a whole
-    ``req=`` Pydantic model indistinguishably, so the expected-side accessor could
-    never be single-typed. Kept only for the non-UC-004 call sites
-    salesagent-oyiv.4 has not yet migrated onto :func:`dispatch_request` /
-    :func:`dispatch_malformed_request`. Records ``ctx["dispatched_kwargs"]`` — the
-    legacy channel ``dispatched_field`` (in ``_outcome_helpers.py``) still reads for
-    those un-migrated call sites.
+    For scenario-outline sites where SOME Examples rows are deliberately
+    malformed and others are well-formed, and the step itself has no way to
+    know in advance which shape a given row produced. Tries
+    ``model_cls(**kwargs)``; on success, dispatches it through
+    :func:`dispatch_request`. On ``ValidationError`` (Pydantic field-shape
+    rejection) or ``AdCPValidationError`` (a ``@model_validator``, e.g.
+    ``idempotency_key``'s pattern check), falls back to
+    :func:`dispatch_malformed_request` with the same raw kwargs — production,
+    not the test process, is what rejects them.
+
+    Do not reach for this when a site's kwargs are always well-formed (use
+    :func:`dispatch_request` directly) or always malformed (use
+    :func:`dispatch_malformed_request` directly) — it exists for the sites
+    that are genuinely either, depending on the Examples row.
     """
-    ctx["dispatched_kwargs"] = dict(kwargs)
-    _dispatch(ctx, dict(kwargs), identity)
+    from pydantic import ValidationError
+
+    from src.core.exceptions import AdCPValidationError
+
+    try:
+        req = model_cls(**kwargs)
+    except (ValidationError, AdCPValidationError):
+        dispatch_malformed_request(ctx, identity=identity, **kwargs)
+        return
+    dispatch_request(ctx, req=req, identity=identity)
+
+
+def dispatch_request_with_extra(ctx: dict, *, req: BaseModel, identity: Any = _SENTINEL, **extra: Any) -> None:
+    """:func:`dispatch_request`, plus dispatch-level kwargs that are real transport
+    parameters but NOT AdCP request-model fields (e.g. ``include_snapshot`` on
+    ``get_media_buys`` — a genuine MCP/A2A/REST tool parameter forwarded
+    separately from the request body to the ``_impl`` call).
+
+    Keeps :func:`dispatch_request`'s own signature clean — this is the escape
+    hatch for the rare non-model param, not a second general-purpose dispatch
+    shape. Most sites should use :func:`dispatch_request` directly.
+    """
+    ctx["dispatched_request"] = req
+    _dispatch(ctx, {"req": req, **extra}, identity)

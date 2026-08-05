@@ -18,10 +18,15 @@ from unittest.mock import ANY
 import pytest
 from pytest_bdd import given, parsers, then, when
 
+from src.core.schemas.creative import SyncCreativesRequest
 from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps._outcome_helpers import _require, is_e2e
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal, seed_account_with_access
-from tests.bdd.steps.generic._dispatch import dispatch_raw_kwargs
+from tests.bdd.steps.generic._dispatch import (
+    dispatch_malformed_request,
+    dispatch_request,
+    dispatch_typed_or_malformed,
+)
 from tests.factories.creative_asset import (
     assert_assets,
     build_assets,
@@ -257,6 +262,30 @@ def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: obje
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _dispatch_sync_creatives(ctx: dict, **kwargs: object) -> None:
+    """Shared dispatch for sync_creatives When steps (DRY -- salesagent-oyiv.4,
+    replaces 3 near-identical dispatch_raw_kwargs call sites).
+
+    Builds a typed SyncCreativesRequest when kwargs validate; falls back to a
+    malformed dispatch when they don't (a structurally-invalid creative
+    payload, not merely a content-invalid one like an empty name -- Creative
+    has no min_length on name, so a per-item production failure test still
+    reaches the wire typed).
+    """
+    if ctx.get("has_auth") is False:
+        dispatch_typed_or_malformed(ctx, SyncCreativesRequest, identity=ctx.get("identity"), **kwargs)
+    else:
+        dispatch_typed_or_malformed(ctx, SyncCreativesRequest, **kwargs)
+
+
+def _dispatch_creatives_list(ctx: dict) -> None:
+    """Shared dispatch for the append-one-well-formed-creative-then-sync steps
+    (DRY -- salesagent-oyiv.4, replaces 3 identical dispatch_raw_kwargs call
+    sites). Always well-formed -- no malformed fallback needed.
+    """
+    dispatch_request(ctx, req=SyncCreativesRequest(creatives=ctx["creatives"]))
+
+
 @when("the Buyer Agent syncs the creatives")
 @when("the Buyer Agent syncs the creative")
 @when("the Buyer Agent syncs the creative via the REST/A2A endpoint")
@@ -287,10 +316,7 @@ def when_sync_creative(ctx: dict) -> None:
         kwargs["idempotency_key"] = ctx["idempotency_key"]
     if "push_notification_config" in ctx:
         kwargs["push_notification_config"] = ctx["push_notification_config"]
-    if ctx.get("has_auth") is False:
-        dispatch_raw_kwargs(ctx, identity=ctx.get("identity"), **kwargs)
-    else:
-        dispatch_raw_kwargs(ctx, **kwargs)
+    _dispatch_sync_creatives(ctx, **kwargs)
 
 
 def _ensure_tenant_principal(ctx: dict, env: object) -> None:
@@ -3129,7 +3155,7 @@ def when_sync_creative_with_assignments(ctx: dict) -> None:
         kwargs["assignments"] = ctx["assignments"]
     if "validation_mode" in ctx:
         kwargs["validation_mode"] = ctx["validation_mode"]
-    dispatch_raw_kwargs(ctx, **kwargs)
+    _dispatch_sync_creatives(ctx, **kwargs)
 
 
 def _get_media_buy_status_from_db(ctx: dict) -> str:
@@ -3656,7 +3682,7 @@ def when_format_compatibility_checked(ctx: dict) -> None:
         kwargs["assignments"] = ctx["assignments"]
     if "validation_mode" in ctx:
         kwargs["validation_mode"] = ctx["validation_mode"]
-    dispatch_raw_kwargs(ctx, **kwargs)
+    _dispatch_sync_creatives(ctx, **kwargs)
 
 
 @then('the formats should match using the "format_id" key')
@@ -3999,7 +4025,7 @@ def when_sync_specific_creative(ctx: dict, creative_id: str) -> None:
         "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
-    dispatch_raw_kwargs(ctx, creatives=ctx["creatives"])
+    _dispatch_creatives_list(ctx)
 
 
 @then("the existing creative should be updated (matched by triple key)")
@@ -4073,7 +4099,7 @@ def given_two_creatives_one_valid_one_empty_name(ctx: dict) -> None:
 @when("the Buyer Agent syncs both creatives")
 def when_sync_both_creatives(ctx: dict) -> None:
     """Send sync_creatives with both creative payloads."""
-    dispatch_raw_kwargs(ctx, creatives=ctx["creatives"])
+    _dispatch_creatives_list(ctx)
 
 
 def _get_creative_result_by_id(ctx: dict, creative_id: str) -> object | None:
@@ -5641,7 +5667,7 @@ def when_sync_creative_as_principal(ctx: dict, creative_id: str, principal_id: s
         "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
-    dispatch_raw_kwargs(ctx, creatives=ctx["creatives"])
+    _dispatch_creatives_list(ctx)
 
 
 @when('the Buyer Agent syncs an assignment of creative "creative-xp" to a package owned by the authenticated principal')
@@ -5666,7 +5692,12 @@ def when_sync_cross_principal_assignment(ctx: dict) -> None:
     pkg = MediaPackageFactory(media_buy=media_buy)
     env._commit_factory_data()
     ctx["xp_package_id"] = pkg.package_id
-    dispatch_raw_kwargs(ctx, creatives=[], assignments={"creative-xp": [pkg.package_id]}, validation_mode="lenient")
+    # creatives=[] deliberately violates SyncCreativesRequest.creatives' min_length=1 --
+    # always dispatch_malformed_request, never a try-then-fallback: the intent is to see
+    # how production handles the shape, not to construct it client-side.
+    dispatch_malformed_request(
+        ctx, creatives=[], assignments={"creative-xp": [pkg.package_id]}, validation_mode="lenient"
+    )
 
 
 @then("the sync operation should not fail")

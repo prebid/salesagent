@@ -14,7 +14,10 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps.generic._dispatch import dispatch_raw_kwargs
+from tests.bdd.steps.generic._dispatch import (
+    dispatch_malformed_request,
+    dispatch_request_with_extra,
+)
 from tests.bdd.steps.generic.then_error import _wire_code, _wire_error_object, _wire_suggestion
 from tests.factories import (
     CreativeAssignmentFactory,
@@ -1123,16 +1126,43 @@ def given_snapshot_available(ctx: dict, pkg_id: str) -> None:
 
 
 def _dispatch_query(ctx: dict, **extra_kwargs: Any) -> None:
-    """Build and dispatch a get_media_buys request."""
+    """Build and dispatch a get_media_buys request.
+
+    ``include_snapshot`` is a real MCP/A2A/REST transport parameter, not a
+    GetMediaBuysRequest field — it never reaches model construction, and is
+    forwarded separately via dispatch_request_with_extra (or included in the
+    raw kwargs on the malformed path, since production's real wire signature
+    accepts it there too). ``media_buy_ids="not-a-list"`` (ext-d validation)
+    deliberately fails GetMediaBuysRequest construction; production, not the
+    test process, rejects it.
+    """
+    from pydantic import ValidationError
+
+    from src.core.exceptions import AdCPValidationError
+    from src.core.schemas import GetMediaBuysRequest
+
     if ctx.get("error") is not None:
         return
-    query_kwargs = ctx.get("query_kwargs", {})
+    query_kwargs = dict(ctx.get("query_kwargs", {}))
     query_kwargs.update(extra_kwargs)
 
+    include_snapshot = query_kwargs.pop("include_snapshot", None)
+    try:
+        req = GetMediaBuysRequest(**query_kwargs)
+    except (ValidationError, AdCPValidationError):
+        if include_snapshot is not None:
+            query_kwargs["include_snapshot"] = include_snapshot
+        if ctx.get("has_auth") is False:
+            dispatch_malformed_request(ctx, identity=None, **query_kwargs)
+        else:
+            dispatch_malformed_request(ctx, **query_kwargs)
+        return
+
+    extra = {"include_snapshot": include_snapshot} if include_snapshot is not None else {}
     if ctx.get("has_auth") is False:
-        dispatch_raw_kwargs(ctx, identity=None, **query_kwargs)
+        dispatch_request_with_extra(ctx, req=req, identity=None, **extra)
     else:
-        dispatch_raw_kwargs(ctx, **query_kwargs)
+        dispatch_request_with_extra(ctx, req=req, **extra)
 
 
 @when("the Buyer Agent sends a get_media_buys request via A2A with no filters")

@@ -52,7 +52,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from src.core.schemas import SyncCreativesResponse
-from tests.harness._base import IntegrationEnv
+from tests.harness._base import IntegrationEnv, serialize_request
 
 
 class CreativeSyncEnv(IntegrationEnv):
@@ -165,23 +165,45 @@ class CreativeSyncEnv(IntegrationEnv):
         """
         self.mock["run_async"].side_effect = lambda coro: formats
 
+    def _flatten_request(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Convert a ``req=`` kwarg into the flat parameter dict the wrappers take.
+
+        The sync_creatives wrappers (MCP/A2A/REST) and ``_sync_creatives_impl``
+        all accept individual parameters (``creatives``, ``account``,
+        ``assignments``, ...), not a request model. Without ``req=``, returns
+        kwargs unchanged — the ``dispatch_malformed_request`` / legacy flat-kwargs
+        path, where the raw values must reach production unmodified.
+        """
+        req = kwargs.pop("req", None)
+        if req is None:
+            return kwargs
+        flat = serialize_request(req)
+        flat.update(kwargs)
+        return flat
+
     def call_impl(self, **kwargs: Any) -> SyncCreativesResponse:
         """Call _sync_creatives_impl with real DB.
 
-        Accepts all _sync_creatives_impl kwargs. The 'identity' kwarg
-        defaults to self.identity if not provided.
+        Accepts all _sync_creatives_impl kwargs, or a ``req=`` request model.
+        The 'identity' kwarg defaults to self.identity if not provided.
 
-        If 'account' is present, resolves it via enrich_identity_with_account
-        (same as the transport wrappers do) before calling _impl.
+        If an account reference is present, resolves it via
+        enrich_identity_with_account (same as the transport wrappers do)
+        before calling _impl. With ``req=``, uses ``req.account`` directly
+        (the typed model enrich_identity_with_account expects) rather than
+        the flattened wire dict — matching MediaBuyCreateEnv.call_impl.
         """
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
         self._commit_factory_data()
+        req = kwargs.get("req")
+        account = req.account if req is not None else kwargs.pop("account", None)
+        kwargs = self._flatten_request(kwargs)
+        kwargs.pop("account", None)
         kwargs.setdefault("identity", self.identity)
         kwargs.setdefault("creatives", [])
 
-        # Handle account kwarg — resolve at boundary, same as wrappers
-        account = kwargs.pop("account", None)
+        # Handle account — resolve at boundary, same as wrappers
         if account is not None:
             from src.core.transport_helpers import enrich_identity_with_account
 
@@ -196,10 +218,19 @@ class CreativeSyncEnv(IntegrationEnv):
         A2A handler's _handle_sync_creatives_skill constructs CreativeAsset
         from raw dicts, which fails validation (assets field required).
         That handler bug needs a separate fix.
+
+        sync_creatives_raw declares ``account: LibraryAccountReference | None``
+        (unlike ``creatives``, no ``dict`` alternative) — it's a plain Python
+        call with no Pydantic boundary to re-type a flattened wire dict. With
+        ``req=``, use ``req.account`` directly rather than the flattened form.
         """
         from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
 
         self._commit_factory_data()
+        req = kwargs.get("req")
+        account = req.account if req is not None else kwargs.pop("account", None)
+        kwargs = self._flatten_request(kwargs)
+        kwargs["account"] = account
         kwargs.setdefault("identity", self.identity)
         kwargs.setdefault("creatives", [])
         return sync_creatives_raw(**kwargs)
@@ -209,19 +240,19 @@ class CreativeSyncEnv(IntegrationEnv):
 
         No enum coercion needed — FastMCP's TypeAdapter handles it automatically.
         """
+        kwargs = self._flatten_request(kwargs)
         kwargs.setdefault("creatives", [])
         return self._run_mcp_client("sync_creatives", SyncCreativesResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to SyncCreativesBody shape for REST POST."""
+        kwargs = self._flatten_request(kwargs)
         # The REST body expects 'creatives' as list[dict], matching SyncCreativesBody
         body: dict[str, Any] = {}
         if "creatives" in kwargs:
             creatives = kwargs["creatives"]
-            # UC-006 dispatches through dispatch_raw_kwargs (out of scope for the
-            # salesagent-oyiv typed-request migration — see uc006_sync_creatives.py's
-            # when_sync_creative), so creatives arrive as plain dicts, not validated
-            # Creative models. Convert only when a model is actually present.
+            # Some callers (dispatch_malformed_request) send plain dicts, not
+            # validated Creative models — convert only when a model is present.
             body["creatives"] = [c.model_dump(mode="json") if hasattr(c, "model_dump") else c for c in creatives]
         if "assignments" in kwargs and kwargs["assignments"] is not None:
             body["assignments"] = kwargs["assignments"]

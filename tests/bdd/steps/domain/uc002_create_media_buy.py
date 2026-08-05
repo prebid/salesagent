@@ -732,24 +732,33 @@ def when_send_create_media_buy(ctx: dict) -> None:
       either accepts it (account is optional) or rejects it on the wire.
     """
     if ctx.get("idempotency_create"):
-        from tests.bdd.steps.generic._dispatch import dispatch_raw_kwargs
+        # Two Given steps route here: given_valid_request_with_idempotency_key (a
+        # normal string key -- constructs cleanly) and
+        # given_request_idempotency_key_omitted (OMIT_IDEMPOTENCY_KEY, a bare
+        # sentinel object -- raises ValidationError on the typed str field).
+        # dispatch_typed_or_malformed routes each correctly without the step
+        # needing to know which Given ran.
+        from src.core.schemas import CreateMediaBuyRequest
+        from tests.bdd.steps.generic._dispatch import dispatch_typed_or_malformed
 
-        dispatch_raw_kwargs(ctx, **ctx["request_kwargs"])
+        dispatch_typed_or_malformed(ctx, CreateMediaBuyRequest, **ctx["request_kwargs"])
         return
 
     if ctx.get("uc002_full_create"):
         # Manual-approval wiring (PR #1567 round-2 item 2): dispatch a FULL create
         # through the parametrized transport against the harness-seeded
         # product, carrying the Given-step account reference so boundary
-        # account resolution runs too.
-        from tests.bdd.steps.generic._dispatch import dispatch_raw_kwargs
+        # account resolution runs too. Always well-formed -- no malformed
+        # fallback needed here.
+        from src.core.schemas import CreateMediaBuyRequest
+        from tests.bdd.steps.generic._dispatch import dispatch_request
 
         kwargs = _build_idempotency_request_kwargs(ctx)
         kwargs["idempotency_key"] = f"uc002-manual-{uuid.uuid4().hex}"
         account_ref = ctx.get("account_ref")
         if account_ref is not None:
             kwargs["account"] = account_ref.model_dump(mode="json", exclude_none=True)
-        dispatch_raw_kwargs(ctx, **kwargs)
+        dispatch_request(ctx, req=CreateMediaBuyRequest(**kwargs))
         return
 
     if ctx.get("dispatch_mode") == "create_raw":
@@ -786,11 +795,13 @@ def _dispatch_raw_create(ctx: dict) -> None:
     Schema-shape cases carry a malformed ``account`` shape that a typed
     ``CreateMediaBuyRequest`` would reject in test code before reaching the wire.
     Dispatching the flat kwargs sends them through the real route + production
-    Pydantic, so the boundary itself accepts or rejects the shape.
+    Pydantic, so the boundary itself accepts or rejects the shape. Always
+    dispatch_malformed_request, never a try-then-fallback: the intent of this
+    mode is "never construct typed", not "construct unless it fails".
     """
-    from tests.bdd.steps.generic._dispatch import dispatch_raw_kwargs
+    from tests.bdd.steps.generic._dispatch import dispatch_malformed_request
 
-    dispatch_raw_kwargs(ctx, **ctx.get("request_kwargs", {}))
+    dispatch_malformed_request(ctx, **ctx.get("request_kwargs", {}))
 
 
 def _ensure_tenant_principal(ctx: dict, env: object) -> None:
@@ -1531,19 +1542,20 @@ def given_media_buy_already_created_same_key(ctx: dict) -> None:
     adapter create_media_buy call count so the Then steps can assert the replay
     returns the same id and does NOT re-invoke the adapter.
     """
-    from tests.bdd.steps.generic._dispatch import dispatch_raw_kwargs
+    from src.core.schemas import CreateMediaBuyRequest
+    from tests.bdd.steps.generic._dispatch import dispatch_request
 
     env = ctx["env"]
     adapter_mock = env.mock["adapter"].return_value
 
     first_ctx: dict = {"env": env, "transport": ctx.get("transport"), "tenant": ctx.get("tenant")}
-    # dispatch_raw_kwargs, not dispatch_request(req=...): the replay this seeds (the
-    # When step) also dispatches via dispatch_raw_kwargs, and the idempotency check
-    # hashes the canonical WIRE payload. Serializing through a typed CreateMediaBuyRequest
-    # here (exclude_unset=True) produces a different payload shape than the raw-kwargs
-    # replay sends, tripping a spurious IDEMPOTENCY_CONFLICT — the two dispatches must go
-    # through the identical mechanism for the "same payload" invariant to hold.
-    dispatch_raw_kwargs(first_ctx, **dict(ctx["request_kwargs"]))
+    # dispatch_request(req=...), matching the When-step replay (both now go through
+    # typed construction): the idempotency check hashes the canonical WIRE payload,
+    # and serialize_request(mode="json") is deterministic across two constructions
+    # from the SAME kwargs dict — verified empirically. This pair must migrate
+    # together; a half-migrated state (one raw, one typed) would trip a spurious
+    # IDEMPOTENCY_CONFLICT from a "+00:00" vs "Z" timestamp-format mismatch.
+    dispatch_request(first_ctx, req=CreateMediaBuyRequest(**dict(ctx["request_kwargs"])))
 
     assert "error" not in first_ctx, f"First create_media_buy (idempotency seed) failed: {first_ctx.get('error')!r}"
     first_resp = first_ctx.get("response")
@@ -1627,30 +1639,6 @@ def given_idempotency_key_set(ctx: dict, value: str) -> None:
         ctx["idempotency_key"] = "k" * 256
     else:
         ctx["idempotency_key"] = value
-
-
-@when(parsers.parse('the Buyer Agent sends the same create_media_buy request with idempotency_key "{key}"'))
-def when_send_same_request_with_key(ctx: dict, key: str) -> None:
-    """Replay the same create_media_buy request with the given idempotency_key.
-
-    Uses the same request fields from the previous request but ensures the
-    idempotency_key matches the provided value.
-    """
-    ctx["idempotency_key"] = key
-    ctx["is_replay"] = True
-    # Dispatch the request through the harness
-    from tests.bdd.steps.generic._dispatch import dispatch_raw_kwargs
-
-    dispatch_raw_kwargs(ctx)
-
-
-@when("the Buyer Agent sends a second create_media_buy request with the same parameters")
-def when_send_second_request(ctx: dict) -> None:
-    """Send a second create_media_buy request with identical parameters."""
-    ctx["is_second_request"] = True
-    from tests.bdd.steps.generic._dispatch import dispatch_raw_kwargs
-
-    dispatch_raw_kwargs(ctx)
 
 
 @then("the response should succeed")

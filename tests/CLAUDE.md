@@ -436,16 +436,15 @@ federation contract; reusable by the `roundtrip-from-products` /
 
 `wire_response`/`wire_error_envelope` above are the **actual** side — what
 production sent back. The **expected** side is what the scenario's When step
-dispatched, read through one of three `ctx` keys written by
+dispatched, read through one of two `ctx` keys written by
 `tests/bdd/steps/generic/_dispatch.py` (salesagent-hwji). Each key has exactly
-one writer and, for the first two, one typed reader in
+one writer and, for the first one, one typed reader in
 `tests/bdd/steps/_outcome_helpers.py`:
 
 | `ctx` key | Written by | Read by | Shape |
 |---|---|---|---|
-| `ctx["dispatched_request"]` | `dispatch_request(ctx, req=...)` | `dispatched_request(ctx)` | A validated AdCP request model (`BaseModel`) — the only well-formed form. |
-| `ctx["dispatched_malformed"]` | `dispatch_malformed_request(ctx, **raw)` | *(no reader — see below)* | Raw field values that could NOT become a request model. |
-| `ctx["dispatched_kwargs"]` | `dispatch_raw_kwargs(ctx, **kwargs)` (DEPRECATED — salesagent-oyiv.4 deletes it) | *(legacy, no typed reader)* | Flat kwargs, unvalidated. Do not add new call sites. |
+| `ctx["dispatched_request"]` | `dispatch_request(ctx, req=...)` (also `dispatch_typed_or_malformed`/`dispatch_request_with_extra` on their success path) | `dispatched_request(ctx)` | A validated AdCP request model (`BaseModel`) — the only well-formed form. |
+| `ctx["dispatched_malformed"]` | `dispatch_malformed_request(ctx, **raw)` (also `dispatch_typed_or_malformed` on its fallback path) | *(no reader — see below)* | Raw field values that could NOT become a request model. |
 
 **Use `dispatched_request(ctx)`, not `dispatched_kwargs`/`dispatched_field`** (both
 retired): it returns the exact typed model the When step built, so an oracle reads

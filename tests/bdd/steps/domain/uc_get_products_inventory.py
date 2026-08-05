@@ -20,7 +20,7 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import _require_response
 from tests.bdd.steps.generic._brand_param import parse_brand_gherkin_param
-from tests.bdd.steps.generic._dispatch import dispatch_raw_kwargs
+from tests.bdd.steps.generic._dispatch import dispatch_typed_or_malformed
 from tests.factories import (
     InventoryProfileFactory,
     PricingOptionFactory,
@@ -36,15 +36,19 @@ from tests.helpers import assert_envelope_shape
 def _call_get_products(ctx: dict, **kwargs: Any) -> None:
     """Dispatch get_products through ctx['transport'] via the shared wire dispatcher.
 
-    Delegates to the (deprecated, salesagent-oyiv.4) ``dispatch_raw_kwargs`` helper (#1417): it
-    routes through ``env.call_via`` for the parametrized transport, stores the
-    normalized ``ctx['result']`` plus ``ctx['response']`` / ``ctx['error']`` /
-    ``ctx['wire_error_envelope']``, and fails loudly if no transport is set
-    (the IMPL ``call_impl`` fallback was removed — a missing transport is a
-    wiring bug, not an IMPL bypass).
+    Delegates to dispatch_typed_or_malformed (#1417): it builds a
+    GetProductsRequest, routes through ``env.call_via`` for the parametrized
+    transport on success, and falls back to a malformed dispatch (production,
+    not the test process, rejects it) when the Examples row is a deliberately
+    invalid brand shape. Stores the normalized ``ctx['result']`` plus
+    ``ctx['response']`` / ``ctx['error']`` / ``ctx['wire_error_envelope']``,
+    and fails loudly if no transport is set (the IMPL ``call_impl`` fallback
+    was removed — a missing transport is a wiring bug, not an IMPL bypass).
     """
+    from src.core.schemas import GetProductsRequest
+
     kwargs.setdefault("brief", "inventory profile test")
-    dispatch_raw_kwargs(ctx, **kwargs)
+    dispatch_typed_or_malformed(ctx, GetProductsRequest, **kwargs)
 
 
 def _get_first_prop(ctx: dict) -> Any:

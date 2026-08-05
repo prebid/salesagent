@@ -126,16 +126,6 @@ _UNBOUND_STEPS: set[tuple[str, str, str]] = {
         "then_response_not_equals_remembered",
         'the response "{field}" should NOT equal the remembered "{alias}"',
     ),
-    (
-        "tests.bdd.steps.domain.uc002_create_media_buy",
-        "when_send_same_request_with_key",
-        'the Buyer Agent sends the same create_media_buy request with idempotency_key "{key}"',
-    ),
-    (
-        "tests.bdd.steps.domain.uc002_create_media_buy",
-        "when_send_second_request",
-        "the Buyer Agent sends a second create_media_buy request with the same parameters",
-    ),
     ("tests.bdd.steps.domain.uc002_nfr", "given_budget_below_minimum", "But the package budget is below the minimum"),
     (
         "tests.bdd.steps.domain.uc003_ext_error_scenarios",
