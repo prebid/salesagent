@@ -12,8 +12,8 @@ repo ships constantly and `/schemas/latest` drifts; we deliberately do NOT track
 The commit is immutable on GitHub, so the schemas are vendored here (committed) —
 spec-derived gates read them offline and never fetch `/schemas/latest`.
 
-salesagent-ulft: this PINNED_SHA previously targeted "AdCP 3.1" (04f59d2d5) while the
-rest of the project had already moved to 3.1.1 — a silent drift that made
+This PINNED_SHA previously targeted "AdCP 3.1" (04f59d2d5) while the rest of the
+project had already moved to 3.1.1 — a silent drift that made
 verify_feature_error_codes.py's --casing-only gate blind to every code added between
 3.1 and 3.1.1. tests/unit/test_adcp_spec_version.py now asserts this PINNED_SHA
 resolves to the EXPECTED_SPEC_VERSION tag, so it cannot drift silently again.

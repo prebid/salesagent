@@ -104,7 +104,7 @@ A spec version bump is a deliberate change with downstream impact:
    fixtures spec-derived gates read offline (`scripts/verify_feature_error_codes.py`,
    `tests/unit/test_pydantic_schema_alignment.py`). Update `_EXPECTED_PINNED_SHA` in
    `tests/unit/test_adcp_spec_version.py` to match — the CI guard asserts these stay
-   in step (salesagent-ulft: this step was missing from the procedure, so the
+   in step (this step was previously missing from the procedure, so the
    vendored fixture silently stayed one version behind the SDK pin).
 8. Run `make quality` and address Pydantic field/type changes.
 9. Re-verify integration and BDD test coverage.

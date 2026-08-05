@@ -18,10 +18,10 @@ EXPECTED_SPEC_VERSION = "3.1.1"
 # The commit tests/fixtures/adcp_schemas_pinned/_refresh.py vendors offline schema
 # fixtures from (tag v3.1.1 on adcontextprotocol/adcp). Update this in the SAME
 # change as EXPECTED_SPEC_VERSION and _refresh.py's own PINNED_SHA — see
-# docs/adcp-spec-version.md "Bumping the spec version" step 7. salesagent-ulft:
-# this pin previously targeted "AdCP 3.1" (04f59d2d5) while EXPECTED_SPEC_VERSION
-# had already moved to 3.1.1, silently blinding scripts/verify_feature_error_codes.py's
-# --casing-only gate to every code added between 3.1 and 3.1.1.
+# docs/adcp-spec-version.md "Bumping the spec version" step 7. This pin previously
+# targeted "AdCP 3.1" (04f59d2d5) while EXPECTED_SPEC_VERSION had already moved to
+# 3.1.1, silently blinding scripts/verify_feature_error_codes.py's --casing-only
+# gate to every code added between 3.1 and 3.1.1.
 _EXPECTED_PINNED_SHA = "467fd93d77112baf9e094e18980119edcd3a4d07"
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -63,10 +63,8 @@ def _refresh_pinned_sha() -> str:
 def _alignment_test_pinned_sha() -> str:
     """The informational _PINNED_SHA mirror in test_pydantic_schema_alignment.py.
 
-    salesagent-ulft (sweep-verify): a second hand-maintained copy of the same
-    commit, used only in an error message there. Found stale (still 04f59d2d5)
-    even after this file's own _EXPECTED_PINNED_SHA was updated in the same
-    ticket — guard it too so a third drift can't happen silently.
+    A second hand-maintained copy of the same commit, used only in an error
+    message there — guarded too so it can't drift silently.
     """
     src = (_REPO_ROOT / "tests" / "unit" / "test_pydantic_schema_alignment.py").read_text()
     match = re.search(r'_PINNED_SHA = "([0-9a-f]{40})"', src)
@@ -77,8 +75,8 @@ def _alignment_test_pinned_sha() -> str:
 def test_vendored_schema_pin_matches_spec_version() -> None:
     """The offline-vendored schema fixture must track EXPECTED_SPEC_VERSION.
 
-    salesagent-ulft: tests/fixtures/adcp_schemas_pinned/_refresh.py has its OWN
-    commit pin (PINNED_SHA), separate from EXPECTED_SPEC_VERSION above, because the
+    tests/fixtures/adcp_schemas_pinned/_refresh.py has its OWN commit pin
+    (PINNED_SHA), separate from EXPECTED_SPEC_VERSION above, because the
     fixtures it vendors are read offline (CI has no ~/projects/adcp clone or network
     access to verify a tag->commit mapping live). That pin drifted silently for a
     full spec cycle (3.1 -> 3.1.1) with nothing to catch it. This is a static

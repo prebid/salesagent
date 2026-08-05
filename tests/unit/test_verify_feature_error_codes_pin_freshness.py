@@ -1,8 +1,8 @@
 """Regression test: the vendored error-code enum must track the CURRENT spec pin.
 
-Bug salesagent-ulft: tests/fixtures/adcp_schemas_pinned/enums/error-code.json was
-vendored from adcp commit 04f59d2d5 ("AdCP 3.1", 64 codes) while the rest of the
-project pins AdCP 3.1.1 (92 codes, adcp==6.6.0). scripts/verify_feature_error_codes.py
+tests/fixtures/adcp_schemas_pinned/enums/error-code.json was previously vendored
+from adcp commit 04f59d2d5 ("AdCP 3.1", 64 codes) while the rest of the project
+pins AdCP 3.1.1 (92 codes, adcp==6.6.0). scripts/verify_feature_error_codes.py
 reads this fixture as its canonical source, so its --casing-only repo-wide gate
 (gated in make quality) could not see any codes added between 3.1 and 3.1.1 — a
 BDD feature using a lowercase spelling of one of those 28 new codes (e.g.
@@ -11,10 +11,10 @@ NON_CANONICAL (classify() returned None), so the casing gate silently passed the
 exact defect it exists to catch.
 
 Verified failing before the fix (manual measurement against the stale 64-code
-fixture, matching the ticket's own numbers): classify("stale_response", enum) and
-classify("format_not_supported", enum) both returned None. Re-vendoring the
-fixture at the CURRENT pin (v3.1.1, via tests/fixtures/adcp_schemas_pinned/_refresh.py)
-fixes this; this test pins the fixed state and the reproducible check.
+fixture): classify("stale_response", enum) and classify("format_not_supported",
+enum) both returned None. Re-vendoring the fixture at the CURRENT pin (v3.1.1,
+via tests/fixtures/adcp_schemas_pinned/_refresh.py) fixes this; this test pins
+the fixed state and the reproducible check.
 """
 
 from __future__ import annotations
@@ -54,5 +54,5 @@ def test_post_311_codes_are_classified_as_lowercase_variant_when_lowercased() ->
         verdict = m.classify(code.lower(), enum)
         assert verdict == m.LOWERCASE_VARIANT, (
             f"classify({code.lower()!r}, enum) returned {verdict!r}, expected LOWERCASE_VARIANT — "
-            "the casing gate cannot see this code, reproducing salesagent-ulft's defect"
+            "the casing gate cannot see this code"
         )

@@ -67,7 +67,7 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-string 'true' (non-boolean type)-\"true\"-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_boundary__boundary_point[e2e_rest-principal differs from owner-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_partition__partition[e2e_rest-owner_mismatch-invalid]",
-        # GRADUATED (salesagent-ulft): both geo_metro_missing_system rows (boundary +
+        # GRADUATED: both geo_metro_missing_system rows (boundary +
         # partition) removed. Item C10's premise was wrong — the pinned spec's
         # reporting_dimensions.geo.required is ["geo_level"] only; system is genuinely
         # optional ("Omit to request the level without selecting a specific system").
@@ -158,9 +158,9 @@ def test_ledger_header_count_matches_actual() -> None:
     """The ledger's own 'CURRENT SET: N entries' header must match the real count.
 
     GH #1782: the header is unchecked prose that can (and did) drift from the
-    actual entry count without failing anything — salesagent-ulft found it stale
-    by 1 (stated 8, actual 9) and this ticket's own changes moved the count again.
-    This closes #1782 by making the header a checked claim, not free text.
+    actual entry count without failing anything — found stale by 1 (stated 8,
+    actual 9), and the count moved again since. This closes #1782 by making
+    the header a checked claim, not free text.
     """
     header_text = _LEDGER_PATH.read_text()
     match = _HEADER_COUNT_RE.search(header_text)

@@ -1281,10 +1281,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # VALIDATION_ERROR for the same payloads (the REST-vs-MCP/A2A
             # value-vs-structural wire-code divergence, tracked in salesagent-meho), so
             # their rows stay.
-            # GRADUATED (salesagent-ulft): geo_metro_missing_system removed — system is
-            # OPTIONAL per the pinned spec (reporting_dimensions.geo.required = ["geo_level"]
-            # only), so this was never a production gap; the scenario itself demanded the
-            # wrong outcome and was reconciled to expect "valid" in the local .feature file.
+            # GRADUATED: geo_metro_missing_system removed — system is OPTIONAL per the
+            # pinned spec (reporting_dimensions.geo.required = ["geo_level"] only), so
+            # this was never a production gap; the scenario itself demanded the wrong
+            # outcome and was reconciled to expect "valid" in the local .feature file.
             (
                 "T-UC-004-partition-reporting-dims",
                 {
@@ -1334,7 +1334,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # invalid_unit and invalid_model followed per-row (salesagent-v4hb / 06v8 / gz0n / sg1z).
             # The old "window never reaches production" rationale is dead: #1545 narrowed the
             # generic step to `\w+=`, and #1462's in-process drop never reproduced.
-            # GRADUATED (salesagent-ulft): T-UC-004-boundary-reporting-dims "geo with
+            # GRADUATED: T-UC-004-boundary-reporting-dims "geo with
             # geo_level=metro but no system" — item C10's premise was wrong: the pinned
             # spec's reporting_dimensions.geo.required is ["geo_level"] only, system is
             # genuinely optional ("Omit to request the level without selecting a specific

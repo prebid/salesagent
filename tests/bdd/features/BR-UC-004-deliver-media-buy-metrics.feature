@@ -668,7 +668,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | custom_sort_and_limit | {"placement": {"limit": 50, "sort_by": "clicks"}} | valid |
       | all_dimensions | {"geo": {"geo_level": "country"}, "device_type": {}, "device_platform": {}, "audience": {}, "placement": {}} | valid |
       | unsupported_dimension_only | {"audience": {}} | valid |
-      # salesagent-ulft: system is OPTIONAL per the pinned spec (get-media-buy-delivery-request.json
+      # system is OPTIONAL per the pinned spec (get-media-buy-delivery-request.json
       # reporting_dimensions.geo.required = ["geo_level"] only; system's own description says
       # "Omit to request the level without selecting a specific system") — reconciled from Invalid.
       | geo_metro_missing_system | {"geo": {"geo_level": "metro"}} | valid |
@@ -696,7 +696,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | geo with geo_level=metro + system=nielsen_dma | {"geo": {"geo_level": "metro", "system": "nielsen_dma"}} | valid |
       | geo with geo_level=postal_area + system=us_zip | {"geo": {"geo_level": "postal_area", "system": "us_zip"}} | valid |
       | geo without geo_level (required field missing) | {"geo": {"limit": 10}} | invalid |
-      # salesagent-ulft: system is OPTIONAL per the pinned spec — see the partition
+      # system is OPTIONAL per the pinned spec — see the partition
       # scenario's geo_metro_missing_system row for the spec citation. Reconciled from invalid.
       | geo with geo_level=metro but no system | {"geo": {"geo_level": "metro"}} | valid |
       | limit=1 (minimum boundary) | {"geo": {"geo_level": "country", "limit": 1}} | valid |

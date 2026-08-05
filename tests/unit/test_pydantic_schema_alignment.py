@@ -48,15 +48,13 @@ from src.core.schemas.delivery import GetCreativeDeliveryResponse, GetMediaBuyDe
 
 # Pinned AdCP schema fixtures. Source of truth is adcontextprotocol/adcp at the
 # immutable commit named by tests/fixtures/adcp_schemas_pinned/_refresh.py's own
-# PINNED_SHA (tag v3.1.1, salesagent-ulft) — an INTENTIONAL frozen reference point.
-# Upstream ships constantly and `/schemas/latest` drifts, so we deliberately do NOT
-# track it: the schemas are vendored (committed) and read offline. To advance the
-# pin, run tests/fixtures/adcp_schemas_pinned/_refresh.py. This constant is
-# informational only (used in an error message below) but is still a hand-maintained
-# mirror of _refresh.py's PINNED_SHA — test_adcp_spec_version.py's
-# test_vendored_schema_pin_matches_spec_version guards it against drifting again
-# (salesagent-ulft found it stale here too: still 04f59d2d5/"AdCP 3.1" after the
-# fixtures were re-vendored at 3.1.1).
+# PINNED_SHA (tag v3.1.1) — an INTENTIONAL frozen reference point. Upstream ships
+# constantly and `/schemas/latest` drifts, so we deliberately do NOT track it: the
+# schemas are vendored (committed) and read offline. To advance the pin, run
+# tests/fixtures/adcp_schemas_pinned/_refresh.py. This constant is informational
+# only (used in an error message below) but is still a hand-maintained mirror of
+# _refresh.py's PINNED_SHA — test_adcp_spec_version.py's
+# test_vendored_schema_pin_matches_spec_version guards it against drifting again.
 _PINNED_SHA = "467fd93d77112baf9e094e18980119edcd3a4d07"
 _PINNED_SCHEMA_DIR = Path(__file__).parent.parent / "fixtures" / "adcp_schemas_pinned"
 
@@ -91,13 +89,11 @@ SCHEMA_TO_MODEL_PARAMS_WITH_GET_PRODUCTS_DRIFT_XFAIL = [
 # These have defaults or are managed by the library base class — exclude from all comparisons.
 _VERSION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version"})
 
-# salesagent-my6w: the 3.1.1 vendor re-pin (salesagent-ulft) surfaced that
 # CreateMediaBuySuccess.confirmed_at/.revision and UpdateMediaBuySuccess.revision are
-# marked `required` by the pinned schema but modeled with Python-level defaults instead
-# of enforced. This is a real gap, not a false positive — tracked and deferred to
-# salesagent-my6w rather than fixed here, the same documented-exclusion pattern as
-# _VERSION_FIELDS above. Keyed by model name (not schema_ref) since both success models
-# share drift on `revision`.
+# marked `required` by the pinned 3.1.1 schema but modeled with Python-level defaults
+# instead of enforced. This is a real gap, not a false positive — deferred rather than
+# fixed here, the same documented-exclusion pattern as _VERSION_FIELDS above. Keyed by
+# model name (not schema_ref) since both success models share drift on `revision`.
 _KNOWN_REQUIRED_FIELD_GAPS: dict[str, frozenset[str]] = {
     "CreateMediaBuySuccess": frozenset({"confirmed_at", "revision"}),
     "UpdateMediaBuySuccess": frozenset({"revision"}),
