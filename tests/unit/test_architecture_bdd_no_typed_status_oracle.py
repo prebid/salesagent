@@ -50,21 +50,7 @@ _ALLOWLIST: set[str] = {
 
 
 def _find_violations() -> set[str]:
-    found: set[str] = set()
-    for rel, func_names in _TARGET_FUNCS.items():
-        path = _TESTS_ROOT / rel
-        tree = wire_discipline.ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        by_name = {f.name: f for f in wire_discipline._enclosing_functions(tree)}
-        for func_name in func_names:
-            func = by_name.get(func_name)
-            assert func is not None, (
-                f"{rel}::{func_name} not found in the tree — target function was renamed, "
-                "moved, or deleted. Update _TARGET_FUNCS in this guard to match."
-            )
-            typed_vars = wire_discipline._typed_source_var_names(func)
-            if typed_vars and sibling_guard._reads_typed_field(func, typed_vars):
-                found.add(f"{rel} {func_name}")
-    return found
+    return sibling_guard.find_typed_field_violations(_TARGET_FUNCS)
 
 
 def test_no_typed_status_oracle() -> None:

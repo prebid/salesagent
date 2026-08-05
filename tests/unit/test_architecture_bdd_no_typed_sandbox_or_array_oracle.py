@@ -95,9 +95,17 @@ def _reads_typed_field(func: ast.FunctionDef | ast.AsyncFunctionDef, typed_vars:
     return False
 
 
-def _find_violations() -> set[str]:
+def find_typed_field_violations(target_funcs: dict[str, tuple[str, ...]]) -> set[str]:
+    """Shared scan for function-name-allowlist-style typed-payload-oracle guards.
+
+    For each ``(rel path, func names)`` pair, parse the file, find each named function, and
+    flag it if it reads a field VALUE off a typed-response local (see ``_reads_typed_field``).
+    Reused by sibling guards scoped to a different fixed function list (e.g.
+    ``test_architecture_bdd_no_typed_status_oracle.py``) so the scan loop itself — not just the
+    field-read detector — has one implementation.
+    """
     found: set[str] = set()
-    for rel, func_names in _TARGET_FUNCS.items():
+    for rel, func_names in target_funcs.items():
         path = _TESTS_ROOT / rel
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         by_name = {f.name: f for f in wire_discipline._enclosing_functions(tree)}
@@ -105,12 +113,16 @@ def _find_violations() -> set[str]:
             func = by_name.get(func_name)
             assert func is not None, (
                 f"{rel}::{func_name} not found in the tree — target function was renamed, "
-                "moved, or deleted. Update _TARGET_FUNCS in this guard to match."
+                "moved, or deleted. Update the guard's target-funcs mapping to match."
             )
             typed_vars = wire_discipline._typed_source_var_names(func)
             if typed_vars and _reads_typed_field(func, typed_vars):
                 found.add(f"{rel} {func_name}")
     return found
+
+
+def _find_violations() -> set[str]:
+    return find_typed_field_violations(_TARGET_FUNCS)
 
 
 def test_no_typed_sandbox_or_array_oracle() -> None:
