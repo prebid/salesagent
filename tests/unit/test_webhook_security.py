@@ -135,24 +135,33 @@ class TestWebhookURLValidator:
         assert is_valid
         assert error == ""
 
-    def test_validate_for_testing_allows_private_network_receivers(self):
-        """Testing mode must allow private-range receivers (GH #1697 fallout).
+    def test_validate_for_testing_blocks_private_network_receivers(self):
+        """REVERTED (salesagent-bc54): testing mode no longer admits private ranges.
 
-        The e2e capture receiver is reached by the compose-network alias
-        (ADCP_WEBHOOK_HOST=tests) resolving to a private Docker IP, and the
-        localhost rewrite targets host.docker.internal. When testing mode still
-        blocked private ranges, every e2e webhook delivery was silently dropped
-        at the send-time gate (6 tests, zero deliveries — salesagent-5j32).
-        This deliberately REVERSES the earlier pin that testing mode blocks
-        private networks: production mode still does (asserted below).
+        This test used to assert the OPPOSITE (GH #1697 fallout, salesagent-5j32)
+        — that private-range receivers must be reachable under ADCP_TESTING, so
+        the compose-network capture receiver at a private Docker IP would not be
+        silently dropped. That allowance was implemented by substring-matching
+        the SSRF rejection message against needles ("private/internal network",
+        "docker.internal") that either matched every BLOCKED_NETWORKS member (not
+        just the Docker range) or matched attacker-controlled text interpolated
+        into an unresolvable-hostname error — admitting AWS ECS credentials
+        (link-local), CGNAT, and IPv6 ULA ranges under ADCP_TESTING too
+        (salesagent-bc54's reproduction). The hunk is dropped here; the
+        structurally-correct replacement (a typed rejection reason, IP-based
+        loopback check) is salesagent-a2-fetch / GH #1802's job. Until #1802
+        lands, the compose-network receiver is unreachable through this
+        override — the 6 e2e webhook-delivery tests this reopens are marked
+        xfail with a citation to #1802 (tests/e2e/test_delivery_webhooks_e2e.py
+        and tests/e2e/test_a2a_webhook_payload_types.py).
         """
         for url in (
             "http://192.168.1.1/webhook",
             "http://172.20.0.5:8080/webhook",
             "http://host.docker.internal:3001/webhook",
         ):
-            is_valid, error = WebhookURLValidator.validate_for_testing(url, allow_localhost=True)
-            assert is_valid, f"testing mode must reach the capture receiver at {url}: {error}"
+            is_valid, _error = WebhookURLValidator.validate_for_testing(url, allow_localhost=True)
+            assert not is_valid, f"private-range receiver must stay blocked post-bc54: {url}"
 
     def test_validate_for_testing_still_blocks_metadata_endpoints(self):
         """The testing allowance must NOT open cloud metadata endpoints.
@@ -166,6 +175,32 @@ class TestWebhookURLValidator:
         ):
             is_valid, _error = WebhookURLValidator.validate_for_testing(url, allow_localhost=True)
             assert not is_valid, f"metadata endpoint must stay blocked even in testing mode: {url}"
+
+    def test_validate_for_testing_ssrf_hole_admits_non_receiver_blocked_ranges(self):
+        """REPRODUCTION (salesagent-bc54): the testing allowance is decided by
+        substring-matching a HUMAN-READABLE error message, and that message is
+        IDENTICAL for every member of BLOCKED_NETWORKS ("private/internal
+        network"/"...ip address"), not just the intended Docker receiver. So
+        the allowance admits every other blocked range too — including AWS ECS
+        task-credentials link-local, CGNAT, and IPv6 ULA, none of which the
+        docstring's "metadata endpoints stay blocked" carve-out covers (that
+        carve-out only reaches the two BLOCKED_HOSTNAMES literals).
+
+        This test MUST fail at HEAD (proving the hole) and pass once bc54
+        drops the substring-matching hunk.
+        """
+        for url in (
+            "http://169.254.170.2/v2/credentials",  # AWS ECS task credentials
+            "http://100.64.0.1/x",  # CGNAT
+            "http://[fd00::1]/x",  # IPv6 ULA
+            "http://nope.docker.internal.attacker.test/x",  # unresolvable hostname
+        ):
+            is_valid, error = WebhookURLValidator.validate_for_testing(url, allow_localhost=True)
+            assert not is_valid, (
+                f"SSRF hole (salesagent-bc54): {url} was wrongly ALLOWED under the testing "
+                f"allowance (error={error!r} matched a substring-matching needle meant only "
+                f"for the Docker receiver)"
+            )
 
     def test_private_networks_blocked_without_testing_allowance(self):
         """Production semantics unchanged: private ranges rejected outright."""

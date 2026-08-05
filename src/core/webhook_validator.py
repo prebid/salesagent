@@ -150,28 +150,30 @@ class WebhookURLValidator:
 
     @staticmethod
     def _maybe_allow_localhost(is_valid: bool, error: str, *, allow_localhost: bool) -> tuple[bool, str]:
-        """Override localhost/loopback/private-network SSRF failures when testing allows them.
+        """Override localhost-shaped SSRF failures when testing allows them.
 
-        The e2e capture receiver is reached by a compose-network alias
-        (``ADCP_WEBHOOK_HOST=tests``) that resolves to a private Docker IP, and
-        the localhost rewrite targets ``host.docker.internal`` — both must pass
-        under ``ADCP_TESTING`` or every e2e webhook delivery is silently dropped
-        at the send-time gate. The allowance is scoped to the private/loopback
-        REJECTION SHAPES those receivers produce; explicitly blocked hostnames
-        (cloud metadata endpoints, ``169.254.169.254``) fail the hostname check
-        first with a message none of these needles match, so they stay blocked
-        even in test mode. Production rejections are untouched.
+        Scoped to the two genuinely loopback-specific rejection shapes: the
+        exact ``localhost`` hostname (an entry in BLOCKED_HOSTNAMES) and a
+        literal 127.0.0.0/8 address. Both needles are safe because neither is
+        influenced by caller-supplied text: ``localhost`` is an exact-match
+        blocklist hit and ``127.0.0`` only appears via the 127.0.0.0/8
+        network's own ``str()`` repr, never from a hostname the caller chose.
+
+        salesagent-bc54: previously matched three more needles
+        ("private/internal network", "private/internal ip address",
+        "docker.internal") that either matched every BLOCKED_NETWORKS member
+        (not just a specific Docker range) or matched attacker-controlled text
+        interpolated into an unresolvable-hostname error message — admitting
+        AWS ECS credentials (link-local), CGNAT, and IPv6 ULA ranges under
+        ADCP_TESTING. That allowance is dropped here; the structurally-correct
+        replacement (a typed rejection reason, IP-based loopback check) is
+        salesagent-a2-fetch / GH #1802's job, not this fix's. Reaching the
+        compose-network Docker receiver (a private, non-loopback IP) is no
+        longer possible through this override — see #1802.
         """
         if not is_valid and allow_localhost:
             lowered = error.lower()
-            if (
-                "localhost" in lowered
-                or "127.0.0" in error
-                or "loopback" in lowered
-                or "docker.internal" in lowered
-                or "private/internal network" in lowered
-                or "private/internal ip address" in lowered
-            ):
+            if "localhost" in lowered or "127.0.0" in error:
                 return True, ""
         return is_valid, error
 
