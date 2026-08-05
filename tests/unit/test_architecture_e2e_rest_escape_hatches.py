@@ -84,13 +84,18 @@ EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
     # positive from DeliveryPollEnv._BODY_FIELDS masking unknown kwargs before they
     # reached the real REST endpoint — REST now correctly rejects sampling_method
     # like every other transport (owned by the strict=True _UC004_GENUINE_XFAIL_ROWS
-    # entry instead). Only e2e_rest is left unverified pending live-network evidence.
+    # entry instead). e2e_rest confirmed via a live in-network run
+    # (innet_050826_0756) to have the SAME root cause — it inherits
+    # build_rest_body same as REST — so its 6 sibling "valid" rows moved to
+    # tests/bdd/e2e_rest_known_failures.txt instead of a conftest route.
     "_samp_is_named and is_e2e_rest",
     "is_e2e_rest",
     "is_e2e_rest and 'T-UC-002-nfr-001-enforcement' in marker_names",
     "is_e2e_rest and 'T-UC-004-daterange-end-only' in marker_names",
     "is_e2e_rest and 'T-UC-005-empty-catalog' in marker_names",
-    "is_e2e_rest and 'Unknown string not in enum' in nodeid",
+    # Removed (salesagent-oyiv.15): the "Unknown string not in enum" boundary route
+    # GRADUATED — see the ledger comment (tests/bdd/e2e_rest_known_failures.txt) and
+    # the conftest note at the former T-UC-004-boundary-sampling e2e_rest tripwire.
     "is_e2e_rest and any((t.startswith('T-UC-019') for t in marker_names))",
     "is_e2e_rest and marker_names & _UC004_E2E_WEBHOOK_INTERNAL_TAGS",
     "is_e2e_rest and marker_names & _UC005_E2E_FIXTURE_INJECTION_TAGS",

@@ -71,7 +71,17 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         # removing the vacuous _UC004_PARTITION_SELECTIVE strict=False blanket unmasked it
         # on e2e_rest (in-process transports carry the precise strict=True row).
         'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_partition__partition[e2e_rest-geo_metro_missing_system-{"geo": {"geo_level": "metro"}}-error "INVALID_REQUEST" with suggestion]',
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-Unknown string not in enum-systematic-invalid]",
+        # "Unknown string not in enum" boundary row GRADUATED (salesagent-oyiv.15):
+        # removing DeliveryPollEnv._BODY_FIELDS let e2e_rest reach the real endpoint,
+        # which rejects it like every other transport — XPASS(strict) confirmed
+        # in-network (innet_050826_0756). Replaced by the 6 "valid" named-method rows
+        # below (same root cause, opposite direction: those newly FAIL).
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_partition__partition[e2e_rest-random-random-valid]",
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_partition__partition[e2e_rest-stratified-stratified-valid]",
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_partition__partition[e2e_rest-recent-recent-valid]",
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_partition__partition[e2e_rest-failures_only-failures_only-valid]",
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-random (first enum value)-random-valid]",
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-failures_only (last enum value)-failures_only-valid]",
         # RETIRED (GH #1726, 2026-07-28): T-UC-004-attr-unsupported was reconciled away.
         # AdCP 3.1.1 says sellers that do NOT support configurable attribution windows ignore the
         # field; it does not require any seller to be non-supporting, and this seller always

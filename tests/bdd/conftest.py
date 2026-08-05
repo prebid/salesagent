@@ -1721,16 +1721,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # precise strict=True T-UC-004-boundary-sampling entry above; the
         # graduated mcp Unknown-string row must plain-PASS, not silently XPASS
         # under a second marker.
-        if "T-UC-004-boundary-sampling" in marker_names:
-            # FIXME(#1270): e2e_rest: Docker doesn't validate sampling_method —
-            # invalid enum value succeeds instead of failing.
-            if is_e2e_rest and "Unknown string not in enum" in nodeid:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="e2e_rest: Docker does not validate sampling_method — invalid value succeeds",
-                        strict=True,
-                    )
-                )
+        #
+        # UNGRADUATED then RE-GRADUATED (salesagent-oyiv.15): the e2e_rest
+        # "Unknown string not in enum" tripwire below claimed "Docker doesn't
+        # validate sampling_method" — the same DeliveryPollEnv._BODY_FIELDS
+        # masking root cause as plain REST (see the strict-list entry above).
+        # e2e_rest inherits build_rest_body same as REST (tests/harness/
+        # dispatchers.py:270), so removing that allowlist makes e2e_rest reject
+        # it too — confirmed via a live in-network run (innet_050826_0756):
+        # XPASS(strict) on this exact row. Tripwire removed; the row now owns no
+        # marker and is expected to plain-PASS. See
+        # tests/bdd/e2e_rest_known_failures.txt for the sibling "valid" rows
+        # that newly fail on e2e_rest from the same root cause.
 
         # Graduated (2026-07-30, GH #1740 fallout): the T-UC-004-boundary-date-range
         # transport-aware strict=False block. The valid rows (before, omitted) pass on
