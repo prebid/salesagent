@@ -18,15 +18,17 @@ beads: salesagent-mdhh
 
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, bdd_registered_step_plugins
+from tests.unit._architecture_helpers import (
+    assert_violations_match_allowlist,
+    bdd_registered_step_plugins,
+    bdd_step_registrations,
+)
 
 _STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
-_STEPDEF_PREFIX = "pytestbdd_stepdef_"
 
 # Step-defining modules not in conftest's pytest_plugins. RATCHETING baseline —
 # may only shrink, never grow. Two DISTINCT reasons an entry is allowed:
@@ -62,8 +64,7 @@ def _dotted_name(py_file: Path) -> str:
 
 def _defines_steps(dotted: str) -> bool:
     """True if importing the module yields any pytest-bdd step fixture."""
-    module = importlib.import_module(dotted)
-    return any(attr.startswith(_STEPDEF_PREFIX) for attr in vars(module))
+    return bool(bdd_step_registrations([dotted]))
 
 
 def _scan_unregistered_step_modules() -> list[str]:

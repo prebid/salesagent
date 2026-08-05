@@ -113,30 +113,51 @@ def test_adcp_spec_version_matches_pin() -> None:
     )
 
 
+def _prose_claims(pin: str) -> dict[str, tuple[str, ...]]:
+    """Required substrings per prose file, keyed by the same names as ``_PROSE_FILES``.
+
+    Single table driving both ``test_prose_claims_current_pin`` (presence) and
+    ``test_prose_names_no_stale_versions`` (drift, via ``_PROSE_FILES`` == this
+    table's keys, checked by test_meta_prose_claims_keys_match_prose_files) — a
+    file added to one check is added to both, never silently to just one.
+    """
+    return {
+        "README.md": (
+            f"AdCP spec version {EXPECTED_SPEC_VERSION}",
+            f"(AdCP {EXPECTED_SPEC_VERSION})",
+            f"adcp=={pin}",
+        ),
+        "CLAUDE.md": (
+            f"AdCP spec **{EXPECTED_SPEC_VERSION}**",
+            f"adcp=={pin}",
+        ),
+        "docs/adcp-spec-version.md": (f"The SDK **pin** ({EXPECTED_SPEC_VERSION})",),
+    }
+
+
+def test_meta_prose_claims_keys_match_prose_files() -> None:
+    """``_prose_claims``' keys must exactly match ``_PROSE_FILES``.
+
+    Catches a file added to one table but not the other — the asymmetry that
+    previously let a fourth prose file get drift-scanning with silently no
+    presence-checking (or vice versa).
+    """
+    assert set(_prose_claims("0.0.0")) == set(_PROSE_FILES)
+
+
 def test_prose_claims_current_pin() -> None:
     """Each prose file must advertise the CURRENT spec + SDK versions.
 
     Presence checks — deleting the claim instead of updating it fails too.
     Phrasings are the ones each file actually uses; if a file legitimately
-    rewords its claim, update the expectation here in the same change.
+    rewords its claim, update the expectation in ``_prose_claims``.
     """
     pin = _pyproject_sdk_pin()
-    readme = (_REPO_ROOT / "README.md").read_text()
-    claude_md = (_REPO_ROOT / "CLAUDE.md").read_text()
-    spec_doc = (_REPO_ROOT / "docs/adcp-spec-version.md").read_text()
-
-    assert f"AdCP spec version {EXPECTED_SPEC_VERSION}" in readme, (
-        f"README.md 'AdCP Compatibility' must name spec {EXPECTED_SPEC_VERSION}"
-    )
-    assert f"(AdCP {EXPECTED_SPEC_VERSION})" in readme, f"README.md status note must name AdCP {EXPECTED_SPEC_VERSION}"
-    assert f"adcp=={pin}" in readme, f"README.md must name the SDK pin adcp=={pin}"
-    assert f"AdCP spec **{EXPECTED_SPEC_VERSION}**" in claude_md, (
-        f"CLAUDE.md 'AdCP Spec Version' must name spec {EXPECTED_SPEC_VERSION}"
-    )
-    assert f"adcp=={pin}" in claude_md, f"CLAUDE.md must name the SDK pin adcp=={pin}"
-    assert f"The SDK **pin** ({EXPECTED_SPEC_VERSION})" in spec_doc, (
-        f"docs/adcp-spec-version.md must name the pin {EXPECTED_SPEC_VERSION}"
-    )
+    claims = _prose_claims(pin)
+    for rel in _PROSE_FILES:
+        text = (_REPO_ROOT / rel).read_text()
+        for claim in claims[rel]:
+            assert claim in text, f"{rel} must contain {claim!r}"
 
 
 def test_prose_names_no_stale_versions() -> None:

@@ -2330,42 +2330,34 @@ def then_packages_limited(ctx: dict, field: str, n: int) -> None:
     assert checked >= 1, "Response has no packages to check"
 
 
-@then(parsers.parse('"{field}" should be true'))
-def then_field_true(ctx: dict, field: str) -> None:
-    """Assert the named field is True on every package in the response.
+def _assert_package_flag(ctx: dict, field: str, *, expected: bool) -> None:
+    """Assert the named field equals ``expected`` on every package in the response.
 
     Truncation flags (by_geo_truncated, by_device_type_truncated) live on
     PackageDelivery, not on the top-level response object.
 
-    Graded on the WIRE via :func:`wire_packages`, and with ``is True`` — so a flag
-    serialized as the string "true" (which the typed payload would coerce back to a
-    boolean) fails here. Absence fails too, as it must: the response schema requires
-    by_*_truncated whenever the matching by_* array is present.
+    Graded on the WIRE via :func:`wire_packages`, and with ``is expected`` — so a flag
+    serialized as the string "true"/"false" (which the typed payload would coerce back
+    to a boolean) fails here. Absence fails too, as it must: the response schema
+    requires by_*_truncated whenever the matching by_* array is present.
     """
     packages = wire_packages(ctx)
     assert packages, "Response has no packages to check"
     for pkg in packages:
         value = pkg.get(field)
-        assert value is True, f"Expected response package.{field} to be True, got {value!r}"
+        assert value is expected, f"Expected response package.{field} to be {expected}, got {value!r}"
+
+
+@then(parsers.parse('"{field}" should be true'))
+def then_field_true(ctx: dict, field: str) -> None:
+    """Assert the named field is True on every package in the response."""
+    _assert_package_flag(ctx, field, expected=True)
 
 
 @then(parsers.parse('"{field}" should be false'))
 def then_field_false(ctx: dict, field: str) -> None:
-    """Assert the named field is False on every package in the response.
-
-    Truncation flags (by_geo_truncated, by_device_type_truncated) live on
-    PackageDelivery, not on the top-level response object.
-
-    Graded on the WIRE via :func:`wire_packages`, and with ``is False`` — so a flag
-    serialized as the string "false" (which the typed payload would coerce back to a
-    boolean) fails here. Absence fails too, as it must: the response schema requires
-    by_*_truncated whenever the matching by_* array is present.
-    """
-    packages = wire_packages(ctx)
-    assert packages, "Response has no packages to check"
-    for pkg in packages:
-        value = pkg.get(field)
-        assert value is False, f"Expected response package.{field} to be False, got {value!r}"
+    """Assert the named field is False on every package in the response."""
+    _assert_package_flag(ctx, field, expected=False)
 
 
 @then(parsers.parse('the response packages should include "{field}"'))
@@ -2653,8 +2645,13 @@ def then_attribution_default_model(ctx: dict) -> None:
     """Assert attribution window echoes the seller's platform default model.
 
     When the buyer omits attribution_window, production echoes the platform
-    default (last_touch). Assert the response's attribution_window.model
-    matches the platform default from production config.
+    default. Delegates the "what should be echoed" computation to
+    _expected_attribution_model (BR-RULE-092) rather than re-deriving it, so
+    there is one implementation of that rule, not two. Also cross-checks the
+    dispatched request actually implies the default (mirrors
+    then_attribution_model's pattern) — a scenario that invokes this step
+    despite requesting a non-default model explicitly is a scenario bug, not
+    something this step should silently grade as something else.
 
     This reads the same constant production reads, so it cannot by itself
     catch a wrong platform default; the independent anchor is
@@ -2662,10 +2659,14 @@ def then_attribution_default_model(ctx: dict) -> None:
     """
     from src.core.tools.media_buy_delivery import PLATFORM_DEFAULT_ATTRIBUTION_MODEL
 
+    expected_model = _expected_attribution_model(ctx)
+    assert expected_model == PLATFORM_DEFAULT_ATTRIBUTION_MODEL.value, (
+        f"This step asserts the platform default is echoed, but the dispatched request implies "
+        f"{expected_model!r} — the buyer requested a non-default model, so this step doesn't apply"
+    )
     actual_model = _wire_attribution_model(
         ctx, expectation="production should echo the platform default when the buyer omits it"
     )
-    expected_model = PLATFORM_DEFAULT_ATTRIBUTION_MODEL.value
     assert actual_model == expected_model, (
         f"attribution_window.model should be platform default '{expected_model}', got '{actual_model}'"
     )
@@ -2912,6 +2913,21 @@ def _assert_attribution_echoed_on_wire(ctx: dict, field: str) -> None:
             )
 
 
+def _assert_delivery_statuses_within(deliveries: list[dict], allowed: list[str]) -> None:
+    """Assert every delivery's status is one of ``allowed``.
+
+    No ``if actual_status:`` guard — a delivery that comes back with no status is
+    itself a filter violation (the filter cannot have been applied to it), and
+    guarding on it let exactly that case pass silently. See GH #1751.
+    """
+    for d in deliveries:
+        actual_status = d.get("status")
+        assert actual_status in allowed, (
+            f"Status filter violation: delivery {d.get('media_buy_id', '?')!r} has status "
+            f"{actual_status!r} but filter requested {allowed}"
+        )
+
+
 def _assert_valid_content(ctx: dict, field: str) -> None:
     """Per-field content assertion for 'valid' partition/boundary outcomes.
 
@@ -2939,14 +2955,7 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
         requested_filter = request_params.get("status_filter")
         if requested_filter:
             deliveries = wire_dict(ctx).get("media_buy_deliveries") or []
-            for d in deliveries:
-                # No `if actual_status:` guard — a delivery that comes back with no status is
-                # itself a filter violation (the filter cannot have been applied to it), and
-                # guarding on it let exactly that case pass silently. See GH #1751.
-                actual_status = d.get("status")
-                assert actual_status in requested_filter, (
-                    f"Status filter violation: got status {actual_status!r} but filter requested {requested_filter}"
-                )
+            _assert_delivery_statuses_within(deliveries, requested_filter)
 
     elif field == "resolution":
         # NOTE (cross-ticket, salesagent-hwji/P2): see status_filter/filter above.
@@ -3168,18 +3177,7 @@ def then_filter_result(ctx: dict, expected: str) -> None:
         if request_filter and request_filter not in (["(field absent)"], ["(omitted)"]):
             # Concrete filter: every returned delivery must have a matching status
             assert deliveries, f"Expected non-empty deliveries for valid status_filter={request_filter}"
-            for d in deliveries:
-                # No enum unwrap: MediaBuyDeliveryData sets use_enum_values=True, so status is
-                # already a plain str (and the underlying enum is a StrEnum regardless) — and now
-                # this reads the wire directly, so even a non-conformant wire is graded. No
-                # `is not None` guard either — a delivery that comes back without a status
-                # cannot have had the filter applied to it, so that is a violation, not a case
-                # to skip.
-                actual_status = d.get("status")
-                assert actual_status in request_filter, (
-                    f"Status filter violation: delivery {d.get('media_buy_id', '?')!r} "
-                    f"has status {actual_status!r} but filter requested {request_filter}"
-                )
+            _assert_delivery_statuses_within(deliveries, request_filter)
         else:
             # Omitted filter or field absent: all buyer's media buys should be returned
             assert deliveries, "Expected all buyer's media buys returned when status_filter is omitted"

@@ -63,15 +63,17 @@ stricter definition: 2 extra entries).
 
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, bdd_registered_step_plugins
+from tests.unit._architecture_helpers import (
+    assert_violations_match_allowlist,
+    bdd_registered_step_plugins,
+    bdd_step_registrations,
+)
 
 _FEATURES_DIR = Path(__file__).resolve().parents[1] / "bdd" / "features"
-_STEPDEF_PREFIX = "pytestbdd_stepdef_"
 
 # Step modules registered OUTSIDE conftest's pytest_plugins but still live:
 # uc019 loads via `from … import *` in tests/bdd/test_uc019_query_media_buys.py
@@ -526,17 +528,13 @@ def _step_registrations() -> list[tuple[str, str, str, object]]:
     decorator, and one can be bound while its sibling is dormant.
     """
     seen: dict[tuple[str, int, str], tuple[str, str, str, object]] = {}
-    for dotted in [*bdd_registered_step_plugins(), *_LOCAL_STEP_MODULES]:
-        module = importlib.import_module(dotted)
-        for attr, value in vars(module).items():
-            if not attr.startswith(_STEPDEF_PREFIX):
-                continue
-            ctx = getattr(value, "_pytest_bdd_step_context", None)
-            if ctx is None:
-                continue
-            code = ctx.step_func.__code__
-            key = (code.co_filename, code.co_firstlineno, ctx.parser.name)
-            seen.setdefault(key, (ctx.step_func.__module__, ctx.step_func.__name__, ctx.parser.name, ctx))
+    for _dotted, _name, value in bdd_step_registrations([*bdd_registered_step_plugins(), *_LOCAL_STEP_MODULES]):
+        ctx = getattr(value, "_pytest_bdd_step_context", None)
+        if ctx is None:
+            continue
+        code = ctx.step_func.__code__
+        key = (code.co_filename, code.co_firstlineno, ctx.parser.name)
+        seen.setdefault(key, (ctx.step_func.__module__, ctx.step_func.__name__, ctx.parser.name, ctx))
     return list(seen.values())
 
 

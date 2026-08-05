@@ -22,13 +22,9 @@ beads: salesagent-g4cm
 
 from __future__ import annotations
 
-import importlib
 from collections import defaultdict
 
-from tests.unit._architecture_helpers import bdd_registered_step_plugins
-
-# pytest-bdd names every step fixture with this prefix.
-_STEPDEF_PREFIX = "pytestbdd_stepdef_"
+from tests.unit._architecture_helpers import bdd_registered_step_plugins, bdd_step_registrations
 
 # Step texts intentionally registered by 2+ imported modules. MUST stay empty —
 # a shadowed step means one verification body is dead. Fix the collision (pick a
@@ -43,18 +39,10 @@ def _scan_shadowed_steps() -> dict[str, list[str]]:
     Only names registered by 2+ modules (i.e. genuine shadows) are returned.
     """
     registry: dict[str, list[str]] = defaultdict(list)
-    for dotted in bdd_registered_step_plugins():
-        module = importlib.import_module(dotted)
-        short = dotted.split(".")[-1]
-        for attr in vars(module):
-            if attr.startswith(_STEPDEF_PREFIX):
-                registry[attr].append(short)
+    for dotted, name, _value in bdd_step_registrations(bdd_registered_step_plugins()):
+        registry[name].append(dotted.split(".")[-1])
 
-    return {
-        name[len(_STEPDEF_PREFIX) :]: mods
-        for name, mods in registry.items()
-        if len(mods) > 1 and name[len(_STEPDEF_PREFIX) :] not in _ALLOWED_SHADOWS
-    }
+    return {name: mods for name, mods in registry.items() if len(mods) > 1 and name not in _ALLOWED_SHADOWS}
 
 
 class TestBddNoShadowedSteps:

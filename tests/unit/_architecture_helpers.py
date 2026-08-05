@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ast
 import functools
+import importlib
 import os
 import re
 import subprocess
@@ -944,6 +945,29 @@ def bdd_registered_step_plugins() -> list[str]:
 def bdd_registered_step_module_paths() -> list[Path]:
     """Filesystem paths of the registered step modules (path adapter)."""
     return [REPO_ROOT / (mod.replace(".", "/") + ".py") for mod in bdd_registered_step_plugins()]
+
+
+_STEPDEF_PREFIX = "pytestbdd_stepdef_"
+
+
+def bdd_step_registrations(dotted_modules: Iterable[str]) -> list[tuple[str, str, Any]]:
+    """Return ``(dotted_module, step_name, fixture_value)`` for every pytest-bdd
+    stepdef fixture defined by each module in ``dotted_modules``, with pytest-bdd's
+    internal ``pytestbdd_stepdef_`` prefix already stripped from ``step_name``.
+
+    Single source of truth for "import a step module and find its
+    ``pytestbdd_stepdef_*`` fixtures" — a pytest-bdd internal-naming detail that must
+    not drift independently across guards: a pytest-bdd rename would otherwise need
+    fixing in every copy, and a copy that's missed goes green-but-blind rather than
+    red instead of failing loudly.
+    """
+    out: list[tuple[str, str, Any]] = []
+    for dotted in dotted_modules:
+        module = importlib.import_module(dotted)
+        for attr, value in vars(module).items():
+            if attr.startswith(_STEPDEF_PREFIX):
+                out.append((dotted, attr[len(_STEPDEF_PREFIX) :], value))
+    return out
 
 
 # ---------------------------------------------------------------------------
