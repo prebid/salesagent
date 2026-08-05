@@ -1279,7 +1279,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # rows' named-code assertion — verified XPASS(strict) 2026-07-30 once the
             # strict-xfail deselection stopped hiding them. a2a/mcp still emit
             # VALIDATION_ERROR for the same payloads (the REST-vs-MCP/A2A
-            # value-vs-structural wire-code divergence, tracked in salesagent-meho), so
+            # value-vs-structural wire-code divergence, a repo-wide reclassification
+            # follow-up — see src/app.py's request_validation_error_handler), so
             # their rows stay.
             # GRADUATED: geo_metro_missing_system removed — system is OPTIONAL per the
             # pinned spec (reporting_dimensions.geo.required = ["geo_level"] only), so
@@ -1296,8 +1297,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "mcp-limit_negative",
                 },
                 "a2a/mcp emit VALIDATION_ERROR where the Examples demand INVALID_REQUEST "
-                "(REST already emits INVALID_REQUEST+suggestion via src/app.py — divergence "
-                "tracked in salesagent-meho). See docs/test-debt-bdd-strict-markers.md item C4.",
+                "(REST already emits INVALID_REQUEST+suggestion via src/app.py — a repo-wide "
+                "value-vs-structural reclassification follow-up). See "
+                "docs/test-debt-bdd-strict-markers.md item C4.",
             ),
             # NEWLY ROUTED (2026-07-28) — only the explicit-true rows.
             # THE GAP that retires these: GH #1776 (include_package_daily_breakdown accepted and
@@ -1330,8 +1332,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # "VALIDATION_ERROR" with suggestion — the Examples were regenerated off the
             # earlier INVALID_REQUEST mis-pin), which a2a/mcp/rest all emit, closing the old
             # reconstructed-path C4 gap. campaign_interval_not_one graduated with the rest
-            # (#1545 / salesagent-x18x) and is NOT xfailed below; interval_zero, interval_negative,
-            # invalid_unit and invalid_model followed per-row (salesagent-v4hb / 06v8 / gz0n / sg1z).
+            # (#1545) and is NOT xfailed below; interval_zero, interval_negative,
+            # invalid_unit and invalid_model followed per-row, each individually verified
+            # per xpass-graduation.md.
             # The old "window never reaches production" rationale is dead: #1545 narrowed the
             # generic step to `\w+=`, and #1462's in-process drop never reproduced.
             # GRADUATED: T-UC-004-boundary-reporting-dims "geo with
@@ -1359,15 +1362,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # remains carried by the identical-payload partition twins, whose a2a/mcp xfails
             # stay accurate until the REST-vs-MCP/A2A wire-code divergence
             # (INVALID_REQUEST vs VALIDATION_ERROR, src/app.py value-vs-structural
-            # reclassification) is reconciled — that work is tracked separately
-            # (salesagent-meho) and was deliberately not folded into the graduation.
+            # reclassification) is reconciled — a repo-wide follow-up, deliberately not
+            # folded into this graduation.
             #
             # History: these rows were previously covered by the blanket _UC004_BOUNDARY_TAGS
-            # strict=False, which 18h.10 Phase-2 (salesagent-04zf et al.) emptied; restored as
+            # strict=False, which 18h.10 Phase-2 emptied; restored as
             # PRECISE strict=True, then masked by the strict-xfail deselection until GH #1740
             # removed it. impl is not listed because #1417 dropped it from the BDD
             # parametrization entirely.
-            # GRADUATED (removed 2026-07-28, salesagent-5zlo): T-UC-004-boundary-attribution —
+            # GRADUATED (removed 2026-07-28): T-UC-004-boundary-attribution —
             # ALL SIX mcp/rest rows (interval=0, unit=weeks, model=last_click).
             # The scenario names VALIDATION_ERROR and routes through _WIRE_ASSERTED_FIELDS ->
             # assert_wire_error, i.e. it grades the real two-layer envelope, not a categorical
@@ -1387,14 +1390,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # buyer-supplied start_date/end_date in response.reporting_period,
             # so T-UC-004-daterange now genuinely passes (no strict xfail).
             #
-            # date-range partition (salesagent-x18x, #1545): the a2a rows GRADUATED —
+            # date-range partition (#1545): the a2a rows GRADUATED —
             # the Examples now name the wire code (error "VALIDATION_ERROR" with
             # suggestion) and production emits exactly that on the a2a wire ("Start date
             # must be before end date", media_buy_delivery.py:209-218 via
             # AdCPValidationError). Under the transport-aware harness (e2e-harness-wiring)
             # mcp/rest ARE parametrized for this partition and still gap, so they retain a
             # marker below.
-            # date-range partition/boundary (salesagent-04zf, 18h.10 Phase-2):
+            # date-range partition/boundary (18h.10 Phase-2):
             # when_partition/boundary_date_range now translate the descriptor
             # into real start_date/end_date (previously the axis name was sent
             # as a literal request field and rejected by extra=forbid, so the
@@ -1505,7 +1508,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # GetMediaBuyDeliveryRequest field — the artifact-sampling feature
             # is entirely unimplemented. Only (omitted)/not_provided genuinely
             # pass (a real, empty request). Every named-method + unknown_value/systematic
-            # row fails on ALL FOUR transports as of salesagent-oyiv.15: the harness used
+            # row fails on ALL FOUR transports: the harness used
             # to filter DeliveryPollEnv.build_rest_body through a hand-maintained
             # _BODY_FIELDS allowlist that silently stripped unknown kwargs before they
             # ever reached the real REST endpoint — REST's rows only "passed" because the
@@ -1537,7 +1540,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "rest-stratified",
                     "rest-recent",
                     "rest-failures_only",
-                    # rest-unknown_value-systematic GRADUATED (salesagent-oyiv.15): the
+                    # rest-unknown_value-systematic GRADUATED: the
                     # scenario names error "INVALID_REQUEST" with suggestion, and REST now
                     # genuinely emits that envelope once the harness stopped masking the
                     # field — no longer a spec/production gap on this transport.
@@ -1570,7 +1573,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "field) on impl/a2a/mcp/rest alike; ValidationError not AdCPError on "
                 "impl/a2a/mcp. See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
-            # resolution (salesagent-x18x, #1545): GRADUATED on all transports. The
+            # resolution (#1545): GRADUATED on all transports. The
             # Examples now name error "VALIDATION_ERROR" with suggestion, and the empty
             # media_buy_ids=[] hits the SDK min_length=1 constraint, surfacing as
             # AdCPValidationError(VALIDATION_ERROR)+suggestion on the a2a/mcp/rest wire
@@ -1594,7 +1597,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "cross-principal access returns 200+empty instead of "
                 "AdCPError(MEDIA_BUY_NOT_FOUND). See docs/test-debt-bdd-strict-markers.md item C3.",
             ),
-            # UNGRADUATED (salesagent-oyiv.15): the prior "a2a/mcp genuinely pass on
+            # UNGRADUATED: the prior "a2a/mcp genuinely pass on
             # differs" claim above was a false positive. when_boundary_ownership used to
             # send a bogus flat "ownership=<label>" kwarg (not a real request field) —
             # a2a/mcp rejected THAT (extra=forbid on an unknown field), which happened
@@ -1653,8 +1656,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # strict-xfail deselection stopped hiding it: the MCP boundary now normalizes
             # the enum rejection into the two-layer envelope, satisfying the categorical
             # _assert_wire_rejection like its a2a/rest siblings. Entry removed. (The four
-            # dead "*-pending_activation" substrings were already removed 2026-07-28,
-            # salesagent-5zlo.)
+            # dead "*-pending_activation" substrings were already removed 2026-07-28.)
             # credentials (salesagent-f8u4): FULLY reconciled — the When step
             # now validates the real AdCP reporting_webhook Authentication
             # model (scheme enum + credentials min_length=32). All 40 rows
@@ -1697,7 +1699,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # AdCP reporting_webhook Authentication at the create_media_buy boundary
         # (scheme enum + credentials min_length=32), so all rows pass on all transports.
 
-        # UNGRADUATED (salesagent-oyiv.15, see the strict-list entry above): "matches
+        # UNGRADUATED (see the strict-list entry above): "matches
         # owner" now genuinely passes on every transport (impl/a2a/mcp/rest/e2e_rest —
         # the step dispatches a real identity, not a bogus flat kwarg). "differs from
         # owner" is the C3 cross-principal-access gap on every transport; a2a/mcp/rest
@@ -1724,7 +1726,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # graduated mcp Unknown-string row must plain-PASS, not silently XPASS
         # under a second marker.
         #
-        # UNGRADUATED then RE-GRADUATED (salesagent-oyiv.15): the e2e_rest
+        # UNGRADUATED then RE-GRADUATED: the e2e_rest
         # "Unknown string not in enum" tripwire below claimed "Docker doesn't
         # validate sampling_method" — the same DeliveryPollEnv._BODY_FIELDS
         # masking root cause as plain REST (see the strict-list entry above).
@@ -1912,11 +1914,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             #
             # Each of the five invalid rows was graduated on its own, per
             # .claude/rules/workflows/xpass-graduation.md, never in bulk:
-            #   campaign_interval_not_one — salesagent-x18x / #1545
-            #   interval_zero             — salesagent-v4hb
-            #   interval_negative         — salesagent-06v8
-            #   invalid_unit              — salesagent-gz0n
-            #   invalid_model             — salesagent-sg1z
+            #   campaign_interval_not_one — #1545
+            #   interval_zero, interval_negative, invalid_unit, invalid_model — graduated
+            #   individually, each verified per the "Shared evidence" below
             #
             # Shared evidence (verified per row, not assumed from the green mark):
             #   spec      — AdCP 3.1.1 core/duration.json pins `interval.minimum: 1` and
@@ -1981,13 +1981,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"unknown_value", "empty_array"},
                 "status_filter validation not implemented — production accepts invalid values",
             ),
-            # date range partition GRADUATED (salesagent-x18x, #1545): only [a2a-…] is
+            # date range partition GRADUATED (#1545): only [a2a-…] is
             # parametrized for start_equals_end/start_after_end, and a2a now emits
             # VALIDATION_ERROR+suggestion ("Start date must be before end date",
             # media_buy_delivery.py:209-218) for the named Examples — passes unmasked. Entry
             # removed. (mcp/rest are only parametrized on the BOUNDARY counterpart, which
             # stays masked in _UC004_GENUINE_XFAIL_ROWS above.)
-            # resolution partition GRADUATED (salesagent-x18x, #1545): empty media_buy_ids=[]
+            # resolution partition GRADUATED (#1545): empty media_buy_ids=[]
             # hits the SDK min_length=1 constraint -> VALIDATION_ERROR+suggestion on the
             # a2a/mcp/rest wire (all three empirically PASS the named Example). Entry removed.
             # ownership: production doesn't validate principal mismatch
@@ -2017,7 +2017,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # AdCP reporting_webhook Authentication at the create_media_buy boundary
         # (scheme enum + credentials min_length=32), so all rows pass on all transports.
 
-        # UNGRADUATED on REST (salesagent-oyiv.15, see the strict-list entry above):
+        # UNGRADUATED on REST (see the strict-list entry above):
         # "REST + named method passes" was a false positive from the same
         # DeliveryPollEnv._BODY_FIELDS masking documented there — REST now correctly
         # rejects sampling_method like every other transport, and that row is owned by

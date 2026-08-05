@@ -136,9 +136,9 @@ class TestWebhookURLValidator:
         assert error == ""
 
     def test_validate_for_testing_blocks_private_network_receivers(self):
-        """REVERTED (salesagent-bc54): testing mode no longer admits private ranges.
+        """REVERTED: testing mode no longer admits private ranges.
 
-        This test used to assert the OPPOSITE (GH #1697 fallout, salesagent-5j32)
+        This test used to assert the OPPOSITE (GH #1697 fallout)
         — that private-range receivers must be reachable under ADCP_TESTING, so
         the compose-network capture receiver at a private Docker IP would not be
         silently dropped. That allowance was implemented by substring-matching
@@ -147,13 +147,13 @@ class TestWebhookURLValidator:
         just the Docker range) or matched attacker-controlled text interpolated
         into an unresolvable-hostname error — admitting AWS ECS credentials
         (link-local), CGNAT, and IPv6 ULA ranges under ADCP_TESTING too
-        (salesagent-bc54's reproduction). The hunk is dropped here; the
-        structurally-correct replacement (a typed rejection reason, IP-based
-        loopback check) is salesagent-a2-fetch / GH #1802's job. Until #1802
-        lands, the compose-network receiver is unreachable through this
-        override — the 6 e2e webhook-delivery tests this reopens are marked
-        xfail with a citation to #1802 (tests/e2e/test_delivery_webhooks_e2e.py
-        and tests/e2e/test_a2a_webhook_payload_types.py).
+        (reproduced below). The hunk is dropped here; the structurally-correct
+        replacement (a typed rejection reason, IP-based loopback check) is
+        GH #1802's job. Until #1802 lands, the compose-network receiver is
+        unreachable through this override — the 6 e2e webhook-delivery tests
+        this reopens are marked xfail with a citation to #1802
+        (tests/e2e/test_delivery_webhooks_e2e.py and
+        tests/e2e/test_a2a_webhook_payload_types.py).
         """
         for url in (
             "http://192.168.1.1/webhook",
@@ -161,7 +161,7 @@ class TestWebhookURLValidator:
             "http://host.docker.internal:3001/webhook",
         ):
             is_valid, _error = WebhookURLValidator.validate_for_testing(url, allow_localhost=True)
-            assert not is_valid, f"private-range receiver must stay blocked post-bc54: {url}"
+            assert not is_valid, f"private-range receiver must stay blocked: {url}"
 
     def test_validate_for_testing_still_blocks_metadata_endpoints(self):
         """The testing allowance must NOT open cloud metadata endpoints.
@@ -177,17 +177,16 @@ class TestWebhookURLValidator:
             assert not is_valid, f"metadata endpoint must stay blocked even in testing mode: {url}"
 
     def test_validate_for_testing_ssrf_hole_admits_non_receiver_blocked_ranges(self):
-        """REPRODUCTION (salesagent-bc54): the testing allowance is decided by
-        substring-matching a HUMAN-READABLE error message, and that message is
+        """Pins the fix for a former SSRF hole: the testing allowance used to be decided
+        by substring-matching a HUMAN-READABLE error message, and that message was
         IDENTICAL for every member of BLOCKED_NETWORKS ("private/internal
         network"/"...ip address"), not just the intended Docker receiver. So
-        the allowance admits every other blocked range too — including AWS ECS
+        the allowance admitted every other blocked range too — including AWS ECS
         task-credentials link-local, CGNAT, and IPv6 ULA, none of which the
         docstring's "metadata endpoints stay blocked" carve-out covers (that
         carve-out only reaches the two BLOCKED_HOSTNAMES literals).
 
-        This test MUST fail at HEAD (proving the hole) and pass once bc54
-        drops the substring-matching hunk.
+        The substring-matching hunk has been dropped, so this now passes.
         """
         for url in (
             "http://169.254.170.2/v2/credentials",  # AWS ECS task credentials
@@ -197,7 +196,7 @@ class TestWebhookURLValidator:
         ):
             is_valid, error = WebhookURLValidator.validate_for_testing(url, allow_localhost=True)
             assert not is_valid, (
-                f"SSRF hole (salesagent-bc54): {url} was wrongly ALLOWED under the testing "
+                f"SSRF hole: {url} was wrongly ALLOWED under the testing "
                 f"allowance (error={error!r} matched a substring-matching needle meant only "
                 f"for the Docker receiver)"
             )

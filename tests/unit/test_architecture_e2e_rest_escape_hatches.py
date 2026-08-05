@@ -80,7 +80,7 @@ EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
     "(is_rest or is_e2e_rest) and 'T-UC-019-boundary-principal' in marker_names",
     "(is_rest or is_e2e_rest) and 'T-UC-019-ext-a' in marker_names",
     "(is_rest or is_e2e_rest) and 'T-UC-019-partition-principal-invalid' in marker_names",
-    # Reworded (salesagent-oyiv.15): "REST + named method passes" was a false
+    # Reworded: "REST + named method passes" was a false
     # positive from DeliveryPollEnv._BODY_FIELDS masking unknown kwargs before they
     # reached the real REST endpoint — REST now correctly rejects sampling_method
     # like every other transport (owned by the strict=True _UC004_GENUINE_XFAIL_ROWS
@@ -93,7 +93,7 @@ EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
     "is_e2e_rest and 'T-UC-002-nfr-001-enforcement' in marker_names",
     "is_e2e_rest and 'T-UC-004-daterange-end-only' in marker_names",
     "is_e2e_rest and 'T-UC-005-empty-catalog' in marker_names",
-    # Removed (salesagent-oyiv.15): the "Unknown string not in enum" boundary route
+    # Removed: the "Unknown string not in enum" boundary route
     # GRADUATED — see the ledger comment (tests/bdd/e2e_rest_known_failures.txt) and
     # the conftest note at the former T-UC-004-boundary-sampling e2e_rest tripwire.
     "is_e2e_rest and any((t.startswith('T-UC-019') for t in marker_names))",

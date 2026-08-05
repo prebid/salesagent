@@ -1,6 +1,6 @@
-"""Superset proof for the re-keyed typed-payload package-oracle detector (salesagent-9csh).
+"""Superset proof for the re-keyed typed-payload package-oracle detector.
 
-salesagent-9csh replaces Check C in ``test_architecture_bdd_wire_discipline.py``. The
+This detector replaces Check C in ``test_architecture_bdd_wire_discipline.py``. The
 old detector keys on the literal symbol ``_collect_all_packages`` — so the migration
 that deletes that helper also empties the detector's match set, and the guard would go
 green while ~40 typed-payload reads remain permanently invisible to it. The ticket's
@@ -67,7 +67,7 @@ def _rekeyed_detector():
     """Return the per-module re-keyed detector, failing loudly if step 1 has not landed."""
     detector = getattr(wire_discipline, "_find_typed_package_oracles_in", None)
     assert detector is not None, (
-        "salesagent-9csh step 1 has not landed: "
+        "The re-keyed detector has not landed: "
         "test_architecture_bdd_wire_discipline.py exposes no "
         "_find_typed_package_oracles_in(rel, tree) -> set[str]. The re-keyed detector "
         "must be evaluable against a single parsed module so the superset proof can run "
@@ -93,7 +93,7 @@ def test_snapshot_holds_every_currently_allowlisted_oracle() -> None:
     missing = set(_MUST_FLAG + _MUST_NOT_FLAG) - defined
     assert not missing, f"Frozen snapshot is missing control functions: {sorted(missing)}"
 
-    # salesagent-9csh landed: the six _MUST_FLAG functions were migrated onto
+    # The six _MUST_FLAG functions were migrated onto
     # wire_packages(ctx) and the old allowlist entries removed — retired, not merely
     # shrunk (the superset proof above is what makes that claim provable). Before
     # migration this assertion pinned "the live allowlist equals the snapshot's positive
@@ -104,7 +104,7 @@ def test_snapshot_holds_every_currently_allowlisted_oracle() -> None:
     allowlisted = {entry.split(" ", 1)[1] for entry in wire_discipline._TYPED_PACKAGE_ORACLE_ALLOWLIST}
     reappeared = allowlisted & set(_MUST_FLAG)
     assert not reappeared, (
-        f"{sorted(reappeared)} migrated onto wire_packages(ctx) in salesagent-9csh but "
+        f"{sorted(reappeared)} migrated onto wire_packages(ctx) but "
         f"reappeared in the live Check C allowlist — migration reverted or re-allowlisted "
         f"instead of fixed."
     )

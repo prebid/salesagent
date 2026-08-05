@@ -32,7 +32,7 @@ C. **No typed-payload package/delivery oracle** (success-path, assertion-side). 
    truncation rows stayed green until ``then_field_true`` / ``then_field_false`` /
    ``then_packages_limited`` moved onto ``_wire_packages``.
 
-   Re-keyed (salesagent-9csh) on the READ (a typed-response variable dereferenced for one of
+   Re-keyed on the READ (a typed-response variable dereferenced for one of
    the three field names above, or a call to a helper that itself does so — resolved
    behaviorally within the module, not by a fixed helper-name list) rather than on the literal
    symbol ``_collect_all_packages``, so a sibling reaching the same data by any other route
@@ -81,20 +81,20 @@ _ERROR_CONSTRUCTION_ALLOWLIST: set[str] = {
 _RECONSTRUCTED_ASSERTION_ALLOWLIST: set[str] = set()
 
 # -- Check C: typed-payload package/delivery oracles (success path) -----------
-# Keyed by "<relative path> <function>". RETIRED, not shrunk (salesagent-9csh): the prior
+# Keyed by "<relative path> <function>". RETIRED, not shrunk: the prior
 # 6-entry allowlist (all UC-004 package oracles reading _collect_all_packages) is gone —
 # superset proof in test_architecture_bdd_wire_discipline_rekeyed_meta.py confirms the
 # re-keyed detector flags all 6 against their pre-migration bodies. One entry is seeded
-# deliberately (architect review MEDIUM-4, salesagent-2qfx.4): a cross-UC generic step, not
-# UC-004-scoped work, tracked at salesagent-oyiv.1.
+# deliberately (architect review MEDIUM-4): a cross-UC generic step, not
+# UC-004-scoped work, tracked separately.
 _TYPED_PACKAGE_ORACLE_ALLOWLIST: set[str] = {
     # FIXME(#1778): then_response_status grades media_buy_deliveries presence (among other
     # statusless-response types) off the typed payload via a runtime field-name lookup
     # (_STATUSLESS_SUCCESS_ATTRS), so a boolean/enum coercion regression on that path is
     # invisible to it. Cross-UC generic step (shared by every "the response status should be
-    # ..." phrasing, not UC-004-scoped) — migrating it is salesagent-oyiv.1's scope, not this
-    # ticket's. Seeded here explicitly rather than narrowing the detector's scan set back to
-    # uc004_delivery.py, which would reintroduce the file-keying this re-key exists to end.
+    # ..." phrasing, not UC-004-scoped) — migrating it is a separately tracked follow-up, not
+    # this guard's job. Seeded here explicitly rather than narrowing the detector's scan set back
+    # to uc004_delivery.py, which would reintroduce the file-keying this re-key exists to end.
     "bdd/steps/generic/then_success.py then_response_status",
 }
 
@@ -207,10 +207,10 @@ _SHAPE_ATTRS = {
 # NOTE: "errors" is deliberately NOT in this set — it is a generic field name shared by
 # many unrelated response types across other UCs (uc003/uc006/uc011/uc019/then_error.py),
 # so including it would pull those out-of-scope oracles into Check C's UC-004-scoped
-# view (sweep verification salesagent-2qfx.8). uc004_delivery.py's own errors-field
+# view (sweep verification). uc004_delivery.py's own errors-field
 # oracles (then_no_errors_field, then_has_errors_field) were migrated to wire_dict
 # directly, independent of guard coverage; the tree-wide errors-field disease is
-# salesagent-oyiv.1's scope, not this guard's.
+# tracked separately, not this guard's scope.
 _WIRE_READER_NAMES = {"_wire_packages", "wire_dict", "wire_field", "wire_packages"}
 
 

@@ -25,14 +25,14 @@ from tests.e2e.adcp_request_builder import (
 )
 from tests.e2e.utils import make_mcp_client, set_live_adapter_behavior
 
-# salesagent-bc54: dropped the SSRF hunk (#1728) that admitted the compose-network
+# Dropped the SSRF hunk (#1728) that admitted the compose-network
 # webhook capture receiver's private-IP rejection alongside genuine loopback
-# rejections — the receiver is unreachable again until salesagent-a2-fetch / GH #1802
+# rejections — the receiver is unreachable again until GH #1802
 # lands the structural (typed-reason) replacement. Known, accepted, cited regression
 # for every test in this module that depends on webhook_capture_server actually
 # receiving a delivery — not silently masked.
 _WEBHOOK_RECEIVER_UNREACHABLE = pytest.mark.xfail(
-    reason="salesagent-bc54: webhook capture receiver unreachable post SSRF-hunk drop, see GH #1802",
+    reason="Webhook capture receiver unreachable post SSRF-hunk drop, see GH #1802",
     strict=False,
 )
 

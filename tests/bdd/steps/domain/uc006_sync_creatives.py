@@ -263,7 +263,7 @@ def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: obje
 
 
 def _dispatch_sync_creatives(ctx: dict, **kwargs: object) -> None:
-    """Shared dispatch for sync_creatives When steps (DRY -- salesagent-oyiv.4,
+    """Shared dispatch for sync_creatives When steps (DRY --
     replaces 3 near-identical dispatch_raw_kwargs call sites).
 
     Builds a typed SyncCreativesRequest when kwargs validate; falls back to a
@@ -280,7 +280,7 @@ def _dispatch_sync_creatives(ctx: dict, **kwargs: object) -> None:
 
 def _dispatch_creatives_list(ctx: dict) -> None:
     """Shared dispatch for the append-one-well-formed-creative-then-sync steps
-    (DRY -- salesagent-oyiv.4, replaces 3 identical dispatch_raw_kwargs call
+    (DRY -- replaces 3 identical dispatch_raw_kwargs call
     sites). Always well-formed -- no malformed fallback needed.
     """
     dispatch_request(ctx, req=SyncCreativesRequest(creatives=ctx["creatives"]))

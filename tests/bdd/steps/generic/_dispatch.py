@@ -1,6 +1,6 @@
 """Shared dispatch helpers for BDD domain step definitions.
 
-Named entry points (salesagent-hwji), replacing the single polymorphic
+Named entry points, replacing the single polymorphic
 ``dispatch_request`` that used to accept either a validated request model OR raw
 flat kwargs indistinguishably:
 

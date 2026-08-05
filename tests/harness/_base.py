@@ -140,7 +140,7 @@ def _adcp_error_from_code(
 def serialize_request(req: BaseModel, **overrides: Any) -> dict[str, Any]:
     """Serialize an AdCP request model into the flat dict a transport wrapper sends.
 
-    The single shared implementation of what was six independent copies (salesagent-hwji):
+    The single shared implementation of what was six independent copies:
     ``_base.py``'s a2a/mcp/rest req-unpack blocks, ``media_buy_create.py``'s
     ``_flatten_request``/``build_rest_body``, and ``creative_sync.py``'s ``build_rest_body``.
     Fixes, in this one place, three defects every copy carried independently:

@@ -132,14 +132,13 @@ def then_no_sandbox_field(ctx: dict) -> None:
     A field present with value None still serializes as ``{"sandbox": null}``
     which counts as "including a sandbox field".
 
-    NOT migrated to wire_dict(ctx) (attempted during salesagent-9csh's sweep
-    verification, reverted): doing so surfaces that MCP's wire response DOES include
-    ``sandbox: null`` for production accounts (REST/A2A correctly omit it), which is a
-    real, pre-existing, PROJECT-WIDE gap — every ``ToolResult(structured_content=...)``
-    call site in src/core/tools/ passes the raw model without ``exclude_none=True``
-    (confirmed: only products.py even attempts model_dump, and it too omits
-    exclude_none). Fixing that belongs to its own properly-scoped ticket, not a UC-004
-    test-seam change — see salesagent-oyiv.7.
+    NOT migrated to wire_dict(ctx) (attempted, then reverted): doing so surfaces that
+    MCP's wire response DOES include ``sandbox: null`` for production accounts (REST/A2A
+    correctly omit it), which is a real, pre-existing, PROJECT-WIDE gap — every
+    ``ToolResult(structured_content=...)`` call site in src/core/tools/ passes the raw
+    model without ``exclude_none=True`` (confirmed: only products.py even attempts
+    model_dump, and it too omits exclude_none). Fixing that belongs to its own
+    properly-scoped follow-up, not a UC-004 test-seam change.
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none found"

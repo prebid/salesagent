@@ -115,7 +115,7 @@ def dispatched_request(ctx: dict[str, Any]) -> Any:
 
     The single reader for the ``ctx["dispatched_request"]`` channel that
     :func:`tests.bdd.steps.generic._dispatch.dispatch_request` records — single-typed
-    BY CONSTRUCTION (salesagent-hwji): unlike the retired ``dispatched_kwargs`` /
+    BY CONSTRUCTION: unlike the retired ``dispatched_kwargs`` /
     ``dispatched_field`` pair, there is no flat-kwargs shape to also handle, because
     ``dispatch_request`` no longer accepts one.
 

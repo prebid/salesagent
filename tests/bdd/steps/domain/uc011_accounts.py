@@ -1250,7 +1250,7 @@ def _find_key_anywhere(payload: Any, key: str) -> bool:
 def _get_error_envelope(ctx: dict) -> dict:
     """Return the real (or IMPL-synthesized) wire error envelope, asserting it exists.
 
-    salesagent-lvs0: the error variant's oracle must grade what the buyer
+    The error variant's oracle must grade what the buyer
     actually receives on the wire, not the harness-reconstructed exception —
     AdCPError's own __dict__ has a fixed key set that can never carry
     application-specific leaked fields (accounts, dry_run, ...) regardless of

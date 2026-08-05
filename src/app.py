@@ -244,7 +244,7 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     # malformed/unknown field (structural) is INVALID_REQUEST. The full
     # value-vs-structural reclassification across all fields is a repo-wide
     # follow-up; for now the attribution_window family — reconciled to
-    # VALIDATION_ERROR upstream in adcp-req — is mapped explicitly. (salesagent-meho)
+    # VALIDATION_ERROR upstream in adcp-req — is mapped explicitly.
     if field and field.startswith("attribution_window"):
         exc_cls, suggestion = AdCPValidationError, VALIDATION_ERROR_SUGGESTION
     else:

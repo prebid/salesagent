@@ -1,7 +1,7 @@
 """Regression test: the error-variant "no accounts array"/"no dry_run field" oracles
 must grade the WIRE.
 
-Bug salesagent-lvs0 (Violation 1): then_no_accounts_in_response and
+Bug: then_no_accounts_in_response and
 then_no_dry_run_field read the harness-reconstructed AdCPError
 (vars(error)/error.model_dump()/getattr(error, "dry_run", None)) instead of
 ctx["wire_error_envelope"]. AdCPError has a fixed __dict__ shape (context, details,

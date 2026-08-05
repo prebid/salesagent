@@ -1,6 +1,6 @@
 """Guard: every ``dispatch_request(...)`` call site passes ``req=``.
 
-salesagent-hwji retired the old polymorphic ``dispatch_request`` that accepted
+This guard follows the retirement of the old polymorphic ``dispatch_request`` that accepted
 either a validated request model OR raw flat kwargs indistinguishably (the "one
 accessor returning two types" disease -- see ``tests/bdd/steps/generic/_dispatch.py``
 for the full writeup). ``dispatch_request`` now declares ``req`` as a keyword-only
@@ -55,7 +55,7 @@ def test_dispatch_request_call_sites_all_pass_req() -> None:
             violations[rel_path] = lines
 
     assert not violations, (
-        "dispatch_request(...) called without req= (the flat-kwargs shape salesagent-hwji "
+        "dispatch_request(...) called without req= (the flat-kwargs shape was "
         "retired) at:\n" + "\n".join(f"  {f}:{ln}" for f, lns in violations.items() for ln in lns) + "\n"
         "Use dispatch_request(ctx, req=SomeRequest(...)) for well-formed requests, or "
         "dispatch_malformed_request(ctx, **raw) for values that cannot become a request model."

@@ -159,7 +159,7 @@ class WebhookURLValidator:
         blocklist hit and ``127.0.0`` only appears via the 127.0.0.0/8
         network's own ``str()`` repr, never from a hostname the caller chose.
 
-        salesagent-bc54: previously matched three more needles
+        Previously matched three more needles
         ("private/internal network", "private/internal ip address",
         "docker.internal") that either matched every BLOCKED_NETWORKS member
         (not just a specific Docker range) or matched attacker-controlled text
@@ -167,7 +167,7 @@ class WebhookURLValidator:
         AWS ECS credentials (link-local), CGNAT, and IPv6 ULA ranges under
         ADCP_TESTING. That allowance is dropped here; the structurally-correct
         replacement (a typed rejection reason, IP-based loopback check) is
-        salesagent-a2-fetch / GH #1802's job, not this fix's. Reaching the
+        GH #1802's job, not this fix's. Reaching the
         compose-network Docker receiver (a private, non-loopback IP) is no
         longer possible through this override — see #1802.
         """

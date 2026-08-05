@@ -9,9 +9,9 @@ Importing ``uc004_delivery`` ensures its registered delivery handler is active
 after the refactor (no-op before it). These call the real generic step with a
 crafted ctx; they pass on the pre-refactor code and must keep passing after.
 
-Updated for salesagent-9csh: the delivery handler's "valid" branch now reads
-``wire_dict(ctx)`` instead of ``getattr(response, "media_buy_deliveries")`` (the
-disease this ticket retires), so the crafted ctx carries a wire-shaped
+Updated for the wire-discipline migration: the delivery handler's "valid" branch now reads
+``wire_dict(ctx)`` instead of ``getattr(response, "media_buy_deliveries")``, so
+the crafted ctx carries a wire-shaped
 ``ctx["wire_response"]`` dict, not a typed ``SimpleNamespace``. The domain-routing
 sniff (``hasattr(resp, "media_buy_deliveries")``) stays typed deliberately (see
 ``_delivery_boundary_handler``'s own comment — it is routing, not grading), so

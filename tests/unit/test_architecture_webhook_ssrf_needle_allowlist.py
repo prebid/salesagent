@@ -1,6 +1,6 @@
 """Guard: WebhookURLValidator._maybe_allow_localhost's needle list stays narrow.
 
-salesagent-bc54: the testing-mode SSRF override used to decide its allowance by
+The testing-mode SSRF override used to decide its allowance by
 substring-matching a HUMAN-READABLE rejection message against six needles. Two
 ("private/internal network", "private/internal ip address") matched EVERY member
 of BLOCKED_NETWORKS, not just the intended Docker compose-network range, admitting
@@ -56,9 +56,9 @@ def test_maybe_allow_localhost_needles_stay_narrow() -> None:
     assert not disallowed, (
         f"{rel(_TARGET_FILE)}::_maybe_allow_localhost compares against needle(s) "
         f"{disallowed} outside the pinned allowlist {sorted(_ALLOWED_NEEDLES)} — this reopens "
-        "salesagent-bc54's SSRF hole (a needle matching every BLOCKED_NETWORKS member, or "
+        "the SSRF hole (a needle matching every BLOCKED_NETWORKS member, or "
         "attacker-controlled interpolated text). If a new needle is genuinely safe, add it to "
-        "_ALLOWED_NEEDLES here with the same reasoning bar bc54 applied."
+        "_ALLOWED_NEEDLES here with the same reasoning bar applied above."
     )
 
 

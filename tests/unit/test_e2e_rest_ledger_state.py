@@ -74,7 +74,7 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         # Not a "no validator" gap: there was never anything to validate. Reconciled to
         # expect "valid" in the local .feature file (both nodeids changed accordingly
         # and no longer collect under their old -invalid/-error names).
-        # "Unknown string not in enum" boundary row GRADUATED (salesagent-oyiv.15):
+        # "Unknown string not in enum" boundary row GRADUATED:
         # removing DeliveryPollEnv._BODY_FIELDS let e2e_rest reach the real endpoint,
         # which rejects it like every other transport — XPASS(strict) confirmed
         # in-network (innet_050826_0756). Replaced by the 6 "valid" named-method rows

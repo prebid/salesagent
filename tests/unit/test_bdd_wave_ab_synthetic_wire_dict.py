@@ -1,42 +1,34 @@
-"""Synthetic wire-dict proof for salesagent-oyiv.1 Wave A + Wave B migration targets.
+"""Synthetic wire-dict proof for 5 sandbox/array oracle functions.
 
-Per the revised implementation plan's dormancy rule (salesagent-oyiv.1 design, "Dormancy
-rule" section): a dormant oracle (no live, non-xfailed BDD scenario reaches it today) still
-gets migrated, PROVIDED it is proven correct by a synthetic wire-dict unit test that
-exercises the migrated accessor directly — a module/BDD run is NOT accepted as proof for a
-dormant item, since it is green whether the migration is right or wrong. This module is that
-proof, for all 5 Wave A/B targets (one item, ``then_response_contains_array``, is additionally
-live and BDD-verifiable; the other 4 are dormant):
+A dormant oracle (no live, non-xfailed BDD scenario reaches it) that reads
+wire_dict(ctx)/wire_field(ctx, ...) instead of the typed payload still needs proof it is
+correct: a module/BDD run is not proof for a dormant item, since it is green whether the
+implementation is right or wrong. This module is that proof, for all 5 targets (one,
+``then_response_contains_array``, is additionally live and BDD-verifiable; the other 4 are
+dormant):
 
-  1. ``then_response_contains_array``   (generic/then_success.py)        — Wave A, live
-  2. ``then_response_has_sandbox``      (domain/uc003_update_media_buy.py) — Wave B, dormant
-  3. ``_get_packages``                  (domain/uc026_package_media_buy.py) — Wave B, dormant
-  4. ``then_no_real_orders_created``    (generic/then_success.py)        — Wave B, dormant
-  5. ``then_no_real_api_calls``         (generic/then_success.py, part 3 only) — Wave B, dormant
+  1. ``then_response_contains_array``   (generic/then_success.py)        — live
+  2. ``then_response_has_sandbox``      (domain/uc003_update_media_buy.py) — dormant
+  3. ``_get_packages``                  (domain/uc026_package_media_buy.py) — dormant
+  4. ``then_no_real_orders_created``    (generic/then_success.py)        — dormant
+  5. ``then_no_real_api_calls``         (generic/then_success.py, part 3 only) — dormant
 
-Each function still reads the harness-reconstructed TYPED payload (``ctx["response"]``) today,
-not ``wire_dict(ctx)``/``wire_field(ctx, ...)`` (``tests/bdd/steps/_outcome_helpers.py``). Every
-test below constructs a hand-built ``ctx["wire_response"]`` dict shaped like the real wire body
-plus a real-wire ``ctx["transport"]`` (``Transport.REST``, satisfying ``wire_dict``/``wire_field``'s
-loud "wire_response missing" guard) and asserts the MIGRATED function's expected behavior against
-it — the target for salesagent-0bdd.7's implementation, not the current code.
+Each function reads ``wire_dict(ctx)``/``wire_field(ctx, ...)`` (``tests/bdd/steps/_outcome_helpers.py``),
+never the harness-reconstructed TYPED payload (``ctx["response"]``). Every test below constructs
+a hand-built ``ctx["wire_response"]`` dict shaped like the real wire body plus a real-wire
+``ctx["transport"]`` (``Transport.REST``, satisfying ``wire_dict``/``wire_field``'s loud
+"wire_response missing" guard) and asserts the function's behavior against it.
 
-TDD-red mechanism used per test (see each docstring for which applies):
+Two test shapes (see each docstring for which applies):
 
-- **"wire-only" tests**: omit ``ctx["response"]`` entirely. The migrated function must succeed
-  reading only ``wire_response``. Today's function immediately raises (it requires
-  ``ctx["response"]`` present) — an uncaught exception, so the test fails for the right reason.
+- **"wire-only" tests**: omit ``ctx["response"]`` entirely. The function must succeed reading
+  only ``wire_response`` — proving it never requires the typed payload.
 - **"coercion/staleness divergence" tests**: populate BOTH ``ctx["response"]`` (a typed value
   that looks fine) AND ``ctx["wire_response"]`` (a wire value that is wrong/stale/malformed in a
-  way the migrated function must catch or must prefer). Today's function reads the typed value
-  and is fooled; the migrated function must read the wire value and catch it. This is the exact
-  coercion blind spot the whole ticket targets (a bool serialized as the string ``"true"``
-  reconstructs to real ``True`` on the typed side and passes vacuously).
-
-None of these tests are wrapped in ``pytest.raises`` unless the wrapped assertion itself is what
-currently DOESN'T happen (today's unmigrated code does not raise) — a bare ``pytest.raises`` that
-also raises today for an unrelated reason (e.g. "no response in ctx") would be a vacuous pass and
-is avoided throughout.
+  way the function must catch or must prefer). A function that read the typed value instead
+  would be fooled here — this is the exact coercion blind spot wire-reading oracles close (a
+  bool serialized as the string ``"true"`` reconstructs to real ``True`` on the typed side and
+  passes vacuously).
 """
 
 from __future__ import annotations

@@ -1,19 +1,15 @@
 """Guard: no BDD step calls the deprecated ``dispatch_raw_kwargs`` channel.
 
-``dispatch_raw_kwargs(ctx, *, identity=..., **kwargs)`` (``tests/bdd/steps/generic/_dispatch.py``)
-is the legacy polymorphic dispatch primitive salesagent-hwji split into two typed
+``dispatch_raw_kwargs`` was the legacy polymorphic dispatch primitive, split into two typed
 successors: ``dispatch_request(ctx, *, req: BaseModel, identity=...)`` for well-formed
 requests and ``dispatch_malformed_request(ctx, *, identity=..., **raw)`` for payloads
-that deliberately cannot become a request model. ``dispatch_raw_kwargs`` was kept ONLY
-as a transitional escape hatch for call sites salesagent-hwji did not migrate — its
-own docstring names it DEPRECATED and points here.
+that deliberately cannot become a request model. It was kept ONLY as a transitional
+escape hatch for call sites not yet migrated, then deleted from
+``tests/bdd/steps/generic/_dispatch.py`` once the last caller was gone.
 
-This guard is a call-site-count ratchet with a target of ZERO: every
-``dispatch_raw_kwargs(...)`` call in ``tests/bdd/steps/`` (outside the function's own
-definition) is a violation. The count may only shrink as call sites migrate onto
-``dispatch_request``/``dispatch_malformed_request`` — never grow. Once the last call
-site is migrated, ``dispatch_raw_kwargs`` itself is deleted from ``_dispatch.py`` and
-this guard becomes (and stays) vacuously green.
+This guard now permanently pins the call-site count at ZERO (the function no longer
+exists, so any new ``dispatch_raw_kwargs(...)`` call site would be a reintroduction of
+the retired pattern, not a leftover migration).
 """
 
 from __future__ import annotations

@@ -1564,7 +1564,7 @@ def then_only_status(ctx: dict, status: str) -> None:
 def then_period_start(ctx: dict, date: str) -> None:
     """Assert reporting period start date (response-level, not per-delivery).
 
-    Graded on the WIRE (sweep verification salesagent-2qfx.8, R1): reporting_period.start
+    Graded on the WIRE (sweep verification, R1): reporting_period.start
     is an AwareDatetime; any wire form Pydantic can parse (a date-only string, an epoch
     int, a differently-offset string) reconstructs to a valid AwareDatetime and
     ``str(period.start)[:10]`` would pass on a non-conformant wire. Matches
@@ -2132,7 +2132,7 @@ def then_has_deliveries_field(ctx: dict) -> None:
 def then_no_errors_field(ctx: dict) -> None:
     """Assert response errors list is empty and no exception was raised.
 
-    Graded on the WIRE (sweep verification salesagent-2qfx.8, R1) — matches the file's
+    Graded on the WIRE (sweep verification, R1) — matches the file's
     other error/status oracles rather than a getattr default.
     """
     assert "error" not in ctx, f"Unexpected error: {ctx.get('error')}"
@@ -2150,7 +2150,7 @@ def then_has_errors_field(ctx: dict) -> None:
     in ctx['error']. The assertion verifies that an error condition is
     present, not just that some field exists.
 
-    Graded on the WIRE (sweep verification salesagent-2qfx.8, R1): reads
+    Graded on the WIRE (sweep verification, R1): reads
     wire_dict(ctx).get("errors") — the try/except AttributeError dance this replaced
     was only ever needed against a typed object; a wire dict never raises AttributeError.
     """
@@ -2812,7 +2812,7 @@ def _dispatched_attribution_window(ctx: dict, *, required: bool = False) -> Any:
     """Return the attribution_window this scenario dispatched (typed AttributionWindow), or
     None if it sent none.
 
-    Merged reader (salesagent-hwji, closing @ChrisHuie's open nit that
+    Merged reader (closing @ChrisHuie's open nit that
     ``_dispatched_post_click`` and this were two readers for one channel).
     ``None`` is the honest answer for the ``omitted`` row — the buyer sent nothing, so
     the seller's default applies. It is NOT a fallback that hides a missing record:
@@ -2947,10 +2947,9 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
     non-vacuous outcome for a legitimate zero-match row, not a guard to route around.
     """
     if field in ("status_filter", "filter"):
-        # NOTE (cross-ticket, salesagent-hwji/P2): the expected filter is read from
-        # ctx["request_params"] rather than the dispatched request model — the
-        # dispatched-request channel this should route through instead is hwji's
-        # own P2 scope, not this ticket's. Left as-is pending that ticket landing.
+        # NOTE: the expected filter is read from ctx["request_params"] rather than the
+        # dispatched request model. Migrating this to the dispatched_request(ctx) channel
+        # is still open — left as-is.
         request_params = ctx.get("request_params", {})
         requested_filter = request_params.get("status_filter")
         if requested_filter:
@@ -2958,7 +2957,7 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
             _assert_delivery_statuses_within(deliveries, requested_filter)
 
     elif field == "resolution":
-        # NOTE (cross-ticket, salesagent-hwji/P2): see status_filter/filter above.
+        # NOTE: see status_filter/filter above.
         request_params = ctx.get("request_params", {})
         requested_ids = request_params.get("media_buy_ids")
         deliveries = wire_dict(ctx).get("media_buy_deliveries") or [] if requested_ids else []
@@ -3167,7 +3166,7 @@ def then_filter_result(ctx: dict, expected: str) -> None:
         deliveries = wire_dict(ctx).get("media_buy_deliveries") or []
 
         # Determine what filter was requested by inspecting the When step's kwargs.
-        # NOTE (cross-ticket, salesagent-hwji/P2): reconstructed from ctx["request_params"]
+        # NOTE: reconstructed from ctx["request_params"]
         # rather than the dispatched request model — see _assert_valid_content's matching note.
         request_filter = None
         request_params = ctx.get("request_params", {})

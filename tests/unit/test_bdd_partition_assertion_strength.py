@@ -11,8 +11,8 @@ WRONG content for the field being tested. The function SHOULD reject it
 
 When the bug is fixed, these tests will pass.
 
-Updated for salesagent-9csh: the assertion now reads ``wire_dict(ctx)`` instead of
-``getattr(response, "media_buy_deliveries")`` (the disease this ticket retires), so
+Updated for the wire-discipline migration: the assertion now reads ``wire_dict(ctx)`` instead of
+``getattr(response, "media_buy_deliveries")``, so
 the crafted ctx carries a wire-shaped ``ctx["wire_response"]`` dict, not a
 ``MagicMock`` response whose ``media_buy_deliveries`` attribute the new code path
 never reads. A bare ``response=MagicMock()`` with no ``wire_response`` would make

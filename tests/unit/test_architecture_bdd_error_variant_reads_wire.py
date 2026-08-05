@@ -1,6 +1,6 @@
 """Guard: a BDD oracle must not introspect the reconstructed exception for content.
 
-salesagent-lvs0 (Violation 1): then_no_accounts_in_response / then_no_dry_run_field
+then_no_accounts_in_response / then_no_dry_run_field
 used to call vars(error) / error.model_dump() / getattr(error, "dry_run", None) on
 ctx["error"] (or _get_error(ctx)) — the harness-RECONSTRUCTED AdCPError. Its __dict__
 has a fixed key set that can never carry an application-specific leaked field
@@ -59,7 +59,7 @@ def test_no_bdd_step_introspects_the_reconstructed_error_for_content() -> None:
             violations[rel(path)] = lines
 
     assert not violations, (
-        "vars(error)/error.model_dump()/error.__dict__ (salesagent-lvs0's unfalsifiable-oracle "
+        "vars(error)/error.model_dump()/error.__dict__ (an unfalsifiable-oracle "
         "shape) found at:\n" + "\n".join(f"  {f}:{ln}" for f, lns in violations.items() for ln in lns) + "\n"
         "Read ctx['wire_error_envelope'] (or ctx['synthesized_error_envelope'] for IMPL) instead — "
         "see tests/CLAUDE.md's Error Verification Policy."

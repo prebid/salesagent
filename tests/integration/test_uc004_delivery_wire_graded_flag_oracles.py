@@ -1,6 +1,6 @@
 """Regression: UC-004 boolean-flag oracles must grade the wire, not the coerced payload.
 
-salesagent-9csh's verification bar. On a2a/mcp/rest the harness hands Then-steps a
+The wire-discipline verification bar. On a2a/mcp/rest the harness hands Then-steps a
 typed payload that was *reconstructed from* the wire, so Pydantic has already coerced
 every field to its declared type. A boolean serialized as the JSON string ``"true"``
 reconstructs to ``True``: an oracle that reads the typed payload passes on a wire the

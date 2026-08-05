@@ -123,9 +123,9 @@ class TestDailyDeliveryWebhookFlow:
 
     @pytest.mark.asyncio
     @pytest.mark.xfail(
-        reason="salesagent-bc54: dropped the SSRF hunk (#1728) that admitted the compose-network "
+        reason="Dropped the SSRF hunk (#1728) that admitted the compose-network "
         "capture receiver's private-IP rejection alongside genuine loopback rejections — the receiver "
-        "is unreachable again until salesagent-a2-fetch / GH #1802 lands the structural (typed-reason) "
+        "is unreachable again until GH #1802 lands the structural (typed-reason) "
         "replacement. Known, accepted, cited regression — not silently masked.",
         strict=False,
     )

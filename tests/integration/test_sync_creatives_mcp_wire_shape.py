@@ -87,13 +87,13 @@ def test_mcp_wire_validates_against_pinned_response_schema(integration_db):
     schema, and present-as-null for the array-typed fields is pinned by
     ``test_mcp_wire_changes_and_warnings_are_never_null`` above.
 
-    salesagent-1ifc: the protocol-envelope ``status`` field is a SEPARATE known
+    The protocol-envelope ``status`` field is a SEPARATE known
     gap from the same structured_content bypass — it's REQUIRED (not just
     array-typed like changes/warnings), so stripping its null to absent fails
     schema validation outright rather than silently passing. Inject the
     synthetic value a synchronous success response MUST carry (``"completed"``,
     per core/protocol-envelope.json) so this test grades the rest of the shape;
-    remove the injection once salesagent-1ifc lands the real MCP-transport fix.
+    remove the injection once the real MCP-transport fix lands.
     """
     wire = _sync_one_creative_via_mcp()
     stripped = _nulls_as_absent(wire)

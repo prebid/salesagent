@@ -437,7 +437,7 @@ federation contract; reusable by the `roundtrip-from-products` /
 `wire_response`/`wire_error_envelope` above are the **actual** side — what
 production sent back. The **expected** side is what the scenario's When step
 dispatched, read through one of two `ctx` keys written by
-`tests/bdd/steps/generic/_dispatch.py` (salesagent-hwji). Each key has exactly
+`tests/bdd/steps/generic/_dispatch.py`. Each key has exactly
 one writer and, for the first one, one typed reader in
 `tests/bdd/steps/_outcome_helpers.py`:
 

@@ -1,6 +1,6 @@
 """Regression: a UC-004 partition cell must route by the request field's DECLARED type.
 
-salesagent-hwji's verification bar, expected side. The scenario's Examples cell is a
+The dispatch verification bar, expected side. The scenario's Examples cell is a
 string; the request field ``include_package_daily_breakdown`` is declared ``bool | None``.
 Today ``_dispatch_partition`` tries ``json.loads`` and, on failure, dispatches the RAW
 STRING — so the cell ``True`` reaches the wire as ``"True"`` — and even a successful
