@@ -414,6 +414,7 @@ Feature: BR-UC-011 Manage Accounts
     | brand-a.com     | brand-a.com   | operator |
     Then agent B's account for brand domain "brand-b.com" is not affected
     And only agent A's absent accounts are deactivated
+    And none of the returned accounts have brand domain "brand-b.com"
 
   @T-UC-011-ext-f-false @sync @delete-missing @partition @boundary
   Scenario: delete_missing_false preserves absent accounts (delete_missing = false with absent accounts)

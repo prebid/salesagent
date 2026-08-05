@@ -34,6 +34,13 @@ Detection notes, each of which cost a real finding when it was missing:
   ``ctx.get(k, set())`` and ``ctx.get(k, {})``.
 * ``when_*`` counts as an oracle context. ``last_max_results`` above lives in a
   When and silently changed what got *dispatched*, upstream of any assertion.
+
+Allowlist policy: a change may NOT seed either tier's allowlist from a site that
+same change edits or introduces. If your diff touches a read, fix it (write the
+key, or delete the dead read) in the same diff -- landing it allowlisted is not
+a deferral, it is recording your own change's residue as pre-existing debt. Both
+tiers were fully emptied once for exactly this reason: an earlier change added 8
+Tier-2 entries every one of which was a site it had just edited.
 """
 
 from __future__ import annotations
@@ -66,19 +73,16 @@ _ALLOWED_DEFAULTED_ORPHANS: set[str] = set()
 # Shrink-only: never add. Tracked by GH #1749.
 # Retired: bad_package_id (both Givens now record nonexistent_package_id),
 # media_buy_id + target_media_buy_id (then_error_no_reveal now reads the dispatched
-# media_buy_ids instead of two keys no step ever wrote).
-_ALLOWED_ORPHANS: frozenset[str] = frozenset(
-    {
-        "captured_logs",
-        "dispatched_pipeline",
-        "existing_product",
-        "expected_existing_package_id",
-        "explicit_buying_mode",
-        "last_order_name",
-        "request_push_config",
-        "seeded_task_count",
-    }
-)
+# media_buy_ids instead of two keys no step ever wrote), captured_logs (read
+# env.captured_logs directly instead of a dead ctx fallback), dispatched_pipeline +
+# explicit_buying_mode (the pipeline-routing dispatcher branch that read them was
+# entirely dead code — no scenario ever reached it — deleted along with its three
+# helper functions), existing_product + request_push_config + expected_existing_package_id
+# (each was one dead half of an `or` fallback chain whose other half was a real,
+# written key — dropped the dead half), seeded_task_count (replaced with a direct
+# non-empty check on the returned task list), last_order_name (the entire order-naming
+# step cluster it belonged to was unbound by any scenario — deleted).
+_ALLOWED_ORPHANS: frozenset[str] = frozenset()
 
 # Writes whose key is not a string literal (`ctx[some_var] = ...`). An AST census
 # cannot resolve these, so each is a potential false-orphan source. Pinning the
@@ -216,20 +220,23 @@ class TestBddNoOrphanCtxReads:
     """A BDD oracle must not read scenario state no step ever wrote."""
 
     def test_no_defaulted_read_of_an_orphan_key(self) -> None:
-        """TIER 1: a literal default over a never-written key makes the oracle a constant."""
+        """TIER 1: a literal default over a never-written key makes the oracle a constant.
+
+        Routed through the same allowlist-diff helper as TIER 2 (rather than a
+        hand-rolled comprehension) so this tier also detects a STALE allowlist
+        entry, not just a new violation -- matching TIER 2's mechanism.
+        """
         written, _read, defaulted, _dynamic = _scan()
-        violations = sorted(
-            f"{site}: ctx.get({key!r}, <literal>) -- nothing writes {key!r}"
-            for key, site in defaulted
-            if key not in written and key not in _ALLOWED_DEFAULTED_ORPHANS
-        )
-        assert not violations, (
-            "BDD oracle reads a ctx key nothing writes AND supplies a literal default, so the "
-            "assertion silently degrades into a constant:\n  "
-            + "\n  ".join(violations)
-            + "\n\nFix the read, do not allowlist it: write the key in the Given/When that "
-            "establishes the precondition, and read it with `_require(ctx, key, hint=...)` so "
-            "absence fails loudly. See GH #1749."
+        found = {(key,) for key, _site in defaulted if key not in written}
+        assert_violations_match_allowlist(
+            found=found,
+            allowlist={(key,) for key in _ALLOWED_DEFAULTED_ORPHANS},
+            fix_hint=(
+                "BDD oracle reads a ctx key nothing writes AND supplies a literal default, so the "
+                "assertion silently degrades into a constant. Fix the read, do not allowlist it: "
+                "write the key in the Given/When that establishes the precondition, and read it "
+                "with `_require(ctx, key, hint=...)` so absence fails loudly. See GH #1749."
+            ),
         )
 
     def test_orphan_ctx_reads_match_allowlist(self) -> None:

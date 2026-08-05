@@ -424,11 +424,8 @@ def given_creative_sync_fails(ctx: dict) -> None:
 
 
 def _get_product(ctx: dict) -> Any:
-    """Get the product from ctx or from the DB (UC-003 doesn't set default_product in ctx)."""
-    # FIXME(#1749): reads ctx 'existing_product', which no step writes — dead branch,
-    # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
-    # where the precondition is established, or delete the read; then drop it from the allowlist.
-    product = ctx.get("default_product") or ctx.get("existing_product")
+    """Get the product from ctx or from the DB (UC-003 doesn't always set default_product in ctx)."""
+    product = ctx.get("default_product")
     if product is not None:
         return product
     # UC-003: product was created by setup_product_chain but not stored in ctx.

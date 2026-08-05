@@ -1568,12 +1568,7 @@ def then_webhook_registered(ctx: dict) -> None:
         )
     # Verify the request actually carried push_notification_config (distinguishes
     # this step from a plain "sync succeeded" check)
-    push_config = (
-        # FIXME(#1749): reads ctx 'request_push_config', which no step writes — dead branch,
-        # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
-        # where the precondition is established, or delete the read; then drop it from the allowlist.
-        ctx.get("push_notification_config") or ctx.get("request_push_config") or ctx.get("push_notification_url")
-    )
+    push_config = ctx.get("push_notification_config") or ctx.get("push_notification_url")
     assert push_config is not None, (
         "Then 'webhook registered' but the When step did not set push_notification_config/url in ctx — "
         "cannot verify webhook registration without a configured webhook"
@@ -2663,10 +2658,8 @@ def when_resync_identical_all_fields(ctx: dict, domain: str) -> None:
 def then_none_have_brand_domain(ctx: dict, domain: str) -> None:
     """Assert no returned account has the specified brand domain.
 
-    DORMANT: no feature file binds this step today (nor the
-    ``re-syncs with identical billing…`` When above it). It is corrected here so
-    that wiring it produces a real grader; until then it grades nothing — wire it
-    to the cross-agent isolation scenario that needs it, or delete it.
+    Wired to "Delete missing scoped to authenticated agent only" — after agent A's
+    sync_accounts response comes back, assert it never leaks agent B's brand domain.
 
     The ``hasattr`` guards it used to carry were removed per GH #1751. Two
     separate problems lived in them: ``Account`` and ``Brand`` are Pydantic models

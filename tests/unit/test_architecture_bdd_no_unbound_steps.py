@@ -92,18 +92,8 @@ _UNBOUND_STEPS: set[tuple[str, str, str]] = {
     ),
     (
         "tests.bdd.steps.domain.uc002_create_media_buy",
-        "given_default_order_name_template",
-        "the tenant uses the default order_name_template",
-    ),
-    (
-        "tests.bdd.steps.domain.uc002_create_media_buy",
         "given_natural_key_other_agent",
         "the natural key resolves to an account accessible only to a different agent",
-    ),
-    (
-        "tests.bdd.steps.domain.uc002_create_media_buy",
-        "given_order_name_template",
-        'the tenant order_name_template is "{template}"',
     ),
     (
         "tests.bdd.steps.domain.uc002_create_media_buy",
@@ -125,27 +115,7 @@ _UNBOUND_STEPS: set[tuple[str, str, str]] = {
         "given_valid_request_with_table",
         "a valid create_media_buy request with:\n{datatable}",
     ),
-    (
-        "tests.bdd.steps.domain.uc002_create_media_buy",
-        "then_order_name_contains_media_buy_id",
-        "the ad server order name should contain the media_buy_id from the response",
-    ),
-    (
-        "tests.bdd.steps.domain.uc002_create_media_buy",
-        "then_order_name_differs",
-        'the ad server order name should differ from the remembered "{alias}"',
-    ),
-    (
-        "tests.bdd.steps.domain.uc002_create_media_buy",
-        "then_order_name_no_substring",
-        'the ad server order name should not contain "{substring}"',
-    ),
     ("tests.bdd.steps.domain.uc002_create_media_buy", "then_remember_field", 'I remember the "{field}" as "{alias}"'),
-    (
-        "tests.bdd.steps.domain.uc002_create_media_buy",
-        "then_remember_order_name",
-        'I remember the ad server order name as "{alias}"',
-    ),
     (
         "tests.bdd.steps.domain.uc002_create_media_buy",
         "then_response_equals_remembered",
@@ -312,11 +282,6 @@ _UNBOUND_STEPS: set[tuple[str, str, str]] = {
         "tests.bdd.steps.domain.uc011_accounts",
         "then_none_belong_to_agent",
         'none of the returned accounts belong to agent "{name}"',
-    ),
-    (
-        "tests.bdd.steps.domain.uc011_accounts",
-        "then_none_have_brand_domain",
-        'none of the returned accounts have brand domain "{domain}"',
     ),
     (
         "tests.bdd.steps.domain.uc011_accounts",

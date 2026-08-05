@@ -853,8 +853,6 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
         _assert_account_resolution_succeeds(ctx)
     elif outcome.startswith("error"):
         _assert_error_outcome(ctx, outcome)
-    elif _is_pipeline_routing_outcome(outcome):
-        _assert_pipeline_routing(ctx, outcome)
     elif _is_validation_pass_outcome(outcome):
         _assert_validation_pass(ctx, outcome)
     elif _is_workflow_outcome(outcome):
@@ -923,11 +921,6 @@ def _assert_account_resolution_succeeds(ctx: dict) -> None:
 # -- Outcome family classifiers -----------------------------------------------
 
 
-def _is_pipeline_routing_outcome(outcome: str) -> bool:
-    """Check if outcome is a pipeline routing result (UC-001 buying_mode)."""
-    return outcome.startswith("request proceeds to") or outcome.startswith("request defaults to")
-
-
 def _is_validation_pass_outcome(outcome: str) -> bool:
     """Check if outcome is a validation-pass or validation-skipped result."""
     _VALIDATION_SUFFIXES = (
@@ -991,21 +984,6 @@ def _extract_validation_domain(outcome: str) -> str:
     return outcome
 
 
-def _extract_pipeline_name(outcome: str) -> str:
-    """Extract the pipeline name from a routing outcome.
-
-    "request proceeds to brief pipeline" -> "brief"
-    "request defaults to brief pipeline" -> "brief"
-    """
-    for prefix in ("request proceeds to ", "request defaults to "):
-        if outcome.startswith(prefix):
-            remainder = outcome[len(prefix) :]
-            if remainder.endswith(" pipeline"):
-                return remainder[: -len(" pipeline")]
-            return remainder
-    return outcome
-
-
 # -- Outcome family assertions -------------------------------------------------
 
 
@@ -1065,54 +1043,6 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
         assert media_buy_id is not None, (
             f"Expected media_buy_id in response for '{domain}' validation pass, "
             f"got {type(resp).__name__} without media_buy_id"
-        )
-
-
-def _assert_pipeline_routing(ctx: dict, outcome: str) -> None:
-    """Assert the production code dispatched to the expected pipeline.
-
-    For "request proceeds to X pipeline" or "request defaults to X pipeline",
-    verifies:
-    1. No error raised
-    2. Response is present
-    3. If the harness recorded the dispatched pipeline (ctx["dispatched_pipeline"]),
-       asserts it matches the expected pipeline name
-    4. For "defaults to X": the request did NOT explicitly specify a buying_mode
-
-    When the harness does not yet expose pipeline routing, the assertion
-    xfails rather than silently passing on a no-error check.
-    """
-    import pytest
-
-    expected_pipeline = _extract_pipeline_name(outcome)
-    is_default = outcome.startswith("request defaults to")
-
-    assert "error" not in ctx, (
-        f"Expected request to route to '{expected_pipeline}' pipeline but got error: {ctx.get('error')}"
-    )
-    resp = ctx.get("response")
-    assert resp is not None, (
-        f"Expected response for pipeline routing to '{expected_pipeline}' but ctx['response'] is None"
-    )
-    # FIXME(#1749): reads ctx 'dispatched_pipeline', which no step writes — dead branch,
-    # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
-    # where the precondition is established, or delete the read; then drop it from the allowlist.
-    dispatched = ctx.get("dispatched_pipeline")
-    if dispatched is None:
-        pytest.xfail(
-            f"Harness does not yet expose dispatched pipeline "
-            f"(expected '{expected_pipeline}'). "
-            f"Add ctx['dispatched_pipeline'] to the When step."
-        )
-    assert dispatched == expected_pipeline, f"Expected dispatched pipeline '{expected_pipeline}', got '{dispatched}'"
-    if is_default:
-        # FIXME(#1749): reads ctx 'explicit_buying_mode', which no step writes — dead branch,
-        # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
-        # where the precondition is established, or delete the read; then drop it from the allowlist.
-        explicit_mode = ctx.get("explicit_buying_mode")
-        assert explicit_mode is None, (
-            f"Expected default pipeline routing (no explicit buying_mode), "
-            f"but ctx['explicit_buying_mode'] = {explicit_mode!r}"
         )
 
 
@@ -1289,12 +1219,7 @@ def _assert_task_list_outcome(ctx: dict, outcome: str) -> None:
     elif outcome.startswith("tasks filtered to"):
         _assert_tasks_filtered(tasks, outcome)
     elif outcome.startswith("tasks of all") or outcome.startswith("tasks from all"):
-        # FIXME(#1749): reads ctx 'seeded_task_count', which no step writes — dead branch,
-        # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
-        # where the precondition is established, or delete the read; then drop it from the allowlist.
-        seeded_count = ctx.get("seeded_task_count")
-        if seeded_count is not None:
-            assert len(tasks) >= seeded_count, f"Expected >= {seeded_count} tasks (unfiltered), got {len(tasks)}"
+        assert tasks, f"Expected an unfiltered task list to return at least one task, got {tasks!r}"
     elif outcome.startswith("defaults to"):
         if "created_at" in outcome and len(tasks) >= 2:
             values = [_get_task_field(t, "created_at") for t in tasks]
@@ -1933,67 +1858,6 @@ def _get_error_message_for_step(error: object) -> str:
         return " ".join(parts)
     message = getattr(error, "message", None)
     return message if isinstance(message, str) and message else str(error)
-
-
-# ── Order naming steps (hand-authored, adcp 3.12 / PR #1217) ──
-
-
-@then(parsers.parse('I remember the ad server order name as "{alias}"'))
-def then_remember_order_name(ctx: dict, alias: str) -> None:
-    """Remember the ad server order name for later comparison."""
-    response = ctx.get("response")
-    assert response is not None, "No response in ctx"
-    # Order name is typically in the adapter call args or response metadata
-    # FIXME(#1749): reads ctx 'last_order_name', which no step writes — dead branch,
-    # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
-    # where the precondition is established, or delete the read; then drop it from the allowlist.
-    order_name = ctx.get("last_order_name")
-    assert order_name is not None, "No order name recorded — harness must capture it"
-    ctx.setdefault("remembered", {})[alias] = order_name
-
-
-@then(parsers.parse('the ad server order name should differ from the remembered "{alias}"'))
-def then_order_name_differs(ctx: dict, alias: str) -> None:
-    """Assert the order name from the latest request differs from the remembered one."""
-    remembered = ctx.get("remembered", {})
-    assert alias in remembered, f"No remembered value for '{alias}'"
-    current = ctx.get("last_order_name")
-    assert current is not None, "No order name for current request"
-    assert current != remembered[alias], f"Order name '{current}' should differ from remembered '{remembered[alias]}'"
-
-
-@then(parsers.parse('the ad server order name should not contain "{substring}"'))
-def then_order_name_no_substring(ctx: dict, substring: str) -> None:
-    """Assert the order name does not contain the given substring."""
-    order_name = ctx.get("last_order_name")
-    assert order_name is not None, "No order name recorded"
-    assert substring not in order_name, f"Order name '{order_name}' should not contain '{substring}'"
-
-
-@then("the ad server order name should contain the media_buy_id from the response")
-def then_order_name_contains_media_buy_id(ctx: dict) -> None:
-    """Assert the order name contains the media_buy_id from the create response."""
-    order_name = ctx.get("last_order_name")
-    response = ctx.get("response")
-    assert order_name is not None, "No order name recorded"
-    assert response is not None, "No response in ctx"
-    media_buy_id = getattr(response, "media_buy_id", None)
-    if isinstance(response, dict):
-        media_buy_id = response.get("media_buy_id")
-    assert media_buy_id is not None, "No media_buy_id in response"
-    assert media_buy_id in order_name, f"Order name '{order_name}' should contain media_buy_id '{media_buy_id}'"
-
-
-@given(parsers.parse('the tenant order_name_template is "{template}"'))
-def given_order_name_template(ctx: dict, template: str) -> None:
-    """Set a custom order_name_template on the tenant."""
-    ctx.setdefault("tenant_config", {})["order_name_template"] = template
-
-
-@given("the tenant uses the default order_name_template")
-def given_default_order_name_template(ctx: dict) -> None:
-    """Use the default order_name_template (no override)."""
-    ctx.setdefault("tenant_config", {}).pop("order_name_template", None)
 
 
 @then("the Buyer should be notified via webhook")

@@ -2276,14 +2276,8 @@ def then_existing_package(ctx: dict, pkg_id: str) -> None:
     """Assert response contains the existing package (dedup)."""
     pkgs = _assert_has_packages(ctx)
     # Use the actual existing_package_id from the Given step (pkg_id is a label)
-    # FIXME(#1749): reads ctx 'expected_existing_package_id', which no step writes — dead branch,
-    # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
-    # where the precondition is established, or delete the read; then drop it from the allowlist.
-    actual_existing = ctx.get("expected_existing_package_id") or ctx.get("existing_package_id")
-    assert actual_existing, (
-        "expected_existing_package_id/existing_package_id missing from context — "
-        "Given step must record the existing package ID"
-    )
+    actual_existing = ctx.get("existing_package_id")
+    assert actual_existing, "existing_package_id missing from context — Given step must record the existing package ID"
     found = False
     for pkg in pkgs:
         if _pkg_field(pkg, "package_id") == actual_existing:

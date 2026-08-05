@@ -1820,11 +1820,8 @@ def then_log_auth_rejection(ctx: dict) -> None:
     assert success is False, f"Expected webhook delivery to fail on auth rejection, got success={success!r}"
 
     # 2. Verify auth rejection was logged
-    # FIXME(#1749): reads ctx 'captured_logs', which no step writes — dead branch,
-    # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
-    # where the precondition is established, or delete the read; then drop it from the allowlist.
-    log_records = getattr(env, "captured_logs", None) or ctx.get("captured_logs")
-    assert log_records is not None, "CircuitBreakerEnv.captured_logs not available — harness must capture logs"
+    log_records = env.captured_logs
+    assert log_records, "CircuitBreakerEnv.captured_logs is empty — no log records were captured"
     found_auth_log = any("client error" in r.lower() or "401" in r or "unauthorized" in r.lower() for r in log_records)
     assert found_auth_log, (
         f"Expected a WARNING log record about auth rejection (401/client error/unauthorized), "

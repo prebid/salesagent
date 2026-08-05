@@ -569,10 +569,10 @@ def given_placement_ids_valid(ctx: dict) -> None:
     assert isinstance(pids, list), f"Expected placement_ids to be a list, got {type(pids).__name__}"
     assert len(pids) > 0, "placement_ids list is empty — step claims placements are 'valid for the product'"
     # Step claims 'valid for the product' — product must be present to validate against
-    product = ctx.get("default_product") or ctx.get("existing_product")
+    product = ctx.get("default_product")
     assert product is not None, (
-        "No product in ctx (neither 'default_product' nor 'existing_product') — "
-        "step claims placements are 'valid for the product' but no product exists to validate against"
+        "No product in ctx ('default_product') — step claims placements are 'valid for the "
+        "product' but no product exists to validate against"
     )
     # Verify product does not have restrictive placement config that would reject these.
     # The model column is `placements` (list of dicts with placement_id); when set it
@@ -1936,7 +1936,7 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
 
     # Handle "product unsupported" — configure product to not support placements
     if "product unsupported" in stripped:
-        product = ctx.get("default_product") or ctx.get("existing_product")
+        product = ctx.get("default_product")
         if product is None:
             # UC-003 harness doesn't store product in ctx — look up from existing package
             pkg_obj = ctx.get("existing_package")
