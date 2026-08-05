@@ -218,7 +218,10 @@ class CreativeSyncEnv(IntegrationEnv):
         body: dict[str, Any] = {}
         if "creatives" in kwargs:
             creatives = kwargs["creatives"]
-            # Convert Pydantic models to dicts if needed
+            # UC-006 dispatches through dispatch_raw_kwargs (out of scope for the
+            # salesagent-oyiv typed-request migration — see uc006_sync_creatives.py's
+            # when_sync_creative), so creatives arrive as plain dicts, not validated
+            # Creative models. Convert only when a model is actually present.
             body["creatives"] = [c.model_dump(mode="json") if hasattr(c, "model_dump") else c for c in creatives]
         if "assignments" in kwargs and kwargs["assignments"] is not None:
             body["assignments"] = kwargs["assignments"]

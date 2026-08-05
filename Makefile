@@ -16,7 +16,7 @@ quality-ci:
 	uv run ruff format --check .
 	uv run ruff check .
 	uv run mypy src/ --config-file=mypy.ini
-	uv run mypy tests/bdd/steps/_outcome_helpers.py --config-file=mypy.ini --follow-imports=silent --cache-dir=.mypy_cache_tests_gate
+	uv run python .pre-commit-hooks/check_mypy_outcome_helpers_count.py
 	uv run python .pre-commit-hooks/check_code_duplication.py
 	uv run python .pre-commit-hooks/check-gam-auth-support.py
 	uv run python scripts/hooks/check_response_attribute_access.py $$(find src -name '*.py')
@@ -51,14 +51,12 @@ lint:
 
 typecheck:
 	uv run mypy src/ --config-file=mypy.ini
-	# tests/ accessor-layer gate (GH #1728 fallout): the ctx accessors in
-	# _outcome_helpers feed every BDD step module, so a wrong type there
-	# propagates suite-wide. Hard gate (0 errors today). Dedicated cache dir:
-	# sharing .mypy_cache with the src/ run reports stale phantom errors;
-	# --follow-imports=silent keeps followed-import errors outside the gated
-	# file from leaking into this gate. Widening to tests/harness/ (43 errors)
-	# and a tests/-wide count ratchet (baseline 427) are tracked follow-ups.
-	uv run mypy tests/bdd/steps/_outcome_helpers.py --config-file=mypy.ini --follow-imports=silent --cache-dir=.mypy_cache_tests_gate
+	# tests/ accessor-layer gate (GH #1728 fallout, ratcheted at baseline 0 by
+	# salesagent-hwji): the ctx accessors in _outcome_helpers feed every BDD step
+	# module, so a wrong type there propagates suite-wide. Widening to
+	# tests/harness/ (43 errors) and a tests/-wide count ratchet (baseline 427)
+	# are tracked follow-ups.
+	uv run python .pre-commit-hooks/check_mypy_outcome_helpers_count.py
 
 test-fast:
 	uv run pytest tests/unit/ -x

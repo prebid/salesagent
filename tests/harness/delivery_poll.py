@@ -65,21 +65,6 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
         """Call get_media_buy_delivery via Client(mcp) — full pipeline dispatch."""
         return self._run_mcp_client("get_media_buy_delivery", GetMediaBuyDeliveryResponse, **kwargs)
 
-    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
-        """Convert kwargs to GetMediaBuyDeliveryBody shape for REST POST."""
-        # Forward all request fields that the REST body accepts
-        _BODY_FIELDS = (
-            "media_buy_ids",
-            "status_filter",
-            "start_date",
-            "end_date",
-            "reporting_dimensions",
-            "attribution_window",
-            "include_package_daily_breakdown",
-            "account",
-        )
-        return {k: kwargs[k] for k in _BODY_FIELDS if k in kwargs and kwargs[k] is not None}
-
     def parse_rest_response(self, data: dict[str, Any]) -> GetMediaBuyDeliveryResponse:
         """Parse REST JSON into GetMediaBuyDeliveryResponse."""
         return GetMediaBuyDeliveryResponse(**data)

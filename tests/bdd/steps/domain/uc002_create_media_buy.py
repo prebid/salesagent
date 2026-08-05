@@ -732,9 +732,9 @@ def when_send_create_media_buy(ctx: dict) -> None:
       either accepts it (account is optional) or rejects it on the wire.
     """
     if ctx.get("idempotency_create"):
-        from tests.bdd.steps.generic._dispatch import dispatch_request
+        from tests.bdd.steps.generic._dispatch import dispatch_raw_kwargs
 
-        dispatch_request(ctx, **ctx["request_kwargs"])
+        dispatch_raw_kwargs(ctx, **ctx["request_kwargs"])
         return
 
     if ctx.get("uc002_full_create"):
@@ -742,14 +742,14 @@ def when_send_create_media_buy(ctx: dict) -> None:
         # through the parametrized transport against the harness-seeded
         # product, carrying the Given-step account reference so boundary
         # account resolution runs too.
-        from tests.bdd.steps.generic._dispatch import dispatch_request
+        from tests.bdd.steps.generic._dispatch import dispatch_raw_kwargs
 
         kwargs = _build_idempotency_request_kwargs(ctx)
         kwargs["idempotency_key"] = f"uc002-manual-{uuid.uuid4().hex}"
         account_ref = ctx.get("account_ref")
         if account_ref is not None:
             kwargs["account"] = account_ref.model_dump(mode="json", exclude_none=True)
-        dispatch_request(ctx, **kwargs)
+        dispatch_raw_kwargs(ctx, **kwargs)
         return
 
     if ctx.get("dispatch_mode") == "create_raw":
@@ -788,9 +788,9 @@ def _dispatch_raw_create(ctx: dict) -> None:
     Dispatching the flat kwargs sends them through the real route + production
     Pydantic, so the boundary itself accepts or rejects the shape.
     """
-    from tests.bdd.steps.generic._dispatch import dispatch_request
+    from tests.bdd.steps.generic._dispatch import dispatch_raw_kwargs
 
-    dispatch_request(ctx, **ctx.get("request_kwargs", {}))
+    dispatch_raw_kwargs(ctx, **ctx.get("request_kwargs", {}))
 
 
 def _ensure_tenant_principal(ctx: dict, env: object) -> None:
@@ -1606,13 +1606,19 @@ def given_media_buy_already_created_same_key(ctx: dict) -> None:
     adapter create_media_buy call count so the Then steps can assert the replay
     returns the same id and does NOT re-invoke the adapter.
     """
-    from tests.bdd.steps.generic._dispatch import dispatch_request
+    from tests.bdd.steps.generic._dispatch import dispatch_raw_kwargs
 
     env = ctx["env"]
     adapter_mock = env.mock["adapter"].return_value
 
     first_ctx: dict = {"env": env, "transport": ctx.get("transport"), "tenant": ctx.get("tenant")}
-    dispatch_request(first_ctx, **dict(ctx["request_kwargs"]))
+    # dispatch_raw_kwargs, not dispatch_request(req=...): the replay this seeds (the
+    # When step) also dispatches via dispatch_raw_kwargs, and the idempotency check
+    # hashes the canonical WIRE payload. Serializing through a typed CreateMediaBuyRequest
+    # here (exclude_unset=True) produces a different payload shape than the raw-kwargs
+    # replay sends, tripping a spurious IDEMPOTENCY_CONFLICT — the two dispatches must go
+    # through the identical mechanism for the "same payload" invariant to hold.
+    dispatch_raw_kwargs(first_ctx, **dict(ctx["request_kwargs"]))
 
     assert "error" not in first_ctx, f"First create_media_buy (idempotency seed) failed: {first_ctx.get('error')!r}"
     first_resp = first_ctx.get("response")
@@ -1708,18 +1714,18 @@ def when_send_same_request_with_key(ctx: dict, key: str) -> None:
     ctx["idempotency_key"] = key
     ctx["is_replay"] = True
     # Dispatch the request through the harness
-    from tests.bdd.steps.generic._dispatch import dispatch_request
+    from tests.bdd.steps.generic._dispatch import dispatch_raw_kwargs
 
-    dispatch_request(ctx)
+    dispatch_raw_kwargs(ctx)
 
 
 @when("the Buyer Agent sends a second create_media_buy request with the same parameters")
 def when_send_second_request(ctx: dict) -> None:
     """Send a second create_media_buy request with identical parameters."""
     ctx["is_second_request"] = True
-    from tests.bdd.steps.generic._dispatch import dispatch_request
+    from tests.bdd.steps.generic._dispatch import dispatch_raw_kwargs
 
-    dispatch_request(ctx)
+    dispatch_raw_kwargs(ctx)
 
 
 @then("the response should succeed")

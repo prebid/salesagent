@@ -7,22 +7,28 @@ transports including E2E.
 No raw session access. No db_session(ctx). The harness owns the session,
 the repository owns the query, the helper owns the assertion.
 
-Accessor helpers here return ``Any``, not ``object``. They read out of the untyped
-heterogeneous ``ctx`` dict or off ORM/Pydantic instances, and every caller
+``_require``/``_require_response``/``_require_error``/``_get_response_field`` return
+``Any``, not ``object``: they read out of the untyped heterogeneous ``ctx`` dict or
+off ORM/Pydantic instances of unknown shape at that call site, and every caller
 immediately indexes or attribute-accesses the result — ``object`` turned each of
-those into a mypy ``attr-defined`` error while adding no real type safety. Note
-that nothing type-checks ``tests/`` today: the Makefile runs ``mypy src/``, the
-untyped-defs ratchet hard-codes ``SRC_DIR``, and pre-commit excludes ``tests/``.
+those into a mypy ``attr-defined`` error while adding no real type safety. Every
+other accessor here carries the real return type it knows statically (``MediaBuy``,
+``dict[str, Any]``) so mypy can catch a typo'd attribute or an int-key subscript at
+the call site — that is exactly what ``tests/bdd/steps/_outcome_helpers.py``'s
+Makefile-pinned mypy gate exists to check (this file feeds every BDD step module).
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tests.harness.transport import Transport
 
+if TYPE_CHECKING:
+    from src.core.database.models import MediaBuy
 
-def wire_field(ctx: dict, field: str) -> Any:
+
+def wire_field(ctx: dict[str, Any], field: str) -> Any:
     """Return a top-level success-response field as the buyer sees it on the wire.
 
     REST/A2A/MCP expose the real success-path wire dict via ``ctx["wire_response"]``.
@@ -47,7 +53,7 @@ def wire_field(ctx: dict, field: str) -> Any:
     return _require_response(ctx).model_dump(mode="json")[field]
 
 
-def wire_dict(ctx: dict) -> dict:
+def wire_dict(ctx: dict[str, Any]) -> dict[str, Any]:
     """Return the full success-path wire body as the buyer sees it on the wire.
 
     The dict analogue of :func:`wire_field` — use when an oracle must test key
@@ -66,7 +72,7 @@ def wire_dict(ctx: dict) -> dict:
     return _require_response(ctx).model_dump(mode="json")
 
 
-def wire_packages(ctx: dict) -> list[dict[str, Any]]:
+def wire_packages(ctx: dict[str, Any]) -> list[dict[str, Any]]:
     """Collect every package across every delivery as the buyer sees it on the WIRE.
 
     The wire-reading twin of a typed ``resp.media_buy_deliveries[].by_package`` walk.
@@ -81,7 +87,7 @@ def wire_packages(ctx: dict) -> list[dict[str, Any]]:
     return [pkg for d in wire.get("media_buy_deliveries") or [] for pkg in d.get("by_package") or []]
 
 
-def _require(ctx: dict, key: str, *, hint: str | None = None) -> Any:
+def _require(ctx: dict[str, Any], key: str, *, hint: str | None = None) -> Any:
     """Return ``ctx[key]``, failing with a diagnostic if it is absent.
 
     Then steps read entities and outcomes a prior step was expected to put in
@@ -104,44 +110,35 @@ def _require(ctx: dict, key: str, *, hint: str | None = None) -> Any:
     return val
 
 
-def dispatched_kwargs(ctx: dict) -> dict:
-    """Return the kwargs the scenario's When step actually dispatched.
+def dispatched_request(ctx: dict[str, Any]) -> Any:
+    """Return the validated AdCP request model the scenario's When step dispatched.
 
-    The single reader for the ``ctx["dispatched_kwargs"]`` channel that
-    ``dispatch_request`` records. Derive expected values from THIS, never from a
-    literal default: a ``.get(key, 7)`` style fallback silently turns an
-    assertion into a constant, which is the defect class GH #1749 tracks.
+    The single reader for the ``ctx["dispatched_request"]`` channel that
+    :func:`tests.bdd.steps.generic._dispatch.dispatch_request` records — single-typed
+    BY CONSTRUCTION (salesagent-hwji): unlike the retired ``dispatched_kwargs`` /
+    ``dispatched_field`` pair, there is no flat-kwargs shape to also handle, because
+    ``dispatch_request`` no longer accepts one.
 
-    Recorded before dispatch, so it is available on the error path too.
+    Raises loudly, naming the malformed channel, when
+    ``ctx["dispatched_malformed"]`` is set instead — reaching into a malformed
+    dispatch's fields for an expected value is a test-authoring bug, not a
+    fallback to paper over: there IS no validated request to read attributes from.
 
-    The dict is HETEROGENEOUS — it may hold plain kwargs or a whole Pydantic
-    request object under ``req``. Use :func:`dispatched_field` to read one
-    request field across both shapes.
+    Derive expected values from the returned model's typed attributes, never from
+    a literal default — a hardcoded fallback silently turns an assertion into a
+    constant, the defect class GH #1749 tracks.
     """
-    return _require(ctx, "dispatched_kwargs", hint="the When step must call dispatch_request()")
+    if "dispatched_malformed" in ctx:
+        raise AssertionError(
+            "dispatched_request(ctx) called on a malformed dispatch — "
+            f"ctx['dispatched_malformed'] = {ctx['dispatched_malformed']!r}. "
+            "There is no validated request model to read; this scenario dispatched "
+            "through dispatch_malformed_request(), not dispatch_request()."
+        )
+    return _require(ctx, "dispatched_request", hint="the When step must call dispatch_request(req=...)")
 
 
-def dispatched_field(ctx: dict, name: str, *, default: Any = None) -> Any:
-    """Return request field ``name`` as dispatched, across both dispatch shapes.
-
-    Handles the flat-kwargs form (``dispatch_request(ctx, media_buy_ids=[...])``)
-    and the request-object form (``dispatch_request(ctx, req=SomeRequest(...))``),
-    which 38 of the dispatch sites use.
-
-    ``default`` is for fields the buyer legitimately did not send. Never pass a
-    value the assertion will then compare against — that reintroduces the
-    constant-oracle defect this channel exists to prevent.
-    """
-    kwargs = dispatched_kwargs(ctx)
-    if name in kwargs:
-        return kwargs[name]
-    req = kwargs.get("req")
-    if req is not None:
-        return getattr(req, name, default)
-    return default
-
-
-def _require_response(ctx: dict) -> Any:
+def _require_response(ctx: dict[str, Any]) -> Any:
     """Return ctx["response"], failing with a diagnostic if it is absent.
 
     Then steps assert on the response produced by a prior When step. Reading
@@ -153,7 +150,7 @@ def _require_response(ctx: dict) -> Any:
     return _require(ctx, "response", hint="The operation may have errored instead of returning.")
 
 
-def _require_error(ctx: dict) -> Any:
+def _require_error(ctx: dict[str, Any]) -> Any:
     """Return ctx["error"], failing with a diagnostic if no error was recorded.
 
     Then steps on an error path read ``ctx["error"]``. By subscript that raises
@@ -182,13 +179,13 @@ def _get_response_field(resp: object, field: str) -> Any:
     return None
 
 
-def is_e2e(ctx: dict) -> bool:
+def is_e2e(ctx: dict[str, Any]) -> bool:
     """Check if the current transport is E2E (Docker-based)."""
     transport = ctx.get("transport")
     return transport is not None and hasattr(transport, "value") and str(transport.value).startswith("e2e_")
 
 
-def assert_media_buy_created(ctx: dict, media_buy_id: str | None = None) -> Any:
+def assert_media_buy_created(ctx: dict[str, Any], media_buy_id: str | None = None) -> MediaBuy:
     """Verify media buy exists in DB through the harness.
 
     Returns the MediaBuy ORM instance for further assertions.
@@ -206,7 +203,7 @@ def assert_media_buy_created(ctx: dict, media_buy_id: str | None = None) -> Any:
     return mb
 
 
-def assert_adapter_executed(ctx: dict) -> Any:
+def assert_adapter_executed(ctx: dict[str, Any]) -> MediaBuy:
     """Verify adapter ran by checking DB state through the harness.
 
     A media buy that reaches a non-draft status proves the adapter was invoked.
@@ -219,7 +216,7 @@ def assert_adapter_executed(ctx: dict) -> Any:
     return mb
 
 
-def assert_audit_logged(ctx: dict, *, operation_substring: str = "create_media_buy") -> None:
+def assert_audit_logged(ctx: dict[str, Any], *, operation_substring: str = "create_media_buy") -> None:
     """Verify audit logging occurred — transport-aware.
 
     In-process: asserts on mock audit logger calls (fast, precise).
@@ -233,7 +230,7 @@ def assert_audit_logged(ctx: dict, *, operation_substring: str = "create_media_b
         _assert_audit_logged_mock(ctx, operation_substring)
 
 
-def _assert_audit_logged_mock(ctx: dict, operation_substring: str) -> None:
+def _assert_audit_logged_mock(ctx: dict[str, Any], operation_substring: str) -> None:
     """Assert audit logger mock was called with the operation (in-process mode)."""
     env = ctx["env"]
     mock_audit = env.mock["audit"].return_value
@@ -250,7 +247,7 @@ def _assert_audit_logged_mock(ctx: dict, operation_substring: str) -> None:
     )
 
 
-def assert_audit_approval_logged(ctx: dict) -> None:
+def assert_audit_approval_logged(ctx: dict[str, Any]) -> None:
     """Verify approval decision was logged — transport-aware."""
     if is_e2e(ctx):
         env = ctx["env"]
@@ -265,7 +262,7 @@ def assert_audit_approval_logged(ctx: dict) -> None:
         _assert_audit_approval_mock(ctx)
 
 
-def _assert_audit_approval_mock(ctx: dict) -> None:
+def _assert_audit_approval_mock(ctx: dict[str, Any]) -> None:
     """Assert approval-specific audit log call exists (in-process mode)."""
     env = ctx["env"]
     mock_audit = env.mock["audit"].return_value
@@ -287,7 +284,7 @@ def _assert_audit_approval_mock(ctx: dict) -> None:
     )
 
 
-def assert_audit_adapter_logged(ctx: dict) -> None:
+def assert_audit_adapter_logged(ctx: dict[str, Any]) -> None:
     """Verify adapter execution was logged — transport-aware.
 
     If the media buy went to pending_approval, the adapter was not called —
@@ -310,7 +307,7 @@ def assert_audit_adapter_logged(ctx: dict) -> None:
         _assert_audit_adapter_mock(ctx)
 
 
-def _assert_audit_adapter_mock(ctx: dict) -> None:
+def _assert_audit_adapter_mock(ctx: dict[str, Any]) -> None:
     """Assert adapter execution audit log call exists (in-process mode)."""
     env = ctx["env"]
     mock_audit = env.mock["audit"].return_value

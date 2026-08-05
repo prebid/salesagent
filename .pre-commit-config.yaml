@@ -84,6 +84,14 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
+      - id: mypy-outcome-helpers-no-regression
+        name: "Check mypy error count on tests/bdd/steps/_outcome_helpers.py (no regression)"
+        entry: uv run python .pre-commit-hooks/check_mypy_outcome_helpers_count.py
+        language: system
+        files: '^(tests/bdd/steps/_outcome_helpers\.py|pyproject\.toml|mypy\.ini|uv\.lock|\.pre-commit-config\.yaml|\.pre-commit-hooks/.*|\.mypy-outcome-helpers-baseline)$'
+        pass_filenames: false
+        stages: [pre-push]
+
       - id: adcp-contract-tests
         name: Verify AdCP protocol compliance
         entry: uv run pytest tests/unit/test_adcp_contract.py -v --tb=short

@@ -21,7 +21,7 @@ from pytest_bdd import given, parsers, then, when
 from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps._outcome_helpers import _require, is_e2e
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal, seed_account_with_access
-from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._dispatch import dispatch_raw_kwargs
 from tests.factories.creative_asset import (
     assert_assets,
     build_assets,
@@ -288,9 +288,9 @@ def when_sync_creative(ctx: dict) -> None:
     if "push_notification_config" in ctx:
         kwargs["push_notification_config"] = ctx["push_notification_config"]
     if ctx.get("has_auth") is False:
-        dispatch_request(ctx, identity=ctx.get("identity"), **kwargs)
+        dispatch_raw_kwargs(ctx, identity=ctx.get("identity"), **kwargs)
     else:
-        dispatch_request(ctx, **kwargs)
+        dispatch_raw_kwargs(ctx, **kwargs)
 
 
 def _ensure_tenant_principal(ctx: dict, env: object) -> None:
@@ -3129,7 +3129,7 @@ def when_sync_creative_with_assignments(ctx: dict) -> None:
         kwargs["assignments"] = ctx["assignments"]
     if "validation_mode" in ctx:
         kwargs["validation_mode"] = ctx["validation_mode"]
-    dispatch_request(ctx, **kwargs)
+    dispatch_raw_kwargs(ctx, **kwargs)
 
 
 def _get_media_buy_status_from_db(ctx: dict) -> str:
@@ -3656,7 +3656,7 @@ def when_format_compatibility_checked(ctx: dict) -> None:
         kwargs["assignments"] = ctx["assignments"]
     if "validation_mode" in ctx:
         kwargs["validation_mode"] = ctx["validation_mode"]
-    dispatch_request(ctx, **kwargs)
+    dispatch_raw_kwargs(ctx, **kwargs)
 
 
 @then('the formats should match using the "format_id" key')
@@ -3999,7 +3999,7 @@ def when_sync_specific_creative(ctx: dict, creative_id: str) -> None:
         "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
-    dispatch_request(ctx, creatives=ctx["creatives"])
+    dispatch_raw_kwargs(ctx, creatives=ctx["creatives"])
 
 
 @then("the existing creative should be updated (matched by triple key)")
@@ -4073,7 +4073,7 @@ def given_two_creatives_one_valid_one_empty_name(ctx: dict) -> None:
 @when("the Buyer Agent syncs both creatives")
 def when_sync_both_creatives(ctx: dict) -> None:
     """Send sync_creatives with both creative payloads."""
-    dispatch_request(ctx, creatives=ctx["creatives"])
+    dispatch_raw_kwargs(ctx, creatives=ctx["creatives"])
 
 
 def _get_creative_result_by_id(ctx: dict, creative_id: str) -> object | None:
@@ -5641,7 +5641,7 @@ def when_sync_creative_as_principal(ctx: dict, creative_id: str, principal_id: s
         "assets": build_assets(image_spec("image")),
     }
     ctx.setdefault("creatives", []).append(creative_payload)
-    dispatch_request(ctx, creatives=ctx["creatives"])
+    dispatch_raw_kwargs(ctx, creatives=ctx["creatives"])
 
 
 @when('the Buyer Agent syncs an assignment of creative "creative-xp" to a package owned by the authenticated principal')
@@ -5666,7 +5666,7 @@ def when_sync_cross_principal_assignment(ctx: dict) -> None:
     pkg = MediaPackageFactory(media_buy=media_buy)
     env._commit_factory_data()
     ctx["xp_package_id"] = pkg.package_id
-    dispatch_request(ctx, creatives=[], assignments={"creative-xp": [pkg.package_id]}, validation_mode="lenient")
+    dispatch_raw_kwargs(ctx, creatives=[], assignments={"creative-xp": [pkg.package_id]}, validation_mode="lenient")
 
 
 @then("the sync operation should not fail")

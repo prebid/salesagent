@@ -20,7 +20,7 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import _require_response
 from tests.bdd.steps.generic._brand_param import parse_brand_gherkin_param
-from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._dispatch import dispatch_raw_kwargs
 from tests.factories import (
     InventoryProfileFactory,
     PricingOptionFactory,
@@ -36,7 +36,7 @@ from tests.helpers import assert_envelope_shape
 def _call_get_products(ctx: dict, **kwargs: Any) -> None:
     """Dispatch get_products through ctx['transport'] via the shared wire dispatcher.
 
-    Delegates to the universal ``dispatch_request`` helper (#1417): it
+    Delegates to the (deprecated, salesagent-oyiv.4) ``dispatch_raw_kwargs`` helper (#1417): it
     routes through ``env.call_via`` for the parametrized transport, stores the
     normalized ``ctx['result']`` plus ``ctx['response']`` / ``ctx['error']`` /
     ``ctx['wire_error_envelope']``, and fails loudly if no transport is set
@@ -44,7 +44,7 @@ def _call_get_products(ctx: dict, **kwargs: Any) -> None:
     wiring bug, not an IMPL bypass).
     """
     kwargs.setdefault("brief", "inventory profile test")
-    dispatch_request(ctx, **kwargs)
+    dispatch_raw_kwargs(ctx, **kwargs)
 
 
 def _get_first_prop(ctx: dict) -> Any:

@@ -432,6 +432,43 @@ wire, not a payload reconstruction) and
 federation contract; reusable by the `roundtrip-from-products` /
 `third-party-agent` siblings).
 
+## Dispatch Channels: the Expected-Side Twin of wire_response
+
+`wire_response`/`wire_error_envelope` above are the **actual** side — what
+production sent back. The **expected** side is what the scenario's When step
+dispatched, read through one of three `ctx` keys written by
+`tests/bdd/steps/generic/_dispatch.py` (salesagent-hwji). Each key has exactly
+one writer and, for the first two, one typed reader in
+`tests/bdd/steps/_outcome_helpers.py`:
+
+| `ctx` key | Written by | Read by | Shape |
+|---|---|---|---|
+| `ctx["dispatched_request"]` | `dispatch_request(ctx, req=...)` | `dispatched_request(ctx)` | A validated AdCP request model (`BaseModel`) — the only well-formed form. |
+| `ctx["dispatched_malformed"]` | `dispatch_malformed_request(ctx, **raw)` | *(no reader — see below)* | Raw field values that could NOT become a request model. |
+| `ctx["dispatched_kwargs"]` | `dispatch_raw_kwargs(ctx, **kwargs)` (DEPRECATED — salesagent-oyiv.4 deletes it) | *(legacy, no typed reader)* | Flat kwargs, unvalidated. Do not add new call sites. |
+
+**Use `dispatched_request(ctx)`, not `dispatched_kwargs`/`dispatched_field`** (both
+retired): it returns the exact typed model the When step built, so an oracle reads
+`dispatched_request(ctx).attribution_window`, never `.get("attribution_window")`.
+If the scenario actually dispatched through `dispatch_malformed_request`,
+`dispatched_request(ctx)` raises loudly naming the malformed channel instead of
+silently handing back nothing — reaching into a malformed dispatch's fields for an
+expected value is a test-authoring bug, not something a fallback should paper over.
+
+**Neither channel is `ctx["request_params"]`** (a hand-maintained expectation dict
+some UC-004 steps still populate for their own Then-step comparisons) **nor
+`ctx["request_kwargs"]`** (the builder-side dict a Given step assembles before
+constructing a request model — see `uc002_create_media_buy.py`). Both predate this
+migration and are scoped to their own step files; don't route new expected-side
+reads through them.
+
+`tests/bdd/steps/_outcome_helpers.py`'s mypy gate (`make typecheck`, ratcheted at
+baseline 0 by `.pre-commit-hooks/check_mypy_outcome_helpers_count.py`) is what
+catches a typo'd attribute or a wrong-type subscript on `wire_dict`/
+`assert_media_buy_created` at the call site — this file feeds every BDD step
+module, so keep new accessors here typed (`dict[str, Any]`, the real ORM/Pydantic
+type), not bare `dict` or unannotated `Any`.
+
 ## Infrastructure
 
 | What you need | Command |

@@ -80,7 +80,12 @@ EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
     "(is_rest or is_e2e_rest) and 'T-UC-019-boundary-principal' in marker_names",
     "(is_rest or is_e2e_rest) and 'T-UC-019-ext-a' in marker_names",
     "(is_rest or is_e2e_rest) and 'T-UC-019-partition-principal-invalid' in marker_names",
-    "_samp_is_named and (is_rest or is_e2e_rest)",
+    # Reworded (salesagent-oyiv.15): "REST + named method passes" was a false
+    # positive from DeliveryPollEnv._BODY_FIELDS masking unknown kwargs before they
+    # reached the real REST endpoint — REST now correctly rejects sampling_method
+    # like every other transport (owned by the strict=True _UC004_GENUINE_XFAIL_ROWS
+    # entry instead). Only e2e_rest is left unverified pending live-network evidence.
+    "_samp_is_named and is_e2e_rest",
     "is_e2e_rest",
     "is_e2e_rest and 'T-UC-002-nfr-001-enforcement' in marker_names",
     "is_e2e_rest and 'T-UC-004-daterange-end-only' in marker_names",

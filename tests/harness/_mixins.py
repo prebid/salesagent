@@ -235,6 +235,14 @@ class DeliveryPollMixin:
         raw_identity = extra.pop("identity", _no_identity)
         identity = self.identity if raw_identity is _no_identity else raw_identity  # type: ignore[attr-defined]
 
+        # req= passthrough (salesagent-hwji): a caller that already built the request
+        # model sends it directly, so it must NOT fall into **extra and land as an
+        # unknown 'req' kwarg on GetMediaBuyDeliveryRequest(**kwargs), which raises
+        # under extra="forbid".
+        req = extra.pop("req", None)
+        if req is not None:
+            return _get_media_buy_delivery_impl(req, identity)
+
         kwargs: dict[str, Any] = {}
         if media_buy_ids is not None:
             kwargs["media_buy_ids"] = media_buy_ids

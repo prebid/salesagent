@@ -1502,9 +1502,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # sampling (salesagent-03q): sampling_method is NOT a
             # GetMediaBuyDeliveryRequest field — the artifact-sampling feature
             # is entirely unimplemented. Only (omitted)/not_provided genuinely
-            # pass; rest silently drops the unknown param so its named-method
-            # rows accidentally "pass" (must NOT be marked). impl/a2a/mcp
-            # named-method + every unknown_value/systematic row fails.
+            # pass (a real, empty request). Every named-method + unknown_value/systematic
+            # row fails on ALL FOUR transports as of salesagent-oyiv.15: the harness used
+            # to filter DeliveryPollEnv.build_rest_body through a hand-maintained
+            # _BODY_FIELDS allowlist that silently stripped unknown kwargs before they
+            # ever reached the real REST endpoint — REST's rows only "passed" because the
+            # test process was lying to itself about what production does, not because
+            # production accepted the field. Deleting that allowlist (so REST inherits the
+            # base's correct dict(kwargs) passthrough) let the real request reach the live
+            # server, which rejects it exactly like a2a/mcp do — confirmed on the wire via
+            # "REST boundary translating AdCPInvalidRequestError to envelope:
+            # INVALID_REQUEST - Extra inputs are not permitted".
             (
                 "T-UC-004-partition-sampling",
                 {
@@ -1523,11 +1531,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "mcp-recent",
                     "mcp-failures_only",
                     "mcp-unknown_value-systematic",
-                    "[rest-unknown_value-systematic",
+                    "rest-random-random",
+                    "rest-stratified",
+                    "rest-recent",
+                    "rest-failures_only",
+                    # rest-unknown_value-systematic GRADUATED (salesagent-oyiv.15): the
+                    # scenario names error "INVALID_REQUEST" with suggestion, and REST now
+                    # genuinely emits that envelope once the harness stopped masking the
+                    # field — no longer a spec/production gap on this transport.
                 },
                 "sampling_method is unimplemented in get_media_buy_delivery (no schema "
-                "field); ValidationError not AdCPError (rest silently drops it). "
-                "See docs/test-debt-bdd-strict-markers.md item C4.",
+                "field) on impl/a2a/mcp/rest alike; ValidationError not AdCPError on "
+                "impl/a2a/mcp. See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
             (
                 "T-UC-004-boundary-sampling",
@@ -1543,13 +1558,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # Graduated (2026-07-30, GH #1740 fallout): "mcp-Unknown string not in
                     # enum" — MCP now rejects the unknown sampling_method with a normalized
                     # two-layer envelope (RequestCompatMiddleware + boundary translator),
-                    # XPASS(strict) verified once the deselection stopped hiding it. rest
-                    # still silently drops the unknown param (no rejection), so its row stays.
-                    "[rest-Unknown string not in enum",
+                    # XPASS(strict) verified once the deselection stopped hiding it.
+                    "rest-random (first enum value)",
+                    "rest-failures_only (last enum value)",
+                    # rest-Unknown string not in enum GRADUATED alongside the partition row
+                    # above, same _BODY_FIELDS root cause and same evidence.
                 },
                 "sampling_method is unimplemented in get_media_buy_delivery (no schema "
-                "field); ValidationError not AdCPError (rest silently drops it). "
-                "See docs/test-debt-bdd-strict-markers.md item C4.",
+                "field) on impl/a2a/mcp/rest alike; ValidationError not AdCPError on "
+                "impl/a2a/mcp. See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
             # resolution (salesagent-x18x, #1545): GRADUATED on all transports. The
             # Examples now name error "VALIDATION_ERROR" with suggestion, and the empty
@@ -1575,18 +1592,27 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "cross-principal access returns 200+empty instead of "
                 "AdCPError(MEDIA_BUY_NOT_FOUND). See docs/test-debt-bdd-strict-markers.md item C3.",
             ),
-            # Transport-scoped: impl and a2a raise AdCPError on cross-principal access;
-            # mcp graduated (2026-07-30, GH #1740 fallout): the mcp row XPASS(strict)
-            # once the deselection stopped hiding it — the MCP path now surfaces the
-            # cross-principal rejection as a normalized envelope. rest still returns
-            # 200+empty (C3 gap remains there only).
+            # UNGRADUATED (salesagent-oyiv.15): the prior "a2a/mcp genuinely pass on
+            # differs" claim above was a false positive. when_boundary_ownership used to
+            # send a bogus flat "ownership=<label>" kwarg (not a real request field) —
+            # a2a/mcp rejected THAT (extra=forbid on an unknown field), which happened
+            # to satisfy the "invalid" assertion for the wrong reason. It was never
+            # exercising real cross-principal ownership logic. Now that the step
+            # dispatches through the same identity-based _dispatch_ownership_partition
+            # as T-UC-004-partition-ownership (a real foreign-identity request), it
+            # surfaces the SAME C3 gap that scenario already marks on every transport:
+            # cross-principal access returns 200+empty instead of
+            # AdCPError(MEDIA_BUY_NOT_FOUND), on impl/a2a/mcp/rest alike.
             (
                 "T-UC-004-boundary-ownership",
                 {
+                    "a2a-principal differs from owner",
+                    "mcp-principal differs from owner",
                     "[rest-principal differs from owner",
                 },
                 "cross-principal access returns 200+empty instead of "
-                "AdCPError(MEDIA_BUY_NOT_FOUND) on rest. impl/a2a/mcp genuinely pass. "
+                "AdCPError(MEDIA_BUY_NOT_FOUND) on every transport — same C3 gap as "
+                "T-UC-004-partition-ownership's owner_mismatch row. "
                 "See docs/test-debt-bdd-strict-markers.md item C3.",
             ),
             # status-filter (salesagent-6vu): all valid single statuses +
@@ -1669,29 +1695,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # AdCP reporting_webhook Authentication at the create_media_buy boundary
         # (scheme enum + credentials min_length=32), so all rows pass on all transports.
 
-        # Graduated: T-UC-004-boundary-ownership — impl-"differs", a2a-"differs",
-        # mcp-"differs" (2026-07-30, GH #1740 fallout: the mcp cross-principal
-        # rejection now surfaces as a normalized envelope — XPASS(strict) once the
-        # deselection stopped hiding it) and rest-"matches" pass. Remaining
-        # failures: a2a/mcp-"matches" and rest-"differs" (the latter also owned by
-        # the strict=True tag above).
-        if "T-UC-004-boundary-ownership" in marker_names:
-            _ownership_passes = (
-                (not is_a2a and not is_mcp)
-                and (
-                    (not is_rest and not is_e2e_rest and "differs from owner" in nodeid)
-                    or (is_rest and "matches owner" in nodeid)
-                    or (is_e2e_rest and "matches owner" in nodeid)
-                )
-            ) or (
-                # a2a now raises AdCPError(MEDIA_BUY_NOT_FOUND) on cross-principal access
-                # (wire-drop confirmed XPASS, #1417); mcp followed (GH #1740 fallout).
-                (is_a2a or is_mcp) and "differs from owner" in nodeid
-            )
-            if not _ownership_passes:
-                item.add_marker(
-                    pytest.mark.xfail(reason="ownership boundary: validation gaps on some transports", strict=False)
-                )
+        # UNGRADUATED (salesagent-oyiv.15, see the strict-list entry above): "matches
+        # owner" now genuinely passes on every transport (impl/a2a/mcp/rest/e2e_rest —
+        # the step dispatches a real identity, not a bogus flat kwarg). "differs from
+        # owner" is the C3 cross-principal-access gap on every transport; a2a/mcp/rest
+        # are owned by the strict=True _UC004_GENUINE_XFAIL_ROWS entry above, and
+        # e2e_rest is owned by its own dedicated tripwire block below (~:1852) — no
+        # separate marker needed here.
 
         # Graduated (2026-07-30, GH #1740 fallout): the T-UC-004-boundary-reporting-dims
         # transport-aware strict=False block. Its "mcp/rest still return
@@ -2003,14 +2013,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # AdCP reporting_webhook Authentication at the create_media_buy boundary
         # (scheme enum + credentials min_length=32), so all rows pass on all transports.
 
-        # Graduated: T-UC-004-partition-sampling — "not_provided" passes all transports;
-        # valid named methods (random, stratified, recent, failures_only) pass on REST only.
-        # Non-REST + named method → still fails; unknown_value → fails on all transports.
+        # UNGRADUATED on REST (salesagent-oyiv.15, see the strict-list entry above):
+        # "REST + named method passes" was a false positive from the same
+        # DeliveryPollEnv._BODY_FIELDS masking documented there — REST now correctly
+        # rejects sampling_method like every other transport, and that row is owned by
+        # the strict=True _UC004_GENUINE_XFAIL_ROWS entry. "not_provided" still passes
+        # all transports (a real, empty request — nothing to reject). e2e_rest is left
+        # as-is pending live-network verification.
         if "T-UC-004-partition-sampling" in marker_names and "not_provided" not in nodeid:
             _samp_named = {"random", "stratified", "recent", "failures_only"}
             _samp_is_named = any(s in nodeid for s in _samp_named)
-            if _samp_is_named and (is_rest or is_e2e_rest):
-                pass  # REST/e2e_rest + named method → passes, no xfail
+            if _samp_is_named and is_e2e_rest:
+                pass  # e2e_rest + named method → passes, no xfail
             else:
                 item.add_marker(
                     pytest.mark.xfail(

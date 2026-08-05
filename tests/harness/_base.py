@@ -137,6 +137,32 @@ def _adcp_error_from_code(
     return reconstructed
 
 
+def serialize_request(req: BaseModel, **overrides: Any) -> dict[str, Any]:
+    """Serialize an AdCP request model into the flat dict a transport wrapper sends.
+
+    The single shared implementation of what was six independent copies (salesagent-hwji):
+    ``_base.py``'s a2a/mcp/rest req-unpack blocks, ``media_buy_create.py``'s
+    ``_flatten_request``/``build_rest_body``, and ``creative_sync.py``'s ``build_rest_body``.
+    Fixes, in this one place, three defects every copy carried independently:
+
+    - ``exclude_unset=True`` (not ``exclude_none``): a field the buyer never set must not be
+      fabricated as its declared False/None default on the wire — ``exclude_none`` keeps an
+      unset bool's False default (it is not None), silently turning "omitted" into "explicit
+      false".
+    - ``mode="json"``: MCP's copy omitted this, so MCP carried live enum objects where A2A
+      carried the wire string for the identical request model.
+    - No ``hasattr(x, "model_dump")`` dual read: callers pass a validated ``BaseModel``, never
+      a dict standing in for one, so the isinstance-style guard three of the six copies carried
+      is dead weight.
+
+    ``overrides`` re-injects fields ``model_dump`` cannot see — e.g. ``creative_ids``, which
+    ``CreateMediaBuyRequest`` declares with ``Field(exclude=True)``.
+    """
+    fields = req.model_dump(mode="json", exclude_unset=True)
+    fields.update(overrides)
+    return fields
+
+
 def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
     """Translate FastMCP ToolError back to the corresponding AdCPError.
 
@@ -645,9 +671,8 @@ class BaseTestEnv:
         # Unpack req object into flat parameters if present.
         # A2A skills accept a flat parameter dict, not a request model.
         req = kwargs.pop("req", None)
-        if req is not None and hasattr(req, "model_dump"):
-            req_fields = req.model_dump(mode="json", exclude_none=True)
-            parameters = {**req_fields, **kwargs}
+        if req is not None:
+            parameters = serialize_request(req, **kwargs)
         else:
             parameters = dict(kwargs)
 
@@ -795,10 +820,9 @@ class BaseTestEnv:
         # Unpack req object into flat arguments if present.
         # MCP tools accept individual params, not a request model.
         req = kwargs.pop("req", None)
-        if req is not None and hasattr(req, "model_dump"):
-            req_fields = req.model_dump(exclude_none=True)
+        if req is not None:
             # kwargs override req fields (explicit > implicit)
-            arguments = {**req_fields, **kwargs}
+            arguments = serialize_request(req, **kwargs)
         else:
             arguments = dict(kwargs)
 
@@ -877,10 +901,9 @@ class BaseTestEnv:
         # Unpack req object into flat kwargs — MCP wrappers accept individual
         # parameters, not a request model.
         req = kwargs.pop("req", None)
-        if req is not None and hasattr(req, "model_dump"):
-            req_fields = req.model_dump(exclude_none=True)
+        if req is not None:
             # kwargs override req fields (explicit > implicit)
-            kwargs = {**req_fields, **kwargs}
+            kwargs = serialize_request(req, **kwargs)
 
         mock_ctx = MagicMock(spec=Context)
         mock_ctx.get_state = AsyncMock(return_value=mcp_identity)
@@ -969,28 +992,32 @@ class BaseTestEnv:
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert call_impl kwargs to the REST endpoint body shape.
 
-        Default: if ``req`` is a Pydantic model, delegates serialization to it
-        via ``model_dump(mode="json", exclude_none=True)``.  Enums, nested
-        models, and optional fields are handled by Pydantic — no manual
-        field-by-field extraction needed.
+        Default: if ``req`` is a Pydantic model, delegates serialization to
+        :func:`serialize_request`. Enums, nested models, and optional fields are
+        handled by Pydantic — no manual field-by-field extraction needed.
 
-        If no ``req`` is present, returns empty dict (valid for endpoints
-        where all parameters are optional).
+        Without a ``req``, returns the remaining kwargs VERBATIM — no allowlist, no
+        field filtering — mirroring exactly what ``_run_a2a_handler``/``_run_mcp_client``
+        already do when no ``req`` is present (``arguments = dict(kwargs)``). This is
+        what makes ``dispatch_malformed_request`` reach production over REST/e2e_rest
+        with the buyer's raw values instead of silently degrading to an empty body (the
+        prior hard-coded ``return {}`` here); a genuinely empty dispatch (no kwargs) is
+        just the degenerate case of the same rule, not a special one.
 
-        Subclasses that receive flat kwargs (not a ``req`` object) must
-        override to build the body dict themselves.
+        Subclasses that receive flat kwargs shaped differently must override to build
+        the body dict themselves.
         """
         from pydantic import BaseModel as PydanticBaseModel
 
-        req = kwargs.get("req")
-        if req is not None and isinstance(req, PydanticBaseModel):
-            return req.model_dump(mode="json", exclude_none=True)
-        if req is None:
-            return {}
-        raise NotImplementedError(
-            f"{type(self).__name__}.build_rest_body() received non-Pydantic 'req': {type(req)}. "
-            "Override build_rest_body() to handle this type."
-        )
+        req = kwargs.pop("req", None)
+        if req is not None:
+            if not isinstance(req, PydanticBaseModel):
+                raise NotImplementedError(
+                    f"{type(self).__name__}.build_rest_body() received non-Pydantic 'req': {type(req)}. "
+                    "Override build_rest_body() to handle this type."
+                )
+            return serialize_request(req)
+        return dict(kwargs)
 
     def parse_rest_response(self, data: dict[str, Any]) -> BaseModel:
         """Parse REST JSON response dict into the expected Pydantic model.

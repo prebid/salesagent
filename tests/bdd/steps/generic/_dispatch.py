@@ -1,50 +1,47 @@
-"""Shared dispatch helper for BDD domain step definitions.
+"""Shared dispatch helpers for BDD domain step definitions.
 
-Provides a single implementation of the transport-aware dispatch pattern
-used across UC-004, UC-011, and future domain step files.
+Three named entry points (salesagent-hwji), replacing the single polymorphic
+``dispatch_request`` that used to accept either a validated request model OR raw
+flat kwargs indistinguishably:
+
+- :func:`dispatch_request` — the ONLY form for well-formed requests. Takes a
+  validated AdCP request model (``req=``). Records ``ctx["dispatched_request"]``.
+- :func:`dispatch_malformed_request` — the negative path. Takes raw field values
+  that could NOT become a request model. Records ``ctx["dispatched_malformed"]``,
+  never ``dispatched_request`` — this is the explicit statement that no request
+  model exists for this dispatch, so the expected-side accessor
+  (``dispatched_request(ctx)`` in ``_outcome_helpers.py``) can raise loudly naming
+  the malformed channel instead of silently handing a Then-step a shape it never
+  asked for.
+- :func:`dispatch_raw_kwargs` — DEPRECATED. The old polymorphic form, kept ONLY
+  for call sites outside UC-004 that salesagent-oyiv.4 has not yet migrated.
+  Records ``ctx["dispatched_kwargs"]``. Do not add new call sites.
+
+All three share the same transport-dispatch mechanics (:func:`_dispatch`):
+resolve ``ctx["transport"]``, call ``env.call_via``, store the outcome. Used
+across UC-004, UC-011, and other domain step files.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pydantic import BaseModel
 
 _SENTINEL = object()
 
 
-def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> None:
-    """Dispatch a request through ctx['transport'] via call_via, or direct call_impl.
+def _dispatch(ctx: dict, kwargs: dict[str, Any], identity: Any) -> None:
+    """Shared transport-dispatch mechanics for all three entry points below.
 
-    Stores result in ctx["response"] on success, ctx["error"] on failure.
-    If ctx["transport"] is a Transport enum, uses call_via directly.
-    If it's a string, maps to Transport enum first.
-    If absent, falls back to call_impl.
-
-    The ``identity`` kwarg overrides the default identity for multi-agent
-    and no-auth scenarios. When provided, it flows through to call_via
-    (which uses kwargs.setdefault, so an explicit identity won't be clobbered).
-    Use ``identity=None`` for no-auth scenarios.
-
-    Records what was dispatched in ``ctx["dispatched_kwargs"]`` so Then steps can
-    derive their expected values from the request instead of hardcoding them. An
-    oracle built on a literal default is indistinguishable from no assertion at
-    all — see GH #1749, where a step compared against the constants 7/"days" that
-    happened to match its only scenario.
-
-    This is a DISTINCT channel. Do not conflate it with:
-
-    - ``ctx["request_params"]`` — an EXPECTATION channel. It deliberately holds
-      values that were never dispatched (``["(field absent)"]``) and, in
-      ``_dispatch_resolution``, deliberately fewer ids than were sent.
-    - ``ctx["request_kwargs"]`` — the request-builder channel, which UC-026
-      ``pop``s to reset between requests and asserts on directly.
-
-    The recorded dict is HETEROGENEOUS — readers must not assume flat kwargs. It
-    may hold plain kwargs, a whole Pydantic request object (``req=``), or be empty
-    for a no-argument dispatch. ``identity`` is excluded: it is a dispatch control
-    kwarg, not a request field, so the snapshot is taken before it is merged in.
+    Resolves ``ctx["transport"]``, calls ``env.call_via(transport, **kwargs)``, and
+    stores the outcome on ``ctx`` (``result``/``response``/``wire_response`` on
+    success, ``error``/``wire_error_envelope``/``synthesized_error_envelope`` on
+    failure). Does NOT record what was dispatched — callers do that themselves,
+    before calling this, so the recorded snapshot is taken before the identity
+    merge below (#1728's property, preserved).
     """
-    ctx["dispatched_kwargs"] = dict(kwargs)
-
     if identity is not _SENTINEL:
         kwargs["identity"] = identity
 
@@ -55,7 +52,7 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
     # an IMPL fallback — fail loudly rather than silently bypassing the wire.
     if transport is None:
         raise RuntimeError(
-            "dispatch_request: ctx['transport'] is unset. BDD scenarios must dispatch "
+            "dispatch: ctx['transport'] is unset. BDD scenarios must dispatch "
             "through a wire transport (a2a/mcp/rest); the IMPL call_impl fallback was removed."
         )
 
@@ -73,7 +70,7 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
             "rest": Transport.REST,
         }
         if transport not in transport_map:
-            raise RuntimeError(f"dispatch_request: unrecognized wire transport {transport!r}")
+            raise RuntimeError(f"dispatch: unrecognized wire transport {transport!r}")
         transport = transport_map[transport]
     try:
         result = env.call_via(transport, **kwargs)
@@ -101,3 +98,55 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
             ctx["wire_response"] = result.wire_response
     except Exception as exc:
         ctx["error"] = exc
+
+
+def dispatch_request(ctx: dict, *, req: BaseModel, identity: Any = _SENTINEL) -> None:
+    """Dispatch a validated AdCP request model — the only form for well-formed requests.
+
+    Records ``ctx["dispatched_request"] = req`` BEFORE the identity merge and BEFORE
+    ``env.call_via`` (both #1728 properties, preserved), so Then-steps can derive
+    their expected values from the request the scenario actually built instead of
+    hardcoding them. An oracle built on a literal default is indistinguishable from
+    no assertion at all — see GH #1749, where a step compared against the constants
+    7/"days" that happened to match its only scenario.
+
+    Use :func:`dispatch_malformed_request` for values that could NOT become a
+    validated request model — that is a different, explicit channel, not a second
+    shape this function should also accept.
+    """
+    ctx["dispatched_request"] = req
+    _dispatch(ctx, {"req": req}, identity)
+
+
+def dispatch_malformed_request(ctx: dict, *, identity: Any = _SENTINEL, **raw: Any) -> None:
+    """Dispatch raw field values that could NOT become a validated request model.
+
+    Records ``ctx["dispatched_malformed"] = dict(raw)``, NEVER ``dispatched_request``
+    — this is not a second request shape, it is the explicit statement that no
+    request model exists for this dispatch. It makes the "the buyer sent garbage"
+    case unreadable by the expected-side oracle (``dispatched_request(ctx)`` raises
+    loudly naming this channel) instead of silently readable as if it were well-formed.
+
+    The raw values are sent through unchanged on every transport: a2a/mcp receive
+    them as flat arguments (no ``req`` present, so the harness's own
+    ``arguments = dict(kwargs)`` fallback applies); REST/e2e_rest receive them
+    verbatim as the JSON body (``BaseTestEnv.build_rest_body``'s no-``req`` fallback),
+    so production — not the test process — is what rejects them.
+    """
+    ctx["dispatched_malformed"] = dict(raw)
+    _dispatch(ctx, dict(raw), identity)
+
+
+def dispatch_raw_kwargs(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> None:
+    """DEPRECATED — salesagent-oyiv.4 deletes this; do not add call sites.
+
+    The old polymorphic dispatch form: accepted either flat kwargs or a whole
+    ``req=`` Pydantic model indistinguishably, so the expected-side accessor could
+    never be single-typed. Kept only for the non-UC-004 call sites
+    salesagent-oyiv.4 has not yet migrated onto :func:`dispatch_request` /
+    :func:`dispatch_malformed_request`. Records ``ctx["dispatched_kwargs"]`` — the
+    legacy channel ``dispatched_field`` (in ``_outcome_helpers.py``) still reads for
+    those un-migrated call sites.
+    """
+    ctx["dispatched_kwargs"] = dict(kwargs)
+    _dispatch(ctx, dict(kwargs), identity)

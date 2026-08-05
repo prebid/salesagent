@@ -22,7 +22,7 @@ from src.core.schemas._base import (
     CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
 )
-from tests.harness._base import IntegrationEnv
+from tests.harness._base import IntegrationEnv, serialize_request
 
 # Sentinel for missing-key tests: pass idempotency_key=OMIT_IDEMPOTENCY_KEY to send a
 # request with NO key (the schema rejects it as "Field required" — AdCP 3.0.1).
@@ -359,7 +359,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
         req = kwargs.pop("req", None)
         if req is None:
             return _ensure_idempotency_key(kwargs)
-        flat = req.model_dump(mode="json", exclude_none=True)
+        flat = serialize_request(req)
         # Keep ``account``: the create_media_buy wrappers declare it and resolve it
         # at the transport boundary (998ad1be2). Stripping it here regresses
         # account-not-found scenarios to a successful create.
@@ -401,7 +401,7 @@ class MediaBuyCreateEnv(IntegrationEnv):
         kwargs.pop("identity", None)
         req = kwargs.pop("req", None)
         if req is not None:
-            body = req.model_dump(mode="json", exclude_none=True)
+            body = serialize_request(req)
             # Preserve creative_ids — exclude=True strips them from model_dump
             _restore_creative_ids(req, body)
             return body

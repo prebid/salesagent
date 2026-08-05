@@ -14,7 +14,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._dispatch import dispatch_raw_kwargs
 from tests.bdd.steps.generic.then_error import _wire_code, _wire_error_object, _wire_suggestion
 from tests.factories import (
     CreativeAssignmentFactory,
@@ -1130,9 +1130,9 @@ def _dispatch_query(ctx: dict, **extra_kwargs: Any) -> None:
     query_kwargs.update(extra_kwargs)
 
     if ctx.get("has_auth") is False:
-        dispatch_request(ctx, identity=None, **query_kwargs)
+        dispatch_raw_kwargs(ctx, identity=None, **query_kwargs)
     else:
-        dispatch_request(ctx, **query_kwargs)
+        dispatch_raw_kwargs(ctx, **query_kwargs)
 
 
 @when("the Buyer Agent sends a get_media_buys request via A2A with no filters")

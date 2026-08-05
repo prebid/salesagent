@@ -8,7 +8,7 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.domain.uc002_create_media_buy import _get_response_field
 from tests.bdd.steps.generic._brand_param import parse_brand_gherkin_param
-from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._dispatch import dispatch_raw_kwargs
 from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
 
@@ -25,7 +25,7 @@ def when_send_create_media_buy_with_brand(ctx: dict, brand: str) -> None:
     kwargs = _ensure_request_defaults(ctx)
     kwargs["brand"] = parse_brand_gherkin_param(brand)
     kwargs["po_number"] = f"PO-BRAND-{uuid.uuid4().hex[:8]}"
-    dispatch_request(ctx, **kwargs)
+    dispatch_raw_kwargs(ctx, **kwargs)
 
 
 @then("the create_media_buy request succeeds")
