@@ -1041,33 +1041,23 @@ def then_affected_package_budget(ctx: dict, budget: int) -> None:
 
 @then("the response envelope should include a sandbox flag")
 def then_response_has_sandbox(ctx: dict) -> None:
-    """Assert response includes sandbox information.
+    """Assert the response includes sandbox information, on the WIRE.
 
     Step text: "the response envelope should include a sandbox flag"
     Contract: sandbox MUST be present as a boolean on the response envelope.
     If production doesn't include it, that's a SPEC-PRODUCTION GAP (xfail).
     """
-    from pydantic import BaseModel
+    from tests.bdd.steps._outcome_helpers import wire_dict
 
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response — no response in ctx"
     # Guard: this step only makes sense on a success response, not an error
     assert "error" not in ctx, f"Update errored ({ctx.get('error')}) — cannot check sandbox flag on an error response"
-    # Guard: response must be a Pydantic model (not a raw dict/string) — the
-    # transport dispatch always yields a typed response on success.
-    assert isinstance(resp, BaseModel), (
-        f"Response is not a Pydantic model (type: {type(resp).__name__}) — cannot inspect for sandbox flag"
-    )
-    # sandbox may live on the response directly or on a wrapper envelope
-    sandbox = getattr(resp, "sandbox", None)
-    if sandbox is None:
-        dumped = resp.model_dump()
-        sandbox = dumped.get("sandbox")
+    wire = wire_dict(ctx)
+    sandbox = wire.get("sandbox")
     # Step text claims "should include a sandbox flag" unconditionally — hard assert.
     # If production doesn't include sandbox, the SCENARIO should be xfailed in conftest.py.
     # See salesagent-n3bf.
     assert sandbox is not None, (
-        f"sandbox flag not present on response (type: {type(resp).__name__}) — "
+        f"sandbox flag not present on the wire response (keys: {sorted(wire)}) — "
         "step text claims envelope 'should include' it unconditionally"
     )
     # sandbox is not None — verify it's a boolean (not just any truthy/falsy value)

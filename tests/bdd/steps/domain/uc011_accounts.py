@@ -26,6 +26,19 @@ from tests.helpers import assert_envelope_shape
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _stash_bypass_wire_response(ctx: dict, resp: Any) -> None:
+    """Stash a wire-equivalent for a TRANSPORT-BYPASS When step.
+
+    A TRANSPORT-BYPASS calls an ``_impl`` function directly, so no transport
+    ever serializes a real wire body — the same situation ``wire_dict``/
+    ``wire_field`` (tests/bdd/steps/_outcome_helpers.py) handle for IMPL by
+    serializing the typed payload through the production serializer. Mirror
+    that here so a wire-reading oracle (``wire_dict(ctx)``/``wire_field``)
+    still has something to read instead of raising "wire_response missing".
+    """
+    ctx["wire_response"] = resp.model_dump(mode="json")
+
+
 def _setup_tenant_and_principal(ctx: dict) -> tuple[Any, Any]:
     """Set up default tenant + principal, caching in ctx to avoid duplicates."""
     if "tenant" not in ctx:
@@ -370,6 +383,7 @@ def when_list_accounts_unfiltered(ctx: dict) -> None:
         env._commit_factory_data()
         try:
             ctx["response"] = _list_accounts_impl(identity=env.identity)
+            _stash_bypass_wire_response(ctx, ctx["response"])
         except Exception as exc:
             ctx["error"] = exc
     else:
@@ -471,6 +485,7 @@ def when_list_sandbox_filter(ctx: dict, value: str) -> None:
         env._commit_factory_data()
         try:
             ctx["response"] = _list_accounts_impl(req=req, identity=env.identity)
+            _stash_bypass_wire_response(ctx, ctx["response"])
         except Exception as exc:
             ctx["error"] = exc
     else:

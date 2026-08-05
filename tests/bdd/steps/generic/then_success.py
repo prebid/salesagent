@@ -9,6 +9,7 @@ from __future__ import annotations
 from pytest_bdd import parsers, then
 
 from src.core.helpers import enum_value
+from tests.bdd.steps._outcome_helpers import wire_dict
 from tests.bdd.steps.generic.then_media_buy import then_no_media_buy_persisted as _then_no_media_buy_persisted
 
 
@@ -99,11 +100,10 @@ def then_response_status(ctx: dict, status: str) -> None:
 
 @then(parsers.parse('the response should contain "{field}" array'))
 def then_response_contains_array(ctx: dict, field: str) -> None:
-    """Assert response contains a field that is an array (list)."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
-    value = getattr(resp, field, None)
-    assert value is not None, f"Expected '{field}' in response, got attrs: {dir(resp)}"
+    """Assert the response contains a field that is an array (list), on the WIRE."""
+    wire = wire_dict(ctx)
+    value = wire.get(field)
+    assert value is not None, f"Expected '{field}' in response, got wire keys: {sorted(wire)}"
     assert isinstance(value, list), f"Expected '{field}' to be a list, got {type(value)}"
 
 
@@ -172,19 +172,16 @@ def then_natural_key_resolves_to_sandbox(ctx: dict) -> None:
 
 @then("no real ad platform orders should have been created")
 def then_no_real_orders_created(ctx: dict) -> None:
-    """Assert no real ad-platform order was created (sandbox isolation).
+    """Assert no real ad-platform order was created (sandbox isolation), on the WIRE.
 
     The sandbox resolution must not have invoked the real adapter's order
-    creation. The mock adapter records create_media_buy calls; in sandbox mode
-    none should have run against a real platform.
+    creation. The response must mark itself sandbox on the wire so the buyer
+    knows no real platform order exists.
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a successful sandbox response"
-    # Sandbox isolation contract: the response must mark itself sandbox so the
-    # buyer knows no real platform order exists.
-    assert getattr(resp, "sandbox", None) is True, (
-        f"Expected sandbox=True to confirm no real ad-platform order was created, "
-        f"got sandbox={getattr(resp, 'sandbox', None)!r}"
+    wire = wire_dict(ctx)
+    sandbox = wire.get("sandbox")
+    assert sandbox is True, (
+        f"Expected sandbox=True to confirm no real ad-platform order was created, got sandbox={sandbox!r}"
     )
 
 
@@ -239,9 +236,10 @@ def then_no_real_api_calls(ctx: dict) -> None:
         f"Harness: {type(env).__name__}"
     )
 
-    # 3. Corroborate via the sandbox flag on the response. The sandbox=True
+    # 3. Corroborate via the sandbox flag on the WIRE. The sandbox=True
     #    flag proves the sandbox/simulated code path served the result.
-    sandbox = getattr(resp, "sandbox", None)
+    wire = wire_dict(ctx)
+    sandbox = wire.get("sandbox")
     assert sandbox is True, (
         f"Expected sandbox=True on response confirming simulated mode, "
         f"got sandbox={sandbox!r}. Without sandbox=True, the response may "

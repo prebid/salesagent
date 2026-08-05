@@ -208,21 +208,15 @@ def _get_overlay_field(pkg: Any, field: str) -> Any:
 
 
 def _get_packages(ctx: dict) -> list:
-    """Extract packages from create or update media_buy response."""
-    resp = ctx.get("response")
-    assert resp is not None, f"Expected a response. Error: {ctx.get('error')}"
-    # CreateMediaBuyResult wraps .response which has .packages
-    inner = getattr(resp, "response", resp)
-    packages = getattr(inner, "packages", None)
-    if packages is None:
-        packages = getattr(resp, "packages", None)
-    # UpdateMediaBuySuccess uses affected_packages instead of packages
-    if packages is None:
-        packages = getattr(inner, "affected_packages", None)
-    if packages is None:
-        packages = getattr(resp, "affected_packages", None)
-    assert packages is not None, "No packages in response"
-    return list(packages)
+    """Extract packages from create or update media_buy response, on the WIRE.
+
+    CreateMediaBuyResult uses "packages"; UpdateMediaBuySuccess uses
+    "affected_packages" — try both, wire-only.
+    """
+    from tests.bdd.steps._outcome_helpers import wire_dict
+
+    wire = wire_dict(ctx)
+    return list(wire.get("packages") or wire.get("affected_packages") or [])
 
 
 def _build_default_package(ctx: dict) -> dict[str, Any]:
