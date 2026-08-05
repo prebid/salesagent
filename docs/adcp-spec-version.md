@@ -98,13 +98,23 @@ A spec version bump is a deliberate change with downstream impact:
 6. Update the version prose in `README.md` (status note + "AdCP Compatibility")
    and `CLAUDE.md` ("AdCP Spec Version") — the CI guard asserts these stay in
    step with the pin.
-7. Run `make quality` and address Pydantic field/type changes.
-8. Re-verify integration and BDD test coverage.
+7. Update `PINNED_SHA` in `tests/fixtures/adcp_schemas_pinned/_refresh.py` to the
+   new spec version's tag commit, then run
+   `uv run python tests/fixtures/adcp_schemas_pinned/_refresh.py` to re-vendor the
+   fixtures spec-derived gates read offline (`scripts/verify_feature_error_codes.py`,
+   `tests/unit/test_pydantic_schema_alignment.py`). Update `_EXPECTED_PINNED_SHA` in
+   `tests/unit/test_adcp_spec_version.py` to match — the CI guard asserts these stay
+   in step (salesagent-ulft: this step was missing from the procedure, so the
+   vendored fixture silently stayed one version behind the SDK pin).
+8. Run `make quality` and address Pydantic field/type changes.
+9. Re-verify integration and BDD test coverage.
 
 ## Related files
 
 - `pyproject.toml` — SDK pin
-- `tests/unit/test_adcp_spec_version.py` — CI guard
+- `tests/unit/test_adcp_spec_version.py` — CI guard (also pins `_EXPECTED_PINNED_SHA`)
+- `tests/fixtures/adcp_schemas_pinned/_refresh.py` — vendors the offline schema
+  fixtures spec-derived gates read; its `PINNED_SHA` must track this same version
 - `docs/adcp-spec-version.md` — this document
 - `README.md` — status note + "AdCP Compatibility" section name the pinned version
 - `CLAUDE.md` — "AdCP Spec Version" section names the pinned version

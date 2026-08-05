@@ -668,11 +668,14 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | custom_sort_and_limit | {"placement": {"limit": 50, "sort_by": "clicks"}} | valid |
       | all_dimensions | {"geo": {"geo_level": "country"}, "device_type": {}, "device_platform": {}, "audience": {}, "placement": {}} | valid |
       | unsupported_dimension_only | {"audience": {}} | valid |
+      # salesagent-ulft: system is OPTIONAL per the pinned spec (get-media-buy-delivery-request.json
+      # reporting_dimensions.geo.required = ["geo_level"] only; system's own description says
+      # "Omit to request the level without selecting a specific system") — reconciled from Invalid.
+      | geo_metro_missing_system | {"geo": {"geo_level": "metro"}} | valid |
 
     Examples: Invalid partitions
       | partition | value | expected |
       | geo_missing_geo_level | {"geo": {"limit": 10}} | error "INVALID_REQUEST" with suggestion |
-      | geo_metro_missing_system | {"geo": {"geo_level": "metro"}} | error "INVALID_REQUEST" with suggestion |
       | limit_zero | {"geo": {"geo_level": "country", "limit": 0}} | error "INVALID_REQUEST" with suggestion |
       | limit_negative | {"device_type": {"limit": -1}} | error "INVALID_REQUEST" with suggestion |
 
@@ -693,7 +696,9 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | geo with geo_level=metro + system=nielsen_dma | {"geo": {"geo_level": "metro", "system": "nielsen_dma"}} | valid |
       | geo with geo_level=postal_area + system=us_zip | {"geo": {"geo_level": "postal_area", "system": "us_zip"}} | valid |
       | geo without geo_level (required field missing) | {"geo": {"limit": 10}} | invalid |
-      | geo with geo_level=metro but no system (behavioral gap) | {"geo": {"geo_level": "metro"}} | invalid |
+      # salesagent-ulft: system is OPTIONAL per the pinned spec — see the partition
+      # scenario's geo_metro_missing_system row for the spec citation. Reconciled from invalid.
+      | geo with geo_level=metro but no system | {"geo": {"geo_level": "metro"}} | valid |
       | limit=1 (minimum boundary) | {"geo": {"geo_level": "country", "limit": 1}} | valid |
       | limit=0 (below minimum) | {"geo": {"geo_level": "country", "limit": 0}} | invalid |
       | unsupported dimension only (seller lacks capability) | {"audience": {}} | valid |

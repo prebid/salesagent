@@ -15,6 +15,15 @@ import adcp
 
 EXPECTED_SPEC_VERSION = "3.1.1"
 
+# The commit tests/fixtures/adcp_schemas_pinned/_refresh.py vendors offline schema
+# fixtures from (tag v3.1.1 on adcontextprotocol/adcp). Update this in the SAME
+# change as EXPECTED_SPEC_VERSION and _refresh.py's own PINNED_SHA — see
+# docs/adcp-spec-version.md "Bumping the spec version" step 7. salesagent-ulft:
+# this pin previously targeted "AdCP 3.1" (04f59d2d5) while EXPECTED_SPEC_VERSION
+# had already moved to 3.1.1, silently blinding scripts/verify_feature_error_codes.py's
+# --casing-only gate to every code added between 3.1 and 3.1.1.
+_EXPECTED_PINNED_SHA = "467fd93d77112baf9e094e18980119edcd3a4d07"
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Files whose prose claims the pinned versions. docs/adcp-spec-version.md also
@@ -41,6 +50,35 @@ def _is_historical_line(line: str) -> bool:
     """
     stripped = line.lstrip()
     return stripped.startswith("|") or "dist/compliance/" in line
+
+
+def _refresh_pinned_sha() -> str:
+    """The PINNED_SHA constant as written in _refresh.py."""
+    src = (_REPO_ROOT / "tests" / "fixtures" / "adcp_schemas_pinned" / "_refresh.py").read_text()
+    match = re.search(r'PINNED_SHA = "([0-9a-f]{40})"', src)
+    assert match, '_refresh.py no longer carries a PINNED_SHA = "<40-char sha>" constant'
+    return match.group(1)
+
+
+def test_vendored_schema_pin_matches_spec_version() -> None:
+    """The offline-vendored schema fixture must track EXPECTED_SPEC_VERSION.
+
+    salesagent-ulft: tests/fixtures/adcp_schemas_pinned/_refresh.py has its OWN
+    commit pin (PINNED_SHA), separate from EXPECTED_SPEC_VERSION above, because the
+    fixtures it vendors are read offline (CI has no ~/projects/adcp clone or network
+    access to verify a tag->commit mapping live). That pin drifted silently for a
+    full spec cycle (3.1 -> 3.1.1) with nothing to catch it. This is a static
+    cross-check between two hand-maintained constants, not a live git/network
+    lookup — bump BOTH together (docs/adcp-spec-version.md step 7) and this stays
+    green; bump only one and it fails.
+    """
+    assert _refresh_pinned_sha() == _EXPECTED_PINNED_SHA, (
+        f"_refresh.py's PINNED_SHA ({_refresh_pinned_sha()}) does not match this test's "
+        f"_EXPECTED_PINNED_SHA ({_EXPECTED_PINNED_SHA}). If you just bumped EXPECTED_SPEC_VERSION "
+        f"to {EXPECTED_SPEC_VERSION}, also update _refresh.py's PINNED_SHA to the new tag's commit, "
+        "re-run tests/fixtures/adcp_schemas_pinned/_refresh.py to re-vendor the fixtures, and update "
+        "_EXPECTED_PINNED_SHA here to match. See docs/adcp-spec-version.md 'Bumping the spec version'."
+    )
 
 
 def test_adcp_spec_version_matches_pin() -> None:

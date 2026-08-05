@@ -1,20 +1,30 @@
 #!/usr/bin/env python3
-"""Refresh the pinned AdCP JSON-schema fixtures used by test_pydantic_schema_alignment.
+"""Refresh the pinned AdCP JSON-schema fixtures used by test_pydantic_schema_alignment
+AND by scripts/verify_feature_error_codes.py (the enums/error-code.json vendor).
 
 Source of truth: adcontextprotocol/adcp @ commit
-    04f59d2d56d3d77033162c310e99a1188e4eb419  (tag v3.1-04f59d2d5, 2026-05-13)
+    467fd93d77112baf9e094e18980119edcd3a4d07  (tag v3.1.1, 2026-06-30)
 
-This commit is an INTENTIONAL, frozen reference point for AdCP 3.1 semantics. The
-upstream adcp repo ships constantly and `/schemas/latest` drifts; we deliberately do
-NOT track it. The commit is immutable on GitHub, so the schemas are vendored here
-(committed) — the alignment test reads them offline and never fetches `/schemas/latest`.
+This commit is an INTENTIONAL, frozen reference point matching the project's main
+spec/SDK pin (EXPECTED_SPEC_VERSION in tests/unit/test_adcp_spec_version.py,
+adcp==X.Y.Z in pyproject.toml — see docs/adcp-spec-version.md). The upstream adcp
+repo ships constantly and `/schemas/latest` drifts; we deliberately do NOT track it.
+The commit is immutable on GitHub, so the schemas are vendored here (committed) —
+spec-derived gates read them offline and never fetch `/schemas/latest`.
+
+salesagent-ulft: this PINNED_SHA previously targeted "AdCP 3.1" (04f59d2d5) while the
+rest of the project had already moved to 3.1.1 — a silent drift that made
+verify_feature_error_codes.py's --casing-only gate blind to every code added between
+3.1 and 3.1.1. tests/unit/test_adcp_spec_version.py now asserts this PINNED_SHA
+resolves to the EXPECTED_SPEC_VERSION tag, so it cannot drift silently again.
 
 Layout: schema `$id`/`$ref` namespace is `/schemas/<rest>`; each is written to
 `<this dir>/<rest>` (so `/schemas/core/account-ref.json` -> `core/account-ref.json`).
 
 Only the transitive `$ref` closure of the request schemas the test maps is vendored.
 
-To refresh (e.g. to advance the pinned commit — a deliberate, reviewed change):
+To refresh (e.g. to advance the pinned commit — a deliberate, reviewed change,
+done in lockstep with an EXPECTED_SPEC_VERSION bump):
     uv run python tests/fixtures/adcp_schemas_pinned/_refresh.py
 
 It reads from a local clone at ~/projects/adcp if present (faster), else GitHub raw.
@@ -28,7 +38,7 @@ import subprocess
 import urllib.request
 from pathlib import Path
 
-PINNED_SHA = "04f59d2d56d3d77033162c310e99a1188e4eb419"
+PINNED_SHA = "467fd93d77112baf9e094e18980119edcd3a4d07"
 REPO = "adcontextprotocol/adcp"
 SRC_PREFIX = "static/schemas/source"  # repo path that backs the `/schemas/...` namespace
 LOCAL_CLONE = Path.home() / "projects" / "adcp"

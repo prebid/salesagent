@@ -20,9 +20,12 @@ in the same change.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
-# The 9 e2e_rest nodeids remaining, ALL of them production code gaps:
+# The 12 e2e_rest nodeids remaining, ALL of them production code gaps (kept in sync
+# with the "CURRENT SET" header in tests/bdd/e2e_rest_known_failures.txt — see
+# test_ledger_header_count_matches_actual below):
 #   6  uc004 invalid-input rows the live server still accepts
 #   1  push-notification ack (inline-xfail in the step body)
 #   2  daily-breakdown rows — GH #1776
@@ -64,13 +67,13 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-string 'true' (non-boolean type)-\"true\"-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_boundary__boundary_point[e2e_rest-principal differs from owner-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_partition__partition[e2e_rest-owner_mismatch-invalid]",
-        'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]',
-        # Added 2026-07-30 (GH #1740 fallout) — the partition twin of the boundary metro row
-        # above, SAME pre-existing gap (metro/postal system requirement lives only in the
-        # field description; no validator anywhere — debt item C10). NOT newly broken:
-        # removing the vacuous _UC004_PARTITION_SELECTIVE strict=False blanket unmasked it
-        # on e2e_rest (in-process transports carry the precise strict=True row).
-        'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_partition__partition[e2e_rest-geo_metro_missing_system-{"geo": {"geo_level": "metro"}}-error "INVALID_REQUEST" with suggestion]',
+        # GRADUATED (salesagent-ulft): both geo_metro_missing_system rows (boundary +
+        # partition) removed. Item C10's premise was wrong — the pinned spec's
+        # reporting_dimensions.geo.required is ["geo_level"] only; system is genuinely
+        # optional ("Omit to request the level without selecting a specific system").
+        # Not a "no validator" gap: there was never anything to validate. Reconciled to
+        # expect "valid" in the local .feature file (both nodeids changed accordingly
+        # and no longer collect under their old -invalid/-error names).
         # "Unknown string not in enum" boundary row GRADUATED (salesagent-oyiv.15):
         # removing DeliveryPollEnv._BODY_FIELDS let e2e_rest reach the real endpoint,
         # which rejects it like every other transport — XPASS(strict) confirmed
@@ -146,3 +149,26 @@ def test_conftest_loader_reads_this_ledger() -> None:
     from tests.bdd.conftest import _E2E_REST_KNOWN_FAILURES
 
     assert _E2E_REST_KNOWN_FAILURES == EXPECTED_LEDGER
+
+
+_HEADER_COUNT_RE = re.compile(r"# CURRENT SET: (\d+) entries =")
+
+
+def test_ledger_header_count_matches_actual() -> None:
+    """The ledger's own 'CURRENT SET: N entries' header must match the real count.
+
+    GH #1782: the header is unchecked prose that can (and did) drift from the
+    actual entry count without failing anything — salesagent-ulft found it stale
+    by 1 (stated 8, actual 9) and this ticket's own changes moved the count again.
+    This closes #1782 by making the header a checked claim, not free text.
+    """
+    header_text = _LEDGER_PATH.read_text()
+    match = _HEADER_COUNT_RE.search(header_text)
+    assert match, "e2e_rest_known_failures.txt header no longer has a '# CURRENT SET: N entries =' line"
+    stated = int(match.group(1))
+    actual = len(EXPECTED_LEDGER)
+    assert stated == actual, (
+        f"Ledger header claims {stated} entries but EXPECTED_LEDGER (and the file) has {actual}. "
+        "Update the '# CURRENT SET: N entries =' line and its breakdown in "
+        "tests/bdd/e2e_rest_known_failures.txt in the same change."
+    )

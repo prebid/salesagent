@@ -1280,8 +1280,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # strict-xfail deselection stopped hiding them. a2a/mcp still emit
             # VALIDATION_ERROR for the same payloads (the REST-vs-MCP/A2A
             # value-vs-structural wire-code divergence, tracked in salesagent-meho), so
-            # their rows stay. geo_metro_missing_system has no validator on any
-            # transport (description-only constraint) and stays un-prefixed.
+            # their rows stay.
+            # GRADUATED (salesagent-ulft): geo_metro_missing_system removed — system is
+            # OPTIONAL per the pinned spec (reporting_dimensions.geo.required = ["geo_level"]
+            # only), so this was never a production gap; the scenario itself demanded the
+            # wrong outcome and was reconciled to expect "valid" in the local .feature file.
             (
                 "T-UC-004-partition-reporting-dims",
                 {
@@ -1291,12 +1294,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "mcp-limit_zero",
                     "a2a-limit_negative",
                     "mcp-limit_negative",
-                    "geo_metro_missing_system",
                 },
                 "a2a/mcp emit VALIDATION_ERROR where the Examples demand INVALID_REQUEST "
                 "(REST already emits INVALID_REQUEST+suggestion via src/app.py — divergence "
-                "tracked in salesagent-meho); geo_metro_missing_system has no validator "
-                "anywhere. See docs/test-debt-bdd-strict-markers.md item C4.",
+                "tracked in salesagent-meho). See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
             # NEWLY ROUTED (2026-07-28) — only the explicit-true rows.
             # THE GAP that retires these: GH #1776 (include_package_daily_breakdown accepted and
@@ -1333,11 +1334,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # invalid_unit and invalid_model followed per-row (salesagent-v4hb / 06v8 / gz0n / sg1z).
             # The old "window never reaches production" rationale is dead: #1545 narrowed the
             # generic step to `\w+=`, and #1462's in-process drop never reproduced.
-            (
-                "T-UC-004-boundary-reporting-dims",
-                {"geo with geo_level=metro but no system"},
-                "AdCP spec defines metro/postal_area system requirement only in field description; no validator. See docs/test-debt-bdd-strict-markers.md item C10.",
-            ),
+            # GRADUATED (salesagent-ulft): T-UC-004-boundary-reporting-dims "geo with
+            # geo_level=metro but no system" — item C10's premise was wrong: the pinned
+            # spec's reporting_dimensions.geo.required is ["geo_level"] only, system is
+            # genuinely optional ("Omit to request the level without selecting a specific
+            # system"). Not a "no validator" gap — there was never anything to validate.
+            # Reconciled to expect "valid" in the local .feature file.
             # GRADUATED (removed): T-UC-004-boundary-attribution "unit=campaign with
             # interval=2" — BR-RULE-092 INV-5 is now enforced by the _validate_attribution_window
             # check in _get_media_buy_delivery_impl (VALIDATION_ERROR on all transports; the

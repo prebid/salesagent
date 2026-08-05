@@ -26,11 +26,14 @@
 # entries now owned by the env E2EUnsupportedSetup declaration. 47 genuine-gap
 # entries remain, grouped by gap below.
 #
-# CURRENT SET: 8 entries =
-#   5  uc004 invalid-input rows the live server still accepts (spec-production gap)
+# CURRENT SET: 12 entries =
+#   3  uc004 invalid-input rows the live server still accepts (spec-production gap)
+#   6  uc004 sampling_method rows — unimplemented in get_media_buy_delivery (item C4)
 #   1  explicit inline-xfail production gap (push-notification ack)
 #   2  daily-breakdown rows — GH #1776 (see the block at the end of this file)
-# Every one of the 8 is a PRODUCTION CODE GAP. None is a harness artifact and none is
+# (salesagent-ulft closes GH #1782: this header count is asserted against
+# len(EXPECTED_LEDGER) by tests/unit/test_e2e_rest_ledger_state.py — keep both in sync.)
+# Every one of the 12 is a PRODUCTION CODE GAP. None is a harness artifact and none is
 # masking a regression this suite introduced: where an entry was added rather than
 # graduated, it is because repairing a vacuous test UNMASKED a pre-existing production
 # failure, and the GH issue named on that entry owns closing it.
@@ -43,11 +46,15 @@
 # Fixed by mapping FastAPI 422 -> AdCPValidationError in parse_rest_error
 # (tests/harness/_base.py); the 6 entries now xpass in-network (innet_120626_1848).
 
-# --- uc004 invalid-input validation — accepted by live server (5) ---
+# --- uc004 invalid-input validation — accepted by live server (3) ---
 # GENUINE GAP: the live server accepts these inputs that the spec marks invalid
-# (owner-mismatch principal, out-of-enum sampling, string "true" daily-breakdown,
-# geo metro without system).
+# (owner-mismatch principal, string "true" daily-breakdown).
 # Production does not validate them — a real spec-production gap, tracked for src/ fix.
+# (geo_metro_missing_system / "geo with geo_level=metro but no system" GRADUATED,
+# salesagent-ulft: this was never a gap — system is OPTIONAL per the pinned spec
+# [reporting_dimensions.geo.required = ["geo_level"] only]. Reconciled to expect
+# "valid" in the local .feature file; both rows now pass in-network for the right
+# reason, not masked. out-of-enum sampling GRADUATED separately, salesagent-oyiv.15.)
 # (campaign-unit interval!=1 GRADUATED at the main merge: upstream regenerated the
 # scenario's expected cell `invalid` -> `error "VALIDATION_ERROR" with suggestion`,
 # the old `-invalid]` nodeid no longer collects, and the renamed scenario passes
@@ -61,8 +68,6 @@
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-string 'true' (non-boolean type)-"true"-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_boundary__boundary_point[e2e_rest-principal differs from owner-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_partition__partition[e2e_rest-owner_mismatch-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_partition__partition[e2e_rest-geo_metro_missing_system-{"geo": {"geo_level": "metro"}}-error "INVALID_REQUEST" with suggestion]
 
 # --- uc004 sampling_method "Unknown string not in enum" boundary row — GRADUATED (salesagent-oyiv.15) ---
 # Was: "e2e_rest: Docker does not validate sampling_method — invalid value succeeds"
