@@ -1221,52 +1221,70 @@ def then_errors_array(ctx: dict, count: int) -> None:
     assert ctx.get("response") is None, "Expected error variant (no success response) when errors array is present"
 
 
+def _find_key_anywhere(payload: Any, key: str) -> bool:
+    """True if ``key`` appears at any level of a nested dict/list structure."""
+    if isinstance(payload, dict):
+        if key in payload:
+            return True
+        return any(_find_key_anywhere(v, key) for v in payload.values())
+    if isinstance(payload, (list, tuple)):
+        return any(_find_key_anywhere(v, key) for v in payload)
+    return False
+
+
+def _get_error_envelope(ctx: dict) -> dict:
+    """Return the real (or IMPL-synthesized) wire error envelope, asserting it exists.
+
+    salesagent-lvs0: the error variant's oracle must grade what the buyer
+    actually receives on the wire, not the harness-reconstructed exception —
+    AdCPError's own __dict__ has a fixed key set that can never carry
+    application-specific leaked fields (accounts, dry_run, ...) regardless of
+    what production actually emits, so reading it makes the assertion
+    structurally unfalsifiable. This step's scenarios (unauthenticated
+    connection -> AUTH_REQUIRED) always raise before FastMCP's own schema
+    validation could intervene, so the boundary translator always populates
+    one of these two — no MCP-ToolError special case needed here (contrast
+    the brandless-entry precedent at :2878, which fires on a genuinely
+    different, pre-_impl schema-rejection path).
+    """
+    envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
+    assert envelope is not None, (
+        f"Expected a wire or synthesized error envelope to inspect, got neither. error={ctx.get('error')!r}"
+    )
+    return envelope
+
+
 @then("the response does not contain an accounts array")
 def then_no_accounts_in_response(ctx: dict) -> None:
-    """Assert the error response has no accounts array.
+    """Assert the error response has no accounts array — on the WIRE, not the reconstructed exception.
 
-    Verifies we are on the error path AND that neither the error payload
-    nor any leaked success response contains an 'accounts' key. This
-    ensures the error variant truly excludes account data on the wire.
+    Verifies we are on the error path AND that neither the wire error
+    envelope (at any nesting level) nor any leaked success response
+    contains an 'accounts' key. This ensures the error variant truly
+    excludes account data on the wire.
     """
-    error = _get_error(ctx)
-    # Assert no success response leaked through
     resp = ctx.get("response")
     assert resp is None, f"Expected no success response in error variant, got: {resp}"
-    # Inspect the error payload itself for absence of accounts
-    error_payload = None
-    if hasattr(error, "model_dump"):
-        error_payload = error.model_dump()
-    elif hasattr(error, "__dict__"):
-        error_payload = vars(error)
-    # Unconditional (GH #1751): if the error cannot be introspected at all, the claim
-    # "the error variant excludes account data" is unprovable rather than satisfied, so
-    # that is a failure — not a reason to skip the only assertion in this step.
-    assert error_payload is not None, (
-        f"Could not introspect the error to prove it carries no accounts data: "
-        f"{type(error).__name__} exposes neither model_dump() nor __dict__"
-    )
-    assert "accounts" not in error_payload, (
-        f"Error payload should not contain 'accounts' key, but found: {error_payload.get('accounts')}"
+    envelope = _get_error_envelope(ctx)
+    assert not _find_key_anywhere(envelope, "accounts"), (
+        f"Error envelope should not contain an 'accounts' key at any level, but it does: {envelope}"
     )
 
 
 @then("the response does not contain a dry_run field")
 def then_no_dry_run_field(ctx: dict) -> None:
-    """Assert the error variant response doesn't include dry_run.
+    """Assert the error variant response doesn't include dry_run — on the WIRE.
 
     This step runs in the error variant scenario where ctx["response"]
-    is None (error was raised). Verify the error itself doesn't leak
-    a dry_run field.
+    is None (error was raised). Verify the wire error envelope doesn't leak
+    a dry_run field, at any nesting level.
     """
-    error = ctx.get("error")
-    assert error is not None, "Expected error variant — no error found"
-    # Error variant: no success response should exist
     resp = ctx.get("response")
     assert resp is None, f"Expected no success response in error variant, got: {resp}"
-    # Verify the error doesn't carry a dry_run attribute
-    dry_run = getattr(error, "dry_run", None)
-    assert dry_run is None, f"Expected no dry_run on error, got {dry_run}"
+    envelope = _get_error_envelope(ctx)
+    assert not _find_key_anywhere(envelope, "dry_run"), (
+        f"Error envelope should not contain a 'dry_run' key at any level, but it does: {envelope}"
+    )
 
 
 @then("the response is the error variant of oneOf")
