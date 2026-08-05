@@ -2,9 +2,10 @@
 
 Single source of truth for schema-shape assertions in tests (e.g. the BDD step
 "the response should be schema-valid against <file>"). Reads the committed
-fixtures under ``tests/fixtures/adcp_schemas_pinned/``, pinned at
-adcontextprotocol/adcp@04f59d2d5 (tag ``v3.1-04f59d2d5``). It never fetches the
-network — ``/schemas/latest`` drifts and would make tests non-deterministic.
+fixtures under ``tests/fixtures/adcp_schemas_pinned/``, pinned at the commit
+named by ``tests/fixtures/adcp_schemas_pinned/_refresh.py``'s own ``PINNED_SHA``
+(currently tag ``v3.1.1``). It never fetches the network —
+``/schemas/latest`` drifts and would make tests non-deterministic.
 
 ``$ref`` resolution (e.g. ``/schemas/core/format-id.json``) is wired through a
 ``referencing.Registry`` retrieve callback that loads each referenced schema from
