@@ -25,14 +25,19 @@ Each negative case below PASSED vacuously before the fix and must FAIL
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
+from pydantic import BaseModel
 
 from src.core.schemas import ListCreativeFormatsResponse
+from tests.bdd.steps.domain.uc026_package_media_buy import then_operation_succeeds
 from tests.bdd.steps.generic.then_payload import (
     then_boundary_handling_result,
     then_partition_filtering_result,
 )
 from tests.bdd.steps.generic.then_success import then_response_status
+from tests.harness.transport import Transport
 
 
 def _valid_uc005_ctx() -> dict:
@@ -102,12 +107,15 @@ def test_unknown_expected_word_still_rejected() -> None:
 
 
 def test_response_status_completed_with_error_in_ctx() -> None:
-    """AdCP 3.1: protocol-envelope.json requires status on ALL responses.
+    """ListCreativeFormatsResponse declares a required ``status`` field.
 
-    ListCreativeFormatsResponse refs protocol-envelope.json which declares
-    status as required (default "completed" for synchronous tasks). The step
-    checks the declared status field, not ctx["error"]. This is correct per
-    3.1 — the "status-less response" path only applies to non-spec test doubles.
+    salesagent-oyiv.9 confirmed (via direct ``model_fields`` introspection) that
+    the status-less branch is NOT limited to non-spec test doubles:
+    ``SyncCreativesResponse`` (UC-006) is a real AdCP spec response type that
+    genuinely has no ``status`` field, and is a live-if-dormant code path, not
+    vestigial. ``ListCreativeFormatsResponse`` itself does declare ``status``
+    (default "completed" for synchronous tasks), so this control case still
+    exercises the declared-status branch, not ctx["error"].
     """
     ctx = {
         "response": ListCreativeFormatsResponse(formats=[]),
@@ -135,3 +143,124 @@ def test_response_status_completed_valid_still_passes() -> None:
 def test_response_status_non_completed_against_statusless_fails() -> None:
     with pytest.raises(AssertionError):
         then_response_status(_valid_uc005_ctx(), status="working")
+
+
+# ── salesagent-oyiv.9: synthetic wire-dict proof (TDD red) ───────────────
+#
+# then_response_status branch 1 (the "status" in resp_fields arm) and
+# uc026_package_media_buy.py::then_operation_succeeds both currently grade
+# the harness-RECONSTRUCTED typed payload (resp.status /
+# getattr(resp, "status", None)) instead of the real wire body
+# (wire_dict(ctx)/wire_field(ctx, ...)). Most scenarios reaching these
+# functions are dormant/xfailed today, so a BDD module run is vacuous proof
+# — these direct-call tests are the mandatory synthetic proof per the plan's
+# Step 3. Every test below currently FAILS against the unmigrated code
+# (either an uncaught AssertionError because the read comes off the typed
+# ``resp`` instead of the wire, or a ``pytest.raises`` block that does NOT
+# currently raise) and is expected to pass once the migration lands.
+
+
+class _StubResponseWithStatus(BaseModel):
+    """Minimal real Pydantic model — satisfies then_response_status's
+    ``"status" in resp_fields`` routing gate (a legitimate schema-DECLARATION
+    probe, out of scope for migration) while carrying a controllable typed
+    ``status`` value distinct from the wire value used to prove the read
+    that matters (the actual grade) comes off the wire, not this attribute.
+    """
+
+    status: str
+
+
+def test_response_status_reads_wire_only_for_matching_status() -> None:
+    """Migrated: grades ``wire_dict(ctx)["status"]`` — the typed resp's own
+    status value is irrelevant/inconsistent, proving the function no longer
+    needs a matching typed value, only a matching wire value.
+
+    Today: ``enum_value(resp.status)`` reads the typed placeholder
+    "unused-placeholder", which does not equal "completed" — an uncaught
+    ``AssertionError`` (wrong reason: reads the typed payload, not the wire).
+    """
+    ctx = {
+        "response": _StubResponseWithStatus(status="unused-placeholder"),
+        "wire_response": {"status": "completed"},
+        "transport": Transport.REST,
+    }
+    then_response_status(ctx, status="completed")
+
+
+def test_response_status_catches_wire_divergence_despite_matching_typed_status() -> None:
+    """Coercion/staleness divergence: the typed resp reports status="completed"
+    (a value that WOULD satisfy the request), but the real wire carries a
+    different value ("submitted"). The migrated function must fail on the
+    WIRE value, proving it no longer reads ``resp.status``.
+
+    Today: ``enum_value(resp.status)`` reads "completed", which equals the
+    requested "completed" — no exception is raised, so wrapping in
+    ``pytest.raises`` fails today with "DID NOT RAISE" (the honest red
+    signal: today's code is fooled by the stale/coerced typed value).
+    """
+    ctx = {
+        "response": _StubResponseWithStatus(status="completed"),
+        "wire_response": {"status": "submitted"},
+        "transport": Transport.REST,
+    }
+    with pytest.raises(AssertionError):
+        then_response_status(ctx, status="completed")
+
+
+def test_operation_succeeds_reads_wire_only_ignoring_typed_failure_status() -> None:
+    """Migrated: ``then_operation_succeeds`` grades
+    ``wire_dict(ctx).get("status")`` — a non-failure WIRE status must not
+    raise even though the typed ``resp.status`` carries a failure value the
+    migrated code must no longer consult.
+
+    Today: ``getattr(resp, "status", None)`` reads the typed "failed", which
+    IS in ``_FAILURE_STATUSES`` — an uncaught ``AssertionError`` (wrong
+    reason: reads the typed payload, not the wire).
+    """
+    ctx = {
+        "response": SimpleNamespace(status="failed"),
+        "wire_response": {"status": "completed"},
+        "transport": Transport.REST,
+    }
+    then_operation_succeeds(ctx)
+
+
+def test_operation_succeeds_catches_wire_failure_despite_typed_success_status() -> None:
+    """Coercion/staleness divergence: the typed resp reports status="completed"
+    (a value that would NOT raise), but the real wire carries a failure value
+    ("failed"). The migrated function must fail on the WIRE value.
+
+    Today: ``getattr(resp, "status", None)`` reads "completed", which is not
+    in ``_FAILURE_STATUSES`` — no exception is raised, so wrapping in
+    ``pytest.raises`` fails today with "DID NOT RAISE".
+    """
+    ctx = {
+        "response": SimpleNamespace(status="completed"),
+        "wire_response": {"status": "failed"},
+        "transport": Transport.REST,
+    }
+    with pytest.raises(AssertionError):
+        then_operation_succeeds(ctx)
+
+
+def test_operation_succeeds_tolerates_absent_wire_status_ignoring_typed_failure() -> None:
+    """Tolerate-absent, matching BR-UC-009's real response shape (no
+    ``status`` field on the wire at all): ``wire_dict(ctx).get("status")``
+    must return ``None`` (no ``KeyError`` — deliberately not the bare
+    ``wire[field]`` shape ``wire_field`` uses elsewhere) and the function
+    must not raise, even though the typed resp carries a failure value the
+    migrated code must no longer fall back to.
+
+    Today: ``getattr(resp, "status", None)`` reads the typed "failed" (a
+    value the real BR-UC-009 schema would never stamp, since it has no
+    status field at all) — an uncaught ``AssertionError`` (wrong reason:
+    reads the typed payload instead of tolerating the genuinely status-less
+    wire body).
+    """
+    ctx = {
+        "response": SimpleNamespace(status="failed"),
+        "wire_response": {},
+        "transport": Transport.REST,
+    }
+    then_operation_succeeds(ctx)

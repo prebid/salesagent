@@ -1854,31 +1854,27 @@ _FAILURE_STATUSES = frozenset({"failed", "rejected", "error", "canceled"})
 
 @then("the operation should succeed")
 def then_operation_succeeds(ctx: dict) -> None:
-    """Assert the operation succeeded (generic, transport-agnostic).
+    """Assert the operation succeeded (generic, transport-agnostic), on the WIRE.
 
     This step is shared across use cases with different response shapes
     (UC-026 create/update media buy, UC-009 performance feedback, etc.).
     It asserts the transport-agnostic success contract common to all:
       1. No error was recorded in ctx.
       2. A response object exists.
-      3. If the response exposes a status field (directly or on an inner
-         .response wrapper), the status is not a failure value.
+      3. If the wire exposes a status field, it is not a failure value.
+         Tolerate-absent by design: some reached response shapes (e.g.
+         UC-009) carry no status field at all.
 
     Shape-specific checks (packages, detail messages) belong in the
     dedicated follow-on Then steps already present in each scenario.
     """
+    from tests.bdd.steps._outcome_helpers import wire_dict
+
     assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
     resp = ctx.get("response")
     assert resp is not None, "Expected a response but none was recorded"
 
-    # Check status on the response itself or on an inner .response wrapper
-    # (CreateMediaBuyResult wraps .response which may carry status).
-    status = getattr(resp, "status", None)
-    if status is None:
-        inner = getattr(resp, "response", None)
-        if inner is not None:
-            status = getattr(inner, "status", None)
-
+    status = wire_dict(ctx).get("status")
     if status is not None:
         status_str = str(status).lower()
         assert status_str not in _FAILURE_STATUSES, (

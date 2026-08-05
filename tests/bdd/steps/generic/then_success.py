@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from pytest_bdd import parsers, then
 
-from src.core.helpers import enum_value
 from tests.bdd.steps._outcome_helpers import wire_dict
 from tests.bdd.steps.generic.then_media_buy import then_no_media_buy_persisted as _then_no_media_buy_persisted
 
@@ -40,12 +39,16 @@ _STATUSLESS_SUCCESS_ATTRS: tuple[str, ...] = (
 
 @then(parsers.parse('the response status should be "{status}"'))
 def then_response_status(ctx: dict, status: str) -> None:
-    """Assert the operation completed with expected status.
+    """Assert the operation completed with expected status, on the WIRE.
 
     Works across use cases:
-    - UC-004 (GetMediaBuyDeliveryResponse): has explicit ``status`` field —
-      assert it equals the expected value directly.
-    - UC-005 (ListCreativeFormatsResponse): no ``status`` field. Such
+    - Six response types are dispatched through this step today
+      (GetProductsResponse/UC-001, CreateMediaBuyResult/UC-002,
+      UpdateMediaBuySuccess+UpdateMediaBuySubmitted/UC-003,
+      GetMediaBuyDeliveryResponse/UC-004, ListCreativeFormatsResponse/UC-005) —
+      all declare an explicit ``status`` field; assert it equals the expected
+      value directly, read off the wire.
+    - SyncCreativesResponse (UC-006) has no ``status`` field. Such
       response types can only represent the *completed* state, so
       "completed" is proven by (a) no error recorded for the operation and
       (b) the schema-required success payload being present. Any requested
@@ -58,8 +61,9 @@ def then_response_status(ctx: dict, status: str) -> None:
     # Uses getattr on the class (not instance) to handle non-Pydantic test doubles.
     resp_fields = getattr(type(resp), "model_fields", {})
     if "status" in resp_fields:
-        # SDK 5.7: status may be a non-StrEnum; enum_value normalizes to str.
-        actual_str = enum_value(resp.status)
+        wire = wire_dict(ctx)
+        assert "status" in wire, f"Expected 'status' in response, got wire keys: {sorted(wire)}"
+        actual_str = wire["status"]
         assert actual_str == status, f"Expected status '{status}', got '{actual_str}'"
         return
 
