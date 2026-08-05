@@ -2656,8 +2656,12 @@ def then_attribution_default_model(ctx: dict) -> None:
     """Assert attribution window echoes the seller's platform default model.
 
     When the buyer omits attribution_window, production echoes the platform
-    default (last_touch).  Assert the response's attribution_window.model
+    default (last_touch). Assert the response's attribution_window.model
     matches the platform default from production config.
+
+    This reads the same constant production reads, so it cannot by itself
+    catch a wrong platform default; the independent anchor is
+    tests/unit/test_uc004_attribution_default_oracle_strength.py.
     """
     from src.core.tools.media_buy_delivery import PLATFORM_DEFAULT_ATTRIBUTION_MODEL
 
@@ -2836,6 +2840,10 @@ def _expected_attribution_model(ctx: dict) -> str:
     different production branches (``requested is None`` at
     media_buy_delivery.py:979 vs ``requested.model or default`` at :992), so both
     are graded here rather than assumed equivalent.
+
+    For the default half, this reads the same ``PLATFORM_DEFAULT_ATTRIBUTION_MODEL``
+    constant production reads; the independent anchor is
+    tests/unit/test_uc004_attribution_default_oracle_strength.py.
     """
     from src.core.tools.media_buy_delivery import PLATFORM_DEFAULT_ATTRIBUTION_MODEL
 
@@ -2867,9 +2875,14 @@ def _assert_attribution_echoed_on_wire(ctx: dict, field: str) -> None:
     for window_name in ("post_click", "post_view"):
         req_window = getattr(requested, window_name, None) if requested is not None else None
         if req_window is None:
-            # INV-4: the applied window the seller echoes must not contain a
-            # lookback the buyer never asked for — fabricated conversion
-            # attribution would otherwise be graded by nothing, anywhere.
+            # Repo-level pin of current production behavior, not a spec MUST: per
+            # core/attribution-window.json, post_click/post_view are individually
+            # optional and nothing forbids a seller from declaring a default lookback.
+            # Distinct from BR-RULE-092 INV-4 (BR-UC-004-deliver-media-buy-metrics.feature:
+            # "buyer omits -> seller uses and echoes platform default") -- do not conflate.
+            # The applied window the seller echoes must not contain a lookback the buyer
+            # never asked for — fabricated conversion attribution would otherwise be
+            # graded by nothing, anywhere.
             assert aw.get(window_name) is None, (
                 f"Valid {field}: buyer requested no {window_name}, but the response echoed "
                 f"{aw.get(window_name)} — the seller must not fabricate a lookback window"
