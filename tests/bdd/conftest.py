@@ -1253,18 +1253,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                     break
 
-        # UC-004 date range strict=False entry from main covers T-UC-004-daterange
-        # (custom dates partially applied). T-UC-004-daterange-end-only is
-        # promoted to strict=True in _UC004_GENUINE_XFAIL_ROWS below (debt C7).
-        _UC004_DATE_SELECTIVE: list[tuple[str, set[str], str]] = [
-            ("T-UC-004-daterange", set(), "custom date range partially applied"),
-        ]
-        if any(t.startswith("T-UC-004-daterange") for t in marker_names):
-            for tag, substrings, reason in _UC004_DATE_SELECTIVE:
-                if tag in marker_names:
-                    if not substrings or any(s in nodeid for s in substrings):
-                        item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
-                    break
+        # Graduated (salesagent-oyiv.5): T-UC-004-daterange ("Custom date range
+        # used as reporting period") — media_buy_delivery.py:209 honors BOTH
+        # start_date and end_date together (`if req.start_date and req.end_date`),
+        # setting reporting_period to the exact request-provided bounds; no
+        # partial-application gap. then_period_start/then_period_end grade
+        # wire_dict(ctx) with exact string equality. Verified XPASS on all 3
+        # in-scope transports (a2a/mcp/rest) with --runxfail. Not on the
+        # e2e_rest ledger. T-UC-004-daterange-end-only remains a separate,
+        # still-open gap (debt C7, below).
+        #
+        # T-UC-004-daterange-end-only is promoted to strict=True in
+        # _UC004_GENUINE_XFAIL_ROWS below (debt C7).
 
         # Per-row strict=True xfails for partition/boundary scenarios where
         # blanket markers were removed and production gaps are real and named
@@ -1790,15 +1790,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"non-boolean", "non_boolean", "string 'true'"},
                 "include_package_daily_breakdown boundary: non-boolean validation not implemented",
             ),
-            # media_buy_resolution: partial still fails on all transports
+            # Graduated (salesagent-oyiv.5): "partial resolution (some missing)" —
+            # _dispatch_resolution sends one real id + "mb-nonexistent"; production's
+            # _get_target_media_buys (media_buy_delivery.py:942) fetches by the given
+            # ids and returns the real one as a partial success (the missing one
+            # yields an advisory MEDIA_BUY_NOT_FOUND, not a hard failure).
+            # _assert_valid_content's "resolution" branch checks the real requested
+            # id is present in wire_dict(ctx)["media_buy_deliveries"] — a real
+            # content check, not a truthiness probe. Verified XPASS on a2a/mcp/rest
+            # with --runxfail; not on the e2e_rest ledger.
             # Graduated: "buyer_refs only" and "zero resolution" (all 4 transports pass)
             # Graduated: "empty array" passes on impl/mcp/rest (only a2a fails)
             # Clean-pass: media_buy_ids only, both provided, neither provided
-            (
-                "T-UC-004-boundary-resolution",
-                {"partial resolution"},
-                "media_buy_resolution boundary: production gaps on some transports",
-            ),
             # Graduated: status_filter "not in AdCP enum" passes on impl+rest,
             # "empty array, violates" passes on impl+mcp+rest (transport-aware below)
         ]
@@ -1831,19 +1834,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     )
                 )
 
-        # adcp 5.7 SDK dropped buyer_refs (excised from the pin since 3.0.0) — the
-        # "both provided" resolution scenario sends both media_buy_ids and buyer_refs,
-        # but buyer_refs no longer exists, so the scenario is obsolete. strict=False
-        # tolerates it (in-process xfails, e2e_rest xpasses) until PR #1417 retires the
-        # obligation + feature rows upstream. (salesagent-uw8f)
-        if "T-UC-004-boundary-resolution" in marker_names and "both provided" in nodeid:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="adcp 5.7 SDK dropped buyer_refs — 'both provided' resolution test is obsolete "
-                    "(retirement owned by PR #1417)",
-                    strict=False,
-                )
-            )
+        # Graduated (salesagent-oyiv.5): "both provided (priority rule)" — PR #1417
+        # (merged 2026-07-14) already reinterpreted this row: adcp 5.7 dropped
+        # buyer_refs, so _dispatch_resolution's "both_provided" branch now sends
+        # media_buy_ids + status_filter=["active"] together, not media_buy_ids +
+        # buyer_refs. Production's _get_target_media_buys (media_buy_delivery.py:936)
+        # genuinely combines both: fetches by the given ids, then filters the
+        # result by status_filter — not a vacuous ids-only path. Verified XPASS on
+        # a2a/mcp/rest with --runxfail; not on the e2e_rest ledger. Retirement loop
+        # (salesagent-uw8f) closed by this graduation.
 
         # Graduated: e2e_rest media_buy_resolution "empty array" now returns a
         # structured AdCP error envelope (not a raw 500/empty body), so the
