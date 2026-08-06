@@ -2023,11 +2023,25 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # the strict=True _UC004_GENUINE_XFAIL_ROWS entry. "not_provided" still passes
         # all transports (a real, empty request — nothing to reject). e2e_rest is left
         # as-is pending live-network verification.
+        #
+        # Graduated (salesagent-oyiv.20): "unknown_value" (systematic) on REST only.
+        # Oracle strengthened first (added "sampling" to _WIRE_ASSERTED_FIELDS, wiring
+        # it through the same result.assert_wire_error() path attribution_window
+        # already uses — this was previously the weaker reconstructed-exception
+        # fallback), then re-verified with --runxfail: REST genuinely emits the exact
+        # two-layer INVALID_REQUEST+suggestion envelope (src/app.py's
+        # request_validation_error_handler, the same REST-vs-a2a/mcp value-vs-structural
+        # reclassification already graduated for other fields in this file) — a2a/mcp
+        # still genuinely emit VALIDATION_ERROR and remain xfailed. e2e_rest is left
+        # routed as before (not independently verified here; needs a bdd-in-network run).
         if "T-UC-004-partition-sampling" in marker_names and "not_provided" not in nodeid:
             _samp_named = {"random", "stratified", "recent", "failures_only"}
             _samp_is_named = any(s in nodeid for s in _samp_named)
+            _samp_unknown_value = "unknown_value" in nodeid
             if _samp_is_named and is_e2e_rest:
                 pass  # e2e_rest + named method → passes, no xfail
+            elif _samp_unknown_value and is_rest and not is_e2e_rest:
+                pass  # REST + unknown_value → passes for real (INVALID_REQUEST+suggestion)
             else:
                 item.add_marker(
                     pytest.mark.xfail(

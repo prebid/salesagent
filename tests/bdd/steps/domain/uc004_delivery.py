@@ -3091,8 +3091,9 @@ def _assert_wire_rejection(ctx: dict, field: str) -> None:
 
 
 # Fields migrated to the clean reference path (scenario names the exact error code,
-# step asserts it on the harness wire envelope). attribution_window is the first.
-_WIRE_ASSERTED_FIELDS = {"attribution_window"}
+# step asserts it on the harness wire envelope). attribution_window is the first;
+# sampling (salesagent-oyiv.20) is the second.
+_WIRE_ASSERTED_FIELDS = {"attribution_window", "sampling"}
 
 
 def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknown") -> None:
