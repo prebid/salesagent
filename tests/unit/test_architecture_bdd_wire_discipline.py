@@ -55,8 +55,8 @@ from typing import Any
 from tests.unit._architecture_helpers import assert_violations_match_allowlist
 from tests.unit.test_architecture_bdd_no_orphan_ctx_reads import _ORACLE_PREFIXES
 
-_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
-_TESTS_ROOT = _STEPS_DIR.parent.parent
+_TESTS_ROOT = Path(__file__).resolve().parents[1]
+_STEPS_DIR = _TESTS_ROOT / "bdd"
 
 _WIRE_REFERENCES = (
     "_wire_code",
@@ -556,4 +556,9 @@ def test_meta_the_scan_set_is_not_empty() -> None:
     )
     assert "bdd/steps/generic/then_success.py" in rels, (
         "generic/then_success.py is not in the scan set; it carries the cross-UC then_response_status oracle"
+    )
+    assert "bdd/test_uc018_list_creatives.py" in rels, (
+        "salesagent-oyiv.6 regression: the top-level tests/bdd/test_uc*.py scenario-binding "
+        "modules must be in scan scope too — a @then oracle landing directly in one of them "
+        "(not in tests/bdd/steps/) was previously invisible to Checks A/B/C"
     )
