@@ -226,3 +226,35 @@ class TestPublisherDomainsPortfolioIntegration:
             response = _list_authorized_properties_impl(req=None, identity=identity)
             assert response.publisher_domains == []
             assert isinstance(response.publisher_domains, list)
+
+
+class TestGetProductsMCPWireOmitsNullFields:
+    """Bug salesagent-oyiv.7: MCP wire responses must omit null-valued optional
+    top-level fields the same way REST/A2A do, not serialize them as ``null``.
+
+    get_products is the one call site (src/core/tools/products.py:832) that
+    already pre-dumps with ``response.model_dump(mode="json")`` before wrapping
+    in ``ToolResult`` — worth its own regression test since that's a different
+    code shape from the other 8 MIGRATE sites (which pass the raw model), and
+    the fix must cover it too (GetProductsResponse itself carries
+    NestedModelSerializerMixin, so the explicit pre-dump alone doesn't help).
+    """
+
+    def test_mcp_wire_omits_unset_top_level_envelope_fields(self, integration_db):
+        from tests.harness import Transport
+
+        with ProductEnv(tenant_id="wire-mcp-t1", principal_id="p1") as env:
+            tenant = TenantFactory(tenant_id="wire-mcp-t1", subdomain="wire-mcp-t1")
+            PrincipalFactory(tenant=tenant, principal_id="p1")
+            p = ProductFactory(tenant=tenant, product_id="prod_wire")
+            PricingOptionFactory(product=p)
+
+            result = env.call_via(Transport.MCP, brief="display ads")
+
+        assert result.is_success, f"Expected success: {result.error}"
+        wire = result.wire_response
+        null_keys = {k for k, v in wire.items() if v is None}
+        assert not null_keys, (
+            "MCP wire response includes null-valued top-level envelope keys that "
+            f"REST/A2A correctly omit: {sorted(null_keys)} (full wire: {wire})"
+        )

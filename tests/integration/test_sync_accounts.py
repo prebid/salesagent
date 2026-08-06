@@ -627,3 +627,42 @@ class TestSyncAccountsBrandlessEntryRejected:
             "VALIDATION_ERROR",
             recovery="correctable",
         )
+
+
+class TestSyncAccountsMCPWireOmitsNullFields:
+    """Bug salesagent-oyiv.7: the MCP wire must omit null-valued optional fields
+    the same way REST/A2A do, not serialize them as ``null``.
+
+    Root cause (confirmed by direct wire inspection, refining the ticket's
+    original claim): nested list items (``accounts[]``) are NOT affected —
+    ``NestedModelSerializerMixin`` re-serializes them via each item's own
+    ``model_dump()``, which the adcp library base defaults to
+    ``exclude_none=True``. The leak is at the TOP-LEVEL envelope: FastMCP
+    serializes the raw ``ToolResult(structured_content=response)`` Pydantic
+    model through Pydantic's own ``@model_serializer(mode="wrap")`` core path,
+    which bypasses that class-level ``model_dump()`` override entirely and
+    falls back to Pydantic's true default (``exclude_none=False``). REST/A2A
+    do not hit this path and correctly omit unset optional envelope fields
+    (confirmed: REST's wire has only ``accounts``; A2A's has only ``message``/
+    ``accounts``/``success``; MCP's additionally includes ``adcp_version``,
+    ``adcp_major_version``, ``dry_run``, ``context``, ``ext`` all as ``null``).
+    """
+
+    def test_mcp_wire_omits_unset_top_level_envelope_fields(self, integration_db):
+        with AccountSyncEnv(tenant_id="bp_wire_mcp", principal_id="agent_wire_mcp") as env:
+            env.setup_default_data()
+
+            req = SyncAccountsRequest(
+                accounts=[
+                    {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
+                ],
+            )
+            result = env.call_via(Transport.MCP, req=req)
+
+        assert result.is_success, f"Expected success: {result.error}"
+        wire = result.wire_response
+        null_keys = {k for k, v in wire.items() if v is None}
+        assert not null_keys, (
+            "MCP wire response includes null-valued top-level envelope keys that "
+            f"REST/A2A correctly omit: {sorted(null_keys)} (full wire: {wire})"
+        )

@@ -220,6 +220,20 @@ class NestedModelSerializerMixin:
         # Get default serialization
         data = serializer(self)
 
+        # info.exclude_none reflects the caller's raw dump request, not this class's
+        # documented default (SalesAgentBaseModel / LibraryAdCPBaseModel:
+        # model_dump(exclude_none=True) for AdCP spec compliance) — this wrap hook runs
+        # before that class-level default (a Python method override, not a Pydantic
+        # serializer hook) ever gets a chance to apply. Callers that reach this class via
+        # pydantic_core directly (e.g. FastMCP's ToolResult, which serializes structured
+        # content via pydantic_core.to_jsonable_python — never .model_dump()) see None
+        # values leak at the TOP level while nested fields below are already correctly
+        # filtered (they're re-serialized via a real .model_dump() call, which does hit
+        # the override). Match that same default here so top-level fields behave
+        # identically to nested ones regardless of how this model gets serialized.
+        if not info.exclude_none:
+            data = {k: v for k, v in data.items() if v is not None}
+
         # Introspect all fields and re-serialize nested Pydantic models
         for field_name, _ in self.__class__.model_fields.items():
             if field_name not in data:
