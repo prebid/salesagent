@@ -667,7 +667,7 @@ class UpdateMediaBuyError(AdCPUpdateMediaBuyError):  # type: ignore[misc]
             return "Media buy update failed."
 
 
-class UpdateMediaBuySubmitted(AdCPUpdateMediaBuySubmitted):  # type: ignore[misc]
+class UpdateMediaBuySubmitted(NestedModelSerializerMixin, AdCPUpdateMediaBuySubmitted):  # type: ignore[misc]
     """Async/pending update_media_buy response extending adcp v3.1.1 type.
 
     Spec 3.1.1 ``update-media-buy-response.json`` models a not-yet-applied update
@@ -682,6 +682,12 @@ class UpdateMediaBuySubmitted(AdCPUpdateMediaBuySubmitted):  # type: ignore[misc
     this type from the manual-approval branch yields the spec-correct submitted
     envelope on every transport. ``status`` defaults to ``"submitted"`` on the
     library base; ``task_id`` is required.
+
+    NestedModelSerializerMixin (salesagent-oyiv.16): the MCP structured_content
+    path (FastMCP's pydantic_core.to_jsonable_python) bypasses this class's own
+    inherited exclude_none=True model_dump() override — without the mixin's
+    top-level null-filtering wrap hook, every unset optional field (context,
+    message, errors, ext, ...) leaked as null on that path specifically.
     """
 
     def __str__(self) -> str:
@@ -1460,7 +1466,7 @@ class UpdatePerformanceIndexRequest(SalesAgentBaseModel):
     )
 
 
-class UpdatePerformanceIndexResponse(SalesAgentBaseModel):
+class UpdatePerformanceIndexResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
     status: str
     detail: str
     context: ContextObject | None = Field(None, description="Application-level context echoed from the request")
@@ -2469,7 +2475,7 @@ class ActivateSignalRequest(LibraryActivateSignalRequest):
         return self.signal_agent_segment_id
 
 
-class ActivateSignalResponse(SalesAgentBaseModel):
+class ActivateSignalResponse(NestedModelSerializerMixin, SalesAgentBaseModel):
     """Response from signal activation.
 
     NOT migrated to library base (evaluated in salesagent-xeb):

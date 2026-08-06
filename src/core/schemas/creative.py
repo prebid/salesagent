@@ -456,7 +456,7 @@ class AssignmentResult(SalesAgentBaseModel):
     )
 
 
-class SyncCreativesResponse(LibrarySyncCreativesSuccess):
+class SyncCreativesResponse(NestedModelSerializerMixin, LibrarySyncCreativesSuccess):
     """Extends library SyncCreativesResponse success variant.
 
     adcp 3.9: SyncCreativesResponse is now a union TypeAlias (not RootModel).
@@ -470,6 +470,12 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
     ``creatives`` remains overridden — see below.
 
     Design decision (salesagent-g3c): error variant never constructed.
+
+    NestedModelSerializerMixin (salesagent-oyiv.16) replaces the former hand-rolled
+    model_dump() override: the mixin's generic nested-list re-serialization already
+    calls each creative's own model_dump() (Pattern #4), and its top-level
+    exclude_none filtering fixes the MCP structured_content null-leak FastMCP's
+    pydantic_core.to_jsonable_python() path exposed (no hook previously existed here).
     """
 
     # Override creatives to use our SyncCreativeResult (Pattern #4: nested serialization).
@@ -478,13 +484,6 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
     # synchronously-processed sync always carries a creatives array, even all-failed
     # (#1399 R3-F2).
     creatives: list[SyncCreativeResult]  # type: ignore[assignment]
-
-    def model_dump(self, **kwargs):
-        """Override to call child model_dump() for nested SyncCreativeResult (Pattern #4)."""
-        result = super().model_dump(**kwargs)
-        if "creatives" in result and self.creatives:
-            result["creatives"] = [c.model_dump(**kwargs) for c in self.creatives]
-        return result
 
     def __str__(self) -> str:
         """Return human-readable summary message for protocol envelope."""
