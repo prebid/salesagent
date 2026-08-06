@@ -181,6 +181,17 @@ def _find_error_construction() -> set[str]:
     return found
 
 
+def _uses_ctx_result_subscript(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """True if the function reads ``ctx["result"]``/``ctx.get("result")`` anywhere in its body.
+
+    Tighter than a bare ``"result" in names`` token match, which a local variable, kwarg, or
+    string literal spelled ``result`` could satisfy without the function ever touching the real
+    ``TransportResult`` — this requires the exact ctx-subscript-or-``.get`` shape the wire path
+    actually uses.
+    """
+    return any(_ctx_key_read_matches(node, lambda k: k == "result") for node in _own_nodes(func))
+
+
 def _find_reconstructed_only_assertions() -> set[str]:
     """Find error @then steps using _get_error_code/_get_error_dict without a wire reference."""
     found: set[str] = set()
@@ -192,7 +203,7 @@ def _find_reconstructed_only_assertions() -> set[str]:
                 continue
             names = _func_names(func)
             uses_reconstructed = bool({"_get_error_code", "_get_error_dict"} & names)
-            uses_wire = bool(set(_WIRE_REFERENCES) & names) or "result" in names
+            uses_wire = bool(set(_WIRE_REFERENCES) & names) or _uses_ctx_result_subscript(func)
             if uses_reconstructed and not uses_wire:
                 found.add(f"{rel} {func.name}")
     return found
@@ -476,6 +487,38 @@ def test_no_reconstructed_only_error_assertion() -> None:
             "IMPL/no-wire. See then_error.py then_error_code / then_suggestion_contains."
         ),
     )
+
+
+def test_uses_ctx_result_subscript_requires_real_ctx_result_shape() -> None:
+    """Regression guard: a bare local/kwarg/string-literal named ``result`` must NOT count as
+    wire-grounding (salesagent-oyiv.2) — only a genuine ``ctx["result"]``/``ctx.get("result")``
+    read does.
+    """
+
+    def _first_func(source: str) -> ast.FunctionDef:
+        tree = ast.parse(source)
+        return next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef))
+
+    bare_local = _first_func("def then_x(ctx):\n    result = _get_error_code(ctx['error'])\n    assert result == 'X'\n")
+    assert not _uses_ctx_result_subscript(bare_local), (
+        "a local variable merely named 'result' must not satisfy the ctx['result'] wire check"
+    )
+
+    bare_kwarg = _first_func("def then_x(ctx, result='unused'):\n    assert _get_error_code(ctx['error'])\n")
+    assert not _uses_ctx_result_subscript(bare_kwarg), (
+        "a kwarg named 'result' must not satisfy the ctx['result'] wire check"
+    )
+
+    string_literal = _first_func("def then_x(ctx):\n    assert _get_error_code(ctx['error']) == 'result'\n")
+    assert not _uses_ctx_result_subscript(string_literal), (
+        "a string literal 'result' must not satisfy the ctx['result'] wire check"
+    )
+
+    real_subscript = _first_func("def then_x(ctx):\n    ctx['result'].assert_wire_error('X')\n")
+    assert _uses_ctx_result_subscript(real_subscript), "a genuine ctx['result'] subscript must be recognized"
+
+    real_get = _first_func("def then_x(ctx):\n    r = ctx.get('result')\n    r.assert_wire_error('X')\n")
+    assert _uses_ctx_result_subscript(real_get), "a genuine ctx.get('result') read must be recognized"
 
 
 def test_no_typed_payload_package_oracle() -> None:
