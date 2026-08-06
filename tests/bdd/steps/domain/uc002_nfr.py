@@ -15,6 +15,7 @@ import uuid
 
 from pytest_bdd import given, then
 
+from tests.bdd.steps._outcome_helpers import wire_dict
 from tests.bdd.steps.generic._dispatch import dispatch_request
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -360,26 +361,26 @@ def then_response_within_sla(ctx: dict) -> None:
     """
     import pytest
 
-    from src.core.schemas._base import CreateMediaBuySuccess
-
     env = ctx["env"]
 
     # --- Part 1: Verify the original request completed successfully ---
     error = ctx.get("error")
     assert error is None, f"Expected a successful response to verify SLA, got error: {error}"
-    result = ctx.get("response")
-    assert result is not None, "No response recorded — the request did not complete"
-    assert result.status == "success", f"Expected status='success' (full pipeline completed), got '{result.status}'"
-    assert isinstance(result.response, CreateMediaBuySuccess), (
-        f"Expected CreateMediaBuySuccess, got {type(result.response).__name__}"
+    wire = wire_dict(ctx)
+    assert wire.get("status") == "completed", (
+        f"Expected status='completed' (full pipeline completed), got {wire.get('status')!r}"
     )
 
-    # Production-computed: media_buy_id proves the pipeline completed end-to-end
-    assert result.response.media_buy_id, (
+    # Production-computed: media_buy_id proves the pipeline completed end-to-end.
+    # Also proves the success variant (CreateMediaBuySuccess) was returned — a
+    # CreateMediaBuyError/CreateMediaBuySubmitted wire has no media_buy_id/packages
+    # pair, so this is a stronger, content-based replacement for the old
+    # isinstance(result.response, CreateMediaBuySuccess) type check.
+    assert wire.get("media_buy_id"), (
         "media_buy_id is empty — pipeline did not complete (fast error is not SLA compliance)"
     )
     # Production-computed: packages prove adapter + persistence completed
-    assert result.response.packages, "packages list is empty — adapter/persistence did not complete"
+    assert wire.get("packages"), "packages list is empty — adapter/persistence did not complete"
 
     # --- Part 2: Assert no synchronous adapter I/O on request thread ---
     # The controllable latency risk for p95 SLA is synchronous external
