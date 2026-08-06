@@ -27,10 +27,12 @@ from __future__ import annotations
 
 from pytest_bdd import given, then, when
 
-from src.core.schemas import FormatId, ListCreativeFormatsRequest, format_id_identity
-from tests.bdd.steps._outcome_helpers import _require_response
+from src.core.schemas import FormatId, ListCreativeFormatsRequest
+from src.core.schemas._base import canonical_agent_url
+from tests.bdd.steps.domain.uc005_format_id_shape import _serialized_formats
 from tests.bdd.steps.generic.when_request import _call
 from tests.factories import FormatFactory
+from tests.helpers.format_assertions import wire_format_id_identity
 
 # The seller's own creative agent — matches the agent_url the CreativeFormatsEnv
 # mock catalog uses, so a seeded format reads as "hosted by this seller".
@@ -68,20 +70,30 @@ def when_send_list_with_third_party_format_id(ctx: dict) -> None:
     _call(ctx, req=req)
 
 
+def _returned_identities(ctx: dict) -> set[tuple[str, str]]:
+    """Federation identities of every format_id on the real wire."""
+    return {wire_format_id_identity(entry["format_id"]) for entry in _serialized_formats(ctx)}
+
+
+def _expected_third_party_identity(ctx: dict) -> tuple[str, str]:
+    """Federation identity of the third-party format_id the Given step built."""
+    fid = ctx["third_party_format_id"]
+    return (canonical_agent_url(fid.agent_url), fid.id)
+
+
 @then("the seller should NOT fabricate a local format entry to satisfy the third-party reference")
 def then_no_fabricated_local_entry(ctx: dict) -> None:
     """No returned format is the third-party reference, nor a substituted local same-id format."""
-    response = _require_response(ctx)
-    returned = {format_id_identity(f.format_id) for f in response.formats}
+    returned = _returned_identities(ctx)
 
-    third_party = format_id_identity(ctx["third_party_format_id"])
+    third_party = _expected_third_party_identity(ctx)
     assert third_party not in returned, (
         f"seller fabricated a third-party-attributed entry {third_party} it does not host: {returned}"
     )
 
     # Falsifiable core: the seller's own same-id format must NOT be substituted for
     # the foreign reference. id-only matching would surface it here.
-    seller_local = (SELLER_AGENT_URL, ctx["third_party_format_id"].id)
+    seller_local = (canonical_agent_url(SELLER_AGENT_URL), ctx["third_party_format_id"].id)
     assert seller_local not in returned, (
         f"seller substituted its own format {seller_local} for the third-party reference "
         f"{third_party}; the federation filter must match on (agent_url, id), not id alone"
@@ -94,9 +106,8 @@ def then_reported_as_observation(ctx: dict) -> None:
     assert ctx.get("error") is None, (
         f"out-of-scope third-party reference raised an error instead of an observation: {ctx.get('error')!r}"
     )
-    response = _require_response(ctx)
     # The foreign reference resolves to nothing locally — that empty match is the
     # observation (on_out_of_scope: warn), distinct from a graded failure/error.
-    third_party = format_id_identity(ctx["third_party_format_id"])
-    returned = {format_id_identity(f.format_id) for f in response.formats}
+    third_party = _expected_third_party_identity(ctx)
+    returned = _returned_identities(ctx)
     assert third_party not in returned

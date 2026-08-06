@@ -18,7 +18,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require_response
+from tests.bdd.steps._outcome_helpers import wire_list
 from tests.bdd.steps.generic._brand_param import parse_brand_gherkin_param
 from tests.bdd.steps.generic._dispatch import dispatch_typed_or_malformed
 from tests.factories import (
@@ -51,14 +51,13 @@ def _call_get_products(ctx: dict, **kwargs: Any) -> None:
     dispatch_typed_or_malformed(ctx, GetProductsRequest, **kwargs)
 
 
-def _get_first_prop(ctx: dict) -> Any:
-    """Get the inner model of the first publisher_properties entry."""
+def _get_first_prop(ctx: dict) -> dict[str, Any]:
+    """Get the first publisher_properties entry off the real wire."""
     product = ctx["first_product"]
-    pp = product.publisher_properties
+    pp = product.get("publisher_properties")
     assert pp is not None, "publisher_properties is None"
     assert pp, "publisher_properties is empty"
-    inner = pp[0]
-    return inner.root
+    return pp[0]
 
 
 # ── Given steps ─────────────────────────────────────────────────────
@@ -206,15 +205,15 @@ def when_request_products_with_brand(ctx: dict, brand: str) -> None:
 def then_has_products(ctx: dict) -> None:
     """Assert the response has exactly the product created in the Given step."""
     assert "error" not in ctx, f"Request failed: {ctx.get('error')}"
-    response = _require_response(ctx)
+    products = wire_list(ctx, "products")
     expected = ctx["product"]
-    assert response.products is not None, "Response has no products"
-    assert len(response.products) == 1, f"Expected 1 product, got {len(response.products)}"
-    actual = response.products[0]
-    assert actual.product_id == expected.product_id, (
-        f"Expected product_id={expected.product_id!r}, got {actual.product_id!r}"
+    assert products is not None, "Response has no products"
+    assert len(products) == 1, f"Expected 1 product, got {len(products)}"
+    actual = products[0]
+    assert actual["product_id"] == expected.product_id, (
+        f"Expected product_id={expected.product_id!r}, got {actual['product_id']!r}"
     )
-    assert actual.name == expected.name, f"Expected name={expected.name!r}, got {actual.name!r}"
+    assert actual["name"] == expected.name, f"Expected name={expected.name!r}, got {actual['name']!r}"
     ctx["first_product"] = actual
 
 
@@ -236,9 +235,7 @@ def then_rejected_validation_field(ctx: dict, field: str) -> None:
 def then_selection_type(ctx: dict, expected: str) -> None:
     """Assert publisher_properties[0] has the expected selection_type."""
     inner = _get_first_prop(ctx)
-    actual = getattr(inner, "selection_type", None) or (
-        inner.get("selection_type") if isinstance(inner, dict) else None
-    )
+    actual = inner.get("selection_type")
     assert actual == expected, f"Expected selection_type={expected!r}, got {actual!r}"
 
 
@@ -246,9 +243,9 @@ def then_selection_type(ctx: dict, expected: str) -> None:
 def then_has_property_ids(ctx: dict, expected: str) -> None:
     """Assert property_ids contains the expected value."""
     inner = _get_first_prop(ctx)
-    ids = getattr(inner, "property_ids", None) or (inner.get("property_ids") if isinstance(inner, dict) else None)
+    ids = inner.get("property_ids")
     assert ids is not None, "property_ids is None"
-    id_strings = [str(pid.root) if hasattr(pid, "root") else str(pid) for pid in ids]  # noqa: rootmodel
+    id_strings = [str(pid) for pid in ids]
     assert expected in id_strings, f"Expected {expected!r} in property_ids, got {id_strings}"
 
 
@@ -256,9 +253,9 @@ def then_has_property_ids(ctx: dict, expected: str) -> None:
 def then_has_property_tags(ctx: dict, expected: str) -> None:
     """Assert property_tags contains the expected value."""
     inner = _get_first_prop(ctx)
-    tags = getattr(inner, "property_tags", None) or (inner.get("property_tags") if isinstance(inner, dict) else None)
+    tags = inner.get("property_tags")
     assert tags is not None, "property_tags is None"
-    tag_strings = [str(t.root) if hasattr(t, "root") else str(t) for t in tags]  # noqa: rootmodel
+    tag_strings = [str(t) for t in tags]
     assert expected in tag_strings, f"Expected {expected!r} in property_tags, got {tag_strings}"
 
 
@@ -266,7 +263,4 @@ def then_has_property_tags(ctx: dict, expected: str) -> None:
 def then_no_field(ctx: dict, field: str) -> None:
     """Assert publisher_properties[0] does not contain the given field."""
     inner = _get_first_prop(ctx)
-    if isinstance(inner, dict):
-        assert field not in inner, f"Field {field!r} should not be present, got {inner}"
-    else:
-        assert not hasattr(inner, field), f"Field {field!r} should not be present on {type(inner).__name__}"
+    assert field not in inner, f"Field {field!r} should not be present, got {inner}"

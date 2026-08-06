@@ -22,7 +22,7 @@ from typing import Any
 
 from pytest_bdd import then, when
 
-from tests.bdd.steps._outcome_helpers import _require_response, wire_field
+from tests.bdd.steps._outcome_helpers import wire_field
 from tests.helpers.format_assertions import assert_wire_format_id_is_object
 
 
@@ -40,7 +40,7 @@ def _serialized_formats(ctx: dict) -> list[dict[str, Any]]:
 def when_response_returns_non_empty_formats(ctx: dict) -> None:
     # Precondition guard (phrased as a When by the storyboard): the Given's
     # dispatch must have returned a non-empty formats array before shape checks.
-    assert len(_require_response(ctx).formats) >= 1
+    assert len(_serialized_formats(ctx)) >= 1
 
 
 @then("every entry's format_id should be an object carrying both agent_url and id")

@@ -35,3 +35,26 @@ def assert_wire_format_id_is_object(fid: Any) -> None:
     assert isinstance(fid, dict), f"format_id must serialize as an object, got {type(fid).__name__}: {fid!r}"
     assert "agent_url" in fid, f"format_id missing agent_url: {fid!r}"
     assert "id" in fid, f"format_id missing id: {fid!r}"
+
+
+def wire_format_id_identity(fid: Any) -> tuple[str, str]:
+    """Return the federation identity of a serialized wire ``format_id``.
+
+    Wire-side counterpart of :func:`src.core.schemas._base.format_id_identity`,
+    which is duck-typed on ``.agent_url``/``.id`` attributes and cannot accept a
+    wire dict. Asserts the object shape first (:func:`assert_wire_format_id_is_object`),
+    then canonicalizes ``agent_url`` the same way the production identity does —
+    the wire preserves a trailing slash the typed value does not, so a raw
+    ``(fid["agent_url"], fid["id"])`` tuple would never equal the expected
+    identity and any collision falsifier built on it would go permanently green.
+
+    Args:
+        fid: A single ``format_id`` value as it appears on the serialized wire.
+
+    Returns:
+        The ``(canonical agent_url, id)`` identity pair.
+    """
+    assert_wire_format_id_is_object(fid)
+    from src.core.schemas._base import canonical_agent_url
+
+    return (canonical_agent_url(fid["agent_url"]), fid["id"])
