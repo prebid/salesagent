@@ -48,7 +48,9 @@ All three allowlists can only SHRINK. Each entry documents the production gap th
 from __future__ import annotations
 
 import ast
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from tests.unit._architecture_helpers import assert_violations_match_allowlist
 from tests.unit.test_architecture_bdd_no_orphan_ctx_reads import _ORACLE_PREFIXES
@@ -214,15 +216,20 @@ _SHAPE_ATTRS = {
 _WIRE_READER_NAMES = {"_wire_packages", "wire_dict", "wire_field", "wire_packages"}
 
 
-def _is_typed_response_expr(node: ast.expr) -> bool:
-    """``ctx["response"]`` / ``ctx.get("response")`` / ``_require_response(ctx)`` — a direct
-    typed-payload source expression (or an ``or``-chain of these)."""
+def _ctx_key_read_matches(node: ast.expr, predicate: Callable[[Any], bool]) -> bool:
+    """True if ``node`` is ``ctx[<key>]`` or ``ctx.get(<key>)`` and ``predicate(key)`` holds.
+
+    Shared by :func:`_is_typed_response_expr` (``key == "response"``) and the sandbox/array
+    guard's ``_is_cached_typed_source_expr`` (``key in cache_keys``) — both need the identical
+    "is this a ctx-subscript-or-.get read, and does the literal key match?" AST shape, differing
+    only in the predicate applied to the key.
+    """
     if (
         isinstance(node, ast.Subscript)
         and isinstance(node.value, ast.Name)
         and node.value.id == "ctx"
         and isinstance(node.slice, ast.Constant)
-        and node.slice.value == "response"
+        and predicate(node.slice.value)
     ):
         return True
     if isinstance(node, ast.Call):
@@ -234,9 +241,19 @@ def _is_typed_response_expr(node: ast.expr) -> bool:
             and f.value.id == "ctx"
             and node.args
             and isinstance(node.args[0], ast.Constant)
-            and node.args[0].value == "response"
+            and predicate(node.args[0].value)
         ):
             return True
+    return False
+
+
+def _is_typed_response_expr(node: ast.expr) -> bool:
+    """``ctx["response"]`` / ``ctx.get("response")`` / ``_require_response(ctx)`` — a direct
+    typed-payload source expression (or an ``or``-chain of these)."""
+    if _ctx_key_read_matches(node, lambda v: v == "response"):
+        return True
+    if isinstance(node, ast.Call):
+        f = node.func
         if isinstance(f, ast.Name) and f.id == "_require_response":
             return True
     if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):

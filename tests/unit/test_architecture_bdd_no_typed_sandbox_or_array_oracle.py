@@ -76,6 +76,15 @@ def _reads_typed_field(func: ast.FunctionDef | ast.AsyncFunctionDef, typed_vars:
     Deliberately NOT matched: ``isinstance(var, ...)`` / ``var is not None`` — those are
     presence/type-routing checks, not value extraction, and several targets legitimately keep
     a presence guard even after migrating the value read itself.
+
+    Also NOT matched: ``var.get(...)`` (the ``.attr`` name ``"get"``). A ``typed_vars`` name can
+    be ambiguous under the ``typed_cache_keys`` extension — the SAME variable (e.g. ``acct``)
+    holds a typed ``Account``/``SyncResponseAccount`` Pydantic model before migration and a wire
+    ``dict`` after, since the disease and its fix share the identifier. Those models implement no
+    ``.get()`` method (verified: ``hasattr(SyncResponseAccount, "get") is False``), so
+    ``var.get(...)`` can only be the CORRECT post-migration dict read, never a live violation —
+    without this exclusion, migrating ``acct.errors`` to ``acct.get("errors")`` still trips the
+    detector on the unchanged ``ast.Attribute(value=Name(var), attr="get")`` shape.
     """
     for node in wire_discipline._own_nodes(func):
         if (
@@ -87,7 +96,7 @@ def _reads_typed_field(func: ast.FunctionDef | ast.AsyncFunctionDef, typed_vars:
             base = node.args[0]
             if (isinstance(base, ast.Name) and base.id in typed_vars) or wire_discipline._is_typed_response_expr(base):
                 return True
-        if isinstance(node, ast.Attribute):
+        if isinstance(node, ast.Attribute) and node.attr != "get":
             if isinstance(node.value, ast.Name) and node.value.id in typed_vars:
                 return True
             if wire_discipline._is_typed_response_expr(node.value):
@@ -95,7 +104,96 @@ def _reads_typed_field(func: ast.FunctionDef | ast.AsyncFunctionDef, typed_vars:
     return False
 
 
-def find_typed_field_violations(target_funcs: dict[str, tuple[str, ...]]) -> set[str]:
+def _is_cached_typed_source_expr(node: ast.expr, cache_keys: frozenset[str]) -> bool:
+    """``ctx.get(<key>)`` / ``ctx[<key>]`` for one of ``cache_keys`` (optionally 'or'-chained
+    with a ``wire_discipline``-recognized typed-response expression) — the disease's OTHER
+    typed source: a value CACHED from the typed payload by an earlier producer ``@then`` step
+    (e.g. uc011's ``ctx["last_account"]``), not read directly off ``ctx["response"]``.
+
+    Opt-in via ``cache_keys`` (empty by default) so this stays inert for guards with no such
+    cache — the 2 existing sibling guards never pass a non-empty set, so their behavior is
+    unchanged. Narrow and per-guard-scoped deliberately: ``wire_discipline._is_typed_response_expr``
+    stays generic (``ctx["response"]``-family only); a UC-specific cache key name has no
+    business widening that shared cross-guard helper.
+    """
+    if not cache_keys:
+        return False
+    if wire_discipline._ctx_key_read_matches(node, lambda v: v in cache_keys):
+        return True
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+        return any(
+            _is_cached_typed_source_expr(v, cache_keys) or wire_discipline._is_typed_response_expr(v)
+            for v in node.values
+        )
+    return False
+
+
+def _typed_source_var_names_extended(
+    func: ast.FunctionDef | ast.AsyncFunctionDef, cache_keys: frozenset[str]
+) -> set[str]:
+    """``wire_discipline._typed_source_var_names``, extended to also recognize a value cached
+    from the typed payload under one of ``cache_keys`` — covers both the bare cache read
+    (``acct = ctx.get("last_account")``) and the producer-fallback idiom
+    (``acct = ctx.get("last_account") or _require_response(ctx).accounts[0]``), since
+    ``_is_cached_typed_source_expr`` handles the 'or'-chain itself.
+    """
+    names = set(wire_discipline._typed_source_var_names(func))
+    for node in wire_discipline._own_nodes(func):
+        if isinstance(node, ast.Assign) and _is_cached_typed_source_expr(node.value, cache_keys):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    names.add(t.id)
+        if (
+            isinstance(node, ast.NamedExpr)
+            and _is_cached_typed_source_expr(node.value, cache_keys)
+            and isinstance(node.target, ast.Name)
+        ):
+            names.add(node.target.id)
+    return names
+
+
+def _vars_from_typed_walker_calls(
+    func: ast.FunctionDef | ast.AsyncFunctionDef,
+    typed_vars: set[str],
+    walker_helpers: frozenset[str],
+) -> set[str]:
+    """Local names assigned from calling a known typed-walker helper on an already-typed
+    argument — e.g. ``acct = _find_account_by_brand(resp, domain)`` where ``resp`` is itself
+    typed. Mirrors ``wire_discipline._typed_walker_names``' behavioral taint-following (Check
+    C's mechanism for the identical indirection problem), but keyed on an explicit,
+    per-guard-supplied helper-name set rather than reproducing the full SHAPE_ATTRS-driven
+    walk — the helpers this guard needs to see through (e.g. uc011's own
+    ``_find_account_by_brand``) read arbitrary per-domain field names, not a fixed shape set.
+    """
+    found: set[str] = set()
+    if not walker_helpers:
+        return found
+    for node in wire_discipline._own_nodes(func):
+        if not isinstance(node, ast.Assign):
+            continue
+        call = node.value
+        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id in walker_helpers):
+            continue
+        if not call.args:
+            continue
+        first_arg = call.args[0]
+        arg_is_typed = (
+            isinstance(first_arg, ast.Name) and first_arg.id in typed_vars
+        ) or wire_discipline._is_typed_response_expr(first_arg)
+        if not arg_is_typed:
+            continue
+        for t in node.targets:
+            if isinstance(t, ast.Name):
+                found.add(t.id)
+    return found
+
+
+def find_typed_field_violations(
+    target_funcs: dict[str, tuple[str, ...]],
+    *,
+    typed_cache_keys: frozenset[str] = frozenset(),
+    typed_walker_helpers: frozenset[str] = frozenset(),
+) -> set[str]:
     """Shared scan for function-name-allowlist-style typed-payload-oracle guards.
 
     For each ``(rel path, func names)`` pair, parse the file, find each named function, and
@@ -103,6 +201,14 @@ def find_typed_field_violations(target_funcs: dict[str, tuple[str, ...]]) -> set
     Reused by sibling guards scoped to a different fixed function list (e.g.
     ``test_architecture_bdd_no_typed_status_oracle.py``) so the scan loop itself — not just the
     field-read detector — has one implementation.
+
+    ``typed_cache_keys`` / ``typed_walker_helpers`` are opt-in extensions (both default to an
+    empty set, so the 2 pre-existing sibling guards are unaffected): the former recognizes a
+    value CACHED from the typed payload under a named ``ctx`` key (e.g. ``ctx["last_account"]``,
+    populated by an earlier producer step); the latter recognizes a typed-sourced argument
+    passed through a named helper function (e.g. ``_find_account_by_brand(resp, ...)``) as
+    itself producing a typed-sourced local. Both close detection gaps ``_reads_typed_field``
+    alone cannot see, since it only inspects a single function's own body syntactically.
     """
     found: set[str] = set()
     for rel, func_names in target_funcs.items():
@@ -115,7 +221,8 @@ def find_typed_field_violations(target_funcs: dict[str, tuple[str, ...]]) -> set
                 f"{rel}::{func_name} not found in the tree — target function was renamed, "
                 "moved, or deleted. Update the guard's target-funcs mapping to match."
             )
-            typed_vars = wire_discipline._typed_source_var_names(func)
+            typed_vars = _typed_source_var_names_extended(func, typed_cache_keys)
+            typed_vars |= _vars_from_typed_walker_calls(func, typed_vars, typed_walker_helpers)
             if typed_vars and _reads_typed_field(func, typed_vars):
                 found.add(f"{rel} {func_name}")
     return found

@@ -72,11 +72,6 @@ def _status_str(status: Any) -> str:
     return status.value if hasattr(status, "value") else str(status)
 
 
-def _action_str(action: Any) -> str:
-    """Extract string value from Action enum or return as-is."""
-    return action.value if hasattr(action, "value") else str(action)
-
-
 def _wire_accounts(ctx: dict) -> list[dict[str, Any]]:
     """Return the ``accounts`` array as the buyer sees it on the wire.
 
@@ -1583,20 +1578,19 @@ def then_webhook_registered(ctx: dict) -> None:
     assert ctx.get("error") is None, (
         f"Sync request failed — webhook registration requires successful sync, got error: {ctx.get('error')}"
     )
-    resp = ctx.get("response")
-    assert resp is not None, "Expected sync response for webhook registration check"
-    assert isinstance(resp.accounts, list), f"Expected accounts list, got {type(resp.accounts)}"
+    assert ctx.get("response") is not None, "Expected sync response for webhook registration check"
+    accounts = _wire_accounts(ctx)
     # Verify the sync produced accounts with seller-assigned IDs
-    first_acct = resp.accounts[0] if resp.accounts else None
-    assert first_acct is not None and isinstance(first_acct.account_id, str), (
+    first_acct = accounts[0] if accounts else None
+    assert first_acct is not None and isinstance(first_acct.get("account_id"), str), (
         "Expected sync to produce at least one account with a seller-assigned account_id"
     )
-    for acct in resp.accounts:
-        assert acct.account_id is not None and isinstance(acct.account_id, str), (
+    for acct in accounts:
+        assert acct.get("account_id") is not None and isinstance(acct["account_id"], str), (
             f"Account missing seller-assigned account_id: {acct}"
         )
-        assert _action_str(acct.action) in ("created", "updated", "unchanged"), (
-            f"Account has unexpected action '{_action_str(acct.action)}' — "
+        assert acct.get("action") in ("created", "updated", "unchanged"), (
+            f"Account has unexpected action '{acct.get('action')}' — "
             f"webhook registration requires successful account processing"
         )
     # Verify the request actually carried push_notification_config (distinguishes
@@ -1625,28 +1619,26 @@ def then_account_transitions(ctx: dict, from_status: str, to_status: str) -> Non
     """
     import pytest
 
-    resp = ctx.get("response")
-    assert resp is not None, "Expected sync response before checking transitions"
-    assert isinstance(resp.accounts, list), f"Expected accounts list, got {type(resp.accounts)}"
+    assert ctx.get("response") is not None, "Expected sync response before checking transitions"
+    accounts = _wire_accounts(ctx)
     # The account's current status must match the expected from_status
-    acct = ctx.get("last_account") or (resp.accounts[0] if resp.accounts else None)
+    acct = ctx.get("last_account") or (accounts[0] if accounts else None)
     assert acct is not None, "Expected at least one account in sync response"
-    actual_status = _status_str(acct.status)
+    actual_status = acct.get("status")
     assert actual_status == from_status, (
         f"Expected account status '{from_status}' as transition source, got '{actual_status}'"
     )
     # Verify the account has an account_id assigned by the seller
-    assert acct.account_id is not None and isinstance(acct.account_id, str), (
-        f"Account missing seller-assigned account_id: {acct}"
-    )
+    account_id = acct.get("account_id")
+    assert account_id is not None and isinstance(account_id, str), f"Account missing seller-assigned account_id: {acct}"
     # Record the transition expectation for the downstream push notification step
     ctx["expected_transition"] = (from_status, to_status)
-    ctx["transition_account_id"] = acct.account_id
+    ctx["transition_account_id"] = account_id
     # xfail: production does not yet implement the actual status transition
     # (the account remains in from_status; the to_status is never applied)
     pytest.xfail(
         "SPEC-PRODUCTION GAP: async account status transition not yet implemented — "
-        f"account {acct.account_id} remains in '{from_status}', expected '{to_status}'"
+        f"account {account_id} remains in '{from_status}', expected '{to_status}'"
     )
 
 
@@ -1663,12 +1655,11 @@ def then_push_sent(ctx: dict, url: str) -> None:
     import pytest
 
     # Assert the sync produced accounts that could trigger a push
-    resp = ctx.get("response")
-    assert resp is not None, "Expected sync response before push notification"
-    assert isinstance(resp.accounts, list), f"Expected accounts list, got {type(resp.accounts)}"
+    assert ctx.get("response") is not None, "Expected sync response before push notification"
+    accounts = _wire_accounts(ctx)
     # Verify at least one account was produced with a seller-assigned ID
-    first_acct = resp.accounts[0] if resp.accounts else None
-    assert first_acct is not None and isinstance(first_acct.account_id, str), (
+    first_acct = accounts[0] if accounts else None
+    assert first_acct is not None and isinstance(first_acct.get("account_id"), str), (
         "Expected at least one account with a seller-assigned account_id before push"
     )
     # Assert the transition was recorded by the preceding transition step
