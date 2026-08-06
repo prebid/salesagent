@@ -16,7 +16,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require, _require_response, wire_dict, wire_field, wire_list
+from tests.bdd.steps._outcome_helpers import _require, wire_dict, wire_field, wire_list
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 from tests.helpers import assert_envelope_shape
@@ -77,15 +77,6 @@ def _action_str(action: Any) -> str:
     return action.value if hasattr(action, "value") else str(action)
 
 
-def _brand_id_str(bid: Any) -> str | None:
-    """Extract string value from BrandId (RootModel[str]) or return as-is."""
-    if bid is None:
-        return None
-    if isinstance(bid, str):
-        return bid
-    return str(bid.root)
-
-
 def _wire_accounts(ctx: dict) -> list[dict[str, Any]]:
     """Return the ``accounts`` array as the buyer sees it on the wire.
 
@@ -97,19 +88,34 @@ def _wire_accounts(ctx: dict) -> list[dict[str, Any]]:
     return wire_list(ctx, "accounts")
 
 
-def _find_account_by_brand(resp: Any, domain: str, brand_id: str | None = None) -> Any:
-    """Find an account in sync response by brand domain (and optional brand_id)."""
-    for acct in resp.accounts:
-        if acct.brand.domain != domain:
+def _find_wire_account_by_brand(
+    accounts: list[dict[str, Any]], domain: str, brand_id: str | None = None
+) -> dict[str, Any]:
+    """Find a wire-account dict by brand domain (and optional brand_id).
+
+    A brand_id is already a plain string on the wire (BrandId is a RootModel[str] serialized
+    to its bare value), so no separate unwrap helper is needed here.
+    """
+    for acct in accounts:
+        brand = acct.get("brand") or {}
+        if brand.get("domain") != domain:
             continue
-        if brand_id is not None:
-            acct_bid = _brand_id_str(getattr(acct.brand, "brand_id", None))
-            if acct_bid != brand_id:
-                continue
+        if brand_id is not None and brand.get("brand_id") != brand_id:
+            continue
         return acct
-    domains = [a.brand.domain for a in resp.accounts]
+    domains = [(a.get("brand") or {}).get("domain") for a in accounts]
     suffix = f" and brand_id '{brand_id}'" if brand_id else ""
     raise AssertionError(f"No account found for domain '{domain}'{suffix}. Available: {domains}")
+
+
+def _last_wire_account(ctx: dict) -> dict[str, Any]:
+    """Return the last-referenced account as a wire dict.
+
+    Wire-reading twin of the ``ctx.get("last_account") or _require_response(ctx).accounts[0]``
+    idiom: ``ctx["last_account"]`` is populated by an earlier producer ``@then`` step (already a
+    wire dict once that producer is migrated); absent that, falls back to the first wire account.
+    """
+    return ctx.get("last_account") or _wire_accounts(ctx)[0]
 
 
 def _make_governance_agent(
@@ -968,9 +974,8 @@ def then_success_with_accounts(ctx: dict) -> None:
 )
 def then_account_action_with_brand_id(ctx: dict, domain: str, bid: str, action: str) -> None:
     """Assert a specific account (by domain + brand_id) has the expected action."""
-    resp = _require_response(ctx)
-    acct = _find_account_by_brand(resp, domain, brand_id=bid)
-    actual = _action_str(acct.action)
+    acct = _find_wire_account_by_brand(_wire_accounts(ctx), domain, brand_id=bid)
+    actual = acct.get("action")
     assert actual == action, f"Expected action '{action}' for {domain}:{bid}, got '{actual}'"
     ctx["last_account"] = acct
 
@@ -978,9 +983,8 @@ def then_account_action_with_brand_id(ctx: dict, domain: str, bid: str, action: 
 @then(parsers.re(r'the account for brand domain "(?P<domain>[^"]+)" has action "(?P<action>[^"]+)"'))
 def then_account_action(ctx: dict, domain: str, action: str) -> None:
     """Assert a specific account has the expected action."""
-    resp = _require_response(ctx)
-    acct = _find_account_by_brand(resp, domain)
-    actual = _action_str(acct.action)
+    acct = _find_wire_account_by_brand(_wire_accounts(ctx), domain)
+    actual = acct.get("action")
     assert actual == action, f"Expected action '{action}' for {domain}, got '{actual}'"
     ctx["last_account"] = acct
 
@@ -988,8 +992,8 @@ def then_account_action(ctx: dict, domain: str, action: str) -> None:
 @then("the account has a seller-assigned account_id")
 def then_account_has_id(ctx: dict) -> None:
     """Assert the last referenced account has a seller-assigned account_id."""
-    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
-    account_id = getattr(acct, "account_id", None)
+    acct = _last_wire_account(ctx)
+    account_id = acct.get("account_id")
     assert account_id is not None and isinstance(account_id, str) and len(account_id) > 0, (
         f"Account missing non-empty seller-assigned account_id: {acct}"
     )
@@ -998,8 +1002,8 @@ def then_account_has_id(ctx: dict) -> None:
 @then(parsers.parse('the account has status "{status}"'))
 def then_account_status(ctx: dict, status: str) -> None:
     """Assert the last referenced account has the expected status."""
-    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
-    actual = _status_str(acct.status)
+    acct = _last_wire_account(ctx)
+    actual = acct.get("status")
     assert actual == status, f"Expected status '{status}', got '{actual}'"
 
 
@@ -1013,17 +1017,17 @@ def then_account_action_generic(ctx: dict, action: str) -> None:
     """
     if action == "failed" and ctx.get("error") is not None and ctx.get("response") is None:
         return  # Request-level validation error ≡ per-account failure
-    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
-    actual = _action_str(acct.action)
+    acct = _last_wire_account(ctx)
+    actual = acct.get("action")
     assert actual == action, f"Expected action '{action}', got '{actual}'"
 
 
 @then(parsers.parse('the response includes brand domain "{domain}" echoed from request'))
 def then_brand_echoed(ctx: dict, domain: str) -> None:
     """Assert the response echoes the brand domain from the request."""
-    resp = _require_response(ctx)
-    acct = _find_account_by_brand(resp, domain)
-    assert acct.brand.domain == domain, f"Expected brand domain '{domain}', got '{acct.brand.domain}'"
+    acct = _find_wire_account_by_brand(_wire_accounts(ctx), domain)
+    actual_domain = (acct.get("brand") or {}).get("domain")
+    assert actual_domain == domain, f"Expected brand domain '{domain}', got '{actual_domain}'"
 
 
 @then(parsers.parse("the response contains {count:d} account results"))
@@ -1049,27 +1053,26 @@ def then_all_accounts_echo_brand(ctx: dict) -> None:
 @then(parsers.parse('the account operator is "{operator}"'))
 def then_account_operator(ctx: dict, operator: str) -> None:
     """Assert the last referenced account has the expected operator."""
-    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
-    actual = acct.operator
+    acct = _last_wire_account(ctx)
+    actual = acct.get("operator")
     assert actual == operator, f"Expected operator '{operator}', got '{actual}'"
 
 
 @then(parsers.parse('the account billing is "{billing}"'))
 def then_account_billing(ctx: dict, billing: str) -> None:
     """Assert the last referenced account has the expected billing model."""
-    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
-    actual = _status_str(acct.billing) if acct.billing else None
+    acct = _last_wire_account(ctx)
+    actual = acct.get("billing")
     assert actual == billing, f"Expected billing '{billing}', got '{actual}'"
 
 
 @then(parsers.parse('the per-account result echoes brand domain "{domain}" and brand_id "{bid}"'))
 def then_per_account_brand_echo(ctx: dict, domain: str, bid: str) -> None:
     """Assert a per-account result echoes the exact brand domain and brand_id."""
-    resp = _require_response(ctx)
-    acct = _find_account_by_brand(resp, domain, brand_id=bid)
-    acct_bid = _brand_id_str(getattr(acct.brand, "brand_id", None))
-    assert acct.brand.domain == domain, f"Expected brand domain '{domain}', got '{acct.brand.domain}'"
-    assert acct_bid == bid, f"Expected brand_id '{bid}', got '{acct_bid}'"
+    acct = _find_wire_account_by_brand(_wire_accounts(ctx), domain, brand_id=bid)
+    brand = acct.get("brand") or {}
+    assert brand.get("domain") == domain, f"Expected brand domain '{domain}', got '{brand.get('domain')}'"
+    assert brand.get("brand_id") == bid, f"Expected brand_id '{bid}', got '{brand.get('brand_id')}'"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1204,8 +1207,8 @@ def then_error_has_suggestion(ctx: dict) -> None:
     """
     # Check per-account error suggestion first
     acct = ctx.get("last_account")
-    if acct is not None and acct.errors:
-        has_suggestion = any(getattr(e, "suggestion", None) for e in acct.errors)
+    if acct is not None and acct.get("errors"):
+        has_suggestion = any(e.get("suggestion") for e in acct["errors"])
         if has_suggestion:
             return
     # Fall back to operation-level exception
@@ -1419,12 +1422,12 @@ def then_failed_has_errors(ctx: dict) -> None:
     """Assert the last referenced (failed) account has a non-empty errors array."""
     acct = ctx.get("last_account")
     assert acct is not None, "No account referenced — need a prior 'account for brand domain' step"
-    errors = acct.errors
+    errors = acct.get("errors")
     assert errors is not None, "Expected errors array on failed account, got None"
     # Verify each error has required fields (code + message)
     for err in errors:
-        assert err.code, f"Per-account error missing code: {err}"
-        assert err.message, f"Per-account error missing message: {err}"
+        assert err.get("code"), f"Per-account error missing code: {err}"
+        assert err.get("message"), f"Per-account error missing message: {err}"
 
 
 @then("the response does not contain an operation-level errors field")
@@ -1438,8 +1441,9 @@ def then_per_account_error_code(ctx: dict, code: str) -> None:
     """Assert the failed account's errors contain a specific error code."""
     acct = ctx.get("last_account")
     assert acct is not None, "No account referenced"
-    assert acct.errors is not None, "No errors on account"
-    codes = [e.code for e in acct.errors]
+    errors = acct.get("errors")
+    assert errors is not None, "No errors on account"
+    codes = [e.get("code") for e in errors]
     assert code in codes, f"Expected error code '{code}' in {codes}"
 
 
@@ -1447,11 +1451,12 @@ def then_per_account_error_code(ctx: dict, code: str) -> None:
 def then_billing_error_message(ctx: dict) -> None:
     """Assert the billing error has an explanatory message."""
     acct = ctx.get("last_account")
-    assert acct is not None and acct.errors, "No account errors"
-    billing_err = next((e for e in acct.errors if e.code == "BILLING_NOT_SUPPORTED"), None)
+    assert acct is not None and acct.get("errors"), "No account errors"
+    billing_err = next((e for e in acct["errors"] if e.get("code") == "BILLING_NOT_SUPPORTED"), None)
     assert billing_err is not None, "No BILLING_NOT_SUPPORTED error found"
-    assert "billing" in billing_err.message.lower() or "supported" in billing_err.message.lower(), (
-        f"Expected billing-related message, got: {billing_err.message}"
+    message = billing_err.get("message") or ""
+    assert "billing" in message.lower() or "supported" in message.lower(), (
+        f"Expected billing-related message, got: {message}"
     )
 
 
@@ -1460,10 +1465,11 @@ def then_failed_status_with_error(ctx: dict, status: str, code: str) -> None:
     """Assert the last failed account has given status and error code."""
     acct = ctx.get("last_account")
     assert acct is not None, "No account referenced"
-    actual_status = _status_str(acct.status)
+    actual_status = acct.get("status")
     assert actual_status == status, f"Expected status '{status}', got '{actual_status}'"
-    assert acct.errors is not None, "Expected errors on failed account"
-    codes = [e.code for e in acct.errors]
+    errors = acct.get("errors")
+    assert errors is not None, "Expected errors on failed account"
+    codes = [e.get("code") for e in errors]
     assert code in codes, f"Expected error code '{code}' in {codes}"
 
 
@@ -1497,55 +1503,60 @@ def then_field_validation_error(ctx: dict, field: str) -> None:
 @then("the account includes a setup object")
 def then_has_setup(ctx: dict) -> None:
     """Assert the account has a non-null setup object."""
-    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
-    assert acct.setup is not None, "Expected setup object, got None"
+    acct = _last_wire_account(ctx)
+    assert acct.get("setup") is not None, "Expected setup object, got None"
 
 
 @then("the setup object includes a message describing the required action")
 def then_setup_has_message(ctx: dict) -> None:
     """Assert the setup object has a descriptive message."""
-    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
-    assert acct.setup is not None, "No setup object"
-    assert acct.setup.message, f"Expected message in setup, got: {acct.setup.message}"
+    acct = _last_wire_account(ctx)
+    setup = acct.get("setup")
+    assert setup is not None, "No setup object"
+    assert setup.get("message"), f"Expected message in setup, got: {setup.get('message')}"
 
 
 @then("the setup object includes a message")
 def then_setup_message_present(ctx: dict) -> None:
     """Assert the setup object has a message (any content)."""
-    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
-    assert acct.setup is not None, "No setup object"
-    assert acct.setup.message, "Setup message is empty"
+    acct = _last_wire_account(ctx)
+    setup = acct.get("setup")
+    assert setup is not None, "No setup object"
+    assert setup.get("message"), "Setup message is empty"
 
 
 @then("the setup object includes a URL for the human buyer")
 def then_setup_has_url(ctx: dict) -> None:
     """Assert the setup object has a URL."""
-    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
-    assert acct.setup is not None, "No setup object"
-    assert acct.setup.url is not None, "Expected URL in setup, got None"
+    acct = _last_wire_account(ctx)
+    setup = acct.get("setup")
+    assert setup is not None, "No setup object"
+    assert setup.get("url") is not None, "Expected URL in setup, got None"
 
 
 @then("the setup object includes an expires_at timestamp")
 def then_setup_has_expires(ctx: dict) -> None:
     """Assert the setup object has an expires_at timestamp."""
-    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
-    assert acct.setup is not None, "No setup object"
-    assert acct.setup.expires_at is not None, "Expected expires_at in setup"
+    acct = _last_wire_account(ctx)
+    setup = acct.get("setup")
+    assert setup is not None, "No setup object"
+    assert setup.get("expires_at") is not None, "Expected expires_at in setup"
 
 
 @then("the setup object does not include a URL")
 def then_setup_no_url(ctx: dict) -> None:
     """Assert the setup object has no URL."""
-    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
-    assert acct.setup is not None, "No setup object"
-    assert acct.setup.url is None, f"Expected no URL in setup, got {acct.setup.url}"
+    acct = _last_wire_account(ctx)
+    setup = acct.get("setup")
+    assert setup is not None, "No setup object"
+    assert setup.get("url") is None, f"Expected no URL in setup, got {setup.get('url')}"
 
 
 @then("the account does not include a setup object")
 def then_no_setup(ctx: dict) -> None:
     """Assert the account has no setup object."""
-    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
-    assert acct.setup is None, f"Expected no setup, got {acct.setup}"
+    acct = _last_wire_account(ctx)
+    assert acct.get("setup") is None, f"Expected no setup, got {acct.get('setup')}"
 
 
 # ── Push notification steps (registration only) ──────────────────────
@@ -1873,9 +1884,8 @@ def then_no_dry_run_include(ctx: dict) -> None:
 @then(parsers.parse('the account for brand domain "{domain}" shows action "{action}"'))
 def then_account_shows_action(ctx: dict, domain: str, action: str) -> None:
     """Assert account has expected action (alias for 'has action')."""
-    resp = _require_response(ctx)
-    acct = _find_account_by_brand(resp, domain)
-    actual = _action_str(acct.action)
+    acct = _find_wire_account_by_brand(_wire_accounts(ctx), domain)
+    actual = acct.get("action")
     assert actual == action, f"Expected action '{action}' for {domain}, got '{actual}'"
     ctx["last_account"] = acct
 
@@ -1922,10 +1932,9 @@ def then_deactivation_result(ctx: dict, domain: str) -> None:
     Production code (BR-RULE-061) sets action='updated' and status='closed'
     for accounts removed by delete_missing.
     """
-    resp = _require_response(ctx)
-    acct = _find_account_by_brand(resp, domain)
-    actual_status = _status_str(acct.status)
-    actual_action = _action_str(acct.action)
+    acct = _find_wire_account_by_brand(_wire_accounts(ctx), domain)
+    actual_status = acct.get("status")
+    actual_action = acct.get("action")
     assert actual_status == "closed", f"Expected status 'closed' for deactivated {domain}, got '{actual_status}'"
     assert actual_action == "updated", f"Expected action 'updated' for deactivated {domain}, got '{actual_action}'"
 
@@ -1933,9 +1942,8 @@ def then_deactivation_result(ctx: dict, domain: str) -> None:
 @then(parsers.parse('the account for brand domain "{domain}" has action "unchanged" or "updated"'))
 def then_account_unchanged_or_updated(ctx: dict, domain: str) -> None:
     """Assert account has action 'unchanged' or 'updated' (either is acceptable)."""
-    resp = _require_response(ctx)
-    acct = _find_account_by_brand(resp, domain)
-    actual = _action_str(acct.action)
+    acct = _find_wire_account_by_brand(_wire_accounts(ctx), domain)
+    actual = acct.get("action")
     assert actual in ("unchanged", "updated"), f"Expected 'unchanged' or 'updated' for {domain}, got '{actual}'"
     ctx["last_account"] = acct
 
@@ -2029,9 +2037,8 @@ def then_no_deactivations(ctx: dict) -> None:
 @then(parsers.parse('the account for brand domain "{domain}" is processed normally'))
 def then_account_processed_normally(ctx: dict, domain: str) -> None:
     """Assert the account was processed (action is created/updated/unchanged, not failed)."""
-    resp = _require_response(ctx)
-    acct = _find_account_by_brand(resp, domain)
-    actual = _action_str(acct.action)
+    acct = _find_wire_account_by_brand(_wire_accounts(ctx), domain)
+    actual = acct.get("action")
     assert actual in ("created", "updated", "unchanged"), (
         f"Expected normal processing for {domain}, got action '{actual}'"
     )
@@ -2362,17 +2369,16 @@ def then_operator_required_error(ctx: dict) -> None:
 @then("the provisioned account should have sandbox equals true")
 def then_account_sandbox_true(ctx: dict) -> None:
     """Assert the provisioned account has sandbox=True."""
-    resp = _require_response(ctx)
-    acct = resp.accounts[0]
-    assert acct.sandbox is True, f"Expected sandbox=True, got {acct.sandbox}"
+    acct = _wire_accounts(ctx)[0]
+    assert acct.get("sandbox") is True, f"Expected sandbox=True, got {acct.get('sandbox')}"
     ctx["last_account"] = acct
 
 
 @then("the account should have a seller-assigned account_id")
 def then_sandbox_account_has_id(ctx: dict) -> None:
     """Assert the account has a seller-assigned account_id."""
-    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
-    account_id = getattr(acct, "account_id", None)
+    acct = _last_wire_account(ctx)
+    account_id = acct.get("account_id")
     assert account_id is not None, f"Account missing seller-assigned account_id: {acct}"
 
 
@@ -2387,8 +2393,8 @@ def then_no_real_platform_account(ctx: dict) -> None:
     from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
 
-    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
-    account_id = acct.account_id
+    acct = _last_wire_account(ctx)
+    account_id = acct.get("account_id")
     assert account_id is not None, "Account missing account_id"
 
     tenant = ctx["tenant"]
@@ -2776,7 +2782,8 @@ def then_db_field_unchanged(ctx: dict, field: str) -> None:
     with get_db_session() as session:
         repo = AccountRepository(session, tenant.tenant_id)
         # Find by brand domain from the last_account
-        domain = acct.brand.domain if hasattr(acct.brand, "domain") else str(acct.brand)
+        brand = acct.get("brand") or {}
+        domain = brand.get("domain") or str(brand)
         db_acct = repo.get_by_natural_key(operator=domain, brand_domain=domain)
         assert db_acct is not None, f"Account for {domain} not found in DB"
         db_val = getattr(db_acct, field, None)
