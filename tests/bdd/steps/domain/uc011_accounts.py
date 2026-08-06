@@ -16,7 +16,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require, _require_response
+from tests.bdd.steps._outcome_helpers import _require, _require_response, wire_dict, wire_field, wire_list
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 from tests.helpers import assert_envelope_shape
@@ -84,6 +84,17 @@ def _brand_id_str(bid: Any) -> str | None:
     if isinstance(bid, str):
         return bid
     return str(bid.root)
+
+
+def _wire_accounts(ctx: dict) -> list[dict[str, Any]]:
+    """Return the ``accounts`` array as the buyer sees it on the wire.
+
+    Shared by every account oracle that iterates/counts the response's accounts —
+    the wire-reading counterpart of ``resp.accounts`` (see tests/CLAUDE.md's Error
+    Verification Policy: grade what production put on the wire, not the
+    harness-reconstructed typed payload).
+    """
+    return wire_list(ctx, "accounts")
 
 
 def _find_account_by_brand(resp: Any, domain: str, brand_id: str | None = None) -> Any:
@@ -434,8 +445,8 @@ def when_list_accounts_with_cursor(ctx: dict) -> None:
 
     from src.core.schemas.account import ListAccountsRequest
 
-    prev_response = _require_response(ctx)
-    cursor = prev_response.pagination.cursor
+    pagination = wire_dict(ctx).get("pagination") or {}
+    cursor = pagination.get("cursor")
     # Page with the SAME size the scenario requested. A literal default here silently
     # re-pages at 50 regardless of what the scenario set up, so the continuation would
     # not be testing continuity at all (GH #1749).
@@ -500,9 +511,7 @@ def when_list_sandbox_filter(ctx: dict, value: str) -> None:
 @then(parsers.parse("the response contains an accounts array with {count:d} items"))
 def then_accounts_array_count(ctx: dict, count: int) -> None:
     """Assert the response accounts array has the expected count."""
-    resp = _require_response(ctx)
-    assert resp is not None, "Expected a response"
-    accounts = resp.accounts  # AttributeError if field missing
+    accounts = _wire_accounts(ctx)
     assert len(accounts) == count, f"Expected {count} accounts, got {len(accounts)}"
 
 
@@ -514,25 +523,29 @@ def then_accounts_have_fields(ctx: dict) -> None:
     values tracked in ctx. Optional fields (advertiser, rate_card, payment_terms)
     must be present in the schema so callers can read them.
     """
-    resp = _require_response(ctx)
+    from src.core.schemas.account import Account
+
+    accounts = _wire_accounts(ctx)
     expected_ids = ctx.get("expected_account_ids", set())
     assert expected_ids, "Test setup error: no expected_account_ids tracked by Given steps"
-    returned_ids = {acct.account_id for acct in resp.accounts}
+    returned_ids = {acct["account_id"] for acct in accounts}
     assert returned_ids == expected_ids, f"Returned account_ids {returned_ids} != expected {expected_ids}"
-    for acct in resp.accounts:
+    for acct in accounts:
         # Required fields — verify values match factory defaults
-        assert acct.account_id in expected_ids, f"Unexpected account_id: {acct.account_id}"
-        assert isinstance(acct.name, str) and acct.name, f"Account {acct.account_id} has empty name"
-        actual_status = _status_str(acct.status)
+        assert acct["account_id"] in expected_ids, f"Unexpected account_id: {acct['account_id']}"
+        assert isinstance(acct.get("name"), str) and acct["name"], f"Account {acct['account_id']} has empty name"
+        actual_status = acct.get("status")
         assert actual_status in ctx.get("created_statuses", set()), (
-            f"Account {acct.account_id} status '{actual_status}' not in seeded statuses {ctx.get('created_statuses')}"
+            f"Account {acct['account_id']} status '{actual_status}' not in seeded statuses "
+            f"{ctx.get('created_statuses')}"
         )
         # Optional fields — schema must expose them (POST-S3 compliance).
         # These fields are None when not set, but the schema must declare them
-        # so callers can read the field even when the value is None.
-        fields = type(acct).model_fields
+        # so callers can read the field even when the value is None. This checks the
+        # SCHEMA's declared fields, not wire content, so it reads the type directly.
+        fields = Account.model_fields
         for field_name in ("advertiser", "rate_card", "payment_terms"):
-            assert field_name in fields, f"Account {acct.account_id} schema missing optional field '{field_name}'"
+            assert field_name in fields, f"Account {acct['account_id']} schema missing optional field '{field_name}'"
 
 
 @then("the accounts are only those accessible to the authenticated agent")
@@ -542,11 +555,9 @@ def then_accounts_are_agent_scoped(ctx: dict) -> None:
     Compares returned account_ids against the set created by Given steps
     (tracked in ctx["expected_account_ids"]).
     """
-    resp = _require_response(ctx)
-    assert resp is not None, "Expected a response"
     expected_ids = ctx.get("expected_account_ids", set())
     assert expected_ids, "Test setup error: no expected_account_ids tracked by Given steps"
-    returned_ids = {acct.account_id for acct in resp.accounts}
+    returned_ids = {acct["account_id"] for acct in _wire_accounts(ctx)}
     assert returned_ids == expected_ids, (
         f"Scoping mismatch: returned {returned_ids}, expected {expected_ids}. "
         f"Extra: {returned_ids - expected_ids}, Missing: {expected_ids - returned_ids}"
@@ -556,10 +567,8 @@ def then_accounts_are_agent_scoped(ctx: dict) -> None:
 @then(parsers.parse('the response contains only accounts with status "{status}"'))
 def then_only_status(ctx: dict, status: str) -> None:
     """Assert all returned accounts have the expected status (vacuously true if empty)."""
-    resp = _require_response(ctx)
-    assert resp is not None, "Expected a response"
-    for acct in resp.accounts:
-        actual = _status_str(acct.status)
+    for acct in _wire_accounts(ctx):
+        actual = acct.get("status")
         assert actual == status, f"Expected status '{status}', got '{actual}'"
 
 
@@ -571,10 +580,8 @@ def then_other_statuses_excluded(ctx: dict) -> None:
     to verify that non-matching statuses were actually excluded, not just
     that matching ones are present.
     """
-    resp = _require_response(ctx)
-    assert resp is not None, "Expected a response"
     created_statuses = ctx.get("created_statuses", set())
-    returned_statuses = {_status_str(acct.status) for acct in resp.accounts}
+    returned_statuses = {acct.get("status") for acct in _wire_accounts(ctx)}
     # The previous only_status step already verified all returned have the target.
     # This step verifies the exclusion is real: created statuses that aren't in
     # the response were actually filtered out (not just absent by coincidence).
@@ -589,9 +596,8 @@ def then_other_statuses_excluded(ctx: dict) -> None:
 @then("the response contains an empty accounts array")
 def then_empty_accounts(ctx: dict) -> None:
     """Assert the response has an empty accounts array."""
-    resp = ctx.get("response")
-    assert resp is not None, f"Expected a response but got error: {ctx.get('error')}"
-    accounts = resp.accounts  # AttributeError if field missing
+    assert ctx.get("response") is not None, f"Expected a response but got error: {ctx.get('error')}"
+    accounts = _wire_accounts(ctx)
     assert accounts == [], f"Expected empty accounts array, got {len(accounts)} items"
 
 
@@ -610,23 +616,23 @@ def then_n_accounts(ctx: dict, count: int) -> None:
 
     Also tracks account IDs for later disjointness checks in pagination.
     """
-    resp = _require_response(ctx)
-    actual = len(resp.accounts)
+    accounts = _wire_accounts(ctx)
+    actual = len(accounts)
     assert actual == count, f"Expected {count} accounts, got {actual}"
     # Track IDs for disjointness assertion in subsequent pages
-    ctx["previous_page_ids"] = {a.account_id for a in resp.accounts}
+    ctx["previous_page_ids"] = {a["account_id"] for a in accounts}
 
 
 @then(parsers.parse("the response contains {count:d} more accounts"))
 def then_n_more_accounts(ctx: dict, count: int) -> None:
     """Assert the response has exactly N accounts and they are disjoint from previous page."""
-    resp = _require_response(ctx)
-    actual = len(resp.accounts)
+    accounts = _wire_accounts(ctx)
+    actual = len(accounts)
     assert actual == count, f"Expected {count} more accounts, got {actual}"
     # Verify disjointness with previous page
     prev_ids = ctx.get("previous_page_ids")
     if prev_ids:
-        current_ids = {a.account_id for a in resp.accounts}
+        current_ids = {a["account_id"] for a in accounts}
         overlap = prev_ids & current_ids
         assert not overlap, f"Page 2 shares {len(overlap)} account(s) with page 1: {overlap}"
         # Track cumulative IDs for further pages
@@ -636,21 +642,21 @@ def then_n_more_accounts(ctx: dict, count: int) -> None:
 @then(parsers.parse("the response includes pagination metadata with has_more {has_more} and a cursor"))
 def then_pagination_has_more_with_cursor(ctx: dict, has_more: str) -> None:
     """Assert pagination metadata with has_more and cursor."""
-    resp = _require_response(ctx)
-    assert resp.pagination is not None, "Expected pagination metadata"
+    pagination = wire_field(ctx, "pagination")
+    assert pagination is not None, "Expected pagination metadata"
     expected = has_more.lower() == "true"
-    assert resp.pagination.has_more == expected, f"Expected has_more={expected}, got {resp.pagination.has_more}"
+    assert pagination.get("has_more") == expected, f"Expected has_more={expected}, got {pagination.get('has_more')}"
     if expected:
-        assert resp.pagination.cursor is not None, "Expected cursor when has_more is true"
+        assert pagination.get("cursor") is not None, "Expected cursor when has_more is true"
 
 
 @then(parsers.parse("the response includes pagination metadata with has_more {has_more}"))
 def then_pagination_has_more(ctx: dict, has_more: str) -> None:
     """Assert pagination metadata with has_more."""
-    resp = _require_response(ctx)
-    assert resp.pagination is not None, "Expected pagination metadata"
+    pagination = wire_field(ctx, "pagination")
+    assert pagination is not None, "Expected pagination metadata"
     expected = has_more.lower() == "true"
-    assert resp.pagination.has_more == expected, f"Expected has_more={expected}, got {resp.pagination.has_more}"
+    assert pagination.get("has_more") == expected, f"Expected has_more={expected}, got {pagination.get('has_more')}"
 
 
 @then("the response returns accounts starting from the first page")
@@ -661,15 +667,14 @@ def then_accounts_from_first_page(ctx: dict) -> None:
     checking that the returned accounts match the first-page slice of the
     full sorted expected set (offset 0 through page_size).
     """
-    resp = ctx.get("response")
     error = ctx.get("error")
     assert error is None, f"Expected success but got error: {error}"
-    assert resp is not None, "Expected a response"
-    accounts = resp.accounts  # AttributeError if field missing
+    assert ctx.get("response") is not None, "Expected a response"
+    accounts = _wire_accounts(ctx)
     expected_ids = sorted(ctx.get("expected_account_ids", set()))
     assert expected_ids, "Test setup error: no expected_account_ids tracked by Given steps"
     # Verify accounts are sorted by account_id (first-page ordering from offset 0)
-    account_ids = [a.account_id for a in accounts]
+    account_ids = [a["account_id"] for a in accounts]
     assert account_ids == sorted(account_ids), (
         f"Accounts not sorted by account_id — cannot confirm first-page ordering: {account_ids}"
     )
@@ -732,8 +737,7 @@ def then_error_invalid_status(ctx: dict) -> None:
 @then("the response contains accounts with all statuses")
 def then_all_statuses_present(ctx: dict) -> None:
     """Assert the response includes accounts covering all seeded statuses."""
-    resp = _require_response(ctx)
-    statuses = {_status_str(a.status) for a in resp.accounts}
+    statuses = {a.get("status") for a in _wire_accounts(ctx)}
     expected = ctx.get("created_statuses")
     assert expected, "Test setup error: created_statuses not tracked by Given step"
     missing = expected - statuses
@@ -750,11 +754,9 @@ def then_result_set_identical(ctx: dict) -> None:
     check is mandatory (not optional) — if Given steps did not track IDs,
     the test setup is broken.
     """
-    resp = _require_response(ctx)
-    assert resp is not None, "Expected a response"
     expected_ids = ctx.get("expected_account_ids")
     assert expected_ids, "Test setup error: no expected_account_ids tracked by Given steps"
-    returned_ids = {acct.account_id for acct in resp.accounts}
+    returned_ids = {acct["account_id"] for acct in _wire_accounts(ctx)}
     assert len(returned_ids) == len(expected_ids), (
         f"Expected exactly {len(expected_ids)} accounts, got {len(returned_ids)}"
     )
@@ -782,30 +784,30 @@ def then_response_outcome(ctx: dict, outcome: str) -> None:
     elif outcome.startswith("success with"):
         error = ctx.get("error")
         assert error is None, f"Expected success for outcome '{outcome}', but got error: {error}"
-        resp = ctx.get("response")
-        assert resp is not None, f"Expected a response for outcome '{outcome}'"
+        assert ctx.get("response") is not None, f"Expected a response for outcome '{outcome}'"
+        accounts = _wire_accounts(ctx)
 
         if "per-account results" in outcome:
             # Sync BVA: verify per-account result count matches submitted count
             submitted = ctx.get("submitted_account_count")
             assert submitted is not None, "Test setup error: submitted_account_count not stored in ctx by When step"
-            actual_count = len(resp.accounts)
+            actual_count = len(accounts)
             assert actual_count == submitted, f"Expected {submitted} per-account results, got {actual_count}"
             # Each per-account result must have an identifier and status
-            for acct in resp.accounts:
-                assert acct.account_id is not None, f"Per-account result missing account_id: {acct}"
-                assert _status_str(acct.status) in {
+            for acct in accounts:
+                assert acct.get("account_id") is not None, f"Per-account result missing account_id: {acct}"
+                assert acct.get("status") in {
                     "active",
                     "pending_approval",
                     "suspended",
                     "closed",
-                }, f"Unexpected account status: {_status_str(acct.status)}"
+                }, f"Unexpected account status: {acct.get('status')}"
         else:
             # Parse expected count from outcome like "success with 50 accounts"
             match = re.search(r"(\d+)\s+account", outcome)
             if match:
                 expected_count = int(match.group(1))
-                actual = len(resp.accounts)
+                actual = len(accounts)
                 assert actual == expected_count, (
                     f"Expected {expected_count} accounts for outcome '{outcome}', got {actual}"
                 )
@@ -952,10 +954,11 @@ def then_success_with_accounts(ctx: dict) -> None:
     """Assert the response is a success variant (optionally with accounts array)."""
     error = ctx.get("error")
     assert error is None, f"Expected success but got error: {error}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
-    assert resp.accounts is not None, f"Response 'accounts' field is None: {type(resp)}"
-    assert isinstance(resp.accounts, list), f"accounts is not a list: {type(resp.accounts)}"
+    assert ctx.get("response") is not None, "Expected a response"
+    wire = wire_dict(ctx)
+    assert "accounts" in wire, f"Response 'accounts' field missing on wire: {sorted(wire)}"
+    accounts = wire["accounts"]
+    assert isinstance(accounts, list), f"accounts is not a list: {type(accounts)}"
 
 
 @then(
@@ -1026,21 +1029,19 @@ def then_brand_echoed(ctx: dict, domain: str) -> None:
 @then(parsers.parse("the response contains {count:d} account results"))
 def then_n_account_results(ctx: dict, count: int) -> None:
     """Assert the sync response has exactly N account results."""
-    resp = _require_response(ctx)
-    actual = len(resp.accounts)
+    actual = len(_wire_accounts(ctx))
     assert actual == count, f"Expected {count} account results, got {actual}"
 
 
 @then("each account echoes brand domain and brand_id from the request")
 def then_all_accounts_echo_brand(ctx: dict) -> None:
     """Assert each response account's brand domain+brand_id matches a submitted pair."""
-    resp = _require_response(ctx)
     submitted = ctx.get("sync_request_brand_pairs")
     assert submitted, "Test setup error: sync_request_brand_pairs not tracked by When step"
-    for acct in resp.accounts:
-        brand = acct.brand
-        domain = brand.domain
-        bid = _brand_id_str(getattr(brand, "brand_id", None))
+    for acct in _wire_accounts(ctx):
+        brand = acct.get("brand") or {}
+        domain = brand.get("domain")
+        bid = brand.get("brand_id")
         pair = (domain, bid)
         assert pair in submitted, f"Response brand pair {pair} not in submitted pairs {submitted}"
 
@@ -1309,11 +1310,24 @@ def then_response_is_error_variant(ctx: dict) -> None:
     assert ctx.get("response") is None, "Expected error variant (no success response)"
 
 
+def _assert_no_wire_errors_field(ctx: dict) -> None:
+    """Assert the success-path wire body has no non-empty 'errors' field.
+
+    Shared by ``then_no_operation_errors``/``then_no_operation_level_errors`` — the
+    scenario text differs (two Gherkin phrasings for the same obligation) but the
+    check is identical.
+    """
+    wire = wire_dict(ctx)
+    errors = wire.get("errors")
+    assert errors is None or len(errors) == 0, f"Unexpected errors: {errors}"
+
+
 @then("the response contains an accounts array")
 def then_has_accounts_array(ctx: dict) -> None:
     """Assert the response has a non-empty accounts array."""
-    resp = _require_response(ctx)
-    accounts = resp.accounts  # AttributeError if field missing
+    wire = wire_dict(ctx)
+    assert "accounts" in wire, f"Response 'accounts' field missing on wire: {sorted(wire)}"
+    accounts = wire["accounts"]
     assert isinstance(accounts, list), f"accounts is not a list: {type(accounts)}"
     assert accounts, "Expected non-empty accounts array in success variant"
 
@@ -1321,19 +1335,17 @@ def then_has_accounts_array(ctx: dict) -> None:
 @then("the response does not contain an operation-level errors array")
 def then_no_operation_errors(ctx: dict) -> None:
     """Assert the success response has no operation-level errors field."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
-    errors = getattr(resp, "errors", None)
-    assert errors is None or len(errors) == 0, f"Unexpected errors: {errors}"
+    _assert_no_wire_errors_field(ctx)
 
 
 @then("the response is the success variant of oneOf")
 def then_response_is_success_variant(ctx: dict) -> None:
     """Assert the response is the success variant (has accounts, no exception)."""
     assert ctx.get("error") is None, f"Expected success variant, got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected success response"
-    accounts = resp.accounts  # AttributeError if field missing on non-success variant
+    assert ctx.get("response") is not None, "Expected success response"
+    wire = wire_dict(ctx)
+    assert "accounts" in wire, f"Response 'accounts' field missing on wire: {sorted(wire)}"
+    accounts = wire["accounts"]
     assert isinstance(accounts, list), f"Success variant accounts must be a list: {type(accounts)}"
 
 
@@ -1390,10 +1402,8 @@ def then_neither_invalid(ctx: dict, description: str) -> None:
 @then(parsers.parse('all accounts have action "{action}"'))
 def then_all_accounts_action(ctx: dict, action: str) -> None:
     """Assert all accounts in the response have the given action."""
-    resp = _require_response(ctx)
-    assert resp is not None, "Expected a response"
-    accounts = resp.accounts
-    actions = {_action_str(acct.action) for acct in accounts}
+    accounts = _wire_accounts(ctx)
+    actions = {acct.get("action") for acct in accounts}
     assert actions == {action}, (
         f"Expected all accounts to have action '{action}', got actions {actions} across {len(accounts)} accounts"
     )
@@ -1420,10 +1430,7 @@ def then_failed_has_errors(ctx: dict) -> None:
 @then("the response does not contain an operation-level errors field")
 def then_no_operation_level_errors(ctx: dict) -> None:
     """Assert the success response has no top-level errors field."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
-    errors = getattr(resp, "errors", None)
-    assert errors is None or len(errors) == 0, f"Unexpected operation-level errors: {errors}"
+    _assert_no_wire_errors_field(ctx)
 
 
 @then(parsers.parse('the per-account errors array contains an error with code "{code}"'))
@@ -1850,17 +1857,16 @@ def when_agent_a_sync_delete_missing(ctx: dict, datatable: Any) -> None:
 @then("the response includes dry_run true")
 def then_dry_run_true(ctx: dict) -> None:
     """Assert the response has dry_run=True."""
-    resp = _require_response(ctx)
-    assert resp is not None, "Expected a response"
-    assert resp.dry_run is True, f"Expected dry_run=True, got {resp.dry_run}"
+    assert ctx.get("response") is not None, "Expected a response"
+    dry_run = wire_field(ctx, "dry_run")
+    assert dry_run is True, f"Expected dry_run=True, got {dry_run}"
 
 
 @then("the response does not include a dry_run field")
 def then_no_dry_run_include(ctx: dict) -> None:
     """Assert the response doesn't include dry_run (alias for 'does not contain')."""
-    resp = ctx.get("response")
-    if resp is not None:
-        dry_run = getattr(resp, "dry_run", None)
+    if ctx.get("response") is not None:
+        dry_run = wire_dict(ctx).get("dry_run")
         assert dry_run is None, f"Expected no dry_run, got {dry_run}"
 
 
@@ -1897,9 +1903,8 @@ def then_account_in_db(ctx: dict) -> None:
 
     tenant, principal = ctx["tenant"], ctx["principal"]
     # The response should have the account that was just created
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response from the sync"
-    expected_id = resp.accounts[0].account_id
+    assert ctx.get("response") is not None, "Expected a response from the sync"
+    expected_id = _wire_accounts(ctx)[0]["account_id"]
     with get_db_session() as session:
         repo = AccountRepository(session, tenant.tenant_id)
         accounts = repo.list_by_principal(principal.principal_id)
@@ -1996,11 +2001,10 @@ def then_brand_unchanged(ctx: dict, domain: str) -> None:
 @then("only the included accounts are processed")
 def then_only_included_processed(ctx: dict) -> None:
     """Assert the response only contains accounts that were in the sync request."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    assert ctx.get("response") is not None, "Expected a response"
     request_domains = ctx.get("sync_request_domains")
     assert request_domains, "Test setup error: sync_request_domains not tracked by When step"
-    response_domains = {a.brand.domain for a in resp.accounts if a.brand}
+    response_domains = {(a.get("brand") or {}).get("domain") for a in _wire_accounts(ctx) if a.get("brand")}
     extra = response_domains - request_domains
     assert not extra, f"Response included accounts not in the sync request: {extra}. Request domains: {request_domains}"
 
@@ -2241,17 +2245,10 @@ def then_response_includes_context(ctx: dict, ctx_json: str) -> None:
     expected = json.loads(ctx_json)
 
     # Check success response first
-    resp = ctx.get("response")
-    if resp is not None:
-        resp_context = getattr(resp, "context", None)
+    if ctx.get("response") is not None:
+        resp_context = wire_dict(ctx).get("context")
         assert resp_context is not None, "Response has no context field"
-        # ContextObject may be a Pydantic model — convert to dict for comparison
-        if hasattr(resp_context, "model_dump"):
-            actual = resp_context.model_dump(mode="json", exclude_none=True)
-        elif isinstance(resp_context, dict):
-            actual = resp_context
-        else:
-            actual = dict(resp_context)
+        actual = {k: v for k, v in resp_context.items() if v is not None}
         assert actual == expected, f"Context mismatch: expected {expected}, got {actual}"
         return
 
@@ -2283,28 +2280,21 @@ def then_response_includes_context(ctx: dict, ctx_json: str) -> None:
 @then("the context is identical to what was sent")
 def then_context_identical(ctx: dict) -> None:
     """Assert the echoed context is exactly what was sent (deep equality)."""
-    resp = ctx.get("response")
     sent = ctx.get("sent_context")
     assert sent is not None, "No sent_context to compare"
 
-    if resp is not None:
-        resp_context = getattr(resp, "context", None)
+    if ctx.get("response") is not None:
+        resp_context = wire_dict(ctx).get("context")
         assert resp_context is not None, "Response has no context"
-        if hasattr(resp_context, "model_dump"):
-            actual = resp_context.model_dump(mode="json", exclude_none=True)
-        elif isinstance(resp_context, dict):
-            actual = resp_context
-        else:
-            actual = dict(resp_context)
+        actual = {k: v for k, v in resp_context.items() if v is not None}
         assert actual == sent, f"Context not identical: sent {sent}, got {actual}"
 
 
 @then("the response does not include a context field")
 def then_no_context(ctx: dict) -> None:
     """Assert the response has no context field (or it's None)."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
-    context = getattr(resp, "context", None)
+    assert ctx.get("response") is not None, "Expected a response"
+    context = wire_dict(ctx).get("context")
     assert context is None, f"Expected no context, got {context}"
 
 
@@ -2414,12 +2404,23 @@ def then_no_real_platform_account(ctx: dict) -> None:
         )
 
 
+def _assert_all_wire_accounts_sandbox_true(ctx: dict, *, label_field: str) -> None:
+    """Assert every wire account has sandbox=True.
+
+    Shared by ``then_all_accounts_sandbox_true``/``then_no_production_accounts`` — two
+    Gherkin phrasings of the same obligation, differing only in which per-account field
+    the failure message surfaces (``label_field``).
+    """
+    for acct in _wire_accounts(ctx):
+        assert acct.get("sandbox") is True, (
+            f"Expected sandbox=True, got sandbox={acct.get('sandbox')} for {acct.get(label_field)}"
+        )
+
+
 @then("all returned accounts should have sandbox equals true")
 def then_all_accounts_sandbox_true(ctx: dict) -> None:
     """Assert every account in the response has sandbox=True."""
-    resp = _require_response(ctx)
-    for acct in resp.accounts:
-        assert acct.sandbox is True, f"Expected sandbox=True, got sandbox={acct.sandbox} for {acct.name}"
+    _assert_all_wire_accounts_sandbox_true(ctx, label_field="name")
 
 
 @then("the response should not include production accounts")
@@ -2430,9 +2431,7 @@ def then_no_production_accounts(ctx: dict) -> None:
     must have sandbox=True; any sandbox=False or sandbox=None is a production
     account that should have been filtered out.
     """
-    resp = _require_response(ctx)
-    for acct in resp.accounts:
-        assert acct.sandbox is True, f"Production account found: {acct.account_id} (sandbox={acct.sandbox})"
+    _assert_all_wire_accounts_sandbox_true(ctx, label_field="account_id")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2575,10 +2574,9 @@ def when_sync_no_principal(ctx: dict, datatable: Any) -> None:
 @then(parsers.parse('none of the returned accounts belong to agent "{name}"'))
 def then_none_belong_to_agent(ctx: dict, name: str) -> None:
     """Assert no returned accounts are in the other agent's set."""
-    resp = _require_response(ctx)
     other_ids = ctx.get("agent_account_ids", {}).get(name, set())
     assert other_ids, f"Test setup error: no account IDs tracked for agent '{name}'"
-    returned_ids = {acct.account_id for acct in resp.accounts}
+    returned_ids = {acct["account_id"] for acct in _wire_accounts(ctx)}
     leaked = returned_ids & other_ids
     assert not leaked, f"Cross-agent leak: accounts {leaked} belong to agent '{name}' but appeared in response"
 
@@ -2684,15 +2682,15 @@ def then_none_have_brand_domain(ctx: dict, domain: str) -> None:
     would pass this cross-agent-leak check while being incapable of exhibiting a
     leak at all. The capability assertion below closes that.
     """
-    resp = _require_response(ctx)
-    domains = [acct.brand.domain if acct.brand else None for acct in resp.accounts]
+    accounts = _wire_accounts(ctx)
+    domains = [(acct.get("brand") or {}).get("domain") if acct.get("brand") else None for acct in accounts]
     assert any(d is not None for d in domains), (
         f"No returned account carries a brand domain, so 'none have brand domain {domain}' "
-        f"cannot detect a leak — {len(resp.accounts)} account(s) returned, all without a brand"
+        f"cannot detect a leak — {len(accounts)} account(s) returned, all without a brand"
     )
-    for acct, acct_domain in zip(resp.accounts, domains, strict=True):
+    for acct, acct_domain in zip(accounts, domains, strict=True):
         assert acct_domain != domain, (
-            f"Cross-agent leak: account {acct.account_id} has brand domain '{domain}' "
+            f"Cross-agent leak: account {acct['account_id']} has brand domain '{domain}' "
             f"but should not be visible to this agent"
         )
 
@@ -2841,24 +2839,23 @@ def given_db_failure(ctx: dict) -> None:
 @then(parsers.parse('the list includes an account with brand domain "{domain}"'))
 def then_list_includes_domain(ctx: dict, domain: str) -> None:
     """Assert the list_accounts response contains an account with the given brand domain."""
-    resp = _require_response(ctx)
-    for acct in resp.accounts:
-        if hasattr(acct, "brand") and acct.brand and getattr(acct.brand, "domain", None) == domain:
+    accounts = _wire_accounts(ctx)
+    for acct in accounts:
+        if acct.get("brand") and acct["brand"].get("domain") == domain:
             return
-    domains = [getattr(a.brand, "domain", "?") for a in resp.accounts if hasattr(a, "brand") and a.brand]
+    domains = [a["brand"].get("domain", "?") for a in accounts if a.get("brand")]
     raise AssertionError(f"Expected account with domain '{domain}' in list, got: {domains}")
 
 
 @then(parsers.parse('the response does not include a result for brand domain "{domain}"'))
 def then_no_result_for_domain(ctx: dict, domain: str) -> None:
     """Assert the sync response has no account entry for the given domain."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
-    for acct in resp.accounts:
-        acct_domain = acct.brand.domain if hasattr(acct, "brand") and acct.brand else None
+    assert ctx.get("response") is not None, "Expected a response"
+    for acct in _wire_accounts(ctx):
+        acct_domain = acct["brand"].get("domain") if acct.get("brand") else None
         assert acct_domain != domain, (
             f"Expected no result for domain '{domain}' but found account "
-            f"{acct.account_id} with action={getattr(acct, 'action', '?')}"
+            f"{acct.get('account_id')} with action={acct.get('action', '?')}"
         )
 
 

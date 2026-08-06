@@ -72,19 +72,30 @@ def wire_dict(ctx: dict[str, Any]) -> dict[str, Any]:
     return _require_response(ctx).model_dump(mode="json")
 
 
+def wire_list(ctx: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    """Return a top-level list field from the success-path wire body.
+
+    The list analogue of :func:`wire_field` — use when an oracle must iterate the
+    wire-serialized items of a list field (e.g. ``accounts``) rather than read one
+    scalar field. Reads through :func:`wire_dict`, inheriting its loud guard: a
+    real-wire transport that stashed no body raises instead of silently falling back
+    to the typed payload.
+    """
+    return wire_dict(ctx).get(key) or []
+
+
 def wire_packages(ctx: dict[str, Any]) -> list[dict[str, Any]]:
     """Collect every package across every delivery as the buyer sees it on the WIRE.
 
     The wire-reading twin of a typed ``resp.media_buy_deliveries[].by_package`` walk.
-    Reads through :func:`wire_dict`, inheriting its loud guard: a real-wire transport that
+    Reads through :func:`wire_list`, inheriting its loud guard: a real-wire transport that
     stashed no body raises instead of silently degrading to the typed payload. A boolean
     truncation flag serialized as the string "true" is the concrete case a typed read misses:
     it reconstructs to ``True`` and a typed oracle passes on a non-conformant wire. (A field
     that is DROPPED is still caught by a typed reader, since it reconstructs to ``None`` — the
     blind spot is coercion, not absence.)
     """
-    wire = wire_dict(ctx)
-    return [pkg for d in wire.get("media_buy_deliveries") or [] for pkg in d.get("by_package") or []]
+    return [pkg for d in wire_list(ctx, "media_buy_deliveries") for pkg in d.get("by_package") or []]
 
 
 def _require(ctx: dict[str, Any], key: str, *, hint: str | None = None) -> Any:
