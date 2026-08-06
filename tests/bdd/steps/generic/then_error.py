@@ -11,7 +11,31 @@ from __future__ import annotations
 
 from pytest_bdd import parsers, then
 
+from tests.bdd.steps._outcome_helpers import wire_dict, wire_list
+
 # ── Helpers ─────────────────────────────────────────────────────────
+
+
+def _promote_wire_graded_error(ctx: dict):
+    """Promote the first response error to ctx["error"] for downstream Then
+    steps, grading the WIRE for presence/shape while keeping the promoted
+    value TYPED (a handoff slot, not graded data — downstream accessors
+    duck-type on .code/.message/.suggestion/.recovery / isinstance(Exception)).
+
+    Returns the promoted typed error, or None if there is nothing to promote.
+    Only call when ctx["response"] is not None (the success branch — the only
+    place wire_dict(ctx) is populated; see generic/_dispatch.py:86-103).
+    """
+    wire_errors = wire_dict(ctx).get("errors") or []
+    if not wire_errors:
+        return None
+    assert wire_errors[0].get("code"), f"wire errors[0] missing a non-empty code: {wire_errors[0]!r}"
+    resp = ctx["response"]
+    first_error = resp.errors[0] if getattr(resp, "errors", None) else None
+    assert first_error is not None, (
+        "wire carries a non-empty errors[] but the typed response.errors is empty — wire/typed reconstruction diverge"
+    )
+    return first_error
 
 
 def _wire_code(ctx: dict) -> str | None:
@@ -194,14 +218,12 @@ def then_operation_fails(ctx: dict) -> None:
         _assert_meaningful_error(error)
         return
     resp = ctx.get("response")
-    if resp is not None and hasattr(resp, "errors") and resp.errors:
-        # Promote the first response error to ctx["error"] so downstream
-        # Then steps (error_code, error_message) can find it.
-        first_error = resp.errors[0]
-        assert first_error is not None, "response.errors[0] is None — expected a concrete error object"
-        _assert_meaningful_error(first_error)
-        ctx["error"] = first_error
-        return
+    if resp is not None:
+        promoted = _promote_wire_graded_error(ctx)
+        if promoted is not None:
+            _assert_meaningful_error(promoted)
+            ctx["error"] = promoted
+            return
     raise AssertionError(
         "Expected the operation to fail but no error was recorded. "
         f"ctx keys: {list(ctx.keys())}, response: {ctx.get('response')!r}"
@@ -220,19 +242,28 @@ def then_entire_sync_operation_fails(ctx: dict) -> None:
 
     Asserts:
     1. An error was recorded with meaningful error information.
-    2. If a response exists with a results/catalogs collection, NONE of the
-       items were processed successfully (no partial success).
+    2. If a response exists with a catalogs collection, NONE of the items
+       were processed successfully (no partial success).
+
+    NOTE: the item-level walk below is currently unreachable by construction
+    -- no sync_catalogs tool exists in production and no collected BDD
+    scenario binds BR-UC-023-sync-product-catalogs.feature (verified:
+    0 of 7543 collected tests match). It is derived from the pinned adcp 6.6
+    SyncCatalogsSuccessResponse schema, not from a live/synthetic run --
+    wire key catalogs, item field action (CatalogAction StrEnum =
+    created|updated|unchanged|failed|deleted, REQUIRED), "failed" the only
+    non-partial-success value. There is no item-level status field on a
+    catalog result.
     """
     # ── Resolve the error object ────────────────────────────────────
     error = ctx.get("error")
     resp = ctx.get("response")
 
     # Promote response.errors if no top-level error was captured
-    if error is None and resp is not None and hasattr(resp, "errors") and resp.errors:
-        first_error = resp.errors[0]
-        assert first_error is not None, "response.errors[0] is None -- expected a concrete error"
-        ctx["error"] = first_error
-        error = first_error
+    if error is None and resp is not None:
+        error = _promote_wire_graded_error(ctx)
+        if error is not None:
+            ctx["error"] = error
 
     assert error is not None, (
         "Expected the entire sync operation to fail but no error was recorded. "
@@ -246,20 +277,12 @@ def then_entire_sync_operation_fails(ctx: dict) -> None:
     # "Entire sync fails" means the operation was rejected wholesale.
     # If a response exists with item-level results, none may have succeeded.
     if resp is not None:
-        for attr in ("catalogs", "results", "items"):
-            items = getattr(resp, attr, None)
-            if items is None:
-                continue
-            successful = [
-                item
-                for item in items
-                if getattr(item, "action", None) not in (None, "failed", "error", "rejected")
-                or getattr(item, "status", None) == "success"
-            ]
-            assert not successful, (
-                f"Expected entire sync to fail but found {len(successful)} "
-                f"successfully processed item(s) in response.{attr} -- "
-                f"this indicates partial success, not total failure. "
+        for item in wire_list(ctx, "catalogs"):
+            action = item.get("action")
+            assert action, f"catalog item missing required action field on the wire: {item!r}"
+            assert action == "failed", (
+                f"Expected entire sync to fail but item has action={action!r} (not failed) "
+                f"in response.catalogs -- this indicates partial success, not total failure. "
                 f"BR-RULE-172 INV-5 requires the ENTIRE operation to fail."
             )
 
