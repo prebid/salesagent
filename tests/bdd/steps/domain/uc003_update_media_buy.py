@@ -18,6 +18,7 @@ from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.given_media_buy import _resolve_date_token
+from tests.bdd.steps.generic.then_error import _promote_wire_graded_error
 
 # ═══════════════════════════════════════════════════════════════════════
 # Label mapping — Gherkin package labels → real package_ids
@@ -832,7 +833,8 @@ def _promote_update_errors(ctx: dict) -> None:
     from src.core.schemas._base import UpdateMediaBuyError
 
     if isinstance(resp, UpdateMediaBuyError) and resp.errors:
-        ctx["error"] = resp.errors[0]
+        promoted = _promote_wire_graded_error(ctx)
+        ctx["error"] = promoted
         ctx["error_response"] = resp
         del ctx["response"]
 
@@ -1067,23 +1069,16 @@ def then_response_has_sandbox(ctx: dict) -> None:
 
 @then('the response should NOT contain an "errors" field')
 def then_no_errors_field(ctx: dict) -> None:
-    """Assert the response does not contain an 'errors' field at all.
+    """Assert the response does not contain an 'errors' field at all, on the wire.
 
     Step text says 'NOT contain' — the field should be absent (None),
     not just empty. An empty list ``[]`` still means the field exists.
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
-    # "NOT contain" means the key must be absent, not just None.
-    # Use exclude_none=True (AdCP default) so errors=None is excluded from the dict.
-    if hasattr(resp, "model_dump"):
-        data = resp.model_dump(exclude_none=True)
-        assert "errors" not in data, (
-            f"Expected 'errors' key absent from response (exclude_none=True), but found: {data.get('errors')!r}"
-        )
-    else:
-        errors = getattr(resp, "errors", None)
-        assert errors is None, f"Expected no 'errors' field in response, got: {errors}"
+    from tests.bdd.steps._outcome_helpers import wire_dict
+
+    assert ctx.get("response") is not None, "Expected a response"
+    wire = wire_dict(ctx)
+    assert "errors" not in wire, f"Expected 'errors' key absent from the wire, but found: {wire.get('errors')!r}"
 
 
 @then('the response should contain an "errors" array')

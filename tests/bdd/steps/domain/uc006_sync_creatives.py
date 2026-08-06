@@ -27,6 +27,7 @@ from tests.bdd.steps.generic._dispatch import (
     dispatch_request,
     dispatch_typed_or_malformed,
 )
+from tests.bdd.steps.generic.then_error import _promote_wire_graded_error
 from tests.factories.creative_asset import (
     assert_assets,
     build_assets,
@@ -2307,7 +2308,7 @@ def then_operation_fails_with_assignment_error(ctx: dict) -> None:
         # Promote response.errors if available (partial-success pattern), then re-check
         resp = ctx.get("response")
         if resp is not None and getattr(resp, "errors", None):
-            error = resp.errors[0]
+            error = _promote_wire_graded_error(ctx)
             ctx["error"] = error
 
     if error is None:
