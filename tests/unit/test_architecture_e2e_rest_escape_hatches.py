@@ -89,6 +89,14 @@ EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
     # build_rest_body same as REST — so its 6 sibling "valid" rows moved to
     # tests/bdd/e2e_rest_known_failures.txt instead of a conftest route.
     "_samp_is_named and is_e2e_rest",
+    # Added (salesagent-oyiv.20): "unknown_value" sampling_method graduated on REST
+    # only — the oracle was strengthened to wire-grading first (added "sampling" to
+    # _WIRE_ASSERTED_FIELDS), then re-verified with --runxfail: REST genuinely emits
+    # INVALID_REQUEST+suggestion; a2a/mcp still genuinely emit VALIDATION_ERROR and
+    # stay xfailed. This route explicitly EXCLUDES e2e_rest (falls through to the
+    # unconditional xfail below when is_e2e_rest is true) — e2e_rest's behavior for
+    # this row is untouched, not independently verified without a bdd-in-network run.
+    "_samp_unknown_value and is_rest and (not is_e2e_rest)",
     "is_e2e_rest",
     "is_e2e_rest and 'T-UC-002-nfr-001-enforcement' in marker_names",
     "is_e2e_rest and 'T-UC-004-daterange-end-only' in marker_names",
