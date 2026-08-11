@@ -19,7 +19,7 @@ tokens without a deliberate cross-script rename. The shared ``grade_base``
 helper owns the confirmation gate so both classifiers cannot drift.
 
 Canonical conftest tag parsing lives here as ``parse_conftest_xfail_tags``
-(``tag → (reason, mechanism)``). Callers that only need reasons use
+(``tag → TagReason``). Callers that only need reasons use
 ``tag_reasons`` (a one-line projection) — not a second parser.
 """
 
@@ -46,6 +46,19 @@ CONFTEST_PATH = REPO_ROOT / "tests" / "bdd" / "conftest.py"
 STEPS_DIR = REPO_ROOT / "tests" / "bdd" / "steps"
 
 GradeBucket = Literal["graduate", "confirm", "partial"]
+
+
+class TagReason(NamedTuple):
+    """Conftest xfail tag → human reason + classification mechanism."""
+
+    reason: str
+    mechanism: str
+
+
+def phase_dict(test: Mapping[str, Any], phase: str) -> dict[str, Any]:
+    """Return a present-or-empty phase dict (null ``call``/`setup` safe)."""
+    raw = test.get(phase)
+    return raw if isinstance(raw, dict) else {}
 
 
 class StepRecord(TypedDict):
@@ -364,23 +377,24 @@ def grade_base(
     )
 
 
-def parse_conftest_xfail_tags(conftest_path: Path) -> dict[str, tuple[str, str]]:
-    """Parse conftest.py to extract tag → (reason, mechanism) mappings.
+def parse_conftest_xfail_tags(conftest_path: Path) -> dict[str, TagReason]:
+    """Parse conftest.py to extract tag → TagReason mappings.
 
-    Returns dict mapping tag string to (reason, mechanism) where mechanism
-    is one of: 'production_gap', 'transport_gap', 'harness_gap', 'partial_impl'.
+    Returns dict mapping tag string to ``TagReason(reason, mechanism)`` where
+    mechanism is one of: 'production_gap', 'transport_gap', 'harness_gap',
+    'partial_impl'.
 
     Covers dict forms (``_XFAIL_TAGS``, ``_UC004_XFAIL_TAGS`` tuples,
     ``_UC003_EXT_XFAILS``), set forms (``_UC*_XFAIL_TAGS``, partition/boundary/
     partial), MCP selective reason= kwargs, and validation tuple forms.
     """
     text = conftest_path.read_text(encoding="utf-8", errors="replace")
-    tag_map: dict[str, tuple[str, str]] = {}
+    tag_map: dict[str, TagReason] = {}
 
     # _XFAIL_TAGS dict: tag → reason (production gaps)
     for match in re.finditer(r'"(T-[^"]+)":\s*"([^"]+)"', text):
         tag, reason = match.group(1), match.group(2)
-        tag_map[tag] = (reason, "production_gap")
+        tag_map[tag] = TagReason(reason, "production_gap")
 
     # _UC026_XFAIL_TAGS, _UC019_XFAIL_TAGS, etc. — sets with production/harness gaps
     for set_match in re.finditer(
@@ -397,7 +411,7 @@ def parse_conftest_xfail_tags(conftest_path: Path) -> dict[str, tuple[str, str]]
         for tag_m in re.finditer(r'"(T-[^"]+)"', block):
             tag = tag_m.group(1)
             if tag not in tag_map:
-                tag_map[tag] = (f"from {set_name}", mechanism)
+                tag_map[tag] = TagReason(f"from {set_name}", mechanism)
 
     # _UC004_PARTITION_TAGS, _UC004_BOUNDARY_TAGS — partial impl
     for set_match in re.finditer(
@@ -410,7 +424,7 @@ def parse_conftest_xfail_tags(conftest_path: Path) -> dict[str, tuple[str, str]]
         for tag_m in re.finditer(r'"(T-[^"]+)"', block):
             tag = tag_m.group(1)
             if tag not in tag_map:
-                tag_map[tag] = (f"partition/boundary from {set_name}", "partial_impl")
+                tag_map[tag] = TagReason(f"partition/boundary from {set_name}", "partial_impl")
 
     # _UC005_PARTIAL_TAGS
     for set_match in re.finditer(r"(_UC\d+_PARTIAL_TAGS)\s*=\s*\{([^}]+)\}", text, re.DOTALL):
@@ -418,31 +432,31 @@ def parse_conftest_xfail_tags(conftest_path: Path) -> dict[str, tuple[str, str]]
         for tag_m in re.finditer(r'"(T-[^"]+)"', block):
             tag = tag_m.group(1)
             if tag not in tag_map:
-                tag_map[tag] = ("partial implementation", "partial_impl")
+                tag_map[tag] = TagReason("partial implementation", "partial_impl")
 
     # MCP selective xfails
     for match in re.finditer(r'"(T-[^"]+)".*?reason="([^"]+)"', text):
         tag, reason = match.group(1), match.group(2)
         if tag not in tag_map and "MCP" in reason.upper():
-            tag_map[tag] = (reason, "transport_gap")
+            tag_map[tag] = TagReason(reason, "transport_gap")
 
     # _UC002_VALIDATION_XFAIL, _UC006_VALIDATION_XFAIL — selective xfails
     for match in re.finditer(r'\(\s*"(T-[^"]+)",\s*\{[^}]*\},\s*"([^"]+)"\s*\)', text):
         tag, reason = match.group(1), match.group(2)
         if tag not in tag_map:
-            tag_map[tag] = (reason, "production_gap")
+            tag_map[tag] = TagReason(reason, "production_gap")
 
     # _UC004_XFAIL_TAGS dict with tuples: tag → (reason, strict)
     for match in re.finditer(r'"(T-UC-004[^"]+)":\s*\(\s*"([^"]+)",\s*(True|False)\s*\)', text):
         tag, reason = match.group(1), match.group(2)
         if tag not in tag_map:
-            tag_map[tag] = (reason, "production_gap")
+            tag_map[tag] = TagReason(reason, "production_gap")
 
     # _UC003_EXT_XFAILS dict
     for match in re.finditer(r'"(T-UC-003[^"]+)":\s*"([^"]+)"', text):
         tag, reason = match.group(1), match.group(2)
         if tag not in tag_map:
-            tag_map[tag] = (reason, "production_gap")
+            tag_map[tag] = TagReason(reason, "production_gap")
 
     # Dict form with nested reason key (legacy / alternate)
     for m in re.finditer(
@@ -451,14 +465,14 @@ def parse_conftest_xfail_tags(conftest_path: Path) -> dict[str, tuple[str, str]]
     ):
         tag, reason = m.group(1), m.group(2)
         if tag not in tag_map:
-            tag_map[tag] = (reason, "production_gap")
+            tag_map[tag] = TagReason(reason, "production_gap")
 
     return tag_map
 
 
 def tag_reasons(conftest_path: Path) -> dict[str, str]:
     """Projection of ``parse_conftest_xfail_tags`` to ``tag → reason`` only."""
-    return {k: v[0] for k, v in parse_conftest_xfail_tags(conftest_path).items()}
+    return {k: v.reason for k, v in parse_conftest_xfail_tags(conftest_path).items()}
 
 
 def remap_container_path(

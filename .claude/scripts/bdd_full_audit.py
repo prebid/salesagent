@@ -39,6 +39,7 @@ from bdd_audit_common import (  # noqa: E402
     grade_base,
     load_bdd_artifact,
     load_e2e_rest_known_failure_bases,
+    phase_dict,
     short_base,
     short_nodeid,
     tag_reasons,
@@ -114,7 +115,7 @@ class InspectorFlag:
 
 def _test_entry_from_raw(t: dict) -> TestEntry:
     """Build a TestEntry from one bdd.json test dict (null-safe longrepr)."""
-    longrepr = t.get("call", {}).get("longrepr") or ""
+    longrepr = phase_dict(t, "call").get("longrepr") or ""
     return TestEntry(
         nodeid=t["nodeid"],
         outcome=t["outcome"],

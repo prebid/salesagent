@@ -21,6 +21,16 @@ SCRIPTS = Path(__file__).resolve().parents[2] / ".claude" / "scripts"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFTEST = REPO_ROOT / "tests" / "bdd" / "conftest.py"
 
+# Canonical present-transport set for xpass fixtures (must not drift from
+# bdd_audit_common / conftest parametrize ids).
+_PRESENT_TRANSPORTS = ("a2a", "mcp", "rest")
+
+
+def _xpassed(base: str, *transports: str) -> list[dict[str, str]]:
+    """Build xpassed json-report rows for ``base`` × transports."""
+    chosen = transports or _PRESENT_TRANSPORTS
+    return [{"nodeid": f"{base}[{t}]", "outcome": "xpassed"} for t in chosen]
+
 
 def _load(name: str, request: pytest.FixtureRequest | None = None):
     path = SCRIPTS / f"{name}.py"
@@ -345,7 +355,7 @@ class TestClassifyXpassedAudit:
 
     def test_three_transport_xpass_is_stale_not_partial(self, audit_xfails) -> None:
         base = "tests/bdd/test_uc004.py::test_s"
-        all_tests = [{"nodeid": f"{base}[{t}]", "outcome": "xpassed"} for t in ("a2a", "mcp", "rest")]
+        all_tests = _xpassed(base)
         buckets = audit_xfails.classify_xpassed(all_tests)
         assert buckets.graduate == {base}
         assert buckets.confirm == set()
@@ -408,7 +418,7 @@ class TestClassifyXpassedAudit:
 
     def test_e2e_rest_less_no_firm_graduate(self, audit_xfails) -> None:
         base = "tests/bdd/test_uc004.py::test_s"
-        all_tests = [{"nodeid": f"{base}[{t}]", "outcome": "xpassed"} for t in ("a2a", "mcp", "rest")]
+        all_tests = _xpassed(base)
         buckets = audit_xfails.classify_xpassed(all_tests, force_confirm=True)
         assert buckets.graduate == set()
         assert buckets.confirm == {base}
@@ -416,7 +426,7 @@ class TestClassifyXpassedAudit:
     def test_ledger_member_without_e2e_rest_confirms(self, audit_xfails) -> None:
         """Ledger-marked base with no e2e_rest row must confirm, not firm-graduate."""
         base = "tests/bdd/test_uc004.py::test_s"
-        all_tests = [{"nodeid": f"{base}[{t}]", "outcome": "xpassed"} for t in ("a2a", "mcp", "rest")]
+        all_tests = _xpassed(base)
         buckets = audit_xfails.classify_xpassed(all_tests, ledger_bases={base})
         assert buckets.graduate == set()
         assert buckets.confirm == {base}
@@ -521,7 +531,7 @@ class TestConftestTagParser:
         reasons = bdd_audit_common.tag_reasons(CONFTEST)
         assert len(tag_map) >= 100
         assert len(reasons) == len(tag_map)
-        assert all(reasons[k] == tag_map[k][0] for k in tag_map)
+        assert all(reasons[k] == tag_map[k].reason for k in tag_map)
 
     def test_audit_xfails_uses_shared_parser(self, audit_xfails, bdd_audit_common) -> None:
         assert audit_xfails.parse_conftest_xfail_tags is bdd_audit_common.parse_conftest_xfail_tags
@@ -535,6 +545,31 @@ class TestCrashMessageClassification:
             "/tmp/x.py", 1, phase="setup", message="_pytest.outcomes.XFailed: UC harness not yet wired"
         )
         assert "wasxfail" not in test  # realistic json-report shape
+        entry = audit_xfails.classify_xfail(test, {}, [])
+        assert entry.category == "HARNESS_GAP"
+
+    def test_harness_gap_from_no_harness_environment_phrase(self, audit_xfails) -> None:
+        """Pin the canonical conftest wording alone (load-bearing disjunct)."""
+        test = _json_report_test(
+            "/tmp/x.py",
+            1,
+            phase="setup",
+            message="_pytest.outcomes.XFailed: No harness environment for UC-004",
+        )
+        assert "harness not" not in test["setup"]["crash"]["message"].lower()
+        entry = audit_xfails.classify_xfail(test, {}, [])
+        assert entry.category == "HARNESS_GAP"
+
+    def test_harness_gap_from_harness_not_wired_without_yet(self, audit_xfails) -> None:
+        """Pin ``harness not wired`` (no ``yet``) as its own disjunct."""
+        test = _json_report_test(
+            "/tmp/x.py",
+            1,
+            phase="setup",
+            message="_pytest.outcomes.XFailed: UC harness not wired",
+        )
+        assert "not yet" not in test["setup"]["crash"]["message"].lower()
+        assert "No harness environment" not in test["setup"]["crash"]["message"]
         entry = audit_xfails.classify_xfail(test, {}, [])
         assert entry.category == "HARNESS_GAP"
 
@@ -1177,24 +1212,24 @@ class TestGradeResultNamedFields:
 class TestSurvivingMechanismArms:
     """S9 — pin surviving mechanism arms after dead-arm deletion."""
 
-    def test_partial_impl_from_tag_map(self, audit_xfails) -> None:
+    def test_partial_impl_from_tag_map(self, audit_xfails, bdd_audit_common) -> None:
         test = _json_report_test(
             "/x", 1, phase="call", message="xfail", nodeid="t::s[a2a]", keywords=["T-UC-004-partition-foo"]
         )
         entry = audit_xfails.classify_xfail(
             test,
-            {"T-UC-004-partition-foo": ("partition reason", "partial_impl")},
+            {"T-UC-004-partition-foo": bdd_audit_common.TagReason("partition reason", "partial_impl")},
             [],
         )
         assert entry.category == "PARTIAL_IMPL"
 
-    def test_production_gap_from_tag_map(self, audit_xfails) -> None:
+    def test_production_gap_from_tag_map(self, audit_xfails, bdd_audit_common) -> None:
         test = _json_report_test(
             "/x", 1, phase="setup", message="xfail", nodeid="t::s[a2a]", keywords=["T-UC-002-main-1"]
         )
         entry = audit_xfails.classify_xfail(
             test,
-            {"T-UC-002-main-1": ("not built", "production_gap")},
+            {"T-UC-002-main-1": bdd_audit_common.TagReason("not built", "production_gap")},
             [],
         )
         assert entry.category == "PRODUCTION_GAP"

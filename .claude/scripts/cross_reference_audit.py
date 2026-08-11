@@ -33,6 +33,7 @@ from bdd_audit_common import (  # noqa: E402
     extract_transport,
     extract_uc,
     load_bdd_artifact,
+    phase_dict,
 )
 
 
@@ -80,7 +81,7 @@ def parse_test_results(path: Path) -> list[TestOutcome]:
         nodeid = t["nodeid"]
         transport = extract_transport(nodeid)
 
-        longrepr = t.get("call", {}).get("longrepr", "")
+        longrepr = phase_dict(t, "call").get("longrepr") or ""
         error = extract_longrepr_e_line(longrepr)
 
         outcomes.append(

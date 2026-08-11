@@ -45,7 +45,7 @@ from __future__ import annotations
 import ast
 import sys
 from collections import Counter, defaultdict
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple, TypedDict, cast
@@ -59,6 +59,7 @@ from bdd_audit_common import (  # noqa: E402
     E2E_LEDGER_PATH,
     REPO_ROOT,
     STEPS_DIR,
+    TagReason,
     extract_scenario_base,
     extract_transport,
     extract_uc,
@@ -66,6 +67,7 @@ from bdd_audit_common import (  # noqa: E402
     load_bdd_artifact,
     load_e2e_rest_known_failure_bases,
     parse_conftest_xfail_tags,
+    phase_dict,
     remap_container_path,
     short_base,
 )
@@ -217,9 +219,9 @@ def find_premature_xfails(steps_dir: Path) -> list[PrematureXfail]:
 def _iter_phase_dicts(test: TestReportEntry) -> Iterator[PhaseResult]:
     """Yield setup/call phase dicts in canonical order with dict-guarding."""
     for phase in ("setup", "call"):
-        ph_raw = test.get(phase) or {}
-        if isinstance(ph_raw, dict):
-            yield cast(PhaseResult, ph_raw)
+        ph = phase_dict(test, phase)
+        if ph:
+            yield cast(PhaseResult, ph)
 
 
 def _crash_reason_text(test: TestReportEntry) -> str:
@@ -364,7 +366,7 @@ def extract_tags(test_entry: TestReportEntry) -> set[str]:
 
 def classify_xfail(
     test: TestReportEntry,
-    tag_map: dict[str, tuple[str, str]],
+    tag_map: Mapping[str, TagReason],
     premature_xfails: Sequence[PrematureXfail],
     *,
     artifact_root: str | None = None,
@@ -394,8 +396,11 @@ def classify_xfail(
         entry.xfail_source = f"step:{matched.name}"
         return entry
 
-    # Priority 1: Missing step definition (auto-xfail from pytest hook)
-    if "Step definition not found" in reason_text or "StepDefinitionNotFoundError" in reason_text:
+    # Priority 1: Missing step definition (auto-xfail from pytest hook).
+    # Real pytest-bdd messages carry ``StepDefinitionNotFoundError``; the
+    # human phrase "Step definition not found" never matches live wording
+    # ("is not found") and is intentionally not a classifier arm.
+    if "StepDefinitionNotFoundError" in reason_text:
         entry.category = "MISSING_STEP"
         entry.reason = reason_text
         entry.xfail_source = "conftest:auto"
@@ -416,14 +421,14 @@ def classify_xfail(
     # Priority 3: Match against conftest tag map (deterministic tag order)
     for tag in sorted(tags):
         if tag in tag_map:
-            reason, mechanism = tag_map[tag]
-            entry.reason = reason
+            tagged = tag_map[tag]
+            entry.reason = tagged.reason
             entry.xfail_source = f"conftest:tag:{tag}"
-            if mechanism == "transport_gap":
+            if tagged.mechanism == "transport_gap":
                 entry.category = "TRANSPORT_GAP"
-            elif mechanism == "harness_gap":
+            elif tagged.mechanism == "harness_gap":
                 entry.category = "HARNESS_GAP"
-            elif mechanism == "partial_impl":
+            elif tagged.mechanism == "partial_impl":
                 entry.category = "PARTIAL_IMPL"
             else:
                 entry.category = "PRODUCTION_GAP"
@@ -661,29 +666,47 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
         "PARTIAL_PASS": "Passes some transports, not all",
         "UNCLASSIFIED": "No matching pattern found",
     }
+    # Single owner for column / stderr category order (by_uc table + SUMMARY).
+    xfail_categories = tuple(category_desc.keys())
+    by_uc_categories = (
+        "PRODUCTION_GAP",
+        "TRANSPORT_GAP",
+        "HARNESS_GAP",
+        "PARTIAL_IMPL",
+        "MISSING_STEP",
+        "PREMATURE_XFAIL",
+        "STALE",
+        "STALE_CONFIRM",
+        "UNCLASSIFIED",
+    )
 
-    for cat, desc in category_desc.items():
+    for cat in xfail_categories:
+        desc = category_desc[cat]
         entries = report.by_category.get(cat, [])
         pct = len(entries) / report.total_xfailed * 100 if report.total_xfailed else 0
         lines.append(f"| {cat} | {len(entries)} | {pct:.0f}% | {desc} |")
 
     lines.extend(["", "### By use case", ""])
-    lines.append(
-        "| UC | PROD_GAP | TRANSPORT | HARNESS | PARTIAL | MISSING | PREMATURE | STALE | STALE_CONFIRM | UNCLASS | Total |"
-    )
-    lines.append("|" + "|".join(["---"] * 11) + "|")
+    header_labels = [
+        "PROD_GAP",
+        "TRANSPORT",
+        "HARNESS",
+        "PARTIAL",
+        "MISSING",
+        "PREMATURE",
+        "STALE",
+        "STALE_CONFIRM",
+        "UNCLASS",
+    ]
+    lines.append("| UC | " + " | ".join(header_labels) + " | Total |")
+    lines.append("|" + "|".join(["---"] * (len(by_uc_categories) + 2)) + "|")
 
     all_ucs = sorted(report.by_uc.keys())
     for uc in all_ucs:
         counts = report.by_uc[uc]
         total = sum(counts.values())
-        lines.append(
-            f"| {uc} | {counts.get('PRODUCTION_GAP', 0)} | {counts.get('TRANSPORT_GAP', 0)} | "
-            f"{counts.get('HARNESS_GAP', 0)} | {counts.get('PARTIAL_IMPL', 0)} | "
-            f"{counts.get('MISSING_STEP', 0)} | {counts.get('PREMATURE_XFAIL', 0)} | "
-            f"{counts.get('STALE', 0)} | {counts.get('STALE_CONFIRM', 0)} | "
-            f"{counts.get('UNCLASSIFIED', 0)} | {total} |"
-        )
+        cells = " | ".join(str(counts.get(cat, 0)) for cat in by_uc_categories)
+        lines.append(f"| {uc} | {cells} | {total} |")
 
     # Xpassed section
     lines.extend(
@@ -895,15 +918,18 @@ def main() -> None:
     else:
         # Progress summary on stderr so stdout stays report-only when piped
         print("\n=== SUMMARY ===", file=sys.stderr)
-        for cat in [
+        for cat in (
             "PRODUCTION_GAP",
             "TRANSPORT_GAP",
             "HARNESS_GAP",
             "PARTIAL_IMPL",
             "MISSING_STEP",
             "PREMATURE_XFAIL",
+            "STALE",
+            "STALE_CONFIRM",
+            "PARTIAL_PASS",
             "UNCLASSIFIED",
-        ]:
+        ):
             count = len(report.by_category.get(cat, []))
             if count > 0:
                 print(f"  {cat}: {count}", file=sys.stderr)
