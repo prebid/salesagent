@@ -3083,8 +3083,9 @@ def _detect_uc011_harness(marker_names: set[str]) -> str:
     """Detect which UC-011 harness a scenario needs based on tags.
 
     When both @sync and @list are present (cross-cutting scenarios like
-    sync-then-list), use sync harness — it's the superset and already has
-    a cross-cutting list path via _list_accounts_impl.
+    sync-then-list), use sync harness — it's the accounts superset env
+    (salesagent-oyiv.15: extends AccountListEnv, dispatches both sync_accounts
+    and list_accounts genuinely per-transport, no bypass).
     """
     has_list = "list" in marker_names
     has_sync = "sync" in marker_names

@@ -28,12 +28,11 @@ _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 # Functions that legitimately bypass transport dispatch.
 # Each entry: (filename_stem, function_name).
 # This allowlist can only shrink — never add new entries.
-_ALLOWLIST: set[tuple[str, str]] = {
-    # FIXME(salesagent-ec0): cross-cutting list under sync env —
-    # AccountSyncEnv can't dispatch list_accounts requests
-    ("uc011_accounts", "when_list_accounts_unfiltered"),
-    ("uc011_accounts", "when_list_sandbox_filter"),
-}
+# Graduated (salesagent-oyiv.15): uc011_accounts's when_list_accounts_unfiltered /
+# when_list_sandbox_filter no longer bypass — AccountSyncEnv now dispatches
+# ListAccountsRequest genuinely per-transport (extends AccountListEnv, routes by
+# request type), so both steps call dispatch_request() unconditionally.
+_ALLOWLIST: set[tuple[str, str]] = set()
 
 
 def _is_when_or_given_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:

@@ -26,19 +26,6 @@ from tests.helpers import assert_envelope_shape
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _stash_bypass_wire_response(ctx: dict, resp: Any) -> None:
-    """Stash a wire-equivalent for a TRANSPORT-BYPASS When step.
-
-    A TRANSPORT-BYPASS calls an ``_impl`` function directly, so no transport
-    ever serializes a real wire body — the same situation ``wire_dict``/
-    ``wire_field`` (tests/bdd/steps/_outcome_helpers.py) handle for IMPL by
-    serializing the typed payload through the production serializer. Mirror
-    that here so a wire-reading oracle (``wire_dict(ctx)``/``wire_field``)
-    still has something to read instead of raising "wire_response missing".
-    """
-    ctx["wire_response"] = resp.model_dump(mode="json")
-
-
 def _setup_tenant_and_principal(ctx: dict) -> tuple[Any, Any]:
     """Set up default tenant + principal, caching in ctx to avoid duplicates."""
     if "tenant" not in ctx:
@@ -363,8 +350,8 @@ def when_list_accounts_via_transport(ctx: dict, transport: str | None = None) ->
 def when_list_accounts_unfiltered(ctx: dict) -> None:
     """Send list_accounts request with no filters (matches multiple phrasings).
 
-    For cross-cutting scenarios (context-echo) that run under AccountSyncEnv,
-    calls _list_accounts_impl directly since the sync env doesn't dispatch list.
+    AccountSyncEnv dispatches ListAccountsRequest genuinely per-transport
+    (salesagent-oyiv.15) — no TRANSPORT-BYPASS needed here anymore.
     Simulates DB failure when ctx["simulate_db_failure"] is set.
     """
     from src.core.schemas.account import ListAccountsRequest
@@ -385,21 +372,7 @@ def when_list_accounts_unfiltered(ctx: dict) -> None:
                 ctx["error"] = exc
         return
 
-    from tests.harness.account_sync import AccountSyncEnv
-
-    env = ctx["env"]
-    if isinstance(env, AccountSyncEnv):
-        # TRANSPORT-BYPASS: cross-cutting list under sync env
-        from src.core.tools.accounts import _list_accounts_impl
-
-        env._commit_factory_data()
-        try:
-            ctx["response"] = _list_accounts_impl(identity=env.identity)
-            _stash_bypass_wire_response(ctx, ctx["response"])
-        except Exception as exc:
-            ctx["error"] = exc
-    else:
-        dispatch_request(ctx, req=ListAccountsRequest())
+    dispatch_request(ctx, req=ListAccountsRequest())
 
 
 @when(parsers.parse('the Buyer Agent sends a list_accounts request with status filter "{status}"'))
@@ -481,27 +454,13 @@ def when_list_accounts_with_explicit_cursor(ctx: dict, cursor: str) -> None:
 def when_list_sandbox_filter(ctx: dict, value: str) -> None:
     """Send list_accounts with sandbox filter.
 
-    May run under AccountSyncEnv (sandbox tag). For cross-cutting scenarios
-    that need list dispatch on a sync env, calls _list_accounts_impl directly.
+    May run under AccountSyncEnv (sandbox tag) — it dispatches ListAccountsRequest
+    genuinely per-transport (salesagent-oyiv.15), no TRANSPORT-BYPASS needed.
     """
     from src.core.schemas.account import ListAccountsRequest
-    from tests.harness.account_sync import AccountSyncEnv
 
-    env = ctx["env"]
     req = ListAccountsRequest(sandbox=value.lower() == "true")
-    if isinstance(env, AccountSyncEnv):
-        # Cross-cutting: sync env can't dispatch list requests
-        # TRANSPORT-BYPASS: sandbox list under sync env
-        from src.core.tools.accounts import _list_accounts_impl
-
-        env._commit_factory_data()
-        try:
-            ctx["response"] = _list_accounts_impl(req=req, identity=env.identity)
-            _stash_bypass_wire_response(ctx, ctx["response"])
-        except Exception as exc:
-            ctx["error"] = exc
-    else:
-        dispatch_request(ctx, req=req)
+    dispatch_request(ctx, req=req)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2078,9 +2037,10 @@ def when_request_with_context(ctx: dict, operation: str, ctx_json: str) -> None:
     """Send a list_accounts or sync_accounts request with inline context.
 
     Context-echo is cross-cutting: tests both list and sync operations.
-    The conftest harness provides AccountSyncEnv for context-echo tags.
-    For list_accounts, we call _list_accounts_impl directly (the sync env
-    shares the same DB session and identity infrastructure).
+    The conftest harness provides AccountSyncEnv for context-echo tags, which
+    dispatches ListAccountsRequest genuinely per-transport (salesagent-oyiv.15) —
+    this is @T-UC-011-ext-g-echo's list_accounts row, previously silently
+    misdispatched to sync_accounts's serializer under a real transport label.
     """
     context_data = _parse_inline_context(ctx_json)
     ctx["sent_context"] = context_data
