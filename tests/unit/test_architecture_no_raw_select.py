@@ -14,14 +14,13 @@ are also exempt.
 beads: beads-xw7 (universal no-raw-select guard)
 """
 
-import ast
-from pathlib import Path
-
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, find_raw_select_violations
-
-ROOT = Path(__file__).resolve().parents[2]
+from tests.unit._architecture_helpers import (
+    assert_violations_match_allowlist,
+    find_raw_select_violations,
+    orm_model_class_defs,
+)
 
 # ── Exempt directories and files ────────────────────────────────────
 # These are ALLOWED to use raw select() — they are the abstraction layer.
@@ -36,31 +35,14 @@ INFRASTRUCTURE_FILES = {
 
 
 def _discover_orm_model_names() -> set[str]:
-    """Parse src/core/database/models.py and return all ORM model class names.
+    """Every ORM model class name declared in src/core/database/models.py.
 
     A class is an ORM model if it inherits from Base (directly or with mixins).
-    The Base class itself is excluded.
+    The Base class itself is excluded. Discovery reads the shared
+    ``models_module_tree()`` parse so this guard, the uniqueness-index-verdict
+    guard and every other models.py reader agree on one inventory.
     """
-    models_file = ROOT / "src" / "core" / "database" / "models.py"
-    tree = ast.parse(models_file.read_text())
-    model_names: set[str] = set()
-
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ClassDef):
-            continue
-        if node.name == "Base":
-            continue
-        for base in node.bases:
-            base_name = ""
-            if isinstance(base, ast.Name):
-                base_name = base.id
-            elif isinstance(base, ast.Attribute):
-                base_name = base.attr
-            if base_name in ("Base", "JSONValidatorMixin"):
-                model_names.add(node.name)
-                break
-
-    return model_names
+    return {cls.name for cls in orm_model_class_defs()}
 
 
 # Cache the model names at module load (fast — single file parse)
@@ -128,7 +110,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/authorized_properties.py", "list_property_tags"),
     ("src/admin/blueprints/authorized_properties.py", "sync_properties_from_adagents"),
     ("src/admin/blueprints/authorized_properties.py", "upload_authorized_properties"),
-    ("src/admin/blueprints/core.py", "create_tenant"),
+    # create_tenant fixed — its duplicate check goes through TenantLookupRepository
     ("src/admin/blueprints/core.py", "get_tenant_from_hostname"),
     ("src/admin/blueprints/core.py", "index"),
     ("src/admin/blueprints/core.py", "reactivate_tenant"),
@@ -178,16 +160,15 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/policy.py", "update"),
     ("src/admin/blueprints/principals.py", "create_principal"),
     ("src/admin/blueprints/principals.py", "delete_principal"),
-    ("src/admin/blueprints/principals.py", "delete_webhook"),
+    # delete_webhook / register_webhook / toggle_webhook removed — rewired onto
+    # PushNotificationConfigRepository via PushNotificationConfigUoW (salesagent-tayg)
     ("src/admin/blueprints/principals.py", "edit_principal"),
     ("src/admin/blueprints/principals.py", "get_gam_advertisers"),
     ("src/admin/blueprints/principals.py", "get_principal"),
     ("src/admin/blueprints/principals.py", "get_principal_config"),
     ("src/admin/blueprints/principals.py", "list_principals"),
     ("src/admin/blueprints/principals.py", "manage_webhooks"),
-    ("src/admin/blueprints/principals.py", "register_webhook"),
     ("src/admin/blueprints/principals.py", "save_testing_config"),
-    ("src/admin/blueprints/principals.py", "toggle_webhook"),
     ("src/admin/blueprints/principals.py", "update_mappings"),
     ("src/admin/blueprints/products.py", "_render_add_product_form"),
     ("src/admin/blueprints/products.py", "add_product"),
@@ -228,26 +209,23 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/tenants.py", "update_favicon_url"),
     ("src/admin/blueprints/tenants.py", "update_slack"),
     ("src/admin/blueprints/tenants.py", "upload_favicon"),
-    ("src/admin/blueprints/users.py", "add_domain"),
+    # add_domain/remove_domain removed — atomic authorized-list mutation via
+    # TenantConfigRepository/TenantConfigUoW (salesagent-v8dt); ditto the four
+    # domain_access add/remove_authorized_* helpers.
     ("src/admin/blueprints/users.py", "add_user"),
     ("src/admin/blueprints/users.py", "disable_setup_mode"),
     ("src/admin/blueprints/users.py", "enable_setup_mode"),
     ("src/admin/blueprints/users.py", "list_users"),
-    ("src/admin/blueprints/users.py", "remove_domain"),
     ("src/admin/blueprints/users.py", "toggle_user"),
     ("src/admin/blueprints/users.py", "update_role"),
     ("src/admin/blueprints/workflows.py", "approve_workflow_step"),  # select(CreativeAssignment) — no creative repo yet
     ("src/admin/blueprints/workflows.py", "list_workflows"),  # select(Tenant) — no tenant repo yet
     ("src/admin/blueprints/workflows.py", "review_workflow_step"),  # select(Context) — context lookup
     # ── Admin services / utils ──
-    ("src/admin/domain_access.py", "add_authorized_domain"),
-    ("src/admin/domain_access.py", "add_authorized_email"),
     ("src/admin/domain_access.py", "ensure_user_in_tenant"),
     ("src/admin/domain_access.py", "find_tenant_by_authorized_domain"),
     ("src/admin/domain_access.py", "find_tenants_by_authorized_email"),
     ("src/admin/domain_access.py", "find_tenants_by_user_record"),
-    ("src/admin/domain_access.py", "remove_authorized_domain"),
-    ("src/admin/domain_access.py", "remove_authorized_email"),
     ("src/admin/services/business_activity_service.py", "get_business_activities"),
     ("src/admin/services/dashboard_service.py", "get_tenant"),
     ("src/admin/services/media_buy_readiness_service.py", "get_readiness_state"),
@@ -280,7 +258,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/core/config_loader.py", "get_tenant_by_subdomain"),
     ("src/core/config_loader.py", "get_tenant_by_virtual_host"),
     ("src/core/context_manager.py", "_send_push_notifications"),
-    ("src/core/context_manager.py", "add_message"),
     ("src/core/context_manager.py", "get_context"),
     ("src/core/context_manager.py", "get_context_status"),
     ("src/core/context_manager.py", "get_contexts_for_principal"),
@@ -356,7 +333,8 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/services/order_approval_service.py", "_mark_approval_complete"),
     ("src/services/order_approval_service.py", "_mark_approval_failed"),
     # _run_approval_thread removed — uses AdapterConfigRepository (salesagent-zj9)
-    ("src/services/order_approval_service.py", "_send_approval_webhook"),
+    # _send_approval_webhook removed — auth lookup moved to _build_approval_webhook_headers
+    # which routes through PushNotificationConfigRepository (C901 ratchet fix)
     ("src/services/order_approval_service.py", "_update_approval_progress"),
     ("src/services/order_approval_service.py", "get_approval_status"),
     ("src/services/order_approval_service.py", "start_order_approval_background"),

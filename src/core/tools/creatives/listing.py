@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any, cast
 
 from adcp import CreativeFilters
-from adcp.types import ContextObject, PaginationRequest
+from adcp.types import ContextObject, Error, PaginationRequest
 from adcp.types.generated_poc.creative.list_creatives_request import (
     Field1 as FieldModel,
 )
@@ -14,13 +14,12 @@ from adcp.types.generated_poc.creative.list_creatives_request import (
     Sort,
 )
 from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 from pydantic import Field as PydanticField
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPValidationError, normalize_advisory_errors
 from src.core.helpers import enum_value, log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_context_object
@@ -30,6 +29,8 @@ from src.core.schemas import (
     ListCreativesResponse,
 )
 from src.core.tool_context import ToolContext
+from src.core.tools._mcp_boundary import build_tool_result
+from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 from src.core.validation_helpers import adcp_validation_boundary
 
 logger = logging.getLogger(__name__)
@@ -214,6 +215,21 @@ def _list_creatives_impl(
 
     # Derive flat DB-query params from the structured request.
     req_filters = req.filters
+    # This status string is matched against the RAW persisted `creatives.status` column
+    # (CreativeRepository.get_by_principal), while the value rendered on the wire is
+    # derived from it below — and for a row whose stored status is not a CreativeStatus
+    # member, the reader substitutes a placeholder. The two therefore disagree on
+    # purpose: an unreadable row appears in an UNFILTERED read (rendered `processing`,
+    # plus an errors[] advisory) and is ABSENT from `list_creatives(status="processing")`.
+    # That asymmetry is deliberate, and it is the opposite of the choice made for the
+    # unfiltered read on purpose: a filtered read is scoped to a status the buyer NAMED,
+    # and a row we could not parse is not KNOWN to be that status, so excluding it answers
+    # the buyer's actual question. Omitting it from the unfiltered read would instead be a
+    # second lie ("this creative does not exist") and would desynchronise
+    # query_summary.returned from total_matching. Do NOT "fix" this by mapping the
+    # placeholder back onto the filter — that would report the row as confirmed
+    # `processing`. Graded by
+    # tests/integration/test_list_creatives_unrecognized_status.py::TestFilteredReadExcludesTheUnreadableRow.
     status = enum_value(req_filters.statuses[0]) if req_filters and req_filters.statuses else None
     tags = req_filters.tags if req_filters else None
     created_after_dt = req_filters.created_after if req_filters else None
@@ -249,6 +265,10 @@ def _list_creatives_impl(
 
     creatives = []
     total_count = 0
+    # Advisories for rows whose stored status this reader cannot parse. Bound here (not a
+    # parameter) so the loop handler below has a container to surface into; emitted on the
+    # response's errors[] at the bottom of this function.
+    unreadable_status_advisories: list[Error] = []
 
     with CreativeUoW(tenant["tenant_id"]) as uow:
         assert uow.creatives is not None
@@ -337,8 +357,45 @@ def _list_creatives_impl(
             try:
                 status_enum = CreativeStatus(db_creative.status)
             except ValueError:
-                # Default to pending_review if invalid status
-                status_enum = CreativeStatus.pending_review
+                # A stored status that is not a CreativeStatus member. AdCP 3.1.1
+                # list-creatives-response.json makes `status` REQUIRED on every item and
+                # $refs a CLOSED 6-member enum with no `unknown`, so some value must be
+                # emitted — every choice makes some claim, which is why the errors[]
+                # advisory below, not the placeholder, is the honest part of this handler.
+                # `processing` is the placeholder because it is the only member asserting
+                # no completed evaluation, no deliverability and no seller MUST;
+                # `pending_review` is the worst choice (it asserts processing already
+                # succeeded AND that the seller owes a decision, i.e. "wait for us").
+                #
+                # The advisory code is PINNED to CONFIGURATION_ERROR: normalize_advisory_errors
+                # collapses any code outside WIRE_STANDARD_CODES to SERVICE_UNAVAILABLE /
+                # recovery=transient — which would tell the buyer to retry a permanently
+                # bad row forever. Honest caveat: CONFIGURATION_ERROR's pinned prose says
+                # "prevents handling the request" and here the request IS handled; it is
+                # nonetheless the only wire-standard code whose recovery (`terminal`) and
+                # remediation ("surface to a human at the seller — the buyer cannot resolve
+                # a seller-side deployment misconfiguration and MUST NOT auto-retry") both
+                # match. INVALID_STATE is `correctable` (implies the buyer can fix the
+                # request — false); SERVICE_UNAVAILABLE is `transient` (implies retry).
+                logger.warning(
+                    "Creative %s (tenant %s) has unreadable stored status %r; reporting it as "
+                    "'processing' and surfacing an advisory",
+                    db_creative.creative_id,
+                    tenant["tenant_id"],
+                    db_creative.status,
+                )
+                unreadable_status_advisories.append(
+                    Error(  # structural-guard: advisory per-creative result in ListCreativesResponse.errors[]
+                        code="CONFIGURATION_ERROR",
+                        message=(
+                            f"Creative {db_creative.creative_id} has stored status "
+                            f"{db_creative.status!r}, which is not an AdCP creative status; it is "
+                            f"reported as 'processing' as a placeholder. Seller-side data defect — "
+                            f"retrying will not change it."
+                        ),
+                    )
+                )
+                status_enum = CreativeStatus.processing
 
             # v3.1 concept grouping. AdCP exposes concept_id/concept_name on the
             # list_creatives RESPONSE (a creative's concept membership, sourced from
@@ -447,6 +504,7 @@ def _list_creatives_impl(
         creatives=creatives,
         format_summary=None,
         status_summary=None,
+        errors=normalize_advisory_errors(unreadable_status_advisories) or None,
         context=req.context,
     )
 
@@ -455,7 +513,8 @@ async def list_creatives(
     media_buy_id: Annotated[str | None, PydanticField(description="Filter creatives by a single media buy ID")] = None,
     media_buy_ids: list[str] = None,
     status: Annotated[
-        str | None, PydanticField(description="Filter by creative status (e.g. 'approved', 'pending', 'rejected')")
+        str | None,
+        PydanticField(description="Filter by creative status (e.g. 'approved', 'pending_review', 'rejected')"),
     ] = None,
     format: Annotated[str | None, PydanticField(description="Filter by creative format ID")] = None,
     tags: list[str] = None,
@@ -544,7 +603,7 @@ async def list_creatives(
         page=page,
         identity=identity,
     )
-    return ToolResult(content=str(response), structured_content=response)
+    return build_tool_result(str(response), response)
 
 
 def list_creatives_raw(
@@ -567,7 +626,7 @@ def list_creatives_raw(
     sort_order: str = "desc",
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ):
     """List creative assets with filtering and pagination (raw function for A2A server use, AdCP v2.5).
 
@@ -598,10 +657,7 @@ def list_creatives_raw(
     Returns:
         ListCreativesResponse with filtered creative assets and pagination info
     """
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx)
+    identity = resolve_identity_if_not_provided(identity, ctx)
 
     req = _build_list_creatives_request(
         media_buy_id=media_buy_id,

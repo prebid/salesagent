@@ -23,7 +23,7 @@ import subprocess
 import warnings
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import yaml
 
@@ -113,6 +113,197 @@ def parse_module(path: Path) -> ast.Module:
     return _parse_cached(str(path), path.stat().st_mtime)
 
 
+# ---------------------------------------------------------------------------
+# ORM model inventory — the one parse of src/core/database/models.py
+# ---------------------------------------------------------------------------
+
+MODELS_MODULE = REPO_ROOT / "src" / "core" / "database" / "models.py"
+
+#: Bases that make a class an ORM model. ``Base`` itself is excluded.
+_ORM_MODEL_BASES = frozenset({"Base", "JSONValidatorMixin"})
+
+
+def models_module_tree() -> ast.Module:
+    """Parsed ``src/core/database/models.py``, shared by every guard that reads it.
+
+    Four guards independently parsed this file before this accessor existed. It is
+    the same mtime-keyed ``parse_module`` cache underneath, so the parse happens
+    once per session however many guards ask for it.
+    """
+    return parse_module(MODELS_MODULE)
+
+
+def orm_model_class_defs() -> Iterator[ast.ClassDef]:
+    """Yield the ``ClassDef`` of every ORM model declared in ``models.py``."""
+    for node in ast.walk(models_module_tree()):
+        if not isinstance(node, ast.ClassDef) or node.name == "Base":
+            continue
+        for base in node.bases:
+            base_name = base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", "")
+            if base_name in _ORM_MODEL_BASES:
+                yield node
+                break
+
+
+class UniqueKey(NamedTuple):
+    """One declared uniqueness promise on an ORM model.
+
+    ``usable`` is False when the declaration cannot be expressed as a plain set of
+    column names — an expression index, or a partial index whose promise holds only
+    for the rows its ``WHERE`` admits. Such a key is RECORDED and excluded, never
+    truncated to the column subset it happens to mention: ``uq_accounts_natural_key``
+    reduced to ``{tenant_id, operator}`` would assert a uniqueness the database never
+    promised, and any pre-check on that pair would then look like a full key check.
+    """
+
+    model: str
+    name: str
+    columns: frozenset[str]
+    kind: str  # unique-constraint | unique-index | column-unique | composite-pk
+    usable: bool
+    reason: str  # why unusable; "" when usable
+
+
+def _true_kwarg(call: ast.Call, name: str) -> bool:
+    return any(kw.arg == name and isinstance(kw.value, ast.Constant) and kw.value.value is True for kw in call.keywords)
+
+
+def _has_kwarg(call: ast.Call, name: str) -> bool:
+    return any(kw.arg == name for kw in call.keywords)
+
+
+def _string_columns(args: list[ast.expr]) -> tuple[frozenset[str], int]:
+    """Split positional column args into literal names and a count of expression args."""
+    names = {a.value for a in args if isinstance(a, ast.Constant) and isinstance(a.value, str)}
+    return frozenset(names), len(args) - len(names)
+
+
+def _class_body_column_assignments(cls: ast.ClassDef) -> Iterator[tuple[str, ast.Call]]:
+    """Yield ``(column_name, mapped_column_call)`` for each column declared on *cls*."""
+    for stmt in cls.body:
+        target: str | None = None
+        if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+            target = stmt.target.id
+        elif isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
+            target = stmt.targets[0].id
+        if target is None:
+            continue
+        value = stmt.value
+        if not isinstance(value, ast.Call):
+            continue
+        func_name = value.func.attr if isinstance(value.func, ast.Attribute) else getattr(value.func, "id", None)
+        if func_name in {"mapped_column", "Column"}:
+            yield target, value
+
+
+def _table_args_calls(cls: ast.ClassDef) -> Iterator[ast.Call]:
+    """Yield each constraint/index call inside the class's ``__table_args__``."""
+    for stmt in cls.body:
+        if not isinstance(stmt, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == "__table_args__" for t in stmt.targets):
+            continue
+        elements = stmt.value.elts if isinstance(stmt.value, ast.Tuple | ast.List) else [stmt.value]
+        for element in elements:
+            if isinstance(element, ast.Call):
+                yield element
+
+
+def _model_unique_keys(cls: ast.ClassDef) -> Iterator[UniqueKey]:
+    primary_key_columns: list[str] = []
+    for column, call in _class_body_column_assignments(cls):
+        if _true_kwarg(call, "primary_key"):
+            primary_key_columns.append(column)
+        if _true_kwarg(call, "unique"):
+            yield UniqueKey(cls.name, f"{cls.name}.{column}", frozenset({column}), "column-unique", True, "")
+
+    for call in _table_args_calls(cls):
+        func_name = call.func.attr if isinstance(call.func, ast.Attribute) else getattr(call.func, "id", None)
+        if func_name == "UniqueConstraint":
+            columns, expressions = _string_columns(list(call.args))
+            name = next(
+                (kw.value.value for kw in call.keywords if kw.arg == "name" and isinstance(kw.value, ast.Constant)),
+                f"<unnamed uq on {cls.name}>",
+            )
+            reason = "expression column(s)" if expressions else ""
+            yield UniqueKey(cls.name, name, columns, "unique-constraint", not reason, reason)
+        elif func_name == "Index" and _true_kwarg(call, "unique") and call.args:
+            first = call.args[0]
+            name = first.value if isinstance(first, ast.Constant) else f"<unnamed index on {cls.name}>"
+            columns, expressions = _string_columns(list(call.args[1:]))
+            reasons = []
+            if expressions:
+                reasons.append(f"{expressions} expression column(s)")
+            if _has_kwarg(call, "postgresql_where"):
+                reasons.append("partial (postgresql_where)")
+            reason = ", ".join(reasons)
+            yield UniqueKey(cls.name, name, columns, "unique-index", not reason, reason)
+
+    # A composite PRIMARY KEY is a unique index too — and it is the only uniqueness
+    # several models have (PropertyTag, AuthorizedProperty). Single-column primary
+    # keys are excluded: a pre-check on a surrogate id is a plain existence lookup,
+    # not the contested-write shape this inventory exists to describe.
+    if len(primary_key_columns) >= 2:
+        yield UniqueKey(cls.name, f"{cls.name.lower()}_pkey", frozenset(primary_key_columns), "composite-pk", True, "")
+
+
+@functools.lru_cache(maxsize=1)
+def _unique_key_constraints_cached(_mtime: float) -> tuple[UniqueKey, ...]:
+    return tuple(key for cls in orm_model_class_defs() for key in _model_unique_keys(cls))
+
+
+def unique_key_constraints() -> tuple[UniqueKey, ...]:
+    """Every uniqueness promise declared in ``models.py``, usable and not.
+
+    Covers all four declaration forms, because each is the ONLY form for at least
+    one model: ``UniqueConstraint`` in ``__table_args__``, ``Index(..., unique=True)``
+    (``ix_tenants_virtual_host``), column-level ``unique=True`` (``Tenant.subdomain``,
+    ``Principal.access_token``) and composite ``primary_key=True`` (``PropertyTag``,
+    ``AuthorizedProperty``). A ``UniqueConstraint``-only extractor sees none of the
+    tenant keys at all.
+    """
+    return _unique_key_constraints_cached(MODELS_MODULE.stat().st_mtime)
+
+
+def usable_unique_keys_by_model() -> dict[str, frozenset[frozenset[str]]]:
+    """Model name → the column-name tuples the database really enforces as unique."""
+    by_model: dict[str, set[frozenset[str]]] = {}
+    for key in unique_key_constraints():
+        if key.usable and key.columns:
+            by_model.setdefault(key.model, set()).add(key.columns)
+    return {model: frozenset(tuples) for model, tuples in by_model.items()}
+
+
+# ---------------------------------------------------------------------------
+# Shared guard predicates
+# ---------------------------------------------------------------------------
+
+
+def handles_integrity_error(handler: ast.ExceptHandler) -> bool:
+    """True when this except clause catches IntegrityError (alone or in a tuple)."""
+    node = handler.type
+    if node is None:
+        return False
+    candidates = node.elts if isinstance(node, ast.Tuple) else [node]
+    for candidate in candidates:
+        name = candidate.attr if isinstance(candidate, ast.Attribute) else getattr(candidate, "id", None)
+        if name == "IntegrityError":
+            return True
+    return False
+
+
+def structural_guard_marker_re(guard_name: str) -> re.Pattern[str]:
+    """Regex for this repo's per-site opt-out comment, ``# structural-guard: <name> - <why>``.
+
+    The reason is REQUIRED — a bare marker is an opt-out, not a justification. The
+    marker is per-site rather than a central allowlist so the justification lives
+    where the next reader needs it, and so no shared list has to grow to admit a
+    legitimate case. It uses ``# structural-guard:`` rather than ``# noqa:``, which
+    ruff parses as a rule-code list and warns about.
+    """
+    return re.compile(re.escape(f"structural-guard: {guard_name}") + r"\s*[-—:]\s*\S+")
+
+
 def _base_expr_is_tenant(node: ast.expr) -> bool:
     """True when *node* is a tenant reference (``tenant``, ``self.tenant``, ``ctx.tenant``, …)."""
     if isinstance(node, ast.Name) and node.id == "tenant":
@@ -180,6 +371,24 @@ def iter_call_expressions(tree: ast.AST, name: str | None = None) -> Iterator[as
             yield node
         elif isinstance(f, ast.Attribute) and f.attr == name:
             yield node
+
+
+def iter_statement_scoped_nodes(stmt: ast.stmt) -> Iterator[ast.AST]:
+    """Yield the nodes of *stmt* WITHOUT descending into nested statements.
+
+    ``ast.walk`` on a compound statement swallows its whole body, which silently
+    unions everything a function does into one "statement". A guard that binds
+    filter keys per statement needs the header only — ``If.test``, ``Return.value``,
+    the right-hand side of an assignment — so that two unrelated queries in one
+    ``if`` block cannot compose a key tuple neither of them checks.
+    """
+    stack: list[ast.AST] = [stmt]
+    while stack:
+        node = stack.pop()
+        yield node
+        for child in ast.iter_child_nodes(node):
+            if not isinstance(child, ast.stmt):
+                stack.append(child)
 
 
 def select_call_model_name(call: ast.Call) -> str | None:

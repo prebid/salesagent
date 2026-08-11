@@ -28,6 +28,7 @@ from starlette.routing import Route
 from src.a2a_server.adcp_a2a_server import (
     AdCPRequestHandler,
     create_agent_card,
+    restore_a2a_integer_types,
 )
 from src.a2a_server.context_builder import AdCPCallContextBuilder
 from src.admin.app import create_app
@@ -260,7 +261,7 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
 
 @app.exception_handler(PermissionError)
 async def permission_error_handler(request: Request, exc: PermissionError) -> JSONResponse:
-    """Cross-transport symmetry: REST wraps raw ``PermissionError`` as AUTH_REQUIRED.
+    """Cross-transport symmetry: REST wraps raw ``PermissionError`` as PERMISSION_DENIED.
 
     Mirror of the MCP / A2A boundaries which translate ``PermissionError`` to
     a synthetic ``AdCPAuthorizationError`` envelope. Without this handler a
@@ -294,17 +295,55 @@ async def tool_error_handler(request: Request, exc: ToolError) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
+def _restore_a2a_wire_integers(endpoint):
+    """Wrap an a2a-sdk JSON-RPC endpoint to fix up integer fields on the response.
+
+    The a2a-sdk builds the response body via
+    ``google.protobuf.json_format.MessageToDict`` on the ``Task``, which
+    recursively converts every ``Part.data`` (a ``google.protobuf.Value``) to
+    a dict. ``Value`` has no integer variant -- every number comes back as a
+    JSON float (86400 -> 86400.0), regardless of what type was originally
+    placed there. This is the one point where we see the
+    real outgoing JSON body for the ``/a2a`` route and can restore known
+    integer-typed AdCP fields before it reaches the client -- see
+    ``restore_a2a_integer_types`` for the shared coercion logic and the
+    field list's spec citations.
+    """
+
+    async def _wrapped(request):
+        response = await endpoint(request)
+        if isinstance(response, JSONResponse) and response.body:
+            fixed = restore_a2a_integer_types(json.loads(bytes(response.body)))
+            headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
+            return JSONResponse(fixed, status_code=response.status_code, headers=headers)
+        return response
+
+    # Marker for test_guards_a2a_integer_restoration.py -- lets the structural
+    # guard confirm every /a2a route endpoint is wrapped without depending on
+    # closure internals or function identity. setattr (not dot-assignment)
+    # since _wrapped has no statically-declared attribute for this.
+    setattr(_wrapped, "__a2a_integer_restoration_wrapped__", True)  # noqa: B010
+    return _wrapped
+
+
 # Create the A2A application and add routes
 _agent_card = create_agent_card()
 _request_handler = AdCPRequestHandler()
 
 # Build A2A routes using a2a-sdk 1.0 route factories
-_a2a_rpc_routes = create_jsonrpc_routes(
+_a2a_rpc_routes_raw = create_jsonrpc_routes(
     request_handler=_request_handler,
     rpc_url="/a2a",
     context_builder=AdCPCallContextBuilder(),
     enable_v0_3_compat=True,
 )
+# Rebuild each route with an integer-restoring wrapper around its endpoint --
+# mutating route.endpoint in place would not change dispatch, since Starlette
+# builds the actual ASGI app from the endpoint at Route construction time.
+_a2a_rpc_routes = [
+    Route(path=route.path, endpoint=_restore_a2a_wire_integers(route.endpoint), methods=list(route.methods or []))
+    for route in _a2a_rpc_routes_raw
+]
 _a2a_card_routes = create_agent_card_routes(
     agent_card=_agent_card,
     card_url="/.well-known/agent-card.json",

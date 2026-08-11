@@ -13,6 +13,8 @@ from unittest.mock import ANY
 from a2a.types import Artifact, Message, Part, Role
 from google.protobuf import json_format, struct_pb2
 
+from src.a2a_server.adcp_a2a_server import restore_a2a_integer_types
+
 
 def assert_delivery_forwarded_account(mock_delivery, expected_account) -> None:
     """Assert ``core_get_media_buy_delivery_tool`` was called once forwarding ``expected_account``.
@@ -45,6 +47,14 @@ def extract_data_from_artifact(artifact: Artifact) -> dict[str, Any]:
 
     In a2a-sdk 1.0, Part.data is a protobuf Value, not a plain dict.
 
+    google.protobuf.Value has no integer variant -- json_format.MessageToJson
+    widens every number to a double (86400 -> 86400.0), which is exactly what
+    the real a2a-sdk wire (jsonrpc_dispatcher.MessageToDict) does too. Passing
+    the result through restore_a2a_integer_types keeps this "real A2A wire"
+    capture (tests/CLAUDE.md) honest for known integer-typed AdCP fields
+    instead of silently diverging from what production (src/app.py's /a2a
+    route wrapper) emits.
+
     Args:
         artifact: A2A Artifact from response
 
@@ -53,7 +63,7 @@ def extract_data_from_artifact(artifact: Artifact) -> dict[str, Any]:
     """
     for part in artifact.parts:
         if part.HasField("data"):
-            return json.loads(json_format.MessageToJson(part.data))
+            return restore_a2a_integer_types(json.loads(json_format.MessageToJson(part.data)))
     return {}
 
 

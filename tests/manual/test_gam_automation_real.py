@@ -21,7 +21,6 @@ Environment Variables:
 """
 
 import argparse
-import json
 import os
 import sys
 from datetime import datetime, timedelta
@@ -74,7 +73,7 @@ class GAMAutomationTester:
                 tenant_id=self.test_tenant_id,
                 product_id="gam_test_auto",
                 name="GAM Auto Activation Test",
-                implementation_config=json.dumps(
+                implementation_config=(
                     {
                         "order_name_template": "TEST-AUTO-{po_number}-{timestamp}",
                         "line_item_type": "NETWORK",
@@ -95,7 +94,7 @@ class GAMAutomationTester:
                 tenant_id=self.test_tenant_id,
                 product_id="gam_test_confirm",
                 name="GAM Confirmation Test",
-                implementation_config=json.dumps(
+                implementation_config=(
                     {
                         "order_name_template": "TEST-CONF-{po_number}-{timestamp}",
                         "line_item_type": "HOUSE",
@@ -116,7 +115,7 @@ class GAMAutomationTester:
                 tenant_id=self.test_tenant_id,
                 product_id="gam_test_manual",
                 name="GAM Manual Test",
-                implementation_config=json.dumps(
+                implementation_config=(
                     {
                         "order_name_template": "TEST-MANUAL-{po_number}-{timestamp}",
                         "line_item_type": "NETWORK",
@@ -137,7 +136,7 @@ class GAMAutomationTester:
                 tenant_id=self.test_tenant_id,
                 product_id="gam_test_guaranteed",
                 name="GAM Guaranteed Test",
-                implementation_config=json.dumps(
+                implementation_config=(
                     {
                         "order_name_template": "TEST-GUARANTEED-{po_number}-{timestamp}",
                         "line_item_type": "STANDARD",
@@ -158,7 +157,7 @@ class GAMAutomationTester:
                 tenant_id=self.test_tenant_id,
                 product_id="gam_test_lifecycle_network",
                 name="GAM Lifecycle Network Test",
-                implementation_config=json.dumps(
+                implementation_config=(
                     {
                         "order_name_template": "TEST-LIFECYCLE-NET-{po_number}-{timestamp}",
                         "line_item_type": "NETWORK",
@@ -178,7 +177,7 @@ class GAMAutomationTester:
                 tenant_id=self.test_tenant_id,
                 product_id="gam_test_lifecycle_standard",
                 name="GAM Lifecycle Standard Test",
-                implementation_config=json.dumps(
+                implementation_config=(
                     {
                         "order_name_template": "TEST-LIFECYCLE-STD-{po_number}-{timestamp}",
                         "line_item_type": "STANDARD",
@@ -198,7 +197,7 @@ class GAMAutomationTester:
                 tenant_id=self.test_tenant_id,
                 product_id="gam_test_lifecycle_standard_block",
                 name="GAM Lifecycle Block Test",
-                implementation_config=json.dumps(
+                implementation_config=(
                     {
                         "order_name_template": "TEST-LIFECYCLE-BLOCK-{po_number}-{timestamp}",
                         "line_item_type": "STANDARD",
@@ -218,7 +217,7 @@ class GAMAutomationTester:
                 tenant_id=self.test_tenant_id,
                 product_id="gam_test_lifecycle_archive",
                 name="GAM Lifecycle Archive Test",
-                implementation_config=json.dumps(
+                implementation_config=(
                     {
                         "order_name_template": "TEST-LIFECYCLE-ARCH-{po_number}-{timestamp}",
                         "line_item_type": "HOUSE",

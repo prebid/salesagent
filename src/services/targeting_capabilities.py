@@ -196,7 +196,7 @@ def validate_unknown_targeting_fields(targeting_obj: Any) -> list[str]:
     return [f"{key} is not a recognized targeting field" for key in model_extra]
 
 
-def supports_property_list_filtering(adapter: object | None) -> bool:
+def supports_property_list_filtering(adapter: object | type | None) -> bool:
     """Return True iff the bound adapter compiles ``targeting_overlay.property_list``.
 
     Today no adapter sets ``supports_property_list_filtering=True``; the
@@ -207,10 +207,15 @@ def supports_property_list_filtering(adapter: object | None) -> bool:
     which point this advisory path is unreachable for them. Centralizing the
     check here keeps the wire declaration (capabilities) and the per-call
     advisory (this module) in lockstep with one source of truth.
+
+    Accepts either an adapter INSTANCE (the post-construction create_media_buy
+    path) or an adapter CLASS (the principal-free capabilities-read path,
+    salesagent-dn2s) — the flag is a class attribute either way.
     """
     if adapter is None:
         return False
-    return bool(getattr(adapter.__class__, "supports_property_list_filtering", False))
+    adapter_class = adapter if isinstance(adapter, type) else adapter.__class__
+    return bool(getattr(adapter_class, "supports_property_list_filtering", False))
 
 
 # ─── property_list targeting helpers ────────────────────────────────────

@@ -272,7 +272,17 @@ class RestE2EDispatcher:
 
         with httpx.Client(base_url=base_url, timeout=30) as client:
             method = getattr(env, "REST_METHOD", "post")
-            response = getattr(client, method)(endpoint, json=body, headers=headers)
+            # GET-with-no-body only when no params were supplied at all — mirrors
+            # the in-process _run_rest_request dispatch (e.g. CapabilitiesEnv:
+            # parameterless GET /api/v1/capabilities happy path vs POST
+            # /api/v1/capabilities when protocols/context/adcp_version are set,
+            # salesagent-5yik).
+            if method == "get" and not kwargs:
+                response = client.get(endpoint, headers=headers)
+            elif method == "get":
+                response = client.post(endpoint, json=body, headers=headers)
+            else:
+                response = getattr(client, method)(endpoint, json=body, headers=headers)
 
         envelope = {
             "transport": "e2e_rest",

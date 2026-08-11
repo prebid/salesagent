@@ -564,12 +564,33 @@ from src.core.main import mcp
 mcp.run(transport='http', host='0.0.0.0', port={port})
 """
 
+    # The server's output MUST go to a file, never a PIPE: nothing drains the
+    # pipe while tests run, so once the server had logged ~64KB (uvicorn access
+    # lines + app INFO + rich console output) its next logging `emit` blocked
+    # on the full pipe buffer and the server froze mid-request — the client's
+    # await never returned and the whole integration env wedged at whatever
+    # test happened to cross the threshold (observed hanging create_media_buy
+    # in four consecutive CI runs; py-spy showed the server MainThread inside
+    # logging emit → resolve_tenant_adapter_type). A file-backed stream cannot
+    # block the writer, and the startup-failure paths read it for diagnostics.
+    import tempfile
+
+    server_log = tempfile.NamedTemporaryFile(mode="w+b", prefix=f"mcp-server-{port}-", suffix=".log", delete=False)
+
+    def _server_log_tail(limit: int = 8000) -> str:
+        try:
+            server_log.flush()
+            with open(server_log.name, "rb") as fh:
+                data = fh.read()
+            return data[-limit:].decode(errors="replace") if data else "N/A"
+        except OSError:
+            return "N/A (log unreadable)"
+
     process = subprocess.Popen(
         [sys.executable, "-c", server_script],
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        bufsize=1,  # Line buffered
+        stdout=server_log,
+        stderr=subprocess.STDOUT,
     )
 
     # Wait for server to be ready.
@@ -593,28 +614,14 @@ mcp.run(transport='http', host='0.0.0.0', port={port})
         except (ConnectionRefusedError, OSError):
             # Check if process has died
             if process.poll() is not None:
-                stdout, stderr = process.communicate()
-                raise RuntimeError(
-                    f"MCP server process died unexpectedly.\n"
-                    f"STDOUT: {stdout.decode() if stdout else 'N/A'}\n"
-                    f"STDERR: {stderr.decode() if stderr else 'N/A'}"
-                )
+                raise RuntimeError(f"MCP server process died unexpectedly.\nOUTPUT: {_server_log_tail()}")
             time.sleep(0.3)
 
     if not server_ready:
-        # Capture output for debugging
-        try:
-            stdout, stderr = process.communicate(timeout=2)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            stdout, stderr = process.communicate()
-
-        process.terminate()
+        process.kill()
         process.wait(timeout=5)
         raise RuntimeError(
-            f"MCP server failed to start on port {port} within {max_wait}s.\n"
-            f"STDOUT: {stdout.decode() if stdout else 'N/A'}\n"
-            f"STDERR: {stderr.decode() if stderr else 'N/A'}"
+            f"MCP server failed to start on port {port} within {max_wait}s.\nOUTPUT: {_server_log_tail()}"
         )
 
     # Return server info
@@ -635,10 +642,11 @@ mcp.run(transport='http', host='0.0.0.0', port={port})
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
-    if process.stdout:
-        process.stdout.close()
-    if process.stderr:
-        process.stderr.close()
+    server_log.close()
+    try:
+        os.unlink(server_log.name)
+    except OSError:
+        pass
 
     # Don't remove db_name - the PostgreSQL database is managed by integration_db fixture
 

@@ -58,7 +58,7 @@ def seed_cached_success(
     rows.
     """
     from src.core.database.repositories import MediaBuyUoW
-    from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
+    from src.core.idempotency_policy import DEFAULT_REPLAY_TTL
 
     with MediaBuyUoW(tenant_id) as uow:
         assert uow.idempotency_attempts is not None

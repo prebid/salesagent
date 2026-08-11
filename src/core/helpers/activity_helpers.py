@@ -4,11 +4,9 @@ import logging
 import time
 
 from fastmcp.server.context import Context
-from sqlalchemy import select
 
 from src.core.config_loader import get_current_tenant, set_current_tenant
-from src.core.database.database_session import get_db_session
-from src.core.database.models import Principal as ModelPrincipal
+from src.core.database.repositories.principal_lookup import read_principal_name
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 from src.core.transport_helpers import resolve_identity_from_context
@@ -55,11 +53,7 @@ def log_tool_activity(context: Context | ToolContext | ResolvedIdentity, tool_na
         principal_name = "Unknown"
 
         if principal_id:
-            with get_db_session() as session:
-                stmt = select(ModelPrincipal).filter_by(principal_id=principal_id, tenant_id=tenant["tenant_id"])
-                principal = session.scalars(stmt).first()
-                if principal:
-                    principal_name = principal.name
+            principal_name = read_principal_name(tenant["tenant_id"], principal_id) or principal_name
 
         # Calculate response time if start_time provided
         response_time_ms: int | None = None

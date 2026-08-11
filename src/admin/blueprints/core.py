@@ -1,6 +1,5 @@
 """Core application routes blueprint."""
 
-import json
 import logging
 import os
 import secrets
@@ -23,8 +22,11 @@ from sqlalchemy import select, text
 
 from src.admin.utils import require_auth
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant
+from src.core.database.repositories import TenantLookupRepository
 from src.core.domain_config import (
     extract_subdomain_from_host,
     is_sales_agent_domain,
@@ -395,7 +397,14 @@ def health_config():
     except Exception as e:
         logger.error(f"Configuration health check failed: {e}")
         return (
-            jsonify({"status": "unhealthy", "service": "admin-ui", "component": "configuration", "error": str(e)}),
+            jsonify(
+                {
+                    "status": "unhealthy",
+                    "service": "admin-ui",
+                    "component": "configuration",
+                    "error": safe_error_message(e),
+                }
+            ),
             500,
         )
 
@@ -406,6 +415,23 @@ def metrics():
     from src.core.metrics import get_metrics_text
 
     return get_metrics_text(), 200, {"Content-Type": "text/plain; charset=utf-8"}
+
+
+def _tenant_already_exists(db_session, tenant_id: str, subdomain: str):
+    """The create-tenant page's answer when either tenants index is taken, else None.
+
+    Both keys have to be checked, not just ``tenant_id``: this route derives
+    ``tenant_id`` from the submitted subdomain, but the tenant management API mints
+    a uuid-derived one, so a tenant created there holding this subdomain leaves a
+    tenant_id-only check clean and the INSERT trips ``tenants_subdomain_key``
+    instead. ``resolve_or_write`` names both indexes, and it re-invokes this on the
+    race path — so anything it narrows on has to be visible here, or the re-resolve
+    finds nothing and re-raises.
+    """
+    if TenantLookupRepository(db_session).find_by_id_or_subdomain(tenant_id, subdomain):
+        flash(f"Tenant with ID {tenant_id} already exists", "error")
+        return render_template("create_tenant.html")
+    return None
 
 
 @core_bp.route("/create_tenant", methods=["GET", "POST"])
@@ -439,12 +465,6 @@ def create_tenant():
         admin_token = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
 
         with get_db_session() as db_session:
-            # Check if tenant already exists
-            existing = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if existing:
-                flash(f"Tenant with ID {tenant_id} already exists", "error")
-                return render_template("create_tenant.html")
-
             # Create new tenant
             new_tenant = Tenant(
                 tenant_id=tenant_id,
@@ -479,16 +499,25 @@ def create_tenant():
             if creator_email and creator_email not in email_list:
                 email_list.append(creator_email)
 
+            # JSONType/JSONB columns take the list directly — json.dumps here
+            # stores a JSON-encoded STRING, which breaks the jsonb operators
+            # behind TenantConfigRepository's atomic list mutations.
             if email_list:
-                new_tenant.authorized_emails = json.dumps(email_list)
+                new_tenant.authorized_emails = email_list  # noqa: authorized-list-assign — construction of a not-yet-persisted tenant, race-free
 
             authorized_domains = request.form.get("authorized_domains", "")
             if authorized_domains:
-                new_tenant.authorized_domains = json.dumps(
-                    [d.strip() for d in authorized_domains.split(",") if d.strip()]
-                )
+                domain_list = [d.strip() for d in authorized_domains.split(",") if d.strip()]
+                new_tenant.authorized_domains = domain_list  # noqa: authorized-list-assign — construction of a not-yet-persisted tenant, race-free
 
-            db_session.add(new_tenant)
+            conflict = resolve_or_write(
+                db_session,
+                conflict=lambda: _tenant_already_exists(db_session, tenant_id, subdomain),
+                write=lambda: db_session.add(new_tenant),
+                constraint=("tenants_pkey", "tenants_subdomain_key"),
+            )
+            if conflict is not None:
+                return conflict
             db_session.commit()
 
             # Note: No default principal created - principals must be added manually
@@ -499,7 +528,7 @@ def create_tenant():
 
     except Exception as e:
         logger.error(f"Error creating tenant: {e}", exc_info=True)
-        flash(f"Error creating tenant: {str(e)}", "error")
+        flash(f"Error creating tenant: {safe_error_message(e)}", "error")
         return render_template("create_tenant.html")
 
 
@@ -546,5 +575,5 @@ def reactivate_tenant(tenant_id):
 
     except Exception as e:
         logger.error(f"Error reactivating tenant {tenant_id}: {e}", exc_info=True)
-        flash(f"Error reactivating sales agent: {str(e)}", "error")
+        flash(f"Error reactivating sales agent: {safe_error_message(e)}", "error")
         return redirect(url_for("core.index"))

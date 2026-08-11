@@ -64,6 +64,7 @@ def _adcp_error_from_code(
         AdCPAccountSuspendedError,
         AdCPAdapterError,
         AdCPAuthenticationError,
+        AdCPAuthRequiredError,
         AdCPBudgetExhaustedError,
         AdCPBudgetTooLowError,
         AdCPCapabilityNotSupportedError,
@@ -88,6 +89,7 @@ def _adcp_error_from_code(
         for cls in (
             AdCPValidationError,
             AdCPAuthenticationError,
+            AdCPAuthRequiredError,
             AdCPNotFoundError,
             AdCPAccountNotFoundError,
             AdCPAccountSetupRequiredError,
@@ -113,12 +115,16 @@ def _adcp_error_from_code(
             AdCPIdempotencyExpiredError,
         )
     }
-    # AdCPAuthenticationError and AdCPAuthorizationError share the AUTH_REQUIRED
-    # wire code — we can't disambiguate auth-missing from auth-insufficient at
-    # the wire, and Authentication (missing token/tenant) is the more common
-    # buyer-facing case. Pin Authentication explicitly here so the mapping
-    # doesn't depend on dict-comprehension insertion order.
-    _CODE_TO_CLASS[AdCPAuthenticationError._default_error_code] = AdCPAuthenticationError
+    # AUTH_MISSING -> AdCPAuthRequiredError and AUTH_INVALID -> AdCPAuthenticationError
+    # are unambiguous per v3.1.1 error-code.json (salesagent-mkso) — each class's
+    # own _default_error_code disambiguates them via the dict comprehension above.
+    # AUTH_REQUIRED (deprecated alias) is no longer emitted by any subclass
+    # (salesagent-otc5 migrated AdCPAuthorizationError to PERMISSION_DENIED and
+    # split the former tenant-axis raises across AUTH_MISSING/AUTH_INVALID).
+    # PERMISSION_DENIED is not in the class list above, so it still falls
+    # through to the base AdCPError below — matching prior behavior for
+    # AdCPAuthorizationError (no test currently needs isinstance() on it via
+    # wire reconstruction).
     from src.core.exceptions import INTERNAL_CODES
 
     assert error_code not in INTERNAL_CODES, (
@@ -448,12 +454,29 @@ class BaseTestEnv:
             # is visible to other sessions (e.g., get_principal_from_token
             # in the MCP auth chain uses a separate get_db_session() call).
             auth_token = None
+            principal_id = self._principal_id
             if self.use_real_db:
                 self._commit_factory_data()
-                auth_token = self._resolve_auth_token()
+                # _resolve_auth_token() returns None for two different reasons:
+                # (a) a real DB lookup ran and found no matching Principal row, or
+                # (b) self._session isn't bound yet (env constructed/used outside
+                # its `with` context). Only (a) is a genuine "principal doesn't
+                # exist" signal — gate on self._session directly so a session-
+                # timing case doesn't get misread as a missing-principal one.
+                if self._session:
+                    auth_token = self._resolve_auth_token()
+                    if auth_token is None:
+                        # No Principal row for this principal_id+tenant_id (never
+                        # created, or deleted after "authenticating") — mirror
+                        # production's resolve_identity() (src/core/resolved_identity.py:
+                        # 168-172), which nulls principal_id on a failed token->principal
+                        # lookup, so in-process transports agree with e2e_rest's real DB
+                        # lookup instead of diverging on the deleted-principal case
+                        # (salesagent-z9e0).
+                        principal_id = None
 
             self._identity_cache[protocol] = PrincipalFactory.make_identity(
-                principal_id=self._principal_id,
+                principal_id=principal_id,
                 tenant_id=self._tenant_id,
                 protocol=protocol,
                 dry_run=self._dry_run,
@@ -461,6 +484,37 @@ class BaseTestEnv:
                 **self._tenant_overrides,
             )
         return self._identity_cache[protocol]
+
+    def invalid_token_identity(self) -> ResolvedIdentity:
+        """An identity carrying a token that matches no Principal row.
+
+        Per-transport behavior is production's: A2A rejects a presented-but-
+        invalid credential; MCP/REST treat it as absent (auth-optional tool).
+        """
+        from tests.harness._identity import make_identity
+
+        return make_identity(
+            principal_id=None,
+            tenant_id=self._tenant_id,
+            auth_token="invalid-token-harness",
+            **self._tenant_overrides,
+        )
+
+    def anonymous_identity(self) -> ResolvedIdentity:
+        """Tenant-resolvable identity with NO credential and NO principal.
+
+        Models the production no-auth discovery call where the tenant still
+        resolves (Host header / subdomain) — distinct from identity=None,
+        which is the no-tenant case.
+        """
+        from tests.harness._identity import make_identity
+
+        return make_identity(
+            principal_id=None,
+            tenant_id=self._tenant_id,
+            auth_token=None,
+            **self._tenant_overrides,
+        )
 
     def _resolve_auth_token(self) -> str | None:
         """Look up the real access_token from the session-bound Principal.
@@ -888,24 +942,21 @@ class BaseTestEnv:
         tool_result = asyncio.run(wrapper_fn(ctx=mock_ctx, **kwargs))
         return response_cls(**tool_result.structured_content)
 
-    def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
-        """Shared REST dispatch: configure auth → build body → POST → return Response.
-
-        Symmetric with ``_run_mcp_wrapper``. Handles the full REST lifecycle:
-        1. Pop ``identity`` from kwargs and configure dep override for this request
-        2. Commit factory data
-        3. Build request body from remaining kwargs
-        4. POST via TestClient
-        5. Return raw httpx.Response
+    def _pop_rest_identity(self, kwargs: dict[str, Any]) -> Any:
+        """Pop ``identity`` from REST kwargs, defaulting to the REST identity.
 
         Identity handling (mirrors production auth middleware):
         - identity is None → dep raises AUTH_REQUIRED (no token) with suggestion
         - identity is ResolvedIdentity → dep returns it (valid token)
         - identity absent → uses default self.identity_for(Transport.REST)
         """
-        client, identity = self._prepare_rest_request(kwargs)
-        body = self.build_rest_body(**kwargs)
-        return client.post(endpoint, json=body)
+        from tests.harness.transport import Transport
+
+        _NO_OVERRIDE = object()
+        identity = kwargs.pop("identity", _NO_OVERRIDE)
+        if identity is _NO_OVERRIDE:
+            identity = self.identity_for(Transport.REST)
+        return identity
 
     def _prepare_rest_request(self, kwargs: dict[str, Any]) -> tuple[Any, Any]:
         """Resolve identity, commit factory data, get the client, and install auth.
@@ -917,20 +968,14 @@ class BaseTestEnv:
         Returns ``(client, resolved_identity)``; the caller builds the body from the
         now-identity-free *kwargs* and issues the HTTP verb.
         """
-        from tests.harness.transport import Transport
-
-        _NO_OVERRIDE = object()
-        identity = kwargs.pop("identity", _NO_OVERRIDE)
-        if identity is _NO_OVERRIDE:
-            identity = self.identity_for(Transport.REST)
-
+        identity = self._pop_rest_identity(kwargs)
         self._commit_factory_data()
         client = self.get_rest_client()
-        self._configure_rest_auth_override(identity)
+        self._configure_rest_auth(identity)
         return client, identity
 
     @staticmethod
-    def _configure_rest_auth_override(identity: Any) -> None:
+    def _configure_rest_auth(identity: Any) -> None:
         """Install per-request FastAPI auth-dep overrides for the test app.
 
         Single source of truth for the REST auth contract every dispatcher needs
@@ -950,6 +995,24 @@ class BaseTestEnv:
         else:
             app.dependency_overrides[_require_auth_dep] = lambda: identity
             app.dependency_overrides[_resolve_auth_dep] = lambda: identity
+
+    def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
+        """Shared REST dispatch: configure auth → build body → POST → return Response.
+
+        Symmetric with ``_run_mcp_wrapper``. Handles the full REST lifecycle:
+        1. Pop ``identity`` from kwargs and configure dep override for this request
+        2. Commit factory data
+        3. Build request body from remaining kwargs
+        4. POST via TestClient
+        5. Return raw httpx.Response
+
+        Envs whose route is not a body-carrying POST override this method and
+        reuse ``_pop_rest_identity`` / ``_configure_rest_auth`` (e.g.
+        ``CapabilitiesEnv`` GETs).
+        """
+        client, identity = self._prepare_rest_request(kwargs)
+        body = self.build_rest_body(**kwargs)
+        return client.post(endpoint, json=body)
 
     def call_rest(self, **kwargs: Any) -> Any:
         """Call the REST endpoint and parse the response.
@@ -1198,10 +1261,12 @@ class BaseTestEnv:
             except Exception as e:
                 errors.append(e)
 
-            # Dispose the per-scenario e2e engine — closing the session alone
-            # leaves its pool's connections open, and with the ledger retirement
-            # ~300 more scenarios build e2e envs per run, accumulating toward
-            # the server's max_connections (PR #1430 review).
+            # Dispose the per-env E2E engine: each e2e-mode env creates its own
+            # engine, and closing the session alone leaves its pool's connections
+            # open for the rest of the worker's life. With the ledger retirement
+            # (~300 more scenarios building e2e envs per run, PR #1430 review),
+            # thousands of scenarios x 8 workers exhausted Postgres
+            # max_connections ("sorry, too many clients").
             try:
                 if self._e2e_engine is not None:
                     self._e2e_engine.dispose()
@@ -1272,6 +1337,25 @@ class IntegrationEnv(BaseTestEnv):
         if principal is None:
             principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
         return tenant, principal
+
+    def configure_tenant_field(self, field: str, value: Any) -> None:
+        """Write a tenant-level config field for both auth paths.
+
+        Updates the in-memory tenant overrides (mock identity path) AND the
+        DB Tenant row when the column exists (real MCP/A2A auth chain reads
+        the DB via config_loader). Clears the identity cache so the next
+        ``identity_for`` re-resolves with the new value.
+        """
+        self._tenant_overrides[field] = value
+        self._identity_cache.clear()
+
+        if self._session:
+            from src.core.database.models import Tenant
+
+            tenant = self._session.get(Tenant, self._tenant_id)
+            if tenant is not None and hasattr(tenant, field):
+                setattr(tenant, field, value)
+                self._session.commit()
 
     # -- Public query API (step functions must use these, not env._session) ----
 

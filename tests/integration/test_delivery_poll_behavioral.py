@@ -20,7 +20,7 @@ from datetime import UTC, date, datetime
 import pytest
 
 from src.core.exceptions import (
-    AdCPAuthenticationError,
+    AdCPAuthRequiredError,
     AdCPValidationError,
 )
 from src.core.schemas import GetMediaBuyDeliveryResponse
@@ -2581,7 +2581,14 @@ class TestPrincipalNotFoundReturnsError:
     """
 
     def test_principal_not_found_returns_error_in_response(self, integration_db):
-        """Valid token but principal not in DB raises AdCPAuthenticationError.
+        """No Principal row for the given principal_id -> AUTH_MISSING (salesagent-z9e0).
+
+        No Principal row exists, so no auth_token can be resolved for it —
+        the harness's identity_for() nulls principal_id to mirror production's
+        resolve_identity() (a token/principal_id that doesn't resolve to a DB
+        row is indistinguishable from no credentials presented), and
+        require_principal_id raises AdCPAuthRequiredError (AUTH_MISSING)
+        before any delivery-lookup logic runs.
 
         Covers: UC-004-EXT-B-01
         """
@@ -2593,7 +2600,7 @@ class TestPrincipalNotFoundReturnsError:
             TenantFactory(tenant_id="t1")
             # Don't create any principal — ghost_principal doesn't exist
 
-            with pytest.raises(AdCPAuthenticationError, match="ghost_principal"):
+            with pytest.raises(AdCPAuthRequiredError, match="Principal ID not found"):
                 env.call_impl()
 
 

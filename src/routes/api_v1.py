@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, Request
 from src.core.auth_context import require_auth, resolve_auth
 from src.core.schema_helpers import (
     coerce_creative_filters,
+    select_request_fields,
     to_account_reference,
     to_brand_reference,
     to_context_object,
@@ -70,6 +71,11 @@ class GetProductsBody(SalesAgentBaseModel):
     # dict BrandReference or string domain/URL shorthand (#1324)
     brand: dict[str, Any] | str | None = None
     filters: dict[str, Any] | None = None
+    # create_get_products_request accepts these; REST passed only 3 of its 5 kwargs, so a
+    # buyer's property_list filter and context echo were dropped on this transport alone
+    # (salesagent-e8wt.1 scan row 9).
+    property_list: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -87,8 +93,9 @@ class CreateMediaBuyBody(SalesAgentBaseModel):
     context: dict[str, Any] | None = None
     ext: dict[str, Any] | None = None
     idempotency_key: str | None = None
-    # AdCP 3.1.1 create-in-paused-state. Declared but NOT forwarded to the raw wrapper
-    # below, and not honored by _impl even if it were — see #1619.
+    # AdCP 3.1.1 create-in-paused-state; accepted, validated, and forwarded to the
+    # raw wrapper on all transports for wire parity, but pause-on-create is not yet
+    # honored by _impl — see #1619.
     paused: bool | None = None
     adcp_version: str = "1.0.0"
 
@@ -189,18 +196,27 @@ class ListCreativeFormatsBody(SalesAgentBaseModel):
     disclosure_persistence: list[str] | None = None
     output_format_ids: list[dict[str, Any]] | None = None
     input_format_ids: list[dict[str, Any]] | None = None
+    # Application-level context is echoed back per the AdCP envelope; MCP and A2A both
+    # carry it, so omitting it here dropped the echo on REST alone (salesagent-e8wt.1).
+    context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
 class ListAuthorizedPropertiesBody(SalesAgentBaseModel):
     property_tags: list[str] | None = None
     publisher_domains: list[str] | None = None
+    # Application-level context is echoed back per the AdCP envelope; MCP and A2A both
+    # carry it, so omitting it here dropped the echo on REST alone (salesagent-e8wt.1).
+    context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
 class ListAccountsBody(SalesAgentBaseModel):
+    account: dict[str, Any] | None = None
     status: str | None = None
     sandbox: bool | None = None
+    idempotency_key: str | None = None
+    ext: dict[str, Any] | None = None
     pagination: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
@@ -210,9 +226,21 @@ class SyncAccountsBody(SalesAgentBaseModel):
     accounts: list[dict[str, Any]] = []
     delete_missing: bool = False
     dry_run: bool = False
+    # Client-generated at-most-once key. sync-accounts-request.json 3.1.1 lists it in
+    # /required; omitting it from this body made a spec-conformant buyer's request fail
+    # here as an extra input while MCP minted its own and A2A dropped it (salesagent-e8wt.1).
+    idempotency_key: str | None = None
     push_notification_config: dict[str, Any] | None = None
+    ext: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
+
+
+class GetCapabilitiesBody(SalesAgentBaseModel):
+    protocols: list[str] | None = None
+    context: dict[str, Any] | None = None
+    adcp_version: str | None = None
+    adcp_major_version: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +260,8 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
             brief=body.brief,
             brand=body.brand,
             filters=body.filters,
+            property_list=body.property_list,
+            context=to_context_object(body.context),
         )
     response = await products_module._get_products_impl(req, identity)
     result = response.model_dump(mode="json")
@@ -242,6 +272,25 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
 async def get_capabilities(identity: ResolvedIdentity | None = resolve_auth):
     """Get AdCP capabilities (auth-optional discovery skill)."""
     response = await capabilities_module.get_adcp_capabilities_raw(identity=identity)
+    return response.model_dump(mode="json")
+
+
+@router.post("/capabilities")
+async def post_capabilities(body: GetCapabilitiesBody, identity: ResolvedIdentity | None = resolve_auth):
+    """Get AdCP capabilities with request parameters (auth-optional discovery skill).
+
+    Additive alongside the parameterless GET route above (owner decision
+    2026-07-24): protocols filtering and context echo need a real request
+    body, which a bare GET cannot carry — matches the POST+JSON-body
+    convention every other route in this file follows.
+    """
+    response = await capabilities_module.get_adcp_capabilities_raw(
+        protocols=body.protocols,
+        context=to_context_object(body.context),
+        adcp_version=body.adcp_version,
+        adcp_major_version=body.adcp_major_version,
+        identity=identity,
+    )
     return response.model_dump(mode="json")
 
 
@@ -335,6 +384,7 @@ async def create_media_buy(
         context=context,
         ext=body.ext,
         idempotency_key=body.idempotency_key,
+        paused=body.paused,
         identity=identity,
         raw_wire_payload=raw_wire_payload,
     )
@@ -475,9 +525,10 @@ async def update_performance_index(body: UpdatePerformanceIndexBody, identity: R
 async def list_accounts(body: ListAccountsBody, identity: ResolvedIdentity = require_auth):
     """List accounts accessible to the authenticated agent (auth required)."""
     from src.core.schemas.account import ListAccountsRequest
+    from src.core.tools.accounts import build_list_accounts_request
 
     with adcp_validation_boundary(context="list_accounts request"):
-        req = ListAccountsRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
+        req = build_list_accounts_request(**select_request_fields(ListAccountsRequest, body))
     response = accounts_module.list_accounts_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
@@ -486,8 +537,9 @@ async def list_accounts(body: ListAccountsBody, identity: ResolvedIdentity = req
 async def sync_accounts(body: SyncAccountsBody, identity: ResolvedIdentity = require_auth):
     """Sync accounts by natural key (auth required)."""
     from src.core.schemas.account import SyncAccountsRequest
+    from src.core.tools.accounts import build_sync_accounts_request
 
     with adcp_validation_boundary(context="sync_accounts request"):
-        req = SyncAccountsRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
+        req = build_sync_accounts_request(**select_request_fields(SyncAccountsRequest, body))
     response = await accounts_module.sync_accounts_raw(req=req, identity=identity)
     return response.model_dump(mode="json")

@@ -68,8 +68,16 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
+      - id: fixme-citation-no-regression
+        name: "Check local-beads-id citations (no regression)"
+        entry: uv run python .pre-commit-hooks/check_fixme_citation_count.py
+        language: system
+        files: '^(src/.*\.py|tests/.*\.py|\.pre-commit-config\.yaml|\.pre-commit-hooks/.*|\.fixme-citation-baseline)$'
+        pass_filenames: false
+        stages: [pre-push]
+
       - id: ruff-complexity-no-regression
-        name: "Check ruff complexity counts C901/PLR0912/PLR0915 (no regression)"
+        name: "Check ruff counts C901/PLR0912/PLR0915/F841 (no regression)"
         entry: uv run python .pre-commit-hooks/check_ruff_complexity_count.py
         language: system
         files: '^(src/.*\.py|pyproject\.toml|mypy\.ini|uv\.lock|\.pre-commit-config\.yaml|\.pre-commit-hooks/.*|\.ruff-complexity-baseline)$'

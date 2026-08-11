@@ -10,6 +10,7 @@ Philosophy:
 - Custom logic (validators, conversions) lives here, not in wrapper classes
 """
 
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlparse
 
@@ -261,6 +262,41 @@ def create_get_products_request(
 
 
 # Re-export commonly used generated types for convenience
+
+
+#: Version-envelope fields every request model inherits from version-envelope.json. They are
+#: negotiated at the transport boundary (``apply_version_compat``), not buyer request data, and
+#: the transports carry them in incompatible spellings -- the REST bodies default
+#: ``adcp_version`` to "1.0.0", which the envelope's own ``^\d+\.\d+(-...)?$`` pattern rejects.
+#: Forwarding them into the request model turns every REST call into a VALIDATION_ERROR, which
+#: is why the routes excluded ``adcp_version`` by hand before this helper existed.
+_VERSION_ENVELOPE_FIELDS = frozenset({"adcp_version", "adcp_major_version"})
+
+
+def select_request_fields(model: type[BaseModel], source: BaseModel | Mapping[str, Any]) -> dict[str, Any]:
+    """Select a request model's own fields out of a transport's raw parameter bag.
+
+    A transport wrapper that names each field it forwards is the shape that silently drops
+    every field added later: the request model grows, the wrapper does not, and the buyer's
+    value vanishes with no error. That is how sync_accounts' spec-required idempotency_key
+    came to behave three different ways on three transports (salesagent-e8wt.1), and how
+    list_creative_formats' A2A handler still dropped two of its builder's kwargs after a
+    shared builder had already been introduced.
+
+    Selecting by ``model_fields`` cannot drift -- a newly declared field is forwarded the
+    moment it exists. ``source`` may be a REST body model or an A2A ``parameters`` dict;
+    keys the request model does not declare are left behind, as are the version-envelope
+    fields (see ``_VERSION_ENVELOPE_FIELDS``), and ``None`` values are dropped so the model's
+    own defaults apply.
+    """
+    values = source.model_dump(exclude_none=True) if isinstance(source, BaseModel) else source
+    return {
+        name: value
+        for name, value in values.items()
+        if name in model.model_fields and name not in _VERSION_ENVELOPE_FIELDS and value is not None
+    }
+
+
 __all__ = [
     "is_url_shorthand",
     "brand_shorthand_to_domain",
@@ -272,6 +308,7 @@ __all__ = [
     "to_reporting_webhook",
     "coerce_creative_filters",
     "create_get_products_request",
+    "select_request_fields",
     # Re-export types for type hints
     "BrandReference",
     "CreativeFilters",

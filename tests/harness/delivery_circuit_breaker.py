@@ -35,17 +35,7 @@ from src.core.database.models import PushNotificationConfig
 from src.services.webhook_delivery_service import WebhookDeliveryService
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import SSRF_EXTERNAL_PATCH, CircuitBreakerMixin
-
-
-class _LogCaptureHandler(logging.Handler):
-    """Captures formatted log records into a list for assertion in tests."""
-
-    def __init__(self) -> None:
-        super().__init__(level=logging.WARNING)
-        self.records: list[str] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.records.append(self.format(record))
+from tests.helpers.log_capture import LogCaptureHandler
 
 
 class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
@@ -75,13 +65,13 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._service: WebhookDeliveryService | None = None
-        self._log_handler: _LogCaptureHandler | None = None
+        self._log_handler: LogCaptureHandler | None = None
         self.captured_logs: list[str] = []
 
     def __enter__(self) -> CircuitBreakerEnv:
         result = super().__enter__()
         # Attach log capture to the webhook delivery service logger
-        self._log_handler = _LogCaptureHandler()
+        self._log_handler = LogCaptureHandler()
         webhook_logger = logging.getLogger("src.services.webhook_delivery_service")
         webhook_logger.addHandler(self._log_handler)
         self.captured_logs = self._log_handler.records

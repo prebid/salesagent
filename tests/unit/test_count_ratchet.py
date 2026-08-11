@@ -248,6 +248,7 @@ def test_count_rule_violations_tallies_selected_codes(monkeypatch: pytest.Monkey
             {"code": "C901"},
             {"code": "C901"},
             {"code": "PLR0912"},
+            {"code": "F841"},
             {"code": "OTHER"},
         ]
     )
@@ -256,10 +257,13 @@ def test_count_rule_violations_tallies_selected_codes(monkeypatch: pytest.Monkey
         "run",
         lambda *_a, **_k: _cp(stdout=payload, returncode=1),
     )
+    # Zero-fill from RULES so adding a ratcheted rule does not break the tally
+    # assertion, while the per-code counts stay pinned.
     assert check_ruff_complexity_count.count_rule_violations(_REPO, _REPO / "src") == {
+        **dict.fromkeys(check_ruff_complexity_count.RULES, 0),
         "C901": 2,
         "PLR0912": 1,
-        "PLR0915": 0,
+        "F841": 1,
     }
 
 
@@ -434,14 +438,16 @@ def test_raise_probe_failure_does_not_write(tmp_path: Path, monkeypatch: pytest.
 def test_ruff_raise_probe_failure_does_not_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path
     (repo / "src").mkdir()
+    rules = check_ruff_complexity_count.RULES
+    baseline_counts = dict.fromkeys(rules, 1)
     baseline = repo / ".ruff-complexity-baseline"
-    baseline.write_text(json.dumps({"C901": 1, "PLR0912": 1, "PLR0915": 1}) + "\n", encoding="utf-8")
+    baseline.write_text(json.dumps(baseline_counts) + "\n", encoding="utf-8")
     writes: list[object] = []
 
     monkeypatch.setattr(
         check_ruff_complexity_count,
         "count_rule_violations",
-        lambda *_a, **_k: {"C901": 2, "PLR0912": 1, "PLR0915": 1},
+        lambda *_a, **_k: {**baseline_counts, "C901": 2},
     )
     monkeypatch.setattr(
         check_ruff_complexity_count,
@@ -465,4 +471,69 @@ def test_ruff_raise_probe_failure_does_not_write(tmp_path: Path, monkeypatch: py
     )
 
     assert check_ruff_complexity_count.main() == 1
-    assert writes == [("probe", {"C901": 1, "PLR0912": 1, "PLR0915": 1})]
+    assert writes == [("probe", baseline_counts)]
+
+
+def _fake_git_show(payload: str | None):
+    """Stand in for ``git show origin/main:<baseline>``; None means 'not on main'."""
+
+    def runner(*_args, **_kwargs) -> subprocess.CompletedProcess[str]:
+        if payload is None:
+            return _cp(returncode=128, stderr="fatal: path does not exist")
+        return _cp(stdout=payload)
+
+    return runner
+
+
+def test_read_main_baseline_omits_rules_main_never_tracked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A rule absent from main's file is OMITTED, not read as 0.
+
+    Reading it as 0 would make every newly-ratcheted rule unlandable: its true
+    count is the debt that already exists (F841 landed at 38), so the very change
+    that starts tracking it would trip the raise guard against a ceiling main
+    never had.
+    """
+    monkeypatch.setattr(
+        check_ruff_complexity_count.subprocess,
+        "run",
+        _fake_git_show(json.dumps({"C901": 185, "PLR0912": 134, "PLR0915": 108})),
+    )
+
+    main_baseline = check_ruff_complexity_count.read_main_baseline(Path("/repo"))
+
+    assert main_baseline == {"C901": 185, "PLR0912": 134, "PLR0915": 108}
+    assert "F841" not in main_baseline
+
+
+def test_untracked_rule_is_soft_but_tracked_rule_still_guarded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The soft path applies per rule, and does not weaken the rules main tracks."""
+    monkeypatch.setattr(
+        check_ruff_complexity_count.subprocess,
+        "run",
+        _fake_git_show(json.dumps({"C901": 185, "PLR0912": 134, "PLR0915": 108})),
+    )
+
+    landing = {"C901": 185, "PLR0912": 134, "PLR0915": 108, "F841": 38}
+    assert check_ruff_complexity_count.check_baseline_not_raised(Path("/repo"), landing) == 0
+
+    raising = {**landing, "C901": 186}
+    assert check_ruff_complexity_count.check_baseline_not_raised(Path("/repo"), raising) == 1
+
+
+def test_main_baseline_absent_file_is_soft(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(check_ruff_complexity_count.subprocess, "run", _fake_git_show(None))
+
+    unbounded = dict.fromkeys(check_ruff_complexity_count.RULES, 999)
+    assert check_ruff_complexity_count.read_main_baseline(Path("/repo")) is None
+    assert check_ruff_complexity_count.check_baseline_not_raised(Path("/repo"), unbounded) == 0
+
+
+def test_ruff_baseline_file_tracks_every_ratcheted_rule() -> None:
+    """The committed baseline must carry a value for each RULES key.
+
+    Missing keys read as 0 (read_json_baseline), so an unlisted rule would fail
+    the ratchet on its real count the moment anyone runs the hook.
+    """
+    committed = json.loads((_REPO / ".ruff-complexity-baseline").read_text(encoding="utf-8"))
+
+    assert set(committed) == set(check_ruff_complexity_count.RULES)

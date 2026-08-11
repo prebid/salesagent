@@ -5,11 +5,14 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from adcp.types import BrandReference
+from adcp.types import BrandReference, NotificationConfig
 from adcp.types.generated_poc.core.account import (
     CreditLimit,
     GovernanceAgent,
     Setup,
+)  # TODO: no stable alias in adcp.types
+from adcp.types.generated_poc.core.business_entity import (
+    BusinessEntity,
 )  # TODO: no stable alias in adcp.types
 from sqlalchemy import (
     DECIMAL,
@@ -31,6 +34,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
+from src.core.billing_policy import BILLING_PARTY_VALUES
 from src.core.database.json_type import JSONType
 from src.core.exceptions import AdCPConfigurationError
 from src.core.json_validators import JSONValidatorMixin
@@ -75,6 +79,9 @@ class Tenant(Base, JSONValidatorMixin):
     human_review_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     policy_settings: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     supported_billing: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)  # BR-RULE-059
+    account_sandbox: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )  # #1592 C2/A2
     account_approval_mode: Mapped[str | None] = mapped_column(
         String(50), nullable=True
     )  # BR-RULE-060: auto|credit_review|legal_review
@@ -91,6 +98,21 @@ class Tenant(Base, JSONValidatorMixin):
         JSONType,
         nullable=True,
         comment="Advertising policy configuration with prohibited categories, tactics, and advertisers",
+    )
+
+    # Per-tenant AdCP capability declarations (#1592 T1a).
+    # STRICT policy: this store may carry only blocks the implementation BACKS --
+    # business facts the capabilities response echoes (trusted_match surfaces,
+    # measurement catalog, adapter-backed creative_specs, legacy axe_integrations).
+    # It deliberately has NO field for a behavioral posture we do not implement
+    # (request_signing / webhook_signing / identity signing / webhook or offline
+    # report delivery): declaring one would promise the buyer behavior production
+    # lacks. Those blocks land with RFC 9421 signing (#1291).
+    # NULL means "nothing declared" and reproduces the pre-#1592 wire exactly.
+    capability_declarations: Mapped[dict | None] = mapped_column(
+        JSONType,
+        nullable=True,
+        comment="Implementation-backed AdCP capability declaration blocks (#1592); NULL = nothing declared",
     )
 
     # Pydantic AI configuration for multi-model support
@@ -669,7 +691,12 @@ class Creative(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     agent_url: Mapped[str] = mapped_column(String(500), nullable=False)
     format: Mapped[str] = mapped_column(String(100), nullable=False)
-    status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
+    # AdCP CreativeStatus member: the buyer-facing reader (list_creatives) parses this
+    # column through the closed spec enum, so a non-member default (this was "pending")
+    # makes every row written with the field omitted unreadable. No CHECK constraint or
+    # PG enum backs it — the spec enum widens over time and DDL would turn a spec bump
+    # into a boot-blocking migration.
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending_review")
 
     # Data field stores creative content and metadata as JSON
     data: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
@@ -827,6 +854,23 @@ class Account(Base):
     governance_agents: Mapped[list[GovernanceAgent] | None] = mapped_column(
         JSONType(model=GovernanceAgent, is_list=True), nullable=True
     )
+    # Account-level notification subscribers (#1592 T2). Whole-array declarative
+    # replace (maxItems 16, always read and written entire), so a column rather
+    # than a table: there is no cross-account query and no per-entry lifecycle.
+    # NULL and [] are DIFFERENT states the wire must distinguish -- NULL means
+    # "never configured" (the field is omitted from the echo) and [] means
+    # "explicitly cleared" (the echo carries an empty array). JSONType uses
+    # JSONB(none_as_null=True), so that distinction survives the round trip; do
+    # not collapse it with a falsy check.
+    notification_configs: Mapped[list[NotificationConfig] | None] = mapped_column(
+        JSONType(model=NotificationConfig, is_list=True), nullable=True
+    )
+    # Legal/billing entity, permitted in BOTH sync_accounts entry modes and
+    # echoed back on the response ("echoed from the request ... Bank details are
+    # omitted (write-only)"). Whole-object declarative replace, so a column
+    # rather than a table. `bank` IS persisted (the seller needs it to bill) and
+    # stripped only on the way out -- see _scrub_business_entity.
+    billing_entity: Mapped[BusinessEntity | None] = mapped_column(JSONType(model=BusinessEntity), nullable=True)
     sandbox: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     ext: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
 
@@ -849,7 +893,7 @@ class Account(Base):
             name="ck_accounts_status",
         ),
         CheckConstraint(
-            "billing IS NULL OR billing IN ('operator', 'agent')",
+            "billing IS NULL OR billing IN ({})".format(", ".join(repr(v) for v in BILLING_PARTY_VALUES)),
             name="ck_accounts_billing",
         ),
         CheckConstraint(
@@ -863,6 +907,42 @@ class Account(Base):
         Index("idx_accounts_tenant", "tenant_id"),
         Index("idx_accounts_status", "status"),
         Index("idx_accounts_operator", "operator"),
+        # The natural key is IDENTITY, not a search convenience: every resolver
+        # reads this tuple (get_by_natural_key resolves a buyer's sync_accounts
+        # entry, list_by_natural_key detects ambiguity). salesagent-8sfr made the
+        # components immutable so an account cannot be re-keyed; without this
+        # index a second CREATE could still land on an occupied key, and then
+        # get_by_natural_key().first() answers non-deterministically while
+        # list_by_natural_key reports the key unresolvable. The repository's
+        # collision check is the good error message; this index is the invariant,
+        # and the only thing that closes the check-then-insert race.
+        #
+        # Two different NULL mechanics, each doing its own job:
+        # - COALESCE(sandbox, false) because NULL and false are the SAME key to
+        #   get_by_natural_key ("sandbox IS NULL OR sandbox = false"); NULLS NOT
+        #   DISTINCT would not merge them, since it equates NULLs to each other,
+        #   never to a non-NULL value.
+        # - NULLS NOT DISTINCT so a NULL `operator` or a NULL brand_id still
+        #   enforces uniqueness on the rest of the tuple, matching the sibling
+        #   idx_media_buys_idempotency_key / idx_idempotency_attempts_lookup.
+        #
+        # PARTIAL on brand.domain for the same reason that sibling is partial on
+        # idempotency_key: an account with no brand domain has no natural key at
+        # all. The admin form permits one (brand is None when the field is blank)
+        # and no resolver can ever reach it — every lookup supplies a domain — so
+        # constraining keyless rows would forbid a legitimate shape while
+        # preventing no ambiguity.
+        Index(
+            "uq_accounts_natural_key",
+            "tenant_id",
+            "operator",
+            text("(brand ->> 'domain')"),
+            text("(brand ->> 'brand_id')"),
+            text("COALESCE(sandbox, false)"),
+            unique=True,
+            postgresql_nulls_not_distinct=True,
+            postgresql_where=text("(brand ->> 'domain') IS NOT NULL"),
+        ),
     )
 
 

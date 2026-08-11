@@ -14,6 +14,8 @@ Source: https://developers.google.com/ad-manager/api/reference/ForecastService.C
 
 from typing import Literal
 
+from src.core.exceptions import AdCPCapabilityNotSupportedError
+
 # Type aliases for clarity
 PricingModel = Literal["cpm", "vcpm", "cpc", "flat_rate"]  # AdCP pricing models only
 GAMCostType = Literal["CPM", "VCPM", "CPC", "CPD"]  # GAM internal types
@@ -139,11 +141,14 @@ class PricingCompatibility:
             GAM cost type (CPM, VCPM, CPC, or CPD)
 
         Raises:
-            ValueError: If pricing model not supported
+            AdCPCapabilityNotSupportedError: If pricing model not supported —
+                a buyer-correctable capability gap (UNSUPPORTED_FEATURE /
+                correctable per the pinned spec), never a bare ValueError,
+                which generic handlers wrap into SERVICE_UNAVAILABLE/transient.
         """
         cost_type = cls.ADCP_TO_GAM_COST_TYPE.get(pricing_model)
         if not cost_type:
-            raise ValueError(f"Pricing model '{pricing_model}' not supported by GAM adapter")
+            raise AdCPCapabilityNotSupportedError(f"Pricing model '{pricing_model}' not supported by GAM adapter")
         return cost_type
 
     @classmethod

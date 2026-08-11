@@ -208,7 +208,8 @@ def test_webhook_notification_sent_on_success():
             authentication_token="test_token",
             is_active=True,
         )
-        mock_db_instance.scalars.return_value.first.return_value = mock_config
+        # Auth lookup goes through PushNotificationConfigRepository.list_active_by_principal (.all())
+        mock_db_instance.scalars.return_value.all.return_value = [mock_config]
 
         # Mock HTTP client
         mock_response = MagicMock()

@@ -12,7 +12,11 @@ Usage::
     buy = MediaBuyFactory(tenant=tenant, principal__tenant=tenant)
 """
 
-from tests.factories.account import AccountFactory, AgentAccountAccessFactory
+from tests.factories.account import (
+    AccountFactory,
+    AgentAccountAccessFactory,
+    BusinessEntityFactory,
+)
 from tests.factories.core import (
     AdapterConfigFactory,
     AuthorizedPropertyFactory,
@@ -70,6 +74,7 @@ __all__ = [
     "AdapterConfigFactory",
     "AuthorizedPropertyFactory",
     "AgentAccountAccessFactory",
+    "BusinessEntityFactory",
     "CollectionListReferenceFactory",
     "CreativeAssetFactory",
     "CreativeAssignmentFactory",

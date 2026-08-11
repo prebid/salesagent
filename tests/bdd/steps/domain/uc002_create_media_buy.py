@@ -20,6 +20,7 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session as _db_session
 from tests.bdd.steps._outcome_helpers import _get_response_field
+from tests.bdd.steps.generic._account_resolution import seed_natural_key_matches
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -189,14 +190,14 @@ def given_multiple_matches(ctx: dict, count: int) -> None:
     brand = ctx.get("request_brand", "multi-brand.com")
     operator = ctx.get("request_operator", "agency.com")
 
-    for i in range(count):
-        account = AccountFactory(
-            tenant=tenant,
-            account_id=f"acc-multi-{i}",
-            brand={"domain": brand},
-            operator=operator,
-        )
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+    seed_natural_key_matches(
+        tenant,
+        count=count,
+        brand_domain=brand,
+        operator=operator,
+        owner_for_index=lambda _i: principal,
+        account_id_prefix="acc-multi",
+    )
 
 
 @given(parsers.parse("the natural key matches {total:d} accounts but the agent can access {accessible:d}"))
@@ -221,20 +222,15 @@ def given_natural_key_partial_access(ctx: dict, total: int, accessible: int) -> 
     operator = ctx.get("request_operator", "agency.com")
     other_principal = PrincipalFactory(tenant=tenant)
 
-    accessible_ids: list[str] = []
-    for i in range(total):
-        account_id = f"acc-scope-{i}"
-        account = AccountFactory(
-            tenant=tenant,
-            account_id=account_id,
-            status="active",
-            brand={"domain": brand},
-            operator=operator,
-        )
-        owner = principal if i < accessible else other_principal
-        AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=owner, account=account)
-        if i < accessible:
-            accessible_ids.append(account_id)
+    accounts = seed_natural_key_matches(
+        tenant,
+        count=total,
+        brand_domain=brand,
+        operator=operator,
+        owner_for_index=lambda i: principal if i < accessible else other_principal,
+        account_id_prefix="acc-scope",
+    )
+    accessible_ids: list[str] = [a.account_id for a in accounts[:accessible]]
     # Record the accessible account id(s) so a Then step can pin the resolved
     # account to the one the agent can actually access (#1417).
     ctx["accessible_account_ids"] = accessible_ids
@@ -368,17 +364,16 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
         )
 
     elif partition == "natural_key_ambiguous":
-        for i in range(3):
-            account = AccountFactory(
-                tenant=tenant,
-                account_id=f"acc-amb-{i}",
-                status="active",
-                brand={"domain": "ambiguous.com"},
-                operator="ambiguous.com",
-            )
-            # Grant the requesting agent access so ambiguity is genuine FOR THIS AGENT —
-            # natural-key resolution is access-scoped (#1417).
-            AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+        # The requesting agent is granted access to all three so the ambiguity is
+        # genuine FOR THIS AGENT — natural-key resolution is access-scoped (#1417).
+        seed_natural_key_matches(
+            tenant,
+            count=3,
+            brand_domain="ambiguous.com",
+            operator="ambiguous.com",
+            owner_for_index=lambda _i: principal,
+            account_id_prefix="acc-amb",
+        )
         ctx["account_ref"] = AccountReference(
             root=AccountReferenceByNaturalKey(brand=BrandReference(domain="ambiguous.com"), operator="ambiguous.com"),
         )
@@ -494,17 +489,16 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
         )
 
     elif config.startswith("brand+op") and "multi match" in config:
-        for i in range(2):
-            account = AccountFactory(
-                tenant=tenant,
-                account_id=f"acc-multi-{i}",
-                status="active",
-                brand={"domain": "multi.com"},
-                operator="multi.com",
-            )
-            # Access-scoped ambiguity (#1417): grant the agent access so the
-            # two matches are genuinely ambiguous for it.
-            AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
+        # Access-scoped ambiguity (#1417): the agent is granted access to both,
+        # so the two matches are genuinely ambiguous for it.
+        seed_natural_key_matches(
+            tenant,
+            count=2,
+            brand_domain="multi.com",
+            operator="multi.com",
+            owner_for_index=lambda _i: principal,
+            account_id_prefix="acc-multi",
+        )
         ctx["account_ref"] = AccountReference(
             root=AccountReferenceByNaturalKey(brand=BrandReference(domain="multi.com"), operator="multi.com"),
         )
@@ -1298,6 +1292,7 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
     contract the buyer sees — instead of a reconstructed exception.
     """
     from src.core.exceptions import AdCPError
+    from tests.harness.transport import extract_wire_suggestion
 
     assert "error" in ctx, f"Expected an error for outcome: {outcome}"
     error = ctx["error"]
@@ -1315,8 +1310,16 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
     # Suggestion-only: "error with suggestion"
     if remainder.startswith("with suggestion"):
         if result is not None and result.wire_error_envelope is not None:
-            code = result.wire_error_envelope.get("adcp_error", {}).get("code")
-            result.assert_wire_error(code, require_suggestion=True)
+            # No Gherkin code to pin here; assert the buyer-facing suggestion is
+            # present on the wire via the canonical harness reader (the same
+            # top-level lookup assert_wire_error uses), not a hand-rolled envelope
+            # index — and without round-tripping the wire's own code back through
+            # assert_wire_error, which would hard-fail on a non-pinned code.
+            suggestion = extract_wire_suggestion(result.wire_error_envelope)
+            assert suggestion, (
+                f"Expected a non-empty top-level suggestion on the wire error, got envelope: "
+                f"{result.wire_error_envelope}"
+            )
             return
         assert isinstance(error, AdCPError), (
             f"Expected AdCPError for suggestion check, got {type(error).__name__}: {error}"
@@ -1742,7 +1745,7 @@ def then_dual_emit_media_buy_status(ctx: dict) -> None:
     ``submitted``) while the DOMAIN status survives under ``media_buy_status``. The
     earlier "both identical" oracle read the re-mirrored reconstructed payload
     (``_mirror_media_buy_status``) and so could never observe this wire reality.
-    See docs/adcp-spec-version.md "Behavior target vs SDK pin".
+    See docs/adcp-spec-version.md "`status` vs `media_buy_status` on media-buy responses".
     """
     from adcp.types import GeneratedTaskStatus as ProtocolTaskStatus
     from adcp.types import MediaBuyStatus

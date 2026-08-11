@@ -833,8 +833,23 @@ class TestListCreativeObjectConstruction:
         assert creative.format_id.width == 300
         assert creative.format_id.height is None
 
-    def test_invalid_status_defaults_to_pending_review(self, integration_db):
-        """Spec: unknown status string defaults to pending_review."""
+    def test_unparseable_status_is_placeheld_and_surfaced(self, integration_db):
+        """An unreadable stored status renders as ``processing`` AND raises an advisory.
+
+        This test previously asserted ``pending_review`` and called that "spec" — AdCP
+        3.1.1 says no such thing. ``enums/creative-status.json`` defines
+        ``pending_review`` as "Creative has **passed processing** and is awaiting
+        platform content policy review", i.e. a claim that processing succeeded and the
+        SELLER owes the next transition. Asserting it for a value the reader could not
+        parse states a lifecycle position nobody took (salesagent-zm5l). ``status`` is
+        REQUIRED and the enum is closed with no ``unknown`` member, so a placeholder is
+        unavoidable — ``processing`` is the member asserting the least — and the honest
+        part is the ``errors[]`` advisory, which ``list-creatives-response.json`` puts on
+        the success path for exactly this.
+
+        The cross-transport wire assertions live in
+        tests/integration/test_list_creatives_unrecognized_status.py.
+        """
         with CreativeListEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
@@ -850,7 +865,14 @@ class TestListCreativeObjectConstruction:
         # SDK 5.7: CreativeStatus is plain Enum, not StrEnum; compare via .value
         status = response.creatives[0].status
         status_str = status.value if hasattr(status, "value") else str(status)
-        assert status_str == "pending_review"
+        assert status_str == "processing"
+
+        advisories = response.errors or []
+        assert len(advisories) == 1, f"expected one advisory for the unreadable row; got {advisories!r}"
+        assert advisories[0].code == "CONFIGURATION_ERROR"
+        assert advisories[0].recovery == "terminal"
+        assert "c_bad_status" in advisories[0].message
+        assert "completely_bogus_status" in advisories[0].message
 
     def test_creative_with_tags(self, integration_db):
         """Spec: creative tags from data dict are included in response."""

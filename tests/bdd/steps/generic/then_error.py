@@ -175,6 +175,76 @@ def _assert_meaningful_error(error: object) -> None:
     raise AssertionError(f"ctx['error'] is not an Exception or Error model: {type(error).__name__} = {error!r}")
 
 
+# ── Wire error envelope (Error Verification Policy) ─────────────────
+
+
+def _wire_envelope(ctx: dict) -> dict:
+    """The captured two-layer wire error envelope for this dispatch.
+
+    Prefers the real wire (REST body / MCP ToolError JSON / A2A DataPart);
+    falls back to the synthesized envelope only where no wire exists by
+    definition (IMPL). See tests/CLAUDE.md § Error Verification Policy.
+    """
+    envelope = ctx.get("wire_error_envelope")
+    if envelope is None:
+        envelope = ctx.get("synthesized_error_envelope")
+    assert isinstance(envelope, dict), (
+        f"no wire error envelope captured — error={ctx.get('error')!r}, "
+        f"response={'present' if ctx.get('response') is not None else 'absent'}"
+    )
+    return envelope
+
+
+@then(
+    parsers.re(
+        r'the wire error envelope should carry code "(?P<code>[A-Z_0-9]+)" with recovery "(?P<recovery>[a-z]+)"$'
+    )
+)
+def then_wire_envelope_code_and_recovery(ctx: dict, code: str, recovery: str) -> None:
+    from tests.helpers.envelope_assertions import assert_envelope_shape
+
+    assert_envelope_shape(_wire_envelope(ctx), code, recovery=recovery)
+
+
+@then(parsers.re(r'the wire error envelope should carry code "(?P<code>[A-Z_0-9]+)"$'))
+def then_wire_envelope_code(ctx: dict, code: str) -> None:
+    """Code-only variant for scenarios that don't pin recovery semantics.
+
+    Anchored regex (not parse) so it cannot shadow the with-recovery form.
+    """
+    body = _wire_envelope(ctx)
+    assert "adcp_error" in body and "errors" in body and body["errors"], f"not a two-layer envelope: {body}"
+    assert body["adcp_error"]["code"] == code, f"adcp_error.code={body['adcp_error']['code']!r}, expected {code!r}"
+    assert body["errors"][0]["code"] == code, f"errors[0].code={body['errors'][0]['code']!r}, expected {code!r}"
+
+
+@then("the error message should reference authentication or token validation")
+def then_error_references_auth(ctx: dict) -> None:
+    """The payload-level wire message must state that a PRESENTED credential
+    failed verification — the AUTH_INVALID semantics (enums/error-code.json:
+    "Authorization header was present but verification failed").
+
+    Strict two-part contract on ``errors[0].message`` (no envelope-level
+    fallback): it must name the credential (token / credential /
+    authentication / authorization) AND state the verification failure
+    (invalid / failed / rejected / not valid / verification). A generic
+    "authentication required" (missing-credential wording) does NOT satisfy
+    it — that is AUTH_REQUIRED language, the deprecated 3.x alias.
+    """
+    import re as _re
+
+    body = _wire_envelope(ctx)
+    message = body["errors"][0].get("message") or ""
+    assert message, f"errors[0].message is empty on the wire envelope: {body}"
+    lowered = message.lower()
+    names_credential = _re.search(r"\b(token|credential|authenticat\w*|authoriz\w*)\b", lowered)
+    states_failure = _re.search(r"\b(invalid|failed|failure|rejected|not valid|verification|unrecognized)\b", lowered)
+    assert names_credential and states_failure, (
+        "errors[0].message must state that a presented credential failed verification "
+        f"(AUTH_INVALID semantics), got: {message!r}"
+    )
+
+
 # ── Operation failure ────────────────────────────────────────────────
 
 
@@ -295,6 +365,37 @@ def then_error_message_contains(ctx: dict, text: str) -> None:
     assert text.lower() in msg, f"Expected '{text}' in error message: {_get_error_message(error)}"
 
 
+def _wire_error_message(ctx: dict) -> str:
+    """The buyer-facing ``message`` from the captured wire envelope — no fallback.
+
+    Message-RENDERING defects (e.g. a pydantic RootModel interpolated as
+    ``root='...'`` instead of its value) are graded on the exact text the buyer
+    receives, so these steps refuse to fall back to the reconstructed
+    ``ctx['error']``: BDD always dispatches on a wire transport, so a missing
+    envelope is a wiring bug to surface, not to paper over.
+    """
+    obj = _wire_error_object(ctx)
+    assert obj is not None, (
+        "No wire error envelope captured — the scenario must dispatch through a wire "
+        f"transport before asserting on the wire message. Recorded error: {ctx.get('error')!r}"
+    )
+    return obj.get("message") or ""
+
+
+@then(parsers.parse('the wire error message should contain "{text}"'))
+def then_wire_error_message_contains(ctx: dict, text: str) -> None:
+    """Assert the buyer-facing WIRE message contains the text (case-insensitive)."""
+    msg = _wire_error_message(ctx)
+    assert text.lower() in msg.lower(), f"Expected {text!r} in wire error message: {msg!r}"
+
+
+@then(parsers.parse('the wire error message should not contain "{text}"'))
+def then_wire_error_message_not_contains(ctx: dict, text: str) -> None:
+    """Assert the buyer-facing WIRE message does NOT contain the text (case-insensitive)."""
+    msg = _wire_error_message(ctx)
+    assert text.lower() not in msg.lower(), f"Unexpected {text!r} in wire error message: {msg!r}"
+
+
 @then(parsers.parse('the suggestion should contain "{text}"'))
 def then_suggestion_contains(ctx: dict, text: str) -> None:
     """Assert error suggestion contains the given text — wire-first, reconstructed fallback.
@@ -331,20 +432,34 @@ def then_error_tenant_context(ctx: dict) -> None:
 
 @then("the error message should indicate which parameters are invalid")
 def then_error_invalid_params(ctx: dict) -> None:
-    """Assert error message indicates which specific parameters are invalid."""
+    """Assert the error names the SPECIFIC invalid parameter(s), not just that "something" is invalid.
+
+    A bare "invalid"/"field"/"parameter" satisfies "invalid" but not "WHICH
+    parameter" — the step promises the buyer can identify the offending field.
+    """
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
-    # Pydantic ValidationError: has per-field error details with field paths
+    # Pydantic ValidationError: has per-field error details with named field paths
     if hasattr(error, "errors"):
         field_errors = error.errors()
         assert field_errors, "ValidationError has no field-level error details"
-        assert all("loc" in e for e in field_errors), f"Expected field locations in error details: {field_errors}"
+        assert all(e.get("loc") for e in field_errors), (
+            f"Expected non-empty field locations naming which parameter is invalid: {field_errors}"
+        )
         return
-    # AdCPError: message must reference parameter/field specifics
-    msg = _get_error_message(error)
-    msg_lower = msg.lower()
-    assert any(kw in msg_lower for kw in ("parameter", "field", "invalid", "format_id", "agent_url")), (
-        f"Expected error to indicate which parameters are invalid, got: {msg}"
+    # AdCPError: the offending field must be named — via error.field / details["field"]
+    # — AND actually mentioned in the message text, not just a generic complaint.
+    from src.core.exceptions import AdCPError
+
+    field_name = getattr(error, "field", None) if isinstance(error, AdCPError) else None
+    if not field_name:
+        field_name = _get_error_details(error).get("field")
+    assert field_name, (
+        f"Expected the error to name a specific invalid parameter (error.field or details['field']), got: {error!r}"
+    )
+    msg_lower = _get_error_message(error).lower()
+    assert str(field_name).lower() in msg_lower, (
+        f"Expected error message to name the invalid parameter {field_name!r}, got: {_get_error_message(error)}"
     )
 
 
@@ -665,30 +780,48 @@ def then_no_error_for_value(ctx: dict, value: str) -> None:
 def then_validation_error(ctx: dict) -> None:
     """Assert response indicates a validation error — wire-first, reconstructed fallback.
 
-    When the scenario dispatched through a wire transport, assert on the real
-    wire envelope's code (the buyer-facing contract); otherwise fall back to the
-    reconstructed ``ctx['error']`` for IMPL/no-wire scenarios (ztl6.8).
+    Wire-first via the sanctioned surface: when a wire envelope was captured,
+    grade it through ``ctx['result'].assert_wire_error`` (VALIDATION_ERROR is a
+    canonical pinned code, so this is the invariant-blessed check, not a
+    hand-rolled one). Only when no wire exists — the dispatch-exception path, where
+    ``dispatch_request`` never produced a ``TransportResult`` — fall back to the
+    reconstructed ``ctx['error']``. The fallback stays because that path has no
+    ``ctx['result']`` to assert against; it is not a second wire mechanism.
     """
-    actual = _wire_code(ctx)
-    if actual is None:
-        error = ctx.get("error")
-        assert error is not None, "Expected a validation error"
-        actual = _get_error_code(error)
-    assert actual == "VALIDATION_ERROR", f"Expected VALIDATION_ERROR, got {actual}"
+    result = ctx.get("result")
+    if result is not None and result.wire_error_envelope is not None:
+        result.assert_wire_error("VALIDATION_ERROR")
+        return
+    error = ctx.get("error")
+    assert error is not None, "Expected a validation error"
+    assert _get_error_code(error) == "VALIDATION_ERROR", f"Expected VALIDATION_ERROR, got {_get_error_code(error)}"
 
 
 @then("the error should be a real validation error, not simulated")
 def then_real_validation_error(ctx: dict) -> None:
     """Assert the error is a real Pydantic validation error, not a simulated one.
 
-    A real validation error is a pydantic.ValidationError raised by schema
-    validation, with per-field error details. This distinguishes it from
-    AdCPValidationError (our wrapper) or sandbox-simulated errors.
+    Two-part contract. PRIMARY (wire): when a wire envelope was captured, the
+    buyer-facing code must be VALIDATION_ERROR, graded through the sanctioned
+    ``assert_wire_error`` surface. SECONDARY (type): the caught exception must be a
+    real ``pydantic.ValidationError`` with per-field details, distinguishing it from
+    ``AdCPValidationError`` (our wrapper) or a sandbox-simulated error.
+
+    The type check CANNOT be replaced by a wire assertion: both a raw
+    ``pydantic.ValidationError`` and an ``AdCPValidationError`` collapse to the same
+    VALIDATION_ERROR wire code, so nothing on the wire distinguishes "real" from
+    "wrapped/simulated". Hence it stays as an explicit secondary check rather than
+    being dropped — and it is not a reconstructed-envelope grade, so it is not the
+    anti-pattern the Error Verification Policy targets.
     """
-    error = ctx.get("error")
-    assert error is not None, "Expected an error"
     from pydantic import ValidationError
 
+    result = ctx.get("result")
+    if result is not None and result.wire_error_envelope is not None:
+        result.assert_wire_error("VALIDATION_ERROR")
+
+    error = ctx.get("error")
+    assert error is not None, "Expected an error"
     assert isinstance(error, ValidationError), (
         f"Expected a real pydantic.ValidationError, got {type(error).__name__}: {error}"
     )
@@ -750,11 +883,27 @@ def then_error_includes_field(ctx: dict, field: str) -> None:
 
 @then(parsers.parse('the error should include "{field}" field with value "{value}"'))
 def then_error_field_with_value(ctx: dict, field: str, value: str) -> None:
-    """Assert the error includes a named field matching the expected value.
+    """Assert the error includes a named field matching the expected value — wire-first.
 
-    Checks the error dict, details sub-dict, and direct attributes.
-    Compares as strings for cross-type compatibility.
+    When the scenario dispatched through a wire transport, read the field from the
+    real wire error object (``errors[0]``, the buyer-facing contract) — this is what
+    the buyer actually receives, and grading only the reconstructed exception (as
+    this step previously did) verifies the lossy reconstruction layer, not the wire
+    (Error Verification Policy). Fall back to the reconstructed ``ctx['error']`` only
+    on the IMPL/no-wire dispatch-exception path. Compares as strings for cross-type
+    compatibility (enum ``.value``, int, etc.).
     """
+    wire = _wire_error_object(ctx)
+    if wire is not None:
+        actual = wire.get(field)
+        if actual is None:
+            actual = (wire.get("details") or {}).get(field)
+        assert actual is not None, (
+            f"Expected wire error to include '{field}' field but it was not found. Wire error keys: {list(wire.keys())}"
+        )
+        actual_str = actual.value if hasattr(actual, "value") else str(actual)
+        assert actual_str == value, f"Expected wire {field}='{value}', got '{actual_str}'"
+        return
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
     actual = _resolve_error_field(error, field)

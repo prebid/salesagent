@@ -9,7 +9,6 @@ import time
 import uuid
 
 from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 
 from src.core.exceptions import (
     AdCPAdapterError,
@@ -18,6 +17,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.tool_context import ToolContext
+from src.core.tools._mcp_boundary import build_tool_result
 from src.core.validation_helpers import adcp_validation_boundary
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,12 @@ from src.core.schemas import (
     SignalDeployment,
 )
 from src.core.testing_hooks import AdCPTestContext
-from src.core.transport_helpers import resolve_identity_from_context
+from src.core.transport_helpers import (
+    NOT_PROVIDED,
+    IdentityOrNotProvided,
+    resolve_identity_from_context,
+    resolve_identity_if_not_provided,
+)
 
 
 def _agent_signal_id(segment_id: str) -> SignalId:
@@ -215,7 +220,7 @@ async def get_signals(req: GetSignalsRequest, context: Context | ToolContext | N
     """
     identity = resolve_identity_from_context(context, require_valid_token=False)
     response = await _get_signals_impl(req, identity)
-    return ToolResult(content=str(response), structured_content=response)
+    return build_tool_result(str(response), response)
 
 
 def _build_activate_signal_request(
@@ -338,13 +343,13 @@ async def activate_signal(
     identity = resolve_identity_from_context(ctx)
     req = _build_activate_signal_request(signal_agent_segment_id, campaign_id, media_buy_id, context)
     response = await _activate_signal_impl(req=req, identity=identity)
-    return ToolResult(content=str(response), structured_content=response)
+    return build_tool_result(str(response), response)
 
 
 async def get_signals_raw(
     req: GetSignalsRequest,
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ) -> GetSignalsResponse:
     """Optional endpoint for discovering available signals (raw function for A2A server use).
 
@@ -358,8 +363,7 @@ async def get_signals_raw(
     Returns:
         GetSignalsResponse containing matching signals
     """
-    if identity is None:
-        identity = resolve_identity_from_context(ctx, require_valid_token=False)
+    identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=False)
     return await _get_signals_impl(req, identity)
 
 
@@ -369,7 +373,7 @@ async def activate_signal_raw(
     media_buy_id: str = None,
     context: ContextObject | None = None,  # payload-level context
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ) -> ActivateSignalResponse:
     """Activate a signal for use in campaigns (raw function for A2A server use).
 
@@ -386,7 +390,6 @@ async def activate_signal_raw(
     Returns:
         ActivateSignalResponse with activation status
     """
-    if identity is None:
-        identity = resolve_identity_from_context(ctx)
+    identity = resolve_identity_if_not_provided(identity, ctx)
     req = _build_activate_signal_request(signal_agent_segment_id, campaign_id, media_buy_id, context)
     return await _activate_signal_impl(req=req, identity=identity)

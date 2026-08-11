@@ -328,7 +328,7 @@ class AuditLogger:
                     adapter_id=None,  # adapter_id not applicable
                     success=False,  # Security violations are failures
                     error_message=f"Attempted to access resource '{resource_id}' - {reason}",
-                    details=json.dumps({"resource_id": resource_id, "reason": reason}),
+                    details={"resource_id": resource_id, "reason": reason},
                 )
                 db_session.add(audit_log)
                 db_session.commit()

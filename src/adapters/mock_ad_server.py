@@ -184,11 +184,13 @@ class MockAdServer(AdServerAdapter):
         """Set the current simulation time."""
         self._current_simulation_time = simulation_time
 
-    def get_supported_pricing_models(self) -> set[str]:
+    @staticmethod
+    def get_supported_pricing_models() -> set[str]:
         """Mock adapter supports all pricing models (AdCP PR #88)."""
         return {"cpm", "vcpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"}
 
-    def get_targeting_capabilities(self) -> TargetingCapabilities:
+    @staticmethod
+    def get_targeting_capabilities() -> TargetingCapabilities:
         """Mock adapter supports all targeting for testing flexibility."""
         return TargetingCapabilities(
             geo_countries=True,
@@ -201,6 +203,8 @@ class MockAdServer(AdServerAdapter):
             gb_outward=True,
             gb_full=True,
             de_plz=True,
+            ch_plz=True,
+            at_plz=True,
             fr_code_postal=True,
             au_postcode=True,
             eurostat_nuts2=True,
@@ -882,10 +886,13 @@ class MockAdServer(AdServerAdapter):
             for package in packages:
                 if package.targeting_overlay:
                     targeting = package.targeting_overlay
+                    # GeoCountry/GeoRegion are RootModels — log the wrapped values,
+                    # not root='US' reprs. geo_metros stays as-is on purpose:
+                    # GeoMetro is a plain model (system/values), not a RootModel.
                     if targeting.geo_countries:
-                        self.log(f"      'countries': {targeting.geo_countries},")
+                        self.log(f"      'countries': {[c.root for c in targeting.geo_countries]},")
                     if targeting.geo_regions:
-                        self.log(f"      'regions': {targeting.geo_regions},")
+                        self.log(f"      'regions': {[r.root for r in targeting.geo_regions]},")
                     if targeting.geo_metros:
                         self.log(f"      'metros': {targeting.geo_metros},")
                     if getattr(targeting, "key_value_pairs", None):

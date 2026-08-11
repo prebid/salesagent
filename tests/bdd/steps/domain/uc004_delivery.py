@@ -1334,6 +1334,23 @@ def then_has_mb_status(ctx: dict, status: str) -> None:
     assert d.status == status, f"Expected status '{status}', got '{d.status}'"
 
 
+@then(parsers.parse('buyers MAY treat the legacy alias "{legacy_status}" as equivalent to "{status}"'))
+def then_legacy_status_alias(ctx: dict, legacy_status: str, status: str) -> None:
+    """Buyer-side compatibility note, not a seller behavior: confirms the
+    response actually carries the NEW v3.1 canonical status name (the
+    precondition for "buyers who used to check for the legacy name MAY treat
+    the new one as equivalent" to be meaningful at all) rather than silently
+    also emitting the retired legacy value.
+    """
+    resp = ctx.get("response")
+    assert resp is not None, "Expected a response but none found"
+    d = resp.media_buy_deliveries[0]
+    assert d.status == status, f"Expected canonical status {status!r}, got {d.status!r}"
+    assert d.status != legacy_status, (
+        f"response carries the retired legacy status {legacy_status!r} instead of canonical {status!r}"
+    )
+
+
 @then("the response should include aggregated totals across both media buys")
 def then_has_aggregated_totals(ctx: dict) -> None:
     """Assert aggregated totals equal the sum of per-delivery totals."""
@@ -2812,12 +2829,23 @@ def _assert_wire_rejection(ctx: dict, field: str) -> None:
         code = layer.get("code")
         recovery = layer.get("recovery")
         # SERVICE_UNAVAILABLE must be excluded too: ERROR_CODE_MAPPING remaps
-        # INTERNAL_ERROR to SERVICE_UNAVAILABLE, and the base AdCPError default
-        # recovery is "terminal" — so a {SERVICE_UNAVAILABLE, terminal} server fault
-        # would otherwise pass as a field rejection. (#1420 should-fix)
-        # CONFIGURATION_ERROR now passes through untranslated (salesagent-nr2q) and is
-        # likewise a seller-side fault, never a field rejection.
-        assert code and code not in {"INTERNAL_ERROR", "SERVICE_UNAVAILABLE", "CONFIGURATION_ERROR", "AUTH_REQUIRED"}, (
+        # INTERNAL_ERROR to SERVICE_UNAVAILABLE — a server fault would otherwise
+        # pass as a field rejection. (#1420 should-fix) CONFIGURATION_ERROR now
+        # passes through untranslated (salesagent-nr2q) and is likewise a
+        # seller-side fault, never a field rejection. AUTH_MISSING/AUTH_INVALID
+        # (v3.1.1 split, salesagent-mkso) replace the deprecated AUTH_REQUIRED
+        # alias for auth failures — excluding only the literal "AUTH_REQUIRED"
+        # string let an auth failure (e.g. resolve_principal_or_raise's
+        # "principal not found" -> AUTH_INVALID) masquerade as a legitimate
+        # client field rejection once the split landed.
+        assert code and code not in {
+            "INTERNAL_ERROR",
+            "SERVICE_UNAVAILABLE",
+            "CONFIGURATION_ERROR",
+            "AUTH_REQUIRED",
+            "AUTH_MISSING",
+            "AUTH_INVALID",
+        }, (
             f"Invalid {field}: expected a client rejection on the wire, got code={code!r} "
             f"— a server crash or auth failure is not a field rejection. Envelope: {envelope}"
         )

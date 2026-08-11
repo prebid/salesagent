@@ -78,6 +78,14 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/bdd/test_uc018_list_creatives.py::test_brrule034_inv1_counter__crossprincipal_creatives_never_visible[e2e_rest]",
         "tests/bdd/test_uc018_list_creatives.py::test_brrule034_inv1_holds__query_always_scoped_by_principal[e2e_rest]",
         "tests/bdd/test_uc018_list_creatives.py::test_list_creatives_filtered_by_concept_ids_returns_only_creatives_in_that_concept_carrying_concept_id_and_concept_name[e2e_rest]",
+        # Added by bug-triage epic salesagent-jl20 (2026-07-16): 2 genuine e2e-only
+        # gaps surfaced by un-xfailing dn2s/mkso's scenarios — see ledger file
+        # section comments for full root-cause analysis of each.
+        # uc010 auth-data-identity graduated at salesagent-zna9 (_resolve_auth_dep
+        # now resolves tenant from headers regardless of credential presence).
+        # uc003 ext-a-unknown graduated at salesagent-z9e0 (harness identity_for()
+        # now nulls principal_id on a failed token->principal DB lookup, mirroring
+        # production's resolve_identity() — all transports agree now).
     }
 )
 

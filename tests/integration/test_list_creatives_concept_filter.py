@@ -107,9 +107,9 @@ class TestNonScalarConceptValueDropped:
     numeric-coercion fix: reverting `return None` to a passthrough 500s the listing)."""
 
     def test_non_scalar_concept_value_is_dropped(self, integration_db):
-        from unittest.mock import patch
 
         from tests.factories import CreativeFactory
+        from tests.helpers.log_capture import capture_logs
 
         with CreativeListEnv() as env:
             tenant, principal = _seed_authenticated_principal(env)
@@ -120,11 +120,10 @@ class TestNonScalarConceptValueDropped:
                 status="approved",
                 data={"assets": {}, "concept_id": ["x"], "concept_name": {"k": "v"}},
             )
-            # Assert the code EMITS the warning by patching the module logger, not by
-            # capturing log records: the REST path runs in-process, so the patch applies,
-            # and this is immune to the tox/integration logging config (levels, handlers,
-            # propagation, logging.disable) that suppressed capture-based approaches.
-            with patch("src.core.tools.creatives.listing.logger") as mock_logger:
+            # capture_logs attaches to the producing module's logger rather than using
+            # caplog: caplog's root-level handler is lost when suite-level code
+            # reconfigures root handlers, which made this order-dependent in full runs.
+            with capture_logs("src.core.tools.creatives.listing") as handler:
                 result = env.call_via(Transport.REST)
 
             assert not result.is_error, f"non-scalar concept value crashed the listing: {result.error!r}"
@@ -133,10 +132,7 @@ class TestNonScalarConceptValueDropped:
             assert "concept_id" not in creative
             assert "concept_name" not in creative
             # Observability (No Quiet Failures): the drop is surfaced in logs, not silent.
-            warnings_logged = " ".join(str(c) for c in mock_logger.warning.call_args_list)
-            assert "Dropping non-scalar concept value" in warnings_logged, (
-                f"expected the non-scalar drop warning; logger.warning calls: {mock_logger.warning.call_args_list}"
-            )
+            assert any("Dropping non-scalar concept value" in r for r in handler.records)
 
 
 class TestSellerConceptEnrichmentIsFilterable:

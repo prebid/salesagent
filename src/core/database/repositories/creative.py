@@ -206,7 +206,11 @@ class CreativeRepository:
         format: str,
         format_parameters: dict | None = None,
         principal_id: str,
-        status: str = "pending",
+        # Must stay a member of the AdCP CreativeStatus enum: list_creatives parses this
+        # value through the closed spec enum, so a non-member default (this was "pending")
+        # is unreadable to the buyer-facing reader. Pinned by
+        # tests/unit/test_architecture_creative_status_vocabulary.py.
+        status: str = "pending_review",
         data: dict | None = None,
     ) -> Creative:
         """Create a new creative within this tenant.

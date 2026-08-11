@@ -263,7 +263,7 @@ class TestNoAdapterSupportsCustomMetro:
     def test_gam_rejects_custom_metro(self):
         from src.adapters.google_ad_manager import GoogleAdManager
 
-        caps = GoogleAdManager.get_targeting_capabilities(None)
+        caps = GoogleAdManager.get_targeting_capabilities()
         errors = caps.validate_geo_systems(_custom_metro_targeting())
         assert any("custom" in e for e in errors)
 
@@ -282,6 +282,6 @@ class TestNoAdapterSupportsCustomMetro:
     def test_mock_rejects_custom_metro(self):
         from src.adapters.mock_ad_server import MockAdServer
 
-        caps = MockAdServer.get_targeting_capabilities(None)
+        caps = MockAdServer.get_targeting_capabilities()
         errors = caps.validate_geo_systems(_custom_metro_targeting())
         assert any("custom" in e for e in errors)

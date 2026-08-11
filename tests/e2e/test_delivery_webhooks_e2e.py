@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 
+from tests.e2e._tenant_state import set_mock_approval
 from tests.e2e._webhook_capture import WebhookCaptureHandler, run_webhook_capture_server
 from tests.e2e.adcp_request_builder import (
     build_adcp_media_buy_request,
@@ -26,7 +27,6 @@ from tests.e2e.adcp_request_builder import (
 from tests.e2e.utils import (
     force_approve_media_buy_in_db,
     make_mcp_client,
-    set_live_adapter_behavior,
     wait_for_server_readiness,
 )
 
@@ -137,7 +137,7 @@ class TestDailyDeliveryWebhookFlow:
         3. Get delivery metrics explicitly via get_media_buy_delivery
         4. Wait for scheduled delivery_report webhook and inspect payload
         """
-        set_live_adapter_behavior(live_server, manual_approval_required=False)
+        set_mock_approval(live_server, manual=False)
 
         # Wait for server readiness
         wait_for_server_readiness(live_server["mcp"])

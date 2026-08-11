@@ -1689,13 +1689,13 @@ class TestDeliveryAdapterError:
 
         Advisory errors[] entries serialize verbatim (no boundary translation), so this
         is the only thing standing between an internal code and the buyer. Reddens if
-        _normalize_advisory_errors stops normalizing (e.g. returns code=e.code).
+        normalize_advisory_errors stops normalizing (e.g. returns code=e.code).
         """
         from adcp.types import Error
 
-        from src.core.tools.media_buy_delivery import _normalize_advisory_errors
+        from src.core.exceptions import normalize_advisory_errors
 
-        out = _normalize_advisory_errors(
+        out = normalize_advisory_errors(
             [
                 Error(code="API_ERROR", message="internal adapter detail for mb_x"),  # internal, unmapped
                 Error(code="INTERNAL_ERROR", message="mapped internal for mb_y"),  # internal, mapped

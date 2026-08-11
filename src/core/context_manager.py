@@ -14,12 +14,16 @@ from adcp.types import McpWebhookPayload
 from adcp.webhooks import GeneratedTaskStatus
 from pydantic import BaseModel
 from rich.console import Console
-from sqlalchemy import select
+from sqlalchemy import literal, select
+from sqlalchemy import update as sa_update
+from sqlalchemy.sql import func
 
 from src.core.async_utils import pin_task
 from src.core.database.database_session import DatabaseManager
+from src.core.database.jsonb_append import jsonb_list_append
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
+from src.core.database.repositories.workflow import append_step_comment
 from src.core.exceptions import AdCPError, build_two_layer_error_envelope, normalize_to_adcp_error
 from src.core.webhook_validator import (
     validate_webhook_task_type,
@@ -320,19 +324,18 @@ class ContextManager(DatabaseManager):
                     step.transaction_details = transaction_details
 
                 if add_comment:
-                    # Ensure comments is a list
-                    if not isinstance(step.comments, list):
-                        step.comments = []
-                    # Create a new list to trigger SQLAlchemy change detection
-                    new_comments = list(step.comments)
-                    new_comments.append(
-                        {
-                            "user": add_comment.get("user", "system"),
-                            "timestamp": datetime.now(UTC).isoformat(),
-                            "text": add_comment.get("text", add_comment.get("comment", "")),
-                        }
+                    # Single-statement atomic append (salesagent-pgqs): the
+                    # old whole-list write-back erased concurrent comments.
+                    # Autoflush pushes the pending field updates above first;
+                    # the instance's stale comments are expired below.
+                    append_step_comment(
+                        session,
+                        step_id,
+                        user=add_comment.get("user", "system"),
+                        text=add_comment.get("text", add_comment.get("comment", "")),
+                        tenant_id=tenant_id,
                     )
-                    step.comments = new_comments
+                    session.expire(step, ["comments"])
 
                 # DEBUG: Log the condition check values BEFORE commit
                 console.print("[magenta]🔍 PRE-COMMIT WEBHOOK DEBUG:[/magenta]")
@@ -635,18 +638,28 @@ class ContextManager(DatabaseManager):
         """
         session = self.session
         try:
-            stmt = select(Context).filter_by(context_id=context_id)
-
-            context = session.scalars(stmt).first()
-            if context:
-                if not isinstance(context.conversation_history, list):
-                    context.conversation_history = []
-
-                context.conversation_history.append(
-                    {"role": role, "content": content, "timestamp": datetime.now(UTC).isoformat()}
+            # Single-statement atomic append: the old load-append-write-back
+            # lost concurrent messages (and an in-place append on an
+            # already-list history was never even flushed) — salesagent-pgqs.
+            entry = func.jsonb_build_object(
+                "role",
+                literal(role),
+                "content",
+                literal(content),
+                "timestamp",
+                literal(datetime.now(UTC).isoformat()),
+            )
+            stmt = (
+                sa_update(Context)
+                .where(Context.context_id == context_id)
+                .values(
+                    conversation_history=jsonb_list_append(Context.conversation_history, entry),
+                    last_activity_at=datetime.now(UTC),
                 )
-                context.last_activity_at = datetime.now(UTC)
-                session.commit()
+                .execution_options(synchronize_session=False)
+            )
+            session.execute(stmt)
+            session.commit()
         finally:
             session.close()
 

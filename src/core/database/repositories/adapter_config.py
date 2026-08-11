@@ -173,3 +173,25 @@ class AdapterConfigRepository:
         """
         config = self.get_by_tenant()  # raises if missing
         config.custom_targeting_keys = keys
+
+
+def read_adapter_config(tenant_id: str) -> AdapterConfig | None:
+    """Read a tenant's AdapterConfig in a fresh, single-use session, detached
+    for use after the session closes.
+
+    The ONE session-owning read for AdapterConfig outside the UoW/impl layer.
+    ``src/core/helpers/adapter_helpers.py`` (4 call sites) routes through this
+    instead of each opening its own ``get_db_session()`` -- the guard's
+    legitimate session home is the repository layer, not a helper module one
+    call frame from ``_impl`` (#1721 M2). ``AdapterConfig`` has no
+    relationships and every column is eagerly loaded by the plain SELECT below,
+    so ``session.expunge()`` is enough to detach it safely -- no
+    ``DetachedInstanceError`` risk on later attribute access.
+    """
+    from src.core.database.database_session import get_db_session
+
+    with get_db_session() as session:
+        config = AdapterConfigRepository(session, tenant_id).find_by_tenant()
+        if config is not None:
+            session.expunge(config)
+        return config

@@ -321,7 +321,7 @@ Feature: BR-UC-012 Manage Content Standards
     Given the Buyer has no authentication credentials
     When the Buyer Agent sends a <operation> request
     Then the request is rejected with an authentication error
-    And the error code should be "AUTH_REQUIRED"
+    And the error code should be "AUTH_MISSING"
     And the error should include "suggestion"
     # BR-RULE-063 INV-2,3: No token or invalid token → rejected
     # BR-RULE-063 INV-4: All five operations enforce identical auth
@@ -341,7 +341,7 @@ Feature: BR-UC-012 Manage Content Standards
     Given the Buyer Agent has an expired authentication token
     When the Buyer Agent sends a list_content_standards request
     Then the request is rejected with an authentication error
-    And the error code should be "AUTH_REQUIRED"
+    And the error code should be "AUTH_INVALID"
     And the error should include "suggestion"
     # BR-RULE-063 INV-3: Invalid/expired token → rejected
 

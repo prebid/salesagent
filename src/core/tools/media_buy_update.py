@@ -36,7 +36,6 @@ MAX_CAMPAIGN_BUDGET: Decimal = Decimal(os.environ.get("MAX_CAMPAIGN_BUDGET_USD",
 from adcp.types import ContextObject, ReportingWebhook, TargetingOverlay
 from adcp.types import PackageUpdate as UpdatePackage
 from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 from sqlalchemy import select
 
 from src.core.exceptions import (
@@ -86,6 +85,7 @@ from src.core.schemas import (
     UpdateMediaBuySuccess,
 )
 from src.core.testing_hooks import AdCPTestContext
+from src.core.tools._mcp_boundary import build_tool_result
 from src.core.tools.creatives import _sync_creatives_impl
 from src.core.tools.financial_validation import (
     raise_if_validation_failed,
@@ -94,7 +94,7 @@ from src.core.tools.financial_validation import (
     validate_max_daily_package_spend,
     validate_min_package_budget,
 )
-from src.core.transport_helpers import resolve_identity_from_context
+from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 from src.core.utils import utc_flight_start
 from src.core.validation_helpers import adcp_validation_boundary, package_field_path
 from src.services.targeting_capabilities import (
@@ -347,7 +347,7 @@ def _update_media_buy_impl(
     req: UpdateMediaBuyRequest,
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
-) -> UpdateMediaBuyResult | UpdateMediaBuySubmitted:
+) -> UpdateMediaBuyResult:
     """Shared implementation for update_media_buy (used by both MCP and A2A).
 
     Callers construct the validated UpdateMediaBuyRequest at their boundary
@@ -583,8 +583,8 @@ def _update_media_buy_impl(
                 # Spec 3.1.1 models a not-yet-applied (pending human approval) update as the
                 # UpdateMediaBuySubmitted response variant: protocol-envelope status="submitted"
                 # + a task_id the buyer polls for the outcome. Returning UpdateMediaBuySuccess
-                # here would falsely assert the update was applied (its envelope status is
-                # "completed"). task_id is the workflow step the admin approval flow acts on.
+                # here would emit the adcp-6.6 default status="completed", falsely asserting the
+                # update was applied. task_id is the workflow step the admin approval flow acts on.
                 approval_response = UpdateMediaBuySubmitted(
                     task_id=step.step_id,
                     context=req.context,
@@ -611,10 +611,7 @@ def _update_media_buy_impl(
                 )
                 session.add(mapping)
 
-                # UpdateMediaBuySubmitted carries the protocol-envelope
-                # status="submitted" (const) natively — returned unwrapped so every
-                # transport serializes the spec-correct submitted envelope.
-                return approval_response
+                return UpdateMediaBuyResult(response=approval_response, status=AdcpTaskStatus.submitted.value)
 
             # Validate currency limits if flight dates or budget changes
             # This prevents workarounds where buyers extend flight to bypass daily max
@@ -1592,7 +1589,7 @@ async def update_media_buy(
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
     response = _update_media_buy_impl(req=req, identity=identity, context_id=_ctx_id)
-    return ToolResult(content=str(response), structured_content=response)
+    return build_tool_result(str(response), response)
 
 
 def update_media_buy_raw(
@@ -1617,7 +1614,7 @@ def update_media_buy_raw(
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     idempotency_key: str | None = None,  # AdCP idempotency key for retry safety
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ):
     """Update an existing media buy (raw function for A2A server use).
 
@@ -1666,8 +1663,7 @@ def update_media_buy_raw(
         ext=ext,
         idempotency_key=idempotency_key,
     )
-    if identity is None:
-        identity = resolve_identity_from_context(ctx, require_valid_token=True)
+    identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=True)
     # A2A/REST callers pass identity directly without a FastMCP Context, so there
     # is no workflow context_id to forward — _impl creates one if needed.
     return _update_media_buy_impl(req=req, identity=identity, context_id=None)

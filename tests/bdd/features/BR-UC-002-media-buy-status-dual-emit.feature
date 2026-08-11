@@ -8,7 +8,8 @@
 # the deprecated "both identical" model, #4908). On the flattened wire envelope,
 # TaskResultEnvelope._serialize sets top-level `status` to the protocol TaskStatus (e.g. completed/
 # submitted) — a DIFFERENT namespace from the domain status; they are NOT identical. The domain
-# status survives under `media_buy_status`. See docs/adcp-spec-version.md "Behavior target vs SDK pin".
+# status survives under `media_buy_status`. See docs/adcp-spec-version.md
+# "`status` vs `media_buy_status` on media-buy responses".
 
 @schema-v3.1 @media-buy-status-dual-emit
 Feature: AdCP 3.1 media_buy_status on create/update responses

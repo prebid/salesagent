@@ -58,6 +58,8 @@ class TargetingCapabilities:
     gb_outward: bool = False  # UK outward code (first part)
     gb_full: bool = False  # Full UK postcode
     de_plz: bool = False  # German PLZ
+    ch_plz: bool = False  # Swiss PLZ
+    at_plz: bool = False  # Austrian PLZ
     fr_code_postal: bool = False  # French postal code
     au_postcode: bool = False  # Australian postcode
 
@@ -76,6 +78,8 @@ class TargetingCapabilities:
         "ca_fsa",
         "ca_full",
         "de_plz",
+        "ch_plz",
+        "at_plz",
         "fr_code_postal",
         "au_postcode",
     )
@@ -334,21 +338,38 @@ class AdServerAdapter(ABC):
             workflow_step_id=workflow_step_id,
         )
 
-    def get_supported_pricing_models(self) -> set[str]:
+    @staticmethod
+    def get_supported_pricing_models() -> set[str]:
         """Return set of pricing models this adapter supports (AdCP PR #88).
 
         Default implementation supports only CPM. Override in subclasses.
+        Staticmethod: no per-principal state, so it can be resolved from the
+        adapter CLASS alone via get_adapter_class_for_tenant() (salesagent-r9rf,
+        same INV-4 pattern as get_targeting_capabilities(), salesagent-dn2s) —
+        capability data must not require a resolved Principal to read.
 
         Returns:
             Set of pricing model strings: {"cpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"}
         """
         return {"cpm"}
 
-    def get_targeting_capabilities(self) -> TargetingCapabilities:
+    @staticmethod
+    def get_targeting_capabilities() -> TargetingCapabilities:
         """Return targeting capabilities this adapter supports.
 
         Default implementation returns minimal capabilities (geo country only).
         Override in subclasses with actual adapter capabilities.
+
+        A ``@staticmethod`` (not an instance method) because capability
+        discovery (get_adcp_capabilities) must read this off the adapter
+        CLASS, tenant-only, without ever constructing a Principal-bound
+        adapter instance (some adapters require principal-bound config in
+        ``__init__`` and would crash for a synthetic Principal — see
+        salesagent-dn2s). Keeping this a staticmethod makes
+        instance-independence a structural fact instead of an unenforced
+        convention: any future override that needs ``self`` (e.g. to read
+        adapter config) MUST stop being a plain override of this signature,
+        which forces a deliberate decision instead of a silent crash.
 
         Returns:
             TargetingCapabilities describing what targeting is supported

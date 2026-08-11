@@ -28,7 +28,6 @@ from tests.factories import (
     ProductFactory,
     TenantFactory,
 )
-from tests.helpers import assert_envelope_shape
 
 # ── Helpers ─────────────────────────────────────────────────────────
 
@@ -216,16 +215,15 @@ def then_has_products(ctx: dict) -> None:
 
 @then(parsers.parse('the request is rejected with VALIDATION_ERROR naming field "{field}"'))
 def then_rejected_validation_field(ctx: dict, field: str) -> None:
-    """Assert the wire envelope is VALIDATION_ERROR and names the field structurally."""
-    envelope = ctx.get("wire_error_envelope")
-    assert envelope is not None, f"No wire error envelope (error={ctx.get('error')!r})"
-    assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
-    assert envelope["errors"][0].get("field") == field, (
-        f"errors[0].field={envelope['errors'][0].get('field')!r}, expected {field!r}"
-    )
-    assert envelope["adcp_error"].get("field") == field, (
-        f"adcp_error.field={envelope['adcp_error'].get('field')!r}, expected {field!r}"
-    )
+    """Assert the wire envelope is VALIDATION_ERROR and names the field structurally.
+
+    errors[0].field is the canonical error.json pointer; the envelope builder
+    mirrors errors[0] verbatim into adcp_error
+    (exceptions.build_two_layer_error_envelope), so pinning errors[0].field via
+    the field= kwarg also pins the adcp_error mirror — no separate hand-rolled
+    read needed.
+    """
+    ctx["result"].assert_wire_error("VALIDATION_ERROR", recovery="correctable", field=field)
 
 
 @then(parsers.parse('the first product publisher_properties selection_type is "{expected}"'))

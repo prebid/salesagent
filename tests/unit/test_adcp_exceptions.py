@@ -44,16 +44,26 @@ class TestExceptionHierarchy:
         exc = AdCPAuthenticationError("bad token")
         assert isinstance(exc, AdCPError)
         assert exc.status_code == 401
-        assert exc.error_code == "AUTH_REQUIRED"
+        assert exc.error_code == "AUTH_INVALID"
 
     def test_authorization_error(self):
-        """AdCPAuthorizationError must have status_code=403."""
+        """AdCPAuthorizationError must have status_code=403 and PERMISSION_DENIED (salesagent-otc5).
+
+        Per v3.1.1 error-code.json, AUTHORIZATION_REQUIRED means the caller is
+        authenticated but the referenced object needs an additional downstream
+        platform/creator authorization (e.g. sync_creatives published_post) —
+        NOT the general "authenticated caller lacks permission under seller
+        policy" case AdCPAuthorizationError's call sites express (ownership
+        mismatch, admin-only actions, account access, brand-manifest policy).
+        That general case is PERMISSION_DENIED. Migrated off the deprecated
+        AUTH_REQUIRED alias to close the salesagent-mkso split for this class.
+        """
         from src.core.exceptions import AdCPAuthorizationError, AdCPError
 
         exc = AdCPAuthorizationError("forbidden")
         assert isinstance(exc, AdCPError)
         assert exc.status_code == 403
-        assert exc.error_code == "AUTH_REQUIRED"
+        assert exc.error_code == "PERMISSION_DENIED"
 
     def test_not_found_error(self):
         """AdCPNotFoundError must have status_code=404."""

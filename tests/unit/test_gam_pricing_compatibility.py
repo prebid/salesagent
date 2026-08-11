@@ -124,9 +124,17 @@ class TestGAMCostTypeMapping:
         assert PricingCompatibility.get_gam_cost_type("flat_rate") == "CPD"
 
     def test_unsupported_pricing_models(self):
-        """Test rejection of unsupported pricing models."""
+        """An unsupported pricing model is a buyer-correctable capability gap.
+
+        Per the pinned spec (v3.1.1 enums/error-code.json) it must surface as
+        UNSUPPORTED_FEATURE / correctable — a bare ValueError gets wrapped
+        into SERVICE_UNAVAILABLE / transient ("retry the unretryable") by the
+        impl's generic handler (salesagent-rdrs; se18 targeting precedent).
+        """
+        from src.core.exceptions import AdCPCapabilityNotSupportedError
+
         for unsupported in ["cpcv", "cpv", "cpp", "invalid"]:
-            with pytest.raises(ValueError, match="not supported by GAM adapter"):
+            with pytest.raises(AdCPCapabilityNotSupportedError, match="not supported by GAM adapter"):
                 PricingCompatibility.get_gam_cost_type(unsupported)
 
 

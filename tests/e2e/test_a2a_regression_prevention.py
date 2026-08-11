@@ -19,15 +19,6 @@ import requests
 # Add parent directories to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from tests.e2e.conftest import e2e_host
-
-
-def _a2a_base_url() -> str:
-    """Get A2A server base URL from environment (supports dynamic ports)."""
-    port = os.getenv("ADCP_SALES_PORT", "8080")
-    return f"http://{e2e_host()}:{port}"
-
-
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler, create_agent_card
 
 logger = logging.getLogger(__name__)
@@ -111,21 +102,17 @@ class TestAgentCardURLRegression:
             assert url.endswith("/a2a"), f"URL pattern should end with '/a2a': {url}"
 
     @pytest.mark.integration
-    def test_agent_card_http_endpoint_url_format(self):
+    def test_agent_card_http_endpoint_url_format(self, live_server):
         """Integration test: Verify actual HTTP endpoint returns correct URL format."""
-        # This test requires the server to be running - skip if not available
-        try:
-            # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
-            response = requests.get(f"{_a2a_base_url()}/.well-known/agent-card.json", timeout=2)
-            if response.status_code == 200:
-                agent_card = response.json()
-                url = agent_card.get("url")
+        # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
+        response = requests.get(f"{live_server['a2a']}/.well-known/agent-card.json", timeout=2)
+        if response.status_code == 200:
+            agent_card = response.json()
+            url = agent_card.get("url")
 
-                if url:
-                    assert not url.endswith("/"), f"HTTP endpoint returned URL with trailing slash: {url}"
-                    assert url.endswith("/a2a"), f"HTTP endpoint URL should end with '/a2a': {url}"
-        except (requests.ConnectionError, requests.Timeout):
-            pytest.skip(f"A2A server not running at {_a2a_base_url()} - skipping HTTP integration test")
+            if url:
+                assert not url.endswith("/"), f"HTTP endpoint returned URL with trailing slash: {url}"
+                assert url.endswith("/a2a"), f"HTTP endpoint URL should end with '/a2a': {url}"
 
 
 class TestFunctionCallRegression:
@@ -253,7 +240,7 @@ class TestHTTPBehaviorRegression:
         assert "UnifiedAuthMiddleware" in content, "UnifiedAuthMiddleware should be registered in app.py"
 
     @pytest.mark.integration
-    def test_no_redirect_on_agent_card_endpoints(self):
+    def test_no_redirect_on_agent_card_endpoints(self, live_server):
         """Integration test: Verify agent card endpoints don't redirect."""
         # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
         endpoints_to_test = [
@@ -261,31 +248,27 @@ class TestHTTPBehaviorRegression:
         ]
 
         for endpoint in endpoints_to_test:
-            try:
-                # Use allow_redirects=False to catch any redirects
-                response = requests.get(f"{_a2a_base_url()}{endpoint}", allow_redirects=False, timeout=2)
+            # Use allow_redirects=False to catch any redirects
+            response = requests.get(f"{live_server['a2a']}{endpoint}", allow_redirects=False, timeout=2)
 
-                if response.status_code == 200:
-                    # Should be 200, not a redirect (301, 302, etc.)
-                    assert 200 <= response.status_code < 300, (
-                        f"Endpoint {endpoint} returned redirect: {response.status_code}"
-                    )
+            if response.status_code == 200:
+                # Should be 200, not a redirect (301, 302, etc.)
+                assert 200 <= response.status_code < 300, (
+                    f"Endpoint {endpoint} returned redirect: {response.status_code}"
+                )
 
-                    # Should return JSON
-                    assert response.headers.get("content-type", "").startswith("application/json")
+                # Should return JSON
+                assert response.headers.get("content-type", "").startswith("application/json")
 
-                    # Should have agent card data
-                    data = response.json()
-                    assert "name" in data
-                    # a2a-sdk 1.0 (protobuf): URL is in supportedInterfaces, not top-level
-                    assert "supportedInterfaces" in data
+                # Should have agent card data
+                data = response.json()
+                assert "name" in data
+                # a2a-sdk 1.0 (protobuf): URL is in supportedInterfaces, not top-level
+                assert "supportedInterfaces" in data
 
-                    # URL should not have trailing slash
-                    url = data["supportedInterfaces"][0]["url"]
-                    assert not url.endswith("/"), f"Agent card URL has trailing slash: {url}"
-
-            except (requests.ConnectionError, requests.Timeout):
-                pytest.skip(f"A2A server not running - skipping HTTP test for {endpoint}")
+                # URL should not have trailing slash
+                url = data["supportedInterfaces"][0]["url"]
+                assert not url.endswith("/"), f"Agent card URL has trailing slash: {url}"
 
 
 # Summary test to run all regression checks

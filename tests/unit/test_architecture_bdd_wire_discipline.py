@@ -19,6 +19,17 @@ B. **No reconstructed-only error assertion** (assertion-side). An error
    (yields ``RuntimeError`` for an unmapped code); the wire envelope is the buyer-facing
    contract.
 
+C. **No hand-rolled envelope/error parsing** (assertion-side, PR #1721 review round 2
+   #1721 review round 2, F6). An error ``@then`` step must go through
+   ``ctx['result'].assert_wire_error(...)`` (or the ``_wire_code``/``_wire_suggestion``
+   helpers) rather than either (a) a bare ``getattr(<error>, "error_code", ...)`` on a
+   reconstructed exception object, or (b) hand-rolled dict access on
+   ``ctx.get("wire_error_envelope")`` / ``ctx.get("synthesized_error_envelope")``. Both
+   forms bypass the single sanctioned envelope-parsing mechanism
+   (``tests/harness/transport.py``'s own docstring: "step definitions must not hand-roll
+   envelope parsing") and neither is caught by Check B, which only looks for the two named
+   ``_get_error_code``/``_get_error_dict`` helpers, not these inline forms.
+
 Both allowlists can only SHRINK. Each entry documents the production gap that keeps it.
 """
 
@@ -55,6 +66,9 @@ _ERROR_CONSTRUCTION_ALLOWLIST: set[str] = {
 
 # -- Check B: reconstructed-only error assertions -----------------------------
 _RECONSTRUCTED_ASSERTION_ALLOWLIST: set[str] = set()
+
+# -- Check C: hand-rolled envelope/error parsing -------------------------------
+_HAND_ROLLED_PARSING_ALLOWLIST: set[str] = set()
 
 
 def _iter_step_modules() -> list[tuple[str, ast.Module]]:
@@ -168,6 +182,147 @@ def test_no_test_side_error_construction() -> None:
     )
 
 
+def _is_ctx_wire_envelope_get(node: ast.AST) -> bool:
+    """True if node is ctx.get("wire_error_envelope" | "synthesized_error_envelope")."""
+    if not isinstance(node, ast.Call):
+        return False
+    fn = node.func
+    return (
+        isinstance(fn, ast.Attribute)
+        and fn.attr == "get"
+        and isinstance(fn.value, ast.Name)
+        and fn.value.id == "ctx"
+        and bool(node.args)
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value in {"wire_error_envelope", "synthesized_error_envelope"}
+    )
+
+
+def _flatten_or_operands(node: ast.AST) -> list[ast.AST]:
+    """Flatten `a or b or c` into [a, b, c]; a non-BoolOp node is its own singleton list."""
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+        out: list[ast.AST] = []
+        for value in node.values:
+            out.extend(_flatten_or_operands(value))
+        return out
+    return [node]
+
+
+def _exempted_envelope_get_ids(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[int]:
+    """id()s of ctx.get(wire-key) Call nodes that are exempt from Check C:
+
+    (a) presence-only: `ctx.get(...) is None` / `ctx.get(...) is not None` -- testing
+        whether an envelope exists, not parsing its content. Also covers the
+        one-hop-through-a-variable form (`envelope = ctx.get(...) or ctx.get(...);
+        assert envelope is not None`).
+    (b) piped into assert_envelope_shape(...) -- the sanctioned mechanism
+        tests/CLAUDE.md documents for this exact call shape -- directly, or via
+        the same one-hop-through-a-variable form.
+    (c) inside an f-string (ast.JoinedStr) -- a diagnostic/failure-message
+        interpolation can't influence pass/fail, so it isn't "parsing".
+    """
+    exempt: set[int] = set()
+    # varname -> ctx.get(wire-key) call ids that feed it (via `x = A or B or ...`)
+    var_sources: dict[str, set[int]] = {}
+    for node in _own_nodes(func):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            operands = _flatten_or_operands(node.value)
+            get_ids = {id(o) for o in operands if _is_ctx_wire_envelope_get(o)}
+            if get_ids and len(get_ids) == len(operands):
+                var_sources[node.targets[0].id] = get_ids
+        if isinstance(node, ast.JoinedStr):
+            exempt.update(id(n) for n in ast.walk(node) if _is_ctx_wire_envelope_get(n))
+
+    def _feeding_ids(expr: ast.AST) -> set[int]:
+        if _is_ctx_wire_envelope_get(expr):
+            return {id(expr)}
+        if isinstance(expr, ast.Name):
+            return var_sources.get(expr.id, set())
+        return set()
+
+    for node in _own_nodes(func):
+        if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], (ast.Is, ast.IsNot)):
+            operands = [node.left, *node.comparators]
+            if any(isinstance(o, ast.Constant) and o.value is None for o in operands):
+                for o in operands:
+                    exempt.update(_feeding_ids(o))
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "assert_envelope_shape"
+            and node.args
+        ):
+            exempt.update(_feeding_ids(node.args[0]))
+    return exempt
+
+
+def _hand_rolled_calls_in_func(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """True if func's own body (not nested defs) hand-rolls error/envelope parsing.
+
+    Two forms:
+    (a) getattr(<name>, "error_code", ...) as the SOLE mechanism -- a bare
+        reconstructed-exception read that doesn't go through the named
+        _get_error_code/_get_error_dict helpers (which Check B already catches)
+        but has the identical disease. Exempt (mirrors Check B's uses_wire logic)
+        when the function ALSO references a wire indicator -- a documented
+        wire-first-with-IMPL-fallback pattern (see then_error_code).
+    (b) ctx.get("wire_error_envelope") / ctx.get("synthesized_error_envelope") --
+        reading the envelope dict directly instead of through assert_wire_error,
+        except the two exemptions in _exempted_envelope_get_ids.
+    """
+    names = _func_names(func)
+    uses_wire = bool(set(_WIRE_REFERENCES) & names) or "result" in names
+    exempt_get_ids = _exempted_envelope_get_ids(func)
+
+    for node in _own_nodes(func):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        if (
+            isinstance(fn, ast.Name)
+            and fn.id == "getattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value == "error_code"
+            and not uses_wire
+        ):
+            return True
+        if _is_ctx_wire_envelope_get(node) and id(node) not in exempt_get_ids:
+            return True
+    return False
+
+
+def _find_hand_rolled_envelope_parsing() -> set[str]:
+    """Find @then steps that hand-roll error/envelope parsing (see
+    _hand_rolled_calls_in_func for the two forms) instead of using
+    ctx['result'].assert_wire_error(...) or the _wire_code/_wire_suggestion helpers.
+    """
+    found: set[str] = set()
+    for rel, tree in _iter_step_modules():
+        for func in _enclosing_functions(tree):
+            if _is_then(func) and _hand_rolled_calls_in_func(func):
+                found.add(f"{rel} {func.name}")
+    return found
+
+
+def test_no_hand_rolled_envelope_parsing() -> None:
+    """#1721 review round 2 (F6): error @then steps must use assert_wire_error(...),
+    never a bare getattr(error, 'error_code') or ctx.get('wire_error_envelope')/
+    ctx.get('synthesized_error_envelope') hand-roll.
+    """
+    assert_violations_match_allowlist(
+        _find_hand_rolled_envelope_parsing(),
+        _HAND_ROLLED_PARSING_ALLOWLIST,
+        fix_hint=(
+            "An error Then-step hand-rolls envelope/error parsing (bare getattr(error, "
+            "'error_code', ...) or ctx.get('wire_error_envelope'/'synthesized_error_envelope')). "
+            "Use ctx['result'].assert_wire_error(code, recovery=..., message_substr=...) instead "
+            "(tests/harness/transport.py) -- the single sanctioned envelope-parsing mechanism. "
+            "See then_error_code / then_declaration_rejected for the reference pattern."
+        ),
+    )
+
+
 def test_no_reconstructed_only_error_assertion() -> None:
     """ztl6.8: error @then steps must read the wire envelope, not only the lossy ctx['error']."""
     assert_violations_match_allowlist(
@@ -180,3 +335,100 @@ def test_no_reconstructed_only_error_assertion() -> None:
             "IMPL/no-wire. See then_error.py then_error_code / then_suggestion_contains."
         ),
     )
+
+
+# -- Check C meta-tests ---------------------------------------------------------
+
+
+def test_positive_getattr_error_code_is_detected() -> None:
+    """Meta-test: a bare getattr(error, 'error_code', ...) in a @then step is caught."""
+    src = """
+@then("something")
+def then_something(ctx):
+    error = ctx["error"]
+    actual = getattr(error, "error_code", None)
+    assert actual == "FOO"
+"""
+    tree = ast.parse(src)
+    func = _enclosing_functions(tree)[0]
+    assert _is_then(func)
+    assert _hand_rolled_calls_in_func(func) is True
+
+
+def test_positive_ctx_get_wire_envelope_is_detected() -> None:
+    """Meta-test: hand-rolled content extraction from ctx.get('wire_error_envelope') is
+    caught -- reading CONTENT (not just checking presence, and not piping straight into
+    assert_envelope_shape) is the actual disease.
+    """
+    src = """
+@then("something")
+def then_something(ctx, token):
+    envelope = ctx.get("wire_error_envelope")
+    message = (envelope.get("errors") or [{}])[0].get("message") or ""
+    assert token in message
+"""
+    tree = ast.parse(src)
+    func = _enclosing_functions(tree)[0]
+    assert _hand_rolled_calls_in_func(func) is True
+
+
+def test_negative_presence_check_via_variable_is_not_flagged() -> None:
+    """Meta-test: `envelope = ctx.get(A) or ctx.get(B); assert envelope is not None` is
+    exempt -- a presence-only check reached through one variable hop, same as the direct
+    form (see then_version_details_supported_versions for the real-code shape).
+    """
+    src = """
+@then("something")
+def then_something(ctx):
+    envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
+    assert envelope is not None
+    assert_envelope_shape(envelope, "FOO", recovery="correctable")
+"""
+    tree = ast.parse(src)
+    func = _enclosing_functions(tree)[0]
+    assert _hand_rolled_calls_in_func(func) is False
+
+
+def test_negative_assert_wire_error_is_not_flagged() -> None:
+    """Meta-test: the sanctioned ctx['result'].assert_wire_error(...) pattern is excluded."""
+    src = """
+@then("something")
+def then_something(ctx):
+    ctx["result"].assert_wire_error("FOO", recovery="terminal")
+"""
+    tree = ast.parse(src)
+    func = _enclosing_functions(tree)[0]
+    assert _hand_rolled_calls_in_func(func) is False
+
+
+def test_regex_slip_getattr_other_attribute_is_not_flagged() -> None:
+    """Meta-test: getattr(x, 'some_other_field', ...) (not 'error_code') is NOT a false positive."""
+    src = """
+@then("something")
+def then_something(ctx):
+    value = getattr(ctx["result"], "some_other_field", None)
+    assert value is not None
+"""
+    tree = ast.parse(src)
+    func = _enclosing_functions(tree)[0]
+    assert _hand_rolled_calls_in_func(func) is False
+
+
+def test_regex_slip_non_then_step_is_not_scanned() -> None:
+    """Meta-test: a helper function (no @then decorator) using the hand-rolled pattern is
+    not scanned by _find_hand_rolled_envelope_parsing() -- only @then steps are (helpers
+    like _get_error() are allowed to hand-roll; the discipline is on the assertion site).
+    """
+    src = """
+def _helper(ctx):
+    return ctx.get("wire_error_envelope")
+
+@then("something")
+def then_something(ctx):
+    ctx["result"].assert_wire_error("FOO", recovery="terminal")
+"""
+    tree = ast.parse(src)
+    funcs = {f.name: f for f in _enclosing_functions(tree)}
+    assert _hand_rolled_calls_in_func(funcs["_helper"]) is True
+    assert _is_then(funcs["_helper"]) is False
+    assert _hand_rolled_calls_in_func(funcs["then_something"]) is False

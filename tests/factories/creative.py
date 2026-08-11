@@ -31,7 +31,11 @@ class CreativeFactory(SQLAlchemyModelFactory):
     name = factory.LazyAttribute(lambda o: f"Test Creative {o.creative_id}")
     agent_url = "https://creative.adcontextprotocol.org"
     format = "display_300x250"
-    status = "pending"
+    # Mirrors the production default. Must stay an AdCP CreativeStatus member: a non-spec
+    # value (this was "pending") made every factory-built creative reach list_creatives
+    # through the reader's unparseable-status branch rather than through real status
+    # semantics.
+    status = "pending_review"
     data = factory.LazyFunction(lambda: {"assets": build_assets(image_spec("banner"))})
 
     class Params:

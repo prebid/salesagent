@@ -14,6 +14,7 @@ from sqlalchemy.orm import joinedload
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import PricingOption, Product, ProductInventoryMapping, Tenant
 from src.core.database.product_pricing import get_product_pricing_options
 from src.core.database.repositories.media_buy import MediaBuyRepository
@@ -1707,30 +1708,39 @@ def edit_product(tenant_id, product_id):
                     # Flush deletes to avoid unique constraint violations
                     db_session.flush()
 
-                    # Recreate mappings from implementation_config
-                    # Ad units
-                    if base_config.get("targeted_ad_unit_ids"):
-                        for idx, ad_unit_id in enumerate(base_config["targeted_ad_unit_ids"]):
+                    # Recreate mappings from implementation_config — ad units and
+                    # placements are the same mapping, only the inventory type differs
+                    for config_key, inventory_type in (
+                        ("targeted_ad_unit_ids", "ad_unit"),
+                        ("targeted_placement_ids", "placement"),
+                    ):
+                        for idx, inventory_id in enumerate(base_config.get(config_key) or []):
+                            mapping_stmt = select(ProductInventoryMapping).filter_by(
+                                tenant_id=tenant_id,
+                                product_id=product_id,
+                                inventory_type=inventory_type,
+                                inventory_id=inventory_id,
+                            )
                             mapping = ProductInventoryMapping(
                                 tenant_id=tenant_id,
                                 product_id=product_id,
-                                inventory_type="ad_unit",
-                                inventory_id=ad_unit_id,
+                                inventory_type=inventory_type,
+                                inventory_id=inventory_id,
                                 is_primary=(idx == 0),
                             )
-                            db_session.add(mapping)
 
-                    # Placements
-                    if base_config.get("targeted_placement_ids"):
-                        for idx, placement_id in enumerate(base_config["targeted_placement_ids"]):
-                            mapping = ProductInventoryMapping(
-                                tenant_id=tenant_id,
-                                product_id=product_id,
-                                inventory_type="placement",
-                                inventory_id=placement_id,
-                                is_primary=(idx == 0),
+                            # A mapping's identity IS uq_product_inventory, so a lost race
+                            # means the row is already there; the caller's is_primary still
+                            # applies. Both callables run before this iteration ends, so the
+                            # late binding B023 warns about cannot happen.
+                            already_mapped = resolve_or_write(
+                                db_session,
+                                conflict=lambda: db_session.scalars(mapping_stmt).first(),  # noqa: B023
+                                write=lambda: db_session.add(mapping),  # noqa: B023
+                                constraint="uq_product_inventory",
                             )
-                            db_session.add(mapping)
+                            if already_mapped is not None:
+                                already_mapped.is_primary = idx == 0
 
                     # Custom targeting keys
                     if base_config.get("custom_targeting_keys"):
@@ -2245,27 +2255,26 @@ def assign_inventory_to_product(tenant_id, product_id):
                 return jsonify({"error": "Inventory item not found"}), 404
 
             # Check if mapping already exists
-            existing = db_session.scalars(
-                select(ProductInventoryMapping).filter_by(
-                    tenant_id=tenant_id, product_id=product_id, inventory_id=inventory_id, inventory_type=inventory_type
-                )
-            ).first()
-
-            if existing:
-                # Update existing mapping
+            mapping_stmt = select(ProductInventoryMapping).filter_by(
+                tenant_id=tenant_id, product_id=product_id, inventory_id=inventory_id, inventory_type=inventory_type
+            )
+            mapping = ProductInventoryMapping(
+                tenant_id=tenant_id,
+                product_id=product_id,
+                inventory_id=inventory_id,
+                inventory_type=inventory_type,
+                is_primary=is_primary,
+            )
+            existing = resolve_or_write(
+                db_session,
+                conflict=lambda: db_session.scalars(mapping_stmt).first(),
+                write=lambda: db_session.add(mapping),
+                constraint="uq_product_inventory",
+            )
+            if existing is not None:
+                # Update existing mapping — also where an insert that lost the race lands.
                 existing.is_primary = is_primary
-                db_session.commit()
-            else:
-                # Create new mapping
-                mapping = ProductInventoryMapping(
-                    tenant_id=tenant_id,
-                    product_id=product_id,
-                    inventory_id=inventory_id,
-                    inventory_type=inventory_type,
-                    is_primary=is_primary,
-                )
-                db_session.add(mapping)
-                db_session.commit()
+            db_session.commit()
 
             # CRITICAL: Update product's implementation_config with inventory targeting
             # GAM adapter requires this to create line items

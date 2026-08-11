@@ -9,6 +9,7 @@ beads: salesagent-oj0.1.2
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from pytest_bdd import given, parsers, then, when
@@ -85,6 +86,14 @@ def given_tenant_has_account(ctx: dict, name: str, status: str) -> None:
     """Create a single account with the given name and status."""
     env = _env(ctx)
     account_id = env.create_account(name=name, status=status, brand_domain=f"{name.lower().replace(' ', '-')}.com")
+    ctx[f"account_id:{name}"] = account_id
+
+
+@given(parsers.parse('the tenant has an account "{name}" with brand domain "{domain}" and operator "{operator}"'))
+def given_tenant_has_keyed_account(ctx: dict, name: str, domain: str, operator: str) -> None:
+    """Seed one account holding a specific natural key (brand domain + operator)."""
+    env = _env(ctx)
+    account_id = env.create_account(name=name, status="active", brand_domain=domain, operator=operator)
     ctx[f"account_id:{name}"] = account_id
 
 
@@ -311,17 +320,42 @@ def then_db_has_account(ctx: dict, name: str) -> None:
 @then(parsers.parse('the database does not contain an account with brand domain "{domain}"'))
 def then_db_no_account_with_domain(ctx: dict, domain: str) -> None:
     """Assert no account with the given brand domain exists."""
-    from sqlalchemy import select
+    matches = _env(ctx).accounts_with_brand_domain(domain)
 
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import Account
+    assert matches == [], (
+        f"Found {len(matches)} account(s) with brand domain '{domain}' "
+        f"({[a.account_id for a in matches]}) — should not exist"
+    )
 
+
+@then(parsers.parse('exactly {count:d} account matches brand domain "{domain}" and operator "{operator}"'))
+def then_natural_key_holds_n_accounts(ctx: dict, count: int, domain: str, operator: str) -> None:
+    """Assert how many accounts the natural key resolves to.
+
+    Counted through ``AccountRepository`` — the same query production uses to
+    detect ambiguity — so the assertion grades what a buyer's ``sync_accounts``
+    entry would see, not a hand-rolled equivalent that could drift from it.
+    """
     env = _env(ctx)
-    with get_db_session() as session:
-        accounts = session.scalars(select(Account).where(Account.tenant_id == env.tenant_id)).all()
-        for acct in accounts:
-            if acct.brand and acct.brand.domain == domain:
-                raise AssertionError(f"Found account with brand domain '{domain}' — should not exist")
+    matches = env.accounts_on_natural_key(domain=domain, operator=operator)
+    assert len(matches) == count, (
+        f"expected {count} account(s) on brand domain {domain!r} c/o {operator!r}, found "
+        f"{len(matches)}: {[(a.account_id, a.name) for a in matches]}"
+    )
+
+
+@then(parsers.parse('the account matching brand domain "{domain}" and operator "{operator}" is named "{name}"'))
+def then_natural_key_account_is_named(ctx: dict, domain: str, operator: str, name: str) -> None:
+    """Assert WHICH account survived on the key, not merely that one did.
+
+    A refusal that dropped the original and kept the new row would leave exactly
+    one account and pass the count assertion alone.
+    """
+    env = _env(ctx)
+    matches = env.accounts_on_natural_key(domain=domain, operator=operator)
+    assert [a.name for a in matches] == [name], (
+        f"expected the key to still name {name!r}, got {[a.name for a in matches]}"
+    )
 
 
 @then(parsers.parse('the account "{name}" has brand domain "{domain}"'))
@@ -385,3 +419,24 @@ def then_json_status(ctx: dict, status_code: int) -> None:
     """Assert JSON response HTTP status code."""
     response = _require_response(ctx)
     assert response.status_code == status_code, f"Expected status {status_code}, got {response.status_code}"
+
+
+@then(parsers.parse('the "{field}" control is not editable'))
+def then_control_is_not_editable(ctx: dict, field: str) -> None:
+    """Assert the form control for *field* is rendered disabled or readonly.
+
+    Natural-key components must not be presented as editable: the repository
+    refuses them, so an enabled control would invite an operator to make a change
+    that is then silently dropped (salesagent-8sfr). Accepts either spelling —
+    ``disabled`` for the checkbox, ``readonly`` for the text input — because they
+    are the correct HTML for their respective control types.
+    """
+    html = _require_response(ctx).data.decode()
+    match = re.search(rf'<input[^>]*\bname="{re.escape(field)}"[^>]*>', html)
+    assert match, f'No <input name="{field}"> found on the edit page'
+    tag = match.group(0)
+    assert "disabled" in tag or "readonly" in tag, (
+        f'The "{field}" control is editable on the edit page: {tag}\n'
+        "It is a natural-key component — the repository refuses to write it, so offering it as "
+        "editable means an operator's change is silently discarded."
+    )

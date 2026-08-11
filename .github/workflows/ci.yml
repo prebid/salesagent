@@ -316,13 +316,22 @@ jobs:
         run: docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
 
   bdd-in-network:
-    # The 5th BDD transport (e2e_rest: real HTTP through nginx to the live
-    # server, serial, BDD_E2E_ENABLED=true from docker-compose.e2e.yml) — the
-    # only job that grades the e2e_rest known-failures ledger. Without it a
-    # ledger graduation (or regression) is invisible to CI: the sharded BDD
-    # job runs in-process transports only (PR #1430 review). This job runs
-    # ONLY the bdd_e2e tox env (-k e2e_rest): re-running the in-process bulk
-    # here would duplicate the sharded job serially for no added grading.
+    # The in-network BDD transports (real HTTP through nginx to the live server,
+    # serial, BDD_E2E_ENABLED=true from docker-compose.e2e.yml): e2e_rest for the
+    # AdCP tool surfaces and e2e_admin for the admin UI scenarios — the only job
+    # that grades either. Without it a ledger graduation (or regression) is
+    # invisible to CI: the sharded BDD job runs in-process transports only
+    # (PR #1430 review). This job runs ONLY the bdd_e2e tox env
+    # (-k "e2e_rest or e2e_admin"): re-running the in-process bulk here would
+    # duplicate the sharded job serially for no added grading. Adding a new
+    # in-network transport means adding its id to that -k, or it is collected by
+    # no env at all and dies dormant while CI stays green (salesagent-jckl).
+    #
+    # The job NAME is deliberately NOT updated to list e2e_admin: branch
+    # protection matches required checks by rendered name ("CI / BDD In-Network
+    # (e2e_rest)"), so renaming silently de-requires this job until someone with
+    # repo-admin rights updates the setting out of band. Frozen by
+    # tests/unit/test_architecture_required_ci_checks_frozen.py.
     name: BDD In-Network (e2e_rest)
     runs-on: ubuntu-latest
     permissions:

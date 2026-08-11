@@ -8,7 +8,7 @@ from adcp.types import ContextObject
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.repositories.uow import WorkflowUoW
-from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError
+from src.core.exceptions import AdCPAdapterError, AdCPAuthRequiredError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeStatusEnum
 
@@ -33,9 +33,11 @@ def _create_sync_workflow_steps(
 
     ctx_manager = get_context_manager()
 
-    # Ensure principal_id is available (should always be set by this point)
+    # Ensure principal_id is available (should always be set by this point).
+    # No principal_id at all -> AUTH_MISSING per v3.1.1 error-code.json
+    # (absent credential, not presented-but-rejected).
     if principal_id is None:
-        raise AdCPAuthenticationError("Principal ID required for workflow creation")
+        raise AdCPAuthRequiredError("Principal ID required for workflow creation")
 
     # Get or create persistent context for this operation
     # is_async=True because we're creating workflow steps that need tracking

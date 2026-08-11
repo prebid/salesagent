@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.orm import Session as SASession
 
 # Set test mode before any imports
 os.environ["PYTEST_CURRENT_TEST"] = "true"
@@ -24,7 +25,7 @@ def _connect_with_retry(conn_params, *, attempts: int = 12, base_delay: float = 
     ``psycopg2.OperationalError`` during fixture *setup* and flip the suite red
     non-deterministically. Retry with bounded exponential backoff; on persistent
     failure raise a clear, actionable error instead of a raw psycopg2 traceback on a
-    random test. See salesagent-qpst.
+    random test.
     """
     import psycopg2  # local import matches the existing pattern in this module
 
@@ -38,8 +39,7 @@ def _connect_with_retry(conn_params, *, attempts: int = 12, base_delay: float = 
                 break
             delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
             _LOG.warning(
-                "DB connect attempt %d/%d to %s:%s failed (%s); retrying in %.2fs "
-                "(salesagent-qpst port-collision tolerance)",
+                "DB connect attempt %d/%d to %s:%s failed (%s); retrying in %.2fs (port-collision tolerance)",
                 attempt,
                 attempts,
                 conn_params.get("host"),
@@ -52,7 +52,7 @@ def _connect_with_retry(conn_params, *, attempts: int = 12, base_delay: float = 
         f"Could not establish a PostgreSQL connection to "
         f"{conn_params.get('host')}:{conn_params.get('port')} after {attempts} attempts. "
         f"Under parallel tox this usually means the test-stack port was transiently "
-        f"answered by another service (see salesagent-qpst). Last error: {last_exc}"
+        f"answered by another service. Last error: {last_exc}"
     ) from last_exc
 
 
@@ -455,6 +455,42 @@ def _ensure_db_template(conn_params: dict, engine_url_base: str) -> str:
         conn.close()
     _template_name = name
     return name
+
+
+@pytest.fixture
+def factory_session(integration_db):
+    """Bind all factory_boy factories to a live PostgreSQL session for the test.
+
+    Use this fixture in new DB-backed tests to create test data via factories
+    (e.g. ``TenantFactory(tenant_id="t1")``) instead of inline ``session.add()``.
+    Factories are unbound on teardown so the binding doesn't leak into other tests.
+
+    Returns the bound session for use in post-POST DB state assertions.
+
+    Note: the factory session binding is stored on class attributes of each factory,
+    so this fixture mutates process-wide state. Two tests in the same worker cannot
+    use ``factory_session`` concurrently — the ``assert ... is None`` precondition
+    below catches nesting. Parallel test runners must assign distinct workers per
+    test (pytest-xdist's default ``--dist=load`` is fine; avoid ``--dist=each``).
+    """
+    from src.core.database.database_session import get_engine
+    from tests.factories import ALL_FACTORIES
+
+    for f in ALL_FACTORIES:
+        assert f._meta.sqlalchemy_session is None, (
+            f"Factory {f.__name__} session already bound — nested factory_session fixtures are not supported"
+        )
+
+    session = SASession(bind=get_engine())
+    for f in ALL_FACTORIES:
+        f._meta.sqlalchemy_session = session
+
+    try:
+        yield session
+    finally:
+        for f in ALL_FACTORIES:
+            f._meta.sqlalchemy_session = None
+        session.close()
 
 
 @pytest.fixture(scope="function")

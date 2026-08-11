@@ -64,9 +64,8 @@ from typing import Any
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from tests.bdd.steps._outcome_helpers import _require_response
+from tests.bdd.steps._outcome_helpers import _require_response, wire_field
 from tests.bdd.steps.generic._auth import authenticate_env_as
-from tests.harness.transport import Transport
 from tests.helpers.pinned_schema import validate_against_pinned_schema
 
 # Three genuinely-different formats (display / video / audio) for the "three
@@ -185,8 +184,8 @@ def when_list_creatives_no_filters(ctx: dict) -> None:
 
     Reuses the canonical generic dispatch helper (``env.call_via`` + ctx stash of
     ``response`` / ``wire_response`` / ``error``) rather than re-implementing it.
-    No filter kwargs are passed, so the listing runs unfiltered; the helper maps a
-    missing transport to IMPL.
+    No filter kwargs are passed, so the listing runs unfiltered; a missing
+    transport raises in ``_call_via`` (loud guard — there is no IMPL fallback).
     """
     from tests.bdd.steps.generic.when_request import _call_via
 
@@ -342,20 +341,11 @@ def _wire_creatives(ctx: dict) -> list[dict[str, Any]]:
     REST/A2A/MCP stash the real serialized response on ``ctx["wire_response"]``
     (CreativeListEnv stashes on all three wire transports), so the concept-field
     assertions check the actual on-the-wire bytes rather than a re-serialization.
-    Falls back to the production serializer only when no wire was captured (e.g. a
-    non-stashing path), so the step still has data to assert on.
+    Delegates to the canonical :func:`wire_field` guard (GH #1744 collapsed the
+    private guard clone this used to carry): only an explicit ``Transport.IMPL``
+    may serialize the typed payload; an unset transport raises loudly.
     """
-    wire = ctx.get("wire_response")
-    transport = ctx.get("transport")
-    # Loud guard (mirrors uc005_format_id_shape): a real-wire transport (a2a/mcp/rest/
-    # e2e_rest) that didn't stash wire_response must trip here, not silently fall back
-    # to a model_dump re-serialization and undercut the "real wire bytes" claim. IMPL
-    # (and the unparametrized None default) legitimately have no wire.
-    if wire is None and transport not in (None, Transport.IMPL):
-        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
-    if wire is not None:
-        return wire["creatives"]
-    return _serialized_response(ctx)["creatives"]
+    return wire_field(ctx, "creatives")
 
 
 @then(parsers.parse('the creatives array should only include creatives belonging to concept "{concept_id}"'))

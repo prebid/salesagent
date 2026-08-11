@@ -54,12 +54,12 @@ from google.protobuf import json_format, struct_pb2
 from pydantic import BaseModel
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import AUTH_REQUIRED_SUGGESTION
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.repositories import PushNotificationConfigUoW
 from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import (
+    AUTH_MISSING_SUGGESTION,
     AdCPAuthenticationError,
     AdCPAuthRequiredError,
     AdCPCapabilityNotSupportedError,
@@ -69,7 +69,12 @@ from src.core.exceptions import (
     normalize_to_adcp_error,
 )
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import coerce_creative_filters, to_account_reference, to_brand_reference
+from src.core.schema_helpers import (
+    coerce_creative_filters,
+    select_request_fields,
+    to_account_reference,
+    to_brand_reference,
+)
 from src.core.schemas import CreativeStatusEnum
 from src.core.tool_context import ToolContext
 from src.core.tool_error_logging import record_boundary_error
@@ -168,6 +173,83 @@ def _dict_to_struct(d: dict) -> struct_pb2.Struct:
     s = struct_pb2.Struct()
     s.update(d)
     return s
+
+
+# Field names typed `integer` (not `number`) in the pinned AdCP v3.1.1 schema
+# that this server can place in an A2A Part.data (via _dict_to_value above).
+#
+# google.protobuf.Value/Struct -- the well-known types backing Part.data --
+# have NO integer variant: every JSON number is stored as number_value (a
+# double), by protobuf's own well-known-type design. Any int placed in a
+# Part.data is therefore irreversibly widened to a double the moment it
+# enters the Struct/Value, and comes back out as a JSON float (86400 ->
+# 86400.0) from ANY subsequent json_format.MessageToJson/MessageToDict call
+# -- ours or the a2a-sdk's own jsonrpc_dispatcher.py, which performs the
+# identical conversion to build the real HTTP response body. There is no way
+# to preserve the distinction inside the Struct/Value representation itself;
+# the only fix point is a coercion applied to the JSON produced FROM the
+# Struct/Value, driven by which fields are known to be integer-typed per spec.
+#
+# Spec: v3.1.1 (adcp==6.6.0) -- replay_ttl_seconds:
+# get-adcp-capabilities-response.json #/properties/adcp/properties/idempotency
+# (type: integer). limit: get-creative-delivery-response.json
+# #/properties/limit. Others below are verified `type: integer` fields on
+# this server's other explicit-skill responses (sync/assign counts, delivery
+# totals, revision, attribution window). Extend this set as new integer
+# fields are found on the A2A wire -- coercion only fires for a listed name
+# whose value is a whole-numbered float, so an unlisted or genuinely
+# fractional field is never touched.
+A2A_WIRE_INTEGER_FIELDS = frozenset(
+    {
+        "replay_ttl_seconds",
+        "limit",
+        "returned_count",
+        "revision",
+        "interval",
+        "attribution_window_days",
+        "total_processed",
+        "created",
+        "updated",
+        "unchanged",
+        "failed",
+        "deleted",
+        "total_assignments_processed",
+        "assigned",
+        "unassigned",
+        "total_impressions",
+        "active_count",
+        "impressions",
+    }
+)
+
+
+def restore_a2a_integer_types(data: Any, integer_field_names: frozenset[str] = A2A_WIRE_INTEGER_FIELDS) -> Any:
+    """Recursively coerce known integer-typed fields back to ``int``.
+
+    Reverses the double-widening every number undergoes when it round-trips
+    through a protobuf Struct/Value (see A2A_WIRE_INTEGER_FIELDS above).
+    Only touches a value that is BOTH a whole-numbered float AND at a key in
+    ``integer_field_names`` -- an unlisted key or a genuinely fractional
+    value is returned unchanged, so this cannot silently corrupt real
+    ``number``-typed fields.
+
+    Shared by the production ``/a2a`` route wrapper (src/app.py) and the test
+    harness's ``extract_data_from_artifact`` (tests/utils/a2a_helpers.py) --
+    both perform the same Struct/Value -> JSON conversion the a2a-sdk itself
+    performs, so both need the same restoration to keep the harness's "real
+    A2A wire" claim honest.
+    """
+    if isinstance(data, dict):
+        result: dict[str, Any] = {}
+        for key, value in data.items():
+            if key in integer_field_names and isinstance(value, float) and value.is_integer():
+                result[key] = int(value)
+            else:
+                result[key] = restore_a2a_integer_types(value, integer_field_names)
+        return result
+    if isinstance(data, list):
+        return [restore_a2a_integer_types(item, integer_field_names) for item in data]
+    return data
 
 
 # ADCP Discovery Skills: Skills that don't require authentication
@@ -305,7 +387,12 @@ class AdCPRequestHandler(RequestHandler):
         headers = auth_ctx.headers if auth_ctx else {}
 
         if require_valid_token and not auth_token:
-            raise InvalidRequestError(message="Missing authentication token")
+            raise InvalidRequestError(
+                message="Missing authentication token",
+                data=build_two_layer_error_envelope(
+                    AdCPAuthRequiredError("Missing authentication token", suggestion=AUTH_MISSING_SUGGESTION)
+                ),
+            )
 
         # Extract testing context from A2A request headers (same as MCP does)
         testing_context = AdCPTestContext.from_headers(headers)
@@ -319,13 +406,30 @@ class AdCPRequestHandler(RequestHandler):
                 testing_context=testing_context,
             )
         except AdCPAuthenticationError as e:
-            raise InvalidRequestError(message=str(e)) from e
+            # resolve_identity raises AdCPAuthenticationError (AUTH_INVALID)
+            # for a presented-but-invalid token. Route through the same
+            # two-layer envelope builder used elsewhere in this file instead
+            # of dropping the wire code entirely (salesagent-mkso — this
+            # branch previously re-wrapped as a bare InvalidRequestError with
+            # no error_code/wire-code field at all).
+            raise InvalidRequestError(message=str(e), data=build_two_layer_error_envelope(e)) from e
 
         if require_valid_token:
             if not identity.principal_id:
-                raise InvalidRequestError(message="Authentication token is invalid or expired.")
+                # No principal_id at all -> AUTH_MISSING per v3.1.1
+                # error-code.json.
+                raise InvalidRequestError(
+                    message="Authentication token is invalid or expired.",
+                    data=build_two_layer_error_envelope(
+                        AdCPAuthRequiredError(
+                            "Authentication token is invalid or expired.", suggestion=AUTH_MISSING_SUGGESTION
+                        )
+                    ),
+                )
 
             if not identity.tenant:
+                # DEFER: tenant-axis, out of scope for the AUTH_MISSING/
+                # AUTH_INVALID split (salesagent-40kk) — left unchanged.
                 raise InvalidRequestError(
                     message=f"Unable to determine tenant from authentication. Principal: {identity.principal_id}"
                 )
@@ -513,7 +617,6 @@ class AdCPRequestHandler(RequestHandler):
                 SyncAccountsResponse,
                 SyncCreativesResponse,
                 UpdateMediaBuyError,
-                UpdateMediaBuySubmitted,
                 UpdateMediaBuySuccess,
             )
 
@@ -531,17 +634,14 @@ class AdCPRequestHandler(RequestHandler):
                 else:
                     return CreateMediaBuyError(**data)
             elif skill_name == "update_media_buy":
-                # Submitted (pending-approval) responses carry status="submitted" + task_id
-                # and no applied media_buy_id; success responses have media_buy_id; error
-                # responses have errors. Check submitted first — a submitted envelope must not
-                # be mis-reconstructed as UpdateMediaBuySuccess (whose status is Literal completed).
-                # NB: on the normal path a submitted result takes the status=="submitted"
-                # early-return in on_message_send (Task state=SUBMITTED, no artifacts) BEFORE
-                # artifact/text reconstruction reaches here (PR #1567 round-2); this branch is a
-                # defensive backstop guarded by test_a2a_update_media_buy_submitted_guard.py.
-                if data.get("status") == "submitted":
-                    return UpdateMediaBuySubmitted(**data)
-                elif "media_buy_id" in data:
+                # Success responses have media_buy_id, error responses have errors.
+                # No UpdateMediaBuySubmitted branch on purpose: submitted results
+                # take the status=="submitted" early-return in on_message_send
+                # (Task state=SUBMITTED, no artifacts) BEFORE artifact/text
+                # reconstruction, so a submitted body can never reach here
+                # (PR #1567 round-2 follow-up; same rationale as create_media_buy above).
+                # Guarded by test_a2a_update_media_buy_submitted_guard.py.
+                if "media_buy_id" in data:
                     return UpdateMediaBuySuccess(**data)
                 else:
                     return UpdateMediaBuyError(**data)
@@ -658,16 +758,17 @@ class AdCPRequestHandler(RequestHandler):
             # Require authentication for non-public skills. Stay a JSON-RPC
             # InvalidRequestError (protocol-level rejection, top-level error), but
             # carry the two-layer envelope in ``data`` so the buyer-facing
-            # AUTH_REQUIRED code + AUTH_REQUIRED_SUGGESTION reach the A2A wire —
-            # matching REST's no-identity envelope (auth_context.py), which the
-            # bare A2AError previously dropped. (#1417)
+            # AUTH_MISSING code + suggestion reach the A2A wire — matching
+            # REST's no-identity envelope (auth_context.py), which the bare
+            # A2AError previously dropped. (#1417; split to AUTH_MISSING per
+            # v3.1.1 error-code.json — salesagent-mkso)
             if requires_auth and not auth_token:
                 raise InvalidRequestError(
                     message="Missing authentication token - Bearer token required in Authorization header",
                     data=build_two_layer_error_envelope(
                         AdCPAuthRequiredError(
                             "Authentication required - Bearer token required in Authorization header",
-                            suggestion=AUTH_REQUIRED_SUGGESTION,
+                            suggestion=AUTH_MISSING_SUGGESTION,
                         )
                     ),
                 )
@@ -689,7 +790,16 @@ class AdCPRequestHandler(RequestHandler):
             # to all downstream handlers. No handler should call resolve_identity().
             identity: ResolvedIdentity | None = None
             if auth_token:
-                identity = self._resolve_a2a_identity(auth_token, require_valid_token=requires_auth, context=context)
+                # A PRESENTED token must always be validated, regardless of
+                # whether the requested skill itself requires auth — absent
+                # token -> proceed anonymous (fine); presented-but-invalid
+                # token -> must reject with AUTH_INVALID (terminal), even on
+                # a public/discovery-only skill request. Previously this
+                # reused `requires_auth` (skill-based) here, so an invalid
+                # token on a discovery-only request was silently swallowed as
+                # anonymous by resolve_identity()'s require_valid_token=False
+                # path instead of being rejected (salesagent-7moz).
+                identity = self._resolve_a2a_identity(auth_token, require_valid_token=True, context=context)
             elif not requires_auth:
                 # Unauthenticated discovery request — resolve tenant from headers only
                 identity = self._resolve_a2a_identity(None, require_valid_token=False, context=context)
@@ -1506,9 +1616,20 @@ class AdCPRequestHandler(RequestHandler):
 
         logger.info("Handling explicit skill: %s with parameters: %s", skill_name, list(parameters.keys()))
 
-        # Validate identity for non-discovery skills
+        # Validate identity for non-discovery skills. No identity / no
+        # principal_id resolved at all -> AUTH_MISSING per v3.1.1
+        # error-code.json. Previously a bare InvalidRequestError with no
+        # error_code/wire-code field at all — same layering violation as
+        # the :282-283/:286-287 sites above (salesagent-mkso).
         if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
-            raise InvalidRequestError(message="Authentication required for skill invocation")
+            raise InvalidRequestError(
+                message="Authentication required for skill invocation",
+                data=build_two_layer_error_envelope(
+                    AdCPAuthRequiredError(
+                        "Authentication required for skill invocation", suggestion=AUTH_MISSING_SUGGESTION
+                    )
+                ),
+            )
 
         # Map skill names to handlers. Handler signatures are heterogeneous
         # (discovery skills accept ``identity: ResolvedIdentity | None``; the rest
@@ -1788,6 +1909,10 @@ class AdCPRequestHandler(RequestHandler):
         # Call core function with optional parameters (fixing original validation bug)
         response = core_list_creatives_tool(
             media_buy_id=parameters.get("media_buy_id"),
+            # media_buy_ids (AdCP 2.5) and the four projection flags below are accepted on
+            # MCP and REST; this handler used to enumerate around them, so an A2A buyer's
+            # filters were silently ignored (salesagent-e8wt.1 scan row 11).
+            media_buy_ids=parameters.get("media_buy_ids"),
             status=parameters.get("status"),
             format=parameters.get("format"),
             tags=parameters.get("tags", []),
@@ -1795,6 +1920,10 @@ class AdCPRequestHandler(RequestHandler):
             created_before=parameters.get("created_before"),
             search=parameters.get("search"),
             filters=filters,
+            fields=parameters.get("fields"),
+            include_performance=parameters.get("include_performance", False),
+            include_assignments=parameters.get("include_assignments", False),
+            include_sub_assets=parameters.get("include_sub_assets", False),
             page=parameters.get("page", 1),
             limit=parameters.get("limit", 50),
             sort_by=parameters.get("sort_by", "created_date"),
@@ -1898,6 +2027,9 @@ class AdCPRequestHandler(RequestHandler):
         # Call core function with identity
         response = await get_adcp_capabilities_raw(
             protocols=parameters.get("protocols"),
+            context=parameters.get("context"),
+            adcp_version=parameters.get("adcp_version"),
+            adcp_major_version=parameters.get("adcp_major_version"),
             identity=identity,
         )
 
@@ -1928,6 +2060,8 @@ class AdCPRequestHandler(RequestHandler):
                 max_width=parameters.get("max_width"),
                 min_height=parameters.get("min_height"),
                 max_height=parameters.get("max_height"),
+                disclosure_positions=parameters.get("disclosure_positions"),
+                disclosure_persistence=parameters.get("disclosure_persistence"),
                 context=parameters.get("context"),
             )
 
@@ -1943,15 +2077,11 @@ class AdCPRequestHandler(RequestHandler):
         return an empty account list.
         """
         from src.core.schemas.account import ListAccountsRequest
+        from src.core.tools.accounts import build_list_accounts_request
 
         # Same context string as the REST route's boundary (klkg parity).
         with adcp_validation_boundary(context="list_accounts request"):
-            request = ListAccountsRequest(
-                status=parameters.get("status"),
-                pagination=parameters.get("pagination"),
-                sandbox=parameters.get("sandbox"),
-                context=parameters.get("context"),
-            )
+            request = build_list_accounts_request(**select_request_fields(ListAccountsRequest, parameters))
         return core_list_accounts_tool(req=request, identity=identity)
 
     async def _handle_sync_accounts_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
@@ -1960,15 +2090,11 @@ class AdCPRequestHandler(RequestHandler):
         Authentication is REQUIRED per BR-RULE-055.
         """
         from src.core.schemas.account import SyncAccountsRequest
+        from src.core.tools.accounts import build_sync_accounts_request
 
         # Same context string as the REST route's boundary (klkg parity).
         with adcp_validation_boundary(context="sync_accounts request"):
-            request = SyncAccountsRequest(
-                accounts=parameters.get("accounts", []),
-                delete_missing=parameters.get("delete_missing", False),
-                dry_run=parameters.get("dry_run", False),
-                context=parameters.get("context"),
-            )
+            request = build_sync_accounts_request(**select_request_fields(SyncAccountsRequest, parameters))
         return await core_sync_accounts_tool(req=request, identity=identity)
 
     async def _handle_list_authorized_properties_skill(
@@ -1996,7 +2122,9 @@ class AdCPRequestHandler(RequestHandler):
 
         # Same context string as the REST route's boundary (klkg parity).
         with adcp_validation_boundary(context="list_authorized_properties request"):
-            request = ListAuthorizedPropertiesRequest(context=parameters.get("context"))
+            request = ListAuthorizedPropertiesRequest.model_validate(
+                select_request_fields(ListAuthorizedPropertiesRequest, parameters)
+            )
 
         # Call core function with identity
         response = core_list_authorized_properties_tool(req=request, identity=identity)

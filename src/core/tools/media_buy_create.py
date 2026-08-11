@@ -35,12 +35,11 @@ from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import PackageRequest as AdcpPackageRequest
 from adcp.types.aliases import Package as ResponsePackage
 from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 from pydantic import BaseModel, Field, ValidationError
 from rich.console import Console
 
+from src.core.database.integrity import is_constraint_violation
 from src.core.database.repositories.creative import CreativeRepository
-from src.core.database.repositories.idempotency_attempt import DEFAULT_REPLAY_TTL
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthorizationError,
@@ -59,6 +58,7 @@ from src.core.exceptions import (
 )
 from src.core.helpers import enum_value
 from src.core.idempotency_canonical import canonical_payload_hash, canonical_request_hash
+from src.core.idempotency_policy import DEFAULT_REPLAY_TTL
 
 
 class PackageAssignmentDict(TypedDict):
@@ -149,12 +149,14 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext, TestingContext, apply_testing_hooks
 from src.core.tool_context import ToolContext
+from src.core.tools._mcp_boundary import build_tool_result
 from src.core.tools.financial_validation import (
     raise_if_validation_failed,
     validate_budget_positive,
     validate_max_daily_package_spend,
     validate_min_package_budget,
 )
+from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 
 # Import get_product_catalog from main (after refactor)
 from src.core.validation_helpers import adcp_validation_boundary, format_validation_error, package_field_path
@@ -1888,7 +1890,9 @@ def _cache_and_return(
                 protocol_status=result.status,
                 payload_hash=request_hash,
             )
-    except IntegrityError:
+    except (
+        IntegrityError
+    ):  # structural-guard: integrity-narrowing - best-effort cache write; logs and continues, claims no cause
         logger.info(
             "Idempotency cache race for key %s (tenant %s, principal %s) — winner already stored",
             req.idempotency_key,
@@ -1953,17 +1957,14 @@ _IDEMPOTENCY_BACKSTOP_INDEX = "idx_media_buys_idempotency_key"
 def _is_idempotency_backstop_violation(exc: IntegrityError) -> bool:
     """True iff ``exc`` is the media_buys idempotency-key unique-index collision.
 
-    The single home for the "is this the idempotency race?" decision. Prefers the
-    driver's structured constraint name (``exc.orig.diag.constraint_name``), matched
-    by PREFIX against the backstop index — so a build-time rename suffix (the
-    CONCURRENTLY swap variants ``…_acct`` / ``…_noacct``) still matches, while an
-    unrelated constraint that merely contains the column token does not. Falls back
-    to a message substring scan only when the structured diagnostic is unavailable.
+    The single home for the "is this the idempotency race?" decision. The
+    prefix-match-then-message-fallback mechanism is shared with every other
+    constraint-narrowed recovery (``is_constraint_violation``); only the index and
+    the fallback token are specific to this one. The token stays the bare column
+    name rather than the index name so the fallback keeps matching drivers whose
+    message names the column.
     """
-    constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
-    if constraint:
-        return constraint.startswith(_IDEMPOTENCY_BACKSTOP_INDEX)
-    return "idempotency_key" in str(getattr(exc, "orig", exc))
+    return is_constraint_violation(exc, _IDEMPOTENCY_BACKSTOP_INDEX, message_token="idempotency_key")
 
 
 def _resolve_idempotency_race_or_raise(
@@ -2150,6 +2151,7 @@ async def _create_media_buy_impl(
         # Skip for dry_run mode (no database writes). URL was SSRF-checked above;
         # persist via repository upsert (registration gate + defense in depth).
         if push_notification_config:
+            # Lazy: call-time import so tests that patch the UoW on the repositories package see their patched object (hoisting would bind the unpatched one at module load).
             from src.core.database.repositories import PushNotificationConfigUoW
 
             url = push_notification_config.get("url")
@@ -2169,6 +2171,9 @@ async def _create_media_buy_impl(
                 credentials = authentication.get("credentials") if authentication else None
                 config_id = push_notification_config.get("id") or f"pnc_{uuid.uuid4().hex[:16]}"
 
+                # Save to database. validation_token/session_id are omitted on
+                # purpose: upsert preserves them on an existing row (a token set
+                # via A2A set_push_notification_config must survive this path).
                 with PushNotificationConfigUoW(tenant["tenant_id"]) as pnc_uow:
                     assert pnc_uow.push_notification_configs is not None
                     _config, created = pnc_uow.push_notification_configs.upsert(
@@ -2177,8 +2182,6 @@ async def _create_media_buy_impl(
                         url=str(url),
                         authentication_type=auth_type,
                         authentication_token=credentials,
-                        validation_token=None,
-                        session_id=None,
                     )
                     logger.info(
                         "[MCP/A2A] Push notification config %s: %s",
@@ -2229,7 +2232,9 @@ async def _create_media_buy_impl(
                 computed_start_time = computed_start_time.replace(tzinfo=UTC)
 
             if computed_start_time < now:
-                error_msg = f"Invalid start time: {req.start_time}. Start time cannot be in the past."
+                # req.start_time is a StartTiming RootModel — interpolating it renders
+                # the repr (root=...); the buyer must see the value.
+                error_msg = f"Invalid start time: {computed_start_time}. Start time cannot be in the past."
                 raise AdCPInvalidRequestError(
                     error_msg,
                     suggestion="Use a future datetime or 'asap' for immediate start.",
@@ -2247,7 +2252,11 @@ async def _create_media_buy_impl(
             computed_end_time = computed_end_time.replace(tzinfo=UTC)
 
         if computed_end_time <= computed_start_time:
-            error_msg = f"Invalid time range: end time ({req.end_time}) must be after start time ({req.start_time})."
+            # computed_* are the unwrapped, tz-normalized values; req.start_time is a
+            # StartTiming RootModel whose interpolation would render root=... instead.
+            error_msg = (
+                f"Invalid time range: end time ({computed_end_time}) must be after start time ({computed_start_time})."
+            )
             raise AdCPInvalidRequestError(
                 error_msg,
                 suggestion="Set end_time to a datetime after start_time.",
@@ -2702,7 +2711,14 @@ async def _create_media_buy_impl(
         adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
 
         # Check if manual approval is required
-        # Use tenant.human_review_required as the authoritative source, with adapter setting as fallback
+        # Use tenant.human_review_required as the authoritative source, with adapter setting as fallback.
+        # NOTE: capabilities.py's resolve_manual_approval_signal() (adapter_helpers.py,
+        # salesagent-y9ld) reads a SIMILAR but not identical signal (no default-True
+        # fallback, honest-absence semantics for reporting) -- deliberately NOT reused
+        # here: this is the live enforcement path (a pure dict read with zero DB calls
+        # today), and resolve_manual_approval_signal()'s DB fallback would add an
+        # unconditional query to this hot path for a stylistic DRY win. Tracked as a
+        # follow-up (salesagent-3rhn) alongside the sibling media_buy_update.py gap.
         tenant_approval_required = tenant.get("human_review_required", True)
         adapter_approval_required = adapter.manual_approval_required
         # Tenant setting takes precedence - if tenant requires approval, it's required
@@ -2872,7 +2888,7 @@ async def _create_media_buy_impl(
                         payload_hash=request_hash,
                     )
                     logger.info(f"✅ Created media buy {media_buy_id} with status=pending_approval")
-            except IntegrityError as exc:
+            except IntegrityError as exc:  # structural-guard: integrity-narrowing - _resolve_idempotency_race_or_raise decides, and re-raises anything else
                 return _resolve_idempotency_race_or_raise(
                     exc,
                     tenant["tenant_id"],
@@ -3547,7 +3563,7 @@ async def _create_media_buy_impl(
             # is SILENT on a dry_run response status -> production authoritative. A dry_run
             # buyer asked to SIMULATE the would-be outcome, which IS completion, so
             # "completed" is a truthful preview (unlike the pending-approval and reject paths, where the op
-            # did not apply). Guarded by tests/unit/test_media_buy_dry_run_status.py.
+            # did not apply). Guarded by tests/integration/test_media_buy_dry_run_status.py.
             # Simulated lifecycle: a would-be-created buy starts before its flight,
             # so pending_start — the SAME value must feed both the wire field and
             # valid_actions (spec 3.1.1 pending_creatives_to_start.yaml grades
@@ -3650,7 +3666,7 @@ async def _create_media_buy_impl(
                     payload_hash=request_hash,
                 )
                 # UoW auto-commits on clean exit
-        except IntegrityError as exc:
+        except IntegrityError as exc:  # structural-guard: integrity-narrowing - _resolve_idempotency_race_or_raise decides, and re-raises anything else
             return _resolve_idempotency_race_or_raise(
                 exc,
                 tenant["tenant_id"],
@@ -4490,7 +4506,7 @@ async def create_media_buy(
         context_id=_ctx_id,
         raw_wire_payload=raw_wire_payload,
     )
-    return ToolResult(content=str(result), structured_content=result)
+    return build_tool_result(str(result), result)
 
 
 async def create_media_buy_raw(
@@ -4509,7 +4525,7 @@ async def create_media_buy_raw(
     idempotency_key: str | None = None,
     paused: bool | None = None,  # AdCP 3.1.1 compatibility; pause-on-create NOT yet honored (tracked in #1619)
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
     raw_wire_payload: dict[str, Any] | None = None,
 ):
     """Create a new media buy with specified parameters (raw function for A2A server use).
@@ -4553,10 +4569,7 @@ async def create_media_buy_raw(
         paused=paused,
     )
 
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx, require_valid_token=True)
+    identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=True)
 
     # Resolve account at transport boundary (before _impl)
     from src.core.transport_helpers import enrich_identity_with_account

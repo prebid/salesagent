@@ -182,7 +182,13 @@ Feature: BR-UC-002 Create Media Buy
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error message should contain "past"
+    And the wire error message should contain "2020-01-01 00:00:00+00:00"
+    And the wire error message should not contain "root="
     And the error should include "suggestion" field
+    # POST-F2 hardening (locally added): the submitted start_time must render as its
+    # VALUE in the buyer-facing message. req.start_time is adcp StartTiming (a pydantic
+    # RootModel), so naive interpolation yields "root=datetime.datetime(2020, ...)" —
+    # a rendering defect only observable on the wire text, hence the wire-message steps.
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
@@ -197,7 +203,11 @@ Feature: BR-UC-002 Create Media Buy
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error message should contain "end time"
+    And the wire error message should not contain "root="
     And the error should include "suggestion" field
+    # POST-F2 hardening (locally added): this message interpolates BOTH times; the
+    # start_time side is a StartTiming RootModel and must render as its value, not
+    # the model repr (see the sibling start-time-in-the-past scenario).
     # --- ext-d: Currency Not Supported ---
 
   @T-UC-002-ext-d @extension @ext-d @error @post-f1 @post-f2 @post-f3

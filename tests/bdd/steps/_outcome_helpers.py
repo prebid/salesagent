@@ -15,8 +15,22 @@ from typing import Any
 from tests.harness.transport import Transport
 
 
-def wire_field(ctx: dict, field: str) -> Any:
-    """Return a top-level success-response field as the buyer sees it on the wire.
+class _WireMissing:
+    """Type of :data:`WIRE_MISSING` — exists only to give it a readable repr."""
+
+    def __repr__(self) -> str:  # pragma: no cover - diagnostics only
+        return "<absent from wire>"
+
+
+#: Sentinel distinguishing "the path is not on the wire at all" from "the path is
+#: present and carries a JSON null". The two are different contract violations and
+#: must never collapse: an unset optional object is ABSENT on a conformant wire, so
+#: a serialized ``null`` is a schema-invalid serialization, not an absence.
+WIRE_MISSING = _WireMissing()
+
+
+def _wire_body(ctx: dict) -> dict:
+    """The serialized success-path wire body, behind the loud guard.
 
     REST/A2A/MCP expose the real success-path wire dict via ``ctx["wire_response"]``.
     IMPL has no wire, so serialize the typed payload through the production
@@ -25,38 +39,115 @@ def wire_field(ctx: dict, field: str) -> Any:
     Loud guard: a real-wire transport (REST/A2A/MCP) that didn't stash
     ``wire_response`` would otherwise fall through to the ``model_dump`` path and
     assert nothing on the wire — a silent tautology. A sibling wired against a
-    non-stashing env trips this instead of passing green. IMPL (and the
-    non-parametrized ``None`` default) legitimately have no wire.
+    non-stashing env trips this instead of passing green. Only an EXPLICIT
+    ``Transport.IMPL`` legitimately has no wire; an unset transport (``None`` —
+    any non-parametrized caller, e.g. a @rest/@mcp/@a2a-tagged scenario's empty
+    ctx) raises too, naming the fix, because silently serializing there turns
+    the wire assertion into a serializer round-trip (GH #1744).
+
+    Sole guard implementation for :func:`wire_field`, :func:`wire_dict` and
+    :func:`wire_absent` — three copies of it would be exactly the duplication the
+    canonical-helper rule exists to prevent.
+
+    A success-path helper reached on a scenario that actually ERRORED says so, and
+    names the error. Without this the transport guard below would fire first and
+    report "env does not stash success-path wire" — blaming the harness for what is
+    really a failed request, which is the single most misleading diagnostic these
+    helpers can emit.
     """
     wire = ctx.get("wire_response")
+    error = ctx.get("error")
+    if wire is None and error is not None and ctx.get("response") is None:
+        raise AssertionError(f"expected a success response, got error: {error!r}")
     transport = ctx.get("transport")
-    if wire is None and transport not in (None, Transport.IMPL):
-        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
-    if wire is not None:
-        return wire[field]
-    # IMPL has no wire — serialize the typed payload through the production
-    # serializer. _require_response preserves the diagnostic if a (reused) sibling
-    # scenario hit an error path, instead of a bare ctx["response"] KeyError.
-    return _require_response(ctx).model_dump(mode="json")[field]
-
-
-def wire_dict(ctx: dict) -> dict:
-    """Return the full success-path wire body as the buyer sees it on the wire.
-
-    The dict analogue of :func:`wire_field` — use when an oracle must test key
-    PRESENCE/ABSENCE (e.g. an optional field) rather than read one known field.
-    Shares the same loud guard: a real-wire transport (REST/A2A/MCP) that did not
-    stash ``wire_response`` raises instead of silently asserting nothing. IMPL (and
-    the non-parametrized ``None`` default) serialize the typed payload through the
-    production serializer.
-    """
-    wire = ctx.get("wire_response")
-    transport = ctx.get("transport")
-    if wire is None and transport not in (None, Transport.IMPL):
+    if wire is None and transport is None:
+        raise AssertionError(
+            "wire assertion with transport unset — a non-parametrized caller reached the "
+            "wire helpers without a stashed wire. Set ctx['transport'] (or pass "
+            "Transport.IMPL explicitly) to declare whether a real wire must exist."
+        )
+    if wire is None and transport is not Transport.IMPL:
         raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
     if wire is not None:
         return wire
+    # Explicit IMPL has no wire — serialize the typed payload through the production
+    # serializer. _require_response preserves the diagnostic if a (reused) sibling
+    # scenario hit an error path, instead of a bare ctx["response"] KeyError.
     return _require_response(ctx).model_dump(mode="json")
+
+
+def wire_lookup(ctx: dict, path: str) -> Any:
+    """Resolve a dotted path on the success-path wire, or :data:`WIRE_MISSING` if absent.
+
+    ``"a"`` reads a top-level key; ``"a.b.c"`` walks nested objects. A hop through a
+    non-dict (e.g. a list or a scalar) counts as an absence rather than raising.
+
+    This is the shared resolver behind :func:`wire_field` / :func:`wire_dict` /
+    :func:`wire_absent`, exposed for the genuinely TRI-STATE oracle — one whose
+    contract is "absent, or present with this value" (an outline column grading
+    ``absent or false``; a conditional Then that only grades a block when the seller
+    emits it). It ASSERTS NOTHING, so it is a primitive, not a competing assertion
+    surface: whenever the oracle is binary, reach for wire_field/wire_absent instead,
+    and never rebuild a private dotted-path resolver on top of this one.
+    """
+    cur: Any = _wire_body(ctx)
+    for part in path.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return WIRE_MISSING
+        cur = cur[part]
+    return cur
+
+
+def wire_field(ctx: dict, field: str) -> Any:
+    """Return a success-response field, by dotted path, as the buyer sees it on the wire.
+
+    ``field`` is a dotted path (``"media_buy.features.sandbox"``), of which a bare
+    top-level key is the one-segment case.
+
+    DUAL assert — the path must be both present AND non-null:
+
+    - **absent** fails, naming the top-level keys actually on the wire;
+    - **present but JSON null** fails too. These are optional object/array fields
+      whose schemas do not admit ``null``, so a null on the wire is a serialization
+      defect, not a populated section (observed on MCP ``structured_content``, which
+      serializes unset ``None`` fields; #1592). Downgrading this to a presence-only
+      check would silently reintroduce the vacuous-pass class this helper exists to
+      catch — see :func:`wire_absent` for the symmetric rule.
+    """
+    value = wire_lookup(ctx, field)
+    assert value is not WIRE_MISSING, f"{field!r} absent from wire response (top-level keys: {sorted(_wire_body(ctx))})"
+    assert value is not None, f"{field!r} is JSON null on the wire — schema-invalid serialization of an unset field"
+    return value
+
+
+def wire_dict(ctx: dict, path: str | None = None) -> dict:
+    """Return the success-path wire body — the whole envelope, or the object at *path*.
+
+    The dict analogue of :func:`wire_field` — use when an oracle must test key
+    PRESENCE/ABSENCE (e.g. an optional field) rather than read one known field.
+    With ``path``, resolves the same dotted path :func:`wire_field` does (same
+    absent/null dual assert) and additionally pins that the resolved value IS a
+    JSON object, so a caller that goes on to index it cannot fail with a confusing
+    ``TypeError`` on a scalar. Shares the same loud guard on a non-stashing env.
+    """
+    doc = _wire_body(ctx)
+    if path is None:
+        return doc
+    value = wire_field(ctx, path)
+    assert isinstance(value, dict), f"{path!r} is not a JSON object on the wire: {value!r}"
+    return value
+
+
+def wire_absent(ctx: dict, path: str) -> None:
+    """Assert the dotted *path* is not present on the success-path wire at all.
+
+    The strict complement of :func:`wire_field`: only the missing key counts as
+    absent. A path that resolves to a JSON ``null`` is PRESENT and therefore FAILS
+    here — an unset optional section must not appear on the wire at all, and a
+    serialized ``null`` is the schema-invalid emission this asserts against.
+    """
+    value = wire_lookup(ctx, path)
+    assert value is WIRE_MISSING, f"{path!r} unexpectedly present on the wire: {value!r}"
 
 
 def _require(ctx: dict, key: str, *, hint: str | None = None) -> object:

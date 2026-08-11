@@ -35,7 +35,7 @@ class TestMCPErrorShapes:
         typed exception + error_code + message — without the union dilution.
 
         Missing identity in ``_create_media_buy_impl`` raises
-        ``AdCPAuthRequiredError`` (``AUTH_REQUIRED``) rather than
+        ``AdCPAuthRequiredError`` (``AUTH_MISSING``) rather than
         ``AdCPValidationError`` — identity-required is auth, not validation.
         """
         from src.core.exceptions import AdCPAuthRequiredError
@@ -54,7 +54,7 @@ class TestMCPErrorShapes:
             await _create_media_buy_impl(req=req, identity=None)
 
         error = exc_info.value
-        assert error.error_code == "AUTH_REQUIRED"
+        assert error.error_code == "AUTH_MISSING"
         assert "Authentication required" in error.message
 
     def test_pydantic_validation_error_for_invalid_request_shape(self):
@@ -447,9 +447,11 @@ class TestCrossTransportErrorConsistency:
         """Both transports handle non-existent principal via the same typed AdCPAuthenticationError.
 
         The _create_media_buy_impl function raises AdCPAuthenticationError when the
-        principal is not found; this verifies build_two_layer_error_envelope — the
-        helper every transport boundary delegates to — maps it to AUTH_REQUIRED.
-        The live A2A wire shape for this path is pinned by test_a2a_error_responses.
+        principal is presented but not found (AUTH_INVALID per v3.1.1
+        error-code.json — salesagent-mkso); this verifies
+        build_two_layer_error_envelope — the helper every transport boundary
+        delegates to. The live A2A wire shape for this path is pinned by
+        test_a2a_error_responses.
         """
         from src.core.exceptions import AdCPAuthenticationError, build_two_layer_error_envelope
         from src.core.resolved_identity import ResolvedIdentity
@@ -483,8 +485,8 @@ class TestCrossTransportErrorConsistency:
         # The boundary translator (called by every transport wrapper) produces
         # the same two-layer envelope for this typed exception.
         envelope = build_two_layer_error_envelope(exc_info.value)
-        assert envelope["adcp_error"]["code"] == "AUTH_REQUIRED"
-        assert envelope["errors"][0]["code"] == "AUTH_REQUIRED"
+        assert envelope["adcp_error"]["code"] == "AUTH_INVALID"
+        assert envelope["errors"][0]["code"] == "AUTH_INVALID"
         assert "not found" in envelope["adcp_error"]["message"].lower()
 
     @pytest.mark.asyncio
@@ -739,7 +741,9 @@ class TestErrorCodeVocabularyConsistency:
         "INTERNAL_ERROR",  # Base-class default (internal only, never on wire)
         "VALIDATION_ERROR",  # adcp-req: Generic Errors
         "INVALID_REQUEST",  # SDK standard: AdCPInvalidRequestError (semantically-invalid value)
-        "AUTH_REQUIRED",  # SDK standard: auth failures (AdCPAuthenticationError + AdCPAuthorizationError)
+        "AUTH_MISSING",  # v3.1.1 error-code.json: absent credential (AdCPAuthRequiredError), correctable
+        "AUTH_INVALID",  # v3.1.1 error-code.json: presented-but-rejected credential (AdCPAuthenticationError), terminal
+        "PERMISSION_DENIED",  # v3.1.1 error-code.json: authenticated but not authorized under seller policy (AdCPAuthorizationError, salesagent-otc5)
         "POLICY_VIOLATION",  # SDK standard: AdCPPolicyViolationError (content/advertising policy block)
         "NOT_FOUND",  # Base class for entity-specific codes (internal only)
         "ACCOUNT_NOT_FOUND",  # adcp-req: Account resolution (BR-RULE-080)
@@ -753,6 +757,7 @@ class TestErrorCodeVocabularyConsistency:
         "RATE_LIMITED",  # SDK standard: rate limiting
         "SERVICE_UNAVAILABLE",  # SDK standard: adapter/service failures
         "CONFIGURATION_ERROR",  # Spec supplement: passthrough wire code, pinned terminal (salesagent-nr2q)
+        "VERSION_UNSUPPORTED",  # Spec supplement: AdCPVersionUnsupportedError, correctable (salesagent-rldj, #1592 C4)
         # SDK standard codes added by the error-emission-architecture substrate.
         "MEDIA_BUY_NOT_FOUND",  # SDK standard: AdCPMediaBuyNotFoundError
         "PACKAGE_NOT_FOUND",  # SDK standard: AdCPPackageNotFoundError

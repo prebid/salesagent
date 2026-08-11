@@ -1,5 +1,6 @@
 # from .xandr import XandrAdapter  # Temporarily disabled - needs schema updates
 from dataclasses import dataclass
+from typing import cast
 
 from .base import AdapterCapabilities as AdapterCapabilities
 from .base import AdServerAdapter as AdServerAdapter
@@ -66,12 +67,12 @@ def get_adapter(adapter_type: str, config: dict, principal):
     return adapter_class(config, principal)
 
 
-def get_adapter_class(adapter_type: str):
+def get_adapter_class(adapter_type: str) -> type[AdServerAdapter]:
     """Get the adapter class for a given adapter type."""
     adapter_class = ADAPTER_REGISTRY.get(adapter_type.lower())
     if not adapter_class:
         raise ValueError(f"Unknown adapter type: {adapter_type}")
-    return adapter_class
+    return cast("type[AdServerAdapter]", adapter_class)
 
 
 def get_adapter_default_channels(adapter_type: str) -> list[str]:

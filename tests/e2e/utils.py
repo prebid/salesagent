@@ -54,10 +54,11 @@ def make_mcp_client(
 
 
 class _LiveDBEnv:
-    """Minimal env shim exposing ``get_session()`` over the live e2e database.
+    """Minimal env shim over the live e2e database for ``tests/factories`` helpers.
 
-    Bridges ``tests/factories`` helpers (which expect a harness env exposing
-    ``get_session()``, see tests/harness/_base.py) to the Docker-hosted e2e
+    Bridges factory-level helpers (which expect a harness env exposing
+    ``get_session()`` and ``_commit_factory_data()``, and which may invoke
+    factory classes — see tests/harness/_base.py) to the Docker-hosted e2e
     stack, where only the DSN in ``live_server['postgres']`` is available
     (GH #1423 consolidation).
     """
@@ -68,18 +69,42 @@ class _LiveDBEnv:
     def get_session(self):
         return self._session
 
+    def _commit_factory_data(self) -> None:
+        """Commit pending factory/session state (harness env contract)."""
+        self._session.commit()
+
 
 @contextmanager
 def live_db_env(live_server: dict):
-    """Yield a ``get_session()``-bearing env bound to the live e2e database."""
+    """Yield a harness-contract env bound to the live e2e database.
+
+    Binds ``tests/factories`` to the live-DB session for the duration of the
+    context (mirroring tests/harness/_base.py ``__enter__``/``__exit__``), so
+    factory-based helpers like ``set_adapter_test_behavior`` can create rows —
+    without the binding, factory instantiation crashes with "No session
+    provided". Nested factory-binding envs are rejected the same way the
+    harness rejects them: the binding is global state.
+    """
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
 
-    engine = create_engine(live_server["postgres"])
+    from src.core.database.database_session import _pydantic_json_serializer
+    from tests.factories import ALL_FACTORIES
+
+    engine = create_engine(live_server["postgres"], json_serializer=_pydantic_json_serializer)
     session = Session(engine)
+    for f in ALL_FACTORIES:
+        assert f._meta.sqlalchemy_session is None, (
+            f"Factory {getattr(f, '__name__', type(f).__name__)} session already bound — "
+            "live_db_env cannot nest inside another factory-binding env"
+        )
+    for f in ALL_FACTORIES:
+        f._meta.sqlalchemy_session = session
     try:
         yield _LiveDBEnv(session)
     finally:
+        for f in ALL_FACTORIES:
+            f._meta.sqlalchemy_session = None
         session.close()
         engine.dispose()
 

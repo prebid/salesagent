@@ -1,4 +1,3 @@
-import json
 import os
 import secrets
 from datetime import UTC, datetime
@@ -59,13 +58,11 @@ def init_db(exit_on_error=False):
                     billing_plan="standard",
                     ad_server="mock",
                     enable_axe_signals=True,
-                    auto_approve_format_ids=json.dumps(
-                        [
-                            "display_300x250",
-                            "display_728x90",
-                            "video_30s",
-                        ]
-                    ),
+                    auto_approve_format_ids=[
+                        "display_300x250",
+                        "display_728x90",
+                        "video_30s",
+                    ],
                     human_review_required=False,
                     admin_token=admin_token,
                     auth_setup_mode=False,  # Disable setup mode for demo (simulates SSO configured)
@@ -89,7 +86,7 @@ def init_db(exit_on_error=False):
 
             try:
                 db_session.flush()  # Try to write tenant first to catch duplicates
-            except IntegrityError:
+            except IntegrityError:  # structural-guard: integrity-narrowing - startup bootstrap of ONE known row; returns immediately, nothing else pending
                 # Tenant was created by another process/thread - rollback and continue
                 db_session.rollback()
                 print("ℹ️  Default tenant already exists (created by concurrent process)")
@@ -105,7 +102,7 @@ def init_db(exit_on_error=False):
                     tenant_id="default",
                     principal_id="ci-test-principal",
                     name="CI Test Principal",
-                    platform_mappings=json.dumps({"mock": {"advertiser_id": "test-advertiser"}}),
+                    platform_mappings={"mock": {"advertiser_id": "test-advertiser"}},
                     access_token="ci-test-token",  # Fixed token for E2E tests
                 )
                 db_session.add(ci_test_principal)
@@ -169,7 +166,7 @@ def init_db(exit_on_error=False):
                         tenant_id="default",
                         principal_id=p["principal_id"],
                         name=p["name"],
-                        platform_mappings=json.dumps(p["platform_mappings"]),
+                        platform_mappings=p["platform_mappings"],
                         access_token=p["access_token"],
                     )
                     db_session.add(new_principal)

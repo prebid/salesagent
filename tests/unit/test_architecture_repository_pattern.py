@@ -26,26 +26,37 @@ ROOT = Path(__file__).resolve().parents[2]
 # Invariant 1: No get_db_session() in _impl functions
 # ---------------------------------------------------------------------------
 
+# Directories scanned by discovery glob (not a hand-maintained file list) for
+# _impl-adjacent get_db_session() calls. The hand-maintained list this replaced
+# omitted accounts.py (the largest new tools module, R1-5/R1-6) entirely and
+# never scanned helpers/ at all -- making a session-opening helper one call
+# frame from _impl invisible to this guard (the guard even taught the
+# workaround: adapter_helpers.py's _read_mock_test_behavior docstring used to
+# describe the loophole as the sanctioned seam). #1721 M2.
+_IMPL_DISCOVERY_DIRS = ("src/core/tools", "src/core/helpers")
+
+# Two files outside the discovery dirs were already in the pre-glob list.
+# Kept explicit so widening scan scope never NARROWS it for these.
+_IMPL_LEGACY_EXTRA_FILES = frozenset({"src/core/context_manager.py", "src/admin/blueprints/creatives.py"})
+
+
+def _glob_python_files(root: Path, dirs: tuple[str, ...]) -> set[str]:
+    """``.py`` files under any of ``dirs`` (relative to ``root``), pycache excluded."""
+    return {
+        str(p.relative_to(root))
+        for scan_dir in dirs
+        for p in (root / scan_dir).rglob("*.py")
+        if "__pycache__" not in str(p)
+    }
+
+
+def _discover_impl_files() -> list[str]:
+    """_impl-adjacent files scanned for direct get_db_session() calls."""
+    return sorted(_glob_python_files(ROOT, _IMPL_DISCOVERY_DIRS) | _IMPL_LEGACY_EXTRA_FILES)
+
+
 # Production files that contain _impl functions to scan
-IMPL_FILES = [
-    "src/core/tools/media_buy_create.py",
-    "src/core/tools/media_buy_update.py",
-    "src/core/tools/media_buy_delivery.py",
-    "src/core/tools/media_buy_list.py",
-    "src/core/tools/products.py",
-    "src/core/tools/capabilities.py",
-    "src/core/tools/creative_formats.py",
-    "src/core/tools/properties.py",
-    "src/core/tools/creatives/listing.py",
-    "src/core/tools/creatives/_sync.py",
-    "src/core/tools/creatives/_assignments.py",
-    "src/core/tools/creatives/_workflow.py",
-    "src/core/tools/performance.py",
-    "src/core/tools/signals.py",
-    "src/core/tools/task_management.py",
-    "src/core/context_manager.py",
-    "src/admin/blueprints/creatives.py",
-]
+IMPL_FILES = _discover_impl_files()
 
 # Pre-existing violations: (file_path, function_name)
 # These existed before the guard was created. Allowlist shrinks as repositories are introduced.
@@ -613,6 +624,26 @@ class TestImplNoDirectDbSession:
             IMPL_SESSION_ALLOWLIST,
             fix_hint="Remove fixed entries from IMPL_SESSION_ALLOWLIST.",
         )
+
+    @pytest.mark.arch_guard
+    def test_discovery_glob_catches_a_synthetic_new_file(self, tmp_path):
+        """Guard self-test: the discovery glob picks up a file it has never seen
+        before, proving it is a LIVE glob (re-evaluated every run) and not a
+        frozen snapshot masquerading as one -- the exact failure mode of the
+        hand-maintained list this replaced (#1721 M2)."""
+        scan_dir = tmp_path / "src" / "core" / "tools"
+        scan_dir.mkdir(parents=True)
+        (scan_dir / "_never_seen_before.py").write_text("def f():\n    pass\n")
+        found = _glob_python_files(tmp_path, ("src/core/tools",))
+        assert "src/core/tools/_never_seen_before.py" in found
+
+    @pytest.mark.arch_guard
+    def test_discovery_glob_covers_the_files_the_old_list_missed(self):
+        """accounts.py and helpers/ were invisible to the hand-maintained
+        IMPL_FILES list (R1-5/R1-6) -- confirm the discovery glob now sees them."""
+        assert "src/core/tools/accounts.py" in IMPL_FILES
+        assert "src/core/helpers/adapter_helpers.py" in IMPL_FILES
+        assert "src/core/helpers/activity_helpers.py" in IMPL_FILES
 
 
 class TestIntegrationTestsNoInlineSessionAdd:
@@ -1367,3 +1398,81 @@ class TestIntegrationTestsNoGetDbSession:
             GET_DB_SESSION_IN_TESTS_ALLOWLIST,
             fix_hint="Remove fixed entries from GET_DB_SESSION_IN_TESTS_ALLOWLIST.",
         )
+
+
+# ---------------------------------------------------------------------------
+# Invariant 4: Repositories may not import SDK protocol/response types (reverse layer)
+# ---------------------------------------------------------------------------
+
+# The generated-response-shape family: types describing a WIRE response, not a
+# DB row. IdempotencyPosture/to_sdk_union() imported Idempotency/Idempotency3
+# from here while living in repositories/idempotency_attempt.py (D2, salesagent-
+# c0ia.11 M2) -- business/wire-shaping logic belongs above the repository,
+# never inside it. Scoped to this specific submodule (not bare `adcp.types`,
+# whose top-level re-exports like ContextObject/Error are generic shared types
+# used legitimately in a handful of repository method signatures today) so the
+# check is crisp with zero false positives.
+_FORBIDDEN_REPOSITORY_IMPORT_PREFIX = "adcp.types.generated_poc.protocol"
+
+REPOSITORIES_DIR = "src/core/database/repositories"
+
+
+def _scan_for_protocol_imports(tree: ast.Module) -> list[tuple[str, int]]:
+    """(imported_module, line) for every ``from adcp.types.generated_poc.protocol...
+    import ...`` in ``tree``."""
+    return [
+        (node.module, node.lineno)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        and node.module.startswith(_FORBIDDEN_REPOSITORY_IMPORT_PREFIX)
+    ]
+
+
+def _find_repository_protocol_imports() -> list[tuple[str, str, int]]:
+    """(file_path, imported_module, line) for every repositories/*.py file."""
+    violations: list[tuple[str, str, int]] = []
+    for py_file in sorted((ROOT / REPOSITORIES_DIR).rglob("*.py")):
+        if "__pycache__" in str(py_file):
+            continue
+        rel_path = str(py_file.relative_to(ROOT))
+        tree = ast.parse(py_file.read_text())
+        violations.extend((rel_path, module, lineno) for module, lineno in _scan_for_protocol_imports(tree))
+    return violations
+
+
+class TestRepositoriesDoNotImportProtocolResponseTypes:
+    """The repository layer sits BELOW schemas/tools -- importing an SDK
+    protocol-response type here is the reverse-direction violation of the same
+    layering rule CLAUDE.md Pattern #3 enforces one direction of (business
+    logic must not reach INTO the repository's session; a repository must not
+    reach UP into wire-response typing). Allowlist is empty and stays empty:
+    after M2's IdempotencyPosture relocation there are zero legitimate cases.
+    """
+
+    @pytest.mark.arch_guard
+    def test_no_repository_imports_adcp_protocol_response_types(self):
+        violations = _find_repository_protocol_imports()
+        assert not violations, (
+            "repositories/*.py importing adcp.types.generated_poc.protocol.* "
+            "(a response-shaped SDK type) -- move the business/wire-shaping logic "
+            "that needs this type OUT of the repository layer (see "
+            "src/core/idempotency_policy.py for the pattern):\n"
+            + "\n".join(f"  {f}:{line} imports {mod}" for f, mod, line in violations)
+        )
+
+    @pytest.mark.arch_guard
+    def test_guard_catches_a_reintroduced_protocol_import(self):
+        """Positive meta-test: reproduces the exact pre-M2 idempotency_attempt.py shape."""
+        drifted = ast.parse(
+            "from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import Idempotency\n"
+        )
+        assert _scan_for_protocol_imports(drifted), "a reintroduced protocol-response import must be flagged"
+
+    @pytest.mark.arch_guard
+    def test_guard_ignores_generic_adcp_types_imports(self):
+        """Negative meta-test: bare `adcp.types` re-exports (ContextObject, Error, ...)
+        are generic shared types legitimately used in repository method signatures
+        today (e.g. src/core/database/repositories/media_buy.py) -- not a violation."""
+        generic = ast.parse("from adcp.types import ContextObject, Error\n")
+        assert _scan_for_protocol_imports(generic) == []

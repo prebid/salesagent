@@ -14,6 +14,7 @@ from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, Principal, PushNotificationConfig, Tenant
+from src.core.database.repositories.uow import PushNotificationConfigUoW
 
 logger = logging.getLogger(__name__)
 
@@ -176,11 +177,12 @@ def create_principal(tenant_id):
             }
 
         with get_db_session() as db_session:
-            # Check if principal name already exists
-            existing = db_session.scalars(select(Principal).filter_by(tenant_id=tenant_id, name=principal_name)).first()
-            if existing:
-                flash(f"An advertiser named '{principal_name}' already exists", "error")
-                return redirect(request.url)
+            # No duplicate-name pre-check: advertiser names are human-readable
+            # labels, not keys. AdCP 3.1.1 attaches uniqueness only to ids
+            # (core/account.json: name is "Human-readable account name", e.g.
+            # "Acme c/o Pinnacle"), and no index backs the tenant+name pair, so a
+            # pre-check here read as a guarantee it could not hold under
+            # concurrency. Identity is (tenant_id, principal_id).
 
             # Create the principal
             principal = Principal(
@@ -610,6 +612,10 @@ def manage_webhooks(tenant_id, principal_id):
         return redirect(url_for("principals.list_principals", tenant_id=tenant_id))
 
 
+def _redirect_to_webhooks(tenant_id, principal_id):
+    return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
+
+
 @principals_bp.route("/principals/<principal_id>/webhooks/register", methods=["POST"])
 @log_admin_action("register_webhook")
 @require_tenant_access()
@@ -621,54 +627,50 @@ def register_webhook(tenant_id, principal_id):
         url = request.form.get("url")
         auth_type = request.form.get("auth_type", "none")
 
+        if not url:
+            flash("Invalid webhook URL: URL is required", "error")
+            return _redirect_to_webhooks(tenant_id, principal_id)
+
         # Validate URL for SSRF protection
         is_valid, error_msg = WebhookURLValidator.validate_webhook_url(url)
         if not is_valid:
             flash(f"Invalid webhook URL: {error_msg}", "error")
-            return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
+            return _redirect_to_webhooks(tenant_id, principal_id)
 
-        # Build auth config based on type
-        auth_config = {}
+        webhook_secret = None
         if auth_type == "hmac_sha256":
-            secret = request.form.get("hmac_secret")
-            if not secret:
+            webhook_secret = request.form.get("hmac_secret")
+            if not webhook_secret:
                 flash("HMAC secret is required for HMAC authentication", "error")
-                return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
-            auth_config = {"secret": secret}
+                return _redirect_to_webhooks(tenant_id, principal_id)
+            # Match the delivery-side strength rule (WebhookDeliveryService
+            # skips signing for secrets under 32 chars) at registration time.
+            if len(webhook_secret) < 32:
+                flash("HMAC secret must be at least 32 characters", "error")
+                return _redirect_to_webhooks(tenant_id, principal_id)
 
-        with get_db_session() as db_session:
-            # Check if webhook already exists
-            stmt = select(PushNotificationConfig).filter_by(tenant_id=tenant_id, principal_id=principal_id, url=url)
-            existing = db_session.scalars(stmt).first()
-
-            if existing:
-                flash("Webhook URL already registered for this principal", "warning")
-                return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
-
-            # Create new webhook
-            webhook = PushNotificationConfig(
-                config_id=str(uuid.uuid4()),
-                tenant_id=tenant_id,
+        with PushNotificationConfigUoW(tenant_id) as uow:
+            assert uow.push_notification_configs is not None
+            existing = uow.push_notification_configs.register_admin_webhook(
                 principal_id=principal_id,
                 url=url,
-                auth_type=auth_type if auth_type != "none" else None,
-                auth_config=auth_config if auth_config else None,
-                is_active=True,
-                created_at=datetime.now(UTC),
+                authentication_type=auth_type if auth_type != "none" else None,
+                authentication_token=None,
+                webhook_secret=webhook_secret,
             )
 
-            db_session.add(webhook)
-            db_session.commit()
+        if existing is not None:
+            flash("Webhook URL already registered for this principal", "warning")
+            return _redirect_to_webhooks(tenant_id, principal_id)
 
-            logger.info(f"Registered webhook {url} for principal {principal_id} in tenant {tenant_id}")
-            flash("Webhook registered successfully", "success")
-
-        return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
+        logger.info(f"Registered webhook {url} for principal {principal_id} in tenant {tenant_id}")
+        flash("Webhook registered successfully", "success")
+        return _redirect_to_webhooks(tenant_id, principal_id)
 
     except Exception as e:
         logger.error(f"Error registering webhook: {e}", exc_info=True)
         flash(f"Error registering webhook: {str(e)}", "error")
-        return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
+        return _redirect_to_webhooks(tenant_id, principal_id)
 
 
 @principals_bp.route("/principals/<principal_id>/webhooks/<config_id>/delete", methods=["POST"])
@@ -677,28 +679,22 @@ def register_webhook(tenant_id, principal_id):
 def delete_webhook(tenant_id, principal_id, config_id):
     """Delete a webhook configuration."""
     try:
-        with get_db_session() as db_session:
-            stmt = select(PushNotificationConfig).filter_by(
-                tenant_id=tenant_id, principal_id=principal_id, config_id=config_id
-            )
-            webhook = db_session.scalars(stmt).first()
+        with PushNotificationConfigUoW(tenant_id) as uow:
+            assert uow.push_notification_configs is not None
+            deleted = uow.push_notification_configs.delete(config_id, principal_id)
 
-            if not webhook:
-                flash("Webhook not found", "error")
-                return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
+        if not deleted:
+            flash("Webhook not found", "error")
+            return _redirect_to_webhooks(tenant_id, principal_id)
 
-            db_session.delete(webhook)
-            db_session.commit()
-
-            logger.info(f"Deleted webhook {config_id} for principal {principal_id} in tenant {tenant_id}")
-            flash("Webhook deleted successfully", "success")
-
-        return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
+        logger.info(f"Deleted webhook {config_id} for principal {principal_id} in tenant {tenant_id}")
+        flash("Webhook deleted successfully", "success")
+        return _redirect_to_webhooks(tenant_id, principal_id)
 
     except Exception as e:
         logger.error(f"Error deleting webhook: {e}", exc_info=True)
         flash(f"Error deleting webhook: {str(e)}", "error")
-        return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
+        return _redirect_to_webhooks(tenant_id, principal_id)
 
 
 @principals_bp.route("/principals/<principal_id>/webhooks/<config_id>/toggle", methods=["POST"])
@@ -707,23 +703,17 @@ def delete_webhook(tenant_id, principal_id, config_id):
 def toggle_webhook(tenant_id, principal_id, config_id):
     """Toggle webhook active status."""
     try:
-        with get_db_session() as db_session:
-            stmt = select(PushNotificationConfig).filter_by(
-                tenant_id=tenant_id, principal_id=principal_id, config_id=config_id
-            )
-            webhook = db_session.scalars(stmt).first()
+        with PushNotificationConfigUoW(tenant_id) as uow:
+            assert uow.push_notification_configs is not None
+            new_state = uow.push_notification_configs.toggle_active(config_id, principal_id)
 
-            if not webhook:
-                return jsonify({"error": "Webhook not found"}), 404
+        if new_state is None:
+            return jsonify({"error": "Webhook not found"}), 404
 
-            webhook.is_active = not webhook.is_active
-            db_session.commit()
-
-            logger.info(
-                f"Toggled webhook {config_id} to {'active' if webhook.is_active else 'inactive'} for principal {principal_id}"
-            )
-
-            return jsonify({"success": True, "is_active": webhook.is_active})
+        logger.info(
+            f"Toggled webhook {config_id} to {'active' if new_state else 'inactive'} for principal {principal_id}"
+        )
+        return jsonify({"success": True, "is_active": new_state})
 
     except Exception as e:
         logger.error(f"Error toggling webhook: {e}", exc_info=True)

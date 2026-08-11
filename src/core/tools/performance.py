@@ -9,7 +9,6 @@ from typing import Any
 
 from adcp.types import ContextObject
 from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 
 from src.core.tool_context import ToolContext
 
@@ -21,7 +20,9 @@ from src.core.database.repositories import MediaBuyUoW
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import PackagePerformance, UpdatePerformanceIndexRequest, UpdatePerformanceIndexResponse
+from src.core.tools._mcp_boundary import build_tool_result
 from src.core.tools.media_buy_update import _verify_principal
+from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 from src.core.validation_helpers import adcp_validation_boundary
 
 
@@ -145,7 +146,7 @@ async def update_performance_index(
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     req = _build_update_performance_index_request(media_buy_id, performance_data, context)
     response = _update_performance_index_impl(req=req, identity=identity)
-    return ToolResult(content=str(response), structured_content=response)
+    return build_tool_result(str(response), response)
 
 
 def update_performance_index_raw(
@@ -153,7 +154,7 @@ def update_performance_index_raw(
     performance_data: list[dict[str, Any]],
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ):
     """Update performance data for a media buy (raw function for A2A server use).
 
@@ -168,10 +169,7 @@ def update_performance_index_raw(
     Returns:
         UpdatePerformanceIndexResponse
     """
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx, require_valid_token=True)
+    identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=True)
     req = _build_update_performance_index_request(media_buy_id, performance_data, context)
     return _update_performance_index_impl(req=req, identity=identity)
 

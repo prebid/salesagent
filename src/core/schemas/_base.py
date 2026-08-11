@@ -273,11 +273,11 @@ def _mirror_media_buy_status(model: Any) -> Any:
     ``TaskResultEnvelope._serialize`` OVERWRITES the top-level ``status`` with the
     PROTOCOL ``TaskStatus`` (``submitted`` / ``completed``), so on the wire the
     top-level ``status`` and ``media_buy_status`` are DIFFERENT namespaces and are
-    NOT identical. This is the GA model graded by the published 3.1.0 storyboard
-    ``pending_creatives_to_start.yaml`` (status=field_value 'completed'), which
-    diverges from the pinned SDK's beta.3 storyboard (status=field_value_or_absent,
-    MUST-equal media_buy_status; #4908). See docs/adcp-spec-version.md
-    "Behavior target vs SDK pin".
+    NOT identical. This is the model graded by the pinned 3.1.1 storyboard
+    ``pending_creatives_to_start.yaml`` (status=field_value 'completed'). The
+    body-``status`` backfill below serves the #4908 deprecation window only.
+    See docs/adcp-spec-version.md
+    "`status` vs `media_buy_status` on media-buy responses".
 
     Shared by ``CreateMediaBuySuccess`` and ``UpdateMediaBuySuccess`` (DRY).
     """
@@ -363,7 +363,7 @@ class CreateMediaBuySuccess(AdCPCreateMediaBuySuccess):
         NOTE: adcp 5.7 types this body ``status`` as ``MediaBuyStatus | None``; the wire
         top-level protocol value never lands on this body field (the envelope owns it), so no
         enum widening is needed here — the SDK type is not authoritative for the wire status.
-        See ``_mirror_media_buy_status`` and docs/adcp-spec-version.md "Behavior target vs SDK pin".
+        See ``_mirror_media_buy_status`` and docs/adcp-spec-version.md "`status` vs `media_buy_status` on media-buy responses".
         """
         return _mirror_media_buy_status(self)
 
@@ -589,7 +589,7 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess):  # type: ignore[misc]
         NOTE: adcp 5.7 types this body ``status`` as ``MediaBuyStatus | None``; the wire
         top-level protocol value never lands on this body field (the envelope owns it), so no
         enum widening is needed here — the SDK type is not authoritative for the wire status.
-        See ``_mirror_media_buy_status`` and docs/adcp-spec-version.md "Behavior target vs SDK pin".
+        See ``_mirror_media_buy_status`` and docs/adcp-spec-version.md "`status` vs `media_buy_status` on media-buy responses".
         """
         return _mirror_media_buy_status(self)
 

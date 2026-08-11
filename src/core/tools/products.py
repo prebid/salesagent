@@ -15,7 +15,6 @@ from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp import Product as LibraryProduct
 from adcp.types import BrandReference, ContextObject, PropertyListReference
 from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 from pydantic import Field
 
 from src.adapters import get_adapter_default_channels
@@ -23,8 +22,8 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object, require_identity, require_tenant
 from src.core.exceptions import (
     AdCPAdapterError,
-    AdCPAuthenticationError,
     AdCPAuthorizationError,
+    AdCPAuthRequiredError,
     AdCPError,
     AdCPPolicyViolationError,
     AdCPValidationError,
@@ -38,7 +37,12 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
-from src.core.transport_helpers import resolve_identity_from_context
+from src.core.tools._mcp_boundary import build_tool_result
+from src.core.transport_helpers import (
+    NOT_PROVIDED,
+    IdentityOrNotProvided,
+    resolve_identity_if_not_provided,
+)
 from src.core.validation_helpers import adcp_validation_boundary, safe_parse_json_field
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
@@ -197,7 +201,9 @@ async def _get_products_impl(
     if brand_manifest_policy == "require_brand" and not offering:
         raise AdCPAuthorizationError("Brand manifest required by tenant policy", recovery="correctable")
     elif brand_manifest_policy == "require_auth" and not principal_id:
-        raise AdCPAuthenticationError("Authentication required by tenant policy")
+        # No credential presented at all -> AUTH_MISSING per v3.1.1
+        # error-code.json.
+        raise AdCPAuthRequiredError("Authentication required by tenant policy")
     # public policy allows all requests (no brand_manifest or auth required)
 
     # For non-public policies, we need offering for policy checks and product matching
@@ -218,7 +224,6 @@ async def _get_products_impl(
 
     # Only run policy checks if enabled in tenant settings
     policy_check_enabled = advertising_policy.get("enabled", False)  # Default to False for new tenants
-    policy_disabled_reason = None
 
     # Extract brief text early - needed for policy checks, dynamic variants, and AI ranking
     brief_text = req.brief if req.brief else ""
@@ -226,7 +231,6 @@ async def _get_products_impl(
     if not policy_check_enabled:
         # Skip policy checks if disabled
         policy_result = None
-        policy_disabled_reason = "disabled_by_tenant"
         logger.info(f"Policy checks disabled for tenant {tenant['tenant_id']}")
     else:
         # Get tenant's Gemini API key for policy checks
@@ -234,7 +238,6 @@ async def _get_products_impl(
         if not tenant_gemini_key:
             # No API key - cannot run policy checks
             policy_result = None
-            policy_disabled_reason = "no_gemini_api_key"
             logger.warning(f"Policy checks enabled but no Gemini API key configured for tenant {tenant['tenant_id']}")
         else:
             policy_service = PolicyCheckService(gemini_api_key=tenant_gemini_key)
@@ -268,7 +271,19 @@ async def _get_products_impl(
                 )
 
             except Exception as e:
-                # Policy check failed - log error
+                # structural-guard: fail-open is conformant at AdCP 3.1.1.
+                # `errors` is required on get-products-response.json only in its
+                # `if status == "failed"` branch; this path completes and returns
+                # products, so no emission condition applies. There is also no
+                # `incomplete[]` scope for policy screening — the product set is not
+                # partial, it is unscreened — and the event IS durably recorded by the
+                # policy_check_failure audit entry written just below.
+                # NOTE: this handler used to also set a `policy_disabled_reason` that
+                # a comment claimed reached the response. It was assigned at four sites
+                # and read at none; the variable was deleted rather than surfaced,
+                # because two of those sites are seller-side CONFIGURATION states
+                # (policy disabled by tenant, no Gemini key) whose disclosure would leak
+                # the seller's operational posture to the buyer for no spec reason.
                 logger.error(f"Policy check failed for tenant {tenant['tenant_id']}: {e}")
                 audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
                 audit_logger.log_operation(
@@ -284,9 +299,10 @@ async def _get_products_impl(
                     },
                 )
 
-                # Fail open by default (allow campaigns) with warning in response
+                # Fail open by default: allow the campaign, record the reason in the
+                # audit log above. Nothing is added to the response — see the
+                # structural-guard note on this handler for why that is conformant.
                 policy_result = None
-                policy_disabled_reason = f"service_error: {type(e).__name__}"
                 logger.warning(f"Policy check failed, allowing campaign by default: {e}")
 
     # Handle policy result based on settings
@@ -432,6 +448,18 @@ async def _get_products_impl(
 
             logger.info(f"[GET_PRODUCTS] Added {len(dynamic_variants)} dynamic product variants")
     except (ImportError, RuntimeError, OSError) as e:
+        # structural-guard: fail-open is conformant at AdCP 3.1.1.
+        # get-products-response.json requires `errors` ONLY in its `if status ==
+        # "failed"` branch; on a completed response the field carries no emission
+        # condition. The nearest grading obligation is
+        # dist/compliance/3.1.1/universal/stale-response-advisory.yaml (required_tools:
+        # [get_products]), which puts STALE_RESPONSE in errors[] on a populated success
+        # — but it requires details.served_from_cache + cache_age_seconds and scopes
+        # itself to serving CACHE past its freshness target, which this path does not
+        # do (nothing cached is served; enrichment is simply absent).
+        # If this is ever surfaced, the correct field is `incomplete[]` with
+        # scope="products" ("not all inventory sources were searched"), NOT errors[].
+        # That is a product decision needing its own grounding, not a defect fix.
         logger.warning(f"Failed to generate dynamic product variants: {e}. Continuing with static products only.")
 
     logger.info(f"[GET_PRODUCTS] Total products (static + dynamic): {len(products)}")
@@ -455,6 +483,12 @@ async def _get_products_impl(
                 min_exposures=getattr(req.filters, "min_exposures", None) if req.filters else None,
             )
     except (ImportError, RuntimeError, OSError) as e:
+        # structural-guard: fail-open is conformant at AdCP 3.1.1 —
+        # same reasoning as the dynamic-variants handler above (errors[] is required
+        # only on status=="failed"; stale-response-advisory.yaml does not reach a path
+        # that serves no cache). If surfaced later, the correct field is `incomplete[]`
+        # with scope="pricing" ("products returned but pricing is absent or
+        # unconfirmed"), NOT errors[].
         logger.warning(f"Failed to enrich products with dynamic pricing: {e}. Using defaults.")
 
     # Apply AdCP filters if provided
@@ -698,19 +732,26 @@ async def _get_products_impl(
             else:
                 logger.debug("[GET_PRODUCTS] AI ranking configured but AI not enabled (no API key)")
         except (ImportError, RuntimeError, OSError) as e:
+            # structural-guard: no spec surface covers ranking.
+            # This degrades ORDER only — and the set returned is a SUPERSET, because
+            # the <0.1 relevance filter stops running too, so the buyer loses nothing
+            # they were entitled to. AdCP 3.1.1 defines no ordering guarantee for
+            # get_products and no `incomplete[]` scope for ranking.
             logger.warning(f"Failed to apply AI product ranking: {e}. Returning unranked products.")
 
     # Annotate pricing options with adapter support (AdCP PR #88)
-    # Do this BEFORE serialization to avoid reconstruction issues
-    if principal and eligible_products:
+    # Do this BEFORE serialization to avoid reconstruction issues.
+    # Tenant-level (not Principal-level) resolution: which pricing models an
+    # adapter supports is a fact about the SELLER's ad server, not the caller
+    # (same INV-4 pattern as get_targeting_capabilities(), salesagent-dn2s) —
+    # must not depend on whether principal_id happens to resolve to a DB
+    # Principal (salesagent-r9rf).
+    if eligible_products:
         try:
-            # Use correct get_adapter from adapter_helpers (accepts Principal and dry_run)
-            from src.core.helpers.adapter_helpers import get_adapter
+            from src.core.helpers.adapter_helpers import get_adapter_class_for_tenant
 
-            # Get adapter in dry-run mode (no actual ad server calls)
-            adapter = get_adapter(principal, dry_run=True, tenant=tenant)
-
-            supported_models = adapter.get_supported_pricing_models()
+            adapter_class = get_adapter_class_for_tenant(tenant)
+            supported_models = adapter_class.get_supported_pricing_models()
 
             for product in eligible_products:
                 if product.pricing_options:
@@ -728,6 +769,12 @@ async def _get_products_impl(
                                 f"Current adapter does not support {str(pricing_model).upper()} pricing"
                             )
         except (ImportError, RuntimeError, OSError, ValueError) as e:
+            # structural-guard: spec-neutral — the dropped fields are not in
+            # the pin. `supported` / `unsupported_reason` do not exist in
+            # AdCP 3.1.1 core/pricing-option.json at all; that schema declares no
+            # additionalProperties, so draft-07 permits them as extensions. Dropping a
+            # non-spec extension field cannot violate the pin, so there is no
+            # conformance obligation to surface here.
             logger.warning(f"Failed to annotate pricing options with adapter support: {e}")
 
     # Filter pricing data for anonymous users
@@ -829,7 +876,7 @@ async def get_products(
     response = await _get_products_impl(req, identity)
 
     # Return ToolResult with human-readable text and structured data
-    return ToolResult(content=str(response), structured_content=response.model_dump(mode="json"))
+    return build_tool_result(str(response), response)
 
 
 async def get_products_raw(
@@ -839,7 +886,7 @@ async def get_products_raw(
     property_list: PropertyListReference | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ) -> GetProductsResponse:
     """Get available products matching the brief.
 
@@ -859,9 +906,8 @@ async def get_products_raw(
     Returns:
         GetProductsResponse containing matching products
     """
-    # Resolve identity from transport context if not provided
-    if identity is None:
-        identity = resolve_identity_from_context(ctx, require_valid_token=False)
+    # Resolve identity from transport context only if the caller omitted it
+    identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=False)
 
     # Create request object - adcp library validates schema
     req = create_get_products_request(

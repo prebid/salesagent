@@ -495,11 +495,11 @@ Feature: BR-UC-009 Update Performance Index
     Given the Buyer has no authentication credentials
     When the Buyer Agent calls update_performance_index MCP tool with media_buy_id "mb_auth_001"
     Then the operation should fail
-    And the error code should be "AUTH_REQUIRED"
+    And the error code should be "AUTH_MISSING"
     And the error should indicate "Context is required for update_performance_index"
     And the error should include "suggestion" field
     And the suggestion should contain "provide authentication credentials"
-    # BR-RULE-285 INV-1: no resolvable principal -> AUTH_REQUIRED
+    # BR-RULE-285 INV-1: no resolvable principal -> AUTH_MISSING
     # POST-F1: No data written
     # POST-F2: Buyer knows authentication is required
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/provide-performance-feedback-request.json
@@ -524,7 +524,7 @@ Feature: BR-UC-009 Update Performance Index
     Given the Buyer is authenticated with a principal that has no principal object
     When the Buyer Agent calls update_performance_index with media_buy_id "mb_auth_003"
     Then the operation should fail
-    And the error code should be "AUTH_REQUIRED"
+    And the error code should be "AUTH_INVALID"
     And the error should indicate the principal was not found
     And the error should include "suggestion" field
     And the suggestion should contain "verify principal configuration"
@@ -537,11 +537,11 @@ Feature: BR-UC-009 Update Performance Index
     Given the Buyer sends an A2A request with an invalid or expired auth token
     When the Buyer Agent sends update_performance_index A2A request for "mb_auth_a2a"
     Then the operation should fail
-    And the error code should be "AUTH_REQUIRED"
+    And the error code should be "AUTH_INVALID"
     And the error should indicate authentication failure
     And the error should include "suggestion" field
     And the suggestion should contain "provide valid credentials"
-    # BR-RULE-285 INV-1: no resolvable principal credential -> AUTH_REQUIRED
+    # BR-RULE-285 INV-1: no resolvable principal credential -> AUTH_INVALID
     # POST-F1: No data written
     # POST-F2: Buyer knows auth failed on A2A path
 
@@ -806,7 +806,7 @@ Feature: BR-UC-009 Update Performance Index
     Given the Buyer has no authentication credentials
     When the Buyer Agent submits performance feedback for media_buy_id "mb_owner_order_004"
     Then the operation should fail
-    And the error code should be "AUTH_REQUIRED"
+    And the error code should be "AUTH_MISSING"
     And ownership verification MUST NOT have been attempted
     # BR-RULE-285 INV-4: auth-before-ownership ordering — auth failure precludes ownership check
 

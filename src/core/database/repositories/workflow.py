@@ -16,14 +16,59 @@ beads: salesagent-4d4
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
+from typing import cast as type_cast
 
-from sqlalchemy import func, select
+from sqlalchemy import func, literal, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
+from src.core.database.jsonb_append import jsonb_list_append
 from src.core.database.models import Context as DBContext
 from src.core.database.models import ObjectWorkflowMapping, Principal, WorkflowStep
+
+
+def append_step_comment(
+    session: Session,
+    step_id: str,
+    *,
+    user: str,
+    text: str,
+    tenant_id: str | None = None,
+) -> int:
+    """Atomically append a CommentModel-shaped comment to ``WorkflowStep.comments``.
+
+    Single-statement JSONB append: concurrent comments serialize on the row
+    lock instead of erasing each other (the old whole-list read-modify-write
+    lost updates — salesagent-pgqs). The comment carries the canonical
+    ``user``/``timestamp``/``text`` shape from ``CommentModel``
+    (src/core/json_validators.py).
+
+    ``tenant_id`` scopes the update through the Context join (DBContext) when
+    the caller acts on behalf of a tenant; ``None`` is for trusted internal
+    callers that hold a bare step_id. Returns the number of rows updated
+    (0 = step missing, or not in this tenant).
+    """
+    elem = func.jsonb_build_object(
+        "user",
+        literal(user),
+        "timestamp",
+        literal(datetime.now(UTC).isoformat()),
+        "text",
+        literal(text),
+    )
+    stmt = (
+        update(WorkflowStep)
+        .where(WorkflowStep.step_id == step_id)
+        .values(comments=jsonb_list_append(WorkflowStep.comments, elem))
+        .execution_options(synchronize_session=False)
+    )
+    if tenant_id is not None:
+        stmt = stmt.where(
+            WorkflowStep.context_id.in_(select(DBContext.context_id).where(DBContext.tenant_id == tenant_id))
+        )
+    return type_cast("CursorResult[Any]", session.execute(stmt)).rowcount
 
 
 class WorkflowRepository:
@@ -48,6 +93,14 @@ class WorkflowRepository:
     # ------------------------------------------------------------------
     # WorkflowStep reads
     # ------------------------------------------------------------------
+
+    def append_comment(self, step_id: str, *, user: str, text: str) -> int:
+        """Atomically append a comment to a step within the tenant.
+
+        Delegates to :func:`append_step_comment` with this repository's tenant
+        scope (Context join via DBContext). Returns rows updated.
+        """
+        return append_step_comment(self._session, step_id, user=user, text=text, tenant_id=self._tenant_id)
 
     def get_by_step_id(self, step_id: str) -> WorkflowStep | None:
         """Get a workflow step by its ID within the tenant."""

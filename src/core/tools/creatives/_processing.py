@@ -11,8 +11,10 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from adcp.types import CreativeAsset
 from adcp.types import Error as AdCPErrorDetail
@@ -29,6 +31,108 @@ if TYPE_CHECKING:
     from src.core.database.repositories.creative import CreativeRepository
 
 logger = logging.getLogger(__name__)
+
+#: Fields a full upsert always rewrites, so they always count as changed.
+_ALWAYS_CHANGED = ("url", "click_url", "width", "height", "duration")
+
+
+@dataclass(frozen=True)
+class PriorCreativeState:
+    """The values an update is compared AGAINST, from either of its two sources.
+
+    A live update compares the incoming asset against the persisted row. A
+    dry_run preview of an in-request duplicate has no row — the "prior" state is
+    whatever an earlier entry in the same payload already previewed. Both produce
+    this same value object, which is what lets one comparison serve both arms;
+    deriving the preview's ``changes`` any other way is how the two drift.
+    """
+
+    name: str | None
+    agent_url: str | None
+    format: str | None
+    format_parameters: dict | None
+
+    @classmethod
+    def from_row(cls, existing_creative) -> PriorCreativeState:
+        return cls(
+            name=existing_creative.name,
+            agent_url=existing_creative.agent_url,
+            format=existing_creative.format,
+            format_parameters=existing_creative.format_parameters,
+        )
+
+    @classmethod
+    def from_asset(cls, creative: CreativeAsset, format_value) -> PriorCreativeState:
+        format_info = _extract_format_info(format_value)
+        return cls(
+            name=creative.name,
+            agent_url=format_info["agent_url"],
+            format=format_info["format_id"],
+            format_parameters=cast(dict | None, format_info["parameters"]),
+        )
+
+
+def comparison_changes(creative: CreativeAsset, prior: PriorCreativeState, format_value) -> list[str]:
+    """The part of ``changes`` derived purely by comparison — no mutation, no agent.
+
+    Deliberately decoupled from the field assignments it used to be interleaved
+    with, so the dry_run arm can run the identical comparison without writing
+    anything. The ``name`` quirk is preserved exactly as the live path had it: a
+    ``None`` incoming name that differs from the prior one still reports ``name``
+    as changed even though the live arm assigns nothing (the assignment keeps its
+    ``is not None`` guard at the call site).
+    """
+    changes: list[str] = []
+    if creative.name != prior.name:
+        changes.append("name")
+
+    format_info = _extract_format_info(format_value)
+    if (
+        format_info["agent_url"] != prior.agent_url
+        or format_info["format_id"] != prior.format
+        or format_info["parameters"] != prior.format_parameters
+    ):
+        changes.append("format")
+    return changes
+
+
+def build_update_sync_result(
+    creative_id: str,
+    *,
+    creative: CreativeAsset,
+    prior: PriorCreativeState,
+    format_value,
+    agent_derived_changes: Sequence[str] = (),
+    internal_status: str | None = None,
+) -> SyncCreativeResult:
+    """The ONE place an ``updated`` sync result is built, for both arms.
+
+    Order is load-bearing: ``[name?, format?] + agent-derived + always-changed``
+    reproduces the live path's list byte for byte, duplicates included when the
+    creative agent returns a render (it appends url/width/height/duration that
+    ``_ALWAYS_CHANGED`` appends again). A preview cannot reproduce those
+    agent-derived entries — it makes no agent call — which is a known residual
+    divergence, not something to paper over here.
+
+    ``internal_status`` is absent for an in-request duplicate, which has no row to
+    read a status from. The field is ``exclude=True``, so it never reaches the
+    wire and its absence cannot make a preview diverge from a live run.
+    """
+    changes = comparison_changes(creative, prior, format_value) + list(agent_derived_changes)
+    changes.extend(_ALWAYS_CHANGED)
+
+    # Kept as an expression rather than a hardcoded "updated": _ALWAYS_CHANGED makes
+    # the empty case unreachable today, but that is a property of the full-upsert
+    # semantics, not something this builder should assume on its behalf.
+    action: Literal["updated", "unchanged"] = "updated" if changes else "unchanged"
+
+    return SyncCreativeResult(
+        creative_id=creative_id,
+        action=action,
+        internal_status=internal_status,
+        changes=changes,
+        review_feedback=None,
+    )
 
 
 def _failed_sync_result(
@@ -95,22 +199,28 @@ def _update_existing_creative(
     Returns:
         Tuple of (SyncCreativeResult, needs_approval).
     """
-
-    from typing import Literal
-
     # Update updated_at timestamp
     now = datetime.now(UTC)
     existing_creative.updated_at = now
 
-    # Track changes for result
+    # Snapshot what this update is compared against BEFORE mutating the row, and
+    # derive the comparison-based part of `changes` from it. The dry_run arm runs
+    # the identical comparison against the state an earlier entry previewed, which
+    # is the only way the two arms can agree — see build_update_sync_result.
+    prior = PriorCreativeState.from_row(existing_creative)
+
+    # `changes` here accumulates ONLY the agent-derived entries (generative build,
+    # preview render). The comparison-based and always-changed parts are added by
+    # the builder at the end, in the order the live path has always produced.
     changes: list[str] = []
 
-    # Upsert mode: update provided fields
+    # Upsert mode: update provided fields. Assignment stays guarded on `is not
+    # None`; the comparison that decides whether `name` counts as changed lives in
+    # comparison_changes and deliberately does NOT share that guard.
     if creative.name != existing_creative.name:
         name_value = creative.name
         if name_value is not None:
             existing_creative.name = str(name_value)
-        changes.append("name")
     # Extract complete format info including parameters (AdCP 2.5)
     format_info = _extract_format_info(format_value)
     new_agent_url = format_info["agent_url"]
@@ -125,7 +235,6 @@ def _update_existing_creative(
         existing_creative.format = new_format
         # Cast TypedDict to dict for SQLAlchemy column type
         existing_creative.format_parameters = cast(dict | None, new_params)
-        changes.append("format")
 
     # Determine creative status based on approval mode
     creative_format = creative.format_id
@@ -446,21 +555,19 @@ def _update_existing_creative(
             )
             return (_failed_sync_result(existing_creative.creative_id, error_msg, recovery="transient"), False)
 
-    # In full upsert, consider all fields as changed
-    changes.extend(["url", "click_url", "width", "height", "duration"])
-
     creative_repo.update_data(existing_creative, data)
 
-    # Record result for updated creative
-    action: Literal["updated", "unchanged"] = "updated" if changes else "unchanged"
-
+    # Record result for updated creative. The builder adds the comparison-based
+    # entries and the always-changed five around the agent-derived ones collected
+    # above, preserving the order this function has always emitted.
     return (
-        SyncCreativeResult(
-            creative_id=existing_creative.creative_id,
-            action=action,
+        build_update_sync_result(
+            existing_creative.creative_id,
+            creative=creative,
+            prior=prior,
+            format_value=format_value,
+            agent_derived_changes=changes,
             internal_status=existing_creative.status,
-            changes=changes,
-            review_feedback=None,
         ),
         needs_approval,
     )

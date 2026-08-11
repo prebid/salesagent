@@ -13,7 +13,6 @@ from typing import Any
 
 from adcp.types import ContextObject
 from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_tenant
@@ -24,7 +23,9 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListAuthorizedPropertiesRequest, ListAuthorizedPropertiesResponse
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
-from src.core.validation_helpers import safe_parse_json_field
+from src.core.tools._mcp_boundary import build_tool_result
+from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
+from src.core.validation_helpers import adcp_validation_boundary, safe_parse_json_field
 
 logger = logging.getLogger(__name__)
 
@@ -212,21 +213,24 @@ async def list_authorized_properties(
     Returns:
         ToolResult with human-readable text and structured data.
     """
-    req = ListAuthorizedPropertiesRequest(
-        publisher_domains=publisher_domains,
-        property_tags=property_tags,
-        context=context,
-    )
+    # Same context string as the A2A handler and the REST route, so buyer-invalid input
+    # produces a byte-identical envelope on every transport (#1882).
+    with adcp_validation_boundary(context="list_authorized_properties request"):
+        req = ListAuthorizedPropertiesRequest(
+            publisher_domains=publisher_domains,
+            property_tags=property_tags,
+            context=context,
+        )
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _list_authorized_properties_impl(req, identity)
 
-    return ToolResult(content=str(response), structured_content=response)
+    return build_tool_result(str(response), response)
 
 
 def list_authorized_properties_raw(
     req: "ListAuthorizedPropertiesRequest" = None,
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ) -> "ListAuthorizedPropertiesResponse":
     """List all properties this agent is authorized to represent (raw function for A2A server use).
 
@@ -240,8 +244,5 @@ def list_authorized_properties_raw(
     Returns:
         ListAuthorizedPropertiesResponse with authorized properties
     """
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx, require_valid_token=False)
+    identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=False)
     return _list_authorized_properties_impl(req, identity)

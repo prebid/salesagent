@@ -19,6 +19,7 @@ from src.adapters.gam_inventory_discovery import (
     GAMInventoryDiscovery,
 )
 from src.core.database.db_config import DatabaseConfig
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import GAMInventory, Product, ProductInventoryMapping
 
 # Create database session factory
@@ -827,29 +828,31 @@ class GAMInventoryService:
                 GAMInventory.inventory_id == inventory_id,
             )
         )
-        existing = self.db.scalars(stmt).first()
+        item = GAMInventory(
+            tenant_id=tenant_id,
+            inventory_type=inventory_type,
+            inventory_id=inventory_id,
+            name=name,
+            path=path,
+            status=status,
+            inventory_metadata=inventory_metadata,
+            last_synced=last_synced,
+        )
+        existing = resolve_or_write(
+            self.db,
+            conflict=lambda: self.db.scalars(stmt).first(),
+            write=lambda: self.db.add(item),
+            constraint="uq_gam_inventory",
+        )
 
-        if existing:
-            # Update existing
+        if existing is not None:
+            # Update existing — also where a sync that lost the insert race lands.
             existing.name = name
             existing.path = path
             existing.status = status
             existing.inventory_metadata = inventory_metadata
             # Properly assign datetime to DateTime column
             existing.last_synced = last_synced
-        else:
-            # Insert new
-            item = GAMInventory(
-                tenant_id=tenant_id,
-                inventory_type=inventory_type,
-                inventory_id=inventory_id,
-                name=name,
-                path=path,
-                status=status,
-                inventory_metadata=inventory_metadata,
-                last_synced=last_synced,
-            )
-            self.db.add(item)
 
         self.db.commit()
 

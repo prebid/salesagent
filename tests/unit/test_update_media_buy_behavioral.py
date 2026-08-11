@@ -89,7 +89,7 @@ def test_principal_not_found_returns_error():
         with pytest.raises(AdCPAuthenticationError, match="principal_test") as exc_info:
             env.call_impl(media_buy_id="mb_001")
 
-        assert exc_info.value.error_code == "AUTH_REQUIRED"
+        assert exc_info.value.error_code == "AUTH_INVALID"
         # _update_media_buy_impl wraps its body in the ``audit_workflow_step_failure_ctx`` context
         # manager, so the raise propagates through it rather than via a per-site
         # fail_step call; the exception type is asserted by ``pytest.raises`` above.
@@ -489,12 +489,14 @@ def test_manual_approval_path_through_impl():
 
         # Spec 3.1.1: a not-yet-applied (pending approval) update is the SUBMITTED variant,
         # not a completed success. status="submitted" + task_id (the workflow step).
-        assert isinstance(result, UpdateMediaBuySubmitted)
+        assert isinstance(result.response, UpdateMediaBuySubmitted)
         assert result.status == "submitted"
-        assert result.task_id == "step_001"
-        # The submitted envelope carries no applied-change fields: the update is deferred
-        # until approval (the pre-3.1.1 success shape asserted `affected_packages == []`).
-        dumped = result.model_dump()
+        assert result.response.task_id == "step_001"
+        # Update not applied yet: the submitted variant carries no media_buy_id or
+        # affected_packages fields — the buyer polls task_id for the applied outcome.
+        # (Strict form from the main merge: the pre-3.1.1 success shape asserted
+        # `affected_packages == []`; the submitted envelope must not carry either field.)
+        dumped = result.response.model_dump()
         assert "affected_packages" not in dumped
         assert "media_buy_id" not in dumped
 
@@ -603,7 +605,7 @@ def test_manual_approval_creates_object_workflow_mapping():
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySubmitted)
+        assert isinstance(result.response, UpdateMediaBuySubmitted)
 
         # The DB session should have had an ObjectWorkflowMapping added via session.add()
         mock_session = env.mock["uow"].return_value.session
@@ -653,7 +655,7 @@ def test_manual_approval_stores_raw_request():
         )
         result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuySubmitted)
+        assert isinstance(result.response, UpdateMediaBuySubmitted)
 
         # The workflow step's response_data must contain enough information
         # to execute the update after approval. At minimum, the request data
@@ -945,7 +947,7 @@ class TestUC003PauseResume:
             req = UpdateMediaBuyRequest(media_buy_id="mb_pause_manual", paused=True)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySubmitted)
+            assert isinstance(result.response, UpdateMediaBuySubmitted)
             result_calls = env.mock["ctx_mgr"].return_value.audit_workflow_step_result.call_args_list
             assert len(result_calls) >= 1
             assert result_calls[0][1]["status"] == "requires_approval"
@@ -1946,7 +1948,7 @@ class TestUC003ManualApproval:
             req = UpdateMediaBuyRequest(media_buy_id="mb_deferred", paused=True)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySubmitted)
+            assert isinstance(result.response, UpdateMediaBuySubmitted)
             # Adapter should NOT be called (deferred until seller approves)
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
 
@@ -1965,7 +1967,7 @@ class TestUC003ManualApproval:
             req = UpdateMediaBuyRequest(media_buy_id="mb_reject_setup", paused=True)
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySubmitted)
+            assert isinstance(result.response, UpdateMediaBuySubmitted)
             # Verify workflow step created with requires_approval (enables rejection)
             result_calls = env.mock["ctx_mgr"].return_value.audit_workflow_step_result.call_args_list
             assert result_calls[0][1]["status"] == "requires_approval"
@@ -1986,9 +1988,9 @@ class TestUC003ManualApproval:
             req = UpdateMediaBuyRequest(media_buy_id="mb_poll")
             result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuySubmitted)
+            assert isinstance(result.response, UpdateMediaBuySubmitted)
             # The buyer polls status via the returned task_id (the workflow step).
-            assert result.task_id == "step_001"
+            assert result.response.task_id == "step_001"
             # The workflow step was created (step_id="step_001")
             # and the response allows the buyer to track the status
             env.mock["ctx_mgr"].return_value.create_workflow_step.assert_called_once_with(
@@ -2022,7 +2024,7 @@ class TestUC003ExtA:
             with pytest.raises(AdCPAuthenticationError, match="Principal ID not found") as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
 
-            assert exc_info.value.error_code == "AUTH_REQUIRED"
+            assert exc_info.value.error_code == "AUTH_MISSING"
 
     def test_principal_not_found_in_database(self):
         """Principal ID exists but no DB record raises AdCPAuthenticationError.
@@ -2037,7 +2039,7 @@ class TestUC003ExtA:
             with pytest.raises(AdCPAuthenticationError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
 
-            assert exc_info.value.error_code == "AUTH_REQUIRED"
+            assert exc_info.value.error_code == "AUTH_INVALID"
 
     def test_state_unchanged_on_auth_failure(self):
         """No records modified when authentication fails.
@@ -2052,7 +2054,7 @@ class TestUC003ExtA:
             with pytest.raises(AdCPAuthenticationError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
 
-            assert exc_info.value.error_code == "AUTH_REQUIRED"
+            assert exc_info.value.error_code == "AUTH_INVALID"
             # No adapter call
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
             # No DB writes through UoW

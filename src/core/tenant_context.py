@@ -53,6 +53,7 @@ class TenantContext(BaseModel):
     policy_settings: dict[str, Any] | None = None
     signals_agent_config: dict[str, Any] | None = None
     supported_billing: list[str] | None = None  # BR-RULE-059: seller billing policy
+    account_sandbox: bool = True  # #1592 C2/A2: account.sandbox + sync_accounts provisioning gate
     approval_mode: str = "require-human"  # BR-RULE-037: creative approval mode
     account_approval_mode: str | None = None  # BR-RULE-060: account approval mode (auto|credit_review|legal_review)
     gemini_api_key: str | None = None
@@ -60,6 +61,9 @@ class TenantContext(BaseModel):
     brand_manifest_policy: str = "require_auth"
     advertising_policy: dict[str, Any] | None = None
     product_ranking_prompt: str | None = None
+    # #1592 T1a: implementation-backed AdCP capability declaration blocks.
+    # None = nothing declared = the pre-#1592 capabilities wire.
+    capability_declarations: dict[str, Any] | None = None
 
     # --- Dict-like access for backward compatibility ---
 
@@ -114,6 +118,7 @@ class TenantContext(BaseModel):
             policy_settings=safe_json_loads(tenant.policy_settings, None),
             signals_agent_config=safe_json_loads(tenant.signals_agent_config, None),
             supported_billing=safe_json_loads(tenant.supported_billing, None),
+            account_sandbox=tenant.account_sandbox if tenant.account_sandbox is not None else True,
             approval_mode=tenant.approval_mode or "require-human",
             account_approval_mode=tenant.account_approval_mode,
             gemini_api_key=tenant.gemini_api_key,
@@ -121,6 +126,7 @@ class TenantContext(BaseModel):
             brand_manifest_policy=tenant.brand_manifest_policy or "require_auth",
             advertising_policy=safe_json_loads(tenant.advertising_policy, None),
             product_ranking_prompt=tenant.product_ranking_prompt,
+            capability_declarations=safe_json_loads(tenant.capability_declarations, None),
         )
 
     @classmethod

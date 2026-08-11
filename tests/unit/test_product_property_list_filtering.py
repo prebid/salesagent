@@ -332,7 +332,10 @@ class TestCapabilitiesPropertyListFiltering:
         mock_uow.tenant_config = mock_repo
 
         with (
-            patch("src.core.tools.capabilities.get_principal_object", return_value=None),
+            patch(
+                "src.core.tools.capabilities.get_adapter_class_for_tenant",
+                side_effect=Exception("adapter unavailable (test)"),
+            ),
             patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow),
         ):
             response = _get_adcp_capabilities_impl(None, identity)

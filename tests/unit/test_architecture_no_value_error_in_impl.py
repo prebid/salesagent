@@ -42,10 +42,16 @@ VALUE_ERROR_PER_FILE_CAP: dict[str, int] = {
     "src/adapters/broadstreet/config_schema.py": 4,
     "src/adapters/gam/auth.py": 5,
     "src/adapters/gam/client.py": 1,
-    "src/adapters/gam/managers/creatives.py": 3,
+    # 3→0: the creative-input rejection sites now raise
+    # AdCPCreativeRejectedError (CREATIVE_REJECTED/correctable).
     "src/adapters/gam/managers/orders.py": 11,
-    "src/adapters/gam/managers/targeting.py": 22,
-    "src/adapters/gam/pricing_compatibility.py": 2,
+    # 22→7: the 15 buyer-correctable capability-gap sites now raise
+    # AdCPCapabilityNotSupportedError (UNSUPPORTED_FEATURE/correctable); the 7
+    # remaining ValueErrors are seller-side operational faults by design.
+    "src/adapters/gam/managers/targeting.py": 7,
+    # 2→1: the pricing-model capability gap is typed; the remaining ValueError
+    # is the seller-config incompatible-override raise (deliberately untyped).
+    "src/adapters/gam/pricing_compatibility.py": 1,
     "src/adapters/gam_implementation_config_schema.py": 4,
     "src/adapters/xandr.py": 5,
     "src/core/tools/media_buy_create.py": 2,  # null-session guard + agent_url HTTP(S) validation (internal contracts)

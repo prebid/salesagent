@@ -58,6 +58,16 @@ services:
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
       ADCP_TESTING: ${ADCP_TESTING:-true}
       ADCP_AUTH_TEST_MODE: ${ADCP_AUTH_TEST_MODE:-true}
+      # Must match the `tests` service's ADCP_WEBHOOK_HOST below: this is the
+      # SERVER's own trusted-test-host allowlist entry for outbound webhook SSRF
+      # validation (WebhookURLValidator._is_trusted_test_host), not just the
+      # runner's callback-URL construction. Without it here, every webhook the
+      # server tries to send to the e2e capture server (http://tests/webhook,
+      # which DNS-resolves to a private compose-network IP) is rejected by the
+      # SSRF gate even under ADCP_TESTING=true, because the gate only trusts
+      # literal localhost/127.0.0.1 plus whatever ADCP_WEBHOOK_HOST names --
+      # and this service never saw that name.
+      ADCP_WEBHOOK_HOST: tests
       # The SERVER must know about the pinned in-network creative agent: sync/
       # create flows resolve format specs server-side, and references carry the
       # PUBLIC canonical agent_url — without this, the registry's connection

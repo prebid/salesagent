@@ -217,10 +217,17 @@ def docker_services_e2e(request):
 
         print(f"Using ports: Server={mcp_port} (MCP+A2A+Admin), Postgres={postgres_port}")
 
-        # Set port env vars in os.environ so that:
-        # 1. docker-compose subprocess inherits them via os.environ.copy()
-        # 2. Tests that read ports via os.getenv() (e.g., test_a2a_endpoints_working.py,
-        #    test_landing_pages.py) pick up the correct dynamic ports
+        # Set port env vars in os.environ for ONE consumer: the docker-compose
+        # subprocess, which inherits them via os.environ.copy() at the call below.
+        # Exporting to a child process is what environment variables are for.
+        #
+        # Tests must NOT read these back. A test receives its port from the fixture
+        # that allocated it — this fixture's yielded ports dict, or the `live_server`
+        # URLs built from it. A process-global carries no sender (this fixture,
+        # docker-compose.e2e.yml:146 and scripts/test-stack.sh:174 all write
+        # ADCP_SALES_PORT), no lifetime (a stale value outlives the fixture instead of
+        # failing) and no multiplicity (one variable cannot hold a port per xdist
+        # worker). Env at the edge, data on the inside.
         os.environ["ADCP_SALES_PORT"] = str(mcp_port)
         os.environ["POSTGRES_PORT"] = str(postgres_port)
 

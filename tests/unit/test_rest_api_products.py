@@ -16,6 +16,7 @@ from starlette.testclient import TestClient
 
 from src.app import app
 from src.core.resolved_identity import ResolvedIdentity
+from tests.factories.principal import PrincipalFactory
 
 _MOCK_IDENTITY = ResolvedIdentity(
     principal_id="test-principal",
@@ -72,11 +73,22 @@ class TestRESTProductsEndpoint:
         assert "products" in body
         assert isinstance(body["products"], list)
 
+    @patch("src.core.resolved_identity.resolve_identity")
     @patch("src.core.tools.products._get_products_impl")
-    def test_works_without_auth(self, mock_impl):
-        """get_products is a discovery skill — should work without auth."""
+    def test_works_without_auth(self, mock_impl, mock_resolve):
+        """get_products is a discovery skill — should work without auth.
+
+        _resolve_auth_dep always calls resolve_identity() now (salesagent-zna9,
+        header-based tenant detection regardless of credential presence) — mock
+        it here (unit test, no DB) to isolate route-level behavior. Real
+        header-based DB resolution is covered by
+        tests/integration/test_rest_auth_optional_tenant_resolution.py.
+        """
         from src.core.schemas import GetProductsResponse
 
+        mock_resolve.return_value = PrincipalFactory.make_identity(
+            principal_id=None, tenant_id=None, tenant=None, protocol="rest"
+        )
         mock_impl.return_value = GetProductsResponse(products=[], message="test")
 
         response = client.post(
@@ -86,8 +98,13 @@ class TestRESTProductsEndpoint:
         # Should return 200, not 401 — discovery skill allows unauthenticated access
         assert response.status_code == 200, f"Discovery skill should work without auth, got {response.status_code}"
 
-    def test_endpoint_not_404(self):
+    @patch("src.core.resolved_identity.resolve_identity")
+    def test_endpoint_not_404(self, mock_resolve):
         """POST /api/v1/products must exist (not 404)."""
+        mock_resolve.return_value = PrincipalFactory.make_identity(
+            principal_id=None, tenant_id=None, tenant=None, protocol="rest"
+        )
+
         response = client.post(
             "/api/v1/products",
             json={"brief": "test"},

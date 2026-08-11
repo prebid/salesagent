@@ -294,6 +294,10 @@ class TestAdapterAnnotationExceptionPropagation:
         """TypeError (bug) propagates, not swallowed.
 
         Covers: UC-001-MAIN-43
+
+        Adapter annotation resolves tenant-level via get_adapter_class_for_tenant()
+        (salesagent-r9rf), not a Principal-bound get_adapter() instance — patch
+        the call site actually used now.
         """
         from tests.helpers.adcp_factories import create_test_product
 
@@ -315,7 +319,7 @@ class TestAdapterAnnotationExceptionPropagation:
             ),
             patch("src.services.dynamic_pricing_service.DynamicPricingService"),
             patch(
-                "src.core.helpers.adapter_helpers.get_adapter",
+                "src.core.helpers.adapter_helpers.get_adapter_class_for_tenant",
                 side_effect=TypeError("'NoneType' object has no attribute 'get'"),
             ),
         ]

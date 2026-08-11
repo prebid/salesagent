@@ -19,7 +19,13 @@ from src.core.validation_helpers import format_validation_error, run_async_in_sy
 from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
 
 from ._assignments import _process_assignments
-from ._processing import _create_new_creative, _failed_sync_result, _update_existing_creative
+from ._processing import (
+    PriorCreativeState,
+    _create_new_creative,
+    _failed_sync_result,
+    _update_existing_creative,
+    build_update_sync_result,
+)
 from ._validation import _get_field, _validate_creative_input, check_provenance_required
 from ._workflow import _audit_log_sync, _create_sync_workflow_steps, _send_creative_notifications
 
@@ -121,6 +127,11 @@ def _sync_creatives_impl(
     failed_count = 0
     deleted_count = 0
 
+    # dry_run only: what each creative_id in THIS request has already been
+    # previewed as. Request-local, never module state — the live path's equivalent
+    # memory is the per-creative flush, which is likewise scoped to the request.
+    previewed: dict[str, PriorCreativeState] = {}
+
     # Legacy tracking (still used internally)
     synced_creatives = []
     failed_creatives: list[dict[str, Any]] = []
@@ -201,14 +212,28 @@ def _sync_creatives_impl(
                     if creative.creative_id:
                         existing_creative = creative_repo.get_by_id(creative.creative_id, principal_id)
 
-                    if existing_creative:
+                    # A previous entry in THIS payload may already account for the id.
+                    # The live path gets that memory for free from the per-creative
+                    # flush (repositories/creative.py), so entry 2 resolves against
+                    # what entry 1 wrote; without `previewed` the preview reports a
+                    # second `created` for an id a real run would report as `updated`.
+                    prior = None
+                    if existing_creative is not None:
+                        prior = PriorCreativeState.from_row(existing_creative)
+                    elif creative_id in previewed:
+                        prior = previewed[creative_id]
+
+                    if prior is not None:
                         updated_count += 1
                         results.append(
-                            SyncCreativeResult(
-                                creative_id=creative_id,
-                                action=CreativeAction.updated,
-                                internal_status=existing_creative.status,
-                                review_feedback=None,
+                            build_update_sync_result(
+                                creative_id,
+                                creative=creative,
+                                prior=prior,
+                                format_value=format_value,
+                                # No agent call happens on this arm, so the
+                                # agent-derived entries are absent by construction.
+                                internal_status=existing_creative.status if existing_creative else None,
                             )
                         )
                     else:
@@ -220,6 +245,9 @@ def _sync_creatives_impl(
                                 review_feedback=None,
                             )
                         )
+                    # Refresh on BOTH arms: a third entry must compare against what
+                    # the second one left, exactly as the live path does.
+                    previewed[creative_id] = PriorCreativeState.from_asset(creative, format_value)
                     synced_creatives.append(creative)
                     continue
 
@@ -398,13 +426,25 @@ def _sync_creatives_impl(
 
         # CreativeUoW auto-commits on clean exit — no explicit commit needed
 
-    # Process assignments (spec-compliant: creative_id → package_ids mapping)
+    # Process assignments (spec-compliant: creative_id → package_ids mapping).
+    # One mechanism serves both arms (sync-creatives-request.json
+    # #/properties/dry_run @ v3.1.1: "preview what would change without
+    # applying"): under dry_run the SAME resolution/validation/strict-raise
+    # code runs and populates assigned_to / assignment_errors / synthesized
+    # entries — only the upsert, weight normalization, and media-buy status
+    # transition are gated, and `previewed` supplies the post-sync creative
+    # state for same-payload creatives (accounts previewed_by_key discipline).
+    # Buyer-visible change from the old skip-entirely gate: dry_run + strict +
+    # an invalid assignment now raises exactly as the live run would, instead
+    # of returning a success that under-described the outcome.
     assignment_list = _process_assignments(
         assignments=assignments,
         results=results,
         tenant=tenant,
         validation_mode=validation_mode,
         principal_id=principal_id,
+        dry_run=dry_run,
+        previewed=previewed,
     )
 
     # Create workflow steps and send notifications for creatives requiring approval

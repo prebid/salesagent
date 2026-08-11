@@ -51,17 +51,17 @@ class TestErrorCodeStatusTableDerivation:
             "drift between class _default_* attributes and the derived table:\n" + "\n".join(missing)
         )
 
-    def test_auth_required_resolves_to_403(self):
-        """Pin: ``AUTH_REQUIRED`` resolves to 403 (Authorization class wins over Authentication).
+    def test_permission_denied_resolves_to_403(self):
+        """Pin: ``PERMISSION_DENIED`` resolves to 403 (AdCPAuthorizationError).
 
-        ``AdCPAuthenticationError`` (401) and ``AdCPAuthorizationError`` (403)
-        both emit AUTH_REQUIRED. The derivation rule keeps the **highest**
-        status when multiple subclasses share a wire code — 403 is the
-        spec-aligned answer for AUTH_REQUIRED (authenticated but not authorized).
+        AdCPAuthorizationError migrated off the deprecated AUTH_REQUIRED alias
+        to PERMISSION_DENIED (salesagent-otc5, completing salesagent-mkso for
+        the authz axis) — no other subclass shares this code, so no
+        highest-status-wins ambiguity remains.
         """
         table = _build_error_code_to_status()
-        status = table.get("AUTH_REQUIRED")
-        assert status == 403, f"AUTH_REQUIRED must resolve to 403 (AdCPAuthorizationError), got {status}"
+        status = table.get("PERMISSION_DENIED")
+        assert status == 403, f"PERMISSION_DENIED must resolve to 403 (AdCPAuthorizationError), got {status}"
 
     def test_invalid_request_resolves_to_400(self):
         """Pin: ``INVALID_REQUEST`` resolves to 400.
@@ -79,20 +79,19 @@ class TestErrorCodeStatusTableDerivation:
     def test_authentication_error_status_code_is_401(self):
         """Pin: ``AdCPAuthenticationError`` instances carry HTTP 401.
 
-        Both ``AdCPAuthenticationError`` (401) and ``AdCPAuthorizationError``
-        (403) now emit the standard AUTH_REQUIRED wire code. The instance-level
-        status code distinguishes them: authentication failures are 401. The
-        plain-ToolError fallback table conflates them under AUTH_REQUIRED and,
-        by the "highest status wins" rule, resolves to 403 (the Authorization
-        class) — verified separately in ``test_auth_required_resolves_to_403``.
+        ``AdCPAuthenticationError`` (401, AUTH_INVALID) and
+        ``AdCPAuthorizationError`` (403, PERMISSION_DENIED) no longer share a
+        wire code (salesagent-otc5 migrated the latter off the deprecated
+        AUTH_REQUIRED alias) — each resolves unambiguously in the table now.
         """
         from src.core.exceptions import AdCPAuthenticationError
 
         assert AdCPAuthenticationError("no token").status_code == 401
 
-        # The fallback table conflates both AUTH_REQUIRED emitters → highest wins (403).
         table = _build_error_code_to_status()
-        assert table.get("AUTH_REQUIRED") == 403
+        assert table.get("AUTH_INVALID") == 401
+        assert table.get("PERMISSION_DENIED") == 403
+        assert "AUTH_REQUIRED" not in table, "AUTH_REQUIRED is deprecated and no subclass should emit it anymore"
 
     def test_service_unavailable_resolves_via_highest_status(self):
         """Pin: ``SERVICE_UNAVAILABLE`` takes the highest status when codes overlap.

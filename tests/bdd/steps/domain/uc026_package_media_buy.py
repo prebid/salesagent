@@ -1897,46 +1897,64 @@ def then_operation_succeeds(ctx: dict) -> None:
 
 @then(parsers.parse("the outcome should be {outcome}"))
 def then_outcome(ctx: dict, outcome: str) -> None:
-    """Dispatch assertion based on outcome text from partition/boundary tables."""
+    """Dispatch assertion based on outcome text from partition/boundary tables.
+
+    Wire-first (converging on uc004_delivery._assert_error_outcome, the
+    reference form): when the scenario names a canonical/pinned code and a wire
+    envelope was captured, assert the AdCP two-layer error the buyer receives
+    via ``result.assert_wire_error`` (recovery pin-sourced). assert_wire_error
+    HARD-FAILS on a non-pinned code (e.g. the scenario-only
+    DOMAIN_INVALID_FORMAT that production never emits), so those — and the
+    no-wire case — fall through to the reconstructed-exception branch.
+    """
     import re
 
     from adcp.types import Error as AdCPError
 
+    from tests.harness.transport import is_pinned_error_code
+
     outcome = outcome.strip()
-    if outcome.startswith("error"):
-        error = _require_error(ctx)
-        is_adcp_error = isinstance(error, AdCPError) or (isinstance(error, dict) and "code" in error)
-
-        # Extract expected error code from outcome string, e.g. 'error "CODE" ...'
-        code_match = re.search(r'"([^"]+)"', outcome)
-        expected_code = code_match.group(1) if code_match else None
-        actual_code: str | None = None
-
-        if expected_code and is_adcp_error:
-            actual_code = getattr(error, "code", None)
-            if actual_code is None and isinstance(error, dict):
-                actual_code = error.get("code")
-            assert actual_code, f"Expected error with code but got empty code. Error: {error}"
-            assert actual_code == expected_code, (
-                f"Expected error code '{expected_code}', got '{actual_code}'. Error: {error}"
-            )
-
-        # Verify suggestion only when the error code matches the scenario
-        # expectation.
-        codes_match = actual_code is not None and actual_code == expected_code
-        if "with suggestion" in outcome and is_adcp_error and codes_match:
-            suggestion = getattr(error, "suggestion", None)
-            if suggestion is None and isinstance(error, dict):
-                suggestion = error.get("suggestion")
-            if suggestion is None:
-                suggestion = getattr(error, "recovery", None)
-                if suggestion is None and isinstance(error, dict):
-                    suggestion = error.get("recovery")
-            assert suggestion is not None, f"Expected error with suggestion but none found. Error: {error}"
-    elif outcome.startswith("success"):
+    if outcome.startswith("success"):
         assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-    else:
+        return
+    if not outcome.startswith("error"):
         raise ValueError(f"Unknown outcome format: {outcome}")
+
+    # Extract expected error code from outcome string, e.g. 'error "CODE" ...'
+    code_match = re.search(r'"([^"]+)"', outcome)
+    expected_code = code_match.group(1) if code_match else None
+    require_suggestion = "with suggestion" in outcome
+
+    result = ctx.get("result")
+    if is_pinned_error_code(expected_code) and result is not None and result.wire_error_envelope is not None:
+        result.assert_wire_error(expected_code, require_suggestion=require_suggestion)
+        return
+
+    # Reconstructed fallback: non-pinned scenario code, or no wire envelope.
+    error = _require_error(ctx)
+    is_adcp_error = isinstance(error, AdCPError) or (isinstance(error, dict) and "code" in error)
+    actual_code: str | None = None
+
+    if expected_code and is_adcp_error:
+        actual_code = getattr(error, "code", None)
+        if actual_code is None and isinstance(error, dict):
+            actual_code = error.get("code")
+        assert actual_code, f"Expected error with code but got empty code. Error: {error}"
+        assert actual_code == expected_code, (
+            f"Expected error code '{expected_code}', got '{actual_code}'. Error: {error}"
+        )
+
+    # Verify suggestion only when the error code matches the scenario expectation.
+    codes_match = actual_code is not None and actual_code == expected_code
+    if require_suggestion and is_adcp_error and codes_match:
+        suggestion = getattr(error, "suggestion", None)
+        if suggestion is None and isinstance(error, dict):
+            suggestion = error.get("suggestion")
+        if suggestion is None:
+            suggestion = getattr(error, "recovery", None)
+            if suggestion is None and isinstance(error, dict):
+                suggestion = error.get("recovery")
+        assert suggestion is not None, f"Expected error with suggestion but none found. Error: {error}"
 
 
 # --- Update-specific Then steps ---

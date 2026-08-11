@@ -363,7 +363,8 @@
                 <div class="timeline-comments">
                     {% for comment in step.comments %}
                     <div class="comment">
-                        <strong>{{ comment.user }}:</strong> {{ comment.comment }}
+                        {# Canonical CommentModel key is 'text'; 'comment' covers legacy rows #}
+                        <strong>{{ comment.user }}:</strong> {{ comment.text or comment.comment }}
                     </div>
                     {% endfor %}
                 </div>
