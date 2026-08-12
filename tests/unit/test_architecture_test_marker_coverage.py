@@ -24,31 +24,10 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import _ENTITY_MARKERS
 from tests.unit._architecture_helpers import assert_violations_match_allowlist
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-_ENTITY_MARKERS = frozenset(
-    {
-        "delivery",
-        "creative",
-        "product",
-        "media_buy",
-        "tenant",
-        "auth",
-        "adapter",
-        "inventory",
-        "schema",
-        "admin",
-        "architecture",
-        "targeting",
-        "transport",
-        "workflow",
-        "policy",
-        "agent",
-        "infra",
-    }
-)
 
 # Tests here are pending entity classification — list must only shrink.
 # Format: "tests/unit/test_file.py::TestClass::test_name" or "tests/unit/test_file.py::test_name"

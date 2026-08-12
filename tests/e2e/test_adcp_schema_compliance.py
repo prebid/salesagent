@@ -19,8 +19,9 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers.adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
+
 from ._compliance_report import ComplianceReportBase
-from .adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
 
 
 class AdCPComplianceReport(ComplianceReportBase):

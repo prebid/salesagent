@@ -917,25 +917,40 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # 2026-07-30 once the strict-xfail deselection stopped hiding mcp items;
         # the rows now assert the real wire envelope on every transport.
 
-        # UC-002 ext-g inline-creative missing URL (#1417): the inline
-        # creative carries a FormatId object on the wire. On a2a/rest the
-        # reference-creative URL validation rejects it with the AdCP CREATIVE_REJECTED
-        # envelope (message names the missing URL). On MCP the idempotency
-        # canonicalization (rfc8785) cannot serialize the FormatId object and raises a
-        # bare CanonicalizationError BEFORE the AdCP boundary translator runs — no
-        # two-layer envelope on MCP (same class of MCP serialization gap recorded for
-        # the oneOf-both account shape and the short webhook credential above). The
-        # a2a/rest rows assert the real wire CREATIVE_REJECTED with the URL message.
-        if is_mcp and "T-UC-002-ext-g" in marker_names:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="MCP rfc8785 canonicalization cannot serialize the inline creative's FormatId "
-                    "object (raises CanonicalizationError before the AdCP boundary translator) — no "
-                    "two-layer CREATIVE_REJECTED envelope on MCP (a2a/rest pass). Documented MCP "
-                    "serialization gap.",
-                    strict=True,
-                )
-            )
+        # Graduated (2026-08-11, run sa-602eec0b): UC-002 ext-g inline-creative
+        # missing URL (#1417). The MCP row recorded that the idempotency
+        # canonicalization (rfc8785) could not serialize the inline creative's
+        # FormatId object and raised a bare CanonicalizationError BEFORE the AdCP
+        # boundary translator, leaving no two-layer envelope on MCP while a2a/rest
+        # passed. GH #1868 closed it at the root: Creative.validate_format_id
+        # (src/core/schemas/creative.py) now runs copy_before_mutating() before
+        # upgrading legacy format ids, so it no longer writes a live FormatId back
+        # into the caller's dict; canonicalization then sees a plain
+        # JSON-serializable dict and the request survives to creative validation.
+        #
+        # MEASURED, not inferred (envelope dumped off ctx["result"] on all three
+        # transports): MCP now returns a two-layer envelope — adcp_error.code ==
+        # errors[0].code, recovery="correctable", same suggestion text a2a/rest
+        # carry — where it previously produced a bare CanonicalizationError and no
+        # envelope at all. The ENVELOPE's existence is what this xfail recorded, so
+        # the routing is dead. Routing was MCP-only; the scenario is not in
+        # tests/bdd/e2e_rest_known_failures.txt.
+        #
+        # This graduation is scoped to envelope PRESENCE and blesses nothing about
+        # the code inside it. Two pre-existing defects survive it, on all three
+        # transports (see salesagent-cxeu):
+        #   1. The scenario's `error message should contain "URL"` passes only on
+        #      pydantic echoing {'url': ''...} into its error repr — POST-F2 is not
+        #      actually graded anywhere.
+        #   2. The code emitted is CREATIVE_REJECTED for what is really an
+        #      unparseable asset (missing `asset_type` discriminator), while 9
+        #      dormant sibling rows (INV-6 x3 + the v3.1 discriminator boundary
+        #      matrix x6, all xfailed on harness wiring per #1652 — never run
+        #      against production) demand INVALID_REQUEST. Which side moves is
+        #      UNRESOLVED and belongs to the error-code reconciliation epic, not to
+        #      this merge: the pinned spec mandates no code for a parse failure, so
+        #      the nine may themselves be over-specified. The scenario therefore
+        #      pins NO code, leaving either resolution open.
 
         # --- UC-006: auth error code mismatch (production returns VALIDATION_ERROR, spec expects AUTH_REQUIRED) ---
         _UC006_AUTH_XFAIL = {"T-UC-006-ext-a"}

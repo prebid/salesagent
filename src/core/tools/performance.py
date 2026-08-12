@@ -9,7 +9,6 @@ from typing import Any
 
 from adcp.types import ContextObject
 from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 
 from src.core.tool_context import ToolContext
 
@@ -21,6 +20,7 @@ from src.core.database.repositories import MediaBuyUoW
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import PackagePerformance, UpdatePerformanceIndexRequest, UpdatePerformanceIndexResponse
+from src.core.tools._mcp import mcp_result
 from src.core.tools.media_buy_update import _verify_principal
 from src.core.validation_helpers import adcp_validation_boundary
 
@@ -145,7 +145,7 @@ async def update_performance_index(
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     req = _build_update_performance_index_request(media_buy_id, performance_data, context)
     response = _update_performance_index_impl(req=req, identity=identity)
-    return ToolResult(content=str(response), structured_content=response)
+    return mcp_result(response)
 
 
 def update_performance_index_raw(

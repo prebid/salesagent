@@ -19,7 +19,8 @@ our control.
 
 import pytest
 
-from tests.e2e.adcp_schema_validator import AdCPSchemaValidator
+from src.a2a_server.adcp_a2a_server import create_agent_card
+from tests.helpers.adcp_schema_validator import AdCPSchemaValidator
 
 
 class TestA2AProtocolCompliance:
@@ -36,9 +37,9 @@ class TestA2AProtocolCompliance:
 
         Regression test for: A2A server expecting 'updates' instead of 'packages'
         """
-        async with AdCPSchemaValidator(offline_mode=False) as validator:
+        async with AdCPSchemaValidator() as validator:
             # Load official AdCP schema
-            schema = await validator.get_schema("/schemas/v1/media-buy/update-media-buy-request.json")
+            schema = await validator.get_schema("media-buy/update-media-buy-request.json")
 
             # Verify schema uses 'packages' field (not 'updates')
             assert "packages" in schema["properties"], "AdCP schema should define 'packages' field"
@@ -54,51 +55,68 @@ class TestA2AProtocolCompliance:
     # Real schema conformance is covered by tests/unit/test_adcp_contract.py against
     # the pinned adcp library version. See PR #1186 notes.
 
+    # Skills this agent ships for which the pinned index has no task at all.
+    # Shrink-only: when the spec adds a schema for one of these, remove it
+    # here — never add an entry. A newly-added skill with no schema is a real
+    # failure, not something to allowlist.
+    _KNOWN_MISSING_SCHEMA_SKILLS = frozenset(
+        {
+            "approve_creative",
+            "get_media_buy_status",
+            "optimize_media_buy",
+            "list_authorized_properties",
+            "update_performance_index",
+        }
+    )
+
     @pytest.mark.asyncio
     async def test_all_adcp_skills_have_schemas(self):
         """
-        Verify that all AdCP-compliant skills have corresponding schemas.
+        Every skill this agent advertises resolves to a pinned request AND response schema.
 
-        This prevents regressions where we add new skills but forget to:
-        1. Add them to the schema validation map
-        2. Create tests for them
-        3. Validate their request/response formats
+        The roster comes from ``create_agent_card().skills`` — production's own
+        and only skill declaration — so a skill added there is graded the same
+        day with no test edit. The previous version iterated a hand-maintained
+        test-side map, which had already gone stale in both directions: it
+        listed a skill production had deleted and omitted five it ships, four
+        of which have resolvable schemas that nothing was checking.
+
+        The task name is derived (``_`` -> ``-``) at use rather than stored.
+        Uses ``_find_schema_ref_for_task`` (searches every index section)
+        rather than a hardcoded 'media-buy/' path, so a skill whose schema
+        lives elsewhere (e.g. sync_creatives, under creative/) is found rather
+        than silently treated as missing.
         """
-        # Define which skills are AdCP-compliant (should have schemas)
-        # Note: signals skills removed - should come from dedicated signals agents
-        adcp_skills = {
-            "get_products",
-            "create_media_buy",
-            "update_media_buy",
-            "get_media_buy_delivery",
-            "sync_creatives",
-            "list_creatives",
-            "list_creative_formats",
-            "list_authorized_properties",
-        }
-
-        async with AdCPSchemaValidator(offline_mode=False) as validator:
+        async with AdCPSchemaValidator() as validator:
             missing_schemas = []
+            newly_resolved = []
 
-            for skill in adcp_skills:
-                # Map skill name to schema path
-                schema_path = f"/schemas/v1/media-buy/{skill.replace('_', '-')}-request.json"
+            for skill in sorted(s.id for s in create_agent_card().skills):
+                task_name = skill.replace("_", "-")
+                refs = {
+                    direction: await validator._find_schema_ref_for_task(task_name, direction)
+                    for direction in ("request", "response")
+                }
 
-                try:
-                    schema = await validator.get_schema(schema_path)
-                    assert schema is not None, f"Schema loaded but is None for {skill}"
-                except Exception as e:
-                    # Some schemas might not exist yet (e.g., list_creative_formats)
-                    # Log but don't fail - we'll track these separately
-                    if "404" not in str(e) and "not found" not in str(e).lower():
-                        missing_schemas.append(f"{skill}: {e}")
+                if skill in self._KNOWN_MISSING_SCHEMA_SKILLS:
+                    if any(ref is not None for ref in refs.values()):
+                        newly_resolved.append(skill)
+                    continue
 
-            # Report findings (informational, not a hard failure)
-            if missing_schemas:
-                pytest.skip(
-                    f"Some AdCP skills don't have schemas yet (expected during development): "
-                    f"{', '.join(missing_schemas)}"
-                )
+                for direction, ref in refs.items():
+                    if ref is None:
+                        missing_schemas.append(f"{skill} ({direction})")
+                    else:
+                        assert await validator.get_schema(ref) is not None, (
+                            f"{direction} schema resolved but failed to load for {skill}"
+                        )
+
+            assert not missing_schemas, (
+                f"Advertised skill(s) have no schema anywhere in the pinned index: {missing_schemas}"
+            )
+            assert not newly_resolved, (
+                f"Skill(s) in _KNOWN_MISSING_SCHEMA_SKILLS now HAVE a schema — shrink the allowlist: {newly_resolved}"
+            )
 
     @pytest.mark.asyncio
     async def test_get_media_buy_delivery_request_schema(self):
@@ -107,8 +125,8 @@ class TestA2AProtocolCompliance:
 
         Validates the request accepts AdCP-compliant field names.
         """
-        async with AdCPSchemaValidator(offline_mode=False) as validator:
-            schema = await validator.get_schema("/schemas/v1/media-buy/get-media-buy-delivery-request.json")
+        async with AdCPSchemaValidator() as validator:
+            schema = await validator.get_schema("media-buy/get-media-buy-delivery-request.json")
 
             # Verify expected fields from AdCP spec
             assert "media_buy_ids" in schema["properties"], "Should accept media_buy_ids (plural) per AdCP spec"

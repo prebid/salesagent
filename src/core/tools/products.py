@@ -15,7 +15,6 @@ from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp import Product as LibraryProduct
 from adcp.types import BrandReference, ContextObject, PropertyListReference
 from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 from pydantic import Field
 
 from src.adapters import get_adapter_default_channels
@@ -68,6 +67,7 @@ def get_recommended_cpm(product: Product) -> float | None:
 
 # Import conversion utilities from dedicated module to avoid circular imports
 from src.core.product_conversion import convert_product_model_to_schema
+from src.core.tools._mcp import mcp_result
 
 
 def extract_product_property_ids(
@@ -396,21 +396,23 @@ async def _get_products_impl(
     # Use isinstance check to safely handle mock objects in tests
     _property_list_ref = getattr(req, "property_list", None)
     if isinstance(_property_list_ref, PropertyListReference):
-        try:
-            from src.core.property_list_resolver import resolve_property_list
+        # No try/except here on purpose. Typed AdCPErrors already carry their own
+        # buyer-facing classification, and anything else is a fault on our side —
+        # the transport boundary translates it honestly (SERVICE_UNAVAILABLE,
+        # transient, 500). The handler that used to sit here relabelled every
+        # implementation bug as AdCPValidationError, so the buyer read "your
+        # request is malformed" for our crash, and it forced recovery="transient"
+        # against the pinned enum's "correctable" for that code — telling the
+        # buyer their request was invalid AND that retrying it might work.
+        from src.core.property_list_resolver import resolve_property_list
 
-            allowed_property_ids = await resolve_property_list(_property_list_ref)
-            allowed_set = set(allowed_property_ids)
-            products = filter_products_by_property_list(products, allowed_set)
-            logger.info(
-                f"[GET_PRODUCTS] After property list filtering: {len(products)} products "
-                f"(allowed {len(allowed_set)} properties)"
-            )
-        except AdCPError:
-            raise
-        except Exception as e:
-            logger.error(f"Property list resolution failed: {e}")
-            raise AdCPValidationError(f"Failed to resolve property list: {e}", recovery="transient") from e
+        allowed_property_ids = await resolve_property_list(_property_list_ref)
+        allowed_set = set(allowed_property_ids)
+        products = filter_products_by_property_list(products, allowed_set)
+        logger.info(
+            f"[GET_PRODUCTS] After property list filtering: {len(products)} products "
+            f"(allowed {len(allowed_set)} properties)"
+        )
 
     # Generate dynamic product variants from signals agents
     try:
@@ -828,8 +830,7 @@ async def get_products(
     # Note: GetProductsRequest is now a flat class (not RootModel), so pass req directly
     response = await _get_products_impl(req, identity)
 
-    # Return ToolResult with human-readable text and structured data
-    return ToolResult(content=str(response), structured_content=response.model_dump(mode="json"))
+    return mcp_result(response)
 
 
 async def get_products_raw(

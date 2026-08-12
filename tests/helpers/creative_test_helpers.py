@@ -140,10 +140,15 @@ def make_test_creative(
     principal_id: str = "principal_456",
     status: str = "approved",
     tags: list[str] | None = None,
+    assets: dict | None = None,
 ) -> Creative:  # type: ignore[name-defined]
     """Build a Creative model with standard fields for serialization tests.
 
     Shared between test_creative_response_serialization and test_list_creatives_serialization.
+
+    ``assets`` overrides the default single-banner slot map — pass
+    ``build_assets(...)`` output (e.g. ``image_spec("banner").with_fields(alt_text=None)``)
+    so asset shapes stay declared through AssetSpec rather than hand-rolled here.
     """
     from src.core.schemas import Creative
 
@@ -152,7 +157,9 @@ def make_test_creative(
         "variants": [],
         "name": name,
         "format": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
-        "assets": build_assets(image_spec("banner", url="https://example.com/banner.jpg")),
+        "assets": build_assets(image_spec("banner", url="https://example.com/banner.jpg"))
+        if assets is None
+        else assets,
         "principal_id": principal_id,
         "created_date": datetime.now(UTC),
         "updated_date": datetime.now(UTC),

@@ -43,3 +43,11 @@ class AuthorizedPropertiesEnv(IntegrationEnv):
     def call_a2a(self, **kwargs: Any) -> Any:
         """Dispatch list_authorized_properties through the REAL A2A pipeline."""
         return self._run_a2a_handler("list_authorized_properties", ListAuthorizedPropertiesResponse, **kwargs)
+
+    def call_mcp(self, **kwargs: Any) -> Any:
+        """Call list_authorized_properties via Client(mcp) — full pipeline dispatch."""
+        return self._run_mcp_client("list_authorized_properties", ListAuthorizedPropertiesResponse, **kwargs)
+
+    def parse_rest_response(self, data: dict[str, Any]) -> ListAuthorizedPropertiesResponse:
+        """Parse REST JSON into ListAuthorizedPropertiesResponse."""
+        return ListAuthorizedPropertiesResponse(**data)

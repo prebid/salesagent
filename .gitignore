@@ -110,12 +110,13 @@ server.pid
 conductor_ports.json
 conductor_ports.lock
 
-# AdCP Schema Cache (downloaded on demand by E2E tests)
-/schemas/
-tests/e2e/schemas/
 
 # Test response files
 line_item_*_response.json
+
+# Generated compliance report (tests/e2e/test_adcp_schema_compliance.py::test_save_compliance_report
+# writes to Path(__file__).parent / "schemas" / "compliance_report.json")
+tests/e2e/schemas/
 
 # Test database files (PostgreSQL test databases)
 # Only ignore database files/dirs, not test_*.py files

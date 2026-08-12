@@ -2055,6 +2055,17 @@ def _add_inline_creatives(ctx: dict, count: int = 1, fmt_id: str = "display_300x
                     },
                     "assets": {
                         "primary": {
+                            # asset_type is REQUIRED by the pinned 3.1.1 asset schema
+                            # (core/assets/image-asset.json: required =
+                            # [asset_type, url, width, height]) and is the union
+                            # discriminator every AssetVariant resolves on. Omitting it
+                            # made this Given — named "a VALID create_media_buy request
+                            # with inline creatives" — build a structurally INVALID
+                            # creative: every consumer died at "Unable to extract tag
+                            # using discriminator 'asset_type'" before reaching any
+                            # content validation, so ext-g's missing-URL scenario never
+                            # exercised the URL check it exists to grade.
+                            "asset_type": "image",
                             "url": f"https://example.com/banner-{i + 1}.png",
                             "width": 300,
                             "height": 250,

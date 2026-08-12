@@ -8,12 +8,20 @@ NestedModelSerializerMixin (a real @model_serializer(mode="wrap") hook) gets
 its unset optional fields filtered on that path — anything else leaks null
 top-level fields on the wire.
 
-This guard pins the disease pattern going forward: every
-ToolResult(structured_content=...) call site in src/core/tools/ must resolve
-to response class(es) that either carry the mixin or are on the small,
-reasoned ALLOWLIST below. The non-vacuity count assertion means a brand-new
-call site fails loud (forcing a deliberate MIGRATE/ALLOWLIST decision) rather
-than silently inheriting the bug.
+This guard pins the disease pattern going forward: every MCP wrapper in
+src/core/tools/ that hands a response to structured_content must resolve to
+response class(es) that either carry the mixin or are on the small, reasoned
+ALLOWLIST below. The non-vacuity count assertion means a brand-new call site
+fails loud (forcing a deliberate MIGRATE/ALLOWLIST decision) rather than
+silently inheriting the bug.
+
+Since GH #1868 the wrappers reach that serializer through the shared helper
+``src/core/tools/_mcp.py::mcp_result`` rather than constructing ``ToolResult``
+each — so the scan below matches ``mcp_result(...)`` call sites. That is the
+same fifteen wrappers, and the same fifteen response classes, under one layer
+of indirection; the complementary "only _mcp.py may build a ToolResult"
+boundary rule belongs to
+tests/unit/test_guards_toolresult_structured_content_model_dump.py.
 """
 
 from __future__ import annotations
@@ -109,14 +117,27 @@ def _carries_mixin(cls: type) -> bool:
 
 
 def _find_toolresult_sites(tree: ast.Module) -> list[tuple[str, int]]:
-    """Return (enclosing_function_name, lineno) for structured_content= calls."""
+    """Return (enclosing_function_name, lineno) for MCP structured-content sites.
+
+    Scans for ``mcp_result(...)``, not ``ToolResult(structured_content=...)``:
+    GH #1868 collapsed the fifteen per-wrapper ``ToolResult`` constructions into
+    the single shared helper ``src/core/tools/_mcp.py::mcp_result``, which owns
+    the only ``ToolResult(structured_content=...)`` call in the codebase (that
+    one-site rule is main's own guard,
+    test_guards_toolresult_structured_content_model_dump.py — not restated here).
+
+    The wrapper call sites are still what THIS guard needs to enumerate: the
+    obligation is about which response CLASSES reach pydantic_core's serializer,
+    and that set is one-per-wrapper regardless of how many ToolResult
+    constructions implement it. Scanning the helper instead would collapse
+    fifteen distinct classes into one site and make the table below vacuous.
+    """
     sites: list[tuple[str, int]] = []
     for node in ast.walk(tree):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        for call in iter_call_expressions(node, "ToolResult"):
-            if any(kw.arg == "structured_content" for kw in call.keywords):
-                sites.append((node.name, call.lineno))
+        for call in iter_call_expressions(node, "mcp_result"):
+            sites.append((node.name, call.lineno))
     return sites
 
 
@@ -137,9 +158,9 @@ class TestMcpNullFieldLeakGuard:
     def test_meta_scan_matches_known_site_count(self) -> None:
         """Non-vacuity: the live scan must find exactly the sites in the table.
 
-        A new ToolResult(structured_content=...) construction site (or a
-        renamed/removed one) fails here loudly, forcing a deliberate
-        MIGRATE/ALLOWLIST decision instead of silently inheriting the bug.
+        A new MCP wrapper reaching structured_content (or a renamed/removed
+        one) fails here loudly, forcing a deliberate MIGRATE/ALLOWLIST decision
+        instead of silently inheriting the bug.
         """
         found = _scan_all_sites()
         found_keys = {(file, func) for file, func, _lineno in found}
@@ -147,7 +168,7 @@ class TestMcpNullFieldLeakGuard:
 
         new = found_keys - known_keys
         missing = known_keys - found_keys
-        assert not new, f"New ToolResult(structured_content=...) site(s) not in _TOOLRESULT_SITES: {sorted(new)}"
+        assert not new, f"New mcp_result(...) site(s) not in _TOOLRESULT_SITES: {sorted(new)}"
         assert not missing, f"_TOOLRESULT_SITES site(s) no longer found by the scan: {sorted(missing)}"
 
     def test_every_response_class_omits_null_or_is_allowlisted(self) -> None:
@@ -173,24 +194,31 @@ class TestMcpNullFieldLeakGuardMetaTests:
     """Positive + negative meta-tests for the detector itself (syntactic guard,
     no regex — AST call-site matching is exact, so no regex-slip case applies)."""
 
-    def test_detects_toolresult_structured_content_call(self) -> None:
+    def test_detects_mcp_result_call(self) -> None:
         source = """
 def my_wrapper():
-    return ToolResult(content=str(response), structured_content=response)
+    return mcp_result(response, content=str(response))
 """
         tree = ast.parse(source)
         sites = _find_toolresult_sites(tree)
         assert sites == [("my_wrapper", 3)]
 
-    def test_ignores_toolresult_without_structured_content(self) -> None:
+    def test_ignores_raw_toolresult_construction(self) -> None:
+        """A direct ToolResult(...) is NOT this guard's site any more.
+
+        Post-#1868 only ``_mcp.py`` may construct one, and that one-site rule is
+        graded by test_guards_toolresult_structured_content_model_dump.py. If
+        this detector still counted raw constructions it would double-report the
+        helper's own line as a fifteen-class site.
+        """
         source = """
 def my_wrapper():
-    return ToolResult(content="just text")
+    return ToolResult(content=str(response), structured_content=response)
 """
         tree = ast.parse(source)
         assert _find_toolresult_sites(tree) == []
 
-    def test_ignores_non_toolresult_calls(self) -> None:
+    def test_ignores_non_mcp_result_calls(self) -> None:
         source = """
 def my_wrapper():
     return SomethingElse(structured_content=response)

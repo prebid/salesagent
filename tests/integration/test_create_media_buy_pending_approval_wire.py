@@ -9,8 +9,8 @@ protocol envelope status is "submitted" — so the wire asserts the seller
 CONFIRMED (confirmed_at set, revision issued) a buy that is awaiting human
 approval and not yet committed.
 
-Spec grounding (pinned 3.1.1,
-tests/fixtures/adcp_schemas_pinned/media-buy/create-media-buy-response.json):
+Spec grounding (pinned 3.1.1, the installed adcp SDK's
+media-buy/create-media-buy-response.json, read via tests.helpers.pinned_schema):
 the response oneOf has exactly three mutually exclusive shapes; the pending
 case is "CreateMediaBuySubmitted" — required ``status`` (const "submitted") +
 ``task_id``; "the media_buy_id and packages land on the task's completion

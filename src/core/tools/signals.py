@@ -9,7 +9,6 @@ import time
 import uuid
 
 from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 
 from src.core.exceptions import (
     AdCPAdapterError,
@@ -39,6 +38,7 @@ from src.core.schemas import (
     SignalDeployment,
 )
 from src.core.testing_hooks import AdCPTestContext
+from src.core.tools._mcp import mcp_result
 from src.core.transport_helpers import resolve_identity_from_context
 
 
@@ -215,7 +215,7 @@ async def get_signals(req: GetSignalsRequest, context: Context | ToolContext | N
     """
     identity = resolve_identity_from_context(context, require_valid_token=False)
     response = await _get_signals_impl(req, identity)
-    return ToolResult(content=str(response), structured_content=response)
+    return mcp_result(response)
 
 
 def _build_activate_signal_request(
@@ -338,7 +338,7 @@ async def activate_signal(
     identity = resolve_identity_from_context(ctx)
     req = _build_activate_signal_request(signal_agent_segment_id, campaign_id, media_buy_id, context)
     response = await _activate_signal_impl(req=req, identity=identity)
-    return ToolResult(content=str(response), structured_content=response)
+    return mcp_result(response)
 
 
 async def get_signals_raw(

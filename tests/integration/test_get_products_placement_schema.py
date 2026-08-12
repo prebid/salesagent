@@ -20,26 +20,28 @@ the JSON schema artifact, not the SDK Pydantic model (which is not authoritative
 
 from __future__ import annotations
 
-import json
-import os
 from typing import Any
 
-import adcp
 import pytest
 from jsonschema.validators import Draft7Validator
 
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.harness.product import ProductEnv
 from tests.harness.transport import Transport
+from tests.helpers import pinned_schema
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 def _placement_validator() -> Draft7Validator:
-    """Draft-07 validator for the adcp 3.1.1 placement schema bundled in adcp==6.6.0."""
-    schema_path = os.path.join(os.path.dirname(adcp.__file__), "_schemas", "3.1", "core", "placement.json")
-    schema = json.loads(open(schema_path).read())
-    return Draft7Validator(schema)
+    """Draft-07 validator for the pinned spec version's placement schema, with full $ref resolution.
+
+    placement.json refs 6 sibling schemas (format-id.json, product-format-declaration.json,
+    and 4 enum files under ../enums/) — delegating to tests.helpers.pinned_schema (this
+    repo's single source of truth for pinned-schema resolution) wires those refs through
+    a real registry instead of constructing a bare, ref-blind Draft7Validator.
+    """
+    return pinned_schema.validator_for("core/placement.json")
 
 
 def _assert_placement_schema_valid(placement: dict[str, Any]) -> None:
@@ -51,6 +53,36 @@ def _assert_placement_schema_valid(placement: dict[str, Any]) -> None:
         )
         raise AssertionError(
             f"Emitted placement is not valid against adcp 3.1.1 placement.json:\n{placement}\n{details}"
+        )
+
+
+def test_placement_validator_resolves_format_ids_ref():
+    """A placement with format_ids populated actually exercises placement.json's $ref to
+    format-id.json — a bare, registry-less Draft7Validator only ever "passed" placements
+    that happened not to populate any of the 6 sibling-schema refs (format_ids,
+    format_options, video/audio/sponsored/social placement types); this pins that the ref
+    is genuinely resolved and enforced, not silently skipped.
+    """
+    _assert_placement_schema_valid(
+        {
+            "kind": "seller_inline",
+            "placement_id": "homepage_atf",
+            "mode": "targetable",
+            "name": "Homepage Above the Fold",
+            "format_ids": [{"agent_url": "https://example.com", "id": "display_300x250"}],
+        }
+    )
+    with pytest.raises(AssertionError):
+        # Missing format-id.json's required "id" — must be caught, not waved through
+        # by an unresolved $ref degrading to an always-valid schema.
+        _assert_placement_schema_valid(
+            {
+                "kind": "seller_inline",
+                "placement_id": "homepage_atf",
+                "mode": "targetable",
+                "name": "Homepage Above the Fold",
+                "format_ids": [{"agent_url": "https://example.com"}],
+            }
         )
 
 

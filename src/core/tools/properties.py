@@ -13,7 +13,6 @@ from typing import Any
 
 from adcp.types import ContextObject
 from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_tenant
@@ -24,6 +23,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListAuthorizedPropertiesRequest, ListAuthorizedPropertiesResponse
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
+from src.core.tools._mcp import mcp_result
 from src.core.validation_helpers import safe_parse_json_field
 
 logger = logging.getLogger(__name__)
@@ -220,7 +220,7 @@ async def list_authorized_properties(
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _list_authorized_properties_impl(req, identity)
 
-    return ToolResult(content=str(response), structured_content=response)
+    return mcp_result(response)
 
 
 def list_authorized_properties_raw(

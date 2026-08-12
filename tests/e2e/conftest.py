@@ -131,12 +131,6 @@ def pytest_addoption(parser):
         default=False,
         help="Skip Docker setup and assume services are already running",
     )
-    parser.addoption(
-        "--offline-schemas",
-        action="store_true",
-        default=False,
-        help="Use cached AdCP schemas only (no network requests for schema validation)",
-    )
 
 
 @pytest.fixture(scope="session")
@@ -354,16 +348,36 @@ def docker_services_e2e(request):
     # Initialize CI test data now that services are healthy
     print("📦 Initializing CI test data (products, principals, etc.)...")
 
+    # CRITICAL: when neither E2E_DATABASE_URL nor a genuinely-e2e DATABASE_URL
+    # is set, e2e_db_url() falls back to localhost:<postgres_port>/adcp — the
+    # exact host-published address of THIS stack's own postgres (postgres_port
+    # resolved above by either branch). But a test runner that already has an
+    # unrelated DATABASE_URL set (e.g. a suite DB provisioned by the CI
+    # offload harness for unit/integration/bdd) leaks it into this process's
+    # os.environ, and e2e_db_url() prefers that stale value over the e2e
+    # stack's own DB — so init_database_ci.py silently seeds a database
+    # nothing else reads while the running adcp-server (DATABASE_URL fixed to
+    # its own postgres inside the container) stays empty. setdefault() only
+    # fills the gap when E2E_DATABASE_URL is genuinely absent (this leak
+    # case) — a real in-network run that already sets it (compose service
+    # name, not a published port) is left untouched (#1838 review).
+    os.environ.setdefault(
+        "E2E_DATABASE_URL", f"postgresql://adcp_user:secure_password_change_me@localhost:{postgres_port}/adcp"
+    )
+
     # Setup environment for init script - reuse existing env if available, else create minimal
     init_env = os.environ.copy()
     init_env["ADCP_SALES_PORT"] = str(mcp_port)
     init_env["POSTGRES_PORT"] = str(postgres_port)
+    init_env["DATABASE_URL"] = e2e_db_url(postgres_port)
 
     # Seed CI test data. On the host we shell into the server container via
     # docker-compose exec (the host process can't reach the container DB
-    # directly). In-network there is no docker-compose binary, but the runner
-    # already has DATABASE_URL=postgres:5432 and the source, so it runs the seed
-    # script itself — the script only needs a DB connection, not Docker.
+    # directly) — that path uses the container's own DATABASE_URL, already
+    # correct, and ignores init_env. In-network there is no docker-compose
+    # binary, so it runs the seed script itself using init_env above (which
+    # carries the corrected DATABASE_URL set above) — the script only needs a
+    # DB connection, not Docker.
     import shutil
 
     if shutil.which("docker-compose"):
@@ -662,15 +676,11 @@ def performance_monitor():
 
 
 @pytest.fixture
-async def adcp_validator(request):
-    """Provide AdCP schema validator with offline mode support.
+async def adcp_validator():
+    """Provide the AdCP schema validator (pinned to the installed SDK's schemas)."""
+    from tests.helpers.adcp_schema_validator import AdCPSchemaValidator
 
-    Use --offline-schemas flag to use cached schemas only (no network requests).
-    """
-    from tests.e2e.adcp_schema_validator import AdCPSchemaValidator
-
-    offline = request.config.getoption("--offline-schemas")
-    async with AdCPSchemaValidator(offline_mode=offline) as validator:
+    async with AdCPSchemaValidator() as validator:
         yield validator
 
 

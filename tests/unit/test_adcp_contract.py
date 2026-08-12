@@ -341,7 +341,7 @@ class TestAdCPContract:
                 "timezone": "UTC",
                 "supports_webhooks": True,
                 "available_metrics": ["impressions", "clicks"],
-                "date_range_support": {"minimum_days": 1, "maximum_days": 90},
+                "date_range_support": "date_range",
             },  # Required per AdCP 4.3 spec
         }
 
@@ -2799,7 +2799,7 @@ class TestProductV36FieldContract:
     - product_card (optional): presence-when-set + absence-when-null
     - product_card_detailed (optional): presence-when-set + absence-when-null
     - placements (optional): presence-when-set + absence-when-null
-    - reporting_capabilities (optional): presence-when-set + absence-when-null
+    - reporting_capabilities (REQUIRED): always present, validated default when unset
     - signal_targeting_allowed (optional, default=False): presence + default
     - property_targeting_allowed (optional, default=False): presence + default
     - catalog_match (optional): presence-when-set + absence-when-null
@@ -2998,13 +2998,23 @@ class TestProductV36FieldContract:
         assert dump["placements"][0]["name"] == "Top Banner"
         assert dump["placements"][1]["placement_id"] == "sidebar"
 
-    # --- reporting_capabilities (required in adcp 4.3) ---
+    # --- reporting_capabilities (REQUIRED, validated default_factory on the model) ---
 
-    def test_reporting_capabilities_present_when_null(self):
-        """reporting_capabilities always in model_dump (required in adcp 4.3)."""
+    def test_reporting_capabilities_always_present(self):
+        """reporting_capabilities is never omitted from model_dump(), even when unset.
+
+        The pinned core/product.json's top-level required array lists
+        reporting_capabilities unconditionally (unlike format_ids, which is
+        only required via anyOf with format_options) — it is a genuine
+        AdCP-schema requirement, not merely a wire-layer one. Product's field
+        carries a validated default_factory, so a caller that doesn't know the
+        value yet still produces schema-valid output — and the attribute holds
+        the same value the wire reports.
+        """
         product = self._make_base_product()
         dump = product.model_dump()
         assert "reporting_capabilities" in dump
+        assert dump["reporting_capabilities"] is not None
 
     def test_reporting_capabilities_present_when_set(self):
         """reporting_capabilities appears in model_dump with correct structure."""
@@ -3283,7 +3293,8 @@ class TestProductV36FieldContract:
         dump = schema.model_dump()
 
         # None-valued optional fields should be omitted from dump
-        # reporting_capabilities is required in adcp 4.3 — always present with defaults
+        # reporting_capabilities is required in adcp 4.3 — the field's default_factory
+        # guarantees a validated value, so it is never among the absent fields
         absent_fields = [
             "channels",
             "product_card",

@@ -40,6 +40,7 @@ from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
+from src.core.tools._mcp import mcp_result
 from src.services.targeting_capabilities import supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
@@ -317,8 +318,7 @@ async def get_adcp_capabilities(
 
     summary = "\n".join(summary_parts)
 
-    # Return ToolResult with human-readable text and structured data
-    return ToolResult(content=summary, structured_content=response)
+    return mcp_result(response, content=summary)
 
 
 async def get_adcp_capabilities_raw(

@@ -276,11 +276,37 @@ Feature: BR-UC-002 Create Media Buy
     And the creative format is not generative
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error message should contain "URL"
+    And the error message should contain "valid URL"
     And the error should include "suggestion" field
+    And the suggestion should contain "URL"
     # POST-F1: System state is unchanged on failure
-    # POST-F2: Buyer knows what failed
-    # POST-F3: Buyer knows how to fix the issue
+    # POST-F2: Buyer knows what failed — graded by "valid URL", which appears only in
+    #   production's real statement about the empty url field
+    #   (assets.primary.AssetVariant.image.url: "Input should be a valid URL"). The
+    #   earlier assertion was the bare substring "URL", which pydantic satisfies by
+    #   echoing the offending input dict ({'url': ''...}) into its error repr — it
+    #   stayed green even when the creative died at the asset_type discriminator and
+    #   no URL check ever ran. "valid URL" does not appear in that repr.
+    # POST-F3: Buyer knows how to fix the issue — graded on the suggestion, which is
+    #   production's own buyer-facing prose rather than a pydantic artifact.
+    # NOTE: this scenario does NOT currently grade POST-F2, and deliberately does
+    # NOT pin an error code. Two reasons, both measured 2026-08-11:
+    #   1. `error message should contain "URL"` passes only because pydantic echoes
+    #      the offending input dict ({'url': ''...}) into its error repr — the
+    #      buyer-facing prose never names a URL. Redact the repr and it fails.
+    #   2. Production never reaches a URL check at all: it rejects at the assets
+    #      `asset_type` discriminator and emits CREATIVE_REJECTED. Do NOT pin that
+    #      observed code here. Nine sibling rows (INV-6 x3 + the v3.1 discriminator
+    #      boundary matrix x6) demand INVALID_REQUEST for the same condition, and
+    #      which side is correct is UNRESOLVED: those nine are dormant (xfailed on
+    #      harness wiring, #1652 — never run against production), their @source ref
+    #      points at a request schema that defines no error codes, and the pinned
+    #      3.1.1 ships no prose mandating a code for a parse failure. The only firm
+    #      spec input is enumMetadata semantics, which read against CREATIVE_REJECTED
+    #      ("revise the creative per the seller's advertising_policies" = a policy
+    #      verdict, not an unparseable asset). Pinning EITHER code from here would
+    #      pre-empt that decision — see salesagent-cxeu / the error-code
+    #      reconciliation epic.
     # --- ext-h: Format ID Validation Failure ---
 
   @T-UC-002-inv-015-6 @invariant @BR-RULE-015 @error

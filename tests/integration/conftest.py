@@ -569,9 +569,10 @@ mcp.run(transport='http', host='0.0.0.0', port={port})
 
     # The server's output goes to FILES, never PIPEs. A PIPE nobody drains caps
     # at 64KB; once server logging fills it, the server blocks on a log write
-    # INSIDE a request handler and the calling test awaits forever — this wedges
-    # the integration suite at its quiet tail until the run reaper kills it.
-    # Files keep the error-path diagnostics below without needing a drainer thread.
+    # INSIDE a request handler and the calling test awaits forever — this wedged
+    # every full CI run at integration's quiet tail until the >1h run reaper
+    # killed it (#1868 review). Files keep the error-path diagnostics below
+    # without needing a drainer thread.
     output_dir = Path(tempfile.mkdtemp(prefix=f"mcp-server-{port}-"))
     stdout_path = output_dir / "stdout.log"
     stderr_path = output_dir / "stderr.log"
@@ -606,23 +607,30 @@ mcp.run(transport='http', host='0.0.0.0', port={port})
     start_time = time.time()
     server_ready = False
 
-    while time.time() - start_time < max_wait:
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(1)
-                s.connect(("localhost", port))
-                server_ready = True
-                break
-        except (ConnectionRefusedError, OSError):
-            # Check if process has died
-            if process.poll() is not None:
-                raise RuntimeError(f"MCP server process died unexpectedly.\n{_server_output()}")
-            time.sleep(0.3)
+    try:
+        while time.time() - start_time < max_wait:
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(1)
+                    s.connect(("localhost", port))
+                    server_ready = True
+                    break
+            except (ConnectionRefusedError, OSError):
+                # Check if process has died
+                if process.poll() is not None:
+                    raise RuntimeError(f"MCP server process died unexpectedly.\n{_server_output()}")
+                time.sleep(0.3)
 
-    if not server_ready:
-        process.kill()
-        process.wait(timeout=5)
-        raise RuntimeError(f"MCP server failed to start on port {port} within {max_wait}s.\n{_server_output()}")
+        if not server_ready:
+            process.kill()
+            process.wait(timeout=5)
+            raise RuntimeError(f"MCP server failed to start on port {port} within {max_wait}s.\n{_server_output()}")
+    except BaseException:
+        # Both raise points above happen before yield, so pytest's generator-fixture
+        # teardown (the code after yield, including shutil.rmtree(output_dir) below)
+        # never runs for them -- clean up here instead, on every setup-failure path.
+        shutil.rmtree(output_dir, ignore_errors=True)
+        raise
 
     # Return server info
     class ServerInfo:
