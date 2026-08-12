@@ -14,9 +14,12 @@ transports are not silently dropped from coverage.
 Report-bucket vocabulary (intentional split, same underlying coverage grade):
 ``bdd_full_audit`` labels partial xpass as ``PARTIAL_XPASS`` / full as
 ``GRADUATE`` / confirm as ``GRADUATE_CONFIRM``; ``audit_xfails`` keeps
-``PARTIAL_PASS`` / ``STALE`` / ``STALE_CONFIRM``. Do not unify the report
-tokens without a deliberate cross-script rename. The shared ``grade_base``
-helper owns the confirmation gate so both classifiers cannot drift.
+``PARTIAL_PASS`` / ``STALE`` / ``STALE_CONFIRM``; ``graduate_pending`` uses
+``graduate_all`` / ``graduate_confirm`` / ``graduate_partial`` for the same
+three ``grade_base`` buckets (apply/report dialect, not a fourth grade). Do
+not unify the report tokens without a deliberate cross-script rename. The
+shared ``grade_base`` helper owns the confirmation gate so classifiers cannot
+drift.
 
 Canonical conftest tag parsing lives here as ``parse_conftest_xfail_tags``
 (``tag → TagReason``). Callers that only need reasons use
@@ -285,31 +288,35 @@ def load_e2e_rest_known_failure_bases(ledger_path: Path) -> set[str]:
     return bases
 
 
+class EmptyArtifactError(Exception):
+    """Raised when bdd.json has zero tests (library seam — no SystemExit)."""
+
+    MESSAGE = 'ERROR: artifact contains 0 tests — refusing empty {"tests": []}.'
+
+    def __init__(self, message: str = MESSAGE) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+FORCE_CONFIRM_WARNING = "WARNING: e2e_rest appears for no base — every graduation routes to confirm."
+
+
 def load_bdd_artifact(path: Path) -> LoadedArtifact:
     """Load bdd.json with the shared empty-artifact guard and transport census.
 
-    Empty ``{"tests": []}`` is indistinguishable from a clean run — refuse with
-    exit 2 and one canonical stderr message. When ``e2e_rest`` is absent from
-    the whole artifact, ``force_confirm`` is True and a single warning is
-    emitted on stderr so all four consumers grade identically.
+    Empty ``{"tests": []}`` is indistinguishable from a clean run — raise
+    ``EmptyArtifactError`` (CLI edge exits via ``cli_load_or_exit``). When
+    ``e2e_rest`` is absent from the whole artifact, ``force_confirm`` is True
+    on the returned record; stderr warning is CLI-only.
     """
     data = json.loads(path.read_text(encoding="utf-8"))
     tests = list(data.get("tests") or [])
     if not tests:
-        print(
-            'ERROR: artifact contains 0 tests — refusing empty {"tests": []}.',
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
+        raise EmptyArtifactError()
 
     nodeid_outcomes = [(t["nodeid"], t["outcome"]) for t in tests]
     census = artifact_transport_census(nodeid_outcomes)
     force_confirm = census.incomplete_e2e
-    if force_confirm:
-        print(
-            "WARNING: e2e_rest appears for no base — every graduation routes to confirm.",
-            file=sys.stderr,
-        )
     root = data.get("root")
     artifact_root = root if isinstance(root, str) else None
     return LoadedArtifact(
@@ -318,6 +325,18 @@ def load_bdd_artifact(path: Path) -> LoadedArtifact:
         force_confirm=force_confirm,
         artifact_root=artifact_root,
     )
+
+
+def cli_load_or_exit(path: Path) -> LoadedArtifact:
+    """CLI edge: load artifact or print canonical empty message and exit 2."""
+    try:
+        loaded = load_bdd_artifact(path)
+    except EmptyArtifactError as exc:
+        print(exc.message, file=sys.stderr)
+        raise SystemExit(2) from exc
+    if loaded.force_confirm:
+        print(FORCE_CONFIRM_WARNING, file=sys.stderr)
+    return loaded
 
 
 def grade_base(

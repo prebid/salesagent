@@ -29,6 +29,8 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from bdd_audit_common import (  # noqa: E402
+    LoadedArtifact,
+    cli_load_or_exit,
     extract_longrepr_e_line,
     extract_transport,
     extract_uc,
@@ -73,11 +75,15 @@ def parse_inspector_json(path: Path) -> list[InspectorFlag]:
     return flags
 
 
-def parse_test_results(path: Path) -> list[TestOutcome]:
-    """Parse bdd.json test results via shared ``load_bdd_artifact``."""
-    loaded = load_bdd_artifact(path)
+def parse_test_results(path: Path, *, loaded: LoadedArtifact | None = None) -> list[TestOutcome]:
+    """Parse bdd.json test results via shared ``load_bdd_artifact``.
+
+    Pass ``loaded`` from ``cli_load_or_exit`` at the CLI edge to avoid a
+    second read (and to keep SystemExit out of the library path).
+    """
+    artifact = loaded if loaded is not None else load_bdd_artifact(path)
     outcomes = []
-    for t in loaded.tests:
+    for t in artifact.tests:
         nodeid = t["nodeid"]
         transport = extract_transport(nodeid)
 
@@ -212,8 +218,8 @@ def main():
     print(f"  {len(flags)} flags", file=sys.stderr)
 
     print("Parsing test results...", file=sys.stderr)
-    # load_bdd_artifact (via parse_test_results) owns empty guard + census warning
-    outcomes = parse_test_results(Path(args.results))
+    loaded = cli_load_or_exit(Path(args.results))
+    outcomes = parse_test_results(Path(args.results), loaded=loaded)
     print(f"  Parsed {len(outcomes)} tests", file=sys.stderr)
 
     print("Generating cross-reference...", file=sys.stderr)

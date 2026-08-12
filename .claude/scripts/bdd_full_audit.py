@@ -32,6 +32,7 @@ from bdd_audit_common import (  # noqa: E402
     CONFTEST_PATH,
     E2E_LEDGER_PATH,
     REPO_ROOT,
+    cli_load_or_exit,
     extract_longrepr_e_line,
     extract_scenario_base,
     extract_transport,
@@ -159,14 +160,6 @@ def parse_inspector_reports() -> list[InspectorFlag]:
                 )
             )
     return flags
-
-
-def parse_conftest_xfail_tags(conftest_path: Path | None = None) -> dict[str, str]:
-    """Parse conftest.py for tag → reason mappings (shared projection)."""
-    path = conftest_path or CONFTEST_PATH
-    if not path.exists():
-        return {}
-    return tag_reasons(path)
 
 
 # ── Classification ───────────────────────────────────────────────────
@@ -632,7 +625,7 @@ def main():
     conftest_path = Path(args.conftest)
 
     print("Parsing test results...", file=sys.stderr)
-    loaded = load_bdd_artifact(json_path)
+    loaded = cli_load_or_exit(json_path)
     entries = [_test_entry_from_raw(t) for t in loaded.tests]
     summary = Counter(e.outcome for e in entries)
     print(f"  Parsed {len(entries)} tests: {dict(summary)}", file=sys.stderr)
@@ -643,7 +636,7 @@ def main():
     force_confirm = loaded.force_confirm
 
     print("Parsing conftest xfail tags...", file=sys.stderr)
-    tag_reasons_map = parse_conftest_xfail_tags(conftest_path)
+    tag_reasons_map = tag_reasons(conftest_path) if conftest_path.exists() else {}
     print(f"  {len(tag_reasons_map)} tag reasons", file=sys.stderr)
 
     ledger_bases = load_e2e_rest_known_failure_bases(Path(args.e2e_ledger))

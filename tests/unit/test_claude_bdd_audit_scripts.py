@@ -247,6 +247,21 @@ class TestClassifyXpass:
         result = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
         assert result.category == "PARTIAL_XPASS"
 
+    def test_skipped_outline_example_blocks_graduation(self, bdd_full_audit, bdd_audit_common) -> None:
+        """``skipped`` in the outcome vocabulary must block transport graduation."""
+        all_entries = [
+            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_o[e2e_rest-ex1]", "skipped"),
+            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_o[e2e_rest-ex2]", "xpassed"),
+        ]
+        result = bdd_full_audit.classify_xpass(all_entries[1], all_entries)
+        assert result.category == "PARTIAL_XPASS"
+        grade = bdd_audit_common.grade_base(
+            "tests/bdd/test_uc004.py::test_o",
+            [(e.nodeid, e.outcome) for e in all_entries],
+        )
+        assert "e2e_rest" not in grade.passing
+        assert "e2e_rest" in grade.missing
+
     def test_strict_subset_is_partial_xpass(self, bdd_full_audit) -> None:
         all_entries = [
             self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_s[a2a]", "xpassed"),
@@ -403,6 +418,19 @@ class TestClassifyXpassedAudit:
         assert buckets.graduate == set()
         assert buckets.confirm == set()
 
+    def test_skipped_outline_example_blocks_graduation(self, audit_xfails) -> None:
+        """``skipped`` must keep the transport out of ``passing`` / graduate."""
+        base = "tests/bdd/test_uc004.py::test_outline"
+        all_tests = [
+            {"nodeid": f"{base}[e2e_rest-ex1]", "outcome": "skipped"},
+            {"nodeid": f"{base}[e2e_rest-ex2]", "outcome": "xpassed"},
+        ]
+        buckets = audit_xfails.classify_xpassed(all_tests)
+        assert buckets.graduate == set()
+        assert buckets.confirm == set()
+        assert buckets.partial_passing.get(base, set()) == set()
+        assert "e2e_rest" in buckets.partial_missing.get(base, set())
+
     def test_mixed_examples_routed_to_partial(self, audit_xfails) -> None:
         base = "tests/bdd/test_uc004.py::test_s"
         # worst for a2a is xfailed → mixed_examples (no passing)
@@ -473,7 +501,7 @@ class TestParseTestResultsCallSites:
                             "nodeid": "tests/bdd/test_uc004.py::test_s[e2e_rest]",
                             "outcome": "xpassed",
                             "keywords": [],
-                            "call": {"longrepr": None},
+                            "call": {"longrepr": "E   AssertionError: boom\n other"},
                         }
                     ]
                 }
@@ -481,8 +509,8 @@ class TestParseTestResultsCallSites:
         )
         entries = bdd_full_audit.parse_test_results(report)
         assert len(entries) == 1
-        assert entries[0].error == ""
-        assert entries[0].longrepr == ""
+        assert entries[0].error == "AssertionError: boom"
+        assert "AssertionError: boom" in entries[0].longrepr
         assert bdd_full_audit.extract_transport(entries[0].nodeid) == "e2e_rest"
 
     def test_cross_reference_parse_round_trip(self, cross_reference_audit, tmp_path: Path) -> None:
@@ -559,6 +587,7 @@ class TestCrashMessageClassification:
         assert "harness not" not in test["setup"]["crash"]["message"].lower()
         entry = audit_xfails.classify_xfail(test, {}, [])
         assert entry.category == "HARNESS_GAP"
+        assert entry.xfail_source == "conftest:auto"
 
     def test_harness_gap_from_harness_not_wired_without_yet(self, audit_xfails) -> None:
         """Pin ``harness not wired`` (no ``yet``) as its own disjunct."""
@@ -572,6 +601,26 @@ class TestCrashMessageClassification:
         assert "No harness environment" not in test["setup"]["crash"]["message"]
         entry = audit_xfails.classify_xfail(test, {}, [])
         assert entry.category == "HARNESS_GAP"
+        assert entry.xfail_source == "conftest:auto"
+
+    def test_deterministic_tag_order_picks_lower_sorted_tag(self, audit_xfails, bdd_audit_common) -> None:
+        """Two conflicting tags: ``sorted(tags)`` must pick the lower-sorted key."""
+        test = _json_report_test(
+            "/x",
+            1,
+            phase="setup",
+            message="xfail: tagged",
+            nodeid="t::s[a2a]",
+            keywords=["T-UC-004-b-partition", "T-UC-004-a-production"],
+        )
+        tag_map = {
+            "T-UC-004-b-partition": bdd_audit_common.TagReason("partition arm", "partial_impl"),
+            "T-UC-004-a-production": bdd_audit_common.TagReason("production arm", "production_gap"),
+        }
+        entry = audit_xfails.classify_xfail(test, tag_map, [])
+        assert entry.category == "PRODUCTION_GAP"
+        assert entry.xfail_source == "conftest:tag:T-UC-004-a-production"
+        assert entry.reason == "production arm"
 
     def test_missing_step_from_crash_message(self, audit_xfails) -> None:
         # Real pytest-bdd wording is "Step definition is not found" (not "not
@@ -1026,8 +1075,15 @@ class TestArtifactCensusAndLedger:
     def test_load_bdd_artifact_empty_refuses(self, bdd_audit_common, tmp_path: Path) -> None:
         report = tmp_path / "empty.json"
         report.write_text(json.dumps({"tests": []}))
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(bdd_audit_common.EmptyArtifactError) as exc:
             bdd_audit_common.load_bdd_artifact(report)
+        assert "0 tests" in exc.value.message
+
+    def test_cli_load_or_exit_empty_exits_2(self, bdd_audit_common, tmp_path: Path) -> None:
+        report = tmp_path / "empty.json"
+        report.write_text(json.dumps({"tests": []}))
+        with pytest.raises(SystemExit) as exc:
+            bdd_audit_common.cli_load_or_exit(report)
         assert exc.value.code == 2
 
     def test_load_bdd_artifact_sets_force_confirm(self, bdd_audit_common, tmp_path: Path) -> None:
@@ -1081,11 +1137,13 @@ class TestArtifactCensusAndLedger:
 class TestGraduatePendingAnalyze:
     """Pin graduate_pending.analyze three-way split + empty refusal."""
 
-    def test_empty_artifact_exits_2(self, graduate_pending, tmp_path: Path) -> None:
+    def test_empty_artifact_exits_2(self, graduate_pending, bdd_audit_common, tmp_path: Path) -> None:
         report = tmp_path / "empty.json"
         report.write_text(json.dumps({"tests": []}))
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(bdd_audit_common.EmptyArtifactError):
             graduate_pending.analyze(str(report))
+        with pytest.raises(SystemExit) as exc:
+            bdd_audit_common.cli_load_or_exit(report)
         assert exc.value.code == 2
 
     def test_three_way_split_and_ledger(self, graduate_pending, tmp_path: Path) -> None:

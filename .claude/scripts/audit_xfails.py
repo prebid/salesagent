@@ -60,6 +60,7 @@ from bdd_audit_common import (  # noqa: E402
     REPO_ROOT,
     STEPS_DIR,
     TagReason,
+    cli_load_or_exit,
     extract_scenario_base,
     extract_transport,
     extract_uc,
@@ -668,16 +669,17 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
     }
     # Single owner for column / stderr category order (by_uc table + SUMMARY).
     xfail_categories = tuple(category_desc.keys())
-    by_uc_categories = (
-        "PRODUCTION_GAP",
-        "TRANSPORT_GAP",
-        "HARNESS_GAP",
-        "PARTIAL_IMPL",
-        "MISSING_STEP",
-        "PREMATURE_XFAIL",
-        "STALE",
-        "STALE_CONFIRM",
-        "UNCLASSIFIED",
+    # Single owner for by-UC markdown columns (category + header abbrev).
+    by_uc_columns = (
+        ("PRODUCTION_GAP", "PROD_GAP"),
+        ("TRANSPORT_GAP", "TRANSPORT"),
+        ("HARNESS_GAP", "HARNESS"),
+        ("PARTIAL_IMPL", "PARTIAL"),
+        ("MISSING_STEP", "MISSING"),
+        ("PREMATURE_XFAIL", "PREMATURE"),
+        ("STALE", "STALE"),
+        ("STALE_CONFIRM", "STALE_CONFIRM"),
+        ("UNCLASSIFIED", "UNCLASS"),
     )
 
     for cat in xfail_categories:
@@ -687,25 +689,14 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
         lines.append(f"| {cat} | {len(entries)} | {pct:.0f}% | {desc} |")
 
     lines.extend(["", "### By use case", ""])
-    header_labels = [
-        "PROD_GAP",
-        "TRANSPORT",
-        "HARNESS",
-        "PARTIAL",
-        "MISSING",
-        "PREMATURE",
-        "STALE",
-        "STALE_CONFIRM",
-        "UNCLASS",
-    ]
-    lines.append("| UC | " + " | ".join(header_labels) + " | Total |")
-    lines.append("|" + "|".join(["---"] * (len(by_uc_categories) + 2)) + "|")
+    lines.append("| UC | " + " | ".join(abbrev for _, abbrev in by_uc_columns) + " | Total |")
+    lines.append("|" + "|".join(["---"] * (len(by_uc_columns) + 2)) + "|")
 
     all_ucs = sorted(report.by_uc.keys())
     for uc in all_ucs:
         counts = report.by_uc[uc]
         total = sum(counts.values())
-        cells = " | ".join(str(counts.get(cat, 0)) for cat in by_uc_categories)
+        cells = " | ".join(str(counts.get(cat, 0)) for cat, _ in by_uc_columns)
         lines.append(f"| {uc} | {cells} | {total} |")
 
     # Xpassed section
@@ -826,9 +817,9 @@ def main() -> None:
         file=sys.stderr,
     )
 
-    # Step 3: Parse test results (shared empty guard + census)
+    # Step 3: Parse test results (shared empty guard + census; CLI exit edge)
     print(f"Parsing {json_path}...", file=sys.stderr)
-    loaded = load_bdd_artifact(json_path)
+    loaded = cli_load_or_exit(json_path)
     all_tests = cast(list[TestReportEntry], loaded.tests)
     xfailed_tests = [t for t in all_tests if t["outcome"] == "xfailed"]
     xpassed_tests = [t for t in all_tests if t["outcome"] == "xpassed"]

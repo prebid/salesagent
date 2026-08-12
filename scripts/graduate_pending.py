@@ -30,6 +30,8 @@ if str(_SCRIPTS_DIR) not in sys.path:
 
 from bdd_audit_common import (  # noqa: E402
     E2E_LEDGER_PATH,
+    LoadedArtifact,
+    cli_load_or_exit,
     extract_scenario_base,
     grade_base,
     load_bdd_artifact,
@@ -50,12 +52,14 @@ class GraduationAnalysis(TypedDict):
     force_confirm: bool
 
 
-def analyze(report_path: str, *, ledger_path: Path | None = None) -> GraduationAnalysis:
+def analyze(
+    report_path: str, *, ledger_path: Path | None = None, loaded: LoadedArtifact | None = None
+) -> GraduationAnalysis:
     """Analyze JSON report and return graduation candidates via shared grade_base."""
-    loaded = load_bdd_artifact(Path(report_path))
-    tests = loaded.tests
-    nodeid_outcomes = loaded.nodeid_outcomes
-    force_confirm = loaded.force_confirm
+    artifact = loaded if loaded is not None else load_bdd_artifact(Path(report_path))
+    tests = artifact.tests
+    nodeid_outcomes = artifact.nodeid_outcomes
+    force_confirm = artifact.force_confirm
     ledger = load_e2e_rest_known_failure_bases(ledger_path or E2E_LEDGER_PATH)
 
     # Collect tags per scenario base
@@ -198,7 +202,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    analysis = analyze(args.report_path, ledger_path=Path(args.e2e_ledger))
+    loaded = cli_load_or_exit(Path(args.report_path))
+    analysis = analyze(args.report_path, ledger_path=Path(args.e2e_ledger), loaded=loaded)
     print_report(analysis)
 
     if args.apply:
