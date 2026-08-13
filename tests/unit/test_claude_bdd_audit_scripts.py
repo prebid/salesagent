@@ -20,6 +20,7 @@ pytestmark = pytest.mark.infra
 SCRIPTS = Path(__file__).resolve().parents[2] / ".claude" / "scripts"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFTEST = REPO_ROOT / "tests" / "bdd" / "conftest.py"
+CAPTURED_SLICE = REPO_ROOT / "tests" / "fixtures" / "bdd_audit" / "captured_slice.json"
 
 # Canonical present-transport set for xpass fixtures (must not drift from
 # bdd_audit_common / conftest parametrize ids).
@@ -65,6 +66,59 @@ def _load(name: str, request: pytest.FixtureRequest | None = None):
 @pytest.fixture(scope="module")
 def bdd_audit_common(request):
     return _load("bdd_audit_common", request)
+
+
+@pytest.fixture(scope="module")
+def captured_bdd_slice() -> dict:
+    """One shared pytest-json-report-shaped ``bdd.json`` slice for classifier pins.
+
+    Production artifact *shape* (created/duration/setup/call/teardown, crash
+    messages, null longrepr) — not a thin hand-built dict per pin.
+    """
+    if not CAPTURED_SLICE.is_file():
+        pytest.fail(f"missing captured bdd.json fixture: {CAPTURED_SLICE}")
+    return json.loads(CAPTURED_SLICE.read_text(encoding="utf-8"))
+
+
+def _slice_entry(
+    captured_bdd_slice: dict,
+    *,
+    nodeid: str | None = None,
+    outcome: str | None = None,
+    nodeid_contains: str | None = None,
+) -> dict:
+    """Select exactly one test entry from the shared captured slice."""
+    matches = []
+    for entry in captured_bdd_slice["tests"]:
+        if nodeid is not None and entry["nodeid"] != nodeid:
+            continue
+        if outcome is not None and entry["outcome"] != outcome:
+            continue
+        if nodeid_contains is not None and nodeid_contains not in entry["nodeid"]:
+            continue
+        matches.append(entry)
+    assert len(matches) == 1, (
+        f"expected 1 slice entry (nodeid={nodeid!r} outcome={outcome!r} "
+        f"contains={nodeid_contains!r}), got {len(matches)}"
+    )
+    return matches[0]
+
+
+def _slice_entries(
+    captured_bdd_slice: dict,
+    *,
+    nodeid_contains: str | None = None,
+    outcomes: set[str] | None = None,
+) -> list[dict]:
+    """Select zero-or-more entries from the shared captured slice."""
+    selected = []
+    for entry in captured_bdd_slice["tests"]:
+        if nodeid_contains is not None and nodeid_contains not in entry["nodeid"]:
+            continue
+        if outcomes is not None and entry["outcome"] not in outcomes:
+            continue
+        selected.append(entry)
+    return selected
 
 
 @pytest.fixture(scope="module")
@@ -247,16 +301,18 @@ class TestClassifyXpass:
         result = bdd_full_audit.classify_xpass(all_entries[0], all_entries)
         assert result.category == "PARTIAL_XPASS"
 
-    def test_skipped_outline_example_blocks_graduation(self, bdd_full_audit, bdd_audit_common) -> None:
+    def test_skipped_outline_example_blocks_graduation(
+        self, bdd_full_audit, bdd_audit_common, captured_bdd_slice
+    ) -> None:
         """``skipped`` in the outcome vocabulary must block transport graduation."""
-        all_entries = [
-            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_o[e2e_rest-ex1]", "skipped"),
-            self._entry(bdd_full_audit, "tests/bdd/test_uc004.py::test_o[e2e_rest-ex2]", "xpassed"),
-        ]
-        result = bdd_full_audit.classify_xpass(all_entries[1], all_entries)
+        outline = _slice_entries(captured_bdd_slice, nodeid_contains="::test_outline[")
+        assert {e["outcome"] for e in outline} >= {"skipped", "xpassed"}
+        all_entries = [self._entry(bdd_full_audit, e["nodeid"], e["outcome"]) for e in outline]
+        xpassed = next(e for e in all_entries if e.outcome == "xpassed")
+        result = bdd_full_audit.classify_xpass(xpassed, all_entries)
         assert result.category == "PARTIAL_XPASS"
         grade = bdd_audit_common.grade_base(
-            "tests/bdd/test_uc004.py::test_o",
+            "tests/bdd/test_uc004.py::test_outline",
             [(e.nodeid, e.outcome) for e in all_entries],
         )
         assert "e2e_rest" not in grade.passing
@@ -418,14 +474,12 @@ class TestClassifyXpassedAudit:
         assert buckets.graduate == set()
         assert buckets.confirm == set()
 
-    def test_skipped_outline_example_blocks_graduation(self, audit_xfails) -> None:
+    def test_skipped_outline_example_blocks_graduation(self, audit_xfails, captured_bdd_slice) -> None:
         """``skipped`` must keep the transport out of ``passing`` / graduate."""
         base = "tests/bdd/test_uc004.py::test_outline"
-        all_tests = [
-            {"nodeid": f"{base}[e2e_rest-ex1]", "outcome": "skipped"},
-            {"nodeid": f"{base}[e2e_rest-ex2]", "outcome": "xpassed"},
-        ]
-        buckets = audit_xfails.classify_xpassed(all_tests)
+        outline = _slice_entries(captured_bdd_slice, nodeid_contains="::test_outline[")
+        assert {e["outcome"] for e in outline} >= {"skipped", "xpassed"}
+        buckets = audit_xfails.classify_xpassed(outline)
         assert buckets.graduate == set()
         assert buckets.confirm == set()
         assert buckets.partial_passing.get(base, set()) == set()
@@ -491,62 +545,42 @@ class TestGraduationOperands:
 class TestParseTestResultsCallSites:
     """Pin shared-helper call sites inside parse_test_results (S4 / S10)."""
 
-    def test_bdd_full_audit_parse_round_trip(self, bdd_full_audit, tmp_path: Path) -> None:
-        report = tmp_path / "bdd.json"
-        report.write_text(
-            json.dumps(
-                {
-                    "tests": [
-                        {
-                            "nodeid": "tests/bdd/test_uc004.py::test_s[e2e_rest]",
-                            "outcome": "xpassed",
-                            "keywords": [],
-                            "call": {"longrepr": "E   AssertionError: boom\n other"},
-                        }
-                    ]
-                }
-            )
-        )
-        entries = bdd_full_audit.parse_test_results(report)
-        assert len(entries) == 1
-        assert entries[0].error == "AssertionError: boom"
-        assert "AssertionError: boom" in entries[0].longrepr
-        assert bdd_full_audit.extract_transport(entries[0].nodeid) == "e2e_rest"
+    def test_bdd_full_audit_parse_round_trip(self, bdd_full_audit, captured_bdd_slice) -> None:
+        entries = bdd_full_audit.parse_test_results(CAPTURED_SLICE)
+        by_nodeid = {e.nodeid: e for e in entries}
+        populated_raw = _slice_entry(captured_bdd_slice, nodeid_contains="test_longrepr_populated")
+        empty_raw = _slice_entry(captured_bdd_slice, nodeid_contains="test_longrepr_empty")
+        populated = by_nodeid[populated_raw["nodeid"]]
+        empty = by_nodeid[empty_raw["nodeid"]]
+        assert populated.error == "AssertionError: boom"
+        assert "AssertionError: boom" in populated.longrepr
+        assert bdd_full_audit.extract_transport(populated.nodeid) == "e2e_rest"
+        assert empty.error == ""
+        assert empty.longrepr == ""
+        # Full outcome vocabulary present in the shared slice.
+        assert {e["outcome"] for e in captured_bdd_slice["tests"]} >= {
+            "passed",
+            "skipped",
+            "xfailed",
+            "xpassed",
+            "failed",
+        }
 
-    def test_cross_reference_parse_round_trip(self, cross_reference_audit, tmp_path: Path) -> None:
-        report = tmp_path / "bdd.json"
-        report.write_text(
-            json.dumps(
-                {
-                    "tests": [
-                        {
-                            "nodeid": "tests/bdd/test_uc004.py::test_s[mcp]",
-                            "outcome": "failed",
-                            "call": {"longrepr": "E   ValueError: nope"},
-                        }
-                    ]
-                }
-            )
-        )
-        outcomes = cross_reference_audit.parse_test_results(report)
-        assert len(outcomes) == 1
-        assert outcomes[0].transport == "mcp"
-        assert outcomes[0].error == "ValueError: nope"
+    def test_cross_reference_parse_round_trip(self, cross_reference_audit, captured_bdd_slice) -> None:
+        outcomes = cross_reference_audit.parse_test_results(CAPTURED_SLICE)
+        failed = next(o for o in outcomes if "test_longrepr_failed" in o.nodeid)
+        assert failed.transport == "mcp"
+        assert failed.error == "ValueError: nope"
+        assert failed.outcome == _slice_entry(captured_bdd_slice, nodeid_contains="test_longrepr_failed")["outcome"]
 
-    def test_audit_xfails_parse_round_trip(self, audit_xfails, tmp_path: Path) -> None:
-        report = tmp_path / "bdd.json"
-        report.write_text(
-            json.dumps(
-                {
-                    "root": "/app",
-                    "tests": [{"nodeid": "tests/bdd/test_uc004.py::test_s[a2a]", "outcome": "xfailed", "keywords": []}],
-                }
-            )
-        )
-        xfailed, xpassed, all_tests, artifact_root = audit_xfails.parse_test_results(report)
-        assert len(xfailed) == 1
-        assert artifact_root == "/app"
-        assert audit_xfails.extract_transport(xfailed[0]["nodeid"]) == "a2a"
+    def test_audit_xfails_parse_round_trip(self, audit_xfails, captured_bdd_slice) -> None:
+        xfailed, xpassed, all_tests, artifact_root = audit_xfails.parse_test_results(CAPTURED_SLICE)
+        assert artifact_root == captured_bdd_slice["root"] == "/app"
+        assert len(xfailed) >= 1
+        assert len(xpassed) >= 1
+        assert len(all_tests) == len(captured_bdd_slice["tests"])
+        simple = next(t for t in xfailed if "test_xfail_simple" in t["nodeid"])
+        assert audit_xfails.extract_transport(simple["nodeid"]) == "a2a"
 
 
 class TestConftestTagParser:
@@ -568,51 +602,42 @@ class TestConftestTagParser:
 class TestCrashMessageClassification:
     """B1 — reason from setup/call crash.message, not wasxfail."""
 
-    def test_harness_gap_from_setup_crash_message(self, audit_xfails) -> None:
-        test = _json_report_test(
-            "/tmp/x.py", 1, phase="setup", message="_pytest.outcomes.XFailed: UC harness not yet wired"
-        )
+    def test_harness_gap_from_setup_crash_message(self, audit_xfails, captured_bdd_slice) -> None:
+        test = _slice_entry(captured_bdd_slice, nodeid_contains="test_harness_yet")
         assert "wasxfail" not in test  # realistic json-report shape
-        entry = audit_xfails.classify_xfail(test, {}, [])
-        assert entry.category == "HARNESS_GAP"
-
-    def test_harness_gap_from_no_harness_environment_phrase(self, audit_xfails) -> None:
-        """Pin the canonical conftest wording alone (load-bearing disjunct)."""
-        test = _json_report_test(
-            "/tmp/x.py",
-            1,
-            phase="setup",
-            message="_pytest.outcomes.XFailed: No harness environment for UC-004",
-        )
-        assert "harness not" not in test["setup"]["crash"]["message"].lower()
+        assert "harness not yet wired" in test["setup"]["crash"]["message"].lower()
         entry = audit_xfails.classify_xfail(test, {}, [])
         assert entry.category == "HARNESS_GAP"
         assert entry.xfail_source == "conftest:auto"
 
-    def test_harness_gap_from_harness_not_wired_without_yet(self, audit_xfails) -> None:
-        """Pin ``harness not wired`` (no ``yet``) as its own disjunct."""
-        test = _json_report_test(
-            "/tmp/x.py",
-            1,
-            phase="setup",
-            message="_pytest.outcomes.XFailed: UC harness not wired",
-        )
-        assert "not yet" not in test["setup"]["crash"]["message"].lower()
-        assert "No harness environment" not in test["setup"]["crash"]["message"]
+    def test_harness_gap_from_no_harness_environment_phrase(self, audit_xfails, captured_bdd_slice) -> None:
+        """Pin the canonical conftest wording alone (load-bearing Priority-2 disjunct)."""
+        test = _slice_entry(captured_bdd_slice, nodeid_contains="test_harness_env")
+        message = test["setup"]["crash"]["message"]
+        assert "No harness environment" in message
+        assert "harness not" not in message.lower()
         entry = audit_xfails.classify_xfail(test, {}, [])
         assert entry.category == "HARNESS_GAP"
         assert entry.xfail_source == "conftest:auto"
 
-    def test_deterministic_tag_order_picks_lower_sorted_tag(self, audit_xfails, bdd_audit_common) -> None:
+    def test_harness_gap_from_harness_not_wired_without_yet(self, audit_xfails, captured_bdd_slice) -> None:
+        """Pin ``harness not wired`` (no ``yet``) as its own Priority-2 disjunct."""
+        test = _slice_entry(captured_bdd_slice, nodeid_contains="test_harness_wired")
+        message = test["setup"]["crash"]["message"]
+        assert "not yet" not in message.lower()
+        assert "No harness environment" not in message
+        assert "harness not wired" in message.lower()
+        entry = audit_xfails.classify_xfail(test, {}, [])
+        assert entry.category == "HARNESS_GAP"
+        assert entry.xfail_source == "conftest:auto"
+
+    def test_deterministic_tag_order_picks_lower_sorted_tag(
+        self, audit_xfails, bdd_audit_common, captured_bdd_slice
+    ) -> None:
         """Two conflicting tags: ``sorted(tags)`` must pick the lower-sorted key."""
-        test = _json_report_test(
-            "/x",
-            1,
-            phase="setup",
-            message="xfail: tagged",
-            nodeid="t::s[a2a]",
-            keywords=["T-UC-004-b-partition", "T-UC-004-a-production"],
-        )
+        test = _slice_entry(captured_bdd_slice, nodeid_contains="test_conflicting_tags")
+        tags = {kw for kw in test["keywords"] if isinstance(kw, str) and kw.startswith("T-")}
+        assert tags == {"T-UC-004-b-partition", "T-UC-004-a-production"}
         tag_map = {
             "T-UC-004-b-partition": bdd_audit_common.TagReason("partition arm", "partial_impl"),
             "T-UC-004-a-production": bdd_audit_common.TagReason("production arm", "production_gap"),
