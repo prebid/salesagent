@@ -25,6 +25,8 @@
 #                        back to the runner via ADCP_WEBHOOK_HOST=tests
 #   ui                -> SERVER DB (/adcp) + playwright chromium baked into
 #                        Dockerfile.test; browser drives proxy:8000
+#                        NOTE: local/in-network only until a CI Summary gate
+#                        exists (#1924) — not the same as admin-ui-tests.
 #
 # Per-suite DB split: integration/bdd/admin use the runner's DATABASE_URL
 # (/adcp_test); e2e/ui override it to E2E_DATABASE_URL (/adcp) in their tox envs.

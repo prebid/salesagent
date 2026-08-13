@@ -33,9 +33,32 @@ _LOCAL_SUITE_TO_SUMMARY_GATE: dict[str, str] = {
     "admin": "admin-ui-tests",
     "e2e": "e2e-tests",
 }
-# Intentionally ungated in CI (no job yet). Soften the "every suite" claim:
-# these are excluded at the source map, not silently omitted from a hand list.
-# see #1924 — removal path: add a ui CI Summary gate, then drop this exclusion.
+# Intentionally ungated in CI Summary (no Playwright job yet). Soften the
+# "every suite gates CI" claim: these are excluded at the source map, not
+# silently omitted from a hand-maintained list.
+#
+# Why ``ui`` stays local-only (Path B / #1924) — not the same as ``admin``:
+# - ``tox -e ui`` needs the full E2E Docker compose stack (SERVER DB ``/adcp``,
+#   app health) **plus** Chromium via Playwright (``extras = ui-tests``). Same
+#   infra class as ``e2e-tests`` (heavy timeout / disk); a second full-stack
+#   job would double CI minutes for a thin smoke suite under ``tests/ui/``.
+# - ``admin-ui-tests`` runs ``tests/admin/`` against bare Postgres via
+#   ``_pytest`` — no browser, no compose app stack. Mapping ``ui`` →
+#   ``admin-ui-tests`` would be a false Summary gate.
+# - Local / in-network coverage already exists: ``ALL_SUITES`` includes ``ui``;
+#   ``./run_all_tests.sh`` / ``tox -e ui`` and the in-network ``tests`` image
+#   (Playwright baked) still surface failures — they just do not turn GitHub
+#   Summary red today.
+#
+# see #1924 — removal recipe (when product wants Summary gating):
+# 1. Add CI job (suggested name ``ui-tests``) that runs Playwright against the
+#    E2E compose stack (mirror ``e2e-tests`` pre-start / ``ADCP_TESTING`` +
+#    ``playwright install chromium`` or image bake).
+# 2. Add ``ui-tests`` to ``summary.needs`` + the Summary result-check step.
+# 3. Map ``"ui": "ui-tests"`` in ``_LOCAL_SUITE_TO_SUMMARY_GATE`` above.
+# 4. Remove ``"ui"`` from ``UNGATED_LOCAL_SUITES`` (delete the constant if empty).
+# 5. Extend arch-guard assertions for the new job (exists, runs ``tests/ui`` or
+#    ``tox -e ui``, Summary floor).
 UNGATED_LOCAL_SUITES = frozenset({"ui"})
 
 # CI-only gates that are not ALL_SUITES entries but must still floor Summary.
