@@ -135,9 +135,43 @@ class TestWebhookURLValidator:
         assert is_valid
         assert error == ""
 
-    def test_validate_for_testing_blocks_private_networks(self):
-        """Testing mode should still block private networks even with allow_localhost."""
-        is_valid, error = WebhookURLValidator.validate_for_testing("http://192.168.1.1/webhook", allow_localhost=True)
+    def test_validate_for_testing_allows_private_network_receivers(self):
+        """Testing mode must allow private-range receivers (GH #1697 fallout).
+
+        The e2e capture receiver is reached by the compose-network alias
+        (ADCP_WEBHOOK_HOST=tests) resolving to a private Docker IP, and the
+        localhost rewrite targets host.docker.internal. When testing mode still
+        blocked private ranges, every e2e webhook delivery was silently dropped
+        at the send-time gate (6 tests, zero deliveries — salesagent-5j32).
+        This deliberately REVERSES the earlier pin that testing mode blocks
+        private networks: production mode still does (asserted below).
+        """
+        for url in (
+            "http://192.168.1.1/webhook",
+            "http://172.20.0.5:8080/webhook",
+            "http://host.docker.internal:3001/webhook",
+        ):
+            is_valid, error = WebhookURLValidator.validate_for_testing(url, allow_localhost=True)
+            assert is_valid, f"testing mode must reach the capture receiver at {url}: {error}"
+
+    def test_validate_for_testing_still_blocks_metadata_endpoints(self):
+        """The testing allowance must NOT open cloud metadata endpoints.
+
+        Blocked HOSTNAMES fail the hostname check first, with a message the
+        testing-allowance needles deliberately do not match.
+        """
+        for url in (
+            "http://metadata.google.internal/computeMetadata",
+            "http://169.254.169.254/latest/meta-data/",
+        ):
+            is_valid, _error = WebhookURLValidator.validate_for_testing(url, allow_localhost=True)
+            assert not is_valid, f"metadata endpoint must stay blocked even in testing mode: {url}"
+
+    def test_private_networks_blocked_without_testing_allowance(self):
+        """Production semantics unchanged: private ranges rejected outright."""
+        is_valid, _error = WebhookURLValidator.validate_for_testing("http://172.20.0.5/webhook", allow_localhost=False)
+        assert not is_valid
+        is_valid, _error = WebhookURLValidator.validate_webhook_url("http://192.168.1.1/webhook")
         assert not is_valid
 
     def test_production_requires_https(self, monkeypatch):

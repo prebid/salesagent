@@ -320,13 +320,18 @@ def then_media_buy_persisted(ctx: dict) -> None:
         assert tenant is not None, "No tenant in ctx — cannot verify tenant_id on persisted media buy"
         assert mb.tenant_id == tenant.tenant_id, f"Expected tenant_id '{tenant.tenant_id}', got '{mb.tenant_id}'"
         assert mb.status is not None, f"Media buy {media_buy_id} persisted with no status"
-        # Verify principal linkage
+        # Verify principal linkage. Graded the same way as tenant_id above rather than
+        # under `if principal is not None` (GH #1751): a scenario that reached a
+        # persisted media buy necessarily authenticated a principal, so an absent
+        # ctx["principal"] is a wiring gap, not a reason to skip the check. And the
+        # assertion compares the VALUE — `principal_id is not None` passed for a record
+        # linked to the wrong principal.
         principal = ctx.get("principal")
-        if principal is not None:
-            assert mb.principal_id is not None, (
-                f"Media buy {media_buy_id} persisted without principal_id — "
-                "step claims record is 'persisted' but identity linkage is missing"
-            )
+        assert principal is not None, "No principal in ctx — cannot verify principal_id on persisted media buy"
+        assert mb.principal_id == principal.principal_id, (
+            f"Media buy {media_buy_id} persisted with principal_id {mb.principal_id!r}, "
+            f"expected {principal.principal_id!r} — identity linkage is wrong"
+        )
 
 
 @then(parsers.parse('the media buy record should be persisted with status "{status}"'))

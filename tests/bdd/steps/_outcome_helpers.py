@@ -6,6 +6,13 @@ transports including E2E.
 
 No raw session access. No db_session(ctx). The harness owns the session,
 the repository owns the query, the helper owns the assertion.
+
+Accessor helpers here return ``Any``, not ``object``. They read out of the untyped
+heterogeneous ``ctx`` dict or off ORM/Pydantic instances, and every caller
+immediately indexes or attribute-accesses the result — ``object`` turned each of
+those into a mypy ``attr-defined`` error while adding no real type safety. Note
+that nothing type-checks ``tests/`` today: the Makefile runs ``mypy src/``, the
+untyped-defs ratchet hard-codes ``SRC_DIR``, and pre-commit excludes ``tests/``.
 """
 
 from __future__ import annotations
@@ -59,7 +66,7 @@ def wire_dict(ctx: dict) -> dict:
     return _require_response(ctx).model_dump(mode="json")
 
 
-def _require(ctx: dict, key: str, *, hint: str | None = None) -> object:
+def _require(ctx: dict, key: str, *, hint: str | None = None) -> Any:
     """Return ``ctx[key]``, failing with a diagnostic if it is absent.
 
     Then steps read entities and outcomes a prior step was expected to put in
@@ -70,6 +77,11 @@ def _require(ctx: dict, key: str, *, hint: str | None = None) -> object:
 
     ``env`` is intentionally not routed through this helper: the harness
     guarantees it and the ``no-silent-env`` guard requires ``ctx["env"]``.
+
+    Returns ``Any`` rather than ``object`` deliberately. ``ctx`` is an untyped
+    heterogeneous dict, so every caller immediately indexes or attribute-accesses
+    the result; ``object`` made each of those a mypy ``attr-defined`` error while
+    adding no real type safety.
     """
     val = ctx.get(key)
     detail = f" {hint}" if hint else ""
@@ -77,7 +89,44 @@ def _require(ctx: dict, key: str, *, hint: str | None = None) -> object:
     return val
 
 
-def _require_response(ctx: dict) -> object:
+def dispatched_kwargs(ctx: dict) -> dict:
+    """Return the kwargs the scenario's When step actually dispatched.
+
+    The single reader for the ``ctx["dispatched_kwargs"]`` channel that
+    ``dispatch_request`` records. Derive expected values from THIS, never from a
+    literal default: a ``.get(key, 7)`` style fallback silently turns an
+    assertion into a constant, which is the defect class GH #1749 tracks.
+
+    Recorded before dispatch, so it is available on the error path too.
+
+    The dict is HETEROGENEOUS — it may hold plain kwargs or a whole Pydantic
+    request object under ``req``. Use :func:`dispatched_field` to read one
+    request field across both shapes.
+    """
+    return _require(ctx, "dispatched_kwargs", hint="the When step must call dispatch_request()")
+
+
+def dispatched_field(ctx: dict, name: str, *, default: Any = None) -> Any:
+    """Return request field ``name`` as dispatched, across both dispatch shapes.
+
+    Handles the flat-kwargs form (``dispatch_request(ctx, media_buy_ids=[...])``)
+    and the request-object form (``dispatch_request(ctx, req=SomeRequest(...))``),
+    which 38 of the dispatch sites use.
+
+    ``default`` is for fields the buyer legitimately did not send. Never pass a
+    value the assertion will then compare against — that reintroduces the
+    constant-oracle defect this channel exists to prevent.
+    """
+    kwargs = dispatched_kwargs(ctx)
+    if name in kwargs:
+        return kwargs[name]
+    req = kwargs.get("req")
+    if req is not None:
+        return getattr(req, name, default)
+    return default
+
+
+def _require_response(ctx: dict) -> Any:
     """Return ctx["response"], failing with a diagnostic if it is absent.
 
     Then steps assert on the response produced by a prior When step. Reading
@@ -89,7 +138,7 @@ def _require_response(ctx: dict) -> object:
     return _require(ctx, "response", hint="The operation may have errored instead of returning.")
 
 
-def _require_error(ctx: dict) -> object:
+def _require_error(ctx: dict) -> Any:
     """Return ctx["error"], failing with a diagnostic if no error was recorded.
 
     Then steps on an error path read ``ctx["error"]``. By subscript that raises
@@ -106,7 +155,7 @@ def _require_error(ctx: dict) -> object:
     return error
 
 
-def _get_response_field(resp: object, field: str) -> object:
+def _get_response_field(resp: object, field: str) -> Any:
     """Extract a field from a response, handling wrapper types."""
     if hasattr(resp, field):
         return getattr(resp, field)
@@ -124,7 +173,7 @@ def is_e2e(ctx: dict) -> bool:
     return transport is not None and hasattr(transport, "value") and str(transport.value).startswith("e2e_")
 
 
-def assert_media_buy_created(ctx: dict, media_buy_id: str | None = None) -> object:
+def assert_media_buy_created(ctx: dict, media_buy_id: str | None = None) -> Any:
     """Verify media buy exists in DB through the harness.
 
     Returns the MediaBuy ORM instance for further assertions.
@@ -142,7 +191,7 @@ def assert_media_buy_created(ctx: dict, media_buy_id: str | None = None) -> obje
     return mb
 
 
-def assert_adapter_executed(ctx: dict) -> object:
+def assert_adapter_executed(ctx: dict) -> Any:
     """Verify adapter ran by checking DB state through the harness.
 
     A media buy that reaches a non-draft status proves the adapter was invoked.

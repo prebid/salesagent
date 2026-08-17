@@ -19,7 +19,19 @@ B. **No reconstructed-only error assertion** (assertion-side). An error
    (yields ``RuntimeError`` for an unmapped code); the wire envelope is the buyer-facing
    contract.
 
-Both allowlists can only SHRINK. Each entry documents the production gap that keeps it.
+C. **No typed-payload package oracle** (success-path, assertion-side). The success-path
+   twin of B. A ``@then`` step must not grade a package/breakdown contract off
+   ``_collect_all_packages`` (the harness-reconstructed TYPED payload) without reading the
+   wire via ``_wire_packages`` / ``wire_dict`` / ``wire_field``. On a2a/mcp/rest the typed
+   payload is reconstructed FROM the wire, so its fields are already coerced to their
+   declared types: a boolean truncation flag serialized as the string ``"true"`` reconstructs
+   to ``True`` and the oracle passes on a non-conformant wire. (A *missing* field is still
+   caught — it reconstructs to ``None`` — so the blind spot is coercion, not absence.)
+   Demonstrated: with the flags emitted as strings, all six truncation rows stayed green
+   until ``then_field_true`` / ``then_field_false`` / ``then_packages_limited`` moved onto
+   ``_wire_packages``.
+
+All three allowlists can only SHRINK. Each entry documents the production gap that keeps it.
 """
 
 from __future__ import annotations
@@ -55,6 +67,26 @@ _ERROR_CONSTRUCTION_ALLOWLIST: set[str] = {
 
 # -- Check B: reconstructed-only error assertions -----------------------------
 _RECONSTRUCTED_ASSERTION_ALLOWLIST: set[str] = set()
+
+# -- Check C: typed-payload package oracles (success path) --------------------
+# Keyed by "<relative path> <then-step func>". Every entry is a UC-004 package oracle
+# still reading the typed payload. They are NOT a different judgement from the three that
+# moved — they are the same defect, held back deliberately: moving an oracle onto the wire
+# STRENGTHENS it, which re-bases the graduation of every e2e_rest row it grades, and the
+# batch that walks them is tracked separately so each row gets its own graduation check
+# rather than a silent bulk re-base. Ordered by coercion exposure, worst first.
+_TYPED_PACKAGE_ORACLE_ALLOWLIST: set[str] = {
+    # HIGH — asserts a STRING classification system; an enum/str wire regression coerces back.
+    "bdd/steps/domain/uc004_delivery.py then_geo_system",
+    # HIGH — assert numeric ordering; a number-as-string on the wire coerces back to a number.
+    "bdd/steps/domain/uc004_delivery.py then_placement_sorted",
+    "bdd/steps/domain/uc004_delivery.py then_placement_sorted_fallback",
+    # MED — reads scalar package field values.
+    "bdd/steps/domain/uc004_delivery.py then_packages_include_field",
+    # LOW — array presence only; a dropped array is already caught by reconstruction (None).
+    "bdd/steps/domain/uc004_delivery.py then_packages_include_breakdown",
+    "bdd/steps/domain/uc004_delivery.py then_packages_include_two",
+}
 
 
 def _iter_step_modules() -> list[tuple[str, ast.Module]]:
@@ -154,6 +186,28 @@ def _find_reconstructed_only_assertions() -> set[str]:
     return found
 
 
+def _find_typed_package_oracles() -> set[str]:
+    """Find success-path @then steps grading packages off the typed payload.
+
+    A step qualifies as wire-grounded if it names any wire reader — ``_wire_packages``
+    (the package-specific one), or the generic ``wire_dict`` / ``wire_field`` — so a
+    future oracle that reads the wire directly rather than through the package helper
+    is not reported.
+    """
+    found: set[str] = set()
+    for rel, tree in _iter_step_modules():
+        for func in _enclosing_functions(tree):
+            if not _is_then(func):
+                continue
+            names = _func_names(func)
+            if "_collect_all_packages" not in names:
+                continue
+            if {"_wire_packages", "wire_dict", "wire_field"} & names:
+                continue
+            found.add(f"{rel} {func.name}")
+    return found
+
+
 def test_no_test_side_error_construction() -> None:
     """0wby: steps must not fabricate ctx['error']; dispatch through the wire instead."""
     assert_violations_match_allowlist(
@@ -178,5 +232,21 @@ def test_no_reconstructed_only_error_assertion() -> None:
             "without reading the wire envelope. Make it wire-first: read _wire_code(ctx)/_wire_suggestion(ctx) "
             "or ctx['result'].assert_wire_error(...) and fall back to the reconstructed exception only for "
             "IMPL/no-wire. See then_error.py then_error_code / then_suggestion_contains."
+        ),
+    )
+
+
+def test_no_typed_payload_package_oracle() -> None:
+    """Success-path package oracles must grade the wire, not the coerced typed payload."""
+    assert_violations_match_allowlist(
+        _find_typed_package_oracles(),
+        _TYPED_PACKAGE_ORACLE_ALLOWLIST,
+        fix_hint=(
+            "A success-path Then-step grades packages off _collect_all_packages (the typed payload "
+            "reconstructed from the wire, whose fields are already coerced to their declared types). "
+            "Read _wire_packages(ctx) instead — it walks the same media_buy_deliveries[].by_package "
+            "nesting out of wire_dict(ctx) and inherits its raise-on-missing-body guard. Keep every "
+            "assertion, and read package_id with pkg.get('package_id') for the failure message. "
+            "See then_field_true / then_field_false / then_packages_limited in uc004_delivery.py."
         ),
     )

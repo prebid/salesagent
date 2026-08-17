@@ -43,7 +43,7 @@ this document.
 
 ## Behavior target vs SDK pin
 
-The SDK **pin** (3.1.0-beta.3) fixes the request/response *type shapes* we
+The SDK **pin** (3.1.1) fixes the request/response *type shapes* we
 build against. It does **not** always fix the graded *behavior*. One field
 diverges deliberately: the `media_buy_status` dual-emit on
 create-/update-media-buy responses.
@@ -66,9 +66,11 @@ validator only backfills the deprecated **body** `status` from the domain
 `media_buy_status` for the deprecation window; it does not touch the wire
 top-level `status`.
 
-**Known SDK type defect (SDK not authoritative):** adcp 5.7 types the response
-`status` as `MediaBuyStatus | None`, but the wire top-level `status` carries a
-protocol `TaskStatus` (`submitted` / `completed`). This is fine because that
+**Historical SDK type defect (SDK not authoritative):** adcp 5.7 typed the
+response `status` as `MediaBuyStatus | None` while the wire top-level `status`
+carries a protocol `TaskStatus` (`submitted` / `completed`); adcp 6.6 resolved
+this — the response-union members type `status` as the protocol literals
+(`completed` / `submitted`). The dual-emit rationale is unchanged: the
 protocol value lives on `TaskResultEnvelope.status` (typed `str`), never on the
 SDK-typed body field. Grounding for the divergent behavior is the value-pinned
 `media_buy_status` assertions in
@@ -93,8 +95,11 @@ A spec version bump is a deliberate change with downstream impact:
 3. Run `uv lock --upgrade-package adcp`.
 4. Update `EXPECTED_SPEC_VERSION` in `tests/unit/test_adcp_spec_version.py`.
 5. Update this document.
-6. Run `make quality` and address Pydantic field/type changes.
-7. Re-verify integration and BDD test coverage.
+6. Update the version prose in `README.md` (status note + "AdCP Compatibility")
+   and `CLAUDE.md` ("AdCP Spec Version") — the CI guard asserts these stay in
+   step with the pin.
+7. Run `make quality` and address Pydantic field/type changes.
+8. Re-verify integration and BDD test coverage.
 
 ## Pinned schema sources
 
@@ -154,3 +159,5 @@ spec bump must consider it separately from the schema-shape pin above.
 - `tests/helpers/adcp_schema_validator.py` — e2e request/response validation, delegates to `pinned_schema.py`
 - `tests/fixtures/adcp_schemas_pinned/` — vendored error-code `enumMetadata` `suggestion` text, sole remaining consumer `test_architecture_error_suggestion_enum_conformance.py` (independent pin, error-code reconciliation epic only — NOT a general schema-shape source)
 - `docs/adcp-spec-version.md` — this document
+- `README.md` — status note + "AdCP Compatibility" section name the pinned version
+- `CLAUDE.md` — "AdCP Spec Version" section names the pinned version

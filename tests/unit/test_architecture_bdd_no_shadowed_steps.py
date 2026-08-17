@@ -22,12 +22,10 @@ beads: salesagent-g4cm
 
 from __future__ import annotations
 
-import ast
 import importlib
 from collections import defaultdict
-from pathlib import Path
 
-_CONFTEST = Path(__file__).resolve().parents[1] / "bdd" / "conftest.py"
+from tests.unit._architecture_helpers import bdd_registered_step_plugins
 
 # pytest-bdd names every step fixture with this prefix.
 _STEPDEF_PREFIX = "pytestbdd_stepdef_"
@@ -39,26 +37,13 @@ _STEPDEF_PREFIX = "pytestbdd_stepdef_"
 _ALLOWED_SHADOWS: set[str] = set()
 
 
-def _registered_step_plugins() -> list[str]:
-    """Return the ``pytest_plugins`` step modules declared in bdd/conftest.py."""
-    tree = ast.parse(_CONFTEST.read_text(), filename=str(_CONFTEST))
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id == "pytest_plugins":
-                    return [
-                        el.value for el in node.value.elts if isinstance(el, ast.Constant) and isinstance(el.value, str)
-                    ]
-    raise AssertionError("pytest_plugins not found in tests/bdd/conftest.py")
-
-
 def _scan_shadowed_steps() -> dict[str, list[str]]:
     """Map each step-fixture name to the imported modules that register it.
 
     Only names registered by 2+ modules (i.e. genuine shadows) are returned.
     """
     registry: dict[str, list[str]] = defaultdict(list)
-    for dotted in _registered_step_plugins():
+    for dotted in bdd_registered_step_plugins():
         module = importlib.import_module(dotted)
         short = dotted.split(".")[-1]
         for attr in vars(module):

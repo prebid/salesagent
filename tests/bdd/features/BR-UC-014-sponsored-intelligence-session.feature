@@ -244,7 +244,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given no session exists with session_id "nonexistent-sess"
     When the Buyer Agent sends si_send_message with session_id "nonexistent-sess" and message "hello"
     Then the operation should fail
-    And the error code should be "session_not_found"
+    And the error code should be "SESSION_NOT_FOUND"
     And the error message should contain "session"
     And the error should include "suggestion" field
     And the suggestion should contain "session_id"
@@ -258,7 +258,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given no session exists with session_id "ghost-session"
     When the Buyer Agent sends si_terminate_session with session_id "ghost-session" and reason "user_exit"
     Then the operation should fail
-    And the error code should be "session_not_found"
+    And the error code should be "SESSION_NOT_FOUND"
     And the error message should contain "session"
     And the error should include "suggestion" field
     And the suggestion should contain "session_id"
@@ -311,7 +311,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     Given the Buyer Agent has exceeded the rate limit for si_get_offering
     When the Buyer Agent sends si_get_offering with offering_id "any-offer"
     Then the operation should fail
-    And the error code should be "rate_limited"
+    And the error code should be "RATE_LIMITED"
     And the error message should contain "rate"
     And the error should include "suggestion" field
     And the suggestion should contain "retry"
@@ -325,7 +325,7 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     And the Buyer Agent has exceeded the rate limit for si_send_message
     When the Buyer Agent sends si_send_message with session_id "sess-abc123" and message "hello"
     Then the operation should fail
-    And the error code should be "rate_limited"
+    And the error code should be "RATE_LIMITED"
     And the error message should contain "rate"
     And the error should include "suggestion" field
     And the suggestion should contain "retry"

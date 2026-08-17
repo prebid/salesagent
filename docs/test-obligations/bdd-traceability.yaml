@@ -3044,12 +3044,6 @@ mappings:
       upstream_refs: ["BR-UC-004-main-mcp", "BR-RULE-092"]
       business_rules: ["BR-RULE-092"]
       status: new
-    - adcp_scenario_id: "T-UC-004-attr-unsupported"
-      adcp_feature: "BR-UC-004-deliver-media-buy-metrics.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-004-main-mcp", "BR-RULE-092"]
-      business_rules: ["BR-RULE-092"]
-      status: new
     - adcp_scenario_id: "T-UC-004-attr-echo"
       adcp_feature: "BR-UC-004-deliver-media-buy-metrics.feature"
       obligation_id: null

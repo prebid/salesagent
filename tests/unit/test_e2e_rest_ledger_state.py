@@ -22,10 +22,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-# The 17 e2e_rest nodeids remaining: 7 genuine gaps + 10 parallel-e2e_rest
-# mock-injection artifacts (owner-approved, added on the adcp-6.6 /
-# perf/parallelize-test-suite work — see the block comment inside the set).
-# Graduated on the way here: the 2 date-range boundary rows (2026-07-09, first
+# The 9 e2e_rest nodeids remaining, ALL of them production code gaps:
+#   6  uc004 invalid-input rows the live server still accepts
+#   1  push-notification ack (inline-xfail in the step body)
+#   2  daily-breakdown rows — GH #1776
+# None is a harness artifact and none masks a regression this suite introduced. Where an
+# entry was ADDED rather than graduated, it is because repairing a vacuous test UNMASKED a
+# pre-existing production failure; the GH issue named on that entry owns closing it.
+# Graduated on the way here: the 10 parallel-e2e_rest mock-injection artifacts (5887ac7d9,
+# GH #1739), the attribution-default scenario (retired, GH #1726),
+# the 2 date-range boundary rows (2026-07-09, first
 # in-network CI run), the 2 date-range partition twins (origin/pr-1417 merge,
 # d4af23095 — strict-xfail XPASS in-network), and the 2 uc004 account valid rows
 # (#1417 merge, jr5b seeded-account Given, XPASS innet_140726_1516).
@@ -59,25 +65,33 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_boundary__boundary_point[e2e_rest-principal differs from owner-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_partition__partition[e2e_rest-owner_mismatch-invalid]",
         'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]',
+        # Added 2026-07-30 (GH #1740 fallout) — the partition twin of the boundary metro row
+        # above, SAME pre-existing gap (metro/postal system requirement lives only in the
+        # field description; no validator anywhere — debt item C10). NOT newly broken:
+        # removing the vacuous _UC004_PARTITION_SELECTIVE strict=False blanket unmasked it
+        # on e2e_rest (in-process transports carry the precise strict=True row).
+        'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_partition__partition[e2e_rest-geo_metro_missing_system-{"geo": {"geo_level": "metro"}}-error "INVALID_REQUEST" with suggestion]',
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-Unknown string not in enum-systematic-invalid]",
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_seller_ignores_attribution_request__returns_platform_default[e2e_rest]",
+        # RETIRED (GH #1726, 2026-07-28): T-UC-004-attr-unsupported was reconciled away.
+        # AdCP 3.1.1 says sellers that do NOT support configurable attribution windows ignore the
+        # field; it does not require any seller to be non-supporting, and this seller always
+        # honours the requested window, so INV-2 never applied to it. The nodeid no longer exists,
+        # so this is a scenario retirement, not a graduation.
         "tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status_changes__with_push_notification[e2e_rest]",
-        # Added 2026-07-09 on the adcp-6.6 branch (owner-approved) when
-        # perf/parallelize-test-suite enabled parallel e2e_rest (E2E_PER_WORKER):
-        # mock-injection-incompatible artifacts, not regressions — UC-004
-        # set_adapter_response (delivery), UC-005 set_registry_formats, UC-018
-        # injected cross-principal creatives are invisible to the separate HTTP
-        # server. Preserved through the main merge.
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_complete_not_truncated__truncation_flag_set_false[e2e_rest]",
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_truncated_by_limit__truncation_flag_set_true[e2e_rest]",
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_buyer_requests_supported_dimension__seller_returns_breakdown[e2e_rest]",
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_multiple_dimensions_requested_simultaneously[e2e_rest]",
-        "tests/bdd/test_uc005_discover_creative_formats.py::test_baseline_list_creative_formats_response_carries_format_id_objects_with_agent_url_and_id[e2e_rest]",
-        "tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_roundtrip__list_creative_formats_returns_the_same_format_object_that_get_products_advertised[e2e_rest]",
-        "tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url_pointing_at_a_thirdparty_creative_agent_is_reported_as_observation_not_failure[e2e_rest]",
-        "tests/bdd/test_uc018_list_creatives.py::test_brrule034_inv1_counter__crossprincipal_creatives_never_visible[e2e_rest]",
-        "tests/bdd/test_uc018_list_creatives.py::test_brrule034_inv1_holds__query_always_scoped_by_principal[e2e_rest]",
-        "tests/bdd/test_uc018_list_creatives.py::test_list_creatives_filtered_by_concept_ids_returns_only_creatives_in_that_concept_carrying_concept_id_and_concept_name[e2e_rest]",
+        # Added 2026-07-28 — THE GAP IS GH #1776: include_package_daily_breakdown=true is
+        # accepted and never honoured (media_buy_delivery.py:549 hardcodes daily_breakdown=None).
+        # NOT newly broken — these two rows were passing vacuously against a guard that could
+        # never be entered (the oracle read pkg.daily / pkg.by_day, neither of which exists on
+        # ByPackageItem). Repairing it made the pre-existing gap observable; that repair's defect
+        # CLASS is GH #1751, which is not this gap, and GH #1319 item C5 is only the
+        # strict-marker debt bucket these rows sit in. Retire with the in-process twins in
+        # conftest _UC004_GENUINE_XFAIL_ROWS when #1776 is fixed.
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_partition__partition[e2e_rest-explicit_true-true-valid]",
+        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-true (explicit)-true-valid]",
+        # (The 2026-07-09 E2E_PER_WORKER mock-injection block that used to sit here is
+        # gone with its entries: all 10 graduated in 5887ac7d9, GH #1739. It described
+        # those rows, NOT the daily-breakdown pair above — do not reintroduce it here,
+        # where it would read as if the #1776 gap were a parallel-execution artifact.)
     }
 )
 

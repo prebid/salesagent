@@ -122,7 +122,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Empty array provided - schema rejects request
     When the Buyer Agent requests delivery metrics with media_buy_ids []
     Then the operation should fail
-    And the error code should be "validation_error"
+    And the error code should be "VALIDATION_ERROR"
     And the error message should contain "minItems"
     And the error should include "suggestion" field
     And the suggestion should contain "at least one identifier"
@@ -164,7 +164,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001"
     When the Buyer Agent requests delivery metrics with status_filter "nonexistent_status"
     Then the operation should fail
-    And the error code should be "validation_error"
+    And the error code should be "VALIDATION_ERROR"
     And the error message should contain "status_filter"
     And the error should include "suggestion" field
     And the suggestion should contain "valid status values"
@@ -424,7 +424,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given no media buy exists with id "mb-nonexistent"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-nonexistent"]
     Then the operation should fail
-    And the error code should be "media_buy_not_found"
+    And the error code should be "MEDIA_BUY_NOT_FOUND"
     And the error message should contain "media buy"
     And the error should include "suggestion" field
     And the suggestion should contain "verify the identifier"
@@ -441,7 +441,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And an authenticated Buyer with principal_id "buyer-001"
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-other"]
     Then the operation should fail
-    And the error code should be "media_buy_not_found"
+    And the error code should be "MEDIA_BUY_NOT_FOUND"
     And the error should NOT reveal that the media buy exists
     And the error should include "suggestion" field
     And the suggestion should contain "verify the identifier"
@@ -598,21 +598,20 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller supports configurable attribution windows
     And the ad server adapter has delivery data for "mb-001"
-    When the Buyer Agent requests delivery metrics for "mb-001" with attribution_window {"post_click": {"interval": 7, "unit": "days"}, "model": "last_touch"}
-    Then the response should include attribution_window with model "last_touch"
+    When the Buyer Agent requests delivery metrics for "mb-001" with attribution_window {"post_click": {"interval": 14, "unit": "days"}, "model": "data_driven"}
+    Then the response should include attribution_window with model "data_driven"
     And the attribution_window should echo the applied post_click window
     # BR-RULE-092 INV-1: buyer provides -> seller applies requested lookback
     # BR-RULE-092 INV-3: response echoes applied attribution_window
 
-  @T-UC-004-attr-unsupported @invariant @BR-RULE-092 @attribution
-  Scenario: Seller ignores attribution request - returns platform default
-    Given a media buy "mb-001" owned by "buyer-001" with status "active"
-    And the seller does NOT support configurable attribution windows
-    And the ad server adapter has delivery data for "mb-001"
-    When the Buyer Agent requests delivery metrics for "mb-001" with attribution_window {"post_click": {"interval": 30, "unit": "days"}}
-    Then the response should include attribution_window with the seller's platform default
-    And no error should be returned
-    # BR-RULE-092 INV-2: seller ignores request, returns platform default
+  # RECONCILED (GH #1726, AdCP 3.1.1): the "seller ignores attribution request"
+  # scenario (BR-RULE-092 INV-2) was removed. The spec sentence it graded --
+  # "Sellers that do not support configurable windows ignore this field and return their
+  # default" -- describes what a NON-supporting seller does; it does not require any seller to
+  # be non-supporting. This seller always honours the requested window
+  # (_resolve_attribution_window), which is conformant, so INV-2 does not apply to it. INV-1 and
+  # INV-3 remain graded by T-UC-004-attr-echo, T-UC-004-attr-omitted and the attribution
+  # partition/boundary Outlines. Conformance storyboard: ungraded at v3.1.1.
 
   @T-UC-004-attr-echo @invariant @BR-RULE-092 @attribution
   Scenario: Response always echoes applied attribution window with model
@@ -717,7 +716,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | both_windows | {"post_click": {"interval": 14, "unit": "days"}, "post_view": {"interval": 1, "unit": "days"}, "model": "last_touch"} | valid |
       | campaign_unit | {"post_click": {"interval": 1, "unit": "campaign"}} | valid |
       | model_only | {"model": "data_driven"} | valid |
-      | seller_ignores | {"post_click": {"interval": 30, "unit": "days"}} | valid |
+      | post_click_30d_echoed_verbatim | {"post_click": {"interval": 30, "unit": "days"}} | valid |
 
     Examples: Invalid partitions
       | partition | value | expected |
@@ -747,7 +746,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | interval=1 (minimum boundary) | {"post_click": {"interval": 1, "unit": "days"}} | valid |
       | unit=weeks (not in enum) | {"post_click": {"interval": 1, "unit": "weeks"}} | error "VALIDATION_ERROR" |
       | model=last_click (not in enum) | {"model": "last_click"} | error "VALIDATION_ERROR" |
-      | seller ignores field (no configurable window support) | {"post_click": {"interval": 30, "unit": "days"}} | valid |
+      | post_click 30-day window echoed verbatim (no model) | {"post_click": {"interval": 30, "unit": "days"}} | valid |
 
   @T-UC-004-partition-daily-breakdown @partition @include_package_daily_breakdown
   Scenario Outline: Include package daily breakdown partition - <partition>

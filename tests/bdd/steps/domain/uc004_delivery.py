@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps._outcome_helpers import _require, _require_response, dispatched_field, wire_dict
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
@@ -60,6 +61,25 @@ def _get_last_webhook_headers(ctx: dict) -> dict[str, str]:
 def _collect_all_packages(resp: Any) -> list[Any]:
     """Collect all packages across all deliveries in a response."""
     return [pkg for d in resp.media_buy_deliveries for pkg in d.by_package]
+
+
+def _wire_packages(ctx: dict) -> list[dict[str, Any]]:
+    """Collect every package across every delivery as the buyer sees it on the WIRE.
+
+    The wire-reading twin of :func:`_collect_all_packages`, and the one reader the
+    breakdown/truncation oracles go through. ``_collect_all_packages`` walks the
+    harness-reconstructed typed payload, whose fields are already coerced to their
+    declared types — so a wire value that coerces back to the right type is invisible
+    to it. A boolean truncation flag serialized as the string "true" is the concrete
+    case: it reconstructs to ``True`` and the typed oracle passes on a non-conformant
+    wire. (A field that is DROPPED is still caught by the typed reader, since it
+    reconstructs to None — the blind spot is coercion, not absence.)
+
+    Reads through ``wire_dict``, inheriting its loud guard: a real-wire transport that
+    stashed no body raises instead of silently degrading to the typed payload.
+    """
+    wire = wire_dict(ctx)
+    return [pkg for d in wire.get("media_buy_deliveries") or [] for pkg in d.get("by_package") or []]
 
 
 def _extract_webhook_success(ctx: dict) -> bool:
@@ -339,6 +359,10 @@ def _set_active_webhook(ctx: dict, mb_id: str) -> None:
         "url": _WEBHOOK_URL,
         "active": True,
     }
+    # Record the URL actually configured so `then_webhook_post` can assert against it
+    # rather than against a hardcoded literal (GH #1749). Set here, at the single
+    # choke point all three "active reporting_webhook" Givens funnel through.
+    ctx["webhook_url"] = _WEBHOOK_URL
     env = ctx["env"]
     if getattr(env, "_session", None) is not None:
         _persist_webhook_config_if_needed(ctx, env)
@@ -562,7 +586,8 @@ def given_webhook_failed_n_times(ctx: dict, n: int) -> None:
 
     env = ctx["env"]
     service = env.get_service()
-    webhook_url = next(iter(ctx.get("webhook_config", {}).values()), {}).get("url", _WEBHOOK_URL)
+    webhook_configs: dict[str, dict[str, Any]] = ctx.get("webhook_config", {})
+    webhook_url = next(iter(webhook_configs.values()), {}).get("url", _WEBHOOK_URL)
     endpoint_key = f"{env._tenant_id}:{webhook_url}"
     if endpoint_key not in service._circuit_breakers:
         service._circuit_breakers[endpoint_key] = CircuitBreaker()
@@ -658,16 +683,54 @@ def given_seller_no_capability(ctx: dict, capability: str) -> None:
     ctx.setdefault("unsupported_capabilities", []).append(capability)
 
 
+# REMOVED (GH #1726): given_seller_no_attribution ("the seller does NOT support
+# configurable attribution windows"). It only wrote ctx["supports_attribution_windows"] = False,
+# a flag no production code reads, so it produced state byte-identical to its "supports" sibling
+# and the two scenarios were the same test. Its scenario (T-UC-004-attr-unsupported) has been
+# reconciled away: this seller always honours the requested window, which AdCP 3.1.1 permits.
+# 39 sibling dead Given flags are tracked in GH #1752.
+
+
 @given("the seller supports configurable attribution windows")
 def given_seller_supports_attribution(ctx: dict) -> None:
-    """Seller supports configurable attribution windows."""
-    ctx["supports_attribution_windows"] = True
+    """State the precondition that this seller honours configurable attribution windows.
 
+    Kept — unlike its deleted "does NOT support" sibling — because two live scenarios still
+    use it (T-UC-004-attr-custom and the campaign-unit valid row).
 
-@given("the seller does NOT support configurable attribution windows")
-def given_seller_no_attribution(ctx: dict) -> None:
-    """Seller does not support configurable attribution windows."""
-    ctx["supports_attribution_windows"] = False
+    It formerly wrote ``ctx["supports_attribution_windows"] = True``, a flag nothing reads, which
+    gave the false impression of configuring something. There is nothing to configure: this
+    seller has no capability gate, so the precondition is true by construction. Rather than
+    assert nothing, the step now VERIFIES that — it calls the production resolver and confirms a
+    requested window really is honoured. If a capability gate is ever introduced (see the
+    reconciliation note on T-UC-004-attr-unsupported), this Given fails loudly instead of letting
+    the scenarios above quietly stop testing what they claim.
+    """
+    from adcp.types import Duration
+    from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
+        AttributionWindow as RequestAttributionWindow,  # TODO: no stable alias in adcp.types
+    )
+
+    from src.core.schemas.delivery import GetMediaBuyDeliveryRequest
+    from src.core.tools.media_buy_delivery import _resolve_attribution_window
+
+    # A real request model, not a SimpleNamespace stand-in: the resolver is typed for
+    # GetMediaBuyDeliveryRequest, and a duck-typed probe both hid a mypy arg-type error
+    # and would keep passing if the resolver started reading a field the stand-in lacks.
+    probe = GetMediaBuyDeliveryRequest(
+        media_buy_ids=["mb-capability-probe"],
+        attribution_window=RequestAttributionWindow(
+            post_click=Duration(interval=5, unit="days"),
+        ),
+    )
+    resolved = _resolve_attribution_window(probe, None)
+    assert resolved.post_click is not None and resolved.post_click.interval == 5, (
+        "Precondition violated: this seller no longer honours a configurable attribution window "
+        f"(requested post_click interval 5 days, resolver returned {resolved.post_click!r}). "
+        "A capability gate appears to have been added — revisit GH #1726, which removed "
+        "the 'seller does NOT support configurable attribution windows' scenario on the premise "
+        "that no such gate exists."
+    )
 
 
 @given(parsers.parse('the seller does NOT report metric "{metric}"'))
@@ -917,6 +980,14 @@ def when_evaluate_circuit_breaker(ctx: dict) -> None:
     cb = service._circuit_breakers.get(endpoint_key)
     if cb is not None:
         ctx["cb_can_attempt"] = cb.can_attempt()
+
+    # Baseline for the probe-count oracle in `then_single_probe`. The probe is dispatched by the
+    # call_send() below, so "how many probes did half-open allow?" is the delta across THIS step —
+    # not the scenario's total POST count. Recording it here is what lets that Then step
+    # distinguish one probe from ten.
+    mock_post = env.mock.get("post")
+    ctx["pre_probe_call_count"] = mock_post.call_count if mock_post is not None else 0
+
     try:
         ctx["circuit_result"] = env.call_send()
     except Exception as exc:
@@ -1467,9 +1538,17 @@ def then_only_status(ctx: dict, status: str) -> None:
     Guards against a vacuous pass: if the scenario filters on a status with no
     seeded buy, the response is empty and a bare per-item loop would assert
     nothing (#1545 review). Require at least one matching buy so the filter is
-    actually exercised. ``status`` is normalized off the enum's ``.value`` since
-    MediaBuyDeliveryStatus is an Enum (not a str-enum), so identity-compares
-    against the plain wire string would otherwise fail.
+    actually exercised.
+
+    ``status`` needs no enum normalization. The previous docstring here claimed
+    "MediaBuyDeliveryStatus is an Enum (not a str-enum), so identity-compares against
+    the plain wire string would otherwise fail" -- that was wrong twice over, and the
+    ``getattr(raw, "value", raw)`` unwrap it justified was dead code.
+    ``MediaBuyDeliveryData`` sets ``use_enum_values=True``
+    (src/core/schemas/delivery.py), so ``d.status`` is already a plain ``str`` at
+    runtime; and the underlying enum is a ``StrEnum`` anyway, so even unconverted it
+    would compare equal to the wire string. See GH #1749's sibling ticket on
+    defensive enum unwrapping.
     """
     resp = ctx.get("response")
     assert resp is not None, "Expected a response"
@@ -1479,8 +1558,7 @@ def then_only_status(ctx: dict, status: str) -> None:
         f"for this status or the assertion passes vacuously."
     )
     for d in deliveries:
-        raw = getattr(d, "status", None)
-        actual = getattr(raw, "value", raw)  # Enum -> wire string; str passthrough
+        actual = getattr(d, "status", None)
         assert actual == status, f"Expected status '{status}', got '{actual}' for {d.media_buy_id}"
 
 
@@ -1528,12 +1606,24 @@ def then_period_end_today(ctx: dict) -> None:
 
 @then("the system should POST a delivery report to the configured webhook URL")
 def then_webhook_post(ctx: dict) -> None:
-    """Assert webhook POST was made to the configured URL."""
+    """Assert webhook POST was made to the configured URL.
+
+    The expected URL is the one the scenario actually configured. It used to default to
+    ``"https://example.com/webhook"``, a literal that nothing writes and that does not even
+    match the harness constant ``_WEBHOOK_URL`` — so the first run of this step would have
+    compared the real POST target against a URL appearing nowhere in the setup. The step is
+    masked today only because its scenario is xfailed on an unrelated production gap, which
+    made it a landmine for whoever implements webhook delivery. See GH #1749.
+    """
     env = ctx["env"]
     assert env.mock["post"].called, "Expected webhook POST but none was made"
     call_args = env.mock["post"].call_args
     called_url = call_args[0][0] if call_args[0] else call_args[1].get("url", "")
-    configured_url = ctx.get("webhook_url", "https://example.com/webhook")
+    configured_url = _require(
+        ctx,
+        "webhook_url",
+        hint="the Given that configures the reporting_webhook must record the URL it configured",
+    )
     assert called_url == configured_url, (
         f"Webhook POST went to wrong URL: expected {configured_url!r}, got {called_url!r}"
     )
@@ -1734,6 +1824,9 @@ def then_log_auth_rejection(ctx: dict) -> None:
     assert success is False, f"Expected webhook delivery to fail on auth rejection, got success={success!r}"
 
     # 2. Verify auth rejection was logged
+    # FIXME(#1749): reads ctx 'captured_logs', which no step writes — dead branch,
+    # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
+    # where the precondition is established, or delete the read; then drop it from the allowlist.
     log_records = getattr(env, "captured_logs", None) or ctx.get("captured_logs")
     assert log_records is not None, "CircuitBreakerEnv.captured_logs not available — harness must capture logs"
     found_auth_log = any("client error" in r.lower() or "401" in r or "unauthorized" in r.lower() for r in log_records)
@@ -1824,33 +1917,50 @@ def then_single_probe(ctx: dict) -> None:
     """Assert exactly one probe delivery was dispatched in half-open state.
 
     The preceding step already verified the breaker transitioned to half_open.
-    This step verifies the behavioral claim: exactly one probe attempt was
-    made — the POST call count should have increased by exactly 1 since the
-    breaker opened, or the probe_count in ctx should be exactly 1.
+    This step verifies the behavioral claim: exactly one probe attempt was made.
+
+    The mock lookup here used to ask for ``httpx_post`` / ``webhook_post``. No env defines
+    either key, so it ALWAYS missed and the step fell through to
+    ``pytest.xfail("HARNESS GAP: no webhook POST mock")``. There was no missing mock — the key
+    was wrong, and this step's own claim went ungraded for the scenario's whole lifetime behind
+    a false excuse. ``CircuitBreakerEnv`` does expose it, as ``mock["post"]``
+    (``tests/harness/delivery_circuit_breaker_unit.py:74``). The baseline was a phantom too:
+    ``ctx.get("pre_open_call_count", 0)`` over a key nothing wrote, so the default turned the
+    half-open delta into the scenario's TOTAL POST count. See GH #1749.
+
+    Correcting the lookup exposes a real and deeper gap: the probe is logged as scheduled but
+    never reaches httpx post, so ``call_count`` is 0 for the whole scenario — GH #1781. The
+    xfail below is narrowed to exactly that case, so a non-zero-but-wrong count still fails
+    loudly instead of being swallowed.
     """
     env = ctx["env"]
     probe_count = ctx.get("probe_count")
     if probe_count is not None:
         # Probe count was explicitly recorded by the When step
         assert probe_count == 1, f"Expected exactly 1 probe delivery attempt, got {probe_count}"
-    else:
-        # Check mock POST call count as evidence of dispatch
-        mock_post = env.mock.get("httpx_post") or env.mock.get("webhook_post")
-        if mock_post is not None:
-            # Count calls that happened during the half-open phase
-            pre_open_calls = ctx.get("pre_open_call_count", 0)
-            probe_dispatches = mock_post.call_count - pre_open_calls
-            assert probe_dispatches == 1, (
-                f"Expected exactly 1 probe dispatch in half-open state, "
-                f"got {probe_dispatches} (total={mock_post.call_count}, pre-open={pre_open_calls})"
-            )
-        else:
-            # No dispatch mock — verify the CB gate at least allowed the attempt
-            cb_can_attempt = ctx.get("cb_can_attempt")
-            assert cb_can_attempt is True, (
-                f"Circuit breaker did not allow the probe attempt (can_attempt={cb_can_attempt!r})"
-            )
-            pytest.xfail("HARNESS GAP: no webhook POST mock — cannot count probe dispatches")
+        return
+
+    mock_post = env.mock.get("post")
+    assert mock_post is not None, (
+        f"{type(env).__name__} exposes no POST mock, so 'exactly one probe' cannot be counted. "
+        f"Available mocks: {sorted(env.mock)}"
+    )
+    pre_probe_calls = _require(
+        ctx,
+        "pre_probe_call_count",
+        hint="the When step that evaluates the circuit breaker must record the POST count before dispatching the probe",
+    )
+    if mock_post.call_count == 0:
+        pytest.xfail(
+            "HARNESS GAP(GH #1781): the half-open probe is logged as scheduled but never reaches "
+            "httpx post within this step, so 'exactly one probe' is unobservable here"
+        )
+
+    probe_dispatches = mock_post.call_count - pre_probe_calls
+    assert probe_dispatches == 1, (
+        f"Expected exactly 1 probe dispatch in half-open state, got {probe_dispatches} "
+        f"(total={mock_post.call_count}, pre-probe={pre_probe_calls})"
+    )
 
 
 @then("normal scheduled deliveries should resume")
@@ -2091,10 +2201,20 @@ def then_error_no_reveal(ctx: dict) -> None:
     leaking_phrases = ["exists", "belongs to", "owned by", "not authorized for", "access denied"]
     for phrase in leaking_phrases:
         assert phrase not in msg, f"Error leaks existence info via phrase {phrase!r}: {error}"
-    # The media_buy_id should not be echoed back in a way that confirms existence
-    mb_id = ctx.get("target_media_buy_id") or ctx.get("media_buy_id") or ""
-    if mb_id:
-        assert msg.count(mb_id.lower()) <= 1, (
+    # The media_buy_id should not be echoed back in a way that confirms existence.
+    #
+    # Sourced from what the When step actually dispatched, not from ctx keys no step
+    # writes. The previous read (`ctx["target_media_buy_id"] or ctx["media_buy_id"]`)
+    # was always empty, so the `if mb_id:` guard was never true and this half of the
+    # step asserted nothing — GH #1749 (dead ctx read) meeting GH #1751 (guard on the
+    # artifact being graded).
+    requested_ids = dispatched_field(ctx, "media_buy_ids") or []
+    assert requested_ids, (
+        "the dispatched request named no media_buy_ids, so there is no identifier whose "
+        "echo could reveal existence — this step belongs only in scenarios that query one"
+    )
+    for mb_id in requested_ids:
+        assert msg.count(str(mb_id).lower()) <= 1, (
             f"Error repeatedly echoes media_buy_id {mb_id!r}, which may reveal existence: {error}"
         )
 
@@ -2207,21 +2327,21 @@ def then_packages_limited(ctx: dict, field: str, n: int) -> None:
 
     Verifies the count constraint and that entries are properly typed (list
     of dicts/objects with at least one field populated).
+
+    Graded on the WIRE via :func:`_wire_packages` — the buyer's view, not the
+    coerced typed payload.
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
-    packages = _collect_all_packages(resp)
+    packages = _wire_packages(ctx)
     checked = 0
     for pkg in packages:
-        value = getattr(pkg, field)
-        assert isinstance(value, list), f"Package {pkg.package_id!r} missing '{field}' as a list: {value!r}"
+        pkg_id = pkg.get("package_id")
+        value = pkg.get(field)
+        assert isinstance(value, list), f"Package {pkg_id!r} missing '{field}' as a list: {value!r}"
         actual_count = len(value)
-        assert actual_count <= n, (
-            f"Package {pkg.package_id!r} '{field}' has {actual_count} entries, expected at most {n}"
-        )
+        assert actual_count <= n, f"Package {pkg_id!r} '{field}' has {actual_count} entries, expected at most {n}"
         # Each entry must be a non-empty dict or object (not bare None)
         for entry in value:
-            assert entry is not None, f"Package {pkg.package_id!r} '{field}' contains a None entry"
+            assert entry is not None, f"Package {pkg_id!r} '{field}' contains a None entry"
         checked += 1
     assert checked >= 1, "Response has no packages to check"
 
@@ -2232,13 +2352,16 @@ def then_field_true(ctx: dict, field: str) -> None:
 
     Truncation flags (by_geo_truncated, by_device_type_truncated) live on
     PackageDelivery, not on the top-level response object.
+
+    Graded on the WIRE via :func:`_wire_packages`, and with ``is True`` — so a flag
+    serialized as the string "true" (which the typed payload would coerce back to a
+    boolean) fails here. Absence fails too, as it must: the response schema requires
+    by_*_truncated whenever the matching by_* array is present.
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
-    packages = _collect_all_packages(resp)
+    packages = _wire_packages(ctx)
     assert packages, "Response has no packages to check"
     for pkg in packages:
-        value = getattr(pkg, field, None)
+        value = pkg.get(field)
         assert value is True, f"Expected response package.{field} to be True, got {value!r}"
 
 
@@ -2248,13 +2371,16 @@ def then_field_false(ctx: dict, field: str) -> None:
 
     Truncation flags (by_geo_truncated, by_device_type_truncated) live on
     PackageDelivery, not on the top-level response object.
+
+    Graded on the WIRE via :func:`_wire_packages`, and with ``is False`` — so a flag
+    serialized as the string "false" (which the typed payload would coerce back to a
+    boolean) fails here. Absence fails too, as it must: the response schema requires
+    by_*_truncated whenever the matching by_* array is present.
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
-    packages = _collect_all_packages(resp)
+    packages = _wire_packages(ctx)
     assert packages, "Response has no packages to check"
     for pkg in packages:
-        value = getattr(pkg, field, None)
+        value = pkg.get(field)
         assert value is False, f"Expected response package.{field} to be False, got {value!r}"
 
 
@@ -2337,13 +2463,28 @@ def then_geo_system(ctx: dict, system: str) -> None:
             f"PRODUCTION GAP: by_geo breakdown not populated in response — "
             f"cannot verify classification system '{system}'"
         )
-    # If geo data is present, verify system field
+    # Geo data is present (the xfail above covers its absence), so every entry must
+    # declare the system it classified by. No `if geo_system is not None` guard: the
+    # scenario NAMES the system it expects, so an entry declaring none leaves that
+    # claim ungraded, which is the whole defect class of GH #1751.
+    #
+    # GeoBreakdown.system is `str | None` in the schema, but AdCP 3.1.1 requires it in
+    # the field description for the metro/postal_area levels this step runs for, and
+    # the step text asserts a specific system either way.
+    checked = 0
     for pkg in packages:
         by_geo = getattr(pkg, "by_geo", None) or []
         for entry in by_geo:
             geo_system = entry.get("system") if isinstance(entry, dict) else getattr(entry, "system", None)
-            if geo_system is not None:
-                assert geo_system == system, f"Geo breakdown system mismatch: expected '{system}', got '{geo_system}'"
+            assert geo_system == system, (
+                f"Geo breakdown system mismatch in package {getattr(pkg, 'package_id', '?')!r}: "
+                f"expected {system!r}, got {geo_system!r}"
+            )
+            checked += 1
+    assert checked >= 1, (
+        f"No by_geo entries were graded, so 'uses classification system {system}' asserted nothing "
+        f"— {len(packages)} package(s) reported a by_geo list, all empty"
+    )
 
 
 @then(parsers.parse('the response placement breakdown should be sorted by "{metric}" (fallback)'))
@@ -2383,119 +2524,140 @@ def then_placement_sorted(ctx: dict, metric: str) -> None:
 # ── Attribution window assertions ─────────────────────────────────
 
 
+def _wire_attribution_window(ctx: dict, *, expectation: str) -> dict:
+    """Return the response's attribution_window as the buyer sees it on the WIRE.
+
+    The one reader every attribution assertion in this module goes through.
+    Asserts the request succeeded, that the response carries deliveries, and
+    that attribution_window is present — BR-RULE-092 requires the seller to echo
+    the applied window on every successful delivery response, so its absence is
+    a failure here rather than a skipped assertion.
+
+    Reads through ``wire_dict``, which raises when a real-wire transport did not
+    stash a body, so this cannot silently degrade into asserting on a typed
+    payload whose fields are already coerced.
+    """
+    assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
+    wire = wire_dict(ctx)
+    # A 200 can still carry advisory errors (media_buy_delivery.py:689 populates
+    # `errors` on partial success). Without this, such a response graded as a clean
+    # echo — the absence of ctx["error"] only rules out a raised exception.
+    assert not wire.get("errors"), f"Response carries advisory errors, so it is not a clean echo: {wire.get('errors')}"
+    assert wire.get("media_buy_deliveries"), "Expected non-empty media_buy_deliveries"
+    assert "attribution_window" in wire, f"Response omits attribution_window — {expectation}. Wire keys: {sorted(wire)}"
+    aw = wire["attribution_window"]
+    assert isinstance(aw, dict), f"attribution_window is {type(aw).__name__}, expected an object"
+    return aw
+
+
+def _wire_attribution_model(ctx: dict, *, expectation: str) -> str:
+    """Return attribution_window.model off the wire, asserting it is present."""
+    aw = _wire_attribution_window(ctx, expectation=expectation)
+    model = aw.get("model")
+    assert model is not None, "attribution_window.model is None — required by BR-RULE-092"
+    return model
+
+
+def _campaign_flight_days() -> int:
+    """The seeded flight length a campaign-unit window must resolve to, in days.
+
+    given_media_buy_with_status passes no dates, so MediaBuyFactory's defaults
+    (2025-01-01 → 2027-12-31) define the flight. Sourced from the FIXTURE, not
+    from the response's own dates — an oracle that mirrored production's
+    subtraction of response fields could not catch a wrong flight, a fallback,
+    or a clamp. (It still shares production's `.days` subtraction, the accepted
+    tradeoff over pinning a literal that breaks when the fixture moves.)
+    """
+    from tests.factories import MediaBuyFactory
+
+    return (MediaBuyFactory.end_date - MediaBuyFactory.start_date).days
+
+
+_CAMPAIGN_FLIGHT_DAYS = _campaign_flight_days()
+
+
 @then(parsers.parse('the response should include attribution_window with model "{model}"'))
 def then_attribution_model(ctx: dict, model: str) -> None:
     """Assert attribution window model matches the expected value.
 
-    Verifies the response carries an attribution_window whose model field
-    equals the expected model string.
+    The Gherkin literal and the dispatched request are cross-checked first:
+    the model this step demands must be exactly what the dispatched
+    attribution_window implies (buyer's model, else platform default). This
+    ties the scenario to INV-1 — a literal that happens to coincide with the
+    platform default while the When sends a different (or no) model is a
+    scenario bug, not a pass. The INV-1 scenario once requested last_touch,
+    which IS the default, so production ignoring the buyer's model was
+    byte-identical to applying it and this step graded nothing.
     """
-    assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
-    assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
-    assert resp.reporting_period is not None, "Expected reporting_period"
+    expected_model = _expected_attribution_model(ctx)
+    assert model == expected_model, (
+        f"Scenario literal {model!r} disagrees with the dispatched request, which implies "
+        f"{expected_model!r} — the Gherkin pair must request and assert the same model"
+    )
+    actual_model = _wire_attribution_model(ctx, expectation=f"expected model {model!r} to be echoed")
+    assert actual_model == expected_model, (
+        f"attribution_window.model should be '{expected_model}', got '{actual_model}'"
+    )
 
-    aw = getattr(resp, "attribution_window", None)
-    assert aw is not None, f"Response missing attribution_window — expected model '{model}' to be echoed"
-    assert aw.model is not None, "attribution_window.model is None"
-    actual_model = aw.model.value if hasattr(aw.model, "value") else str(aw.model)
-    assert actual_model == model, f"attribution_window.model should be '{model}', got '{actual_model}'"
+
+def _dispatched_post_click(ctx: dict) -> dict:
+    """Return the post_click window this scenario actually dispatched.
+
+    Derived from the ``dispatched_kwargs`` channel, never from a literal default:
+    a ``.get(key, 7)`` style fallback silently turns an echo assertion into a
+    constant (GH #1749).
+    """
+    window = dispatched_field(ctx, "attribution_window")
+    assert window is not None, (
+        "the dispatched request carried no attribution_window, so there is nothing to echo — "
+        "this step belongs only in scenarios whose When step requests one"
+    )
+    post_click = window.get("post_click")
+    assert post_click is not None, (
+        f"the dispatched attribution_window has no post_click window: {window!r} — "
+        "this step asserts the post_click echo specifically"
+    )
+    return post_click
 
 
 @then("the attribution_window should echo the applied post_click window")
 def then_attribution_echo(ctx: dict) -> None:
-    """Assert attribution window echoes the buyer's requested post_click values.
+    """Assert attribution_window echoes the APPLIED post_click window (BR-RULE-092 INV-3).
 
-    The production code echoes the buyer-requested post_click window
-    (preserving unit and interval).  This step verifies the echoed values
-    match the request — not merely that they are non-None.
+    Expected values come from what the scenario dispatched, so changing the
+    scenario's requested window changes what this step demands.
+
+    Asserts value equality for both interval and unit. (Exact TYPE equality is
+    not graded on a2a: its DataPart routes through protobuf Value, which widens
+    every integer to an integral float — ``14.0 == 14`` keeps the comparison
+    honest on value; see _dict_to_value in src/a2a_server/adcp_a2a_server.py
+    and tests/unit/test_a2a_numeric_wire.py.) ``unit=campaign`` is the
+    one window production does NOT echo verbatim — it resolves to the flight
+    length in days (src/core/tools/media_buy_delivery.py:980-990) — but no
+    scenario requests campaign through this step, so there is deliberately no
+    branch for it: a weaker "resolved to some positive number of days" check
+    would assert almost nothing. If a scenario ever does request campaign here,
+    this fails, and the fix is to derive the expected day count from the flight
+    dates the Given seeded — with that scenario as the thing proving it right.
     """
-    assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
-    assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
+    aw = _wire_attribution_window(ctx, expectation="expected the post_click window to be echoed")
 
-    aw = getattr(resp, "attribution_window", None)
-    assert aw is not None, "Response missing attribution_window — expected post_click echo"
-
-    pc = aw.post_click
+    pc = aw.get("post_click")
     assert pc is not None, (
         "attribution_window.post_click is None — buyer requested a post_click window which should be echoed"
     )
 
-    # Read the buyer-requested values from ctx (set by the When step)
-    requested = ctx.get("request_attribution", {})
-    req_interval = requested.get("post_click_interval", 7)
-    req_unit = requested.get("post_click_unit", "days")
-
-    # Assert the echoed values match the request
-    assert pc.interval == req_interval, (
-        f"attribution_window.post_click.interval should echo request value {req_interval}, got {pc.interval}"
-    )
-    pc_unit = pc.unit.value if hasattr(pc.unit, "value") else str(pc.unit)
-    assert pc_unit == req_unit, (
-        f"attribution_window.post_click.unit should echo request value {req_unit!r}, got {pc_unit!r}"
-    )
+    requested = _dispatched_post_click(ctx)
+    assert pc == requested, f"attribution_window.post_click should echo the request {requested}, got {pc}"
 
 
-@then("the response should include attribution_window with the seller's platform default")
-def then_attribution_default(ctx: dict) -> None:
-    """Assert attribution window uses the seller's platform default.
-
-    When the seller does NOT support configurable attribution, the response
-    should contain only the platform default model without buyer-requested
-    post_click/post_view windows.
-    """
-    from src.core.tools.media_buy_delivery import PLATFORM_DEFAULT_ATTRIBUTION_MODEL
-
-    assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
-    assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
-    assert resp.reporting_period is not None, "Expected reporting_period in response"
-
-    # Attribution window must be present
-    aw = getattr(resp, "attribution_window", None)
-    assert aw is not None, (
-        "Response missing attribution_window — production should always "
-        "echo an attribution window even for unsupported sellers"
-    )
-    assert aw.model is not None, "attribution_window.model is None — must carry the model"
-
-    # Model should be the platform default
-    actual_model = aw.model.value if hasattr(aw.model, "value") else str(aw.model)
-    expected_model = (
-        PLATFORM_DEFAULT_ATTRIBUTION_MODEL.value
-        if hasattr(PLATFORM_DEFAULT_ATTRIBUTION_MODEL, "value")
-        else str(PLATFORM_DEFAULT_ATTRIBUTION_MODEL)
-    )
-    assert actual_model == expected_model, (
-        f"attribution_window.model should be platform default '{expected_model}', got '{actual_model}'"
-    )
-
-    # When seller does not support configurable windows, post_click/post_view
-    # should be None — the buyer's requested window must be discarded.
-    pc = getattr(aw, "post_click", "MISSING")
-    pv = getattr(aw, "post_view", "MISSING")
-    if pc != "MISSING" or pv != "MISSING":
-        # Production currently echoes the buyer request instead of stripping it.
-        # Xfail only the specific assertion that checks the unimplemented behavior.
-        try:
-            assert pc is None, (
-                f"attribution_window.post_click should be None for unsupported seller "
-                f"(buyer request should be discarded), got {pc!r}"
-            )
-            assert pv is None, (
-                f"attribution_window.post_view should be None for unsupported seller "
-                f"(buyer request should be discarded), got {pv!r}"
-            )
-        except AssertionError:
-            pytest.xfail(
-                "PRODUCTION GAP: seller 'does NOT support configurable attribution' "
-                "check not implemented — production echoes buyer request instead of "
-                "returning bare platform default (post_click/post_view should be None)"
-            )
+# REMOVED (GH #1726): then_attribution_default. It graded the deleted
+# T-UC-004-attr-unsupported scenario, and it wrapped its own post_click/post_view
+# assertions in `try/except AssertionError: pytest.xfail(...)` -- the only
+# self-swallowing assertion in the repo, invisible to the conftest xfail sweep and to
+# the xpass audit, so it could never graduate and would have stayed green if the gap
+# ever closed. Both it and its scenario are gone; see the RECONCILED note in
+# BR-UC-004-deliver-media-buy-metrics.feature.
 
 
 @then('the response attribution_window should include "model" field (required)')
@@ -2507,17 +2669,8 @@ def then_attribution_has_model(ctx: dict) -> None:
     """
     from adcp.types.generated_poc.enums.attribution_model import AttributionModel
 
-    assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
-    assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
-
-    aw = getattr(resp, "attribution_window", None)
-    assert aw is not None, "Response missing attribution_window — BR-RULE-092 requires it"
-    assert aw.model is not None, "attribution_window.model is None — required by spec (BR-RULE-092)"
-    # Model must be one of the spec-allowed values
+    actual_model = _wire_attribution_model(ctx, expectation="BR-RULE-092 requires it")
     valid_models = {m.value for m in AttributionModel}
-    actual_model = aw.model.value if hasattr(aw.model, "value") else str(aw.model)
     assert actual_model in valid_models, (
         f"attribution_window.model '{actual_model}' is not a valid AttributionModel value: {valid_models}"
     )
@@ -2533,23 +2686,10 @@ def then_attribution_default_model(ctx: dict) -> None:
     """
     from src.core.tools.media_buy_delivery import PLATFORM_DEFAULT_ATTRIBUTION_MODEL
 
-    assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
-    assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
-    assert resp.reporting_period is not None, "Expected reporting_period in response"
-
-    aw = getattr(resp, "attribution_window", None)
-    assert aw is not None, (
-        "Response missing attribution_window — production should echo the platform default when buyer omits it"
+    actual_model = _wire_attribution_model(
+        ctx, expectation="production should echo the platform default when the buyer omits it"
     )
-    assert aw.model is not None, "attribution_window.model is None — must carry the platform default"
-    actual_model = aw.model.value if hasattr(aw.model, "value") else str(aw.model)
-    expected_model = (
-        PLATFORM_DEFAULT_ATTRIBUTION_MODEL.value
-        if hasattr(PLATFORM_DEFAULT_ATTRIBUTION_MODEL, "value")
-        else str(PLATFORM_DEFAULT_ATTRIBUTION_MODEL)
-    )
+    expected_model = PLATFORM_DEFAULT_ATTRIBUTION_MODEL.value
     assert actual_model == expected_model, (
         f"attribution_window.model should be platform default '{expected_model}', got '{actual_model}'"
     )
@@ -2562,35 +2702,23 @@ def then_attribution_campaign_length(ctx: dict) -> None:
     When the buyer requests post_click with unit=campaign and interval=1,
     production resolves this to unit=days with interval=campaign_length_days.
     The response must carry an attribution_window with a post_click whose
-    unit is 'days' and interval >= 1.
+    unit is 'days' and interval equal to the seeded flight length.
     """
-    assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response but none found"
-
-    # Response-level structural assertions
-    assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
-    assert resp.reporting_period is not None, "Expected reporting_period in response"
-
-    # Attribution window assertions
-    aw = getattr(resp, "attribution_window", None)
-    assert aw is not None, (
-        "Response missing attribution_window — production should resolve "
-        "campaign-unit window and echo it in the response"
-    )
-    assert aw.model is not None, "attribution_window.model is None — must carry the attribution model"
+    aw = _wire_attribution_window(ctx, expectation="production should resolve the campaign-unit window and echo it")
+    assert aw.get("model") is not None, "attribution_window.model is None — must carry the attribution model"
 
     # post_click must be present and resolved from campaign to days
-    pc = aw.post_click
+    pc = aw.get("post_click")
     assert pc is not None, (
         "attribution_window.post_click is None — buyer requested post_click={interval:1, unit:campaign}"
     )
-    pc_unit = pc.unit.value if hasattr(pc.unit, "value") else str(pc.unit)
-    assert pc_unit == "days", (
-        f"attribution_window.post_click.unit should be 'days' (resolved from 'campaign'), got '{pc_unit}'"
+    assert pc["unit"] == "days", (
+        f"attribution_window.post_click.unit should be 'days' (resolved from 'campaign'), got '{pc['unit']}'"
     )
-    assert pc.interval >= 1, (
-        f"attribution_window.post_click.interval should be >= 1 (campaign length in days), got {pc.interval}"
+    assert pc["interval"] == _CAMPAIGN_FLIGHT_DAYS, (
+        f"attribution_window.post_click.interval should be the seeded flight length "
+        f"({_CAMPAIGN_FLIGHT_DAYS} days), got {pc['interval']} — a campaign-unit window "
+        f"must span the full flight, not a collapsed or clamped lookback"
     )
 
 
@@ -2628,19 +2756,23 @@ def then_zero_metrics(ctx: dict, mb_id: str) -> None:
 
 @then("no real billing records should have been created")
 def then_no_billing(ctx: dict) -> None:
-    """Assert sandbox mode — verify via response flag and absence of billing adapter calls."""
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
+    """Assert sandbox mode via the response's own sandbox flag."""
+    resp = _require_response(ctx)
     sandbox = getattr(resp, "sandbox", None)
     assert sandbox is True, (
         f"Expected sandbox=True in response indicating no real billing records were created, got sandbox={sandbox!r}"
     )
-    # Secondary: no adapter billing/charge methods should have been called
-    env = ctx["env"]
-    for mock_name in ("charge", "create_billing_record", "bill"):
-        mock = env.mock.get(mock_name)
-        if mock is not None:
-            assert not mock.called, f"Billing adapter method '{mock_name}' was called in sandbox mode"
+    # REMOVED (GH #1751): a "secondary" loop over env.mock.get(name) for
+    # ("charge", "create_billing_record", "bill"), each assertion nested under
+    # `if mock is not None`. No harness env has ever exposed a mock by any of those
+    # names — DeliveryPollEnv patches exactly one external, "adapter" — so all three
+    # lookups returned None and the loop body never executed. It read as a second
+    # line of defence while grading nothing.
+    #
+    # Not replaced with an "adapter was not called" assertion: sandbox delivery still
+    # calls the adapter to fetch metrics, so that would assert the opposite of the
+    # contract. The response flag above is the real grader; when a billing side effect
+    # becomes observable in the harness, assert on it here unconditionally.
 
 
 # ── Partition/boundary outcome assertions ─────────────────────────────
@@ -2699,6 +2831,83 @@ def _delivery_boundary_handler(ctx: dict, field: str, expected: str) -> bool:
     return True
 
 
+def _dispatched_attribution_window(ctx: dict) -> dict:
+    """Return the attribution_window this scenario dispatched, or {} if it sent none.
+
+    ``{}`` is the honest answer for the ``omitted`` row — the buyer sent nothing,
+    so the seller's default applies. It is NOT a fallback that hides a missing
+    record: ``dispatched_kwargs`` itself is required, so a scenario that never
+    dispatched fails loudly rather than silently grading against a default.
+    """
+    return dispatched_field(ctx, "attribution_window") or {}
+
+
+def _expected_attribution_model(ctx: dict) -> str:
+    """The model value the seller must echo, derived from the dispatched request.
+
+    BR-RULE-092: the buyer's model when given, otherwise the seller's platform
+    default. The ``omitted`` and ``empty_object`` rows reach the default by two
+    different production branches (``requested is None`` at
+    media_buy_delivery.py:979 vs ``requested.model or default`` at :992), so both
+    are graded here rather than assumed equivalent.
+    """
+    from src.core.tools.media_buy_delivery import PLATFORM_DEFAULT_ATTRIBUTION_MODEL
+
+    requested_model = _dispatched_attribution_window(ctx).get("model")
+    return requested_model or PLATFORM_DEFAULT_ATTRIBUTION_MODEL.value
+
+
+def _assert_attribution_echoed_on_wire(ctx: dict, field: str) -> None:
+    """Assert the applied attribution_window on the WIRE (BR-RULE-092 INV-1/2/3).
+
+    Unconditional by construction: reads through ``wire_dict``, which raises when
+    a real-wire transport did not stash a wire body, and indexes
+    ``attribution_window`` directly. A response that omits the field fails here
+    rather than skipping the assertion — the regression these rows exist to catch.
+
+    Grades the model VALUE (not key presence) and, when the buyer named a
+    lookback window, that it comes back verbatim. ``unit=campaign`` is the one
+    exception: production resolves it to the flight length in days
+    (media_buy_delivery.py:980-990), so only its shape is asserted.
+    """
+    aw = _wire_attribution_window(ctx, expectation=f"valid {field} row requires the seller to echo the applied window")
+    expected_model = _expected_attribution_model(ctx)
+    assert aw.get("model") == expected_model, (
+        f"Valid {field}: attribution_window.model should be {expected_model!r}, got {aw.get('model')!r}"
+    )
+
+    requested = _dispatched_attribution_window(ctx)
+    for window_name in ("post_click", "post_view"):
+        req_window = requested.get(window_name)
+        if req_window is None:
+            # INV-4: the applied window the seller echoes must not contain a
+            # lookback the buyer never asked for — fabricated conversion
+            # attribution would otherwise be graded by nothing, anywhere.
+            assert aw.get(window_name) is None, (
+                f"Valid {field}: buyer requested no {window_name}, but the response echoed "
+                f"{aw.get(window_name)} — the seller must not fabricate a lookback window"
+            )
+            continue
+        echoed = aw.get(window_name)
+        assert echoed is not None, (
+            f"Valid {field}: buyer requested {window_name}={req_window} but the response did not echo it"
+        )
+        if req_window["unit"] == "campaign":
+            # Resolved to the flight length; assert the shape production promises.
+            assert echoed["unit"] == "days", (
+                f"Valid {field}: a campaign-unit {window_name} must be echoed resolved to days, got {echoed['unit']!r}"
+            )
+            assert echoed["interval"] == _CAMPAIGN_FLIGHT_DAYS, (
+                f"Valid {field}: resolved campaign {window_name} must span the seeded flight "
+                f"({_CAMPAIGN_FLIGHT_DAYS} days), got {echoed['interval']} — a collapsed or "
+                f"clamped lookback silently shortens the buyer's attribution"
+            )
+        else:
+            assert echoed == req_window, (
+                f"Valid {field}: {window_name} should be echoed verbatim as {req_window}, got {echoed}"
+            )
+
+
 def _assert_valid_content(ctx: dict, field: str) -> None:
     """Per-field content assertion for 'valid' partition/boundary outcomes."""
     resp = ctx.get("response")
@@ -2710,11 +2919,13 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
         requested_filter = request_params.get("status_filter")
         if requested_filter and deliveries:
             for d in deliveries:
+                # No `if actual_status:` guard — a delivery that comes back with no status is
+                # itself a filter violation (the filter cannot have been applied to it), and
+                # guarding on it let exactly that case pass silently. See GH #1751.
                 actual_status = getattr(d, "status", None)
-                if actual_status:
-                    assert actual_status in requested_filter, (
-                        f"Status filter violation: got status '{actual_status}' but filter requested {requested_filter}"
-                    )
+                assert actual_status in requested_filter, (
+                    f"Status filter violation: got status {actual_status!r} but filter requested {requested_filter}"
+                )
 
     elif field == "resolution":
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
@@ -2739,24 +2950,38 @@ def _assert_valid_content(ctx: dict, field: str) -> None:
             )
 
     elif field in ("attribution_window", "attribution window"):
-        resp_dict = resp.model_dump() if hasattr(resp, "model_dump") else {}
-        if isinstance(resp_dict, dict):
-            aw = resp_dict.get("attribution_window")
-            if aw is not None:
-                assert "model" in aw, f"Valid {field}: attribution_window missing 'model'"
+        _assert_attribution_echoed_on_wire(ctx, field)
 
     elif field in ("daily_breakdown", "daily breakdown", "include_package_daily_breakdown"):
         deliveries = getattr(resp, "media_buy_deliveries", None) or []
         assert deliveries, f"Valid {field}: expected non-empty deliveries"
-        # Verify daily breakdown data is structurally present
+        # Branch on what the scenario REQUESTED, not on what came back. The Outline has three
+        # valid rows — omitted / false / true — and omitted and false correctly expect NO daily
+        # data, so a blanket presence assertion would fail rows that are behaving correctly.
+        #
+        # This previously read `getattr(pkg, "daily", None) or getattr(pkg, "by_day", None)` and
+        # asserted only under `if daily is not None`. Neither attribute exists on
+        # adcp.types.ByPackageItem (the field is `daily_breakdown`), so the guard was
+        # unconditionally false and the assertion was dead by construction — no production change
+        # of any kind could reach it. Proven by mutation: `assert False` inside that guard left
+        # all 18 daily-breakdown rows passing. See GH #1751.
+        requested = dispatched_field(ctx, "include_package_daily_breakdown")
         for d in deliveries:
-            pkgs = getattr(d, "by_package", None) or []
-            for pkg in pkgs:
-                daily = getattr(pkg, "daily", None) or getattr(pkg, "by_day", None)
-                if daily is not None:
+            for pkg in getattr(d, "by_package", None) or []:
+                pkg_id = getattr(pkg, "package_id", "?")
+                daily = getattr(pkg, "daily_breakdown", None)
+                if requested is True:
+                    assert daily, (
+                        f"Valid {field}: include_package_daily_breakdown was requested true, but "
+                        f"package {pkg_id!r} carries no daily_breakdown ({daily!r})"
+                    )
                     assert isinstance(daily, list), (
-                        f"Valid {field}: package {getattr(pkg, 'package_id', '?')!r} "
-                        f"daily field is not a list: {type(daily).__name__}"
+                        f"Valid {field}: package {pkg_id!r} daily_breakdown is not a list: {type(daily).__name__}"
+                    )
+                else:
+                    assert not daily, (
+                        f"Valid {field}: include_package_daily_breakdown was {requested!r}, so "
+                        f"package {pkg_id!r} must carry no daily_breakdown, got {daily!r}"
                     )
 
     elif field == "account":
@@ -2932,13 +3157,16 @@ def then_filter_result(ctx: dict, expected: str) -> None:
             # Concrete filter: every returned delivery must have a matching status
             assert deliveries, f"Expected non-empty deliveries for valid status_filter={request_filter}"
             for d in deliveries:
+                # No enum unwrap: MediaBuyDeliveryData sets use_enum_values=True, so status is
+                # already a plain str (and the underlying enum is a StrEnum regardless). No
+                # `is not None` guard either — a delivery that comes back without a status
+                # cannot have had the filter applied to it, so that is a violation, not a case
+                # to skip.
                 actual_status = getattr(d, "status", None)
-                if actual_status is not None:
-                    status_str = actual_status.value if hasattr(actual_status, "value") else str(actual_status)
-                    assert status_str in request_filter, (
-                        f"Status filter violation: delivery {getattr(d, 'media_buy_id', '?')!r} "
-                        f"has status '{status_str}' but filter requested {request_filter}"
-                    )
+                assert actual_status in request_filter, (
+                    f"Status filter violation: delivery {getattr(d, 'media_buy_id', '?')!r} "
+                    f"has status {actual_status!r} but filter requested {request_filter}"
+                )
         else:
             # Omitted filter or field absent: all buyer's media buys should be returned
             assert deliveries, "Expected all buyer's media buys returned when status_filter is omitted"

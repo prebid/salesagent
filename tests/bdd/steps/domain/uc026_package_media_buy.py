@@ -2276,6 +2276,9 @@ def then_existing_package(ctx: dict, pkg_id: str) -> None:
     """Assert response contains the existing package (dedup)."""
     pkgs = _assert_has_packages(ctx)
     # Use the actual existing_package_id from the Given step (pkg_id is a label)
+    # FIXME(#1749): reads ctx 'expected_existing_package_id', which no step writes — dead branch,
+    # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
+    # where the precondition is established, or delete the read; then drop it from the allowlist.
     actual_existing = ctx.get("expected_existing_package_id") or ctx.get("existing_package_id")
     assert actual_existing, (
         "expected_existing_package_id/existing_package_id missing from context — "
@@ -2299,35 +2302,12 @@ def then_no_duplicate(ctx: dict) -> None:
     assert len(packages) == 1, f"Expected 1 package (no duplicate), got {len(packages)}"
 
 
-@then(parsers.parse('a new package should be created in "{mb_id}" with a new package_id'))
-def then_new_pkg_in_mb(ctx: dict, mb_id: str) -> None:
-    """Assert a new package was created with a new package_id (cross-buy scenario)."""
-    packages = _get_packages(ctx)
-    assert packages, "No packages in response"
-    pkg = packages[0]
-    pkg_id = _pkg_field(pkg, "package_id")
-    assert pkg_id is not None, "Package missing package_id"
-    assert isinstance(pkg_id, str) and pkg_id.strip(), f"Expected non-empty seller-assigned package_id, got {pkg_id!r}"
-    # Verify this is a NEW package_id (different from any existing one)
-    existing_pkg_id = ctx.get("existing_package_id")
-    assert existing_pkg_id is not None, (
-        "No existing_package_id in context — Given step should have created an existing media buy"
-    )
-    assert pkg_id != existing_pkg_id, (
-        f"Expected a NEW package_id for '{mb_id}' but got the same as existing: '{pkg_id}'"
-    )
-    # Verify the response media_buy_id matches the target (different from original)
-    named_mb_ids = ctx.get("named_media_buy_ids", {})
-    original_mb_id = named_mb_ids.get("mb-A") or ctx.get("existing_media_buy_id")
-    resp = ctx.get("response")
-    if resp is not None:
-        inner = getattr(resp, "response", resp)
-        resp_mb_id = getattr(inner, "media_buy_id", None)
-        if resp_mb_id and original_mb_id:
-            assert resp_mb_id != original_mb_id, (
-                f"Expected package in NEW media buy '{mb_id}' but response media_buy_id "
-                f"'{resp_mb_id}' matches original '{original_mb_id}'"
-            )
+# Removed: then_new_pkg_in_mb — `a new package should be created in "{mb_id}" with a new
+# package_id`. It matched ZERO scenarios (no feature file contains the phrase), was referenced
+# nowhere but its own definition, and BR-UC-026 has no obligation doc in docs/test-obligations/,
+# so no documented obligation is lost by deleting it. It was carrying an orphan-key read
+# (`ctx.get("named_media_buy_ids", {})`) whose lookup branch was permanently dead. Deleted rather
+# than "fixed", because repairing an oracle nothing runs is not a fix. See GH #1749.
 
 
 @then("a new package should be created with a seller-assigned package_id")
@@ -2473,10 +2453,17 @@ def then_pricing_defaults(ctx: dict) -> None:
             if isinstance(price_breakdown, dict)
             else getattr(price_breakdown, "list_price", None)
         )
-        if list_price is not None:
-            assert float(list_price) == float(rate), (
-                f"price_breakdown.list_price ({list_price}) != option rate ({rate}); defaults not applied correctly"
-            )
+        # No `if list_price is not None` guard (GH #1751): we are inside the branch where
+        # production DID echo a price_breakdown, so a breakdown that omits list_price is
+        # itself the defect — the field is what carries the applied default. `list_price`
+        # is a real field on PriceBreakdown, so this cannot fail for a misspelt read.
+        assert list_price is not None, (
+            f"price_breakdown was echoed for pricing option '{po_id}' but carries no list_price "
+            f"({price_breakdown!r}), so the default rate ({rate}) is unverifiable"
+        )
+        assert float(list_price) == float(rate), (
+            f"price_breakdown.list_price ({list_price}) != option rate ({rate}); defaults not applied correctly"
+        )
     else:
         pytest.xfail(
             f"price_breakdown not populated in create response — "

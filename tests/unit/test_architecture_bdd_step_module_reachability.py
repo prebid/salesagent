@@ -18,16 +18,14 @@ beads: salesagent-mdhh
 
 from __future__ import annotations
 
-import ast
 import importlib
 from pathlib import Path
 
 import pytest
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist
+from tests.unit._architecture_helpers import assert_violations_match_allowlist, bdd_registered_step_plugins
 
 _STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
-_CONFTEST = _STEPS_DIR.parent / "conftest.py"
 _STEPDEF_PREFIX = "pytestbdd_stepdef_"
 
 # Step-defining modules not in conftest's pytest_plugins. RATCHETING baseline —
@@ -57,19 +55,6 @@ _ALLOWED_UNREGISTERED: set[str] = {
 }
 
 
-def _registered_plugins() -> set[str]:
-    """Return the dotted module names listed in conftest's pytest_plugins."""
-    tree = ast.parse(_CONFTEST.read_text(), filename=str(_CONFTEST))
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id == "pytest_plugins":
-                    return {
-                        el.value for el in node.value.elts if isinstance(el, ast.Constant) and isinstance(el.value, str)
-                    }
-    raise AssertionError("pytest_plugins not found in tests/bdd/conftest.py")
-
-
 def _dotted_name(py_file: Path) -> str:
     rel = py_file.relative_to(_STEPS_DIR.parent.parent.parent)
     return ".".join(rel.with_suffix("").parts)
@@ -88,7 +73,7 @@ def _scan_unregistered_step_modules() -> list[str]:
     new violations vs. allowlisted (still-dead) modules so stale allowlist
     entries can be detected.
     """
-    registered = _registered_plugins()
+    registered = set(bdd_registered_step_plugins())
     unregistered: list[str] = []
     for py_file in sorted(_STEPS_DIR.rglob("*.py")):
         if py_file.name == "__init__.py" or py_file.name.startswith("_"):

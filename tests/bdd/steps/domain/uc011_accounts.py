@@ -16,7 +16,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require_response
+from tests.bdd.steps._outcome_helpers import _require, _require_response
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 from tests.helpers import assert_envelope_shape
@@ -397,6 +397,9 @@ def when_list_accounts_paginated(ctx: dict, value: int) -> None:
 
     from src.core.schemas.account import ListAccountsRequest
 
+    # Record the page size so the cursor-continuation step pages with the SAME size the
+    # scenario set up, instead of guessing a default (GH #1749).
+    ctx["last_max_results"] = value
     try:
         req = ListAccountsRequest(pagination=PaginationRequest(max_results=value))
         dispatch_request(ctx, req=req)
@@ -413,8 +416,14 @@ def when_list_accounts_with_cursor(ctx: dict) -> None:
 
     prev_response = _require_response(ctx)
     cursor = prev_response.pagination.cursor
-    # Use same max_results as before (stored in ctx or default)
-    max_results = ctx.get("last_max_results", 50)
+    # Page with the SAME size the scenario requested. A literal default here silently
+    # re-pages at 50 regardless of what the scenario set up, so the continuation would
+    # not be testing continuity at all (GH #1749).
+    max_results = _require(
+        ctx,
+        "last_max_results",
+        hint="the 'list_accounts request with max_results N' When step must run before the cursor continuation",
+    )
     try:
         req = ListAccountsRequest(pagination=PaginationRequest(max_results=max_results, cursor=cursor))
         dispatch_request(ctx, req=req)
@@ -822,6 +831,27 @@ def _parse_sync_table(datatable: Any) -> list[dict[str, Any]]:
     return accounts
 
 
+def _snapshot_accounts(ctx: dict) -> None:
+    """Record the seller's account set as it stands immediately BEFORE a request.
+
+    ``then_no_accounts_modified`` grades a state-isolation obligation (POST-F1): a failed
+    request must leave the account set untouched. That needs a real pre-request baseline —
+    defaulting to ``set()`` turns the oracle into "the seller has zero accounts", which is
+    a different (and, behind a guard, unreachable) claim. See GH #1749.
+
+    The tenant is resolved from ``ctx["env"]``, which the harness guarantees, rather than
+    from ``ctx["tenant"]``/``ctx["principal"]`` — those are never set for the unauthenticated
+    scenarios this oracle exists to grade.
+    """
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.account import AccountRepository
+
+    env = ctx["env"]
+    with get_db_session() as session:
+        repo = AccountRepository(session, env._tenant_id)
+        ctx["pre_request_account_ids"] = {a.account_id for a in repo.list_all()}
+
+
 @when("the Buyer Agent sends a sync_accounts request with:")
 def when_sync_accounts_with_table(ctx: dict, datatable: Any) -> None:
     """Send sync_accounts with accounts from Gherkin data table.
@@ -836,6 +866,7 @@ def when_sync_accounts_with_table(ctx: dict, datatable: Any) -> None:
     accounts = _parse_sync_table(rows)
 
     ctx["sync_request_brand_pairs"] = _extract_brand_pairs(accounts)
+    _snapshot_accounts(ctx)
 
     kwargs: dict[str, Any] = {}
 
@@ -1076,32 +1107,37 @@ def then_error_exists(ctx: dict) -> None:
 def then_no_accounts_modified(ctx: dict) -> None:
     """Assert no accounts were created/modified/deleted by the failed request.
 
-    Queries the DB for the tenant's account set and verifies it matches
-    the pre-request baseline (zero accounts if none were pre-created, or
-    the exact set from ctx["pre_request_account_ids"] if captured).
+    Compares the seller's current account set against the baseline captured by
+    ``_snapshot_accounts`` immediately before the request (POST-F1 state isolation).
+
+    Previously this body sat behind ``if tenant is not None and principal is not None``
+    and fell back to ``ctx.get("pre_request_account_ids", set())``. Both ctx keys are unset
+    for the unauthenticated scenarios this step grades, so the guard was never true and the
+    assertion never executed — proven by injecting ``assert False`` and still seeing the
+    scenario pass on all three transports. The tenant now comes from ``ctx["env"]`` (which
+    the harness guarantees) and the baseline is required, so absence fails loudly.
+    See GH #1749.
     """
     from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
 
     _get_error(ctx)  # Confirm an error occurred
-    tenant = ctx.get("tenant")
-    principal = ctx.get("principal")
-    if tenant is not None and principal is not None:
-        with get_db_session() as session:
-            repo = AccountRepository(session, tenant.tenant_id)
-            current_accounts = repo.list_by_principal(principal.principal_id)
-            pre_request_ids = ctx.get("pre_request_account_ids", set())
-            current_ids = {a.account_id for a in current_accounts}
-            assert current_ids == pre_request_ids, (
-                f"Accounts were modified despite error. "
-                f"Before: {pre_request_ids}, After: {current_ids}. "
-                f"Created: {current_ids - pre_request_ids}, "
-                f"Deleted: {pre_request_ids - current_ids}"
-            )
-    else:
-        # Unauthenticated caller — no tenant context, so no accounts could have been created.
-        # The error itself proves no side effects occurred for this caller.
-        pass
+    env = ctx["env"]
+    pre_request_ids = _require(
+        ctx,
+        "pre_request_account_ids",
+        hint="the sync/list When step must snapshot the account set before dispatching",
+    )
+    with get_db_session() as session:
+        repo = AccountRepository(session, env._tenant_id)
+        current_ids = {a.account_id for a in repo.list_all()}
+
+    assert current_ids == pre_request_ids, (
+        f"Accounts were modified despite error. "
+        f"Before: {pre_request_ids}, After: {current_ids}. "
+        f"Created: {current_ids - pre_request_ids}, "
+        f"Deleted: {pre_request_ids - current_ids}"
+    )
 
 
 @then(parsers.re(r"the errors array may contain multiple errors"))
@@ -1197,10 +1233,16 @@ def then_no_accounts_in_response(ctx: dict) -> None:
         error_payload = error.model_dump()
     elif hasattr(error, "__dict__"):
         error_payload = vars(error)
-    if error_payload is not None:
-        assert "accounts" not in error_payload, (
-            f"Error payload should not contain 'accounts' key, but found: {error_payload.get('accounts')}"
-        )
+    # Unconditional (GH #1751): if the error cannot be introspected at all, the claim
+    # "the error variant excludes account data" is unprovable rather than satisfied, so
+    # that is a failure — not a reason to skip the only assertion in this step.
+    assert error_payload is not None, (
+        f"Could not introspect the error to prove it carries no accounts data: "
+        f"{type(error).__name__} exposes neither model_dump() nor __dict__"
+    )
+    assert "accounts" not in error_payload, (
+        f"Error payload should not contain 'accounts' key, but found: {error_payload.get('accounts')}"
+    )
 
 
 @then("the response does not contain a dry_run field")
@@ -1503,6 +1545,9 @@ def then_webhook_registered(ctx: dict) -> None:
     # Verify the request actually carried push_notification_config (distinguishes
     # this step from a plain "sync succeeded" check)
     push_config = (
+        # FIXME(#1749): reads ctx 'request_push_config', which no step writes — dead branch,
+        # allowlisted in tests/unit/test_architecture_bdd_no_orphan_ctx_reads.py. Write the key
+        # where the precondition is established, or delete the read; then drop it from the allowlist.
         ctx.get("push_notification_config") or ctx.get("request_push_config") or ctx.get("push_notification_url")
     )
     assert push_config is not None, (
@@ -2589,14 +2634,32 @@ def when_resync_identical_all_fields(ctx: dict, domain: str) -> None:
 
 @then(parsers.parse('none of the returned accounts have brand domain "{domain}"'))
 def then_none_have_brand_domain(ctx: dict, domain: str) -> None:
-    """Assert no returned account has the specified brand domain."""
+    """Assert no returned account has the specified brand domain.
+
+    DORMANT: no feature file binds this step today (nor the
+    ``re-syncs with identical billing…`` When above it). It is corrected here so
+    that wiring it produces a real grader; until then it grades nothing — wire it
+    to the cross-agent isolation scenario that needs it, or delete it.
+
+    The ``hasattr`` guards it used to carry were removed per GH #1751. Two
+    separate problems lived in them: ``Account`` and ``Brand`` are Pydantic models
+    that declare ``brand`` and ``domain``, so ``hasattr`` was always true and the
+    guard was noise; and an account whose brand is absent trivially satisfies
+    "does not have domain X", so a response in which NO account carried a brand
+    would pass this cross-agent-leak check while being incapable of exhibiting a
+    leak at all. The capability assertion below closes that.
+    """
     resp = _require_response(ctx)
-    for acct in resp.accounts:
-        if hasattr(acct, "brand") and acct.brand and hasattr(acct.brand, "domain"):
-            assert acct.brand.domain != domain, (
-                f"Cross-agent leak: account {acct.account_id} has brand domain '{domain}' "
-                f"but should not be visible to this agent"
-            )
+    domains = [acct.brand.domain if acct.brand else None for acct in resp.accounts]
+    assert any(d is not None for d in domains), (
+        f"No returned account carries a brand domain, so 'none have brand domain {domain}' "
+        f"cannot detect a leak — {len(resp.accounts)} account(s) returned, all without a brand"
+    )
+    for acct, acct_domain in zip(resp.accounts, domains, strict=True):
+        assert acct_domain != domain, (
+            f"Cross-agent leak: account {acct.account_id} has brand domain '{domain}' "
+            f"but should not be visible to this agent"
+        )
 
 
 # ── delete_missing semantics steps ──────────────────────────────────

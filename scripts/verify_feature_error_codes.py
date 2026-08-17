@@ -46,6 +46,21 @@ FEATURES_DIR = PROJECT_ROOT / "tests" / "bdd" / "features"
 # "<error_code>" and prose words, so only real error codes are graded.
 CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]*$|^[a-z][a-z0-9_]*_error$")
 
+# Any lowercase snake token. On its own this is far too loose to grade (it would
+# match prose words quoted on the same line), so it is only ever used together
+# with a membership test against the pinned enum — see `classify()`. That pairing
+# makes the LOWERCASE_VARIANT verdict false-positive-free by construction: a token
+# only qualifies if its uppercase form IS a canonical code.
+LOWER_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+
+# Verdicts. These are deliberately distinct: a lowercase spelling of a canonical
+# member is a CASING defect with a mechanical fix, while a non-canonical code needs
+# a code decision (GH #1753). Collapsing them lets a casing defect hide inside
+# a several-hundred-item reconciliation backlog — which is exactly how 13 lowercase
+# case-variants survived unnoticed in BR-UC-001/004/014 until 2026-07-28.
+LOWERCASE_VARIANT = "LOWERCASE_VARIANT"
+NON_CANONICAL = "NON_CANONICAL"
+
 # `Then the error code should be "X"` — X may be a literal code or an Examples
 # placeholder like "<error_code>".
 SHOULD_RE = re.compile(r'error code should be "([^"]+)"')
@@ -166,12 +181,34 @@ def select_features(uc_filters: list[str] | None) -> list[Path]:
     return sorted(set(selected))
 
 
-def find_non_canonical(features: list[Path], enum: set[str]) -> list[dict]:
+def classify(code: str, enum: set[str]) -> str | None:
+    """Return this token's verdict, or None when it is canonical / not code-shaped."""
+    if code in enum:
+        return None
+    # A lowercase spelling of a canonical member: casing defect, mechanical fix.
+    # Checked BEFORE CODE_RE so `validation_error` is reported as a casing defect
+    # rather than as a non-canonical code.
+    if LOWER_TOKEN_RE.match(code) and code.upper() in enum:
+        return LOWERCASE_VARIANT
+    if CODE_RE.match(code):
+        return NON_CANONICAL
+    return None
+
+
+def find_findings(features: list[Path], enum: set[str], verdicts: set[str]) -> list[dict]:
     findings: list[dict] = []
     for feature in features:
         for lineno, code in expected_codes(feature):
-            if CODE_RE.match(code) and code not in enum:
-                findings.append({"file": str(feature.relative_to(PROJECT_ROOT)), "line": lineno, "code": code})
+            verdict = classify(code, enum)
+            if verdict in verdicts:
+                findings.append(
+                    {
+                        "file": str(feature.relative_to(PROJECT_ROOT)),
+                        "line": lineno,
+                        "code": code,
+                        "verdict": verdict,
+                    }
+                )
     return findings
 
 
@@ -184,6 +221,15 @@ def main() -> int:
         help="Limit to use cases, e.g. --uc UC-002 UC-003 (default: all BR-UC-*)",
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of text")
+    parser.add_argument(
+        "--casing-only",
+        action="store_true",
+        help=(
+            "Grade ONLY lowercase spellings of canonical enum members. This verdict is at zero "
+            "repo-wide, so it can be gated everywhere immediately — unlike the non-canonical "
+            "backlog, which is still being reconciled per-UC under GH #1753."
+        ),
+    )
     args = parser.parse_args()
 
     enum = load_enum()
@@ -192,9 +238,11 @@ def main() -> int:
         print("ERROR: no matching feature files", file=sys.stderr)
         return 2
 
-    findings = find_non_canonical(features, enum)
-    findings.sort(key=lambda f: (f["file"], f["line"], f["code"]))
+    verdicts = {LOWERCASE_VARIANT} if args.casing_only else {LOWERCASE_VARIANT, NON_CANONICAL}
+    findings = find_findings(features, enum, verdicts)
+    findings.sort(key=lambda f: (f["verdict"], f["file"], f["line"], f["code"]))
     distinct = sorted({f["code"] for f in findings})
+    by_verdict = {v: [f for f in findings if f["verdict"] == v] for v in sorted(verdicts)}
 
     if args.json:
         print(
@@ -203,6 +251,7 @@ def main() -> int:
                     "scope": args.uc or "repo-wide",
                     "features_scanned": len(features),
                     "finding_count": len(findings),
+                    "counts_by_verdict": {v: len(fs) for v, fs in by_verdict.items()},
                     "distinct_codes": distinct,
                     "findings": findings,
                 },
@@ -212,15 +261,19 @@ def main() -> int:
     else:
         scope = " ".join(args.uc) if args.uc else "repo-wide"
         for f in findings:
-            print(f"{f['file']}:{f['line']}: {f['code']}")
-        print(
-            f"\n{scope}: {len(findings)} non-canonical occurrence(s), "
-            f"{len(distinct)} distinct code(s) across {len(features)} feature file(s)."
-        )
+            print(f"{f['verdict']:18} {f['file']}:{f['line']}: {f['code']}")
+        summary = ", ".join(f"{len(fs)} {v}" for v, fs in by_verdict.items())
+        print(f"\n{scope}: {len(findings)} occurrence(s) ({summary}) across {len(features)} feature file(s).")
+        if by_verdict.get(LOWERCASE_VARIANT):
+            print(
+                "\nLOWERCASE_VARIANT is a casing defect, not a code decision: the uppercase form IS "
+                "canonical.\nFix the literal here AND in the compile source (adcp-req) so "
+                "regeneration does not reinstate it."
+            )
         if distinct:
             print(f"Distinct: {', '.join(distinct)}")
 
-    # Guard mode: any finding fails the gate.
+    # Guard mode: any finding in the selected verdict set fails the gate.
     return 1 if findings else 0
 
 

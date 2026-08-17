@@ -23,7 +23,28 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
     and no-auth scenarios. When provided, it flows through to call_via
     (which uses kwargs.setdefault, so an explicit identity won't be clobbered).
     Use ``identity=None`` for no-auth scenarios.
+
+    Records what was dispatched in ``ctx["dispatched_kwargs"]`` so Then steps can
+    derive their expected values from the request instead of hardcoding them. An
+    oracle built on a literal default is indistinguishable from no assertion at
+    all — see GH #1749, where a step compared against the constants 7/"days" that
+    happened to match its only scenario.
+
+    This is a DISTINCT channel. Do not conflate it with:
+
+    - ``ctx["request_params"]`` — an EXPECTATION channel. It deliberately holds
+      values that were never dispatched (``["(field absent)"]``) and, in
+      ``_dispatch_resolution``, deliberately fewer ids than were sent.
+    - ``ctx["request_kwargs"]`` — the request-builder channel, which UC-026
+      ``pop``s to reset between requests and asserts on directly.
+
+    The recorded dict is HETEROGENEOUS — readers must not assume flat kwargs. It
+    may hold plain kwargs, a whole Pydantic request object (``req=``), or be empty
+    for a no-argument dispatch. ``identity`` is excluded: it is a dispatch control
+    kwarg, not a request field, so the snapshot is taken before it is merged in.
     """
+    ctx["dispatched_kwargs"] = dict(kwargs)
+
     if identity is not _SENTINEL:
         kwargs["identity"] = identity
 

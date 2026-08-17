@@ -31,8 +31,9 @@ import ast
 import re
 from pathlib import Path
 
+from tests.unit._architecture_helpers import bdd_registered_step_module_paths
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CONFTEST = REPO_ROOT / "tests" / "bdd" / "conftest.py"
 
 _STEP_KINDS = ("given", "when", "then")
 # {param} and {param:d} placeholders match on position, not name — normalize.
@@ -41,8 +42,7 @@ _PLACEHOLDER = re.compile(r"\{[^}]*\}")
 
 def registered_step_modules() -> list[Path]:
     """Step-definition modules listed in the BDD conftest's pytest_plugins."""
-    mods = re.findall(r'"(tests\.bdd\.steps\.[\w.]+)"', CONFTEST.read_text())
-    return [REPO_ROOT / (mod.replace(".", "/") + ".py") for mod in mods]
+    return bdd_registered_step_module_paths()
 
 
 def unregistered_step_modules() -> list[Path]:

@@ -19,7 +19,7 @@ import pytest
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
-from tests.bdd.steps._outcome_helpers import is_e2e
+from tests.bdd.steps._outcome_helpers import _require, is_e2e
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal, seed_account_with_access
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.creative_asset import (
@@ -301,11 +301,17 @@ def _ensure_tenant_principal(ctx: dict, env: object) -> None:
 def _action_str(action: object) -> str:
     """Normalize a SyncCreativeResult.action to a plain string.
 
-    Handles both enum instances (action.value) and raw strings.
+    Delegates to production's ``enum_value`` (src/core/enum_helpers.py) rather than
+    re-implementing the unwrap. This module carried 25 hand-rolled copies of that
+    ternary inline at the call sites while this helper already existed; they now all
+    route through here (CLAUDE.md DRY invariant).
+
+    ``str(...)`` on the outside preserves the original ``"None"`` for an absent
+    action -- ``enum_value`` alone returns ``None``, which would change comparisons.
     """
-    if action is None:
-        return "None"
-    return str(action.value) if hasattr(action, "value") else str(action)
+    from src.core.helpers import enum_value
+
+    return str(enum_value(action))
 
 
 def _ensure_tenant_principal_from_db(ctx: dict, env: object) -> None:
@@ -382,7 +388,7 @@ def then_proceed_with_resolved_account(ctx: dict) -> None:
     # 2. Production processed the request (account resolution succeeded)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, "Expected at least one creative result — account resolution should allow processing"
-    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
+    actions = [_action_str(getattr(r, "action", None)) for r in results]
     assert any(a in ("created", "updated", "unchanged") for a in actions), (
         f"Expected a success action proving account was resolved, got {actions}"
     )
@@ -1503,7 +1509,7 @@ def _assert_per_creative_failure(ctx: dict, expected_code: str) -> None:
     if resp is not None:
         results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
         for r in results:
-            action_str = str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None)))
+            action_str = _action_str(getattr(r, "action", None))
             if action_str == "failed":
                 errs = getattr(r, "errors", None) or []
                 if errs:
@@ -1950,7 +1956,7 @@ def then_creative_processed_successfully(ctx: dict) -> None:
         f"Expected SyncCreativesResponse, got {type(resp).__name__ if resp else None}"
     )
     results = getattr(resp, "results", None) or getattr(resp, "creatives", None) or []
-    actions_str = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
+    actions_str = [_action_str(getattr(r, "action", None)) for r in results]
     assert any(a in ("created", "updated", "unchanged") for a in actions_str), (
         f"Expected at least one action in (created, updated, unchanged), got {actions_str}"
     )
@@ -2069,7 +2075,7 @@ def then_creative_action_created(ctx: dict) -> None:
     assert results, f"Expected at least one SyncCreativeResult in response, got: {resp}"
     first = results[0]
     action_val = getattr(first, "action", None)
-    action_str = str(getattr(action_val, "value", action_val))
+    action_str = _action_str(action_val)
     assert action_str == "created", (
         f"Expected creative action 'created', got '{action_str}' (errors={getattr(first, 'errors', None)})"
     )
@@ -2096,7 +2102,7 @@ def then_creative_action_failed(ctx: dict) -> None:
     assert results, f"Expected at least one SyncCreativeResult in response, got: {resp}"
     first = results[0]
     action_val = getattr(first, "action", None)
-    action_str = str(getattr(action_val, "value", action_val))
+    action_str = _action_str(action_val)
     assert action_str == "failed", (
         f"Expected creative action 'failed', got '{action_str}' (errors={getattr(first, 'errors', None)})"
     )
@@ -2367,7 +2373,13 @@ def given_assignments_to_nonexistent_package(ctx: dict) -> None:
     _ensure_tenant_principal(ctx, env)
     env._commit_factory_data()
     creative_id = ctx["creatives"][-1]["creative_id"]
-    ctx["assignments"] = {creative_id: ["pkg-nonexistent-lzhr-404"]}
+    # Recorded so the Then steps can assert the error names THIS package (GH #1749).
+    # Its sibling Given ("two packages: one valid and one non-existent") already wrote
+    # this key; this one did not, so `then_assignment_processing_should_abort` skipped
+    # its package-reference check for every scenario routed through here.
+    bad_package_id = "pkg-nonexistent-lzhr-404"
+    ctx["nonexistent_package_id"] = bad_package_id
+    ctx["assignments"] = {creative_id: [bad_package_id]}
 
 
 @then(parsers.parse('the assignment result should be "{outcome}"'))
@@ -2436,12 +2448,20 @@ def then_assignment_processing_should_abort(ctx: dict) -> None:
         or "not_found" in getattr(error, "error_code", "").lower()
         or "not found" in str(error).lower()
     ), f"Expected not-found error for missing package, got error_code={getattr(error, 'error_code', None)}: {error}"
-    # Verify the error references the bad package from the Given step
-    bad_package = ctx.get("bad_package_id") or ctx.get("nonexistent_package_id", "")
-    if bad_package:
-        assert bad_package in str(error), (
-            f"Error should reference the missing package '{bad_package}', but message is: {error}"
-        )
+    # Verify the error references the bad package from the Given step.
+    #
+    # Unconditional (GH #1751). The dead `ctx["bad_package_id"]` read is gone and both
+    # Givens now record `nonexistent_package_id`, so there is no shape in which the
+    # identifier is unavailable — previously the `if bad_package:` guard silently
+    # skipped this for the one Given that never wrote the key.
+    bad_package = _require(
+        ctx,
+        "nonexistent_package_id",
+        hint="the Given that seeds a non-existent package assignment must record its id",
+    )
+    assert bad_package in str(error), (
+        f"Error should reference the missing package '{bad_package}', but message is: {error}"
+    )
 
 
 @then("the behavior should match strict mode")
@@ -2671,7 +2691,7 @@ def then_response_includes_creative_with_action(ctx: dict, action: str) -> None:
     """Assert the first SyncCreativeResult has the expected action (POST-S2)."""
     result = _get_sync_creative_result(ctx)
     action_val = getattr(result, "action", None)
-    action_str = str(getattr(action_val, "value", action_val))
+    action_str = _action_str(action_val)
     assert action_str == action, f"POST-S2: Expected creative action '{action}', got '{action_str}'"
 
 
@@ -3321,7 +3341,7 @@ def _assert_format_check_outcome(ctx: dict, label: str) -> None:
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, f"format check ({label}): expected at least one SyncCreativeResult"
     first = results[0]
-    action_str = str(getattr(getattr(first, "action", None), "value", getattr(first, "action", None)))
+    action_str = _action_str(getattr(first, "action", None))
     assert action_str in ("created", "updated", "unchanged"), (
         f"format check ({label}): expected creative accepted (created/updated/unchanged), got action='{action_str}'"
     )
@@ -3820,7 +3840,7 @@ def then_creative_processed_normally(ctx: dict) -> None:
     assert resp is not None, "Expected a response"
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, f"Expected at least one creative result, got empty from {type(resp).__name__}"
-    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
+    actions = [_action_str(getattr(r, "action", None)) for r in results]
     assert any(a in ("created", "updated") for a in actions), (
         f"Expected a success action (created/updated) for normal processing, got {actions}"
     )
@@ -4018,7 +4038,7 @@ def then_existing_creative_updated_by_triple_key(ctx: dict) -> None:
 
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     if results:
-        action_str = str(getattr(getattr(results[0], "action", None), "value", getattr(results[0], "action", None)))
+        action_str = _action_str(getattr(results[0], "action", None))
         assert action_str == "updated", f"Expected action 'updated' for triple-key match, got '{action_str}'"
 
 
@@ -4079,7 +4099,7 @@ def then_valid_creative_action(ctx: dict, action: str) -> None:
         )
     result = _get_creative_result_by_id(ctx, ctx["valid_creative_id"])
     assert result is not None, f"No result found for valid creative {ctx['valid_creative_id']}"
-    action_str = str(getattr(getattr(result, "action", None), "value", getattr(result, "action", None)))
+    action_str = _action_str(getattr(result, "action", None))
     assert action_str == action, f"Expected valid creative action '{action}', got '{action_str}'"
 
 
@@ -4094,7 +4114,7 @@ def then_invalid_creative_action(ctx: dict, action: str) -> None:
         )
     result = _get_creative_result_by_id(ctx, ctx["invalid_creative_id"])
     assert result is not None, f"No result found for invalid creative {ctx['invalid_creative_id']}"
-    action_str = str(getattr(getattr(result, "action", None), "value", getattr(result, "action", None)))
+    action_str = _action_str(getattr(result, "action", None))
     assert action_str == action, f"Expected invalid creative action '{action}', got '{action_str}'"
 
 
@@ -4112,7 +4132,7 @@ def then_valid_not_affected_by_invalid(ctx: dict) -> None:
     assert len(results) == 2, f"Expected 2 creative results (one valid, one failed), got {len(results)}"
     valid_result = _get_creative_result_by_id(ctx, ctx["valid_creative_id"])
     assert valid_result is not None, "Valid creative result missing from response"
-    action_str = str(getattr(getattr(valid_result, "action", None), "value", getattr(valid_result, "action", None)))
+    action_str = _action_str(getattr(valid_result, "action", None))
     assert action_str in (
         "created",
         "updated",
@@ -4158,7 +4178,7 @@ def then_processed_without_external_validation(ctx: dict) -> None:
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, "Expected at least one SyncCreativeResult"
     first = results[0]
-    action_str = str(getattr(getattr(first, "action", None), "value", getattr(first, "action", None)))
+    action_str = _action_str(getattr(first, "action", None))
     assert action_str in ("created", "updated", "unchanged"), (
         f"Expected creative processed successfully (created/updated/unchanged), got action='{action_str}'"
     )
@@ -4195,7 +4215,7 @@ def then_creative_action_created_or_updated(ctx: dict) -> None:
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, "Expected at least one SyncCreativeResult"
     first = results[0]
-    action_str = str(getattr(getattr(first, "action", None), "value", getattr(first, "action", None)))
+    action_str = _action_str(getattr(first, "action", None))
     assert action_str in ("created", "updated"), f"Expected action 'created' or 'updated', got '{action_str}'"
 
 
@@ -4384,7 +4404,7 @@ def then_processing_continues_normally(ctx: dict) -> None:
     assert resp is not None, "Expected a response (processing continued)"
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, "Expected at least one creative result from a completed sync"
-    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
+    actions = [_action_str(getattr(r, "action", None)) for r in results]
     assert any(a in ("created", "updated") for a in actions), (
         f"Expected a success action (created/updated) confirming sync completed, got {actions}"
     )
@@ -4455,7 +4475,7 @@ def then_proceed_without_idempotency(ctx: dict) -> None:
         f"but got empty results from {type(resp).__name__}"
     )
     # Verify at least one creative was actually processed (created/updated)
-    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
+    actions = [_action_str(getattr(r, "action", None)) for r in results]
     assert any(a in ("created", "updated") for a in actions), (
         f"Expected a fresh sync action (created/updated), got {actions}"
     )
@@ -4586,17 +4606,21 @@ def _assert_standard_processing(ctx: dict) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response for 'standard processing'"
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
-    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
+    actions = [_action_str(getattr(r, "action", None)) for r in results]
     assert any(a in ("created", "updated", "unchanged") for a in actions), (
         f"Expected created/updated/unchanged for static processing, got {actions}"
     )
-    # Verify generative build was NOT invoked
+    # Verify generative build was NOT invoked.
+    #
+    # No `if hasattr(registry.build_creative, "called")` guard (GH #1751). registry is a
+    # MagicMock, so that attribute always exists and the guard was unconditionally true —
+    # noise that read like a safety check. Were the object ever a real one lacking the
+    # attribute, the guard would have silently skipped the only assertion in this block.
     env = ctx["env"]
     registry = env.mock["registry"].return_value
-    if hasattr(registry.build_creative, "called"):
-        assert not registry.build_creative.called, (
-            "build_creative should NOT be called for static (non-generative) creatives"
-        )
+    assert not registry.build_creative.called, (
+        "build_creative should NOT be called for static (non-generative) creatives"
+    )
 
 
 def _assert_generative_build(ctx: dict, prompt_source: str) -> None:
@@ -4614,7 +4638,7 @@ def _assert_generative_build(ctx: dict, prompt_source: str) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response for generative build"
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
-    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
+    actions = [_action_str(getattr(r, "action", None)) for r in results]
     assert any(a in ("created", "updated") for a in actions), (
         f"Expected created/updated for generative build, got {actions}"
     )
@@ -4887,7 +4911,7 @@ def then_invoke_generative_with_asset_prompt(ctx: dict) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response for generative build"
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
-    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
+    actions = [_action_str(getattr(r, "action", None)) for r in results]
     assert any(a in ("created", "updated") for a in actions), (
         f"Expected created/updated for generative build, got {actions}"
     )
@@ -5157,7 +5181,7 @@ def then_processed_as_generative(ctx: dict) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response for generative processing"
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
-    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
+    actions = [_action_str(getattr(r, "action", None)) for r in results]
     assert any(a in ("created", "updated") for a in actions), (
         f"Expected created/updated for generative processing, got {actions}"
     )
@@ -5257,7 +5281,7 @@ def then_generative_build_skipped(ctx: dict) -> None:
     resp = ctx.get("response")
     assert resp is not None, "Expected a response when generative build is skipped"
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
-    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
+    actions = [_action_str(getattr(r, "action", None)) for r in results]
     assert any(a in ("updated", "unchanged") for a in actions), (
         f"Expected updated/unchanged when build skipped, got {actions}"
     )
@@ -5712,7 +5736,7 @@ def then_new_creative_created_for_principal(ctx: dict, principal_id: str) -> Non
     assert results, f"Expected at least one SyncCreativeResult in response, got: {resp}"
     first = results[0]
     action_val = getattr(first, "action", None)
-    action_str = str(getattr(action_val, "value", action_val))
+    action_str = _action_str(action_val)
     assert action_str == "created", f"Expected creative action 'created' for cross-principal sync, got '{action_str}'"
 
     # Assert DB creative has correct principal_id
@@ -5785,7 +5809,7 @@ def then_creative_validated_by_agent(ctx: dict) -> None:
     # Assert observable outcome: the creative was successfully synced
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, "Expected at least one SyncCreativeResult from agent-validated sync"
-    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
+    actions = [_action_str(getattr(r, "action", None)) for r in results]
     assert any(a in ("created", "updated") for a in actions), (
         f"Expected created/updated action for agent-validated creative, got {actions}"
     )
@@ -5829,7 +5853,7 @@ def then_response_includes_one_creative_with_action(ctx: dict, action: str) -> N
     found = False
     for r in results:
         action_val = getattr(r, "action", None)
-        action_str = str(getattr(action_val, "value", action_val))
+        action_str = _action_str(action_val)
         all_actions.append(action_str)
         if action_str == action:
             found = True
@@ -6747,7 +6771,7 @@ def _get_action_str(result: object) -> str:
     The action field is a CreativeAction enum; normalise to a plain string.
     """
     action_val = getattr(result, "action", None)
-    return str(getattr(action_val, "value", action_val))
+    return _action_str(action_val)
 
 
 @then(parsers.parse('the action should be "{expected_action}"'))

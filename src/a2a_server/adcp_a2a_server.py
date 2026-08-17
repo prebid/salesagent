@@ -157,7 +157,20 @@ def _reject_unsafe_a2a_webhook_url(url: str) -> None:
 
 
 def _dict_to_value(d: dict) -> struct_pb2.Value:
-    """Convert a Python dict to a protobuf Value for use in Part.data."""
+    """Convert a Python dict to a protobuf Value for use in Part.data.
+
+    A2A numeric contract (every response DataPart routes through here):
+    ``google.protobuf.Value``'s only numeric slot is ``number_value`` — a
+    double — so EVERY integer is widened at this boundary and reaches the
+    JSON wire as an integral float (``14`` → ``14.0``). This is inherent to
+    a2a-sdk 1.0's proto-first Part type, not a bug in this helper, and it is
+    not a conformance break: the AdCP schemas are draft-07, where
+    ``"type": "integer"`` matches any number with a zero fractional part.
+    It IS a cross-transport divergence — MCP and REST preserve ints — so
+    buyers deserializing A2A into strict integer types must accept integral
+    floats. Pinned by tests/unit/test_a2a_numeric_wire.py so an SDK
+    representation change surfaces here first.
+    """
     val = struct_pb2.Value()
     json_format.Parse(json.dumps(d, default=str), val)
     return val

@@ -917,6 +917,36 @@ def anchor_consistency_detects_drift(
 
 
 # ---------------------------------------------------------------------------
+# BDD step-plugin registry reader
+# ---------------------------------------------------------------------------
+
+_BDD_CONFTEST = REPO_ROOT / "tests" / "bdd" / "conftest.py"
+
+
+def bdd_registered_step_plugins() -> list[str]:
+    """Dotted module names listed in ``tests/bdd/conftest.py`` ``pytest_plugins``.
+
+    AST-read (no import side effects). Declaration order is preserved —
+    pytest resolves step-fixture name collisions by plugin registration
+    order, so order matters to callers that reason about shadowing.
+    """
+    tree = ast.parse(_BDD_CONFTEST.read_text(), filename=str(_BDD_CONFTEST))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "pytest_plugins":
+                    return [
+                        el.value for el in node.value.elts if isinstance(el, ast.Constant) and isinstance(el.value, str)
+                    ]
+    raise AssertionError("pytest_plugins not found in tests/bdd/conftest.py")
+
+
+def bdd_registered_step_module_paths() -> list[Path]:
+    """Filesystem paths of the registered step modules (path adapter)."""
+    return [REPO_ROOT / (mod.replace(".", "/") + ".py") for mod in bdd_registered_step_plugins()]
+
+
+# ---------------------------------------------------------------------------
 # Failure-message formatter (D26)
 # ---------------------------------------------------------------------------
 

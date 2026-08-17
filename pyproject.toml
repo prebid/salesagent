@@ -85,10 +85,17 @@ dev = [
     "pytest>=9.0.3",  # GHSA-6w46-j5rx-g56g
     "pytest-asyncio>=1.1.0",
     "pytest-cov>=6.2.1",
+    # Provides the `mocker` fixture. Do NOT add the PyPI package named `mocker` —
+    # that is an unrelated 2012 Python-2 library (source-only sdist, SyntaxError on
+    # import under 3.12) which nothing here imports. It was declared in this group
+    # until 2026-07-29 and cost every dev-group install (including Dockerfile.test,
+    # which builds it from sdist) a dead build.
     "pytest-mock>=3.14.1",
     "pytest-timeout>=2.3.1",
     "ruff>=0.8.0",
-    "datamodel-code-generator>=0.26.0",
+    # >=0.64.0: 0.51.0 carried 9 advisories (CVE-2026-54621/54653/54654/54655/54690/54691,
+    # CVE-2026-55391/55403/55415); 0.64.0 is the highest fixed-in across that set.
+    "datamodel-code-generator>=0.64.0",
     "jsonref>=1.1.0",
     "types-psycopg2>=2.9.21.20251012",
     "types-requests>=2.32.4.20250913",

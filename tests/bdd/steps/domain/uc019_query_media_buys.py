@@ -1341,6 +1341,7 @@ def then_package_details(ctx: dict) -> None:
     assert buys, "No media buys in response to check"
     total_packages_checked = 0
     paused_gaps: list[str] = []
+    bid_price_gaps: list[str] = []
     for buy in buys:
         mb_id = buy.media_buy_id
         packages = buy.packages or []
@@ -1360,8 +1361,14 @@ def then_package_details(ctx: dict) -> None:
             assert isinstance(pkg.budget, int | float), (
                 f"Expected budget to be numeric, got {type(pkg.budget).__name__}: {pkg.budget!r}"
             )
-            # bid_price may be None for fixed-price options — verify the field value type when present
-            if pkg.bid_price is not None:
+            # bid_price is legitimately None for fixed-price options, so absence on an
+            # individual package is not a failure. But the step text claims bid_price is
+            # included, so absence on EVERY package means that claim graded nothing —
+            # collect and decide after the loop, the same way `paused` is handled below
+            # (GH #1751: a bare `if pkg.bid_price is not None` guard hid exactly that).
+            if pkg.bid_price is None:
+                bid_price_gaps.append(f"package {pkg.package_id} in {mb_id}")
+            else:
                 assert isinstance(pkg.bid_price, int | float), (
                     f"Expected bid_price to be numeric, got {type(pkg.bid_price).__name__}: {pkg.bid_price!r}"
                 )
@@ -1373,12 +1380,16 @@ def then_package_details(ctx: dict) -> None:
             else:
                 assert isinstance(pkg.paused, bool), f"Expected paused to be bool, got {type(pkg.paused)}"
     assert total_packages_checked > 0, "No packages checked despite media buys being present"
+    assert len(bid_price_gaps) < total_packages_checked, (
+        f"bid_price is absent on ALL {total_packages_checked} package(s), so the step's claim that "
+        f"package details include bid_price graded nothing. Absence is legitimate per-package for "
+        f"fixed-price options, but not universally: {', '.join(bid_price_gaps)}"
+    )
     if paused_gaps:
         pytest.xfail(
             f"SPEC-PRODUCTION GAP: paused field not present on {len(paused_gaps)} of "
             f"{total_packages_checked} package(s): {', '.join(paused_gaps)}. "
-            f"All other fields (budget, bid_price, product_id, flight dates) verified. "
-            f"FIXME(salesagent-9vgz.1)"
+            f"All other fields (budget, bid_price, product_id, flight dates) verified."
         )
 
 
