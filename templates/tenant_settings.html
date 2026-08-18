@@ -1986,12 +1986,13 @@ Exclude any products that don't match the brand's tone.</pre>
             <!-- Add Publisher Modal -->
             <div id="add-publisher-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
                 <div style="background: white; border-radius: 12px; padding: 2rem; max-width: 500px; width: 90%; max-height: 90vh; overflow-y: auto;">
-                    <h3 style="margin: 0 0 1rem 0;">Add Publisher Partner</h3>
+                    <h3 id="publisher-modal-title" style="margin: 0 0 1rem 0;">Add Publisher Partner</h3>
                     <p style="color: #6b7280; font-size: 0.875rem; margin-bottom: 1.5rem;">
                         Enter the domain of the publisher you want to represent. They must have authorized your sales agent in their adagents.json file.
                     </p>
 
-                    <form id="add-publisher-form" onsubmit="addPublisher(event)">
+                    <form id="add-publisher-form" onsubmit="savePublisher(event)">
+                        <input type="hidden" id="publisher-partner-id" value="">
                         <div class="form-group">
                             <label for="publisher-domain">Publisher Domain</label>
                             <input type="text" id="publisher-domain" name="publisher_domain"
@@ -2006,6 +2007,19 @@ Exclude any products that don't match the brand's tone.</pre>
                                    placeholder="Example Publisher"
                                    style="width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 6px;">
                             <small style="color: #6b7280;">Friendly name for this publisher</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Supported Channels</label>
+                            <div id="publisher-channels" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.35rem 1rem; max-height: 220px; overflow-y: auto; padding: 0.5rem; border: 1px solid #e5e7eb; border-radius: 6px;">
+                                {% for channel in media_channels|default([]) %}
+                                <label style="font-weight: 400; font-size: 0.875rem; display: flex; align-items: center; gap: 0.35rem;">
+                                    <input type="checkbox" class="publisher-channel-checkbox" value="{{ channel }}">
+                                    {{ channel }}
+                                </label>
+                                {% endfor %}
+                            </div>
+                            <small style="color: #6b7280;">Canonical advertising channels for this partnership</small>
                         </div>
 
                         <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1.5rem;">

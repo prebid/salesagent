@@ -26,20 +26,18 @@ from src.core.schemas import ListAuthorizedPropertiesRequest, ListAuthorizedProp
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
-from src.core.tools.capabilities import normalize_channel_strings
 from src.core.validation_helpers import safe_parse_json_field
 
 logger = logging.getLogger(__name__)
 
 
 def _aggregate_primary_channels(publishers: Iterable[PublisherPartner]) -> list[str] | None:
-    """Union explicitly-declared supported_channels across publisher partners."""
-    raw_channels: list[str] = []
+    """Union already-canonical supported_channels across publisher partners."""
+    seen: set[str] = set()
     for partner in publishers:
         if partner.supported_channels:
-            raw_channels.extend(partner.supported_channels)
-    normalized = normalize_channel_strings(raw_channels)
-    return normalized or None
+            seen.update(partner.supported_channels)
+    return sorted(seen) or None
 
 
 def _list_authorized_properties_impl(

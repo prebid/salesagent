@@ -193,7 +193,7 @@ class WorkflowUoW(BaseUoW):
 
 
 class TenantConfigUoW(BaseUoW):
-    """Unit of Work for tenant configuration reads.
+    """Unit of Work for tenant configuration reads and writes.
 
     Wraps a database session and provides a tenant-scoped TenantConfigRepository.
     Auto-commits on clean exit, rolls back on exception.

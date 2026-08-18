@@ -200,7 +200,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/public.py", "landing"),
     ("src/admin/blueprints/public.py", "provision_tenant"),
     ("src/admin/blueprints/public.py", "signup_complete"),
-    ("src/admin/blueprints/publisher_partners.py", "add_publisher_partner"),
     ("src/admin/blueprints/publisher_partners.py", "delete_publisher_partner"),
     ("src/admin/blueprints/publisher_partners.py", "get_publisher_properties"),
     ("src/admin/blueprints/publisher_partners.py", "list_publisher_partners"),

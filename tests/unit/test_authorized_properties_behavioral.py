@@ -940,7 +940,7 @@ class TestPrimaryChannelsDisclosure:
         tenant = _make_mock_tenant("tenant-ch2")
         identity = _make_identity(tenant)
         pub_a = _make_publisher("one.com")
-        pub_a.supported_channels = ["display", "video"]
+        pub_a.supported_channels = ["display", "olv"]
         pub_b = _make_publisher("two.com")
         pub_b.supported_channels = ["ctv"]
 

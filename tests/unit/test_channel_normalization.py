@@ -1,6 +1,12 @@
 """Unit tests for channel string normalization."""
 
-from src.core.tools.capabilities import normalize_channel_strings
+import pytest
+
+from src.core.tools.capabilities import (
+    InvalidChannelInput,
+    canonicalize_supported_channels,
+    normalize_channel_strings,
+)
 
 
 class TestNormalizeChannelStrings:
@@ -21,3 +27,20 @@ class TestNormalizeChannelStrings:
 
         assert result == ["display"]
         assert any("native" in record.getMessage() for record in caplog.records)
+
+
+class TestCanonicalizeSupportedChannels:
+    def test_canonicalizes_aliases(self):
+        assert canonicalize_supported_channels(["video", "ctv"]) == ["ctv", "olv"]
+
+    def test_rejects_non_list(self):
+        with pytest.raises(InvalidChannelInput, match="list of strings"):
+            canonicalize_supported_channels("display,ctv")
+
+    def test_rejects_non_string_members(self):
+        with pytest.raises(InvalidChannelInput, match="list of strings"):
+            canonicalize_supported_channels(["display", 1])
+
+    def test_rejects_unknown_values(self):
+        with pytest.raises(InvalidChannelInput, match="native"):
+            canonicalize_supported_channels(["display", "native"])

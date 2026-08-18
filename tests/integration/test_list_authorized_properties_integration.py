@@ -314,21 +314,3 @@ def test_list_authorized_properties_primary_channels_union(integration_db):
     response = _list_authorized_properties_impl(req=None, identity=identity)
 
     assert response.primary_channels == ["ctv", "display", "olv"]
-
-
-@pytest.mark.requires_db
-def test_list_authorized_properties_skips_unknown_channels(integration_db):
-    """Unknown channel values are skipped; valid channels still returned."""
-    with _PropertiesEnv() as env:
-        tenant = TenantFactory(tenant_id="test_channels_unknown", subdomain="chunknown")
-        PublisherPartnerFactory(
-            tenant=tenant,
-            publisher_domain="bad.com",
-            supported_channels=["display", "not_a_real_channel"],
-        )
-        env._commit_factory_data()
-
-    identity = PrincipalFactory.make_identity(tenant_id="test_channels_unknown")
-    response = _list_authorized_properties_impl(req=None, identity=identity)
-
-    assert response.primary_channels == ["display"]
