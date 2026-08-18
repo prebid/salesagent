@@ -2,15 +2,17 @@
 
 This test suite validates that:
 1. A2A handlers return AdCP spec-compliant responses (no extra fields like 'success', 'message')
-2. Human-readable messages are provided via Artifact.description (not in response data)
-3. Response data is identical between MCP and A2A protocols
+2. Response data is identical between MCP and A2A protocols
+
+The human-readable text a buyer sees is pinned where it is produced -- on the
+real ``on_message_send`` pipeline output, in
+``tests/integration/test_a2a_skill_invocation.py`` -- not here.
 
 Replaces: test_a2a_response_message_fields.py (which tested the old incorrect behavior)
 """
 
 import pytest
 
-from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.schemas import (
     CreateMediaBuySuccess,
     GetMediaBuyDeliveryResponse,
@@ -102,8 +104,10 @@ class TestA2ASpecCompliance:
         ctx = {"user_id": "1234567890"}
         response = SyncCreativesResponse(**response_data, context=ctx)
 
-        # Check no extra fields
-        spec_fields = {"creatives", "dry_run", "context"}
+        # Check no extra fields.
+        # status is a protocol-envelope default (GH #1710) -- same pattern as
+        # GetProductsResponse/ListCreativesResponse above.
+        spec_fields = {"creatives", "dry_run", "context", "status"}
         response_fields = set(response.model_dump().keys())
         extra_fields = response_fields - spec_fields
 
@@ -239,79 +243,6 @@ class TestA2ASpecCompliance:
 
 
 @pytest.mark.integration
-class TestA2AArtifactDescriptions:
-    """Test that A2A artifacts include human-readable descriptions from __str__()."""
-
-    def test_artifact_reconstruction_helper(self):
-        """Test _reconstruct_response_object helper."""
-        handler = AdCPRequestHandler()
-
-        # Test successful reconstruction
-        data = {
-            "publisher_domains": ["example.com", "test.com"],
-            "primary_channels": None,
-            "primary_countries": None,
-            "portfolio_description": None,
-            "advertising_policies": None,
-            "last_updated": None,
-            "errors": None,
-        }
-
-        response = handler._reconstruct_response_object("list_authorized_properties", data)
-
-        assert response is not None
-        assert isinstance(response, ListAuthorizedPropertiesResponse)
-        # Local schema's __str__() message format
-        assert str(response) == "Found 2 authorized publisher domains."
-
-    def test_artifact_reconstruction_all_skills(self):
-        """Test reconstruction works for all supported skills."""
-        handler = AdCPRequestHandler()
-
-        test_cases = [
-            (
-                "list_authorized_properties",
-                {"publisher_domains": ["test.com"], "errors": None},
-                ListAuthorizedPropertiesResponse,
-            ),
-            (
-                "get_products",
-                {"products": [], "errors": None},
-                GetProductsResponse,
-            ),
-            (
-                "list_creative_formats",
-                {"formats": [], "creative_agents": None, "errors": None},
-                ListCreativeFormatsResponse,
-            ),
-        ]
-
-        for skill_name, data, expected_class in test_cases:
-            response = handler._reconstruct_response_object(skill_name, data)
-            assert response is not None, f"Failed to reconstruct {skill_name}"
-            assert isinstance(response, expected_class)
-            assert hasattr(response, "__str__")
-            assert len(str(response)) > 0, f"{skill_name} __str__() returned empty string"
-
-    def test_artifact_reconstruction_invalid_data(self):
-        """Test reconstruction gracefully handles invalid data."""
-        handler = AdCPRequestHandler()
-
-        # Invalid data should return None, not raise
-        response = handler._reconstruct_response_object("list_authorized_properties", {"invalid": "data"})
-
-        assert response is None, "Should return None for invalid data"
-
-    def test_artifact_reconstruction_unknown_skill(self):
-        """Test reconstruction gracefully handles unknown skills."""
-        handler = AdCPRequestHandler()
-
-        response = handler._reconstruct_response_object("unknown_skill", {"data": "value"})
-
-        assert response is None, "Should return None for unknown skill"
-
-
-@pytest.mark.integration
 class TestMCPAndA2AResponseParity:
     """Test that MCP and A2A return identical response data."""
 
@@ -383,7 +314,11 @@ class TestA2AResponseRegressionPrevention:
         response = ListAuthorizedPropertiesResponse(publisher_domains=["test.com"])
         response_dict = response.model_dump()
 
-        # These fields should NOT be in the response data
+        # These fields should NOT be on the Pydantic response MODEL. 'message'
+        # is a genuine spec-defined field on the WIRE envelope's Protocol
+        # Envelope arm (see tests/helpers/adcp_schema_validator.py), but it's
+        # populated by the protocol layer (_serialize_for_a2a et al) at the
+        # transport boundary, not carried on the domain response model itself.
         forbidden_fields = {"success", "message", "total_count", "specification_version"}
         actual_fields = set(response_dict.keys())
 
@@ -398,8 +333,69 @@ class TestA2AResponseRegressionPrevention:
         response = GetProductsResponse(products=[])
         response_dict = response.model_dump()
 
-        # These are protocol-level fields, not AdCP response fields
+        # These are protocol-envelope fields (spec-defined on the WIRE
+        # envelope's Protocol Envelope arm — see
+        # tests/helpers/adcp_schema_validator.py — and populated by the protocol
+        # layer at the transport boundary), correctly absent from the
+        # Pydantic response MODEL itself.
         protocol_fields = {"task_id", "context_id"}  # status is actually in some AdCP responses
 
         violations = protocol_fields & set(response_dict.keys())
         assert violations == set(), f"Response data contains protocol fields: {violations}"
+
+
+@pytest.mark.integration
+class TestA2ASuccessDerivedFromErrorsOnRealWire:
+    """``_stamp_a2a_protocol_fields`` derives ``success`` from ``errors`` so a
+    response carrying per-item errors reports ``success=False`` uniformly
+    (single derivation point after three call sites used to duplicate it
+    inline — PR #1868, one of the three previously omitted the derivation
+    entirely and always forced ``success=True``).
+
+    Dispatched through the real ``AdCPRequestHandler`` (not by calling
+    ``_stamp_a2a_protocol_fields`` directly) so a regression in the
+    derivation — or in any call site that stopped routing through it — shows
+    up on the real A2A wire, the same bytes a buyer actually receives.
+    Deleting the derivation in ``_stamp_a2a_protocol_fields`` must make this
+    test fail.
+    """
+
+    def test_get_products_populated_errors_derive_wire_success_false(self, integration_db):
+        """Sync on purpose: ``call_a2a``/``call_via`` bridge to ``asyncio.run()``
+        internally (see ``ProductEnv.call_impl``'s docstring on the same bridge) —
+        an ``async def`` test would nest event loops and silently swallow the
+        resulting RuntimeError.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from src.core.schemas import Error, GetProductsResponse
+        from tests.bdd.steps._outcome_helpers import wire_field
+        from tests.bdd.steps.generic._dispatch import dispatch_request
+        from tests.factories import PrincipalFactory, TenantFactory
+        from tests.harness.product import ProductEnv
+        from tests.harness.transport import Transport
+
+        with ProductEnv(tenant_id="a2a-success-errors-test", principal_id="test_principal") as env:
+            tenant = TenantFactory(tenant_id="a2a-success-errors-test")
+            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            # get_products has no production code path that populates
+            # non-fatal errors[] today (unlike CreateMediaBuySuccess's
+            # property_list_filtering advisory) — stub the tool boundary
+            # _handle_get_products_skill calls, the same seam the transport
+            # wrapper is contractually bound to (Pattern #5), to grade the
+            # stamping/derivation logic the wrapper owns independent of
+            # whether any business path currently exercises it.
+            errored_response = GetProductsResponse(
+                products=[],
+                errors=[Error(code="UNSUPPORTED_FEATURE", message="property_list_filtering unavailable")],
+            )
+
+            with patch(
+                "src.a2a_server.adcp_a2a_server.core_get_products_tool",
+                new=AsyncMock(return_value=errored_response),
+            ):
+                ctx: dict = {"env": env, "transport": Transport.A2A}
+                dispatch_request(ctx, brief="display ads")
+
+            assert wire_field(ctx, "success") is False

@@ -11,11 +11,12 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
-from a2a.types import Artifact, Message, Part, Role, SendMessageRequest, Task, TaskState, TaskStatus
+from a2a.types import Message, Part, Role, SendMessageRequest, Task, TaskState
 from adcp.types import AccountReference as LibraryAccountReference
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from tests.factories.creative_asset import build_assets, image_spec
+from tests.helpers.a2a_adcp_validation import validate_a2a_skill_payload
 from tests.utils.a2a_helpers import (
     assert_delivery_forwarded_account,
     create_a2a_message_with_skill,
@@ -26,7 +27,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 # Import schema validation components
 try:
-    from tests.e2e.adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
+    from tests.helpers.adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
 
     SCHEMA_VALIDATION_AVAILABLE = True
 except ImportError:
@@ -42,25 +43,10 @@ logger = logging.getLogger(__name__)
 class A2AAdCPValidator:
     """Helper class to validate A2A responses against AdCP schemas."""
 
-    # Map A2A skill names to AdCP schema task names
-    # Note: signals skills removed - should come from dedicated signals agents
-    SKILL_TO_SCHEMA_MAP = {
-        "get_products": "get-products",
-        "create_media_buy": "create-media-buy",
-        "update_media_buy": "update-media-buy",  # AdCP v2.0+ endpoint
-        "get_media_buy_delivery": "get-media-buy-delivery",  # AdCP delivery metrics
-        "sync_creatives": "sync-creatives",  # New AdCP spec endpoint
-        "list_creatives": "list-creatives",  # New AdCP spec endpoint
-        "approve_creative": "approve-creative",  # When schema becomes available
-        # Skills without AdCP schemas yet
-        "get_media_buy_status": None,
-        "optimize_media_buy": None,
-    }
-
     def __init__(self):
         self.validator = None
         if SCHEMA_VALIDATION_AVAILABLE:
-            self.validator = AdCPSchemaValidator(offline_mode=True, adcp_version="v1")
+            self.validator = AdCPSchemaValidator()
 
     async def __aenter__(self):
         if self.validator:
@@ -108,40 +94,39 @@ class A2AAdCPValidator:
             warnings.append("Schema validation not available - skipping")
             return result
 
-        # Check if skill has corresponding AdCP schema
-        schema_task = self.SKILL_TO_SCHEMA_MAP.get(skill_name)
-        if not schema_task:
-            warnings.append(f"No AdCP schema mapping for skill '{skill_name}' - skipping")
-            return result
-
-        result["schema_tested"] = schema_task
-
         # Extract AdCP payload from A2A artifacts
         if not task_result.artifacts:
             errors.append("No artifacts found in A2A task result")
             result["valid"] = False
             return result
 
-        # Validate each artifact (skills can return multiple artifacts)
+        # Validate each artifact (skills can return multiple artifacts).
+        # Extraction is transport-specific and stays here; everything after it
+        # is the shared helper, so this and the e2e client cannot drift.
         for i, artifact in enumerate(task_result.artifacts):
-            try:
-                adcp_payload = self.extract_adcp_payload_from_a2a_artifact(artifact)
-                if not adcp_payload:
-                    warnings.append(f"Artifact {i}: No AdCP payload found")
-                    continue
+            adcp_payload = self.extract_adcp_payload_from_a2a_artifact(artifact)
+            if not adcp_payload:
+                warnings.append(f"Artifact {i}: No AdCP payload found")
+                continue
 
-                # Validate against AdCP schema
-                await self.validator.validate_response(schema_task, adcp_payload)
-                warnings.append(f"Artifact {i}: AdCP schema validation passed")
-
-            except SchemaValidationError as e:
-                errors.append(f"Artifact {i}: AdCP schema validation failed: {e}")
-                result["valid"] = False
-            except Exception as e:
-                errors.append(f"Artifact {i}: Validation error: {e}")
+            outcome = await validate_a2a_skill_payload(self.validator, skill_name, adcp_payload)
+            result["schema_tested"] = outcome["schema_tested"]
+            errors.extend(f"Artifact {i}: {msg}" for msg in outcome["errors"])
+            warnings.extend(f"Artifact {i}: {msg}" for msg in outcome["warnings"])
+            if not outcome["valid"]:
                 result["valid"] = False
 
         return result
+
+    def assert_schema_valid(self, validation_result: dict, skill_name: str) -> None:
+        """Print validation errors/warnings, then assert the response is schema-valid."""
+        if validation_result["errors"]:
+            print(f"Schema validation errors: {validation_result['errors']}")
+        if validation_result["warnings"]:
+            print(f"Schema validation warnings: {validation_result['warnings']}")
+        assert validation_result["valid"] is True, (
+            f"{skill_name} response should be schema-valid but wasn't: {validation_result['errors']}"
+        )
 
 
 @pytest.mark.requires_db
@@ -221,11 +206,7 @@ class TestA2ASkillInvocation:
             validation_result = await validator.validate_a2a_skill_response("get_products", result)
             print(f"Natural language get_products validation: {validation_result}")
 
-            # Schema validation should pass or warn (but not fail the test)
-            if validation_result["errors"]:
-                print(f"Schema validation errors: {validation_result['errors']}")
-            if validation_result["warnings"]:
-                print(f"Schema validation warnings: {validation_result['warnings']}")
+            validator.assert_schema_valid(validation_result, "get_products")
 
     @pytest.mark.asyncio
     async def test_explicit_skill_get_products(
@@ -276,11 +257,7 @@ class TestA2ASkillInvocation:
             validation_result = await validator.validate_a2a_skill_response("get_products", result)
             print(f"Explicit skill get_products validation: {validation_result}")
 
-            # Schema validation should pass or warn (but not fail the test)
-            if validation_result["errors"]:
-                print(f"Schema validation errors: {validation_result['errors']}")
-            if validation_result["warnings"]:
-                print(f"Schema validation warnings: {validation_result['warnings']}")
+            validator.assert_schema_valid(validation_result, "get_products")
 
     @pytest.mark.asyncio
     async def test_explicit_skill_get_products_a2a_spec(
@@ -331,11 +308,7 @@ class TestA2ASkillInvocation:
             validation_result = await validator.validate_a2a_skill_response("get_products", result)
             print(f"A2A spec 'input' field get_products validation: {validation_result}")
 
-            # Schema validation should pass or warn (but not fail the test)
-            if validation_result["errors"]:
-                print(f"Schema validation errors: {validation_result['errors']}")
-            if validation_result["warnings"]:
-                print(f"Schema validation warnings: {validation_result['warnings']}")
+            validator.assert_schema_valid(validation_result, "get_products")
 
     @pytest.mark.asyncio
     async def test_explicit_skill_create_media_buy(
@@ -574,74 +547,63 @@ class TestA2ASkillInvocation:
                         break
                 assert data_part_found, "Expected DataPart in artifact.parts"
 
+    @pytest.mark.asyncio
+    async def test_artifact_text_part_is_the_data_part_message(
+        self, handler, sample_tenant, sample_principal, sample_products, mock_identity
+    ):
+        """The artifact's TextPart carries exactly the DataPart's ``message``, verbatim.
+
+        The human-readable text is READ from the payload, not re-derived from
+        it: ``_stamp_a2a_protocol_fields`` stamps ``str(response)`` onto
+        ``message`` at serialization time, and ``on_message_send`` copies that
+        string into the TextPart. Equality is the whole contract — a future
+        change that rebuilds a response model from the outbound dict to call
+        ``__str__()`` again would hand pydantic before-validators a reference
+        to the dict about to go on the wire (the mechanism behind the
+        list_creatives format_id bare-string defect), and any drift between
+        the two parts would show up here first.
+        """
+        from tests.utils.a2a_helpers import extract_data_from_artifact
+
+        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
+
+        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
+            from tests.a2a_helpers import make_a2a_context
+
+            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
+            message = create_a2a_message_with_skill(
+                "get_products", {"brief": "video ads", "brand": {"domain": "testbrand.com"}}
+            )
+            result = await handler.on_message_send(SendMessageRequest(message=message), context=ctx)
+
+        assert isinstance(result, Task)
+        assert len(result.artifacts) == 1, "get_products produces exactly one artifact"
+        artifact = result.artifacts[0]
+
+        text_parts = [p.text for p in artifact.parts if p.HasField("text")]
+        assert len(text_parts) == 1, f"expected exactly one TextPart, got {len(text_parts)}"
+
+        data = extract_data_from_artifact(artifact)
+        assert data["message"], "the DataPart must carry a non-empty stamped message"
+        assert text_parts[0] == data["message"], (
+            "the TextPart must be the stamped message verbatim, not a value re-derived "
+            f"from the payload — TextPart={text_parts[0]!r} DataPart.message={data['message']!r}"
+        )
+
     # TODO: Add test_missing_authentication once we understand how A2A server handles auth errors
     # TODO: Needs investigation of proper error handling approach (A2AError not in current a2a library)
 
-    @pytest.mark.asyncio
-    async def test_adcp_schema_validation_integration(self, validator):
-        """Test A2A-to-AdCP schema validation integration."""
-        # Test the validation helper directly with mock data
-
-        # Create mock A2A task with AdCP-compliant product data
-
-        mock_adcp_products_response = {
-            "products": [
-                {
-                    "id": "prod_test_1",
-                    "name": "Test Video Product",
-                    "description": "Test video advertising product",
-                    "formats": [{"id": "video_720p", "name": "720p Video", "width": 1280, "height": 720}],
-                    "pricing": {"base_cpm": 12.5, "currency": "USD"},
-                    "targeting_template": {"demographics": ["18-34"], "interests": ["technology"]},
-                    "countries": ["US", "CA"],
-                    "delivery_type": "guaranteed",
-                }
-            ],
-            "message": "Products retrieved successfully",
-        }
-
-        # Create A2A artifacts structure (protobuf)
-        from tests.utils.a2a_helpers import _dict_to_value
-
-        artifact = Artifact(
-            artifact_id="test_artifact_1",
-            name="get_products_result",
-        )
-        artifact.parts.append(Part(data=_dict_to_value(mock_adcp_products_response)))
-
-        mock_task = Task(
-            id="test_task_1",
-            context_id="test_context_1",
-            status=TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
-            artifacts=[artifact],
-        )
-
-        # Test validation for each skill that has AdCP schemas
-        adcp_skills_to_test = {
-            "get_products": mock_task,
-            # Add other skills when we have mock data for them
-        }
-
-        for skill_name, task_result in adcp_skills_to_test.items():
-            validation_result = await validator.validate_a2a_skill_response(skill_name, task_result)
-
-            print(f"\n=== Schema Validation Results for {skill_name} ===")
-            print(f"Valid: {validation_result['valid']}")
-            print(f"Schema tested: {validation_result['schema_tested']}")
-
-            if validation_result["errors"]:
-                print(f"Errors: {validation_result['errors']}")
-            if validation_result["warnings"]:
-                print(f"Warnings: {validation_result['warnings']}")
-
-            # For now, don't fail on validation errors - just ensure the validator runs
-            assert "schema_tested" in validation_result
-
-            # If schema validation is available and schema exists, it should have attempted validation
-            if SCHEMA_VALIDATION_AVAILABLE and validation_result["schema_tested"]:
-                assert validation_result["schema_tested"] == "get-products"
-                # Either valid or has meaningful errors/warnings
-                assert validation_result["valid"] or validation_result["errors"] or validation_result["warnings"]
+    # test_adcp_schema_validation_integration removed (#1838 review): it built a
+    # hand-rolled mock A2A Task/Artifact instead of exercising the real production path
+    # — pure mocking in a file whose whole point is DB-backed integration coverage — and
+    # its "assert valid or errors or warnings" could never fail regardless of outcome.
+    # test_natural_language_get_products and test_explicit_skill_get_products below
+    # already cover skill->schema resolution + validator invocation through the real
+    # handler and a real database-backed product, which is strictly better coverage of
+    # the same concept. (#1838 review: their assertions were non-vacuous
+    # placeholders here too; production's get_products response is now AdCP
+    # schema-valid, so `assert validation_result["valid"] is True` below actually
+    # grades the response — not just "or errors or warnings".)
 
     def test_skill_handler_mapping(self, handler):
         """Test that all advertised skills have handlers."""

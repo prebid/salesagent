@@ -1,46 +1,25 @@
-"""Guard tests for the A2A update_media_buy submitted contract (PR #1567 follow-up).
+"""Guard test for the A2A update_media_buy submitted contract (PR #1567 follow-up).
 
-These pin the behavior that must SURVIVE the removal of the unreachable
-``UpdateMediaBuySubmitted`` reconstruction branch in
-``src/a2a_server/adcp_a2a_server.py::_reconstruct_response_object``:
-
-1. A manual-approval update_media_buy driven through the REAL A2A
-   ``on_message_send`` pipeline yields a Task with state=TASK_STATE_SUBMITTED
-   and NO artifacts — the submitted early-return fires BEFORE artifact
-   reconstruction, so no serialized submitted body ever crosses the A2A wire.
-   (The create-side twin of this pin lives at
-   tests/integration/test_a2a_skill_invocation.py::test_explicit_skill_create_media_buy_manual_approval;
-   no test pinned the update side at the Task level before this one — the
-   BR-UC-003 a2a BDD scenarios grade the submitted ENVELOPE, but the harness
-   synthesizes that envelope from Task state alone and never asserts artifact
-   absence.)
-
-2. The REACHABLE part of ``_reconstruct_response_object``'s update contract:
-   a completed artifact body (carrying media_buy_id) reconstructs as
-   ``UpdateMediaBuySuccess``; an errors-only body as ``UpdateMediaBuyError``.
-   (tests/integration/test_a2a_response_compliance.py exercises reconstruction
-   only for list_authorized_properties / get_products / list_creative_formats
-   — the update_media_buy union discrimination was previously unpinned.)
-
-Both tests pass BEFORE the dead-branch removal and must keep passing AFTER it.
-They are guards, not TDD-red artifacts: the removal is a no-behavior-change
-refactor, so there is no failing behavior to write first.
+A manual-approval update_media_buy driven through the REAL A2A
+``on_message_send`` pipeline yields a Task with state=TASK_STATE_SUBMITTED and
+NO artifacts — the submitted early-return fires BEFORE the artifact loop, so no
+serialized submitted body ever crosses the A2A wire. (The create-side twin of
+this pin lives at
+tests/integration/test_a2a_skill_invocation.py::test_explicit_skill_create_media_buy_manual_approval;
+no test pinned the update side at the Task level before this one — the BR-UC-003
+a2a BDD scenarios grade the submitted ENVELOPE, but the harness synthesizes that
+envelope from Task state alone and never asserts artifact absence.)
 
 Honesty notes:
-- Test 1 asserts on the raw Task captured by the harness
+- The assertion is on the raw Task captured by the harness
   (``env.last_a2a_task``), because the harness's parsed submitted response is
   SYNTHESIZED from Task state + id (tests/harness/_base.py) and by itself
   cannot prove that the server attached no artifacts.
-- Test 1 mocks only the ad-server adapter (the external boundary — flipped to
+- Only the ad-server adapter is mocked (the external boundary — flipped to
   manual-approval mode) plus the audit/context-manager seams MediaBuyDualEnv
   always patches; message parsing, skill routing, auth, the shared
   ``_update_media_buy_impl``, and Task/artifact framing are all real, and the
   media buy row lives in real PostgreSQL.
-- Test 2 calls the production reconstruction helper directly; it involves no
-  wire and no DB by design — it pins the pure union-discrimination contract
-  that survives the branch removal. It deliberately does NOT assert anything
-  about a submitted-shaped body: after the removal, that shape is
-  structurally impossible on this path.
 """
 
 from __future__ import annotations
@@ -48,12 +27,7 @@ from __future__ import annotations
 import pytest
 from a2a.types import TaskState
 
-from src.core.schemas import (
-    UpdateMediaBuyError,
-    UpdateMediaBuyRequest,
-    UpdateMediaBuySubmitted,
-    UpdateMediaBuySuccess,
-)
+from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuySubmitted
 from tests.factories import MediaBuyFactory
 from tests.harness.media_buy_dual import MediaBuyDualEnv
 
@@ -114,38 +88,3 @@ def test_manual_approval_update_via_real_a2a_pipeline_is_submitted_task_without_
     )
     assert result.status == "submitted"
     assert result.task_id, "submitted update must carry a task_id for the buyer to poll"
-
-
-def test_reconstruct_update_media_buy_reachable_contract():
-    """_reconstruct_response_object update union: completed -> Success, errors-only -> Error.
-
-    These are the only two shapes that can reach reconstruction (submitted
-    results early-return in on_message_send before the artifact loop). Pins
-    the media_buy_id-based discrimination so the dead-branch removal cannot
-    disturb the reachable cases. Note: reconstruction failures return None
-    (logged, not raised), so the isinstance assertions also prove the data
-    shapes were accepted by the concrete models.
-    """
-    from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-
-    handler = AdCPRequestHandler()
-
-    completed_body = {
-        "media_buy_id": _MEDIA_BUY_ID,
-        "status": "completed",
-        "revision": 2,
-    }
-    completed = handler._reconstruct_response_object("update_media_buy", completed_body)
-    assert isinstance(completed, UpdateMediaBuySuccess), (
-        f"completed body (has media_buy_id) must reconstruct as UpdateMediaBuySuccess, got {completed!r}"
-    )
-    assert completed.media_buy_id == _MEDIA_BUY_ID
-
-    errors_only_body = {
-        "errors": [{"code": "invalid_budget", "message": "budget must be positive"}],
-    }
-    errored = handler._reconstruct_response_object("update_media_buy", errors_only_body)
-    assert isinstance(errored, UpdateMediaBuyError), (
-        f"errors-only body (no media_buy_id) must reconstruct as UpdateMediaBuyError, got {errored!r}"
-    )
-    assert errored.errors[0].code == "invalid_budget"

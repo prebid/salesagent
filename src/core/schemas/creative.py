@@ -58,6 +58,8 @@ from src.core.schemas._base import (
     SalesAgentBaseModel,
     Targeting,
     _upgrade_legacy_format_ids,
+    copy_before_mutating,
+    strip_none_deep,
 )
 
 
@@ -168,6 +170,11 @@ class Creative(LibraryCreative):
         """Validate and upgrade format_id to AdCP namespaced format."""
         from src.core.format_cache import upgrade_legacy_format_id
 
+        if not isinstance(values, dict):
+            return values
+
+        values = copy_before_mutating(values)
+
         # Handle both 'format' and 'format_id' keys
         format_val = values.get("format_id") or values.get("format")
         if format_val is not None:
@@ -201,6 +208,17 @@ class Creative(LibraryCreative):
     def format_agent_url(self) -> str | None:
         """Get agent URL string from FormatId object."""
         return str(self.format_id.agent_url) if self.format_id else None
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        """AdCP-compliant dump. ``assets`` is an untyped dict[str, Any] (the DB
+        stores arbitrary asset shapes), so Pydantic's exclude_none=True default
+        never sees inside it — a None field on a stored asset survives as a
+        literal null instead of being omitted, failing AdCP schema validation.
+        """
+        data = super().model_dump(**kwargs)
+        if data.get("assets") is not None:
+            data["assets"] = strip_none_deep(data["assets"])
+        return data
 
     def model_dump_internal(self, **kwargs):
         """Dump including internal fields for database storage.
@@ -471,6 +489,16 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess):
 
     Design decision (salesagent-g3c): error variant never constructed.
     """
+
+    # Protocol-envelope status (core/protocol-envelope.json): REQUIRED on every task
+    # response envelope, a sibling field at the MCP/REST wire root (not nested under
+    # a "payload" key). This class only ever represents a synchronously-completed
+    # sync (the error/submitted branches are never constructed here — see class
+    # docstring), so "completed" is invariant. Declared directly on the response
+    # (the pattern already used by CreateMediaBuySuccess/UpdateMediaBuySuccess/
+    # ListCreativeFormatsResponse) rather than left to a wrapper that never actually
+    # ran (GH #1710): the library parent has no status field at all.
+    status: Literal["completed"] = "completed"
 
     # Override creatives to use our SyncCreativeResult (Pattern #4: nested serialization).
     # Library parent uses its Creative type which lacks assigned_to, assignment_errors, etc.

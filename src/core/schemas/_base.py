@@ -199,6 +199,55 @@ def format_id_identity(format_id: LibraryFormatId) -> tuple[str, str]:
     return (canonical_agent_url(format_id.agent_url), format_id.id)
 
 
+def strip_none_deep(value: Any) -> Any:
+    """Recursively drop ``None`` values from nested dicts/lists.
+
+    ``model_dump(exclude_none=True)`` only strips at the level it's called on
+    — once a parent has already been dumped to a plain dict (e.g. by a custom
+    ``model_dump()`` override that needs ``exclude_none=False`` at its own
+    level to keep required-but-currently-None fields), Pydantic never
+    revisits the nested dicts/lists inside it. AdCP schemas type optional
+    fields (not accepting ``null``) far more often than they accept it, so a
+    parent's null-preserving override otherwise leaks nulls into every
+    optional field of every nested object.
+    """
+    if isinstance(value, dict):
+        return {k: strip_none_deep(v) for k, v in value.items() if v is not None}
+    if isinstance(value, list):
+        return [strip_none_deep(v) for v in value if v is not None]
+    return value
+
+
+def copy_before_mutating(values: dict[str, Any]) -> dict[str, Any]:
+    """Defensive copy for a ``mode="before"`` validator about to mutate its input.
+
+    pydantic-core hands a ``mode="before"`` validator its input dict BY
+    REFERENCE -- notably, when validating a ``list[Model]`` field on a parent
+    model, each list item's dict is passed to the item model's before-validator
+    without a defensive copy. A validator that mutates that dict in place
+    therefore corrupts whatever dict the caller still holds a reference to.
+
+    Live inbound hazard this protects: the A2A server validates a request
+    payload and then forwards the SAME raw dicts onward --
+    ``_handle_create_media_buy_skill`` runs
+    ``CreateMediaBuyRequest.model_validate(params)`` and passes
+    ``packages=params["packages"]`` into the core tool
+    (``src/a2a_server/adcp_a2a_server.py``). Without the copy,
+    ``_upgrade_legacy_format_ids`` writes live ``FormatId`` objects into the
+    very dicts the handler goes on to forward.
+
+    Historical: the first traced instance was OUTBOUND, not inbound -- the A2A
+    server used to rebuild a typed response from the dict it was about to send
+    on the wire, purely to regenerate a human-readable text part, and
+    ``Creative.validate_format_id`` mutated that shared dict in place,
+    replacing a spec-compliant ``{agent_url, id}`` with a live ``FormatId``
+    that the wire serializer's ``json.dumps(default=str)`` fallback then
+    stringified. That round trip has been deleted; nothing rebuilds an
+    outbound payload any more.
+    """
+    return values.copy()
+
+
 class NestedModelSerializerMixin:
     """Mixin that ensures nested Pydantic models use their custom model_dump().
 
@@ -664,10 +713,10 @@ class UpdateMediaBuySubmitted(AdCPUpdateMediaBuySubmitted):  # type: ignore[misc
     ``"completed"`` and would falsely assert the update was applied.
 
     The update transport wrappers serialize the returned model straight onto the
-    wire (``ToolResult(structured_content=response)`` / A2A / REST), so returning
-    this type from the manual-approval branch yields the spec-correct submitted
-    envelope on every transport. ``status`` defaults to ``"submitted"`` on the
-    library base; ``task_id`` is required.
+    wire (``ToolResult(structured_content=response.model_dump(mode="json"))`` /
+    A2A / REST), so returning this type from the manual-approval branch yields the
+    spec-correct submitted envelope on every transport. ``status`` defaults to
+    ``"submitted"`` on the library base; ``task_id`` is required.
     """
 
     def __str__(self) -> str:
@@ -1235,6 +1284,8 @@ class Targeting(TargetingOverlay):
         if not isinstance(values, dict):
             return values
 
+        values = copy_before_mutating(values)
+
         for v2_key, v3_key, transform in _LEGACY_GEO_FIELDS:
             if v2_key not in values:
                 continue
@@ -1548,6 +1599,8 @@ def _upgrade_legacy_format_ids(values: dict) -> dict:
     if not isinstance(values, dict):
         return values
 
+    values = copy_before_mutating(values)
+
     format_ids = values.get("format_ids")
     if format_ids and isinstance(format_ids, list):
         upgraded = []
@@ -1622,8 +1675,7 @@ class PackageRequest(LibraryPackageRequest):
         if not isinstance(values, dict):
             return values
 
-        # Create copy to avoid mutating input dict (critical for shared/cached dicts)
-        values = values.copy()
+        values = copy_before_mutating(values)
 
         # Remove response-only fields when reconstructing from database
         values.pop("status", None)
@@ -2028,6 +2080,8 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
         """Unwrap RootModel packages and parse datetime strings."""
         if not isinstance(values, dict):
             return values
+
+        values = copy_before_mutating(values)
 
         # Normalize package instances to dicts so the list[AdCPPackageUpdate] field
         # validates them. FastMCP coerces the incoming param to its annotated type

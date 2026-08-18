@@ -56,6 +56,17 @@ none of sync's creative-agent / preview-generation patches), and the obligation
 under test is ``list_all`` — the listing contract, not the sync path. The
 creatives land in the same DB row shape sync would persist, so the listing query
 is exercised faithfully.
+
+**Corrupt-blob coercion reconciliation (#1508):** ``list_creatives`` drops a corrupt
+``tags``/``assets`` blob value to absent, and collapses a stored empty ``tags`` list to
+omission (both conformant at 3.1.1 — the schema permits ``[]`` and absent for ``tags``,
+``{}`` and absent for ``assets``, ``null`` for neither). So whoever wires the dormant
+all-13-fields boundary graders (``BR-UC-018-list-creatives.feature:292``, ``:312``, ``:549``,
+``:575``) must assert value-when-present, not key-presence-of-13 — a creative with empty or
+absent tags legitimately omits the key. (``:403``, the ``BR-RULE-148`` tags-AND-semantics
+scenario, is separately dormant but seeds a non-empty ``tags`` value by construction, so this
+empty/omission caveat doesn't apply there.) The coercion itself is graded on real wire bytes
+across a2a/mcp/rest in ``tests/integration/test_list_creatives_concept_filter.py``.
 """
 
 from __future__ import annotations

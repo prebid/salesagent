@@ -23,12 +23,21 @@ class TestCurrencyValidation:
             PolicyService.validate_currency_code(code)
 
     def test_validate_invalid_currency_codes(self):
-        """Invalid currency codes should raise ValidationError."""
+        """An unknown currency code raises with the precise, actionable message.
+
+        The message is asserted EXACTLY, not by substring: a broad ``except
+        Exception`` around the raise re-wrapped the precise message inside a
+        generic relabel, and a substring check on "Invalid currency code"
+        passed against that double-wrapped string — so the assertion could not
+        see the caller losing the message it exists to deliver.
+        """
         invalid_codes = ["XYZ", "ABC", "ZZZ", "FOO"]
         for code in invalid_codes:
             with pytest.raises(ValidationError) as exc_info:
                 PolicyService.validate_currency_code(code)
-            assert "Invalid currency code" in str(exc_info.value)
+            assert exc_info.value.errors == {
+                "currency_code": f"Invalid currency code: {code}. Please use a valid ISO 4217 currency code."
+            }, f"caller received {exc_info.value.errors!r} instead of the precise validation message"
 
     def test_validate_empty_currency_code(self):
         """Empty currency code should raise ValidationError."""

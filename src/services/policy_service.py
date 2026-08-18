@@ -131,19 +131,21 @@ class PolicyService:
 
         currency_code = currency_code.upper()
 
-        try:
-            # Get the currency name - if Babel returns the code itself, it's not a real currency
-            # Real currencies have proper names (e.g., "US Dollar" for USD)
-            # Unknown currencies just return the code (e.g., "XYZ" for XYZ)
-            name = babel_numbers.get_currency_name(currency_code, locale="en")
-            if name == currency_code:
-                raise ValidationError(
-                    {
-                        "currency_code": f"Invalid currency code: {currency_code}. Please use a valid ISO 4217 currency code."
-                    }
-                )
-        except Exception as e:
-            raise ValidationError({"currency_code": f"Error validating currency code: {str(e)}"}) from e
+        # Get the currency name - if Babel returns the code itself, it's not a real currency
+        # Real currencies have proper names (e.g., "US Dollar" for USD)
+        # Unknown currencies just return the code (e.g., "XYZ" for XYZ)
+        #
+        # No try/except here on purpose: the previous one caught the very
+        # ValidationError raised below and re-wrapped its precise, actionable
+        # message inside a generic wrapper, so the caller never received the
+        # message the raise exists to deliver. A babel
+        # locale-data failure is an environment fault and must surface as one,
+        # not as "your currency_code is invalid".
+        name = babel_numbers.get_currency_name(currency_code, locale="en")
+        if name == currency_code:
+            raise ValidationError(
+                {"currency_code": f"Invalid currency code: {currency_code}. Please use a valid ISO 4217 currency code."}
+            )
 
     @staticmethod
     def validate_currency_limits(currencies: list[CurrencyLimitData]) -> None:

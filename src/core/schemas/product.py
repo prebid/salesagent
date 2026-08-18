@@ -14,6 +14,7 @@ from adcp.types import Product as LibraryProduct
 from adcp.types import ProductCard as LibraryProductCard
 from adcp.types import ProductCardDetailed as LibraryProductCardDetailed
 from adcp.types import ProductFilters as LibraryFilters
+from adcp.types import ReportingCapabilities as LibraryReportingCapabilities
 from pydantic import ConfigDict, Field, model_validator
 
 from src.core.config import get_pydantic_extra_mode
@@ -22,7 +23,26 @@ from src.core.schemas._base import (
     NestedModelSerializerMixin,
     SalesAgentBaseModel,
     _upgrade_legacy_format_ids,
+    strip_none_deep,
 )
+
+
+def _default_reporting_capabilities() -> LibraryReportingCapabilities:
+    """Minimal reporting_capabilities for callers that haven't populated it yet.
+
+    core/product.json requires the field unconditionally, so Product supplies a
+    validated default rather than leaving the attribute None and fabricating a
+    value at serialization time. Returns a fresh instance per call — the field's
+    default_factory — so no lists are shared between products.
+    """
+    return LibraryReportingCapabilities(
+        available_reporting_frequencies=["daily"],
+        expected_delay_minutes=1440,
+        timezone="UTC",
+        supports_webhooks=False,
+        available_metrics=["impressions"],
+        date_range_support="date_range",
+    )
 
 
 class ProductCard(LibraryProductCard):
@@ -77,9 +97,10 @@ class Product(LibraryProduct):
     - Automatic updates when library Product changes
     """
 
-    # adcp 4.3 makes reporting_capabilities required.  Override as optional
-    # — our product builder sets it when available from the adapter.
-    reporting_capabilities: Any | None = None  # type: ignore[assignment]
+    # adcp 4.3 makes reporting_capabilities required. Callers that don't know it
+    # yet get a validated default from the factory below, so the attribute, the
+    # wire and the persisted row always agree and None is unconstructible.
+    reporting_capabilities: LibraryReportingCapabilities = Field(default_factory=_default_reporting_capabilities)
 
     # Internal-only fields (not in AdCP spec)
     implementation_config: dict[str, Any] | None = Field(
@@ -148,8 +169,10 @@ class Product(LibraryProduct):
         if isinstance(kwargs["exclude"], set):
             kwargs["exclude"].update({"implementation_config", "expires_at"})
 
-        # Override exclude_none so we can handle core-field None values ourselves
-        # (AdCPBaseModel defaults exclude_none=True which would strip required fields)
+        # Turn off AdCPBaseModel's exclude_none=True default and do the null
+        # stripping here instead: it has to run AFTER the formats -> format_ids
+        # rename below, and it has to go deep through nested models whose own
+        # model_dump() overrides the parent's flags don't reach (strip_none_deep).
         kwargs["exclude_none"] = False
         data = super().model_dump(**kwargs)
 
@@ -157,31 +180,29 @@ class Product(LibraryProduct):
         if "formats" in data:
             data["format_ids"] = data.pop("formats")
 
-        # Remove null fields per AdCP spec
-        # Only truly required fields should always be present
-        core_fields = {
-            "product_id",
-            "name",
-            "description",
-            "format_ids",
-            "delivery_type",
-            "delivery_measurement",
-            "reporting_capabilities",
-            "is_custom",
-        }
+        # Nested optional fields (format_ids[].width, pricing_options[].floor_price,
+        # placements[].*, delivery_measurement.vendors, publisher_properties[].
+        # publisher_domains, ...) are typed by the pinned schema and reject null.
+        # Strip those first, then decide inclusion at this level: strip_none_deep
+        # reaches INTO values, so a top-level key whose value is itself None has
+        # to survive it and be judged by the pass below.
+        data = {key: strip_none_deep(value) for key, value in data.items()}
 
-        adcp_data = {}
-        for key, value in data.items():
-            # Include core fields always, and non-null optional fields
-            # Note: pricing_options=[] is valid for anonymous users (no pricing shown)
-            # Per AdCP spec, pricing_options is required but can be empty array
-            if key in core_fields or value is not None:
-                adcp_data[key] = value
-            # Include empty pricing_options explicitly (required per AdCP schema)
-            elif key == "pricing_options" and value == []:
-                adcp_data[key] = []
-
-        return adcp_data
+        # Drop null fields per AdCP spec, and only null ones. Every field the
+        # pinned core/product.json requires unconditionally is non-nullable on
+        # the model, so this cannot drop a required field — pinned by
+        # test_required_fields_are_non_nullable. Falsy-but-present values are
+        # kept deliberately: pricing_options=[] is the anonymous-user shape (no
+        # pricing shown), which the spec requires as an empty array, not an
+        # omission.
+        #
+        # format_ids is the case that makes "null" and "absent" different here:
+        # it is Optional on this model (see the field override above) while the
+        # pinned schema types it "array", which rejects null. An unset
+        # format_ids must therefore be OMITTED, never emitted as null — it is
+        # required only via anyOf with format_options, not unconditionally
+        # (#1868 review).
+        return {key: value for key, value in data.items() if value is not None}
 
     def model_dump_internal(self, **kwargs):
         """Return internal model dump including all fields for database operations."""

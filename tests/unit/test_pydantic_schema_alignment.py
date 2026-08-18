@@ -15,11 +15,9 @@ all spec-compliant requests.
 
 import importlib
 import inspect
-import json
 import pkgutil
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -36,6 +34,7 @@ from src.core.schemas import (
     ListAccountsResponse,
     ListCreativesRequest,
     ListCreativesResponse,
+    Product,
     SyncAccountsResponse,
     SyncCreativesRequest,
     SyncCreativesResponse,
@@ -45,29 +44,35 @@ from src.core.schemas import (
 )
 from src.core.schemas.creative import ListCreativeFormatsResponse
 from src.core.schemas.delivery import GetCreativeDeliveryResponse, GetMediaBuyDeliveryResponse
+from tests.helpers import pinned_schema
+from tests.helpers.adcp_factories import create_test_cpm_pricing_option, create_test_publisher_properties_by_tag
 
-# Pinned AdCP schema fixtures. Source of truth is adcontextprotocol/adcp at the
-# immutable commit 04f59d2d5 (tag v3.1-04f59d2d5, 2026-05-13) — an INTENTIONAL frozen
-# reference point for AdCP 3.1. Upstream ships constantly and `/schemas/latest` drifts,
-# so we deliberately do NOT track it: the schemas are vendored (committed) and read
-# offline. To advance the pin, run tests/fixtures/adcp_schemas_pinned/_refresh.py.
-_PINNED_SHA = "04f59d2d56d3d77033162c310e99a1188e4eb419"
-_PINNED_SCHEMA_DIR = Path(__file__).parent.parent / "fixtures" / "adcp_schemas_pinned"
+# AdCP schemas are read from the installed adcp SDK's own pinned tree
+# (tests/helpers/pinned_schema.py) — the SDK's own version IS the pin (moves
+# with pyproject.toml's adcp version), so there is exactly one upstream pin
+# for this suite, not an independently vendored snapshot (that snapshot
+# previously lived here, pinned at adcontextprotocol/adcp@04f59d2d5, a full
+# spec-minor behind the SDK's).
+#
+# Ref strings in this file are the one form the whole repo uses: a
+# category-qualified path relative to the version root, exactly as the SDK's
+# own index writes it. This file used to carry a "/schemas/" prefix of its own
+# and strip it here, which made a SECOND ref normalizer with rules that
+# disagreed with the shared one.
 
-# Map AdCP schema refs to Pydantic model classes. Keys are the pinned schema `$id`
-# namespace (`/schemas/<category>/<file>.json`). At 04f59d2d5, sync/list-creatives
+# Map AdCP schema refs to Pydantic model classes. At 04f59d2d5, sync/list-creatives
 # live under `creative/` (relocated from `media-buy/` earlier in 3.x).
 #
 # NOTE: CreateMediaBuyRequest is temporarily excluded due to AdCP spec evolution.
 # The spec now requires brand_card, but we maintain backward compatibility
 # via brand_manifest. Full brand_card implementation will be added in a separate PR.
 SCHEMA_TO_MODEL_MAP = {
-    "/schemas/media-buy/get-products-request.json": GetProductsRequest,
-    # "/schemas/media-buy/create-media-buy-request.json": CreateMediaBuyRequest,  # Skipped - pending brand_card implementation
-    "/schemas/media-buy/update-media-buy-request.json": UpdateMediaBuyRequest,
-    "/schemas/media-buy/get-media-buy-delivery-request.json": GetMediaBuyDeliveryRequest,
-    "/schemas/creative/sync-creatives-request.json": SyncCreativesRequest,
-    "/schemas/creative/list-creatives-request.json": ListCreativesRequest,
+    "media-buy/get-products-request.json": GetProductsRequest,
+    # "media-buy/create-media-buy-request.json": CreateMediaBuyRequest,  # Skipped - pending brand_card implementation
+    "media-buy/update-media-buy-request.json": UpdateMediaBuyRequest,
+    "media-buy/get-media-buy-delivery-request.json": GetMediaBuyDeliveryRequest,
+    "creative/sync-creatives-request.json": SyncCreativesRequest,
+    "creative/list-creatives-request.json": ListCreativesRequest,
     # Note: GetSignalsRequest removed — signals is dead code (UC-008), not exposed via MCP or A2A
 }
 
@@ -85,49 +90,87 @@ SCHEMA_TO_MODEL_PARAMS_WITH_GET_PRODUCTS_DRIFT_XFAIL = [
 # These have defaults or are managed by the library base class — exclude from all comparisons.
 _VERSION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version"})
 
-# Fields the pinned AdCP schema (04f59d2d5) defines but the adcp 5.7.0 Python library
-# / our local model does not yet model. These are spec-vs-library mismatches, not bugs
-# in our code. Re-derived against the pinned schemas — entries describing fields the
-# pin no longer defines were dropped. #1388 tracks the adcp 5.7 alignment.
+# Every AdCP response schema composes the same shared Protocol Envelope arm
+# (core/protocol-envelope.json) via a top-level allOf, and that arm spec-requires
+# exactly one field: "status". Excluding it from requiredness grading is NOT a
+# layering principle — it is a temporary concession to two mechanical limits of
+# this suite, and one tracked model gap:
 #
-# Keys MUST use the pinned schema namespace (`/schemas/media-buy/...`,
-# `/schemas/creative/...`) to match the `schema_ref` values in SCHEMA_TO_MODEL_MAP;
+#   1. the property walk in _resolve_response_item_schema merges allOf `required`
+#      but not allOf `properties`, so 7 of the registered models cannot be graded
+#      on status correctly yet;
+#   2. the sample generator cannot synthesize a valid enum/Literal value, which
+#      turns 4 more into false failures; and
+#   3. SyncAccountsResponse genuinely does not declare status — GH #1900.
+#
+# Those counts are measured, not estimated: empty this frozenset and the suite
+# goes to 13 failures — 7 on test_declared_fields_present_in_schema_and_model
+# (limit 1), 4 on test_required_fields_enforced with input_value=
+# 'test_status_value' (limit 2), SyncAccountsResponse with a missing required
+# key (limit 3), and the meta-test below. Do not read 7+4+1 as a share of the
+# registry: limits 1 and 2 hit the same four models, so 8 distinct models are
+# affected, not 12.
+#
+# The other 10 of the 11 registered models already carry a spec-correct default
+# for status, inherited straight from their adcp library base, and would pass
+# through the model_defaulted branch of test_required_fields_enforced once (1)
+# and (2) are fixed. So the exclusion buys time for those three fixes; it does
+# not assert that the response model is the wrong layer for status.
+#
+# (For the record, the two claims this comment used to make are both false, and
+# citing them misled a reviewer: _serialize_for_a2a stamps only message/success,
+# never status — src/a2a_server/adcp_a2a_server.py:1350-1383 — and the
+# message/context_id precedent in tests/helpers/adcp_schema_validator.py:223-229
+# decided the OPPOSITE, to grade those fields at the wire layer rather than
+# exempt them.)
+#
+# Derived from the pin, never transcribed — a hand-copied list is exactly how
+# the stale rationale above drifted from the schema it described. The sole
+# consumer subtracts this from an allOf arm's `required` set, so envelope
+# properties the pin marks OPTIONAL need no listing: they cannot appear there.
+# If some future DOMAIN arm does require one (say message), grading it is then
+# correct, and the derived set lets it through where a hand-copied list of all
+# 11 envelope properties would have silently swallowed it.
+_PROTOCOL_ENVELOPE_FIELDS: frozenset[str] = frozenset(pinned_schema.load("core/protocol-envelope.json")["required"])
+
+# Fields the SDK's current schema tree defines but the local model does not yet
+# model. These are spec-vs-library mismatches, not bugs in our code.
+#
+# Keys MUST match the `schema_ref` values in SCHEMA_TO_MODEL_MAP verbatim;
 # `KNOWN_SCHEMA_LIBRARY_MISMATCHES.get(schema_ref, set())` lookups silently fall back
 # to an empty set otherwise.
 KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
-    "/schemas/media-buy/get-products-request.json": set(),
-    "/schemas/media-buy/update-media-buy-request.json": set(),
-    "/schemas/media-buy/get-media-buy-delivery-request.json": set(),
-    "/schemas/creative/sync-creatives-request.json": set(),
-    "/schemas/creative/list-creatives-request.json": set(),
+    "media-buy/get-products-request.json": set(),
+    "media-buy/update-media-buy-request.json": set(),
+    "media-buy/get-media-buy-delivery-request.json": set(),
+    "creative/sync-creatives-request.json": set(),
+    "creative/list-creatives-request.json": set(),
 }
 
 
 def load_json_schema(schema_ref: str) -> dict[str, Any]:
-    """Load a vendored AdCP schema pinned at adcontextprotocol/adcp@04f59d2d5.
+    """Load an AdCP schema from the installed adcp SDK's pinned tree.
 
-    ``schema_ref`` is in the schema ``$id``/``$ref`` namespace (``/schemas/<rest>``),
-    used both for the top-level request schemas and for nested ``$ref`` resolution.
-    Reads the committed fixture offline — never fetches ``/schemas/latest`` (which
-    drifts). A missing file is a HARD FAILURE (the pin moved, or a ``$ref`` is outside
-    the vendored closure), never a silent skip.
+    Normalization is ``pinned_schema.normalize_ref`` — the single shared rule,
+    not a second one local to this file. Every ``$ref`` inside the returned
+    dict is canonicalized to root-relative form
+    (``pinned_schema.load_canonicalized``), so a ``$ref`` found while walking
+    the returned schema is itself a valid input here. A missing file is a HARD
+    FAILURE (the pin moved, or a ``$ref`` is outside the resolvable tree),
+    never a silent skip.
     """
-    rel = schema_ref.split("#")[0]
-    if not rel.startswith("/schemas/"):
-        raise AssertionError(f"Unexpected schema ref (expected '/schemas/...'): {schema_ref!r}")
-    path = _PINNED_SCHEMA_DIR / rel[len("/schemas/") :]
-    if not path.exists():
-        raise AssertionError(
-            f"Pinned schema not vendored: {schema_ref} -> {path}\n"
-            f"Source: adcontextprotocol/adcp@{_PINNED_SHA[:9]}. "
-            f"Re-run tests/fixtures/adcp_schemas_pinned/_refresh.py to vendor it."
-        )
-    with open(path) as f:
-        return json.load(f)
+    return pinned_schema.load_canonicalized(pinned_schema.normalize_ref(schema_ref))
 
 
 def generate_example_value(field_type: str, field_name: str = "", field_spec: dict = None) -> Any:
     """Generate a reasonable example value for a JSON schema type."""
+    # Inline enum (e.g. cache_scope: {"type": "string", "enum": ["public", "account"]}):
+    # a generic "test_<field>_value" string is not a member of the enum and fails
+    # Pydantic validation on construction — checked before the $ref/oneOf/allOf
+    # branches below since an inline enum can appear on any of those field shapes.
+    if field_spec and "enum" in field_spec:
+        return field_spec["enum"][0]
+
     # Handle $ref fields (complex nested objects)
     if field_spec and "$ref" in field_spec:
         # Generate sensible defaults for known $ref types
@@ -757,12 +800,12 @@ class _RegistryRow:
 # success arms and are excluded.
 _RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = [
     _RegistryRow(
-        schema_ref="/schemas/media-buy/get-products-response.json",
+        schema_ref="media-buy/get-products-response.json",
         selector="products",
         model=GetProductsResponse,
     ),
     _RegistryRow(
-        schema_ref="/schemas/media-buy/create-media-buy-response.json",
+        schema_ref="media-buy/create-media-buy-response.json",
         selector="media_buy_id",
         model=CreateMediaBuySuccess,
         # packages requires the local package shape; synthesize is not reliable.
@@ -771,12 +814,12 @@ _RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = [
         declared_fields_override=frozenset({"valid_actions", "context"}),
     ),
     _RegistryRow(
-        schema_ref="/schemas/media-buy/update-media-buy-response.json",
+        schema_ref="media-buy/update-media-buy-response.json",
         selector="media_buy_id",
         model=UpdateMediaBuySuccess,
     ),
     _RegistryRow(
-        schema_ref="/schemas/media-buy/get-media-buy-delivery-response.json",
+        schema_ref="media-buy/get-media-buy-delivery-response.json",
         selector="media_buy_deliveries",
         model=GetMediaBuyDeliveryResponse,
         sample_override={
@@ -787,7 +830,7 @@ _RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = [
         },
     ),
     _RegistryRow(
-        schema_ref="/schemas/creative/get-creative-delivery-response.json",
+        schema_ref="creative/get-creative-delivery-response.json",
         selector="creatives",
         model=GetCreativeDeliveryResponse,
         sample_override={
@@ -797,22 +840,22 @@ _RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = [
         },
     ),
     _RegistryRow(
-        schema_ref="/schemas/account/list-accounts-response.json",
+        schema_ref="account/list-accounts-response.json",
         selector="accounts",
         model=ListAccountsResponse,
     ),
     _RegistryRow(
-        schema_ref="/schemas/account/sync-accounts-response.json",
+        schema_ref="account/sync-accounts-response.json",
         selector="accounts",
         model=SyncAccountsResponse,
     ),
     _RegistryRow(
-        schema_ref="/schemas/creative/sync-creatives-response.json",
+        schema_ref="creative/sync-creatives-response.json",
         selector="creatives",
         model=SyncCreativesResponse,
     ),
     _RegistryRow(
-        schema_ref="/schemas/creative/list-creatives-response.json",
+        schema_ref="creative/list-creatives-response.json",
         selector="creatives",
         model=ListCreativesResponse,
         sample_override={
@@ -822,24 +865,83 @@ _RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = [
         },
     ),
     _RegistryRow(
-        schema_ref="/schemas/creative/list-creative-formats-response.json",
+        schema_ref="creative/list-creative-formats-response.json",
         selector="formats",
         model=ListCreativeFormatsResponse,
     ),
     _RegistryRow(
-        schema_ref="/schemas/signals/get-signals-response.json",
+        schema_ref="signals/get-signals-response.json",
         selector="signals",
         model=GetSignalsResponse,
     ),
 ]
 
 
+def _allof_required_fields(schema: dict[str, Any]) -> set[str]:
+    """Domain-level required fields from every arm of a schema's top-level
+    ``allOf`` — e.g. a shared error/pricing sub-schema composed in alongside
+    the domain shape. A response schema with no top-level ``oneOf``/``required``
+    of its own (get-products-response.json in 3.1.1) can still spec-require
+    fields via allOf; without merging them in, a schema-required field
+    silently drops out of grading instead of failing loudly (the exact bug
+    class this suite exists to catch).
+
+    The shared Protocol Envelope arm's own required field — ``status``, the only
+    one the pin requires — is subtracted back out via ``_PROTOCOL_ENVELOPE_FIELDS``.
+    That exclusion is a temporary suite limitation, not a statement about layers;
+    see that constant's comment for the three fixes that retire it.
+    """
+    required: set[str] = set()
+    for arm in schema.get("allOf", []) or []:
+        resolved = pinned_schema.load_canonicalized(arm["$ref"]) if "$ref" in arm else arm
+        required |= set(resolved.get("required", []))
+    return required - _PROTOCOL_ENVELOPE_FIELDS
+
+
+def _standard_branch_required_fields(schema: dict[str, Any]) -> set[str]:
+    """Required fields from the innermost ``else`` branch of an ``if``/``then``/``else`` chain.
+
+    3.1.1 response schemas (e.g. get-products-response.json, get-signals-response.json)
+    express conditional requiredness this way instead of a top-level ``required`` or a
+    root ``oneOf``: an outer if/then/else branches on the wholesale-unchanged shape,
+    nesting a second if/then/else inside its ``else`` that branches on ``status ==
+    "failed"`` vs. the standard success shape. The alignment suite's samples are all
+    ordinary successful responses, so the "standard" branch — the final ``else`` at the
+    end of the chain — is the one whose ``required`` applies; without walking it, these
+    fields silently drop out of grading (the schema has no OTHER top-level ``required``
+    to fall back on) instead of failing loudly.
+    """
+    node = schema
+    walked = False
+    while "else" in node:
+        node = node["else"]
+        walked = True
+    return set(node.get("required", [])) if walked else set()
+
+
+def _merge_composed_required(node: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
+    """Merge required fields from schema's top-level allOf arms and its
+    if/then/else standard branch into node's own required[], rebuilding node
+    only if that adds anything.
+
+    schema is usually node itself, but a resolved oneOf variant passes the
+    top-level schema separately: allOf/if-then-else compose at the schema
+    root, not on the individual arm.
+    """
+    merged = set(node.get("required", [])) | _allof_required_fields(schema) | _standard_branch_required_fields(schema)
+    if merged == set(node.get("required", [])):
+        return node
+    return {**node, "required": sorted(merged)}
+
+
 def _success_arm(schema: dict[str, Any]) -> dict[str, Any]:
     """Return the success (sub-)schema: the oneOf arm whose required[] names
     neither ``errors`` nor ``task_id`` (error / submitted arms), or the schema
-    itself when it is a flat single-shape response (no oneOf)."""
+    itself — with ``required`` merged from its top-level ``allOf`` arms and any
+    ``if``/``then``/``else`` standard branch — when it is a flat single-shape
+    response (no oneOf)."""
     if "oneOf" not in schema:
-        return schema
+        return _merge_composed_required(schema, schema)
     for arm in schema["oneOf"]:
         required = set(arm.get("required", []))
         if "errors" not in required and "task_id" not in required:
@@ -899,11 +1001,50 @@ def _build_alignments_from_pinned(registry: list[_RegistryRow]) -> list[Response
 # (F5, PR #1388) is not lost when the envelope list is machine-generated.
 _SUPPLEMENTAL_ALIGNMENTS: list[ResponseAlignment] = [
     ResponseAlignment(
-        schema_ref="/schemas/account/sync-accounts-response.json",
+        schema_ref="account/sync-accounts-response.json",
         selector="accounts",
         item_key="accounts",
         model=SyncResponseAccount,
         sample={"brand": {"domain": "acme.com"}, "operator": "create", "action": "created", "status": "active"},
+    ),
+    ResponseAlignment(
+        schema_ref="media-buy/get-products-response.json",
+        selector="products",
+        item_key="products",
+        model=Product,
+        # core/product.json's own required[] — reporting_capabilities included.
+        # Product carries a validated default_factory for it, so omitting it from
+        # the sample is graded by the model_defaulted branch of
+        # test_required_fields_enforced (the attribute must come out non-None),
+        # and by test_declared_fields_present_in_schema_and_model's model_dump()
+        # presence check (#1868 review).
+        declared_fields=frozenset(
+            {
+                "product_id",
+                "name",
+                "description",
+                "publisher_properties",
+                "delivery_type",
+                "pricing_options",
+                "reporting_capabilities",
+            }
+        ),
+        sample={
+            "product_id": "align_test_product",
+            "name": "Alignment Test Product",
+            "description": "Product used to verify the pinned schema descends into products[].",
+            "publisher_properties": [create_test_publisher_properties_by_tag()],
+            "delivery_type": "guaranteed",
+            "pricing_options": [create_test_cpm_pricing_option()],
+            "reporting_capabilities": {
+                "available_reporting_frequencies": ["daily"],
+                "expected_delay_minutes": 60,
+                "timezone": "UTC",
+                "supports_webhooks": False,
+                "available_metrics": ["impressions", "clicks"],
+                "date_range_support": "date_range",
+            },
+        },
     ),
 ]
 
@@ -915,7 +1056,13 @@ def _resolve_response_item_schema(alignment: ResponseAlignment) -> dict[str, Any
     """Resolve the pinned (sub-)schema a response model maps to.
 
     Handles flat single-shape responses (no oneOf → the schema is the success
-    shape) and oneOf responses (pick the arm exposing ``selector``).
+    shape) and oneOf responses (pick the arm exposing ``selector``). Merges in
+    required fields from the schema's own top-level ``allOf`` arms (the
+    shared Protocol/Version Envelope) and from the standard branch of any
+    top-level ``if``/``then``/``else`` chain — those apply regardless of which
+    oneOf variant matched, and 3.1.1 moved some formerly-flat requirements
+    (e.g. ``status``, ``products``/``cache_scope``) into one of those two
+    composition forms for schemas with no oneOf of their own.
     """
     schema = load_json_schema(alignment.schema_ref)
     if "oneOf" in schema:
@@ -923,12 +1070,42 @@ def _resolve_response_item_schema(alignment: ResponseAlignment) -> dict[str, Any
     else:
         variant = schema
     if alignment.item_key:
-        return variant["properties"][alignment.item_key]["items"]
-    return variant
+        item_schema = variant["properties"][alignment.item_key]["items"]
+        # Some item schemas are inlined (SyncResponseAccount); others are a
+        # $ref to a standalone schema (get-products-response.json's
+        # products[] -> core/product.json) — load_canonicalized already
+        # rewrote the ref to the root-relative form pinned_schema.load()
+        # expects, so a raw, unresolved $ref dict would otherwise silently
+        # short-circuit every field/required check below to nothing.
+        if "$ref" in item_schema:
+            item_schema = pinned_schema.load(item_schema["$ref"])
+        return _merge_composed_required(item_schema, item_schema)
+
+    return _merge_composed_required(variant, schema)
 
 
 class TestResponseModelAlignment:
     """Local success models conform to the pinned AdCP response schemas."""
+
+    def test_protocol_envelope_requires_only_status(self):
+        """The envelope exclusion still covers exactly the one field it was scoped to.
+
+        ``_PROTOCOL_ENVELOPE_FIELDS`` is subtracted out of requiredness grading,
+        so anything it contains is a field this suite does NOT check. It is
+        derived from the pin, which means a pin bump that starts requiring a
+        second envelope field (``timestamp``, say) would widen the exclusion on
+        its own and drop that field out of grading with nobody deciding to.
+
+        Fail loudly here instead. A failure is not a bug in this test: it means
+        the pin moved and someone must choose — grade the new field, or exclude
+        it deliberately with its own recorded reason.
+        """
+        assert _PROTOCOL_ENVELOPE_FIELDS == frozenset({"status"}), (
+            f"pinned core/protocol-envelope.json now requires "
+            f"{sorted(_PROTOCOL_ENVELOPE_FIELDS)}, not just ['status'] — the "
+            f"requiredness exclusion silently widened with the pin bump. Decide "
+            f"per new field whether it is graded or excluded, then update this test."
+        )
 
     @pytest.mark.parametrize("alignment", RESPONSE_ALIGNMENTS, ids=lambda a: a.model.__name__)
     def test_declared_fields_present_in_schema_and_model(self, alignment: ResponseAlignment):
@@ -949,9 +1126,41 @@ class TestResponseModelAlignment:
                 f"{alignment.model.__name__} (only surviving via extra='allow')"
             )
 
+        # A field can be declared on the model (above) yet still be silently
+        # dropped by a custom model_dump() override (e.g. an over-broad
+        # exclude set, or a "strip None" pass that also strips populated
+        # values) — the exact bug class this suite exists to catch
+        # (#1868 review). Construct with a real, populated value for
+        # every declared field and confirm each survives serialization.
+        if alignment.sample:
+            instance = alignment.model(**alignment.sample)
+            dumped = instance.model_dump(mode="json")
+            for fname in alignment.declared_fields:
+                if fname not in alignment.sample:
+                    continue
+                assert fname in dumped, (
+                    f"{fname!r} is declared on {alignment.model.__name__} and populated in the "
+                    f"constructor sample, but missing from model_dump() output — silently dropped "
+                    f"from the wire a buyer actually receives."
+                )
+
     @pytest.mark.parametrize("alignment", RESPONSE_ALIGNMENTS, ids=lambda a: a.model.__name__)
     def test_required_fields_enforced(self, alignment: ResponseAlignment):
-        """The model enforces every field the pinned schema marks required."""
+        """The model enforces every field the pinned schema marks required.
+
+        A schema-required field is "enforced" one of two ways, both valid:
+        - the model has no default -> omitting it MUST raise ValidationError
+          (the model rejects an incomplete construction), or
+        - the model declares a spec-correct literal default (e.g.
+          CreateMediaBuySuccess.status/confirmed_at/revision — see that
+          class's docstring: these are invariant for a synchronous success,
+          so the model guarantees the value itself rather than threading an
+          identical literal through every call site) -> omitting it must NOT
+          raise, and the constructed model must still carry a non-None value
+          for it. Either way the schema's requiredness invariant holds; only
+          silently accepting an omitted field with no value at all would be
+          a real gap.
+        """
         item = _resolve_response_item_schema(alignment)
         required = set(item.get("required", [])) - _VERSION_FIELDS
         if not required:
@@ -959,16 +1168,35 @@ class TestResponseModelAlignment:
         assert alignment.sample, (
             f"{alignment.model.__name__}: schema requires {sorted(required)} but no sample provided"
         )
-        assert required <= set(alignment.sample), (
-            f"sample for {alignment.model.__name__} missing required keys: {sorted(required - set(alignment.sample))}"
+        model_defaulted = {
+            fname
+            for fname in required
+            if (mf := alignment.model.model_fields.get(fname)) is not None and not mf.is_required()
+        }
+        # A model-defaulted field guarantees its own value, so the caller-supplied
+        # sample need not carry it — only fields the model can't fill in itself
+        # must be present in the sample.
+        required_from_sample = required - model_defaulted
+        assert required_from_sample <= set(alignment.sample), (
+            f"sample for {alignment.model.__name__} missing required keys: "
+            f"{sorted(required_from_sample - set(alignment.sample))}"
         )
         # The complete required set constructs cleanly.
         assert alignment.model(**alignment.sample) is not None
-        # Omitting any required field must raise (the model enforces it, not the call sites).
         for fname in required:
             partial = {k: v for k, v in alignment.sample.items() if k != fname}
-            with pytest.raises(ValidationError):
-                alignment.model(**partial)
+            if fname in model_defaulted:
+                # Model-defaulted: omission must NOT raise, and the default must
+                # still satisfy the schema's requiredness (a real, non-None value).
+                instance = alignment.model(**partial)
+                assert getattr(instance, fname) is not None, (
+                    f"{alignment.model.__name__}.{fname} is schema-required but the model's "
+                    f"own default left it None when omitted from the constructor call"
+                )
+            else:
+                # No model default: the model itself must reject an incomplete construction.
+                with pytest.raises(ValidationError):
+                    alignment.model(**partial)
 
 
 def _enumerate_grounded_response_models() -> set[type]:

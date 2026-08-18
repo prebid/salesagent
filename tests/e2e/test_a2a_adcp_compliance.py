@@ -23,9 +23,9 @@ import pytest
 
 from tests.e2e._compliance_report import ComplianceReportBase
 from tests.e2e.adcp_request_builder import build_a2a_message_send
-from tests.factories.creative_asset import build_assets, image_spec
+from tests.helpers.a2a_adcp_validation import validate_a2a_skill_payload
+from tests.helpers.adcp_schema_validator import AdCPSchemaValidator
 
-from .adcp_schema_validator import AdCPSchemaValidator, SchemaValidationError
 from .conftest import e2e_host
 
 DEFAULT_AUTH_TOKEN = os.getenv("ADCP_TEST_TOKEN", "ci-test-token")
@@ -40,13 +40,11 @@ class A2AAdCPComplianceClient:
         auth_token: str,
         tenant: str | None = None,
         validate_schemas: bool = True,
-        offline_mode: bool = True,
     ):
         self.a2a_url = a2a_url
         self.auth_token = auth_token
         self.tenant = tenant
         self.validate_schemas = validate_schemas
-        self.offline_mode = offline_mode
         self.http_client = httpx.AsyncClient(timeout=30.0)
         self.schema_validator = None
 
@@ -54,7 +52,7 @@ class A2AAdCPComplianceClient:
         """Enter async context."""
         # Initialize schema validator if enabled
         if self.validate_schemas:
-            self.schema_validator = AdCPSchemaValidator(offline_mode=self.offline_mode, adcp_version="v1")
+            self.schema_validator = AdCPSchemaValidator()
             await self.schema_validator.__aenter__()
 
         return self
@@ -123,26 +121,9 @@ class A2AAdCPComplianceClient:
             "payload_extracted": False,
         }
 
-        # Map skill to AdCP schema
-        # Note: signals skills removed - should come from dedicated signals agents
-        skill_to_schema = {
-            "get_products": "get-products",
-            "create_media_buy": "create-media-buy",
-            "add_creative_assets": "add-creative-assets",
-            # Skills without AdCP schemas
-            "approve_creative": None,  # Schema may not be available yet
-            "get_media_buy_status": None,
-            "optimize_media_buy": None,
-        }
-
-        schema_task = skill_to_schema.get(skill_name)
-        if not schema_task:
-            result["warnings"].append(f"No AdCP schema mapping for skill '{skill_name}'")
-            return result
-
-        result["schema_tested"] = schema_task
-
-        # Extract AdCP payload
+        # Extraction is the only transport-specific step (JSON-RPC dict here,
+        # protobuf artifact in the in-process validator); everything after it
+        # is the shared helper, so the two cannot drift again.
         adcp_payload = self.extract_adcp_payload_from_a2a_response(a2a_response)
         if not adcp_payload:
             result["errors"].append("Could not extract AdCP payload from A2A response")
@@ -151,19 +132,15 @@ class A2AAdCPComplianceClient:
 
         result["payload_extracted"] = True
 
-        # Validate against schema
-        if self.schema_validator:
-            try:
-                await self.schema_validator.validate_response(schema_task, adcp_payload)
-                result["warnings"].append("AdCP schema validation passed")
-            except SchemaValidationError as e:
-                result["errors"].append(f"AdCP schema validation failed: {e}")
-                result["valid"] = False
-            except Exception as e:
-                result["errors"].append(f"Validation error: {e}")
-                result["valid"] = False
-        else:
+        if not self.schema_validator:
             result["warnings"].append("Schema validator not available")
+            return result
+
+        outcome = await validate_a2a_skill_payload(self.schema_validator, skill_name, adcp_payload)
+        result["valid"] = outcome["valid"]
+        result["errors"] = outcome["errors"]
+        result["warnings"] = outcome["warnings"]
+        result["schema_tested"] = outcome["schema_tested"]
 
         return result
 
@@ -222,17 +199,24 @@ async def compliance_client(a2a_url, auth_token):
     """A2A compliance client fixture."""
     import httpx
 
-    # Check if A2A server is available by testing the agent card endpoint
+    # Check if A2A server is available by testing the agent card endpoint.
+    # src/app.py registers /.well-known/agent-card.json (hyphenated) — NOT
+    # agent.json — so probing the wrong path always 404s and silently skips
+    # every test in this module (#1838 review).
     try:
         async with httpx.AsyncClient(timeout=2.0) as test_client:
-            response = await test_client.get(f"{a2a_url.replace('/a2a', '')}/.well-known/agent.json")
+            response = await test_client.get(f"{a2a_url.replace('/a2a', '')}/.well-known/agent-card.json")
             if response.status_code != 200:
                 pytest.skip(f"A2A server not available at {a2a_url} (status: {response.status_code})")
-    except (httpx.ConnectError, httpx.TimeoutException, Exception) as e:
+    # Exactly the two failures that mean 'no server is listening'. A bare
+    # Exception used to sit in this tuple, so ANY instrument failure -- a bug in
+    # the fixture, a bad URL, an import error -- became a green skip and the whole
+    # module reported success while grading nothing.
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
         pytest.skip(f"A2A server not available at {a2a_url}: {e}")
 
     async with A2AAdCPComplianceClient(
-        a2a_url=a2a_url, auth_token=auth_token, tenant="ci-test", validate_schemas=True, offline_mode=True
+        a2a_url=a2a_url, auth_token=auth_token, tenant="ci-test", validate_schemas=True
     ) as client:
         yield client
 
@@ -256,10 +240,11 @@ class TestA2AAdCPCompliance:
         )
 
         validation_result = await compliance_client.validate_skill_response("get_products", response)
+        # Deliberately no assertion here: collect results for reporting only.
+        # validate_skill_response sets "skill" on every return path, so
+        # `assert "skill" in validation_result` was always-true dead weight
+        # (#1868 review), not a real check.
         compliance_report.add_result(validation_result)
-
-        # Don't fail test - just collect results for reporting
-        assert "skill" in validation_result
 
     @pytest.mark.asyncio
     async def test_explicit_skill_get_products(self, compliance_client, compliance_report):
@@ -280,6 +265,11 @@ class TestA2AAdCPCompliance:
         # Verify context echoed
         payload = compliance_client.extract_adcp_payload_from_a2a_response(response)
         assert payload and payload.get("context") == {"e2e": "get_products"}
+        # Must be a real product listing, not an error envelope masquerading
+        # as a payload (an AUTH_REQUIRED error also echoes context and would
+        # otherwise pass this assertion silently — #1838 review).
+        assert "adcp_error" not in payload, f"Expected products, got an error envelope: {payload}"
+        assert "products" in payload
 
     @pytest.mark.asyncio
     async def test_explicit_skill_create_media_buy(self, compliance_client, compliance_report):
@@ -303,35 +293,42 @@ class TestA2AAdCPCompliance:
         validation_result = await compliance_client.validate_skill_response("create_media_buy", response)
         compliance_report.add_result(validation_result)
 
-        assert "skill" in validation_result
         # Verify response is structured (payload extracted), even if it's a validation error
         payload = compliance_client.extract_adcp_payload_from_a2a_response(response)
         assert payload is not None, "Server should return structured response, not crash"
 
     @pytest.mark.asyncio
     async def test_all_adcp_skills_compliance(self, compliance_client, compliance_report):
-        """Test all AdCP skills for compliance in a single comprehensive test."""
+        """Test all AdCP skills for compliance in a single comprehensive test.
 
-        # Define skill tests
+        Every entry here must be a request that genuinely SUCCEEDS against the
+        real CI-seeded stack — the point is to exercise real schema-compliant
+        responses, not error paths (those are covered by the dedicated
+        test_explicit_skill_create_media_buy). create_media_buy and
+        add_creative_assets were previously listed here with a legacy request
+        shape (product_ids/total_budget/flight_start_date, and a skill name
+        that no longer exists in the A2A dispatch table) that could never
+        pass schema validation — masked entirely by the assertion below only
+        checking that SOME results were collected (#1838 review).
+
+        list_creatives was tried here too and pulled back out: its format_id
+        serialized as a bare string over the A2A wire instead of the spec's
+        {agent_url, id} object. Root-caused and fixed: the A2A success path used
+        to reconstruct a typed response FROM the same dict about to be sent on
+        the wire (purely to generate the human-readable text part), and
+        Creative.validate_format_id's @model_validator(mode="before") mutated its
+        input dict in place — pydantic-core hands list-item dicts to
+        before-validators by reference, so this corrupted artifact_data itself,
+        and _dict_to_value's json.dumps(default=str) fallback then silently
+        stringified the resulting live FormatId object. Fixed on both sides: the
+        validator (and 3 siblings with the same hazard) defensively copy their
+        input, and the outbound round trip was deleted — the TextPart is now read
+        from the payload's already-stamped ``message``.
+        """
         # Note: signals skills removed - should come from dedicated signals agents
         skill_tests = [
             ("get_products", {"brief": "Display ads", "brand": {"domain": "testbrand.com"}}),
-            (
-                "create_media_buy",
-                {
-                    "product_ids": ["display_standard"],
-                    "total_budget": 5000.0,
-                    "flight_start_date": "2025-03-01",
-                    "flight_end_date": "2025-03-31",
-                },
-            ),
-            (
-                "add_creative_assets",
-                {
-                    "media_buy_id": "mb_test_123",
-                    "assets": build_assets(image_spec("main", url="https://example.com/creative.jpg")),
-                },
-            ),
+            ("list_creatives", {"limit": 10}),
         ]
 
         for skill_name, params in skill_tests:
@@ -355,8 +352,10 @@ class TestA2AAdCPCompliance:
                 compliance_report.add_result(error_result)
                 print(f"Failed to test {skill_name}: {e}")
 
-        # Always pass - results are in the report
-        assert compliance_report.results, "Should have collected some test results"
+        assert compliance_report.failed == 0, (
+            f"{compliance_report.failed} of {len(skill_tests)} skill(s) failed AdCP schema compliance: "
+            f"{[r for r in compliance_report.results if not r['valid']]}"
+        )
 
 
 def pytest_addoption(parser):

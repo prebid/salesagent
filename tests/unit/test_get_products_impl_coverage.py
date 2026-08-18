@@ -25,7 +25,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from adcp.types import FormatId
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError
 from src.core.resolved_identity import ResolvedIdentity
 from tests.helpers.adcp_factories import create_test_cpm_pricing_option, create_test_product
 
@@ -216,8 +216,10 @@ class TestProductConversionError:
 class TestPropertyListResolution:
     """Test property list resolution error paths.
 
-    Intent: property list resolution can fail due to external service issues.
-    AdCPAdapterError passes through; other errors get wrapped as AdCPValidationError.
+    Intent: a typed AdCPAdapterError passes through untouched. The
+    generic-exception case is NOT tested here on purpose: what matters about it
+    is the code and recovery hint the BUYER receives, which only a wire test can
+    see -- tests/integration/test_get_products_property_list_error_wire.py.
     """
 
     @pytest.mark.asyncio
@@ -250,36 +252,6 @@ class TestPropertyListResolution:
             from src.core.tools.products import _get_products_impl
 
             with pytest.raises(AdCPAdapterError, match="property list service unreachable"):
-                await _get_products_impl(req, identity)
-
-    @pytest.mark.asyncio
-    async def test_generic_error_wrapped_as_validation_error(self):
-        """Non-AdCPAdapterError from resolve_property_list → AdCPValidationError."""
-        tenant = _make_tenant()
-        identity = _make_identity(principal_id="user-1", tenant_id="test-tenant", tenant=tenant)
-
-        from adcp.types import PropertyListReference
-
-        req = _make_request()
-        req.property_list = PropertyListReference(agent_url="https://example.com", list_id="test-list")
-
-        mock_uow = _mock_uow_with_products([])
-        patches = _standard_patches(mock_uow)
-
-        with contextlib.ExitStack() as stack:
-            for p in patches:
-                stack.enter_context(p)
-            stack.enter_context(
-                patch(
-                    "src.core.property_list_resolver.resolve_property_list",
-                    new_callable=AsyncMock,
-                    side_effect=RuntimeError("DNS resolution failed"),
-                )
-            )
-
-            from src.core.tools.products import _get_products_impl
-
-            with pytest.raises(AdCPValidationError, match="Failed to resolve property list"):
                 await _get_products_impl(req, identity)
 
 

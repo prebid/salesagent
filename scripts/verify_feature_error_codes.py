@@ -12,9 +12,12 @@ This script is BOTH:
   * the Phase-1 reconciliation worklist generator (lists what to fix), and
   * the Phase-4 Guard A engine (``--strict``-style: exit 1 on any finding).
 
-Canonical source: the VENDORED enum at
-``tests/fixtures/adcp_schemas_pinned/enums/error-code.json`` (pinned to adcp
-commit 04f59d2d5). Read offline — CI has no ~/projects/adcp clone.
+Canonical source: ``adcp.ErrorCode``, the installed SDK's own generated enum
+(offline — no ~/projects/adcp clone needed). The SDK generates that enum from
+the very schema file this script used to re-read itself, so reading the enum
+directly means there is no second copy to drift. Only the code LIST; the
+``enumMetadata`` recovery/suggestion content stays on the separately-pinned
+vendored fixture — see docs/adcp-spec-version.md "Pinned schema sources".
 
 Usage:
     # Worklist for specific use cases
@@ -37,7 +40,6 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FEATURES_DIR = PROJECT_ROOT / "tests" / "bdd" / "features"
-ENUM_PATH = PROJECT_ROOT / "tests" / "fixtures" / "adcp_schemas_pinned" / "enums" / "error-code.json"
 
 # A code-shaped token: ALL_CAPS_SNAKE (e.g. INVALID_REQUEST) or a lowercase
 # *_error token (e.g. authentication_error). This excludes placeholders like
@@ -66,14 +68,16 @@ BLOCK_RE = re.compile(r"^\s*(Feature|Rule|Background|Scenario|Scenario Outline):
 
 
 def load_enum() -> set[str]:
-    if not ENUM_PATH.exists():
-        print(
-            f"ERROR: pinned enum not found at {ENUM_PATH}\n"
-            "Run: uv run python tests/fixtures/adcp_schemas_pinned/_refresh.py",
-            file=sys.stderr,
-        )
+    try:
+        import adcp
+    except ModuleNotFoundError as e:
+        # An instrument failure, not "findings exist" -- must exit 2 (this
+        # script's diagnostic code) rather than fall through to an uncaught
+        # traceback, which exits 1, the SAME code this script uses for
+        # "findings exist" and which gates make quality.
+        print(f"ERROR: pinned enum not found: {e}", file=sys.stderr)
         sys.exit(2)
-    return set(json.loads(ENUM_PATH.read_text())["enum"])
+    return {code.value for code in adcp.ErrorCode}
 
 
 def _iter_blocks(lines: list[str]):

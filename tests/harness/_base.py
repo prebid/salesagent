@@ -745,8 +745,10 @@ class BaseTestEnv:
         # the top-level envelope fields (message/success) still see them.
         self._last_wire_response = dict(artifact_data)
         # Strip protocol fields added by _serialize_for_a2a (message, success).
-        # These are A2A-envelope fields, not part of the Pydantic response model,
-        # and cause ValidationError under extra="forbid" in non-production mode.
+        # These are populated by the protocol layer per the pin's Protocol
+        # Envelope arm (see tests/helpers/adcp_schema_validator.py) — not
+        # declared on the Pydantic response model — and cause ValidationError
+        # under extra="forbid" in non-production mode.
         artifact_data.pop("message", None)
         artifact_data.pop("success", None)
         return response_cls(**artifact_data)

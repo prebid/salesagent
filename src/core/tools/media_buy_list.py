@@ -14,7 +14,6 @@ from decimal import Decimal
 from typing import Annotated, Any, cast
 
 from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 from pydantic import Field, RootModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -80,6 +79,7 @@ from src.core.schemas import (
     SnapshotUnavailableReason,
     Targeting,
 )
+from src.core.tools._mcp import mcp_result
 from src.core.validation_helpers import adcp_validation_boundary
 
 
@@ -346,7 +346,7 @@ async def get_media_buys(
     # Read identity pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
-    return ToolResult(content=str(response), structured_content=response)
+    return mcp_result(response)
 
 
 def get_media_buys_raw(

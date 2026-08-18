@@ -122,10 +122,37 @@ services:
   # (see run_all_tests.sh).
   tests:
     profiles: ["runner"]
+    # Runs as the INVOKING host user, not the image's default root --
+    # Dockerfile.test has no USER directive, so without this the container
+    # writes test-results/.tox/schemas/logs into the bind-mounted /app as
+    # literal root (no userns-remap on these hosts, so container root IS host
+    # root), and the next run -- as an ordinary user -- dies on `mkdir:
+    # Permission denied` before a single suite starts.
+    #
+    # Derived, never hardcoded. run_all_tests.sh exports TEST_UID/TEST_GID from
+    # `id -u`/`id -g`; the defaults here are only for a bare `docker compose
+    # run tests` and reproduce the old root behaviour rather than guessing.
+    # A literal uid here was correct on exactly one machine: pinning the CI
+    # box's 1003:1001 turned GitHub Actions red with
+    # `PermissionError: '/app/.tox'`, because .tox lives on the bind mount
+    # (see the volumes block) and the Actions checkout is owned by a different
+    # uid. Nothing local can catch that -- `BDD In-Network (e2e_rest)` is the
+    # only job that runs the suite INSIDE this container.
+    user: "${TEST_UID:-0}:${TEST_GID:-0}"
     build:
       context: .
       dockerfile: Dockerfile.test
     environment:
+      # Non-root (user: above) has no /etc/passwd entry for a raw numeric
+      # UID, so HOME defaults to "/" and Dockerfile.test's baked
+      # UV_CACHE_DIR=/cache/uv (root:root 755, no group-write) is
+      # unreachable -- uv fails with "Permission denied" trying to even
+      # create its cache dir, surfacing as a confusing "could not find
+      # python interpreter" error from tox. Redirect both to a
+      # container-local writable path (not the bind mount -- this is a
+      # throwaway per-run cache, no reason to fight over its ownership too).
+      HOME: /tmp
+      UV_CACHE_DIR: /tmp/uv-cache
       # Fixed in-network DB address — never a host port, never collides. This is
       # the SUITE database used by unit(skip)/integration/bdd/admin.
       DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp_test?sslmode=disable
@@ -156,8 +183,20 @@ services:
       # Pinned reference creative agent, reachable in-network by service name
       # (no host :9999). Clears the 18 test_creative_agent_live integration tests.
       CREATIVE_AGENT_URL: http://creative-agent:8080/api/creative-agent
-      # Playwright chromium is pre-installed in Dockerfile.test at this path.
-      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      # Was /ms-playwright (root:root, chromium pre-installed in Dockerfile.test
+      # at build time) -- non-root can't write into it, so `playwright install
+      # chromium` silently hangs trying to verify/write a lock file there
+      # instead of erroring cleanly (found live, Aug 2026, after this exact
+      # duplicate-key mistake first masked it: a stray earlier attempt to fix
+      # this added a SECOND PLAYWRIGHT_BROWSERS_PATH key instead of editing
+      # this one -- YAML last-key-wins silently kept using /ms-playwright, so
+      # the "fix" looked applied and wasn't, and newer docker compose now
+      # hard-rejects duplicate keys outright). Redirecting here means chromium
+      # reinstalls fresh into a writable path every run -- a real cost, but
+      # correctness over reusing the wasted baked-in copy. The complete fix is
+      # a real non-root USER in Dockerfile.test with paths pre-chowned at
+      # build time, deferred in favor of compose-only overrides.
+      PLAYWRIGHT_BROWSERS_PATH: /tmp/ms-playwright
       # bdd runs truly serial in-network: -n0 (no xdist subprocess). Two reasons:
       # (1) all bdd workers share ONE live Postgres in e2e mode -> xdist races; and
       # (2) under xdist BDD_E2E_ENABLED doesn't reach the worker's collection, so
@@ -222,7 +261,15 @@ services:
       - single-request-reopen
     volumes:
       - .:/app
-      - tox_data:/app/.tox  # keep tox envs off the bind-mounted host tree
+      # tox_data named volume removed (Aug 2026): it's destroyed+recreated
+      # fresh every run (cleanup's `dc down -v`), so nothing ever persisted
+      # across runs anyway, and a fresh named volume's mountpoint is created
+      # root:root regardless of the `user:` override above (volume dir
+      # creation happens at the Docker daemon level, before the container
+      # process starts) -- permanently EACCES-blocking the non-root tests
+      # user from `mkdir .tox/<env>` every single run. .tox now lives on the
+      # bind mount instead, same as test-results, which already works
+      # correctly under the `user:` override.
     working_dir: /app
     # venv lives at /opt/venv (UV_PROJECT_ENVIRONMENT in Dockerfile.test), outside
     # the /app bind mount, so it is never shadowed — no .venv anonymous volume.
@@ -282,5 +329,4 @@ services:
       start_period: 30s
 
 volumes:
-  tox_data:
   creative_pg_data:

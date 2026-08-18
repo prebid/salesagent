@@ -409,7 +409,7 @@ Populated on success by the REST dispatcher (HTTP body) and by the A2A/MCP
 dispatchers **only when the env routes through `_run_a2a_handler` /
 `_run_mcp_client`** (which stash the wire). Legacy `_run_mcp_wrapper` and the
 direct `*_raw` wrappers do not stash, so `wire_response` is `None` there — as it
-is on error and on IMPL. Today only `CreativeFormatsEnv` reads it.
+is on error and on IMPL. Today `CreativeFormatsEnv` and `CreativeListEnv` read it.
 Use it to assert the **actual serialized shape** a buyer receives (e.g. the v3.1
 `format_id` `{agent_url, id}` federation contract on `list_creative_formats`)
 rather than the typed `payload`, whose fields are already coerced to their

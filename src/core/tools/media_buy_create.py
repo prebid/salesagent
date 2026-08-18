@@ -35,7 +35,6 @@ from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import PackageRequest as AdcpPackageRequest
 from adcp.types.aliases import Package as ResponsePackage
 from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 from pydantic import BaseModel, Field, ValidationError
 from rich.console import Console
 
@@ -149,6 +148,7 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext, TestingContext, apply_testing_hooks
 from src.core.tool_context import ToolContext
+from src.core.tools._mcp import mcp_result
 from src.core.tools.financial_validation import (
     raise_if_validation_failed,
     validate_budget_positive,
@@ -4490,7 +4490,7 @@ async def create_media_buy(
         context_id=_ctx_id,
         raw_wire_payload=raw_wire_payload,
     )
-    return ToolResult(content=str(result), structured_content=result)
+    return mcp_result(result)
 
 
 async def create_media_buy_raw(

@@ -13,6 +13,7 @@ This test suite covers:
 - ListCreativesResponse
 """
 
+import pytest
 from adcp.types import CreativeAction
 
 from src.core.schemas import (
@@ -27,6 +28,8 @@ from src.core.schemas import (
     SyncCreativeResult,
     SyncCreativesResponse,
 )
+from tests.factories.creative_asset import build_assets, image_spec
+from tests.harness.assertions import assert_omits_paths
 from tests.helpers.creative_test_helpers import (
     assert_listing_creative_fields,
     make_test_creative,
@@ -86,6 +89,39 @@ def test_creative_optional_fields_still_included():
     internal_data = creative.model_dump_internal()
     assert "principal_id" in internal_data
     assert internal_data["principal_id"] == "principal_123"
+
+
+@pytest.mark.parametrize("null_field", ["alt_text", "provenance"])
+def test_creative_model_dump_omits_null_fields_inside_assets(null_field):
+    """An unset optional field on a stored asset is OMITTED, never dumped as null.
+
+    ``Creative.assets`` is an untyped ``dict[str, Any]`` (the DB stores arbitrary
+    asset shapes), so Pydantic's ``exclude_none=True`` default never sees inside
+    it — a ``None`` on a stored asset would survive as a literal wire ``null``.
+    AdCP 3.1 types these asset fields without accepting ``null``, so that fails
+    schema validation. ``Creative.model_dump()`` runs ``strip_none_deep`` over
+    ``assets`` to prevent it.
+
+    Mutation check: delete the ``strip_none_deep`` call in
+    ``src/core/schemas/creative.py`` -> this goes red with the key present and
+    valued ``None``. The wire-level oracle is
+    ``tests/integration/test_list_creatives_a2a_wire_shape.py::test_a2a_wire_omits_null_asset_fields``.
+    """
+    creative = make_test_creative(
+        creative_id="c_null_asset_field",
+        assets=build_assets(image_spec("banner").with_fields(**{null_field: None})),
+    )
+
+    banner = creative.model_dump()["assets"]["banner"]
+
+    assert_omits_paths(
+        banner,
+        [null_field],
+        context=f"model_dump() assets.banner (a null here is invalid against the pinned AdCP asset schema; {banner!r})",
+    )
+    # Negative control: stripping must not eat the asset's real fields.
+    assert banner["asset_type"] == "image"
+    assert banner["url"] == "https://example.com/banner.png"
 
 
 # ── SyncCreativeResult serialization ─────────────────────────────────────

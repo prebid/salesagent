@@ -94,10 +94,6 @@ def create_test_product(
     if pricing_options is None:
         pricing_options = [create_test_cpm_pricing_option()]
 
-    # Default reporting_capabilities if not provided (required in adcp 4.3)
-    if "reporting_capabilities" not in kwargs:
-        kwargs["reporting_capabilities"] = {"metrics": ["impressions", "clicks"]}
-
     return Product(
         product_id=product_id,
         name=name,

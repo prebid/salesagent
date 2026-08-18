@@ -3411,6 +3411,12 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         # fast at the fixture (mirrors UC-002/006/011) rather than spinning up a
         # DB per scenario only to auto-xfail at the first missing step.
         #
+        # When the dormant all-fields boundary scenarios are wired, their Then must
+        # assert value-when-present, not key-presence-of-13: list_creatives drops a
+        # corrupt tags/assets blob to absent and collapses an empty stored tags list
+        # to omission (both conformant at 3.1.1) — see the #1508 reconciliation note
+        # in test_uc018_list_creatives.py's module docstring.
+        #
         # BR-RULE-034 is unambiguous here: this branch only runs for T-UC-018-*
         # scenarios (see _detect_uc), so the tag never collides with the UC-006
         # BR-RULE-034 scenarios routed elsewhere.
