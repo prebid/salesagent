@@ -25,8 +25,6 @@ logger = logging.getLogger(__name__)
 
 publisher_partners_bp = Blueprint("publisher_partners", __name__)
 
-_UNSET = object()
-
 
 def _partner_json(partner: PublisherPartner, *, extra: dict | None = None) -> dict:
     """Serialize a publisher partner for admin JSON responses."""
@@ -46,15 +44,15 @@ def _partner_json(partner: PublisherPartner, *, extra: dict | None = None) -> di
     return payload
 
 
-def _read_supported_channels(data: dict, *, missing: object = _UNSET) -> list[str] | None | object:
+def _parse_supported_channels(data: dict) -> tuple[bool, list[str] | None]:
     """Parse supported_channels from a JSON body.
 
-    Missing key returns ``missing``. Empty list stores as None. Malformed or
-    unknown values raise InvalidChannelInput — callers must not write.
+    Returns (False, None) when the key is absent. Empty list stores as None.
+    Malformed or unknown values raise InvalidChannelInput — callers must not write.
     """
     if "supported_channels" not in data:
-        return missing
-    return canonicalize_supported_channels(data["supported_channels"]) or None
+        return False, None
+    return True, canonicalize_supported_channels(data["supported_channels"]) or None
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners", methods=["GET"])
@@ -127,9 +125,11 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
         publisher_domain = publisher_domain.rstrip("/")
 
         try:
-            supported_channels = _read_supported_channels(data, missing=None)
+            _present, supported_channels = _parse_supported_channels(data)
         except InvalidChannelInput as e:
             return jsonify({"error": str(e)}), 422
+        if not _present:
+            supported_channels = None
 
         with TenantConfigUoW(tenant_id) as uow:
             assert uow.tenant_config is not None
@@ -195,10 +195,10 @@ def update_publisher_partner(tenant_id: str, partner_id: int) -> Response | tupl
             fields["display_name"] = display_name.strip()
 
         try:
-            channels = _read_supported_channels(data)
+            present, channels = _parse_supported_channels(data)
         except InvalidChannelInput as e:
             return jsonify({"error": str(e)}), 422
-        if channels is not _UNSET:
+        if present:
             fields["supported_channels"] = channels
 
         with TenantConfigUoW(tenant_id) as uow:
