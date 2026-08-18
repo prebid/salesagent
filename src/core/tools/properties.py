@@ -9,6 +9,7 @@ Handles property discovery including:
 
 import logging
 import time
+from collections.abc import Iterable
 from typing import Any
 
 from adcp.types import ContextObject
@@ -16,6 +17,7 @@ from fastmcp.server.context import Context
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_tenant
+from src.core.database.models import PublisherPartner
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.exceptions import AdCPAdapterError, AdCPError
 from src.core.helpers import log_tool_activity
@@ -30,7 +32,7 @@ from src.core.validation_helpers import safe_parse_json_field
 logger = logging.getLogger(__name__)
 
 
-def _aggregate_primary_channels(publishers) -> list[str] | None:
+def _aggregate_primary_channels(publishers: Iterable[PublisherPartner]) -> list[str] | None:
     """Union explicitly-declared supported_channels across publisher partners."""
     raw_channels: list[str] = []
     for partner in publishers:

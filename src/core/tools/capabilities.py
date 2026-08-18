@@ -79,7 +79,6 @@ def normalize_channel_strings(raw: list[str]) -> list[str]:
     Unknown values are logged and skipped. Aliases (e.g. video -> olv) resolve
     via CHANNEL_MAPPING. Returns sorted deduplicated canonical enum values.
     """
-    canonical_values = {member.value for member in MediaChannel}
     seen: set[str] = set()
     normalized: list[str] = []
 
@@ -87,10 +86,8 @@ def normalize_channel_strings(raw: list[str]) -> list[str]:
         key = channel.lower().strip()
         if key in CHANNEL_MAPPING:
             value = CHANNEL_MAPPING[key].value
-        elif key in canonical_values:
-            value = key
         else:
-            logger.warning("Unknown channel value %r; skipping", channel)
+            logger.warning(f"Unknown channel value {channel!r}; skipping")
             continue
 
         if value not in seen:

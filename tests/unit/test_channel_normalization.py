@@ -10,6 +10,9 @@ class TestNormalizeChannelStrings:
     def test_deduplicates_and_sorts(self):
         assert normalize_channel_strings(["ctv", "display", "ctv"]) == ["ctv", "display"]
 
+    def test_sponsored_intelligence_is_canonical(self):
+        assert normalize_channel_strings(["sponsored_intelligence"]) == ["sponsored_intelligence"]
+
     def test_skips_unknown_values(self, caplog):
         import logging
 
