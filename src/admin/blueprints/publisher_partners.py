@@ -55,6 +55,33 @@ def _parse_supported_channels(data: dict) -> tuple[bool, list[str] | None]:
     return True, canonicalize_supported_channels(data["supported_channels"]) or None
 
 
+def _normalize_publisher_domain(raw: str) -> str:
+    domain = raw.strip().lower().replace("https://", "").replace("http://", "")
+    return domain.rstrip("/")
+
+
+def _auto_verify_reasons(uow: TenantConfigUoW) -> tuple[bool, bool]:
+    """Return (is_dev, is_mock) used to auto-verify publisher partners."""
+    config = get_config()
+    is_dev = config.environment == "development"
+    assert uow.tenant_config is not None
+    adapter = uow.tenant_config.get_adapter_config()
+    is_mock = adapter is not None and adapter.adapter_type == "mock"
+    return is_dev, is_mock
+
+
+def _publisher_added_message(is_dev: bool, is_mock: bool) -> str:
+    message = "Publisher added successfully"
+    if not (is_dev or is_mock):
+        return message
+    reasons = []
+    if is_dev:
+        reasons.append("development environment")
+    if is_mock:
+        reasons.append("mock tenant")
+    return f"{message} (auto-verified for {' and '.join(reasons)})"
+
+
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners", methods=["GET"])
 def list_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
     """List all publisher partners for a tenant."""
@@ -113,23 +140,13 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
         if not isinstance(data, dict):
             return jsonify({"error": "JSON object required"}), 422
 
-        publisher_domain = data.get("publisher_domain", "").strip().lower()
+        publisher_domain = _normalize_publisher_domain(data.get("publisher_domain", ""))
         display_name = data.get("display_name", "").strip()
 
         if not publisher_domain:
             return jsonify({"error": "Publisher domain is required"}), 400
 
-        # Remove http:// or https:// if present
-        publisher_domain = publisher_domain.replace("https://", "").replace("http://", "")
-        # Remove trailing slash
-        publisher_domain = publisher_domain.rstrip("/")
-
-        try:
-            _present, supported_channels = _parse_supported_channels(data)
-        except InvalidChannelInput as e:
-            return jsonify({"error": str(e)}), 422
-        if not _present:
-            supported_channels = None
+        _present, supported_channels = _parse_supported_channels(data)
 
         with TenantConfigUoW(tenant_id) as uow:
             assert uow.tenant_config is not None
@@ -137,13 +154,7 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
             if not tenant:
                 return jsonify({"error": "Tenant not found"}), 404
 
-            # For mock adapters OR development environment, auto-verify publishers (no adagents.json to check)
-            # Development: Local dev servers won't be in any publisher's adagents.json
-            # Mock: Testing tenants use fake domains
-            config = get_config()
-            is_dev = config.environment == "development"
-            adapter = uow.tenant_config.get_adapter_config()
-            is_mock = adapter is not None and adapter.adapter_type == "mock"
+            is_dev, is_mock = _auto_verify_reasons(uow)
             should_auto_verify = is_dev or is_mock
 
             existing = uow.tenant_config.get_publisher_partner_by_domain(publisher_domain)
@@ -158,17 +169,7 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
                 is_verified=should_auto_verify,
                 last_synced_at=datetime.now(UTC) if should_auto_verify else None,
             )
-
-            message = "Publisher added successfully"
-            if should_auto_verify:
-                reasons = []
-                if is_dev:
-                    reasons.append("development environment")
-                if is_mock:
-                    reasons.append("mock tenant")
-                message += f" (auto-verified for {' and '.join(reasons)})"
-
-            payload = _partner_json(partner, extra={"message": message})
+            payload = _partner_json(partner, extra={"message": _publisher_added_message(is_dev, is_mock)})
 
         return jsonify(payload), 201
 
