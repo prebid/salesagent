@@ -14,6 +14,7 @@ from adcp.exceptions import AdagentsNotFoundError, AdagentsTimeoutError, Adagent
 from flask import Blueprint, Response, jsonify, request
 from sqlalchemy import select
 
+from src.admin.utils import require_tenant_access
 from src.core.config import get_config
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PublisherPartner, Tenant
@@ -25,6 +26,7 @@ publisher_partners_bp = Blueprint("publisher_partners", __name__)
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners", methods=["GET"])
+@require_tenant_access(api_mode=True)
 def list_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
     """List all publisher partners for a tenant."""
     try:
@@ -85,6 +87,7 @@ def list_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners", methods=["POST"])
+@require_tenant_access(api_mode=True)
 def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
     """Add a new publisher partner."""
     try:
@@ -164,6 +167,7 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/<int:partner_id>", methods=["DELETE"])
+@require_tenant_access(api_mode=True)
 def delete_publisher_partner(tenant_id: str, partner_id: int) -> Response | tuple[Response, int]:
     """Delete a publisher partner."""
     try:
@@ -185,6 +189,7 @@ def delete_publisher_partner(tenant_id: str, partner_id: int) -> Response | tupl
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/sync", methods=["POST"])
+@require_tenant_access(api_mode=True)
 def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
     """Sync verification status for all publisher partners."""
     try:
@@ -473,6 +478,7 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/<int:partner_id>/properties", methods=["GET"])
+@require_tenant_access(api_mode=True)
 def get_publisher_properties(tenant_id: str, partner_id: int) -> Response | tuple[Response, int]:
     """Get properties for a specific publisher (fetched fresh from adagents.json)."""
     try:
