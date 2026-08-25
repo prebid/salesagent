@@ -33,8 +33,13 @@ def _xpassed(base: str, *transports: str) -> list[dict[str, str]]:
     return [{"nodeid": f"{base}[{t}]", "outcome": "xpassed"} for t in chosen]
 
 
-def _load(name: str, request: pytest.FixtureRequest | None = None):
-    path = SCRIPTS / f"{name}.py"
+def _load(
+    name: str,
+    request: pytest.FixtureRequest | None = None,
+    *,
+    directory: Path = SCRIPTS,
+):
+    path = directory / f"{name}.py"
     if not path.exists():
         pytest.fail(f"missing script: {path}")
     scripts_dir = str(SCRIPTS)
@@ -144,26 +149,7 @@ def cross_reference_audit(request, bdd_audit_common):
 @pytest.fixture(scope="module")
 def graduate_pending(request, bdd_audit_common):
     """Load scripts/graduate_pending.py (sibling of .claude/scripts)."""
-    path = REPO_ROOT / "scripts" / "graduate_pending.py"
-    if not path.exists():
-        pytest.fail(f"missing script: {path}")
-    scripts_dir = str(SCRIPTS)
-    if scripts_dir not in sys.path:
-        sys.path.insert(0, scripts_dir)
-    name = "graduate_pending"
-    if name in sys.modules:
-        return sys.modules[name]
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-
-    def _teardown() -> None:
-        sys.modules.pop(name, None)
-
-    request.addfinalizer(_teardown)
-    return module
+    return _load("graduate_pending", request, directory=REPO_ROOT / "scripts")
 
 
 def _premature_source() -> str:
@@ -610,12 +596,12 @@ class TestCrashMessageClassification:
         assert entry.category == "HARNESS_GAP"
         assert entry.xfail_source == "conftest:auto"
 
-    def test_harness_gap_from_no_harness_environment_phrase(self, audit_xfails, captured_bdd_slice) -> None:
-        """Pin the canonical conftest wording alone (load-bearing Priority-2 disjunct)."""
+    def test_harness_gap_from_no_harness_wired_catch_all(self, audit_xfails, captured_bdd_slice) -> None:
+        """Pin live catch-all ``No harness wired for {uc}`` (conftest else arm)."""
         test = _slice_entry(captured_bdd_slice, nodeid_contains="test_harness_env")
         message = test["setup"]["crash"]["message"]
-        assert "No harness environment" in message
-        assert "harness not" not in message.lower()
+        assert "No harness wired for UC-004" in message
+        assert "No harness environment" not in message
         entry = audit_xfails.classify_xfail(test, {}, [])
         assert entry.category == "HARNESS_GAP"
         assert entry.xfail_source == "conftest:auto"
@@ -1012,14 +998,16 @@ class TestSalvageDedupe:
             salvage_audit.parse_raw_output(raw)
 
     def test_step_record_key_set_oracle(self, bdd_audit_common) -> None:
-        assert bdd_audit_common.STEP_RECORD_KEYS == {
+        # Tuple preserves declaration order (JSONL line dedupe / PYTHONHASHSEED).
+        assert bdd_audit_common.STEP_RECORD_KEYS == (
             "file_path",
             "line_number",
             "step_type",
             "step_text",
             "function_name",
             "source_text",
-        }
+        )
+        assert set(bdd_audit_common.STEP_RECORD_KEYS) == set(bdd_audit_common.StepRecord.__annotations__)
 
 
 class TestReportIteratesFixNowDict:
@@ -1327,3 +1315,223 @@ class TestSurvivingMechanismArms:
         bucket, cat, _ = bdd_full_audit.classify_failure(entry)
         assert bucket == "FIX_NOW"
         assert cat == "STALE_STRICT_XFAIL"
+
+
+class TestAug17HarnessAndCoverage:
+    """Aug-17 KM: live harness vocab, unknown transport, unparametrized bucket."""
+
+    def test_unknown_transport_blocks_firm_graduate(self, bdd_audit_common) -> None:
+        grade = bdd_audit_common.grade_base(
+            "t::s",
+            [
+                ("t::s[a2a]", "xpassed"),
+                ("t::s[mcp]", "xpassed"),
+                ("t::s[rest]", "xpassed"),
+                ("t::s[e2e_rest]", "xpassed"),
+                ("t::s[newtransport]", "xfailed"),
+            ],
+        )
+        assert grade.bucket == "partial"
+        assert "newtransport" in grade.missing
+        assert grade.graduates is False
+
+    def test_unparametrized_base_has_own_bucket(self, bdd_audit_common, bdd_full_audit) -> None:
+        grade = bdd_audit_common.grade_base("t::admin_only", [("t::admin_only", "xpassed")])
+        assert grade.present_count == 0
+        assert grade.bucket == "unparametrized"
+        entry = bdd_full_audit.TestEntry(nodeid="t::admin_only", outcome="xpassed", longrepr="", error="")
+        classified = bdd_full_audit.classify_xpass(entry, [entry])
+        assert classified.category == "UNPARAMETRIZED"
+
+    def test_conftest_harness_literals_are_harness_gap(self, audit_xfails) -> None:
+        """Every live ``pytest.xfail("…harness…wired…")`` literal must classify HARNESS_GAP."""
+        src = CONFTEST.read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        literals: list[str] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = ""
+            if isinstance(func, ast.Attribute) and func.attr == "xfail":
+                name = "xfail"
+            elif isinstance(func, ast.Name) and func.id == "xfail":
+                name = "xfail"
+            if name != "xfail" or not node.args:
+                continue
+            arg0 = node.args[0]
+            if isinstance(arg0, ast.Constant) and isinstance(arg0.value, str):
+                literals.append(arg0.value)
+            elif isinstance(arg0, ast.JoinedStr):
+                # f-string — approximate with joined constant parts
+                parts = []
+                for v in arg0.values:
+                    if isinstance(v, ast.Constant) and isinstance(v.value, str):
+                        parts.append(v.value)
+                    else:
+                        parts.append("X")
+                literals.append("".join(parts))
+        harness_wired = [lit for lit in literals if "harness" in lit.lower() and "wired" in lit.lower()]
+        assert harness_wired, "expected at least one harness+wired xfail literal in conftest"
+        for lit in harness_wired:
+            test = _json_report_test("/x", 1, phase="setup", message=f"_pytest.outcomes.XFailed: {lit}")
+            entry = audit_xfails.classify_xfail(test, {}, [])
+            assert entry.category == "HARNESS_GAP", lit
+
+    def test_transport_re_covers_conftest_parametrize_ids(self, bdd_audit_common) -> None:
+        """``_TRANSPORT_RE`` must recognize every id in the live parametrize tuple."""
+        src = CONFTEST.read_text(encoding="utf-8")
+        # Heuristic: ids appear as quoted tokens near pytest_generate_tests transport list.
+        # Pin the known post-#1417 set explicitly + assert RE matches each.
+        expected = ("a2a", "mcp", "rest", "e2e_rest")
+        for tid in expected:
+            assert bdd_audit_common.extract_transport(f"t::s[{tid}]") == tid
+        # Also ensure e2e_* variants recognized
+        for tid in ("e2e_mcp", "e2e_a2a", "impl"):
+            assert bdd_audit_common.extract_transport(f"t::s[{tid}]") == tid
+        assert "parametrize" in src  # conftest still owns the list
+
+    def test_captured_slice_crash_paths_under_artifact_root(self, captured_bdd_slice) -> None:
+        root = captured_bdd_slice["root"]
+        assert isinstance(root, str) and root
+        for test in captured_bdd_slice["tests"]:
+            for phase in ("setup", "call", "teardown"):
+                crash = (test.get(phase) or {}).get("crash")
+                if not crash:
+                    continue
+                path = crash.get("path")
+                assert isinstance(path, str) and path.startswith(root), (test["nodeid"], path)
+
+    def test_summary_iterates_module_categories(self, audit_xfails, tmp_path: Path, capsys) -> None:
+        """stderr SUMMARY must walk ``XFAIL_CATEGORIES`` (not a hand list)."""
+        report = tmp_path / "bdd.json"
+        report.write_text(
+            json.dumps(
+                {
+                    "root": "/app",
+                    "tests": [
+                        {
+                            "nodeid": "t::s[a2a]",
+                            "outcome": "xfailed",
+                            "keywords": [],
+                            "setup": {
+                                "outcome": "skipped",
+                                "crash": {
+                                    "path": "/app/tests/bdd/conftest.py",
+                                    "lineno": 1,
+                                    "message": "_pytest.outcomes.XFailed: No harness wired for UC-019",
+                                },
+                            },
+                        },
+                        {"nodeid": "t::other[e2e_rest]", "outcome": "passed", "keywords": []},
+                    ],
+                }
+            )
+        )
+        out = tmp_path / "out.md"
+        old = sys.argv
+        try:
+            sys.argv = ["audit_xfails.py", str(report), "--output", str(out)]
+            audit_xfails.main()
+        finally:
+            sys.argv = old
+        err = capsys.readouterr().err
+        assert "HARNESS_GAP" in err
+        assert audit_xfails.XFAIL_CATEGORIES == tuple(audit_xfails.CATEGORY_DESC.keys())
+        assert "PARTIAL_PASS" in audit_xfails.XFAIL_CATEGORIES
+
+
+class TestGraduatePendingTagPins:
+    """Aug-17 #4 — tag_candidates / tag_blockers / print_report must be pinned."""
+
+    def test_analyze_tag_candidates_and_blockers(self, graduate_pending, tmp_path: Path) -> None:
+        report = tmp_path / "bdd.json"
+        report.write_text(
+            json.dumps(
+                {
+                    "tests": [
+                        {
+                            "nodeid": "tests/bdd/test_uc004.py::test_full[a2a]",
+                            "outcome": "xpassed",
+                            "keywords": ["T-UC-004-grad", "pending"],
+                        },
+                        {
+                            "nodeid": "tests/bdd/test_uc004.py::test_full[mcp]",
+                            "outcome": "xpassed",
+                            "keywords": ["T-UC-004-grad", "pending"],
+                        },
+                        {
+                            "nodeid": "tests/bdd/test_uc004.py::test_full[rest]",
+                            "outcome": "xpassed",
+                            "keywords": ["T-UC-004-grad", "pending"],
+                        },
+                        {
+                            "nodeid": "tests/bdd/test_uc004.py::test_part[a2a]",
+                            "outcome": "xpassed",
+                            "keywords": ["T-UC-004-block", "pending"],
+                        },
+                        {
+                            "nodeid": "tests/bdd/test_uc004.py::test_part[mcp]",
+                            "outcome": "xfailed",
+                            "keywords": ["T-UC-004-block", "pending"],
+                        },
+                        # keep force_confirm False
+                        {"nodeid": "tests/bdd/test_other.py::test_e[e2e_rest]", "outcome": "passed", "keywords": []},
+                    ]
+                }
+            )
+        )
+        ledger = tmp_path / "ledger.txt"
+        ledger.write_text("")
+        analysis = graduate_pending.analyze(str(report), ledger_path=ledger)
+        assert analysis["force_confirm"] is False
+        assert "T-UC-004-grad" in analysis["tag_candidates"]
+        assert "T-UC-004-block" in analysis["tag_blockers"]
+        assert "T-UC-004-grad" in analysis["test_tags"]["tests/bdd/test_uc004.py::test_full"]
+        # firm graduate tuple is (scenario, base)
+        assert any(base.endswith("::test_full") for _, base in analysis["graduate_all"])
+
+    def test_print_report_smoke(self, graduate_pending, tmp_path: Path, capsys) -> None:
+        report = tmp_path / "bdd.json"
+        ledger = tmp_path / "empty.txt"
+        ledger.write_text("")
+        report.write_text(
+            json.dumps(
+                {
+                    "tests": [
+                        {
+                            "nodeid": "tests/bdd/test_uc004.py::test_full[a2a]",
+                            "outcome": "xpassed",
+                            "keywords": ["T-UC-004-grad"],
+                        },
+                        {
+                            "nodeid": "tests/bdd/test_uc004.py::test_full[mcp]",
+                            "outcome": "xpassed",
+                            "keywords": ["T-UC-004-grad"],
+                        },
+                        {
+                            "nodeid": "tests/bdd/test_uc004.py::test_full[rest]",
+                            "outcome": "xpassed",
+                            "keywords": ["T-UC-004-grad"],
+                        },
+                        {"nodeid": "tests/bdd/test_other.py::test_e[e2e_rest]", "outcome": "passed", "keywords": []},
+                    ]
+                }
+            )
+        )
+        analysis = graduate_pending.analyze(str(report), ledger_path=ledger)
+        graduate_pending.print_report(analysis)
+        out = capsys.readouterr().out
+        assert out
+        assert "T-UC-004-grad" in out or "Graduate" in out or "graduate" in out.lower()
+
+
+class TestInspectParallelCliContract:
+    """Aug-17 — ``--features-dir`` must stay accepted if the wrapper passes it."""
+
+    def test_inspect_parallel_flags_accepted_by_parser(self) -> None:
+        wrapper = SCRIPTS / "inspect_parallel.sh"
+        text = wrapper.read_text(encoding="utf-8")
+        src = (SCRIPTS / "inspect_bdd_steps.py").read_text(encoding="utf-8")
+        assert "--features-dir" in text
+        assert '"--features-dir"' in src

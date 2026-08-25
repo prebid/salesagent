@@ -71,6 +71,10 @@ FIX_NOW = {
         "e2e_rest-only — confirm before removing xfail (e2e is environment-dependent)"
     ),
     "PARTIAL_XPASS": "Passes some transports — investigate remaining gaps before graduating",
+    "UNPARAMETRIZED": (
+        "No wire-transport rows (admin / transport-specific / impl-only) — "
+        "conftest returns before parametrize; not a partial-xpass gap"
+    ),
     "FIXTURE_GAP": "Strengthened assertion exposes missing test fixture data — fix factory",
     "STEP_BUG": "Step implementation has a bug — fix step code",
     "WEAK_ASSERTION": "Inspector-flagged: assertion doesn't match scenario intent",
@@ -297,6 +301,13 @@ def classify_xpass(
             category="GRADUATE",
             detail=f"All {grade.present_count} present transports pass: {sorted(grade.passing)}",
             present_count=grade.present_count,
+        )
+    if grade.bucket == "unparametrized":
+        return ClassifiedXpass(
+            bucket="FIX_NOW",
+            category="UNPARAMETRIZED",
+            detail="No wire-transport rows (admin/transport-specific/impl-only)",
+            present_count=0,
         )
     # mixed_examples and partial both land in PARTIAL_XPASS
     return ClassifiedXpass(

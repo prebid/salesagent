@@ -96,11 +96,11 @@
         "duration": 0.0021,
         "outcome": "skipped",
         "crash": {
-          "path": "tests/bdd/conftest.py",
+          "path": "/app/tests/bdd/conftest.py",
           "lineno": 512,
-          "message": "_pytest.outcomes.XFailed: No harness environment for UC-004"
+          "message": "_pytest.outcomes.XFailed: No harness wired for UC-004"
         },
-        "longrepr": "tests/bdd/conftest.py:512: in pytest_bdd_before_scenario\n    _pytest.outcomes.XFailed: No harness environment for UC-004"
+        "longrepr": "tests/bdd/conftest.py:512: in pytest_bdd_before_scenario\n    _pytest.outcomes.XFailed: No harness wired for UC-004"
       },
       "call": {
         "duration": 0.0,
@@ -126,7 +126,7 @@
         "duration": 0.0019,
         "outcome": "skipped",
         "crash": {
-          "path": "tests/bdd/conftest.py",
+          "path": "/app/tests/bdd/conftest.py",
           "lineno": 520,
           "message": "_pytest.outcomes.XFailed: UC harness not wired"
         },
@@ -156,7 +156,7 @@
         "duration": 0.0018,
         "outcome": "skipped",
         "crash": {
-          "path": "tests/bdd/conftest.py",
+          "path": "/app/tests/bdd/conftest.py",
           "lineno": 528,
           "message": "_pytest.outcomes.XFailed: UC harness not yet wired"
         },
@@ -188,7 +188,7 @@
         "duration": 0.0015,
         "outcome": "skipped",
         "crash": {
-          "path": "tests/bdd/conftest.py",
+          "path": "/app/tests/bdd/conftest.py",
           "lineno": 540,
           "message": "_pytest.outcomes.XFailed: xfail: tagged"
         },
@@ -246,7 +246,7 @@
         "duration": 0.018,
         "outcome": "failed",
         "crash": {
-          "path": "tests/bdd/steps/uc004/then_steps.py",
+          "path": "/app/tests/bdd/steps/uc004/then_steps.py",
           "lineno": 88,
           "message": "ValueError: nope"
         },
@@ -295,7 +295,7 @@
         "duration": 0.0013,
         "outcome": "skipped",
         "crash": {
-          "path": "tests/bdd/conftest.py",
+          "path": "/app/tests/bdd/conftest.py",
           "lineno": 560,
           "message": "_pytest.outcomes.XFailed: pending feature"
         },
