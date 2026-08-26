@@ -9,10 +9,11 @@ must propagate BDD/E2E failures so a red suite turns CI red.
 This is a configuration-contract assertion: the workflow file is parsed as
 YAML data and the job graph is inspected. It is NOT a source-code AST scan.
 
-No allowlist — zero tolerance for mapped suites. Every locally-run suite in
-``run_all_tests.sh`` ALL_SUITES must map to a summary gate **or** an explicit
-documented exclusion (currently ``ui`` — Playwright / full-stack cost, no CI
-job yet). CI-only gates (smoke, bdd-in-network) are listed separately.
+One documented local-only exclusion (``ui``), ratcheted via
+``test_local_suites_map_or_explicit_exclusion``. Every locally-run suite in
+``run_all_tests.sh`` ALL_SUITES must map to a summary gate **or** appear in
+``UNGATED_LOCAL_SUITES`` with a ``# see #<issue>`` anchor. CI-only gates
+(smoke, bdd-in-network) are listed separately.
 """
 
 import re
@@ -22,7 +23,13 @@ from typing import Any
 import pytest
 
 from scripts.ci.workflow_helpers import load_ci_workflow
-from tests.unit._architecture_helpers import find_step, job_run_text, load_yaml_mapping, repo_root
+from tests.unit._architecture_helpers import (
+    assert_violations_match_allowlist,
+    find_step,
+    job_run_text,
+    load_yaml_mapping,
+    repo_root,
+)
 
 # Local suite → summary.needs job. Derived from run_all_tests.sh ALL_SUITES;
 # unmapped suites must be listed in UNGATED_LOCAL_SUITES with a documented reason.
@@ -48,15 +55,13 @@ _LOCAL_SUITE_TO_SUMMARY_GATE: dict[str, str] = {
 # - ``admin-ui-tests`` runs ``tests/admin/`` against bare Postgres via
 #   ``_pytest`` — no browser, no compose app stack. Mapping ``ui`` →
 #   ``admin-ui-tests`` would be a false Summary gate.
-# - Local / in-network coverage already exists: ``ALL_SUITES`` includes ``ui``;
-#   ``./run_all_tests.sh`` / ``tox -e ui`` and the in-network ``tests`` image
-#   (Playwright baked) still surface failures — they just do not turn GitHub
-#   Summary red today.
+# - No automated CI execution today: ``./run_all_tests.sh`` / ``tox -e ui`` and
+#   the in-network ``tests`` image (Playwright baked) are local/in-network only;
+#   no workflow job runs ``tests/ui`` or ``tox -e ui``.
 #
-# Ownership (not an unbounded park-list): membership is frozen by
-# ``test_local_suites_map_or_explicit_exclusion`` so new ungated suites cannot
-# land silently. This set shrinks when Summary gating lands (recipe below) —
-# never grows without a new owned issue + ``# see`` anchor.
+# Ownership (not an unbounded park-list): ``test_local_suites_map_or_explicit_exclusion``
+# uses ``assert_violations_match_allowlist`` so growth is red and removal is
+# green when a suite is mapped — never grows without a new owned issue + anchor.
 #
 # see #1924 — removal recipe (when product wants Summary gating):
 # 1. Add CI job (suggested name ``ui-tests``) that runs Playwright against the
@@ -65,13 +70,13 @@ _LOCAL_SUITE_TO_SUMMARY_GATE: dict[str, str] = {
 #    existing full-stack job that already exercises ``tests/ui`` / ``tox -e ui``.
 # 2. Add that job to ``summary.needs`` + the Summary result-check step.
 # 3. Map ``"ui": "<job>"`` in ``_LOCAL_SUITE_TO_SUMMARY_GATE`` above.
-# 4. Remove ``"ui"`` from ``UNGATED_LOCAL_SUITES`` (keep an empty frozenset, or
-#    delete the constant and scrub every ``UNGATED_LOCAL_SUITES`` reference in
-#    ``_required_summary_gates`` / this module).
-# 5. Invert/remove the hard pin ``assert "ui" in UNGATED_LOCAL_SUITES`` in
-#    ``test_local_suites_map_or_explicit_exclusion``; extend arch-guard
-#    assertions for the mapped job (exists, runs ``tests/ui`` or ``tox -e ui``,
-#    Summary floor).
+# 4. Remove ``"ui"`` from ``UNGATED_LOCAL_SUITES`` (stale-entry ratchet fails
+#    until deleted); extend arch-guard assertions for the mapped job (exists,
+#    runs ``tests/ui`` or ``tox -e ui``, Summary floor).
+# 5. Remove the ``run_all_tests.sh`` STATUS note for ``ui`` local-only (step 6
+#    below) once Summary gating lands.
+# 6. Until step 5: keep the one-line STATUS pointer in ``run_all_tests.sh`` at
+#    the ``ui`` suite row (local/in-network only — not ``admin-ui-tests``).
 UNGATED_LOCAL_SUITES = frozenset({"ui"})
 
 # CI-only gates that are not ALL_SUITES entries but must still floor Summary.
@@ -175,15 +180,16 @@ def _find_free_disk_step(steps: list[dict[str, Any]]) -> tuple[int, dict[str, An
     """Locate the shared _free-disk composite step (name may be present for CI UI).
 
     Returns ``(index, step)``. Predicate matches shared ``find_step``; index is
-    recovered here because tip ``find_step`` returns the step mapping only.
+    recovered here because ``find_step`` returns the step mapping only.
     """
     found = find_step(steps, uses_contains="_free-disk")
     if found is None:
         raise AssertionError(f"job must include uses: {_FREE_DISK_USES} (single source for runner reclaim).")
-    for i, step in enumerate(steps):
-        if step is found:
-            return i, step
-    raise AssertionError(f"job must include uses: {_FREE_DISK_USES} (single source for runner reclaim).")
+    try:
+        idx = next(i for i, step in enumerate(steps) if step is found)
+    except StopIteration as exc:
+        raise AssertionError("find_step returned a step not present in steps") from exc
+    return idx, found
 
 
 def _assert_free_disk_action_reclaims_runner(action: dict[str, Any] | Path | None = None) -> None:
@@ -220,6 +226,8 @@ def _load_e2e_compose() -> dict[str, Any]:
 
 class TestCISuiteCoverage:
     """BDD and E2E suites must run in CI and gate the test summary."""
+
+    pytestmark = pytest.mark.arch_guard
 
     def test_shell_has_flag_rejects_wait_timeout_prefix(self):
         """``--wait`` must not match as a prefix of ``--wait-timeout`` (vacuous guard class)."""
@@ -269,7 +277,6 @@ class TestCISuiteCoverage:
         # Production composite still passes the real assert.
         _assert_free_disk_action_reclaims_runner()
 
-    @pytest.mark.arch_guard
     def test_bdd_job_exists(self):
         """BDD aggregate + parallel shard jobs must exist in CI."""
         jobs = load_ci_workflow()["jobs"]
@@ -277,7 +284,6 @@ class TestCISuiteCoverage:
         assert "bdd-tests" in jobs, "No 'bdd-tests' aggregate job in .github/workflows/ci.yml."
         assert "bdd-tests-shard" in jobs, "No 'bdd-tests-shard' matrix job in .github/workflows/ci.yml."
 
-    @pytest.mark.arch_guard
     def test_bdd_shards_run_the_bdd_suite(self):
         """Each BDD shard must resolve paths via shard_paths and run pytest."""
         shard_job = load_ci_workflow()["jobs"]["bdd-tests-shard"]
@@ -293,14 +299,12 @@ class TestCISuiteCoverage:
             "bdd-tests-shard must invoke pytest (via _pytest composite or explicit run)."
         )
 
-    @pytest.mark.arch_guard
     def test_bdd_shards_have_postgres_service(self):
         """BDD harnesses use the integration_db fixture (real PostgreSQL)."""
         services = load_ci_workflow()["jobs"]["bdd-tests-shard"].get("services", {})
 
         assert "postgres" in services, "bdd-tests-shard has no postgres service."
 
-    @pytest.mark.arch_guard
     def test_bdd_aggregate_is_status_proxy_only(self):
         """Aggregate BDD job must gate shard status, not merge coverage."""
         aggregate = load_ci_workflow()["jobs"]["bdd-tests"]
@@ -310,7 +314,6 @@ class TestCISuiteCoverage:
             "bdd-tests aggregate must not merge coverage; that belongs in the Coverage job."
         )
 
-    @pytest.mark.arch_guard
     def test_admin_job_has_postgres_service(self):
         """Admin blueprint tests use integration_db and require PostgreSQL."""
         admin_job = load_ci_workflow()["jobs"]["admin-ui-tests"]
@@ -321,7 +324,6 @@ class TestCISuiteCoverage:
             "the integration_db fixture and require a real PostgreSQL instance."
         )
 
-    @pytest.mark.arch_guard
     def test_integration_job_uses_entity_shards(self):
         """Integration tests must run in parallel entity shards (legacy parity)."""
         integration_job = load_ci_workflow()["jobs"]["integration-tests"]
@@ -341,7 +343,6 @@ class TestCISuiteCoverage:
             "integration-tests must filter pytest with matrix.marker, not run the full suite serially."
         )
 
-    @pytest.mark.arch_guard
     def test_integration_shards_use_strict_partition(self):
         """Shards 2–4 must exclude earlier shard markers to avoid duplicate runs."""
         integration_job = load_ci_workflow()["jobs"]["integration-tests"]
@@ -356,7 +357,6 @@ class TestCISuiteCoverage:
         assert "and not media_buy" in markers["infra"]
         assert "and not delivery" in markers["infra"]
 
-    @pytest.mark.arch_guard
     def test_quality_gate_does_not_run_unit_tests(self):
         """Quality Gate runs static checks only; unit tests run once in unit-tests."""
         quality_job = load_ci_workflow()["jobs"]["quality-gate"]
@@ -365,7 +365,6 @@ class TestCISuiteCoverage:
         assert "make quality-ci" in run_steps, "quality-gate must invoke make quality-ci (no pytest)."
         assert "pytest" not in run_steps, "quality-gate must not re-run unit tests."
 
-    @pytest.mark.arch_guard
     def test_coverage_job_reuses_test_artifacts(self):
         """Coverage gate must not re-run pytest; it combines unit + BDD artifacts."""
         coverage_job = load_ci_workflow()["jobs"]["coverage"]
@@ -383,7 +382,6 @@ class TestCISuiteCoverage:
         assert "pytest" not in run_steps, "coverage job must not re-run tests."
         assert "coverage combine" in run_steps, "coverage job must combine unit and BDD coverage data."
 
-    @pytest.mark.arch_guard
     def test_coverage_gate_requires_all_bdd_shard_artifacts(self):
         """Coverage must fail on partial BDD shard artifact sets, not combine survivors."""
         coverage_job = load_ci_workflow()["jobs"]["coverage"]
@@ -404,7 +402,6 @@ class TestCISuiteCoverage:
             "BDD shard coverage artifacts must land under bdd-coverage-shards/."
         )
 
-    @pytest.mark.arch_guard
     def test_ci_jobs_declare_permissions_and_timeout(self):
         """Every CI job must declare permissions and timeout (workflow hygiene)."""
         jobs = load_ci_workflow()["jobs"]
@@ -416,14 +413,25 @@ class TestCISuiteCoverage:
                 missing.append(f"{job_name}: timeout-minutes")
         assert not missing, "CI jobs missing hygiene fields:\n" + "\n".join(f"  - {m}" for m in missing)
 
-    @pytest.mark.arch_guard
     def test_local_suites_map_or_explicit_exclusion(self):
         """ALL_SUITES must map to summary gates or UNGATED_LOCAL_SUITES (no silent drops)."""
         suites = _all_suites_from_runner()
-        assert "ui" in UNGATED_LOCAL_SUITES, "ui must stay an explicit ungated exclusion until a CI job exists"
         assert "ui" in suites, "run_all_tests.sh ALL_SUITES must still list ui (exclusion is at the gate map)"
+        unmapped = {s for s in suites if s not in _LOCAL_SUITE_TO_SUMMARY_GATE}
+        assert_violations_match_allowlist(
+            unmapped,
+            set(UNGATED_LOCAL_SUITES),
+            fix_hint=(
+                "Map the suite to a Summary gate job in _LOCAL_SUITE_TO_SUMMARY_GATE, "
+                "or add it to UNGATED_LOCAL_SUITES with a `# see #<issue>` anchor."
+            ),
+        )
+        module_src = (repo_root() / "tests/unit/test_architecture_ci_suite_coverage.py").read_text(encoding="utf-8")
+        for suite in UNGATED_LOCAL_SUITES:
+            assert re.search(r"# see #\d+", module_src), (
+                f"UNGATED suite {suite!r} requires a `# see #<issue>` anchor in this module."
+            )
 
-    @pytest.mark.arch_guard
     def test_summary_gates_every_required_job(self):
         """summary must include every suite gate AND fail for every job in summary.needs."""
         workflow = load_ci_workflow()
@@ -447,14 +455,12 @@ class TestCISuiteCoverage:
                 f"A failing {required} job would not fail CI even though it is listed in needs[]."
             )
 
-    @pytest.mark.arch_guard
     def test_type_check_uses_make_target(self):
         """Type Check job must invoke the same entrypoint as local make typecheck."""
         type_check = load_ci_workflow()["jobs"]["type-check"]
         run_steps = job_run_text(type_check)
         assert "make typecheck" in run_steps, "type-check job must run make typecheck for CI/local parity."
 
-    @pytest.mark.arch_guard
     def test_smoke_tests_do_not_duplicate_skip_guard(self):
         """Skip-decorator enforcement belongs in the smoke suite, not a workflow grep step."""
         smoke_job = load_ci_workflow()["jobs"]["smoke-tests"]
@@ -465,7 +471,6 @@ class TestCISuiteCoverage:
             "TestNoSkippedTests is the single source of truth."
         )
 
-    @pytest.mark.arch_guard
     def test_skip_guard_single_source_of_truth_exists(self):
         """The SSoT the workflow delegates to must exist, or enforcement is unguarded."""
         from tests.smoke.test_smoke_basic import TestNoSkippedTests
@@ -474,7 +479,6 @@ class TestCISuiteCoverage:
             "TestNoSkippedTests.test_no_skip_decorators is the declared single source of truth for skip enforcement."
         )
 
-    @pytest.mark.arch_guard
     def test_e2e_job_prestarts_stack_with_adcp_testing(self):
         """E2E CI must pre-start compose; pytest must not cold-build under --timeout.
 
@@ -589,7 +593,6 @@ class TestCISuiteCoverage:
             f"Order must be Free disk → pre-start → pytest (got {free_idx}, {pre_idx}, {pytest_idx})."
         )
 
-    @pytest.mark.arch_guard
     def test_e2e_compose_proxy_waits_for_adcp_healthy(self):
         """Proxy must not race adcp start_period under ``compose up --wait``.
 
@@ -641,7 +644,6 @@ class TestCISuiteCoverage:
             f"creative-agent start_period must be positive (got {creative_hc.get('start_period')!r})."
         )
 
-    @pytest.mark.arch_guard
     def test_bdd_in_network_frees_disk_before_compose(self):
         """In-network e2e_rest must reclaim runner disk before image build.
 
@@ -673,7 +675,6 @@ class TestCISuiteCoverage:
             "bdd-in-network must invoke ./run_all_tests.sh bdd_e2e."
         )
 
-    @pytest.mark.arch_guard
     def test_bdd_and_e2e_run_on_pull_request(self):
         """The gate is worthless if it doesn't run on PRs.
 
