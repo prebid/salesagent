@@ -1706,6 +1706,46 @@ class TestProductUniquenessSchema:
 class TestRelevanceThresholdSchema:
     """AI ranking threshold filter behavior at schema level."""
 
+    async def test_ranked_products_emit_brief_relevance(self):
+        """AI ranking reasons are serialized as AdCP brief_relevance.
+
+        Covers: T-UC-001-main, issue #1595
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        with ProductEnv() as env:
+            env.add_product(product_id="prod_low")
+            env.add_product(product_id="prod_high")
+            env.identity.tenant["product_ranking_prompt"] = "rank by relevance"
+
+            mock_factory = MagicMock()
+            mock_factory.is_ai_enabled.return_value = True
+            mock_factory.create_model.return_value = MagicMock()
+            env.mock["ranking_factory"].return_value = mock_factory
+
+            mock_result = MagicMock()
+            mock_result.rankings = [
+                MagicMock(product_id="prod_low", relevance_score=0.4, reason="Useful secondary fit"),
+                MagicMock(product_id="prod_high", relevance_score=0.9, reason="Best match for the brief"),
+            ]
+
+            with (
+                patch(
+                    "src.services.ai.agents.ranking_agent.rank_products_async",
+                    new_callable=AsyncMock,
+                    return_value=mock_result,
+                ),
+                patch("src.services.ai.agents.ranking_agent.create_ranking_agent"),
+            ):
+                response = await env.call_impl(brief="Display ads for a tech audience")
+
+            products = response.model_dump(mode="json")["products"]
+            assert [product["product_id"] for product in products] == ["prod_high", "prod_low"]
+            assert [product["brief_relevance"] for product in products] == [
+                "Best match for the brief",
+                "Useful secondary fit",
+            ]
+
     async def test_threshold_boundary_included(self):
         """Score exactly at threshold (0.1) is included.
 

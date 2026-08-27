@@ -689,6 +689,11 @@ async def _get_products_impl(
                 # Filter out products with very low relevance (score < 0.1)
                 eligible_products = [p for p in eligible_products if ranking_map.get(p.product_id, (0.0, ""))[0] >= 0.1]
 
+                # AdCP 3.1.1 core/product.json: explain why each curated
+                # product matches the supplied brief.
+                for product in eligible_products:
+                    product.brief_relevance = ranking_map[product.product_id][1]
+
                 # Log the ranking results
                 for r in ranking_result.rankings:
                     logger.info(f"[AI_RANKING] {r.product_id}: score={r.relevance_score:.2f}, reason={r.reason}")

@@ -55,6 +55,7 @@ pytest_plugins = [
     "tests.bdd.steps.generic.then_success",
     "tests.bdd.steps.generic.then_error",
     "tests.bdd.steps.generic.then_payload",
+    "tests.bdd.steps.domain.uc001_discover_inventory",
     "tests.bdd.steps.domain.uc004_delivery",
     "tests.bdd.steps.domain.uc002_create_media_buy",
     "tests.bdd.steps.domain.uc002_nfr",
@@ -3075,6 +3076,8 @@ def _setup_existing_media_buy(ctx: dict, env: object, tenant: object, principal:
 def _detect_uc(request: pytest.FixtureRequest) -> str | None:
     """Detect which use case a BDD scenario belongs to via its tags."""
     marker_names = {m.name for m in request.node.iter_markers()}
+    if any(t.startswith("T-UC-001-") for t in marker_names):
+        return "UC-001"
     if any(t.startswith("T-UC-002") for t in marker_names):
         return "UC-002"
     if any(t.startswith("T-UC-003") for t in marker_names):
@@ -3523,6 +3526,66 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 yield
         else:
             pytest.xfail(f"UC-004 harness not yet wired for type: {harness_type}")
+    elif uc == "UC-001":
+        marker_names = {m.name for m in request.node.iter_markers()}
+        if "T-UC-001-main" not in marker_names:
+            pytest.xfail("UC-001 harness is wired only for T-UC-001-main (#1595)")
+
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from src.services.ai.agents.ranking_agent import ProductRanking, ProductRankingResult
+        from tests.factories import PricingOptionFactory, ProductFactory
+        from tests.harness.product import ProductEnv
+
+        ranking_prompt = "Rank products against the buyer brief"
+        with (
+            _db_scope_for(request, e2e_config),
+            ProductEnv(
+                e2e_config=e2e_config,
+                product_ranking_prompt=ranking_prompt,
+            ) as env,
+            patch("src.services.ai.agents.ranking_agent.create_ranking_agent"),
+        ):
+            tenant, principal = env.setup_default_data()
+            low = ProductFactory(tenant=tenant, product_id="uc001-low")
+            PricingOptionFactory(product=low)
+            high = ProductFactory(tenant=tenant, product_id="uc001-high")
+            PricingOptionFactory(product=high)
+
+            tenant.product_ranking_prompt = ranking_prompt
+            env._commit_factory_data()
+
+            ranking_reasons = {
+                high.product_id: "Strongest match for the requested tech audience",
+                low.product_id: "Relevant display inventory with broader reach",
+            }
+            ranking_result = ProductRankingResult(
+                rankings=[
+                    ProductRanking(
+                        product_id=low.product_id, relevance_score=0.4, reason=ranking_reasons[low.product_id]
+                    ),
+                    ProductRanking(
+                        product_id=high.product_id,
+                        relevance_score=0.9,
+                        reason=ranking_reasons[high.product_id],
+                    ),
+                ]
+            )
+            with patch(
+                "src.services.ai.agents.ranking_agent.rank_products_async",
+                new=AsyncMock(return_value=ranking_result),
+            ):
+                mock_factory = MagicMock()
+                mock_factory.is_ai_enabled.return_value = True
+                mock_factory.create_model.return_value = MagicMock()
+                env.mock["ranking_factory"].return_value = mock_factory
+
+                ctx["env"] = env
+                ctx["tenant"] = tenant
+                ctx["principal"] = principal
+                ctx["ranked_product_ids"] = [high.product_id, low.product_id]
+                ctx["ranking_reasons"] = ranking_reasons
+                yield
     elif uc == "UC-GET-PRODUCTS":
         from tests.harness.product import ProductEnv
 
