@@ -16,32 +16,38 @@ from typing import Any
 
 import pytest
 
-from tests.e2e._webhook_capture import WebhookCaptureHandler, run_webhook_capture_server
+from tests.e2e._tenant_state import set_mock_approval
+from tests.e2e._webhook_capture import tls_capture
 from tests.e2e.adcp_request_builder import (
     build_adcp_media_buy_request,
     build_creative,
     get_test_date_range,
     parse_tool_result,
 )
+from tests.e2e.conftest import e2e_in_network
 from tests.e2e.utils import (
     force_approve_media_buy_in_db,
     make_mcp_client,
-    set_live_adapter_behavior,
     wait_for_server_readiness,
 )
 
-
-class DeliveryWebhookReceiver(WebhookCaptureHandler):
-    """Simple webhook receiver to capture delivery_report notifications."""
-
-    received_webhooks: list[Any] = []
+#: In-network only: deliveries land on the compose ``webhook-capture`` service, whose
+#: readback control plane publishes no host port. ``run_all_tests.sh`` runs every suite
+#: in-network, so this costs the host-path developer convenience, not CI coverage.
+pytestmark = pytest.mark.skipif(
+    not e2e_in_network(),
+    reason=(
+        "in-network only: the webhook-capture service publishes no host port, so its readback "
+        "control plane is reachable by compose service name alone (set ADCP_TEST_HOST)"
+    ),
+)
 
 
 @pytest.fixture
 def delivery_webhook_server():
-    """Start a local HTTP server to receive delivery_report webhooks."""
-    with run_webhook_capture_server(DeliveryWebhookReceiver, DeliveryWebhookReceiver.received_webhooks) as info:
-        yield info
+    """A capture key on the TLS receiver for this test's delivery_report webhooks."""
+    with tls_capture("delivery-e2e") as handle:
+        yield handle
 
 
 class TestDailyDeliveryWebhookFlow:
@@ -97,7 +103,7 @@ class TestDailyDeliveryWebhookFlow:
             start_time=start_time,
             end_time=end_time,
             brand={"domain": "testbrand.com"},
-            webhook_url=delivery_webhook_server["url"],
+            webhook_url=delivery_webhook_server.url,
             reporting_frequency="daily",
             context={"e2e": "delivery_webhook_create_media_buy"},
             pricing_option_id=pricing_option_id,
@@ -137,7 +143,7 @@ class TestDailyDeliveryWebhookFlow:
         3. Get delivery metrics explicitly via get_media_buy_delivery
         4. Wait for scheduled delivery_report webhook and inspect payload
         """
-        set_live_adapter_behavior(live_server, manual_approval_required=False)
+        set_mock_approval(live_server, manual=False)
 
         # Wait for server readiness
         wait_for_server_readiness(live_server["mcp"])
@@ -190,16 +196,18 @@ class TestDailyDeliveryWebhookFlow:
             # We configured DELIVERY_WEBHOOK_INTERVAL=5 in conftest.py for E2E tests.
             # It should trigger in 5 seconds.
 
-            received = delivery_webhook_server["received"]
-
-            # Wait for webhook
+            # Re-read on every turn: the capture service is a separate process, so
+            # unlike the old in-process receiver there is no list that fills itself
+            # while this loop holds a reference to it.
             timeout_seconds = 30
             poll_interval = 1
 
             elapsed = 0
+            received = delivery_webhook_server.payloads()
             while elapsed < timeout_seconds and not received:
                 sleep(poll_interval)
                 elapsed += poll_interval
+                received = delivery_webhook_server.payloads()
 
             assert received, (
                 "Expected at least one delivery report webhook. Check connectivity and DELIVERY_WEBHOOK_INTERVAL."

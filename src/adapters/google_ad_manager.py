@@ -337,7 +337,8 @@ class GoogleAdManager(AdServerAdapter):
         """Check if order has guaranteed line items (delegated to orders manager)."""
         return self._require_orders_manager().check_order_has_guaranteed_items(order_id)
 
-    def get_supported_pricing_models(self) -> set[str]:
+    @staticmethod
+    def get_supported_pricing_models() -> set[str]:
         """Return set of pricing models GAM adapter supports.
 
         Google Ad Manager supports:
@@ -351,7 +352,8 @@ class GoogleAdManager(AdServerAdapter):
         """
         return {"cpm", "vcpm", "cpc", "flat_rate"}
 
-    def get_targeting_capabilities(self) -> TargetingCapabilities:
+    @staticmethod
+    def get_targeting_capabilities() -> TargetingCapabilities:
         """Return targeting capabilities GAM adapter supports.
 
         Google Ad Manager supports comprehensive geo targeting:
@@ -421,7 +423,7 @@ class GoogleAdManager(AdServerAdapter):
                 # Check if pricing model is supported by GAM adapter at all
                 try:
                     gam_cost_type = PricingCompatibility.get_gam_cost_type(pricing_model)
-                except ValueError as e:
+                except AdCPCapabilityNotSupportedError:
                     error_msg = (
                         f"Google Ad Manager adapter does not support '{pricing_model}' pricing. "
                         f"Supported pricing models: CPM, VCPM, CPC, FLAT_RATE. "
@@ -429,7 +431,7 @@ class GoogleAdManager(AdServerAdapter):
                         f"Please choose a product with compatible pricing."
                     )
                     self.log(f"[red]Error: {error_msg}[/red]")
-                    raise AdCPCapabilityNotSupportedError(error_msg)
+                    raise AdCPCapabilityNotSupportedError(error_msg) from None
 
                 self.log(
                     f"📊 Package {pkg_id} pricing: {pricing_model} → GAM {gam_cost_type} "

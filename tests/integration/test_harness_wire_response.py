@@ -37,10 +37,25 @@ from tests.harness.transport import Transport
 class TestWireResponseIsRealWire:
     """wire_response surfaces the real serialized success-path wire, per transport."""
 
-    # Envelope-only keys present only because A2A wraps the payload — absent
-    # from a bare payload reconstruction and from the REST HTTP body. MCP has no
-    # envelope-only keys anymore (see module docstring): its wire is checked
-    # separately via round-trip fidelity.
+    # A2A-only keys, present only because A2A wraps the payload:
+    # `_stamp_a2a_protocol_fields` (adcp_a2a_server.py, reached via
+    # `_serialize_for_a2a`) explicitly overwrites `message` with
+    # `str(response)` and derives `success` from the `errors` field — both are
+    # synthesized wrapper keys, always present, and genuinely absent from a
+    # bare payload reconstruction and from the REST HTTP body.
+    #
+    # MCP has NO equivalent wrapper-only marker anymore (GH #1710; see module
+    # docstring): MCP's `structured_content` is now built via
+    # `response.model_dump(mode="json")` — the identical call REST/A2A use —
+    # so MCP and REST wire shapes correctly converge (both honor
+    # `exclude_none=True` per AdCP 3.1.1 absent-means-absent). There is no
+    # longer a field present in MCP's wire but absent from REST's:
+    # `task_id`/`adcp_version` are optional payload fields that only ever
+    # "worked" as markers because MCP's old serialization bug preserved them
+    # as `null`; `status` is REQUIRED but is a payload field too, so it
+    # appears on REST's body identically. See
+    # `test_mcp_wire_is_real_wire_not_a_reconstruction` below for MCP's
+    # authenticity checks (payload provenance + round-trip fidelity) instead.
     ENVELOPE_MARKERS = {
         Transport.A2A: ("success", "message"),
     }
@@ -67,9 +82,10 @@ class TestWireResponseIsRealWire:
 
         A payload model_dump() exposes only the response model's fields (formats,
         creative_agents, pagination, ...). The A2A envelope adds success/message
-        (injected by ``_serialize_for_a2a``, not part of the response model) —
-        asserting these makes the oracle distinguish real serialized wire from a
-        reconstruction.
+        (injected by ``_serialize_for_a2a`` via ``_stamp_a2a_protocol_fields``, not
+        part of the response model), always present regardless of the payload's own
+        (unrelated, optional) ``message`` field — asserting these makes the oracle
+        distinguish real serialized wire from a reconstruction.
         """
         with CreativeFormatsEnv() as env:
             for transport, markers in self.ENVELOPE_MARKERS.items():
@@ -82,20 +98,41 @@ class TestWireResponseIsRealWire:
                         "looks like a payload reconstruction, not real wire"
                     )
 
-    def test_mcp_wire_round_trips_through_the_response_type(self, integration_db):
-        """MCP wire is a byte-faithful serialization of a valid response instance.
+    def test_mcp_wire_is_real_wire_not_a_reconstruction(self, integration_db):
+        """MCP wire is this run's payload, byte-faithfully serialized.
 
-        MCP has no envelope-only markers to assert (see module docstring): its
-        structured_content is now exactly ``response.model_dump(mode="json")``. A
-        fabricated/partial reconstruction would either fail to construct
-        ``ListCreativeFormatsResponse`` (missing/wrong-typed required fields) or
-        fail to re-dump identically (extra/dropped/differently-shaped fields), so
-        round-trip equality is the meaningful authenticity signal left post-fix.
+        MCP has no envelope-only marker left to assert (GH #1710; see module
+        docstring): its ``structured_content`` is now exactly
+        ``response.model_dump(mode="json")`` — the same call REST/A2A use — so
+        the two authenticity signals that remain are asserted together here:
+
+        1. **Provenance** — ``wire_response`` equals THIS run's typed payload's
+           own serialization. A harness bug that captured ``wire_response`` from
+           a different source (re-serializing with different kwargs, or stashing
+           a stale value from another call) diverges from this.
+        2. **Round-trip fidelity** — the wire parses back into
+           ``ListCreativeFormatsResponse`` and re-dumps identically. A
+           fabricated/partial reconstruction would either fail to construct
+           (missing/wrong-typed required fields) or fail to re-dump identically
+           (extra/dropped/differently-shaped fields).
+
+        Neither subsumes the other: (1) pins the wire to the run, (2) pins it to
+        the declared response schema.
         """
         with CreativeFormatsEnv() as env:
             result = env.call_via(Transport.MCP)
         assert isinstance(result.wire_response, dict), "MCP: wire_response not a dict"
         assert "formats" in result.wire_response, "MCP: wire_response missing formats"
+
+        # (1) provenance: the wire is this run's payload, not some other source
+        assert result.payload is not None, "MCP: no typed payload captured"
+        assert result.wire_response == result.payload.model_dump(mode="json"), (
+            "MCP wire_response diverged from payload.model_dump(mode='json') — "
+            "structured_content may no longer be sourced from the real wire"
+        )
+
+        # (2) round-trip fidelity: the wire is a complete, valid instance of the
+        # declared response type
         reparsed = ListCreativeFormatsResponse(**result.wire_response)
         assert reparsed.model_dump(mode="json") == result.wire_response, (
             "MCP wire_response does not round-trip through ListCreativeFormatsResponse — "

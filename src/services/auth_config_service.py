@@ -10,10 +10,16 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, TenantAuthConfig
 from src.core.domain_config import get_sales_agent_domain, get_sales_agent_url
 
 logger = logging.getLogger(__name__)
+
+#: A tenant's auth config is unique on tenant_id twice over — the column's own
+#: UNIQUE constraint and the unique index the migration adds beside it. An INSERT
+#: can trip either, so both have to be named.
+AUTH_CONFIG_UNIQUE = ("tenant_auth_configs_tenant_id_key", "idx_tenant_auth_configs_tenant_id")
 
 
 # Well-known OIDC discovery URLs
@@ -52,19 +58,24 @@ def get_or_create_auth_config(tenant_id: str) -> TenantAuthConfig:
         TenantAuthConfig (existing or newly created)
     """
     with get_db_session() as session:
-        config = session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
+        stmt = select(TenantAuthConfig).filter_by(tenant_id=tenant_id)
+        new_config = TenantAuthConfig(
+            tenant_id=tenant_id,
+            oidc_enabled=False,
+            created_at=datetime.now(UTC),
+        )
+        existing = resolve_or_write(
+            session,
+            conflict=lambda: session.scalars(stmt).first(),
+            write=lambda: session.add(new_config),
+            constraint=AUTH_CONFIG_UNIQUE,
+        )
+        if existing is not None:
+            return existing
 
-        if not config:
-            config = TenantAuthConfig(
-                tenant_id=tenant_id,
-                oidc_enabled=False,
-                created_at=datetime.now(UTC),
-            )
-            session.add(config)
-            session.commit()
-            session.refresh(config)
-
-        return config
+        session.commit()
+        session.refresh(new_config)
+        return new_config
 
 
 def save_oidc_config(
@@ -103,14 +114,22 @@ def save_oidc_config(
         logout_url = OIDC_LOGOUT_URLS[provider]
 
     with get_db_session() as session:
-        config = session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
-
-        if not config:
-            config = TenantAuthConfig(
-                tenant_id=tenant_id,
-                created_at=datetime.now(UTC),
+        stmt = select(TenantAuthConfig).filter_by(tenant_id=tenant_id)
+        new_config = TenantAuthConfig(
+            tenant_id=tenant_id,
+            created_at=datetime.now(UTC),
+        )
+        # A concurrent writer that got its row in first leaves us the winner's row
+        # to update — the same row the pre-check would have handed us.
+        config = (
+            resolve_or_write(
+                session,
+                conflict=lambda: session.scalars(stmt).first(),
+                write=lambda: session.add(new_config),
+                constraint=AUTH_CONFIG_UNIQUE,
             )
-            session.add(config)
+            or new_config
+        )
 
         # Check if key settings changed (requires re-verification)
         settings_changed = (

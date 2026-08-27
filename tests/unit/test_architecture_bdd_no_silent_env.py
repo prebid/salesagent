@@ -18,13 +18,11 @@ Both patterns violate the "No Quiet Failures" principle from CLAUDE.md.
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
 import pytest
 
 from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
-
-_BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
+from tests.unit._bdd_guard_helpers import iter_bdd_steps
 
 # ── Pre-existing violations ──────────────────────────────────────────────
 # FIXME: replace ctx.get("env") with ctx["env"] and hasattr() with typed
@@ -33,19 +31,6 @@ _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 _CTX_GET_ENV_ALLOWLIST: set[tuple[str, str]] = set()
 
 _HASATTR_ENV_ALLOWLIST: set[tuple[str, str]] = set()
-
-
-def _is_step_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """Check if function is decorated with @given, @when, or @then."""
-    step_names = {"given", "when", "then"}
-    for dec in func.decorator_list:
-        if isinstance(dec, ast.Call):
-            func_node = dec.func
-            if isinstance(func_node, ast.Name) and func_node.id in step_names:
-                return True
-        if isinstance(dec, ast.Name) and dec.id in step_names:
-            return True
-    return False
 
 
 def _has_ctx_get_env(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -71,28 +56,12 @@ def _has_hasattr_env(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     return False
 
 
-def _scan_bdd_steps(check_fn, label: str) -> list[tuple[str, str]]:
+def _scan_bdd_steps(check_fn) -> list[tuple[str, str]]:
     """Find step functions matching a check function.
 
     Returns list of (relative_path, function_name).
     """
-    violations = []
-    for py_file in sorted(_BDD_STEPS_DIR.rglob("*.py")):
-        if py_file.name.startswith("_"):
-            continue
-        source = py_file.read_text()
-        tree = ast.parse(source, filename=str(py_file))
-        relative = str(py_file.relative_to(_BDD_STEPS_DIR.parent.parent))
-
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            if not _is_step_decorated(node):
-                continue
-            if check_fn(node):
-                violations.append((relative, node.name))
-
-    return violations
+    return [(step.relative, step.name) for step in iter_bdd_steps() if check_fn(step.node)]
 
 
 class TestBddNoCtxGetEnv:
@@ -105,7 +74,7 @@ class TestBddNoCtxGetEnv:
     @pytest.mark.arch_guard
     def test_no_new_ctx_get_env(self):
         """No step function uses ctx.get("env") outside the allowlist."""
-        violations = _scan_bdd_steps(_has_ctx_get_env, 'ctx.get("env")')
+        violations = _scan_bdd_steps(_has_ctx_get_env)
         new = [(p, n) for p, n in violations if (p, n) not in _CTX_GET_ENV_ALLOWLIST]
         assert not new, (
             f'Found {len(new)} step(s) using ctx.get("env") — use ctx["env"] instead:\n'
@@ -116,7 +85,7 @@ class TestBddNoCtxGetEnv:
     @pytest.mark.arch_guard
     def test_ctx_get_env_allowlist_not_stale(self):
         """Every allowlisted entry must still exist (forces cleanup)."""
-        current = set(_scan_bdd_steps(_has_ctx_get_env, 'ctx.get("env")'))
+        current = set(_scan_bdd_steps(_has_ctx_get_env))
         assert_violations_match_allowlist(
             current & _CTX_GET_ENV_ALLOWLIST,
             _CTX_GET_ENV_ALLOWLIST,
@@ -134,7 +103,7 @@ class TestBddNoHasattrEnv:
     @pytest.mark.arch_guard
     def test_no_new_hasattr_env(self):
         """No step function uses hasattr(env, ...) outside the allowlist."""
-        violations = _scan_bdd_steps(_has_hasattr_env, "hasattr(env, ...)")
+        violations = _scan_bdd_steps(_has_hasattr_env)
         new = [(p, n) for p, n in violations if (p, n) not in _HASATTR_ENV_ALLOWLIST]
         assert not new, (
             f"Found {len(new)} step(s) using hasattr(env, ...) — call directly or xfail:\n"
@@ -145,7 +114,7 @@ class TestBddNoHasattrEnv:
     @pytest.mark.arch_guard
     def test_hasattr_env_allowlist_not_stale(self):
         """Every allowlisted entry must still exist (forces cleanup)."""
-        current = set(_scan_bdd_steps(_has_hasattr_env, "hasattr(env, ...)"))
+        current = set(_scan_bdd_steps(_has_hasattr_env))
         assert_violations_match_allowlist(
             current & _HASATTR_ENV_ALLOWLIST,
             _HASATTR_ENV_ALLOWLIST,

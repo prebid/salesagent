@@ -25,15 +25,16 @@ _TOOLS_DIR = Path(__file__).resolve().parents[2] / "src" / "core" / "tools"
 # (file, impl_func, expected_result_type, {bare_domain_return_types})
 # #1417: extended from update-only to also pin the create path.
 _IMPLS = [
-    # adcp 6.6 (spec 3.1.1): the manual-approval branch returns the bare
-    # UpdateMediaBuySubmitted oneOf variant — it IS a protocol envelope
-    # (status const "submitted" + required task_id), so TaskStatus still
-    # reaches the wire without the wrapper. Success/Error stay wrapped.
+    # adcp 6.6 (spec 3.1.1): every branch — including the manual-approval
+    # submitted path — returns the UpdateMediaBuyResult protocol envelope, the
+    # shape the harness (_parse_update_rest_response), the A2A server and the
+    # submitted-envelope tests are built on. Submitted is pinned as a bare
+    # type so the unwrapped variant cannot silently return.
     (
         "media_buy_update.py",
         "_update_media_buy_impl",
-        "UpdateMediaBuyResult | UpdateMediaBuySubmitted",
-        {"UpdateMediaBuySuccess", "UpdateMediaBuyError"},
+        "UpdateMediaBuyResult",
+        {"UpdateMediaBuySuccess", "UpdateMediaBuyError", "UpdateMediaBuySubmitted"},
     ),
     (
         "media_buy_create.py",

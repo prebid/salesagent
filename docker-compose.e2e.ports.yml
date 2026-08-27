@@ -24,3 +24,12 @@ services:
   proxy:
     ports:
       - "127.0.0.1:${ADCP_SALES_PORT:-8092}:8000"
+
+  # The TLS listener, published for the host paths. The port is a VARIABLE for
+  # the same reason the two above are: several stacks run concurrently on one
+  # box, and a hardcoded 8443 would reintroduce exactly the cross-stack
+  # collision this overlay's header warns about. Callers allocate it
+  # (scripts/test-stack.sh, tests/e2e/conftest.py) and export ADCP_TLS_PORT.
+  tls-proxy:
+    ports:
+      - "127.0.0.1:${ADCP_TLS_PORT:-8443}:8443"

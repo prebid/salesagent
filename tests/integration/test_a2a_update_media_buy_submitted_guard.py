@@ -44,8 +44,13 @@ def test_manual_approval_update_via_real_a2a_pipeline_is_submitted_task_without_
     (message parsing -> skill routing -> _update_media_buy_impl -> Task framing)
     with the adapter requiring manual approval. The submitted early-return in
     on_message_send must convey the pending state exclusively via the Task
-    object — this is the control-flow fact that makes the UpdateMediaBuySubmitted
-    reconstruction branch dead, and it must hold after that branch is removed.
+    object — this is the control-flow fact that made the UpdateMediaBuySubmitted
+    reconstruction branch dead, and it still holds now that the branch (and the
+    whole ``_reconstruct_response_object`` helper it lived in) has been removed.
+    The assertions below are on the observable A2A envelope — Task state,
+    artifact absence, the parsed submitted response — never on the existence of
+    a private handler method, so a legitimate refactor of the handler internals
+    cannot break this guard while the buyer-facing contract holds.
     """
     with MediaBuyDualEnv() as env:
         tenant, principal, _product, _pricing_option = env.setup_media_buy_data()
@@ -80,11 +85,10 @@ def test_manual_approval_update_via_real_a2a_pipeline_is_submitted_task_without_
     # The harness-synthesized envelope (built from Task state + id) parses as the
     # submitted variant and carries the task_id the buyer polls. Secondary pin:
     # this proves the Task id doubles as the AdCP task_id, not artifact content.
-    # Production's _update_media_buy_impl returns the bare UpdateMediaBuySubmitted
-    # protocol variant (spec 3.1.1 serializes it flat, status="submitted"+task_id at
-    # top level), so the harness reconstructs it bare — not wrapped in UpdateMediaBuyResult.
-    assert isinstance(result, UpdateMediaBuySubmitted), (
-        f"expected bare UpdateMediaBuySubmitted, got {type(result).__name__}"
+    # The harness wraps the reconstructed member in the UpdateMediaBuyResult
+    # protocol envelope (#1417), mirroring production's _update_media_buy_impl.
+    assert isinstance(result.response, UpdateMediaBuySubmitted), (
+        f"expected UpdateMediaBuySubmitted in the envelope, got {type(result.response).__name__}"
     )
     assert result.status == "submitted"
-    assert result.task_id, "submitted update must carry a task_id for the buyer to poll"
+    assert result.response.task_id, "submitted update must carry a task_id for the buyer to poll"

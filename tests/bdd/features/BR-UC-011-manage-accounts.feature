@@ -50,14 +50,29 @@ Feature: BR-UC-011 Manage Accounts
     And accounts with other statuses are excluded
     # @bva status: active (first enum value), closed (last enum value)
     # @bva accounts (response): status filter = specific value with matches
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/account-status.json pointer=/enum
+    # rejected row: the Given seeds no rejected account, so this row grades enum
+    # acceptance (no validation error) — the matching-data case is
+    # @T-UC-011-list-status-rejected below.
 
     Examples:
       | status             |
       | active             |
       | pending_approval   |
+      | rejected           |
       | payment_required   |
       | suspended          |
       | closed             |
+
+  @T-UC-011-list-status-rejected @list @status-filter @partition @boundary
+  Scenario: List accounts filtered by status rejected returns only rejected accounts
+    Given the Buyer Agent has an authenticated connection
+    And the agent has accounts with statuses "rejected", "active", "active"
+    When the Buyer Agent sends a list_accounts request with status filter "rejected"
+    Then the response contains an accounts array with 1 items
+    And every returned account has status "rejected"
+    # @bva status: rejected — the one account-status enum value the filter outline never seeded
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/list-accounts-request.json pointer=/properties/status/enum
 
   @T-UC-011-list-no-accounts @list @empty-result @partition @boundary
   Scenario: List accounts returns empty when authenticated agent has no accounts (0 accounts visible)
@@ -73,9 +88,23 @@ Feature: BR-UC-011 Manage Accounts
     Given the Buyer Agent has an unauthenticated connection
     When the Buyer Agent sends a list_accounts request without an authentication token
     Then the response is an error variant with no accounts array
-    And the error code is "AUTH_REQUIRED"
+    And the error code is "AUTH_MISSING"
     And the error message describes the authentication requirement
     # @bva authentication (account operations): no token on list
+
+  @T-UC-011-ext-c-a2a @list @extension @ext-c @error @a2a @post-f1 @post-f2 @post-f3
+  Scenario: A2A list_accounts request with invalid auth token — error returned
+    Given a tenant is resolvable from the request context
+    And the Buyer has an invalid authentication token
+    When the Buyer Agent sends a list_accounts skill request via A2A with the token
+    Then the wire error envelope should carry code "AUTH_INVALID" with recovery "terminal"
+    And the error message should reference authentication or token validation
+    # Coverage gap alongside salesagent-7moz (BR-UC-010 @T-UC-010-ext-c-a2a): A2A
+    # always validates a presented token regardless of the requested DISCOVERY_SKILLS
+    # member (get_adcp_capabilities and list_accounts share the same boundary code path).
+    # POST-F2: Buyer knows what failed and the error code
+    # POST-F1: No state change (read-only)
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID
 
   @T-UC-011-list-pagination @list @pagination @post-s4
   Scenario: List accounts with pagination
@@ -88,6 +117,68 @@ Feature: BR-UC-011 Manage Accounts
     Then the response contains 50 more accounts
     And the response includes pagination metadata with has_more true
     # POST-S4: Buyer can paginate through accounts
+
+  @T-UC-011-list-pagination-terminal @list @pagination @post-s4 @partition @boundary
+  Scenario: Terminal page omits the cursor when has_more is false
+    Given the Buyer Agent has an authenticated connection
+    And the agent has 20 accessible accounts
+    When the Buyer Agent sends a list_accounts request with max_results 50
+    Then the response contains 20 accounts
+    And the response pagination has has_more false and no cursor
+    # GRADED GREEN (salesagent-9if1): _apply_pagination emits cursor=None when has_more=false and
+    # every transport pre-serializes via model_dump(mode="json") (exclude_none), so the cursor is
+    # omitted (not null) on the wire — the invariant now holds on a2a/mcp/rest.
+    # cursor is "Only present when has_more is true" — has_more=false MUST NOT carry a cursor
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/pagination-response.json pointer=/properties/cursor/description
+    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/pagination-integrity-list-accounts.yaml pointer=phases/pagination_walk
+
+  @T-UC-011-list-account-filter @list @account-filter @partition @boundary
+  Scenario Outline: List accounts with exact account filter -- <key_shape>
+    Given the Buyer Agent has an authenticated connection
+    And accessible accounts exist for brand domains "acme-corp.com" and "nova-brands.com"
+    When the Buyer Agent sends a list_accounts request with an account filter keyed by <key_shape> for brand domain "acme-corp.com"
+    Then the response contains an accounts array with 1 items
+    And the returned account has brand domain "acme-corp.com" and operator "acme-corp.com"
+    # Graduated: _apply_list_account_filters honors req.account (AccountReference oneOf, both
+    # account_id and natural-key arms), forwarded by all 3 transports.
+    # AccountRef oneOf: account_id XOR natural key (brand + operator, optionally sandbox)
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/list-accounts-request.json pointer=/properties/account
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/account-ref.json pointer=/oneOf
+
+    Examples:
+      | key_shape             |
+      | account_id            |
+      | brand and operator    |
+
+  @T-UC-011-list-authorization @list @authorization @partition
+  Scenario: Per-account authorization block carries allowed_tasks when scope introspection is supported
+    Given the Buyer Agent has an authenticated connection
+    And the seller supports scope introspection for the authenticated agent
+    And the agent has 1 accessible accounts
+    When the Buyer Agent sends a list_accounts request
+    Then each returned account includes an authorization object with required key "allowed_tasks"
+    And each allowed_tasks array is a non-empty list of unique snake_case task names
+    # XFAIL-EXPECTED: production gap — GH #1615 (account-with-authorization item shape is NEW in
+    # 3.1.1; production Account schema has no authorization field, list items are bare — out of
+    # #1592 A3 core scope, tracked separately as #1615)
+    # allowed_tasks is the only required field of account-authorization; absence of the whole
+    # object means "no introspection", NOT denial — callers MUST NOT infer access from absence
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/list-accounts-response.json pointer=/properties/accounts/items
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/account-authorization.json pointer=/required
+
+  @T-UC-011-list-read-idempotency-tolerance @list @idempotency @v3-1
+  Scenario: list_accounts tolerates the 3.1 every-request envelope (idempotency_key + ext)
+    Given the Buyer Agent has an authenticated connection
+    And the agent has 3 accessible accounts with statuses "active", "active", "active"
+    When the Buyer Agent sends a list_accounts request carrying idempotency_key "read-tool-idem-key-0001", an ext object, and context {"correlation_id": "uc011-read-idem"}
+    Then the response contains an accounts array with 3 items
+    And the response includes context {"correlation_id": "uc011-read-idem"}
+    # Graduated: ListAccountsRequest.idempotency_key added -- the read wrapper now tolerates
+    # the 3.1 idempotency envelope instead of rejecting it under extra=forbid.
+    # list-accounts-request.json does NOT declare idempotency_key as a property at 3.1.1;
+    # the duty is TOLERANCE (additionalProperties: true + graded storyboard step), not a declared field
+    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/read-tool-idempotency.yaml pointer=phases/read_requests_accept_idempotency_key/steps/list_accounts_with_idempotency_key
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/list-accounts-request.json pointer=/additionalProperties
 
   @T-UC-011-list-status-filter-no-match @list @status-filter @empty-result @partition @boundary
   Scenario: List accounts with status filter returns empty when no matches (status filter = specific value with no matches)
@@ -199,13 +290,35 @@ Feature: BR-UC-011 Manage Accounts
     | brand.domain    | operator      | billing   |
     | acme-corp.com   | acme-corp.com | <billing> |
     Then the account billing is "<billing>"
-    # @bva billing: operator (first enum value), agent (last enum value)
+    # @bva billing: operator (first enum value), advertiser (last enum value)
     # POST-S7: Buyer knows billing model for each account
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/billing-party.json pointer=/enum
 
     Examples:
-      | billing  | partition_name   | boundary_point                |
-      | operator | operator_honored | billing = operator            |
-      | agent    | agent_honored    | billing = agent               |
+      | billing    | partition_name     | boundary_point                |
+      | operator   | operator_honored   | billing = operator            |
+      | agent      | agent_honored      | billing = agent               |
+      | advertiser | advertiser_honored | billing = advertiser          |
+
+  @T-UC-011-sync-billing-advertiser @sync @billing @post-s7 @partition @boundary
+  Scenario: Sync with billing "advertiser" is accepted per the billing-party enum
+    Given the Buyer Agent has an authenticated connection
+    When the Buyer Agent sends a sync_accounts request with:
+    | brand.domain    | operator           | billing    |
+    | acme-corp.com   | pinnacle-media.com | advertiser |
+    Then the response is a success variant with accounts array
+    And the account for brand domain "acme-corp.com" has action "created"
+    And the account billing is "advertiser"
+    And the account has a seller-assigned account_id
+    And the account has status "active"
+    # billing-party enum = ["operator", "agent", "advertiser"]; the seller invoices the
+    # advertiser directly even when a different operator places orders on their behalf.
+    # status is in the per-item required set, and the spec example for an advertiser-billed
+    # created account pins status "active" — an unpinned status let a rejected/pending result pass.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/billing-party.json pointer=/enum
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/billing
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/required
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/examples/3
 
   @T-UC-011-sync-mixed @sync @upsert @partition
   Scenario: Sync mixed_results -- created and updated in same request (all different actions)
@@ -237,6 +350,82 @@ Feature: BR-UC-011 Manage Accounts
     Then the account for brand domain "a.b" has action "created"
     # @bva brand (brand-ref): shortest valid domain (e.g., 'a.b')
 
+  @T-UC-011-sync-natural-key-acceptance @sync @invariant @partition
+  Scenario: Seller keeps accepting the natural-key AccountRef after echoing account_id
+    Given the Buyer Agent has an authenticated connection
+    When the Buyer Agent sends a sync_accounts request with:
+    | brand.domain    | operator      | billing  |
+    | acme-corp.com   | acme-corp.com | operator |
+    Then the account has a seller-assigned account_id
+    When the Buyer Agent sends a sync_accounts request with:
+    | brand.domain    | operator      | billing  |
+    | acme-corp.com   | acme-corp.com | operator |
+    Then the account for brand domain "acme-corp.com" has action "unchanged"
+    And the echoed account_id equals the account_id from the first response
+    # Sellers MAY echo a seller-assigned account_id, but MUST continue accepting the
+    # natural-key AccountRef for every account provisioned in provisioning mode —
+    # the second natural-key call must upsert to the SAME handle, never demand account_id
+    # and never mint a different account_id (which would pass the bare-presence check while
+    # breaking the stability invariant this scenario exists to grade).
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/properties/account_id/description
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/description
+
+  @T-UC-011-sync-settings-update @sync @settings-update @partition @boundary
+  Scenario: Settings-update mode targets an existing account by account_id without provisioning
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "acme-corp.com" already exists with billing "operator"
+    When the Buyer Agent sends a sync_accounts request with a settings-update entry keyed by the existing account's account_id setting payment_terms "net_45"
+    Then the account for brand domain "acme-corp.com" has action "updated"
+    And the account payment_terms is "net_45"
+    When the Buyer Agent sends a list_accounts request
+    Then the response contains an accounts array with 1 items
+    # "no new account was created" is only observable on the account census, not on the seller's
+    # internal state: a settings-update MUST NOT provision, so the post-call list stays at the one
+    # pre-existing account. A second (provisioned) entry would surface with action "created".
+    # Graduated: settings-update (AccountReference) mode implemented via
+    # _process_settings_update_entry (both AccountReference1/account_id and
+    # AccountReference2/natural-key arms), mode-exclusivity enforced in _impl before dispatch.
+    # Settings-update entry carries `account` (AccountRef); trio fields MUST be absent;
+    # the seller updates settable state with no provisioning side effects
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/account
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/oneOf/1
+
+  @T-UC-011-sync-settings-update-no-provision @sync @settings-update @error @post-f1 @post-f2 @partition @boundary
+  Scenario: Settings-update entry never provisions -- unknown account rejected with UNSUPPORTED_PROVISIONING
+    Given the Buyer Agent has an authenticated connection
+    When the Buyer Agent sends a sync_accounts request with a settings-update entry keyed by unknown account_id "acc_does_not_exist"
+    Then the settings-update entry has action "failed"
+    And the per-account errors array contains an error with code "UNSUPPORTED_PROVISIONING"
+    And the per-account error recovery is "correctable"
+    When the Buyer Agent sends a list_accounts request
+    Then the response contains an empty accounts array
+    # Graduated: unmatched settings-update references are rejected with UNSUPPORTED_PROVISIONING.
+    # "When `account` is present, the seller MUST NOT create a new account — entries that
+    # would otherwise trigger provisioning are rejected with UNSUPPORTED_PROVISIONING"
+    # (recovery "correctable" per the enum metadata). "No accounts were modified" is graded on the
+    # census: nothing was seeded, so the post-call list stays empty.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/account/description
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/UNSUPPORTED_PROVISIONING
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/error.json pointer=/properties/recovery/enum
+
+  @T-UC-011-sync-mode-exclusive @sync @settings-update @validation @partition @boundary
+  Scenario: Entry carrying both an account reference and the provisioning trio is rejected
+    Given the Buyer Agent has an authenticated connection
+    When the Buyer Agent sends a sync_accounts request with an entry carrying both an account reference and the provisioning trio
+    Then the request is rejected at the operation level with error code "VALIDATION_ERROR" naming field "accounts[0]"
+    # Graduated: mode-exclusivity enforced in _impl before dispatch (VALIDATION_ERROR naming accounts[i]).
+    # An entry satisfying BOTH arms violates the item oneOf (exactly one), which is a structural
+    # request-schema violation — graded as an operation-level error variant (top-level errors[],
+    # response oneOf arm 1) carrying VALIDATION_ERROR (recovery "correctable" per the enum) with
+    # field pointing at the offending entry — NOT a per-account "failed" result (arm 0), which is
+    # for semantically-valid entries that fail a business rule. Production currently validates the
+    # both-shapes entry as the ProvisioningMode arm and silently ignores the extra `account`, so it
+    # provisions instead of rejecting.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/oneOf
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/1
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/VALIDATION_ERROR
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/error.json pointer=/properties/field
+
   @T-UC-011-ext-a-no-token @sync @ext-a @auth @error @post-f1 @post-f2 @partition @boundary
   Scenario: Sync without authentication -- sync_no_token returns error_auth (no token on sync)
     Given the Buyer Agent has an unauthenticated connection
@@ -244,7 +433,7 @@ Feature: BR-UC-011 Manage Accounts
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
     Then the response is an error variant with no accounts array
-    And the error code is "AUTH_REQUIRED"
+    And the error code is "AUTH_MISSING"
     And the error message describes the authentication requirement
     And the error should include "suggestion" field with remediation guidance
     And no accounts were modified on the seller
@@ -253,13 +442,20 @@ Feature: BR-UC-011 Manage Accounts
     # POST-F2: Buyer knows what failed
 
   @T-UC-011-ext-a-expired @sync @ext-a @auth @error @partition @boundary
-  Scenario: Sync with expired token -- sync_invalid_token returns AUTH_REQUIRED (invalid token on sync)
+  Scenario: Sync with expired token -- sync_invalid_token returns AUTH_MISSING (invalid token on sync)
+    # KNOWN ISSUE (salesagent-mkso): the Given below is textually "expired
+    # token" but its current implementation does not drive a presented-but-
+    # rejected token through the real chain (identical to no-token); see
+    # given_expired_token's docstring (tests/bdd/steps/domain/uc011_accounts.py)
+    # for the REST-harness limitation that blocks a real fix here. Pinned to
+    # what production actually returns for this Given (AUTH_MISSING), not
+    # the AUTH_INVALID the title implies.
     Given the Buyer Agent has an A2A connection with an expired token
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
     Then the response is an error variant
-    And the error code is "AUTH_REQUIRED"
+    And the error code is "AUTH_MISSING"
     And the error should include "suggestion" field with remediation guidance
     # @bva authentication (account operations): invalid token on sync
 
@@ -288,9 +484,71 @@ Feature: BR-UC-011 Manage Accounts
     And the per-account errors array contains an error with code "BILLING_NOT_SUPPORTED"
     And the error message explains the billing model is not available
     And the error should include "suggestion" field with remediation guidance
+    And the per-account error recovery is "correctable"
+    And the per-account error details scope is "capability"
+    And the per-account error details supported_billing echoes the seller's supported billing values
     # @bva billing: billing = unsupported value for seller
     # BR-RULE-059 INV-2: Request includes billing model the seller does not support -> action=failed, status=rejected, BILLING_NOT_SUPPORTED
     # POST-F2: Buyer knows what failed and the specific error code
+    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/billing-gate-dispatch.yaml pointer=phases/capability_gate/steps/sync_accounts_unsupported_billing
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/error-details/billing-not-supported.json
+
+  @T-UC-011-billing-gate-recover @sync @ext-c @billing @recovery @partition
+  Scenario: Buyer recovers from BILLING_NOT_SUPPORTED by retrying with a supported value
+    Given the Buyer Agent has an authenticated connection
+    And the seller supports "agent" billing but not "operator" billing
+    When the Buyer Agent sends a sync_accounts request with:
+    | brand.domain    | operator      | billing  |
+    | acme-corp.com   | acme-corp.com | operator |
+    Then the account for brand domain "acme-corp.com" has action "failed"
+    And the per-account errors array contains an error with code "BILLING_NOT_SUPPORTED"
+    When the Buyer Agent retries the sync_accounts request with billing "agent" and a fresh idempotency_key
+    Then the account for brand domain "acme-corp.com" has action "created"
+    And the account billing is "agent"
+    # GRADED GREEN (salesagent-9jiu): the retry-with-supported-value recovery flow is now
+    # wired and passes on a2a/mcp/rest — the rejected first leg is not persisted
+    # (_check_billing_policy continues), so the keyless re-dispatch provisions a fresh account.
+    # Recovery: pick a value from supported_billing and retry — a NEW request (the rejected
+    # leg left no natural-key row, so no IDEMPOTENCY_CONFLICT). NOTE: production does not carry
+    # idempotency_key on the sync_accounts wire (REST request model rejects it as extra), so the
+    # "fresh idempotency_key" is realized as a fresh keyless request.
+    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/billing-gate-dispatch.yaml pointer=phases/per_agent_gate_recover (recover-leg mechanics; capability-gate recovery narrative in the storyboard header)
+
+  @T-UC-011-billing-agent-gate-reject @sync @billing @per-agent-gate @error @partition
+  Scenario: Passthrough-only buyer agent submitting billing "agent" is rejected with BILLING_NOT_PERMITTED_FOR_AGENT
+    Given the Buyer Agent has an authenticated connection
+    And the Buyer Agent is registered with the seller as passthrough-only
+    When the Buyer Agent sends a sync_accounts request with:
+    | brand.domain    | operator           | billing  |
+    | acme-corp.com   | pinnacle-media.com | agent    |
+    Then the account for brand domain "acme-corp.com" has action "failed"
+    And the account has status "rejected"
+    And the per-account errors array contains an error with code "BILLING_NOT_PERMITTED_FOR_AGENT"
+    And the per-account error recovery is "correctable"
+    And the per-account error details rejected_billing is "agent"
+    And the per-account error details suggested_billing is "operator"
+    And the per-account error details do not include permitted_billing, rate_card, payment_terms, credit_limit, billing_entity, or account_id
+    # XFAIL-EXPECTED: production gap — GH #1772 (no per-buyer-agent commercial gate exists in production)
+    # Clamped details shape (additionalProperties: false) — the per-agent code MUST NOT act as
+    # a commercial-state oracle; only rejected_billing + optional suggested_billing may appear.
+    # Only emitted under ESTABLISHED agent identity — unidentified callers get BILLING_NOT_SUPPORTED.
+    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/billing-gate-dispatch.yaml pointer=phases/per_agent_gate_reject/steps/sync_accounts_passthrough_rejects_agent
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/error-details/billing-not-permitted-for-agent.json
+
+  @T-UC-011-billing-agent-gate-recover @sync @billing @per-agent-gate @recovery @partition
+  Scenario: Passthrough-only buyer agent recovers autonomously via suggested_billing
+    Given the Buyer Agent has an authenticated connection
+    And the Buyer Agent is registered with the seller as passthrough-only
+    When the Buyer Agent sends a sync_accounts request with:
+    | brand.domain    | operator           | billing  |
+    | acme-corp.com   | pinnacle-media.com | agent    |
+    Then the per-account errors array contains an error with code "BILLING_NOT_PERMITTED_FOR_AGENT"
+    When the Buyer Agent retries the sync_accounts request with the seller's suggested_billing value and a fresh idempotency_key
+    Then the account for brand domain "acme-corp.com" has action "created"
+    And the account billing is "operator"
+    # XFAIL-EXPECTED: production gap — GH #1772 (per-agent gate + autonomous recovery unimplemented)
+    # The recover phase is NOT a replay: different payload requires a fresh idempotency_key
+    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/billing-gate-dispatch.yaml pointer=phases/per_agent_gate_recover/steps/sync_accounts_recover_with_suggested
 
   @T-UC-011-ext-c-mixed @sync @ext-c @billing @partial-failure @partition
   Scenario: Billing rejection is per-account -- other accounts still succeed
@@ -363,6 +621,279 @@ Feature: BR-UC-011 Manage Accounts
     And when the account transitions from "pending_approval" to "active"
     Then a push notification is sent to "https://agent.com/webhooks"
 
+  @T-UC-011-notif-register-paused @sync @notification-configs @partition @boundary
+  Scenario: Register a paused account-level notification subscriber and read it back
+    Given the Buyer Agent has an authenticated connection
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the Buyer Agent signs the request
+    When the Buyer Agent sends a sync_accounts request provisioning brand domain "acme-corp.com" with a paused notification config subscriber "buyer-primary" for url "https://buyer.example/webhooks/adcp/creative", event_types "creative.status_changed, creative.purged", and legacy Bearer authentication
+    Then the response is a success variant with accounts array
+    And the account notification_configs echo exactly 1 subscriber
+    And the echoed subscriber "buyer-primary" has url "https://buyer.example/webhooks/adcp/creative" and active false
+    And the echoed subscriber has event_types "creative.status_changed, creative.purged"
+    And the echoed subscriber's authentication object omits "credentials"
+    # The `authentication` block and its "omits credentials" Then were REMOVED under
+    # #1291 D1 and are RESTORED here, SIGNED (salesagent-n78j0.1.3).
+    # The removal itself was correct at the time: security.mdx @ v3.1.1 :1462-1465
+    # ("Downgrade and injection resistance") makes a seller that SUPPORTS request signing
+    # reject an UNSIGNED request carrying accounts[].notification_configs[].authentication
+    # with `request_signature_required`, D1 made this deployment such a seller, and a BDD
+    # scenario could only dispatch unsigned — so the scenario was asserting an outcome the
+    # pin FORBIDS. What has changed is the second half of that reasoning, not the first:
+    # the recorded rationale for not simply signing it ("signing would buy nothing in
+    # exchange for the e2e_rest blast radius") stopped being true the moment
+    # salesagent-n78j0.1.1 gave the cross-transport env a real signature on all four legs.
+    # Signing now buys the thing that was actually missing: the write-only credential rule
+    # is graded ON THE WIRE, on every transport, against a request that really registers a
+    # credential — which the impl-level test below cannot do (it never crosses a boundary
+    # where an echo could leak differently).
+    # The two integration tests stay and are not duplicated by this: they grade the
+    # ADJACENT obligations — that the impl scrubs credentials
+    # (tests/integration/test_sync_accounts_credentials_are_write_only.py, including the
+    # whole-document grep this scenario does not do), and that the UNSIGNED registration is
+    # refused (tests/integration/test_request_signature_operations.py
+    # ::TestWebhookAuthenticationForcesASignature). This scenario grades the third: the
+    # SIGNED registration is accepted and echoes no credential.
+    When the Buyer Agent sends a list_accounts request
+    Then the listed account for brand domain "acme-corp.com" echoes subscriber "buyer-primary" with active false
+    # Graduated (T2 increment F4a): accounts.notification_configs now persists as a
+    # whole-array JSONType column and is echoed on sync_accounts + list_accounts with
+    # authentication.credentials scrubbed.
+    # Paused entries (active: false) may skip only the outbound proof challenge; the seller MUST
+    # persist and echo applied state on sync_accounts AND list_accounts, credentials write-only
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/properties/notification_configs
+    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/notification-config-lifecycle.yaml pointer=phases/register_and_echo_paused_subscriber
+
+  @T-UC-011-notif-replace-clear @sync @notification-configs @partition @boundary
+  Scenario: Re-sending a subscriber_id replaces in place; an empty array clears the set
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "acme-corp.com" exists with notification config subscriber "buyer-primary" for url "https://buyer.example/webhooks/adcp/creative"
+    When the Buyer Agent sends a sync_accounts request re-sending subscriber "buyer-primary" as paused with url "https://buyer.example/webhooks/adcp/paused" and event_types "creative.purged"
+    Then the account notification_configs echo exactly 1 subscriber
+    And the echoed subscriber "buyer-primary" has url "https://buyer.example/webhooks/adcp/paused" and active false
+    And the echoed subscriber has event_types "creative.purged"
+    When the Buyer Agent sends a sync_accounts request with an empty notification_configs array for brand domain "acme-corp.com"
+    Then the account notification_configs echo exactly 0 subscribers
+    # Graduated (T2 increment F4a): declarative-replace semantics implemented (omit
+    # preserves, [] clears, re-sent subscriber_id replaces in place).
+    # Declarative replace: full desired array replaces the persisted set; re-sending an existing
+    # subscriber_id replaces (never duplicates); [] removes all subscribers; seller MUST NOT merge
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description
+    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/notification-config-lifecycle.yaml pointer=phases/replace_pause_and_clear
+
+  @T-UC-011-notif-omit-preserves @sync @notification-configs @partition @boundary
+  Scenario: Omitting notification_configs leaves persisted subscribers unchanged
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "acme-corp.com" exists with a paused notification config subscriber "buyer-primary" for url "https://buyer.example/webhooks/adcp/creative"
+    When the Buyer Agent sends a sync_accounts request with:
+    | brand.domain    | operator      | billing  |
+    | acme-corp.com   | acme-corp.com | operator |
+    Then the account notification_configs echo exactly 1 subscriber
+    And the echoed subscriber "buyer-primary" has url "https://buyer.example/webhooks/adcp/creative" and active false
+    # Graduated (T2 increment F4a): omitting notification_configs leaves persisted
+    # subscribers unchanged.
+    # "Omit this field to leave existing subscribers unchanged" — omission is not clearance
+    # The seed declares a PAUSED subscriber (active false) so the echoed active flag is a
+    # declared input, not an undeclared fixture default (F19)
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/notification-config.json pointer=/properties/active
+
+  @T-UC-011-notif-event-scope-reject @sync @notification-configs @error @post-f1 @post-f2 @partition @boundary
+  Scenario: Media-buy-anchored event type on the account surface is rejected per entry
+    Given the Buyer Agent has an authenticated connection
+    When the Buyer Agent sends a sync_accounts request provisioning brand domain "acme-corp.com" with a paused notification config subscriber "delivery-reports" for url "https://buyer.example/webhooks/adcp/account" and event_types "scheduled"
+    Then the account for brand domain "acme-corp.com" has action "failed"
+    And the account has status "rejected"
+    And the per-account errors array contains an error with code "INVALID_REQUEST" or "VALIDATION_ERROR"
+    And the per-account error field points at "notification_configs[0].event_types[0]"
+    # Graduated (T2 increment F4b): _check_notification_configs rejects
+    # media-buy-anchored event types on the account surface pre-persist.
+    # Media-buy-anchored event types (scheduled, final, delayed, adjusted, impairment) do not
+    # belong on the account surface; also no account-lifecycle event types exist here (no
+    # account.status_changed — poll list_accounts or use push_notification_config instead)
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description
+    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/notification-config-event-scope.yaml pointer=steps/sync_accounts_rejects_scheduled_account_notification
+
+  @T-UC-011-notif-duplicate-subscriber @sync @notification-configs @error @post-f2 @partition @boundary
+  Scenario: Duplicate subscriber_id values within one submitted array are rejected
+    Given the Buyer Agent has an authenticated connection
+    When the Buyer Agent sends a sync_accounts request provisioning brand domain "acme-corp.com" with two notification config entries both using subscriber "buyer-primary"
+    Then the account for brand domain "acme-corp.com" has action "failed"
+    And the account has status "rejected"
+    And the per-account errors array contains an error with code "INVALID_REQUEST" or "VALIDATION_ERROR"
+    And the per-account error field points at "notification_configs[1].subscriber_id"
+    # Graduated (T2 increment F4b): _check_notification_configs rejects duplicate
+    # subscriber_id values within one submitted array pre-persist.
+    # "Duplicate subscriber_id values within one submitted array are rejected" — no
+    # last-write-wins merging, no duplicate subscriptions
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description
+    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/notification-config-rejections.yaml pointer=steps/sync_accounts_rejects_duplicate_subscriber_id
+
+  @T-UC-011-notif-activation-proof-fail @sync @notification-configs @error @post-f1 @post-f2 @partition @boundary
+  Scenario: Active subscriber whose proof-of-control challenge fails is rejected and prior state kept
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "acme-corp.com" exists with notification config subscriber "buyer-primary" for url "https://buyer.example/webhooks/adcp/creative"
+    And the webhook proof-of-control challenge for "https://buyer.example/webhooks/adcp/unreachable" fails
+    When the Buyer Agent sends a sync_accounts request re-sending subscriber "buyer-primary" as active with url "https://buyer.example/webhooks/adcp/unreachable"
+    Then the account for brand domain "acme-corp.com" has action "failed"
+    And the per-account errors array contains an error with code "VALIDATION_ERROR"
+    And the per-account error field points at "notification_configs[0].url"
+    And the account keeps its prior notification_configs set unchanged
+    # Graduated (T2 increment F4c): NotificationProofService performs a bounded
+    # proof-of-control challenge before the write transaction opens; a failed proof rejects
+    # the entry with VALIDATION_ERROR at notification_configs[j].url and writes nothing.
+    # Before activating a new/changed active subscriber the seller MUST complete the
+    # proof-of-control challenge; on failure it rejects the entry (action=failed), leaves the
+    # prior notification_configs[] set unchanged, and reports VALIDATION_ERROR at the url field
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description (Activation proof paragraph)
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # Entry-field disposition (salesagent-gcze step 12)
+  #
+  # Every field a sync_accounts entry can carry has ONE declared disposition per
+  # entry mode. The five scenarios below grade the dispositions that no scenario
+  # graded before, so the single field-policy table that replaces the two
+  # hand-maintained allowlists cannot be written to match the code instead of the
+  # contract. Two of them (billing-forbidden, preferred_reporting_protocol) pin
+  # behavior production ALREADY has: they are what EARNS those rows the
+  # `spec_forbidden` / `ignored_by_design` label rather than "undecided debt".
+  # ══════════════════════════════════════════════════════════════════════════
+
+  @T-UC-011-governance-omit-preserves @sync @list @governance @invariant @partition @boundary
+  Scenario: A provisioning re-sync that omits governance_agents preserves the binding
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "acme-corp.com" already exists with governance_agents
+    When the Buyer Agent sends a sync_accounts request with:
+    | brand.domain    | operator      | billing  | payment_terms |
+    | acme-corp.com   | acme-corp.com | operator | net_45        |
+    Then the account for brand domain "acme-corp.com" has action "updated"
+    When the Buyer Agent sends a list_accounts request
+    Then the listed account for brand domain "acme-corp.com" binds governance agent "https://compliance.example.com/check"
+    # LOCAL EXTENSION, not a spec surface: `governance_agents` is not a
+    # sync-accounts-request property — the entry accepts it only via
+    # additionalProperties, and the spec's designated surface is sync_governance.
+    # Storyboard: UNGRADED on sync_accounts (governance/index.yaml runs sync_accounts
+    # with no governance payload, then sync_governance separately).
+    # The obligation graded here is therefore OURS: a re-sync that never mentions
+    # governance_agents must not silently clear them. `check_governance` keys off this
+    # binding, so an omission-wipe is a governance BYPASS, not merely data loss — the
+    # buyer re-syncs payment_terms and loses the approval gate with a success response.
+    # Read back through list_accounts (not the DB) because the wire is where the buyer
+    # would observe it: _db_account_to_schema already echoes governance_agents.
+    # `action "updated"` is the only intermediate grade: it proves the re-sync really did
+    # mutate the account (payment_terms went from unset to net_45), so the governance Then
+    # below is graded on a re-sync that WROTE, not a no-op. Deliberately NOT graded here:
+    # the payment_terms ECHO on the sync result — _build_sync_result's update branch omits
+    # it, which is a separate response-shape gap and does not belong in a governance scenario.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/additionalProperties
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/account.json pointer=/properties/governance_agents
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description (omission-preserves semantics this reuses)
+
+  @T-UC-011-settings-update-sandbox-reject @sync @list @settings-update @sandbox @error @post-f1 @post-f2 @partition @boundary
+  Scenario: Settings-update entry carrying entry-root sandbox is rejected per account
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "acme-corp.com" already exists with billing "operator"
+    When the Buyer Agent sends a sync_accounts request with a settings-update entry keyed by the existing account's account_id carrying entry-root sandbox true
+    Then the settings-update entry has action "failed"
+    And the per-account errors array contains an error with code "UNSUPPORTED_FEATURE"
+    And the per-account error recovery is "correctable"
+    And the per-account error field points at "accounts[0].sandbox"
+    When the Buyer Agent sends a list_accounts request
+    Then the listed account for brand domain "acme-corp.com" has sandbox false
+    # Schema-LEGAL on this arm (sandbox is absent from the settings-update `not:` list) but
+    # scoped by its own description to provisioning mode, and today silently ignored.
+    # It is the ONE mode-inapplicable field that escalates from declared no-op to explicit
+    # rejection, because sandbox is part of the buyer-declared natural key: honoring it would
+    # re-key the account and orphan it from every subsequent natural-key sync.
+    # Per-account failure (action "failed"), NOT operation-level — the field is schema-legal,
+    # so an operation-level raise would kill an otherwise valid batch.
+    # UNSUPPORTED_FEATURE over UNSUPPORTED_PROVISIONING: the latter's suggestion is about entry
+    # SHAPE ("re-issue with the entry shape the seller supports"), the former's is literally
+    # "remove unsupported fields" — which is the buyer action here.
+    # Storyboard: UNGRADED (no 3.1.1 storyboard sends entry-root sandbox in settings-update).
+    # POST-F1: the account's persisted sandbox flag is unchanged, so it is still findable
+    # under its original natural key.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/sandbox/description
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/oneOf/1
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/account.json pointer=/properties/sandbox
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/UNSUPPORTED_FEATURE
+
+  @T-UC-011-billing-entity-roundtrip @sync @list @settings-update @billing-entity @partition @boundary
+  Scenario: billing_entity is applied in both modes and echoed with bank details stripped
+    Given the Buyer Agent has an authenticated connection
+    When the Buyer Agent sends a sync_accounts request provisioning brand domain "acme-corp.com" with a billing_entity legal_name "Acme GmbH" and bank details
+    Then the account for brand domain "acme-corp.com" has action "created"
+    And the echoed billing_entity legal_name is "Acme GmbH"
+    And the echoed billing_entity omits "bank"
+    When the Buyer Agent sends a sync_accounts request with a settings-update entry keyed by the existing account's account_id refining billing_entity legal_name to "Acme Holdings GmbH"
+    Then the settings-update entry has action "updated"
+    And the echoed billing_entity legal_name is "Acme Holdings GmbH"
+    When the Buyer Agent sends a list_accounts request
+    Then the listed account for brand domain "acme-corp.com" echoes billing_entity legal_name "Acme Holdings GmbH"
+    And the listed billing_entity omits "bank"
+    # "Permitted in BOTH modes — sellers MAY accept refinements in settings-update mode
+    # (e.g., updated bank details)", and the response account item carries it "echoed from
+    # the request ... Bank details are omitted (write-only)". Rejecting is not an option:
+    # the spec's own DACH B2B provisioning example sends billing_entity at provisioning time.
+    # Today NEITHER arm applies it and no response model carries it — accepted on the wire,
+    # then dropped, with a success response. The bank leg has teeth because the request
+    # DECLARES bank details, so an echo that returns them is a real write-only leak.
+    # Storyboard: graded only NEGATIVELY (billing_entity MUST NOT leak through error.details,
+    # billing-gate-dispatch.yaml:350); persistence + echo are UNGRADED.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/billing_entity/description
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/properties/billing_entity
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/account.json pointer=/properties/billing_entity
+    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/billing-gate-dispatch.yaml pointer=phases/capability_gate (non-leak leg only)
+
+  @T-UC-011-preferred-reporting-protocol-noop @sync @partition @boundary
+  Scenario: preferred_reporting_protocol is accepted as a declared no-op, never a rejection
+    Given the Buyer Agent has an authenticated connection
+    When the Buyer Agent sends a sync_accounts request provisioning brand domain "acme-corp.com" with preferred_reporting_protocol "s3"
+    Then the account for brand domain "acme-corp.com" has action "created"
+    And the account has status "active"
+    And the per-account result carries no errors
+    And the response does not contain an operation-level errors field
+    # REGRESSION LOCK, not a gap: this pins the status quo so the field-policy table cannot
+    # quietly turn an advisory hint into a buyer-visible rejection.
+    # The request description is HINT language — "The seller provisions the account
+    # reporting_bucket using this protocol IF SUPPORTED ... When omitted, the seller chooses
+    # from its supported offline_delivery_protocols" — and the response account item carries
+    # neither preferred_reporting_protocol nor reporting_bucket, so there is no echo to
+    # disagree with. The per-account errors array is documented "only present when action is
+    # failed", so the protocol offers NO channel to advise on a SUCCESSFUL account: a protocol
+    # that cannot advise on an unhonored optional hint is saying such hints are simply not
+    # honored. Rejecting would fail a spec-legal provisioning request over an advisory hint.
+    # Non-support stays DISCOVERABLE via get_adcp_capabilities: offline_delivery_protocols /
+    # reporting_delivery_methods are declared unbacked (#1291), which is what discharges the
+    # no-quiet-failure rule here.
+    # Storyboard: UNGRADED (zero occurrences of preferred_reporting_protocol in dist/compliance/3.1.1).
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/preferred_reporting_protocol/description
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/account.json pointer=/properties/reporting_bucket
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/properties/errors/description
+
+  @T-UC-011-settings-update-billing-forbidden @sync @list @settings-update @validation @error @post-f1 @post-f2 @partition @boundary
+  Scenario: Settings-update entry carrying billing alone is rejected at the operation level
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "acme-corp.com" already exists with billing "operator"
+    When the Buyer Agent sends a sync_accounts request with a settings-update entry keyed by the existing account's account_id carrying billing "agent"
+    Then the request is rejected at the operation level with error code "VALIDATION_ERROR" naming field "accounts[0]"
+    When the Buyer Agent sends a list_accounts request
+    Then the listed account for brand domain "acme-corp.com" has billing "operator"
+    # REGRESSION LOCK, not a gap. T-UC-011-sync-mode-exclusive already grades an entry
+    # carrying `account` AND the FULL trio; this grades `account` + `billing` ALONE, which
+    # is the shape the item oneOf forbids field-by-field
+    # (SettingsUpdateMode allOf: not-required brand, not-required operator, not-required billing)
+    # and the one the field-policy table calls `spec_forbidden` for settings-update.
+    # Without it, that row would rest on an AST assertion that the mode-exclusivity `if`
+    # exists — move the dispatch above the guard and the assertion stays green while billing
+    # is silently dropped again. This scenario is what makes the row a behavioral claim.
+    # POST-F1: the pre-existing account keeps billing "operator" — an operation-level
+    # rejection writes nothing.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/oneOf/1/allOf/2
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/billing/description
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/VALIDATION_ERROR
+
   @T-UC-011-ext-e-preview @sync @dry-run @post-s10 @partition @boundary
   Scenario: dry_run_true returns preview -- success_dry_run (dry_run = true)
     Given the Buyer Agent has an authenticated connection
@@ -374,6 +905,23 @@ Feature: BR-UC-011 Manage Accounts
     And the account for brand domain "acme-corp.com" shows action "created"
     And no accounts were actually created or modified on the seller
     # POST-S10: Buyer receives dry-run preview
+
+  @T-UC-011-ext-e-preview-settings-update @sync @dry-run @settings-update @partition @boundary
+  Scenario: dry_run_true with a settings-update entry previews without persisting
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "acme-corp.com" already exists with billing "operator"
+    When the Buyer Agent sends a sync_accounts request with dry_run true and a settings-update entry keyed by the existing account's account_id setting payment_terms "net_45"
+    Then the response is a success variant
+    And the response includes dry_run true
+    And the account for brand domain "acme-corp.com" has action "updated"
+    And the persisted account for brand domain "acme-corp.com" has no payment_terms set
+    # Locally added (GH: settings-update entries ignored dry_run and persisted the write).
+    # The provisioning-trio preview scenario above never reaches the settings-update
+    # dispatch, which routes BEFORE any dry_run branch — this grades that arm.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/dry_run
+    # ("When true, preview what would change without applying. Returns what would be
+    # created/updated/deactivated.") Conformance storyboard: UNGRADED (dry_run absent
+    # from dist/compliance/3.1.1 at v3.1.1).
 
   @T-UC-011-ext-e-normal @sync @dry-run @partition @boundary
   Scenario: dry_run_false -- normal sync applies changes (dry_run = false)
@@ -403,6 +951,24 @@ Feature: BR-UC-011 Manage Accounts
     Then the response includes a result for brand domain "old-brand.com" showing deactivation
     And the account for brand domain "acme-corp.com" has action "unchanged" or "updated"
     # POST-S9: Buyer knows which accounts were deactivated
+
+  @T-UC-011-ext-f-settings-update @sync @delete-missing @settings-update @partition @boundary
+  Scenario: delete_missing_true does not deactivate an account included via a settings-update entry
+    Given the Buyer Agent has an authenticated connection
+    And an account for brand domain "acme-corp.com" already exists with billing "operator"
+    When the Buyer Agent sends a sync_accounts request with delete_missing true and a settings-update entry keyed by the existing account's account_id setting payment_terms "net_45"
+    Then the response is a success variant
+    And the response contains an accounts array with 1 items
+    And the account payment_terms is "net_45"
+    And brand domain "acme-corp.com" remains in its current state
+    # Locally added (GH: seen_account_ids is only populated on the provisioning path,
+    # so a settings-update entry's target counted as "missing" and was CLOSED by the
+    # very request that successfully updated it — the response carried both the update
+    # result and an action=updated/status=closed result for the same account).
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/delete_missing
+    # ("accounts previously synced by this agent but not included in this request will
+    # be deactivated" — the settings-update target IS included in this request.)
+    # Conformance storyboard: UNGRADED (delete_missing absent from dist/compliance/3.1.1 at v3.1.1).
 
   @T-UC-011-ext-f-scoped @sync @delete-missing @agent-scoped
   Scenario: Delete missing scoped to authenticated agent only
@@ -462,7 +1028,7 @@ Feature: BR-UC-011 Manage Accounts
   Scenario: Context echoed in sync error response
     Given the Buyer Agent has an unauthenticated connection
     When the Buyer Agent sends a sync_accounts request with context {"trace": "err-001"}
-    Then the response is an error variant with AUTH_REQUIRED
+    Then the response is an error variant with AUTH_MISSING
     And the response includes context {"trace": "err-001"}
     And the error should include "suggestion" field with remediation guidance
     # POST-F3: Context echoed even on error path
@@ -595,7 +1161,7 @@ Feature: BR-UC-011 Manage Accounts
   @T-UC-011-sandbox-provision @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account provisioned via sync_accounts with sandbox flag
     Given the Buyer Agent has an authenticated connection
-    And the seller declares features.sandbox equals true in capabilities
+    And the seller declares account.sandbox equals true in capabilities
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain  | operator      | billing  | sandbox |
     | acme-corp.com | acme-corp.com | operator | true    |
@@ -603,7 +1169,9 @@ Feature: BR-UC-011 Manage Accounts
     And the provisioned account should have sandbox equals true
     And the account should have a seller-assigned account_id
     And no real ad platform account should have been created
-    # BR-RULE-209 INV-6: seller with features.sandbox: true supports sandbox provisioning
+    # BR-RULE-209 INV-6: seller with account.sandbox: true supports sandbox provisioning
+    # 3.1.1: the sandbox capability lives at account.sandbox (media_buy.features has no sandbox flag)
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/account/properties/sandbox
     # BR-RULE-209 INV-2: real ad platform calls suppressed for sandbox account
 
   @T-UC-011-sandbox-list-filter @invariant @br-rule-209 @sandbox
@@ -611,15 +1179,18 @@ Feature: BR-UC-011 Manage Accounts
     Given the Buyer Agent has an authenticated connection
     And both sandbox and production accounts exist for the Buyer
     When the Buyer Agent sends a list_accounts request with sandbox equals true
-    Then the response should contain "accounts" array
+    Then the response contains an accounts array with 1 items
     And all returned accounts should have sandbox equals true
     And the response should not include production accounts
     # BR-RULE-209 INV-4: sandbox accounts identifiable via sandbox: true
+    # Given seeds exactly one sandbox + one production account; the sandbox=true
+    # filter returns only the sandbox account (count 1, sandbox id present, prod id absent)
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/list-accounts-request.json pointer=/properties/sandbox
 
   @T-UC-011-sandbox-validation @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account provisioning with invalid billing returns real validation error
     Given the Buyer Agent has an authenticated connection
-    And the seller declares features.sandbox equals true in capabilities
+    And the seller declares account.sandbox equals true in capabilities
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain  | operator      | billing       | sandbox |
     | acme-corp.com | acme-corp.com | unsupported   | true    |
@@ -633,7 +1204,7 @@ Feature: BR-UC-011 Manage Accounts
   @T-UC-011-sandbox-response-shape @sync @v3-1 @sandbox @invariant @partition @boundary
   Scenario Outline: Account response reflects sandbox type for a <request_item> request item
     Given the Buyer Agent has an authenticated connection
-    And the seller declares features.sandbox equals true in capabilities
+    And the seller declares account.sandbox equals true in capabilities
     When the Buyer Agent sends a sync_accounts request with idempotency_key "sandbox-shape-001" and a request item where sandbox is <request_item>
     Then the response is a success variant with accounts array
     And the per-account result sandbox field is "<response_field>"
@@ -642,7 +1213,8 @@ Feature: BR-UC-011 Manage Accounts
     # @bva sandbox: sandbox absent in response (production account)
     # @bva sandbox: sandbox omitted on sync_accounts request item
     # BR-RULE-209 INV-4: sandbox accounts identifiable via sandbox: true; production accounts via false or absence
-    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/account/list-accounts-request.json
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/sandbox
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-response.json pointer=/oneOf/0/properties/accounts/items/properties/sandbox
 
     Examples:
       | request_item | response_field |
@@ -653,15 +1225,21 @@ Feature: BR-UC-011 Manage Accounts
   @T-UC-011-sandbox-capability-not-declared @sync @v3-1 @sandbox @error @post-f1 @post-f2 @partition @boundary
   Scenario: Sandbox provisioning requested when capability not declared is rejected
     Given the Buyer Agent has an authenticated connection
-    And the seller does not declare features.sandbox in capabilities
+    And the seller does not declare account.sandbox in capabilities
     When the Buyer Agent sends a sync_accounts request with idempotency_key "sandbox-nocap-001" and:
     | brand.domain  | operator      | billing  | sandbox |
     | acme-corp.com | acme-corp.com | operator | true    |
     Then the account for brand domain "acme-corp.com" has action "failed"
-    And the per-account errors array contains an error describing that sandbox provisioning is not supported
-    And the error should include "suggestion" field with remediation guidance
+    And the per-account errors array contains an error with code "UNSUPPORTED_FEATURE"
+    And the per-account error recovery is "correctable"
+    And the per-account error field points at "accounts[0].sandbox"
+    And the per-account error suggestion mentions "get_adcp_capabilities"
     # @bva sandbox: capability not declared, sandbox provisioning requested
-    # BR-RULE-209 INV-6: only a seller with features.sandbox: true supports sandbox provisioning
+    # BR-RULE-209 INV-6: only a seller with account.sandbox: true supports sandbox provisioning
+    # UNSUPPORTED_FEATURE is the canonical fit (a requested feature the seller does not
+    # support); recovery correctable = "check get_adcp_capabilities and remove unsupported fields"
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/account/properties/sandbox
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/UNSUPPORTED_FEATURE
     # POST-F1: no real or sandbox account created on failure
 
   @T-UC-011-v31-error-account-setup-required @v3-1 @error-details @post-f1 @post-f2 @post-f3

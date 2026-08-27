@@ -92,7 +92,7 @@ from src.core.auth import require_tenant
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse, format_id_identity
 from src.core.tools._mcp import mcp_result
-from src.core.transport_helpers import resolve_identity_from_context
+from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 from src.core.validation_helpers import adcp_validation_boundary
 
 
@@ -295,7 +295,10 @@ def _list_creative_formats_impl(
 
                 logger.info(f"Added {len(BROADSTREET_TEMPLATES)} Broadstreet formats")
     except Exception as e:
-        # Don't fail if adapter formats can't be retrieved
+        # FIXME(#1566): silent degradation — the adapter's formats are dropped from
+        # the response with no errors[] entry, so a failed lookup is indistinguishable
+        # from "this adapter provides none".
+        # Allowlisted in test_architecture_no_silent_loop_failures.py.
         logger.debug(f"Could not get adapter formats: {e}")
 
     # Apply filters from request
@@ -485,6 +488,10 @@ def _list_creative_formats_impl(
                     )
                 )
     except Exception:
+        # FIXME(#1566): silent degradation — creative_agents referrals are dropped
+        # from the response with no errors[] entry, so the buyer reads a referral
+        # lookup failure as "this seller federates to no creative agents".
+        # Allowlisted in test_architecture_no_silent_loop_failures.py.
         logger.warning("Failed to build agent referrals for tenant %s", tenant["tenant_id"], exc_info=True)
 
     # Log the operation
@@ -597,7 +604,7 @@ async def list_creative_formats(
 def list_creative_formats_raw(
     req: ListCreativeFormatsRequest | None = None,
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ) -> ListCreativeFormatsResponse:
     """List all available creative formats (raw function for A2A server use).
 
@@ -611,6 +618,5 @@ def list_creative_formats_raw(
     Returns:
         ListCreativeFormatsResponse with all available formats
     """
-    if identity is None:
-        identity = resolve_identity_from_context(ctx, require_valid_token=False)
+    identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=False)
     return _list_creative_formats_impl(req, identity)

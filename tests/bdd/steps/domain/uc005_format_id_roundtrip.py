@@ -37,10 +37,10 @@ def given_captured_format_id_from_get_products(ctx: dict) -> None:
     disabled), no dynamic templates (variants return []), and no product_ranking_prompt
     (AI ranking skipped).
     """
-    from src.core.database.models import Tenant
+    from src.core.database.models import Principal, Tenant
     from src.core.schemas import GetProductsRequest
     from src.core.tools.products import _get_products_impl
-    from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
+    from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
     from tests.factories.core import get_or_create
 
     env = ctx["env"]
@@ -57,6 +57,15 @@ def given_captured_format_id_from_get_products(ctx: dict) -> None:
         Tenant,
         {"tenant_id": env._tenant_id},
         lambda: TenantFactory(tenant_id=env._tenant_id, ad_server="mock"),
+    )
+    # Tenant.brand_manifest_policy defaults to "require_auth" — env.identity below
+    # needs a real Principal row or identity_for() nulls principal_id (no DB row),
+    # tripping the require_auth gate (salesagent-z9e0).
+    get_or_create(
+        env,
+        Principal,
+        {"principal_id": env._principal_id, "tenant_id": env._tenant_id},
+        lambda: PrincipalFactory(tenant=tenant, principal_id=env._principal_id),
     )
     product = ProductFactory(
         tenant=tenant,

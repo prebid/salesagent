@@ -29,12 +29,12 @@ from src.core.config_loader import (
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as ModelPrincipal
 
-# Single buyer-facing correction hint for every AUTH_REQUIRED rejection (missing
-# identity in an _impl, or a missing/invalid token at the REST auth boundary), so
-# all AUTH_REQUIRED envelopes carry the same actionable suggestion (AdCP POST-F3).
-# Canonical hint owned by exceptions.py (it is AdCPAuthenticationError's
-# class-level default suggestion); re-exported here for existing importers.
-from src.core.exceptions import AUTH_REQUIRED_SUGGESTION
+# Buyer-facing correction hints, split per the v3.1.1 AUTH_MISSING/AUTH_INVALID
+# error-code split (dist/schemas/3.1.1/enums/error-code.json, salesagent-mkso).
+# Canonical hints owned by exceptions.py (class-level default suggestions on
+# AdCPAuthRequiredError / AdCPAuthenticationError); re-exported here for
+# existing importers.
+from src.core.exceptions import AUTH_MISSING_SUGGESTION
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 from src.core.schemas import Principal
 
@@ -346,13 +346,21 @@ def require_principal_id(
     across tool modules. ``context`` is echoed into the error envelope so
     buyer agents can correlate the failure to their request.
     """
-    from src.core.exceptions import AdCPAuthenticationError
+    from src.core.exceptions import AdCPAuthRequiredError
 
     principal_id = identity.principal_id if identity else None
     if not principal_id:
-        raise AdCPAuthenticationError(
-            "Authentication required: Principal ID not found in identity. Provide a valid x-adcp-auth token.",
+        # No principal_id was resolved at all (absent credential, not a
+        # presented-but-rejected one) -> AUTH_MISSING per v3.1.1
+        # error-code.json. Was previously the base AdCPAuthenticationError
+        # (AUTH_INVALID-shaped) with mixed absent/invalid wording ("Provide a
+        # valid x-adcp-auth token" reads as invalid-framing) — de-conflicted
+        # per salesagent-mkso consistency-lens finding, while keeping the
+        # "Principal ID not found in identity" substring existing tests match on.
+        raise AdCPAuthRequiredError(
+            "Authentication required: Principal ID not found in identity. No x-adcp-auth token was presented.",
             context=context,
+            suggestion=AUTH_MISSING_SUGGESTION,
         )
     return principal_id
 
@@ -369,10 +377,26 @@ def require_tenant(
     across tool modules. The canonical message carries the actionable
     diagnostic (token + host headers) so buyer agents can self-correct.
     """
-    from src.core.exceptions import AdCPAuthenticationError
+    from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError
 
     tenant = identity.tenant if identity else None
     if not tenant:
+        # AUTH_MISSING/AUTH_INVALID split (salesagent-mkso), completed for the
+        # tenant-resolution axis (salesagent-otc5). The signal is whether a
+        # credential was PRESENTED, i.e. ``identity.auth_token`` — not merely
+        # whether an identity object exists: resolve_identity() always builds
+        # a ResolvedIdentity for discovery endpoints even with no token, and
+        # for a presented-but-invalid token (require_valid_token=False) it
+        # sets auth_token but leaves principal_id unresolved. No token at all
+        # -> AUTH_MISSING (correctable); a token was presented but tenant
+        # still didn't resolve -> AUTH_INVALID (terminal). The TENANT_REQUIRED
+        # gap (salesagent-40kk) — full tenant-axis semantics beyond this
+        # credential-presence split — remains tracked separately.
+        if not identity or not identity.auth_token:
+            raise AdCPAuthRequiredError(
+                "No tenant context available. Check x-adcp-auth token and host headers.",
+                context=context,
+            )
         raise AdCPAuthenticationError(
             "No tenant context available. Check x-adcp-auth token and host headers.",
             context=context,
@@ -398,7 +422,7 @@ def require_identity(
         raise AdCPAuthRequiredError(
             "Authentication required: no identity in request.",
             context=context,
-            suggestion=AUTH_REQUIRED_SUGGESTION,
+            suggestion=AUTH_MISSING_SUGGESTION,
         )
     return identity
 

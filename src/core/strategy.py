@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy import delete, select
 
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Strategy as StrategyModel
 from src.core.database.models import StrategyState
 
@@ -320,14 +321,18 @@ class SimulationContext:
     def _upsert_state(self, session, key: str, value: dict[str, Any]):
         """Insert or update strategy state."""
         stmt = select(StrategyState).filter_by(strategy_id=self.strategy_id, state_key=key)
-        existing = session.scalars(stmt).first()
+        state = StrategyState(strategy_id=self.strategy_id, state_key=key, state_value=value)
+        existing = resolve_or_write(
+            session,
+            conflict=lambda: session.scalars(stmt).first(),
+            write=lambda: session.add(state),
+            constraint="strategy_states_pkey",
+        )
 
         if existing:
+            # Also where a concurrent simulation that won the insert leaves us.
             existing.state_value = value
             existing.updated_at = datetime.now(UTC)
-        else:
-            state = StrategyState(strategy_id=self.strategy_id, state_key=key, state_value=value)
-            session.add(state)
 
     def jump_to_event(self, event: str) -> dict[str, Any]:
         """Jump simulation to a specific event or time."""

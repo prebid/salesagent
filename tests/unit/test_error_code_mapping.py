@@ -1,15 +1,13 @@
-"""Tests for the error code mapping from internal codes to SDK STANDARD_ERROR_CODES.
+"""Tests for the error code mapping from internal codes to wire-safe codes.
 
 Verifies that:
 1. ERROR_CODE_MAPPING exists and maps all known non-standard codes
-2. Every mapped target is in STANDARD_ERROR_CODES
+2. Every mapped target is in WIRE_STANDARD_CODES (SDK standard + pinned-spec supplement)
 3. INTERNAL_CODES set exists for codes that never reach the wire
 4. All AdCPError subclass error_code attributes are either standard or internal
 """
 
-from adcp.server.helpers import STANDARD_ERROR_CODES
-
-from src.core.exceptions import ERROR_CODE_MAPPING, INTERNAL_CODES, AdCPError
+from src.core.exceptions import ERROR_CODE_MAPPING, INTERNAL_CODES, WIRE_STANDARD_CODES, AdCPError
 
 
 class TestErrorCodeMapping:
@@ -20,10 +18,17 @@ class TestErrorCodeMapping:
         assert len(ERROR_CODE_MAPPING) > 0, "Mapping must not be empty"
 
     def test_all_targets_are_standard(self):
-        """Every mapped-to code must be in SDK STANDARD_ERROR_CODES."""
-        std = set(STANDARD_ERROR_CODES)
+        """Every mapped-to code must be in WIRE_STANDARD_CODES (SDK standard + supplement).
+
+        WIRE_STANDARD_CODES = SDK STANDARD_ERROR_CODES + _SPEC_SUPPLEMENT_CODES
+        (pinned-spec codes the SDK hasn't caught up to yet, e.g. AUTH_MISSING/
+        AUTH_INVALID per v3.1.1 error-code.json — salesagent-mkso). Both are
+        wire-safe targets; the supplement exists precisely so mapping targets
+        can be spec-correct ahead of SDK releases.
+        """
+        std = set(WIRE_STANDARD_CODES)
         bad = {k: v for k, v in ERROR_CODE_MAPPING.items() if v not in std}
-        assert not bad, f"Mapping targets not in STANDARD_ERROR_CODES: {bad}"
+        assert not bad, f"Mapping targets not in WIRE_STANDARD_CODES: {bad}"
 
     def test_internal_codes_exist(self):
         assert isinstance(INTERNAL_CODES, frozenset)
@@ -35,11 +40,11 @@ class TestErrorCodeMapping:
         INTERNAL_CODES documents codes that should never reach the wire as-is.
         ERROR_CODE_MAPPING is the safety net: if an internal code escapes to a
         boundary (base-class raise instead of a specific subclass), the mapping
-        translates it to STANDARD_ERROR_CODES. Overlap is intentional — it
+        translates it to WIRE_STANDARD_CODES. Overlap is intentional — it
         means "this code is internal AND has a wire-safe fallback if it leaks".
         Both invariants must hold for every overlap entry.
         """
-        std = set(STANDARD_ERROR_CODES)
+        std = set(WIRE_STANDARD_CODES)
         overlap = set(ERROR_CODE_MAPPING.keys()) & INTERNAL_CODES
         unsafe = {code: ERROR_CODE_MAPPING[code] for code in overlap if ERROR_CODE_MAPPING[code] not in std}
         assert not unsafe, f"Internal codes in mapping must translate to STANDARD targets: {unsafe}"

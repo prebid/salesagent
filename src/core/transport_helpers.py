@@ -8,6 +8,7 @@ Each transport boundary calls one of these helpers before invoking _impl.
 
 from __future__ import annotations
 
+import enum
 import logging
 from typing import TYPE_CHECKING, Literal
 
@@ -22,6 +23,35 @@ from src.core.tenant_context import LazyTenantContext
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
+
+
+class _IdentitySentinel(enum.Enum):
+    """Typed sentinel distinguishing 'identity omitted' from 'identity=None'.
+
+    ``identity: ResolvedIdentity | None`` cannot tell "caller explicitly
+    passed ``identity=None``" (exercise the anonymous/no-tenant path) apart
+    from "caller omitted the argument" (resolve identity from ambient
+    transport context) — both look like ``None`` inside the function body.
+    ``*_raw`` transport wrappers (A2A/REST) default ``identity`` to
+    :data:`NOT_PROVIDED` instead of ``None`` so :func:`resolve_identity_if_not_provided`
+    can tell the two apart. See salesagent-tb8c.
+
+    A bare ``object()`` sentinel (as used by ``tests/harness/_base.py``'s
+    untyped ``_NO_OVERRIDE``) fails ``mypy src/`` as the default for a
+    ``ResolvedIdentity | None``-typed parameter — this Enum member is a
+    ``Literal``-compatible type that can be folded into the parameter's
+    union annotation.
+    """
+
+    NOT_PROVIDED = enum.auto()
+
+
+#: Default value for ``*_raw`` wrapper ``identity`` parameters — means "not passed by caller".
+NOT_PROVIDED = _IdentitySentinel.NOT_PROVIDED
+
+#: Type alias for ``*_raw`` wrapper ``identity`` parameters: a resolved identity, an
+#: explicit "anonymous" (``None``), or the :data:`NOT_PROVIDED` sentinel.
+IdentityOrNotProvided = ResolvedIdentity | None | Literal[_IdentitySentinel.NOT_PROVIDED]
 
 
 def _make_lazy_tenant(tenant_id: str) -> LazyTenantContext:
@@ -101,6 +131,36 @@ def resolve_identity_from_context(
         protocol=protocol,
         testing_context=testing_context,
     )
+
+
+def resolve_identity_if_not_provided(
+    identity: IdentityOrNotProvided,
+    ctx: Context | ToolContext | None,
+    require_valid_token: bool = True,
+    protocol: Literal["mcp", "a2a", "rest"] = "mcp",
+) -> ResolvedIdentity | None:
+    """Resolve identity from context ONLY when the caller omitted the argument.
+
+    Shared guard for the 15 ``*_raw`` transport wrappers (A2A/REST). Callers
+    default ``identity`` to :data:`NOT_PROVIDED`; an explicit ``identity=None``
+    (meaning: exercise the anonymous/no-tenant path) is returned unchanged
+    instead of being silently upgraded via ambient-context re-resolution.
+    See salesagent-tb8c.
+
+    Args:
+        identity: The wrapper's ``identity`` parameter — a resolved identity,
+            an explicit ``None``, or :data:`NOT_PROVIDED`.
+        ctx: FastMCP Context or ToolContext to resolve from, if omitted.
+        require_valid_token: Whether to raise on invalid tokens (only used on re-resolution).
+        protocol: Transport protocol (only used on re-resolution).
+
+    Returns:
+        ``identity`` unchanged if explicitly provided (including ``None``),
+        otherwise the result of :func:`resolve_identity_from_context`.
+    """
+    if identity is NOT_PROVIDED:
+        return resolve_identity_from_context(ctx, require_valid_token=require_valid_token, protocol=protocol)
+    return identity
 
 
 def enrich_identity_with_account(

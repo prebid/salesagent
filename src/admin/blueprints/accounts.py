@@ -13,7 +13,8 @@ from flask import Blueprint, flash, jsonify, redirect, render_template, request,
 
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.helpers import require_tenant_access
-from src.core.database.models import Account
+from src.core.billing_policy import BILLING_PARTY_VALUES
+from src.core.database.repositories.account import AccountRepository
 from src.core.database.repositories.uow import AccountUoW
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ def create_account(tenant_id):
             "create_account.html",
             tenant_id=tenant_id,
             edit_mode=False,
+            billing_options=BILLING_PARTY_VALUES,
         )
 
     # POST — process form
@@ -79,19 +81,38 @@ def create_account(tenant_id):
     if brand and brand_id:
         brand["brand_id"] = brand_id
 
-    with AccountUoW(tenant_id) as uow:
-        new_account = Account(
-            tenant_id=tenant_id,
-            account_id=account_id,
-            name=name,
-            status="active",
-            brand=brand,
-            operator=operator or None,
-            billing=billing,
-            payment_terms=payment_terms,
-            sandbox=sandbox or None,
-        )
-        uow.accounts.create(new_account)
+    try:
+        with AccountUoW(tenant_id) as uow:
+            # THE SHARED BUILDER, not raw kwargs here (#1878, CLAUDE.md pattern #3). This
+            # site assembled its own ``Account(...)`` while the sync/provisioning arm and
+            # its dry-run preview both went through ``build_row`` — two callers sharing one
+            # row description while a third went its own way, which is exactly the drift
+            # #1721 added that builder to stop. ``billing`` / ``payment_terms`` /
+            # ``sandbox`` ride in ``created_fields``, the slot build_row already exposes so
+            # that "a field added to the re-sync arm and forgotten at create" cannot happen.
+            uow.accounts.create(
+                AccountRepository.build_row(
+                    tenant_id=tenant_id,
+                    account_id=account_id,
+                    name=name,
+                    status="active",
+                    brand_domain=brand_domain,
+                    brand_id=brand_id,
+                    operator=operator or None,
+                    principal_id=None,
+                    created_fields={
+                        "billing": billing,
+                        "payment_terms": payment_terms,
+                        "sandbox": sandbox or None,
+                    },
+                )
+            )
+    except ValueError as exc:
+        # The repository refuses a create whose natural key is already occupied
+        # (salesagent-0njj). Surfaced as a form error rather than a 500: this is
+        # an operator mistake with an obvious remedy — edit the existing account.
+        flash(str(exc), "error")
+        return redirect(request.url)
 
     flash(f"Account '{name}' created successfully.", "success")
     return redirect(url_for("accounts.list_accounts", tenant_id=tenant_id))
@@ -136,18 +157,29 @@ def edit_account(tenant_id, account_id):
                 tenant_id=tenant_id,
                 account=account,
                 edit_mode=True,
+                billing_options=BILLING_PARTY_VALUES,
             )
 
-        # POST — update mutable fields
+        # POST — update mutable fields.
+        #
+        # `operator` and `sandbox` are deliberately ABSENT: they are natural-key
+        # components (AccountRepository.get_by_natural_key), so editing them
+        # re-keys the account and the buyer's next sync_accounts call provisions a
+        # duplicate instead of matching (salesagent-8sfr). The repository refuses
+        # them outright; leaving them here would only turn that into a 500.
+        #
+        # `billing` IS editable, and that is a deliberate authority difference
+        # rather than an oversight. AdCP forbids mutating it on the settings-update
+        # WIRE path (sync-accounts-request.json
+        # #/properties/accounts/items/oneOf/1/allOf/2, enforced in
+        # _sync_accounts_impl), but that binds the BUYER. This is the seller's own
+        # operator surface acting on its own account, which the buyer-facing
+        # restriction does not govern.
         updates = {}
-        for field in ("name", "operator", "billing", "payment_terms", "rate_card"):
+        for field in ("name", "billing", "payment_terms", "rate_card"):
             value = request.form.get(field, "").strip()
             if value:
                 updates[field] = value
-
-        sandbox = request.form.get("sandbox") == "on"
-        if sandbox != (account.sandbox or False):
-            updates["sandbox"] = sandbox or None
 
         if updates:
             uow.accounts.update_fields(account_id, **updates)

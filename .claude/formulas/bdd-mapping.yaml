@@ -482,11 +482,10 @@ finalize:
 
       4. Sync beads and verify clean state:
          ```bash
-         bd sync
          git status
          make quality
          ```
 
-    acceptance: "Coverage report written. All {N} tasks closed. bd sync done. make quality passes."
+    acceptance: "Coverage report written. All {N} tasks closed. make quality passes."
     depends_on_all_barriers: true
     labels: ["atom:verify"]

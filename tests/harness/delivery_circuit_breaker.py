@@ -1,6 +1,7 @@
 """CircuitBreakerEnv — integration test environment for WebhookDeliveryService.
 
-Patches: httpx.Client, time.sleep, random.uniform (external/timing concerns).
+Patches: the outbound webhook SOCKET, time.sleep, random.uniform (external/timing
+concerns).
 Real: get_db_session for PushNotificationConfig queries (real DB).
 
 Requires: integration_db fixture (creates test PostgreSQL DB).
@@ -19,14 +20,16 @@ Usage::
             result = service.send_delivery_webhook(...)
 
 Available mocks via env.mock:
-    "client"    -- httpx.Client mock
+    "post"      -- the outbound webhook socket; called (url, headers=, content=)
     "sleep"     -- time.sleep mock
     "random"    -- random.uniform mock
+    "ssrf"      -- send-time outbound SSRF gate (allows fixture hosts by default)
 """
 
 from __future__ import annotations
 
 import logging
+from contextlib import ExitStack
 from typing import Any
 
 from sqlalchemy import select
@@ -35,17 +38,7 @@ from src.core.database.models import PushNotificationConfig
 from src.services.webhook_delivery_service import WebhookDeliveryService
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import SSRF_EXTERNAL_PATCH, CircuitBreakerMixin
-
-
-class _LogCaptureHandler(logging.Handler):
-    """Captures formatted log records into a list for assertion in tests."""
-
-    def __init__(self) -> None:
-        super().__init__(level=logging.WARNING)
-        self.records: list[str] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.records.append(self.format(record))
+from tests.helpers.log_capture import LogCaptureHandler
 
 
 class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
@@ -57,7 +50,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
     Fluent API (from CircuitBreakerMixin):
         get_service()                    -- return a WebhookDeliveryService instance
         get_breaker(**kwargs)            -- return a fresh CircuitBreaker instance
-        set_http_response(status_code)   -- configure httpx Client mock response
+        set_http_response(status_code)   -- answer every outbound webhook with status_code
         call_send(...)                   -- call service.send_delivery_webhook
         make_webhook_config(...)         -- create a PushNotificationConfig in DB
         set_db_webhooks(configs)         -- replace webhook configs in DB
@@ -66,7 +59,6 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
     MODULE = "src.services.webhook_delivery_service"
 
     EXTERNAL_PATCHES = {
-        "client": "src.services.webhook_delivery_service.httpx.Client",
         "sleep": "src.services.webhook_delivery_service.time.sleep",
         "random": "src.services.webhook_delivery_service.random.uniform",
         **SSRF_EXTERNAL_PATCH,
@@ -75,13 +67,14 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._service: WebhookDeliveryService | None = None
-        self._log_handler: _LogCaptureHandler | None = None
+        self._log_handler: LogCaptureHandler | None = None
+        self._wire: ExitStack | None = None
         self.captured_logs: list[str] = []
 
     def __enter__(self) -> CircuitBreakerEnv:
         result = super().__enter__()
         # Attach log capture to the webhook delivery service logger
-        self._log_handler = _LogCaptureHandler()
+        self._log_handler = LogCaptureHandler()
         webhook_logger = logging.getLogger("src.services.webhook_delivery_service")
         webhook_logger.addHandler(self._log_handler)
         self.captured_logs = self._log_handler.records
@@ -93,6 +86,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
             webhook_logger = logging.getLogger("src.services.webhook_delivery_service")
             webhook_logger.removeHandler(self._log_handler)
             self._log_handler = None
+        self.close_webhook_wire()
         return super().__exit__(*exc)
 
     def _configure_mocks(self) -> None:
@@ -101,11 +95,8 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
 
         self._configure_ssrf_default()
 
-        # httpx.Client: 200 OK by default
-        self.set_http_response(200)
-
-        # Expose inner httpx post as mock["post"] so BDD steps can inspect call_args
-        self.mock["post"] = self.mock["client"].return_value.__enter__.return_value.post
+        # Installs mock["post"] (the outbound socket) answering 200 by default.
+        self.install_webhook_wire()
 
     def make_webhook_config(
         self,
@@ -126,13 +117,13 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
             select(Principal).filter_by(tenant_id=self._tenant_id, principal_id=self._principal_id)
         ).first()
 
+        auth_type, auth_token = self.webhook_auth_fields(auth_type, auth_token, secret)
         return PushNotificationConfigFactory(
             tenant=tenant,
             principal=principal,
             url=url,
             authentication_type=auth_type,
             authentication_token=auth_token,
-            webhook_secret=secret,
             is_active=True,
         )
 

@@ -20,7 +20,10 @@ GREEN='\033[0;32m' RED='\033[0;31m' BLUE='\033[0;34m' NC='\033[0m'
 MODE=${1:-ci}
 PYTEST_TARGET="${2:-}"
 PYTEST_ARGS="${@:3}"
-RESULTS_DIR="$(pwd)/test-results/$(date +%d%m%y_%H%M)"
+# UTC, matching run_all_tests.sh. Both runners write into the same
+# `test-results/` tree, so naming them off different clocks makes two directories
+# from the same instant carry names two hours apart.
+RESULTS_DIR="$(pwd)/test-results/$(date -u +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
 
 # Keep only the last 10 result directories

@@ -644,25 +644,29 @@ Feature: BR-UC-016 Sync Audiences
     # BR-RULE-113 INV-1: valid token present
 
   @T-UC-016-ext-h @extension @ext-h @error @post-f1 @post-f2 @post-f3 @partition @boundary @auth
-  Scenario Outline: AUTH_REQUIRED -- <partition>
+  Scenario Outline: Auth rejection -- <partition>
     Given the Buyer Agent sends a sync_audiences request with <auth_setup>
     When the system validates authentication
     Then the operation should fail
-    And the error code should be "AUTH_REQUIRED"
-    And the error recovery should be "correctable"
+    And the error code should be "<expected_code>"
+    And the error recovery should be "<expected_recovery>"
     And the error should include "suggestion" field
-    And the suggestion should contain "valid bearer token"
+    And the suggestion should contain "<expected_suggestion_substr>"
     And the request context is echoed in the error response when possible
     # POST-F1: System state unchanged
-    # POST-F2: Error with correctable recovery
+    # POST-F2: Error with per-code recovery (AUTH_MISSING=correctable, AUTH_INVALID=terminal)
     # POST-F3: Context echoed when possible
+    # No token -> AUTH_MISSING (absent credential); expired/malformed token ->
+    # AUTH_INVALID (credential presented but rejected). Per v3.1.1
+    # error-code.json split (salesagent-mkso); previously all three
+    # partitions incorrectly pinned the same deprecated AUTH_REQUIRED code.
     # --- Extension I: RATE_LIMITED ---
 
     Examples:
-      | partition         | boundary_point    | auth_setup                                      |
-      | missing_token     | no token          | no authentication token present                 |
-      | expired_token     | expired token     | an expired authentication token                 |
-      | malformed_token   | malformed token   | a structurally invalid token "not-a-jwt"        |
+      | partition         | boundary_point    | auth_setup                                      | expected_code | expected_recovery | expected_suggestion_substr |
+      | missing_token     | no token          | no authentication token present                 | AUTH_MISSING  | correctable        | credentials                |
+      | expired_token     | expired token     | an expired authentication token                 | AUTH_INVALID  | terminal           | rotate                     |
+      | malformed_token   | malformed token   | a structurally invalid token "not-a-jwt"        | AUTH_INVALID  | terminal           | rotate                     |
 
   @T-UC-016-ext-i @extension @ext-i @error @post-f1 @post-f2 @post-f3
   Scenario Outline: RATE_LIMITED via <transport>

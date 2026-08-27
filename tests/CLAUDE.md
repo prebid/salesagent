@@ -56,17 +56,21 @@ with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
 ### Transport dispatching
 
 Every `_impl` function is wrapped by MCP, A2A, and REST transports. Tests should verify
-behavior across all transports. The `Transport` enum has four values:
+behavior across all transports:
 
 ```python
 from tests.harness.transport import Transport
 
-for transport in [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST]:
+for transport in [Transport.A2A, Transport.MCP, Transport.REST]:
     result = env.call_via(transport, media_buy_ids=[buy.media_buy_id])
     assert result.is_success
 ```
 
-BDD tests do this automatically via `pytest_generate_tests()` parametrization.
+BDD tests do this automatically via `pytest_generate_tests()` parametrization
+(a2a/mcp/rest, plus the e2e variants when the stack is up). `Transport.IMPL`
+still exists for harness-level direct `_impl` calls, but it is SUNSETTED for
+BDD: no scenario runs on it — every BDD run is a real wire run, which is what
+makes wire-level assertions non-vacuous.
 
 ### Symbol index
 
@@ -104,13 +108,69 @@ Step definitions are organized in two layers:
 - **`tests/bdd/steps/generic/`** — Reusable steps (auth, entity setup, assertions)
 - **`tests/bdd/steps/domain/`** — Use-case-specific steps (delivery, creative formats)
 
-Every BDD scenario is automatically parametrized across all 4 transports (IMPL, A2A, MCP, REST)
-unless tagged with a specific transport. The `ctx` fixture is a mutable dict shared across steps,
-with `ctx["env"]` holding the harness environment.
+Every BDD scenario is automatically parametrized across the wire transports (a2a, mcp,
+rest — plus e2e variants when enabled) unless tagged with a specific transport. IMPL is
+sunsetted for BDD. The `ctx` fixture is a mutable dict shared across steps, with
+`ctx["env"]` holding the harness environment.
 
 ```bash
 tox -e bdd
 ```
+
+### BDD authoring discipline (the five rules)
+
+Every new or modified scenario and step definition follows these. Most are guard-enforced;
+all of them have caused real defects when skipped.
+
+1. **The scenario is transport-independent by construction.** Given/When/Then never
+   mention a transport and never touch wire shapes. The harness parametrizes each
+   scenario over a2a/mcp/rest (+e2e); transport-specific logic lives ONLY in the env
+   (`env.call_via` → `TransportResult`). A `When` that says "calls the X MCP tool" is a
+   defect unless the scenario grades a spec-cited transport-specific behavior (cite it
+   in a comment). With IMPL removed, every run is a real wire run — assertions got
+   stricter for free.
+
+2. **Setup goes through env methods; dispatch goes through `dispatch_request`.**
+   Givens realize intent via env-owned methods (on e2e that means seeding the live
+   server's DB, or driving the real API — e.g. create_media_buy over HTTP — via
+   `realize_e2e`, `tests/harness/_realize.py`). Steps never hand-stash wire data into
+   `ctx`; `dispatch_request` (`tests/bdd/steps/generic/_dispatch.py`) is the ONE place
+   that writes `ctx["result"]` / `ctx["wire_response"]` / `ctx["wire_error_envelope"]`.
+
+3. **Assert on the wire, through the guarded helpers — never hand-rolled.**
+   - errors: `ctx["result"].assert_wire_error(code, ...)`
+     (`tests/harness/transport.py`) — recovery defaults to the pinned AdCP enum, so
+     the assertion is non-vacuous without per-scenario duplication;
+   - success: `wire_field(ctx, "x")` / `wire_dict(ctx)`
+     (`tests/bdd/steps/_outcome_helpers.py`) — these raise loudly when the env didn't
+     stash the wire, instead of silently falling back to `model_dump()` (a serializer
+     round-trip proves model self-consistency, not what the buyer received). The
+     `model_dump` fallback exists ONLY for an EXPLICIT `Transport.IMPL` in
+     `ctx["transport"]`; an unset transport raises too, naming the fix — set
+     `ctx['transport']` or pass IMPL explicitly (GH #1744). Contract pinned by
+     `tests/harness/test_outcome_helpers_wire_contract.py`.
+
+4. **Assertions compare values, not existence.** `assert status` is green for ANY
+   status. `assert actual == expected` or it isn't a test. A Then whose text claims a
+   value the step doesn't pin is a defect — and a Then you cannot ground in a spec
+   citation is a defect to REPORT, not a step to improvise. Guards catch most of this
+   (`test_architecture_bdd_no_trivial_assertions` & friends); `/inspect-bdd-steps`
+   does the deeper two-pass audit of whether a Then asserts what its text claims.
+
+5. **Prove it executes.** The recurring failure mode: steps written, CI green,
+   scenario never ran — it auto-xfailed at fixture setup (missing step defs and
+   unwired harness routes xfail silently by design). After touching step files, run
+   the touched slice with `-rxX` and READ the output: sub-second wall time and
+   "No harness wired" / `StepDefinitionNotFoundError` reasons are the tells
+   (`make check-dormant` is the incoming wrapper for this check). Ground scenarios in
+   the pinned spec (`docs/adcp-spec-version.md`), cite version+file on any divergence,
+   and remember: xfail ledgers and guard allowlists only shrink. The e2e_rest xfail
+   ROUTES in the bdd conftest are pinned too (`EXPECTED_XFAIL_ROUTES` in
+   `tests/unit/test_architecture_e2e_rest_escape_hatches.py`) — changing a route
+   requires updating the pin in the same change, with a justification.
+
+tl;dr: the scenario says WHAT, the env says HOW per transport, the helpers say whether
+it's really ON THE WIRE — and the dormancy check says whether it ran at all.
 
 ### E2E Tests (`tests/e2e/`)
 
@@ -338,6 +398,12 @@ assert_envelope_shape(
     message_substr="budget must be positive",
 )
 ```
+
+In BDD steps, prefer the `TransportResult` method form —
+`ctx["result"].assert_wire_error(code, ...)` (`tests/harness/transport.py`) — which
+wraps the same envelope check and defaults `recovery` from the pinned AdCP error-code
+enum, so per-scenario duplication of the recovery value is unnecessary and the
+assertion stays non-vacuous.
 
 ### What to assert
 

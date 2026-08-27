@@ -12,6 +12,8 @@ from typing import Any
 
 import pytest
 
+from tests.unit._architecture_helpers import A2A_RAW_WRAPPERS, MCP_WRAPPERS
+
 # Parameters that are allowed to use Any because they have no SDK type
 # or are transport infrastructure (ctx, etc.)
 ALLOWED_ANY_PARAMS = {
@@ -28,41 +30,6 @@ ALLOWED_DICT_PARAMS = {
     # defeat wire-level RFC 8785 hashing.
     "raw_wire_payload",
 }
-
-# MCP wrapper functions to check (module_path, function_name)
-MCP_WRAPPERS = [
-    ("src.core.tools.products", "get_products"),
-    ("src.core.tools.media_buy_create", "create_media_buy"),
-    ("src.core.tools.media_buy_update", "update_media_buy"),
-    ("src.core.tools.media_buy_delivery", "get_media_buy_delivery"),
-    ("src.core.tools.media_buy_list", "get_media_buys"),
-    ("src.core.tools.creatives.sync_wrappers", "sync_creatives"),
-    ("src.core.tools.creatives.listing", "list_creatives"),
-    ("src.core.tools.properties", "list_authorized_properties"),
-    ("src.core.tools.accounts", "list_accounts"),
-    ("src.core.tools.accounts", "sync_accounts"),
-    ("src.core.tools.capabilities", "get_adcp_capabilities"),
-    ("src.core.tools.creative_formats", "list_creative_formats"),
-]
-
-# A2A raw wrapper functions to check (module_path, function_name)
-A2A_RAW_WRAPPERS = [
-    ("src.core.tools.products", "get_products_raw"),
-    ("src.core.tools.media_buy_create", "create_media_buy_raw"),
-    ("src.core.tools.media_buy_update", "update_media_buy_raw"),
-    ("src.core.tools.media_buy_delivery", "get_media_buy_delivery_raw"),
-    ("src.core.tools.media_buy_list", "get_media_buys_raw"),
-    ("src.core.tools.creatives.sync_wrappers", "sync_creatives_raw"),
-    ("src.core.tools.creatives.listing", "list_creatives_raw"),
-    ("src.core.tools.properties", "list_authorized_properties_raw"),
-    ("src.core.tools.accounts", "list_accounts_raw"),
-    ("src.core.tools.accounts", "sync_accounts_raw"),
-    ("src.core.tools.capabilities", "get_adcp_capabilities_raw"),
-    ("src.core.tools.creative_formats", "list_creative_formats_raw"),
-    ("src.core.tools.signals", "get_signals_raw"),
-    ("src.core.tools.signals", "activate_signal_raw"),
-    ("src.core.tools.performance", "update_performance_index_raw"),
-]
 
 # Parameters that MUST use specific SDK types (param_name -> expected type name)
 # These are params where dict[str, Any] or Any is wrong — a proper SDK type exists.

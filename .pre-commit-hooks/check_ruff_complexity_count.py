@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Pre-commit / quality-ci hook: ratchet ruff pure-complexity rule counts.
+Pre-commit / quality-ci hook: ratchet counts for ruff rules we ignore wholesale.
 
 Per ADR-009 / #1228 F1 / #1610:
-- Track C901, PLR0912, PLR0915 violation counts in ``src/``
+- Track C901, PLR0912, PLR0915, F841 violation counts in ``src/``
 - Fail only when a count increases (new complexity debt)
 - Auto-lower the baseline when a count decreases
 - ``--update-baseline`` rewrites the tracked baseline (review must contest ↑)
@@ -34,11 +34,11 @@ from count_ratchet import (
 BASELINE_FILE = ".ruff-complexity-baseline"
 SRC_DIR = "src"
 MAIN_REF = "origin/main"
-RULES = ("C901", "PLR0912", "PLR0915")
+RULES = ("C901", "PLR0912", "PLR0915", "F841")
 
 
 def count_rule_violations(repo_root: Path, src_path: Path) -> dict[str, int]:
-    """Count selected ruff complexity violations under src/ (even if ignored in pyproject)."""
+    """Count selected ruff violations under src/ (even if ignored in pyproject)."""
     cmd = [
         sys.executable,
         "-m",
@@ -72,7 +72,20 @@ def count_rule_violations(repo_root: Path, src_path: Path) -> dict[str, int]:
 
 
 def read_main_baseline(repo_root: Path) -> dict[str, int] | None:
-    """Load origin/main's complexity baseline, or None if the file is not on main yet."""
+    """Load origin/main's baseline, or None if the file is not on main yet.
+
+    Rules ABSENT from main's file are OMITTED rather than read as 0. A rule main
+    never tracked has no ceiling to be raised against, so the first change that
+    adds it is soft — the same rule the ``None`` return applies one level up when
+    the whole file is new. Reading a missing key as 0 would instead make every
+    newly-ratcheted rule unlandable, since its true count is whatever debt already
+    exists (F841 landed at 38).
+
+    This is not a reset loophole: dropping a key from the local baseline also means
+    dropping it from RULES and from the pyproject ratchet bucket, which
+    ``test_ruff_complexity_rules_match_pyproject_ratchet_bucket`` pins equal — a
+    visible, reviewable change, not a silent one.
+    """
     result = subprocess.run(
         ["git", "show", f"{MAIN_REF}:{BASELINE_FILE}"],
         cwd=repo_root,
@@ -86,7 +99,7 @@ def read_main_baseline(repo_root: Path) -> dict[str, int] | None:
         data = json.loads(result.stdout)
         if not isinstance(data, dict):
             raise ValueError(f"baseline must be a JSON object, got {type(data).__name__}")
-        return {key: int(data.get(key, 0)) for key in RULES}
+        return {key: int(data[key]) for key in RULES if key in data}
     except (ValueError, TypeError) as e:
         print(f"ERROR: {MAIN_REF}:{BASELINE_FILE} is not a valid JSON object: {e}", file=sys.stderr)
         raise SystemExit(1) from e
@@ -111,6 +124,9 @@ def check_baseline_not_raised(repo_root: Path, local: dict[str, int]) -> int:
         return 0
     raised = False
     for key in RULES:
+        if key not in main_baseline:
+            # Not tracked on main yet — nothing to raise against (see read_main_baseline).
+            continue
         if local[key] > main_baseline[key]:
             if not raised:
                 print("Baseline value raised vs origin/main!", file=sys.stderr)
@@ -121,13 +137,13 @@ def check_baseline_not_raised(repo_root: Path, local: dict[str, int]) -> int:
             )
     if raised:
         print("", file=sys.stderr)
-        print("The ruff complexity baseline may only shrink. Refactor instead of raising.", file=sys.stderr)
+        print("The ruff baseline may only shrink. Fix the new violations instead of raising.", file=sys.stderr)
         return 1
     return 0
 
 
 def main() -> int:
-    args = parse_ratchet_args("Check that ruff C901/PLR0912/PLR0915 counts do not increase")
+    args = parse_ratchet_args(f"Check that ruff {'/'.join(RULES)} counts do not increase")
     repo_root, src_path, baseline_file = resolve_ratchet_paths(baseline_name=BASELINE_FILE)
     read_baseline, write_baseline = json_baseline_io(RULES)
 
@@ -154,9 +170,10 @@ def main() -> int:
         update_baseline=args.update_baseline,
         read_baseline=read_baseline,
         write_baseline=write_baseline,
-        increase_header="Ruff complexity count increased! (ADR-009 / #1610)",
+        increase_header="Ruff ratchet count increased! (ADR-009 / #1610)",
         increase_hints=(
-            "Refactor the new complexity, or justify a baseline ↑ in review.",
+            "Fix the new violation (refactor the complexity, delete the unused local),",
+            "or justify a baseline ↑ in review.",
             "",
             "To inspect:",
             f"  uv run ruff check {SRC_DIR}/ --select={','.join(RULES)}",

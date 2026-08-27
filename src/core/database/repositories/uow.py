@@ -28,19 +28,22 @@ from __future__ import annotations
 
 import logging
 import warnings
+from collections.abc import Mapping
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 
 from sqlalchemy.orm import Session
 
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.account import AccountRepository
+from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
 from src.core.database.repositories.creative import CreativeAssignmentRepository, CreativeRepository
 from src.core.database.repositories.currency_limit import CurrencyLimitRepository
 from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
+from src.core.database.repositories.signing_key import SigningKeyRepository
 from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.database.repositories.workflow import WorkflowRepository
 
@@ -111,11 +114,39 @@ class BaseUoW:
             self._session = None
             self._clear_repos()
 
+    #: ``attribute name -> repository class`` for subclasses that declare their
+    #: repositories instead of hand-writing the two hooks below. Every repository in this
+    #: layer takes ``(session, tenant_id)``, so the construction is the SAME line with a
+    #: different class — which is exactly the shape that should be data, not code.
+    #:
+    #: Subclasses may still override ``_init_repos``/``_clear_repos`` directly; the eight
+    #: pre-#1757 units of work do, and they keep working unchanged. New ones declare.
+    _REPOSITORIES: ClassVar[Mapping[str, type]] = {}
+
     def _init_repos(self) -> None:
-        raise NotImplementedError
+        """Construct every declared repository on the open session.
+
+        Raises when a subclass declares nothing AND does not override, so "forgot to
+        wire the repositories" stays a loud failure rather than a unit of work whose
+        attributes are all ``None`` at the first use.
+        """
+        if not self._REPOSITORIES:
+            raise NotImplementedError(
+                f"{type(self).__name__} must declare _REPOSITORIES or override _init_repos/_clear_repos"
+            )
+        assert self._session is not None
+        for attribute, repository in self._REPOSITORIES.items():
+            setattr(self, attribute, repository(self._session, self._tenant_id))
 
     def _clear_repos(self) -> None:
-        raise NotImplementedError
+        """Drop every declared repository, so a closed unit of work holds no session.
+
+        The mirror of :meth:`_init_repos`, and derived from the SAME declaration — the
+        two hand-written halves could previously disagree, leaving a repository (and its
+        session) attached after ``__exit__``.
+        """
+        for attribute in self._REPOSITORIES:
+            setattr(self, attribute, None)
 
 
 class MediaBuyUoW(BaseUoW):
@@ -317,3 +348,75 @@ class AdminCreativeUoW(BaseUoW):
         self.products = None
         self.workflows = None
         self.tenant_config = None
+
+
+class SigningKeyUoW(BaseUoW):
+    """Unit of Work for this agent's own signing keys (#1291 A2).
+
+    Wraps a database session and provides a tenant-scoped
+    ``SigningKeyRepository``. Auto-commits on clean exit, rolls back on
+    exception.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+
+    beads: salesagent-z6nr.8
+    """
+
+    signing_keys: SigningKeyRepository | None
+
+    _REPOSITORIES: ClassVar[Mapping[str, type]] = {"signing_keys": SigningKeyRepository}
+
+
+class CapabilitiesUoW(BaseUoW):
+    """Unit of Work for one ``get_adcp_capabilities`` request (#1291 D1).
+
+    ONE session for everything the capabilities response reads from the database: the
+    tenant's publisher partners, its signing keys, and the ``tenants`` row itself —
+    whose stored host IS the agent identity the ``identity`` block points at.
+
+    One session because the ORM ``Tenant`` must stay attached while the identity URLs
+    are derived from it: no session in this codebase sets ``expire_on_commit=False``, so
+    handing the row out to the response-construction site would raise
+    ``DetachedInstanceError`` on the first attribute read.
+
+    Deliberately NOT :class:`TrustRootUoW`, which carries the same two repositories plus
+    ``authorized_properties``: its name asserts a different purpose, and its third
+    repository is dead weight on a per-request read path.
+
+    Added for #1291 D1 (the declarable signing family).
+    """
+
+    tenant_config: TenantConfigRepository | None
+    signing_keys: SigningKeyRepository | None
+
+    _REPOSITORIES: ClassVar[Mapping[str, type]] = {
+        "tenant_config": TenantConfigRepository,
+        "signing_keys": SigningKeyRepository,
+    }
+
+
+class TrustRootUoW(BaseUoW):
+    """Unit of Work for the trust-root documents this agent publishes (#1291 A3).
+
+    One session for all three reads a trust-root request performs — the tenant
+    (whose stored host IS the agent identity), the publishable key set, and the
+    authorized-property records that back an adagents claim. One session because
+    the JWKS and the adagents pin must describe the same key set: two sessions
+    could observe a rotation from either side of it.
+
+    Args:
+        tenant_id: Tenant scope for all repository queries.
+
+    beads: salesagent-z6nr.9
+    """
+
+    tenant_config: TenantConfigRepository | None
+    signing_keys: SigningKeyRepository | None
+    authorized_properties: AuthorizedPropertyRepository | None
+
+    _REPOSITORIES: ClassVar[Mapping[str, type]] = {
+        "tenant_config": TenantConfigRepository,
+        "signing_keys": SigningKeyRepository,
+        "authorized_properties": AuthorizedPropertyRepository,
+    }

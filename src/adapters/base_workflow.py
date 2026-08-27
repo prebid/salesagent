@@ -178,8 +178,6 @@ class BaseWorkflowManager:
                 self.log("[yellow]No Slack webhook configured - skipping notification[/yellow]")
                 return
 
-            import requests
-
             # Get notification styling based on action type
             notification = self._get_notification_details(step_id, action_details)
 
@@ -214,20 +212,17 @@ class BaseWorkflowManager:
                 ]
             }
 
-            # Send notification
-            response = requests.post(
-                slack_webhook_url,
-                json=slack_payload,
-                timeout=10,
-                headers={"Content-Type": "application/json"},
-            )
+            # Gated at SEND time: this URL comes out of tenant config, so it was
+            # never judged by anything at the moment it is dialled. Shared sender
+            # so this path cannot drift onto a different policy from the others.
+            from src.core.webhook_validator import deliver_json_to_allowed_destination
 
-            if response.status_code == 200:
+            if deliver_json_to_allowed_destination(slack_webhook_url, slack_payload, kind="WorkflowSlack", timeout=10):
                 self.log(f"Sent Slack notification for workflow step {step_id}")
                 if self.audit_logger:
                     self.audit_logger.log_success(f"Sent Slack notification for workflow step: {step_id}")
             else:
-                self.log(f"[yellow]Slack notification failed with status {response.status_code}[/yellow]")
+                self.log("[yellow]Slack notification was not delivered[/yellow]")
 
         except Exception as e:
             self.log(f"[yellow]Failed to send Slack notification: {str(e)}[/yellow]")

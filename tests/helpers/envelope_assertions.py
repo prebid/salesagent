@@ -31,6 +31,7 @@ def assert_envelope_shape(
     *,
     recovery: str,
     message_substr: str | None = None,
+    field: str | None = None,
     check_mcp_tool_error: bool = False,
 ) -> None:
     """Assert the AdCP spec two-layer error envelope shape.
@@ -52,6 +53,15 @@ def assert_envelope_shape(
         message_substr: If provided, must appear in ``errors[0].message``.
                 ``adcp_error.message`` is allowed to differ (it carries the
                 envelope-level summary).
+        field: If provided, ``errors[0].field`` must equal it exactly — the
+                error.json ``field`` pointer naming WHICH request field was
+                rejected. Asserted at the protocol top level only: a copy buried
+                in the free-form ``details`` dict is not at the protocol position
+                and does not satisfy the contract (same burial rule as
+                ``extract_wire_suggestion``). This lives here, on the one envelope
+                primitive, rather than as a second free-function error surface —
+                a parallel error-assertion mechanism is exactly what step
+                definitions must not have to choose between.
         check_mcp_tool_error: If ``True``, additionally assert that ``target``
                 is an ``AdCPToolError`` instance before reading its envelope.
                 MCP-boundary call sites use this to pin the exception type as
@@ -84,3 +94,7 @@ def assert_envelope_shape(
     if message_substr is not None:
         actual = body["errors"][0].get("message", "")
         assert message_substr in actual, f"errors[0].message={actual!r} does not contain {message_substr!r}"
+
+    if field is not None:
+        actual_field = body["errors"][0].get("field")
+        assert actual_field == field, f"errors[0].field={actual_field!r}, expected {field!r}"

@@ -60,6 +60,7 @@ class TestSignalsAgentRegistry:
         # Mock the adcp client
         mock_client = Mock()
         mock_agent_client = Mock()
+        mock_agent_client.signing = None
 
         # Mock successful response
         from adcp import GetSignalsResponse
@@ -131,6 +132,7 @@ class TestSignalsAgentRegistry:
         # Mock the adcp client
         mock_client = Mock()
         mock_agent_client = Mock()
+        mock_agent_client.signing = None
 
         # Mock async submission response
         mock_result = Mock()
@@ -169,6 +171,7 @@ class TestSignalsAgentRegistry:
         # Mock the adcp client
         mock_client = Mock()
         mock_agent_client = Mock()
+        mock_agent_client.signing = None
 
         # Mock authentication error
         from adcp.exceptions import ADCPAuthenticationError
@@ -187,9 +190,10 @@ class TestSignalsAgentRegistry:
                 tenant_id="test-tenant",
             )
         # AUTH_TOKEN_INVALID is not in the canonical AdCP error-code enum; this branch
-        # reconciles auth failures to the canonical AUTH_REQUIRED (recovery correctable, #1417).
-        assert exc_info.value.error_code == "AUTH_REQUIRED"
-        assert exc_info.value.recovery == "correctable"
+        # reconciles auth failures to AUTH_INVALID (presented-but-rejected credential,
+        # recovery terminal) per the v3.1.1 error-code.json split (salesagent-mkso).
+        assert exc_info.value.error_code == "AUTH_INVALID"
+        assert exc_info.value.recovery == "terminal"
 
     @pytest.mark.asyncio
     async def test_get_signals_from_agent_handles_timeout_error(self):
@@ -205,6 +209,7 @@ class TestSignalsAgentRegistry:
 
         mock_client = Mock()
         mock_agent_client = Mock()
+        mock_agent_client.signing = None
 
         from adcp.exceptions import ADCPTimeoutError
 
@@ -240,6 +245,7 @@ class TestSignalsAgentRegistry:
 
         mock_client = Mock()
         mock_agent_client = Mock()
+        mock_agent_client.signing = None
 
         from adcp.exceptions import ADCPConnectionError
 
@@ -280,6 +286,7 @@ class TestSignalsAgentRegistry:
 
         mock_client = Mock()
         mock_agent_client = Mock()
+        mock_agent_client.signing = None
 
         from adcp.exceptions import ADCPError
 

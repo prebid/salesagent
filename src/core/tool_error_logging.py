@@ -378,18 +378,20 @@ def _build_error_code_to_status() -> dict[str, int]:
     class-level ``error_code`` + ``status_code`` declarations, then
     propagates each declaration to its wire-translated equivalents via
     ``ERROR_CODE_MAPPING``. Eliminates the drift potential of a
-    hand-maintained table — previously the table declared
+    hand-maintained table — historically the table declared
     ``AUTH_REQUIRED → 401`` while ``AdCPAuthorizationError`` (same wire
-    code) carried ``status_code = 403``; a plain-ToolError raise from
-    authorization code surfaced as 401 instead of 403. Same pattern for
+    code at the time) carried ``status_code = 403``; a plain-ToolError raise
+    from authorization code surfaced as 401 instead of 403. Same pattern for
     ``SERVICE_UNAVAILABLE`` (table said 503, adapter class said 502).
     The class attribute is the source of truth.
 
     When a wire code is shared by multiple subclasses (e.g.,
-    ``AUTH_REQUIRED`` from both ``AdCPAuthenticationError`` 401 and
-    ``AdCPAuthorizationError`` 403), the **highest** status code wins —
+    ``SERVICE_UNAVAILABLE`` from both ``AdCPAdapterError`` 502 and
+    ``AdCPServiceUnavailableError`` 503), the **highest** status code wins —
     the more restrictive one is the spec-aligned answer when the table
     is used for a plain-ToolError fallback that has no carried context.
+    (``AdCPAuthorizationError`` no longer shares AUTH_REQUIRED with
+    ``AdCPAuthenticationError`` — it emits PERMISSION_DENIED, salesagent-otc5.)
     """
     # INVALID_REQUEST is AdCP's "generic 4xx bucket" wire code that does not
     # correspond to any specific typed subclass — it's the translation target

@@ -214,7 +214,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And destinations include "dv360"
     When the Buyer Agent sends an activate_signal request
     Then the system returns an error "Authentication required for signal activation"
-    And the error code should be "AUTH_REQUIRED"
+    And the error code should be "AUTH_MISSING"
     And the error should include "suggestion" field
     And the suggestion should contain "provide authentication credentials"
     # POST-F1: System state unchanged

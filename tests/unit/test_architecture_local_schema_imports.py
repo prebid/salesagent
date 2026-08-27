@@ -13,7 +13,12 @@ Legitimate exceptions:
 
 Scanning approach: AST parse all .py files in src/ (excluding src/core/schemas/).
 For each ``from adcp.types import X`` or ``from adcp.types.generated_poc... import X``,
-check if X matches a locally-exported schema name. If so, flag it.
+check if X matches a locally-exported schema name AND the imported SDK class is
+actually an ancestor of that local schema class -- the SDK's flat namespace has
+name collisions (e.g. two distinct ``Account`` types: the sync_accounts domain
+entity at ``adcp.types.Account`` and the capabilities response's embedded
+account-block at ``adcp.types.generated_poc.protocol.get_adcp_capabilities_response.Account``)
+so bare-name matching alone produces false positives. If so, flag it.
 """
 
 import ast
@@ -25,23 +30,51 @@ from tests.unit._architecture_helpers import assert_violations_match_allowlist
 
 # ── Build set of locally-exported schema names ───────────────────────────
 
-_LOCAL_SCHEMA_NAMES: set[str] | None = None
+_LOCAL_SCHEMA_CLASSES: dict[str, type] | None = None
+
+
+def _get_local_schema_classes() -> dict[str, type]:
+    """Get name -> class for classes defined in src.core.schemas (cached)."""
+    global _LOCAL_SCHEMA_CLASSES
+    if _LOCAL_SCHEMA_CLASSES is not None:
+        return _LOCAL_SCHEMA_CLASSES
+
+    schemas = importlib.import_module("src.core.schemas")
+    classes: dict[str, type] = {}
+    for name, obj in inspect.getmembers(schemas, inspect.isclass):
+        # Only include classes actually defined in the schemas package
+        if obj.__module__ and obj.__module__.startswith("src.core.schemas"):
+            classes[name] = obj
+    _LOCAL_SCHEMA_CLASSES = classes
+    return _LOCAL_SCHEMA_CLASSES
 
 
 def _get_local_schema_names() -> set[str]:
     """Get names of classes defined in src.core.schemas (cached)."""
-    global _LOCAL_SCHEMA_NAMES
-    if _LOCAL_SCHEMA_NAMES is not None:
-        return _LOCAL_SCHEMA_NAMES
+    return set(_get_local_schema_classes().keys())
 
-    schemas = importlib.import_module("src.core.schemas")
-    names = set()
-    for name, obj in inspect.getmembers(schemas, inspect.isclass):
-        # Only include classes actually defined in the schemas package
-        if obj.__module__ and obj.__module__.startswith("src.core.schemas"):
-            names.add(name)
-    _LOCAL_SCHEMA_NAMES = names
-    return _LOCAL_SCHEMA_NAMES
+
+def _shadows_local_schema(module: str, imported_name: str, local_classes: dict[str, type]) -> bool:
+    """True only if the imported SDK class is an actual ancestor of the local subclass.
+
+    Bare-name equality isn't enough -- the SDK's flat namespace has two distinct
+    types both named ``Account`` (and potentially other collisions). Resolve the
+    imported symbol from its exact module and check the real subclass
+    relationship before flagging.
+    """
+    local_cls = local_classes.get(imported_name)
+    if local_cls is None:
+        return False
+    try:
+        imported_module = importlib.import_module(module)
+        imported_cls = getattr(imported_module, imported_name)
+    except (ImportError, AttributeError):
+        # Can't resolve -- fall back to the pre-existing bare-name behavior
+        # rather than silently skip a potential real violation.
+        return True
+    if not isinstance(imported_cls, type):
+        return True
+    return issubclass(local_cls, imported_cls)
 
 
 # ── Allowlist ────────────────────────────────────────────────────────────
@@ -50,7 +83,11 @@ def _get_local_schema_names() -> set[str]:
 ALLOWLIST: set[tuple[str, str]] = {
     # FIXME(#1388): xandr adapter imports SDK types directly
     ("src/adapters/xandr.py", "DeliveryMeasurement"),
-    ("src/adapters/xandr.py", "DeliveryType"),
+    # NOTE: xandr.py's DeliveryType import and capabilities.py's Targeting import
+    # were removed from this allowlist (salesagent-3s5a) -- the subclass-identity
+    # check (_shadows_local_schema) proved neither is a real Pattern #1 violation:
+    # both are SDK flat-namespace name collisions with an UNRELATED local schema
+    # class of the same bare name, not the actual SDK parent the local class extends.
     # FIXME(#1388): admin blueprints import SDK types directly
     ("src/admin/blueprints/operations.py", "Package"),
     # FIXME(#1388): core modules import SDK types directly
@@ -59,7 +96,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/core/schema_helpers.py", "Product"),
     ("src/core/schema_helpers.py", "ProductFilters"),
     # FIXME(#1388): tools import SDK types directly
-    ("src/core/tools/capabilities.py", "Targeting"),
     ("src/core/tools/creative_formats.py", "FormatId"),
     ("src/core/tools/products.py", "FormatId"),
     ("src/core/tools/products.py", "ProductFilters"),
@@ -117,7 +153,7 @@ class TestLocalSchemaImports:
 
     def test_no_sdk_import_when_local_exists(self):
         """No src/ file imports an adcp type that has a local subclass in schemas."""
-        local_names = _get_local_schema_names()
+        local_classes = _get_local_schema_classes()
         violations = []
 
         for src_file in _get_src_files():
@@ -149,8 +185,9 @@ class TestLocalSchemaImports:
                     if _is_library_alias_import(alias):
                         continue
 
-                    # Check if this imported name shadows a local schema
-                    if imported_name in local_names:
+                    # Check if this imported name shadows a local schema (by
+                    # actual subclass relationship, not bare-name collision)
+                    if _shadows_local_schema(module, imported_name, local_classes):
                         key = (rel_path, imported_name)
                         if key in ALLOWLIST:
                             continue
@@ -173,7 +210,7 @@ class TestLocalSchemaImports:
         if not ALLOWLIST:
             return  # Nothing to check
 
-        local_names = _get_local_schema_names()
+        local_classes = _get_local_schema_classes()
         still_violations = set()
 
         for src_file in _get_src_files():
@@ -197,7 +234,7 @@ class TestLocalSchemaImports:
                     imported_name = alias.asname or alias.name
                     if _is_library_alias_import(alias):
                         continue
-                    if imported_name in local_names:
+                    if _shadows_local_schema(module, imported_name, local_classes):
                         still_violations.add((rel_path, imported_name))
 
         assert_violations_match_allowlist(

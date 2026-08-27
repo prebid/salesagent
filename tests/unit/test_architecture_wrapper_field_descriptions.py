@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from pydantic.fields import FieldInfo
 
-from tests.unit.test_architecture_wrapper_typed_params import MCP_WRAPPERS
+from tests.unit._architecture_helpers import MCP_WRAPPERS
 
 # Parameters to skip — transport infrastructure or non-domain params
 SKIP_PARAMS = {

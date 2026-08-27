@@ -1,7 +1,11 @@
 """Enhanced webhook delivery service for AdCP with security and reliability features.
 
-This service implements the AdCP webhook specification from PR #86:
-- HMAC-SHA256 signature generation with X-ADCP-Signature header
+Authentication is NOT this module's concern: the receiver's own
+``PushNotificationConfig`` registration selects exactly one mode at the single
+signing boundary (``src.core.signing.webhook_sender_factory``, #1291 C1), which
+serializes, authenticates and POSTs one delivery as a single act.
+
+What this service owns:
 - Circuit breaker pattern (CLOSED/OPEN/HALF_OPEN states) for fault tolerance
 - Exponential backoff with jitter for retry logic
 - Replay attack prevention with 5-minute timestamp window
@@ -11,21 +15,22 @@ This service implements the AdCP webhook specification from PR #86:
 """
 
 import atexit
-import hashlib
-import hmac
-import json
 import logging
 import random
 import threading
 import time
 from collections import deque
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
 import httpx
 from adcp import get_adcp_spec_version
+from adcp.webhooks import generate_webhook_idempotency_key
+from pydantic import JsonValue
 
+from src.core.signing import deliver_adcp_webhook_sync
 from src.core.webhook_validator import (
     reject_unsafe_outbound_webhook_url,
     webhook_url_for_log,
@@ -126,6 +131,50 @@ class CircuitBreaker:
                 logger.warning("Circuit breaker reopened (recovery test failed)")
 
 
+@dataclass(frozen=True, slots=True)
+class QueuedWebhook:
+    """One queued delivery — PRIMITIVES ONLY, and that is the invariant.
+
+    Every field is a plain value. No ORM model, no ``Mapped[...]``, no session, no
+    repository. That is what makes the retry loop STRUCTURALLY unable to hold a database
+    connection: a loop whose only input is primitives cannot lazy-load a relationship,
+    cannot touch a session, and cannot keep one alive across ``time.sleep`` — no matter
+    how many call frames deep the sleep sits (#1757, salesagent-n78j0.4).
+
+    THIS REPLACED A ``dict[str, Any]`` CARRYING TWO NON-PRIMITIVES:
+
+    * ``signing_repo`` — a ``SigningKeyRepository`` built on the caller's open session.
+      That was the connection riding on the queue, and it is why the delivery loop ran
+      inside a ``with get_db_session()`` block at all.
+    * ``config`` — a live ``PushNotificationConfig`` ORM row, whose lazy-loads need a
+      session that may well be closed by the time a retry touches it.
+
+    ``url`` / ``authentication_type`` / ``authentication_token`` are exactly the three
+    attributes the sender reads off a config (``webhook_sender_factory`` :167-168, :183,
+    :321-322, :445, :452), so this projection satisfies the same attribute contract the
+    ORM row did and is passed as ``config=`` unchanged — the sender's signature does not
+    move.
+
+    ``payload`` is ``dict[str, JsonValue]``, NOT ``dict[str, Any]``: ``JsonValue`` is
+    pydantic's recursive JSON type, so an ORM object in the payload is a TYPE ERROR at
+    every producer rather than a runtime possibility. It is deliberately NOT pre-
+    serialized bytes — ``_deliver_with_backoff`` must "serialize, authenticate and POST
+    as one act, so the bytes signed are the bytes sent" (#1441), and bytes on the queue
+    would be something the sent body could diverge from.
+
+    Pinned by ``tests/unit/test_architecture_repository_pattern.py``; the mutations that
+    turn it red are an ORM-typed or ``Mapped[...]`` field, or dropping ``frozen=True``.
+    """
+
+    url: str
+    authentication_type: str | None
+    authentication_token: str | None
+    payload: dict[str, JsonValue]
+    tenant_id: str
+    idempotency_key: str
+    timestamp: datetime
+
+
 class WebhookQueue:
     """Bounded queue for webhook delivery per endpoint."""
 
@@ -140,7 +189,7 @@ class WebhookQueue:
         self._lock = threading.Lock()
         self._dropped_count = 0
 
-    def enqueue(self, webhook_data: dict[str, Any]) -> bool:
+    def enqueue(self, webhook_data: QueuedWebhook) -> bool:
         """Add webhook to queue.
 
         Args:
@@ -160,7 +209,7 @@ class WebhookQueue:
             self.queue.append(webhook_data)
             return True
 
-    def dequeue(self) -> dict[str, Any] | None:
+    def dequeue(self) -> QueuedWebhook | None:
         """Remove and return oldest webhook from queue.
 
         Returns:
@@ -310,37 +359,6 @@ class WebhookDeliveryService:
             )
             return False
 
-    def _generate_hmac_signature(self, payload: dict[str, Any], secret: str, timestamp: str) -> str:
-        """Generate HMAC-SHA256 signature for webhook payload.
-
-        Args:
-            payload: Webhook payload
-            secret: Webhook secret (min 32 characters)
-            timestamp: ISO format timestamp
-
-        Returns:
-            HMAC signature as hex string
-        """
-        # Create signature input: timestamp + json payload
-        payload_str = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        message = f"{timestamp}.{payload_str}"
-
-        # Generate HMAC-SHA256
-        signature = hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
-
-        return signature
-
-    def _verify_secret_strength(self, secret: str) -> bool:
-        """Verify webhook secret meets minimum strength requirements.
-
-        Args:
-            secret: Webhook secret
-
-        Returns:
-            True if secret is strong enough
-        """
-        return len(secret) >= 32
-
     def _send_webhook_enhanced(
         self,
         tenant_id: str,
@@ -376,8 +394,10 @@ class WebhookDeliveryService:
                     logger.debug(f"⚠️ No webhooks configured for {tenant_id}/{principal_id}")
                     return False
 
-                # Send to all configured webhooks
-                sent_count = 0
+                # PHASE 1 — everything that needs the session: read the receiver rows,
+                # apply the gates, project to primitives, enqueue. Nothing here waits on
+                # a network.
+                pending: list[tuple[str, CircuitBreaker, WebhookQueue]] = []
                 for config in configs:
                     safe_url = webhook_url_for_log(config.url)
                     # Skip auth-blocked endpoints (UC-004-EXT-G-07)
@@ -413,27 +433,52 @@ class WebhookDeliveryService:
                     if self._reject_unsafe_outbound_url(config.url, circuit_breaker):
                         continue
 
-                    # Add to queue (bounded)
-                    webhook_data = {
-                        "config": config,
-                        "payload": delivery_payload,
-                        "timestamp": datetime.now(UTC),
-                    }
+                    # Add to queue (bounded). ``tenant_id`` rides on the entry because
+                    # ``_deliver_with_backoff`` is reached through ``endpoint_key``
+                    # alone, and splitting that composite string back apart to recover a
+                    # tenant id is not a data path. It is a ``str``, so it costs nothing.
+                    # THE SIGNING REPOSITORY USED TO RIDE ALONG FOR THE SAME STATED
+                    # REASON, and that was the fault: a repository carries a SESSION, so
+                    # the entry carried a pooled connection into a loop that sleeps and
+                    # POSTs to a buyer-supplied URL. ``signing_repo`` now opens its own
+                    # short session, so there is nothing left to hand over (#1757).
+                    # Projected off the ORM row HERE, while the session is open — that
+                    # read is legitimate and stays inside the block. What LEAVES the
+                    # block is primitives only, so nothing downstream can reach back
+                    # into a session (#1757).
+                    webhook_data = QueuedWebhook(
+                        url=config.url,
+                        authentication_type=config.authentication_type,
+                        authentication_token=config.authentication_token,
+                        payload=delivery_payload,
+                        timestamp=datetime.now(UTC),
+                        tenant_id=tenant_id,
+                        # ONE key per distinct event, reused across its retries.
+                        idempotency_key=generate_webhook_idempotency_key(),
+                    )
 
                     if not queue.enqueue(webhook_data):
                         logger.warning("⚠️ Queue full for %s, webhook dropped", safe_url)
                         continue
 
-                    # Deliver from queue with enhanced features
-                    if self._deliver_with_backoff(endpoint_key, circuit_breaker, queue):
-                        sent_count += 1
+                    pending.append((endpoint_key, circuit_breaker, queue))
 
-                if sent_count > 0:
-                    logger.debug(f"✅ Delivery webhook sent to {sent_count} endpoint(s)")
-                    return True
-                else:
-                    logger.warning("⚠️ Failed to deliver webhook to any endpoint")
-                    return False
+            # PHASE 2 — the session is CLOSED. ``_deliver_with_backoff`` sleeps between
+            # retries and POSTs to a buyer-supplied URL, so a connection held here would
+            # be parked on a third party's latency: a hanging receiver would consume a
+            # pooled connection for the whole backoff. Nothing below needs a session —
+            # the queue carries primitives (``QueuedWebhook``) and ``signing_repo``
+            # opens its own short one for the key read (#1757, salesagent-n78j0.4).
+            sent_count = 0
+            for endpoint_key, circuit_breaker, queue in pending:
+                if self._deliver_with_backoff(endpoint_key, circuit_breaker, queue):
+                    sent_count += 1
+
+            if sent_count > 0:
+                logger.debug(f"✅ Delivery webhook sent to {sent_count} endpoint(s)")
+                return True
+            logger.warning("⚠️ Failed to deliver webhook to any endpoint")
+            return False
 
         except Exception as e:
             logger.error(f"❌ Error in webhook delivery: {e}", exc_info=True)
@@ -470,32 +515,14 @@ class WebhookDeliveryService:
         if not webhook_data:
             return False
 
-        config = webhook_data["config"]
-        payload = webhook_data["payload"]
-        timestamp = webhook_data["timestamp"].isoformat()
-        safe_url = webhook_url_for_log(config.url)
+        payload = webhook_data.payload
+        safe_url = webhook_url_for_log(webhook_data.url)
 
-        # Generate HMAC signature if webhook secret is configured
-        webhook_secret = getattr(config, "webhook_secret", None)
-        headers = {
-            "Content-Type": "application/json",
-            "User-Agent": "AdCP-Sales-Agent/2.3 (Enhanced Webhooks)",
-            "X-ADCP-Timestamp": timestamp,  # For replay prevention
-        }
-
-        if webhook_secret:
-            if not self._verify_secret_strength(webhook_secret):
-                logger.warning(
-                    "⚠️ Webhook secret for %s is too weak (min 32 characters required)",
-                    safe_url,
-                )
-            else:
-                signature = self._generate_hmac_signature(payload, webhook_secret, timestamp)
-                headers["X-ADCP-Signature"] = signature
-
-        # Add authentication
-        if config.authentication_type == "bearer" and config.authentication_token:
-            headers["Authorization"] = f"Bearer {config.authentication_token}"
+        # Authentication is NOT decided here — the receiver's registration selects
+        # exactly one mode at the single boundary (#1291 C1). What stays local is the
+        # one header this service adds for operator telemetry; ``Content-Type`` and
+        # every auth/signature header belong to the sender that serialized the body.
+        headers = {"User-Agent": "AdCP-Sales-Agent/2.3 (Enhanced Webhooks)"}
 
         # Exponential backoff with jitter
         for attempt in range(max_retries):
@@ -507,40 +534,47 @@ class WebhookDeliveryService:
                     logger.debug(f"Retrying webhook delivery after {delay:.2f}s (attempt {attempt + 1}/{max_retries})")
                     time.sleep(delay)
 
-                # Send webhook — never follow redirects (open-redirect SSRF bypass).
-                with httpx.Client(timeout=10.0, follow_redirects=False) as client:
-                    response = client.post(
-                        config.url,
-                        json=payload,
-                        headers=headers,
-                    )
+                # Send webhook — serialize, authenticate and POST as one act, so the
+                # bytes signed are the bytes sent (#1441). The destination was already
+                # SSRF-gated above (the sender owns authentication, the caller owns
+                # destination policy) and the sender's client leaves httpx's
+                # ``follow_redirects`` at its False default, so an open redirect
+                # cannot walk the POST off the vetted host.
+                delivery = deliver_adcp_webhook_sync(
+                    url=webhook_data.url,
+                    payload=payload,
+                    idempotency_key=webhook_data.idempotency_key,
+                    config=webhook_data,
+                    tenant_id=webhook_data.tenant_id,
+                    extra_headers=headers,
+                )
 
-                    if 200 <= response.status_code < 300:
-                        logger.debug(
-                            "Webhook delivered to %s (status: %s)",
-                            safe_url,
-                            response.status_code,
-                        )
-                        circuit_breaker.record_success()
-                        return True
-
-                    # Client errors (4xx): do NOT retry — the request is invalid
-                    if 400 <= response.status_code < 500:
-                        logger.warning(
-                            "Webhook delivery to %s returned client error %s, will not retry",
-                            safe_url,
-                            response.status_code,
-                        )
-                        circuit_breaker.record_failure()
-                        return False
-
-                    logger.warning(
-                        "Webhook delivery to %s returned status %s (attempt: %s/%s)",
+                if 200 <= delivery.status_code < 300:
+                    logger.debug(
+                        "Webhook delivered to %s (status: %s)",
                         safe_url,
-                        response.status_code,
-                        attempt + 1,
-                        max_retries,
+                        delivery.status_code,
                     )
+                    circuit_breaker.record_success()
+                    return True
+
+                # Client errors (4xx): do NOT retry — the request is invalid
+                if 400 <= delivery.status_code < 500:
+                    logger.warning(
+                        "Webhook delivery to %s returned client error %s, will not retry",
+                        safe_url,
+                        delivery.status_code,
+                    )
+                    circuit_breaker.record_failure()
+                    return False
+
+                logger.warning(
+                    "Webhook delivery to %s returned status %s (attempt: %s/%s)",
+                    safe_url,
+                    delivery.status_code,
+                    attempt + 1,
+                    max_retries,
+                )
 
             except httpx.TimeoutException:
                 logger.warning(

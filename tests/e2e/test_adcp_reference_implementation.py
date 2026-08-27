@@ -250,7 +250,13 @@ class TestAdCPReferenceImplementation:
         loopback-pinned fixture — so the webhook lands once the server links the mapping
         before firing. Discovers all ids from prior responses.
         """
-        with run_webhook_capture_server(WebhookReceiver, WebhookReceiver.received_webhooks) as webhook:
+        # host='127.0.0.1' explicitly: this lifecycle reaches the server over host
+        # loopback, so the callback must be a loopback literal. The parameter is
+        # required now — the old ADCP_WEBHOOK_HOST default silently produced the
+        # same value here while meaning something else in-network.
+        with run_webhook_capture_server(
+            WebhookReceiver, WebhookReceiver.received_webhooks, host="127.0.0.1"
+        ) as webhook:
             async with make_mcp_client(live_server, token=test_auth_token) as client:
                 products_data = parse_tool_result(
                     await client.call_tool(

@@ -1,8 +1,9 @@
 """Integration behavioral tests for UC-004 delivery service (WebhookDeliveryService, CircuitBreaker).
 
 Migrated from tests/unit/test_delivery_service_behavioral.py to use CircuitBreakerEnv
-integration harness. External services (httpx.Client, time.sleep, random.uniform)
-are mocked; DB operations for PushNotificationConfig queries are real.
+integration harness. External services (the outbound webhook socket, time.sleep, random.uniform) are
+stubbed; DB operations for PushNotificationConfig queries are real. ``env.mock["post"]``
+IS the socket — it receives the real URL, headers and body bytes the sender produced.
 
 Pure CircuitBreaker state machine tests remain in the unit file.
 
@@ -10,6 +11,8 @@ Each test targets exactly one obligation ID and follows the 6 hard rules.
 """
 
 from __future__ import annotations
+
+import json
 
 import pytest
 
@@ -73,7 +76,7 @@ class TestCircuitBreakerServiceIntegration:
             assert state == CircuitState.OPEN
 
             # Reset mock to track new calls
-            env.mock["client"].return_value.__enter__.return_value.post.reset_mock()
+            env.mock["post"].reset_mock()
 
             result = service.send_delivery_webhook(
                 media_buy_id="mb_suppressed",
@@ -86,7 +89,7 @@ class TestCircuitBreakerServiceIntegration:
             )
 
             assert result is False
-            env.mock["client"].return_value.__enter__.return_value.post.assert_not_called()
+            env.mock["post"].assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +230,7 @@ class TestSendWebhookEnhancedAuthBlockedSkip:
             )
 
             assert result is False
-            env.mock["client"].return_value.__enter__.return_value.post.assert_not_called()
+            env.mock["post"].assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -237,14 +240,18 @@ class TestSendWebhookEnhancedAuthBlockedSkip:
 
 @pytest.mark.requires_db
 class TestSendWebhookEnhancedHmacSigning:
-    """HMAC-SHA256 signature is added when webhook_secret is configured.
+    """HMAC-SHA256 signature is added when the receiver registered that scheme.
 
     Covers: UC-004-EXT-G-06
     """
 
     def test_hmac_signature_header_present_when_secret_configured(self, integration_db):
-        """When PushNotificationConfig has a strong webhook_secret (>=32 chars),
-        X-ADCP-Signature header is set on the outgoing request.
+        """When PushNotificationConfig registers HMAC-SHA256 with a strong
+        credential (>=32 chars), X-AdCP-Signature is set on the outgoing request.
+
+        The credential lives on ``authentication_token`` — the spec's one selector
+        (security.mdx @ v3.1.1 :1424) — rather than the ``webhook_secret`` column
+        #1291 C1 retired.
 
         Covers: UC-004-EXT-G-06
         """
@@ -262,7 +269,8 @@ class TestSendWebhookEnhancedHmacSigning:
                 tenant=tenant,
                 principal=principal,
                 url="https://hmac.example.com/webhook",
-                webhook_secret="a" * 32,  # Exactly 32 chars — meets minimum
+                authentication_type="HMAC-SHA256",
+                authentication_token="a" * 32,  # Exactly 32 chars — meets minimum
             )
 
             env.set_http_response(200)
@@ -275,11 +283,11 @@ class TestSendWebhookEnhancedHmacSigning:
             )
 
             assert result is True
-            post_mock = env.mock["client"].return_value.__enter__.return_value.post
+            post_mock = env.mock["post"]
             post_mock.assert_called_once()
             sent_headers = post_mock.call_args.kwargs["headers"]
-            assert "X-ADCP-Signature" in sent_headers
-            assert len(sent_headers["X-ADCP-Signature"]) > 0
+            assert "X-AdCP-Signature" in sent_headers
+            assert len(sent_headers["X-AdCP-Signature"]) > 0
 
     def test_hmac_signature_valid_reproduces_from_payload(self, integration_db):
         """The HMAC signature can be reproduced using the same secret and payload.
@@ -288,7 +296,6 @@ class TestSendWebhookEnhancedHmacSigning:
         """
         import hashlib
         import hmac
-        import json
 
         from tests.factories import (
             PrincipalFactory,
@@ -307,7 +314,8 @@ class TestSendWebhookEnhancedHmacSigning:
                 tenant=tenant,
                 principal=principal,
                 url="https://hmac-verify.example.com/webhook",
-                webhook_secret=secret,
+                authentication_type="HMAC-SHA256",
+                authentication_token=secret,
             )
 
             env.set_http_response(200)
@@ -319,15 +327,16 @@ class TestSendWebhookEnhancedHmacSigning:
                 delivery_payload=payload,
             )
 
-            post_mock = env.mock["client"].return_value.__enter__.return_value.post
+            post_mock = env.mock["post"]
             sent_headers = post_mock.call_args.kwargs["headers"]
-            sent_signature = sent_headers["X-ADCP-Signature"]
-            sent_timestamp = sent_headers["X-ADCP-Timestamp"]
+            sent_signature = sent_headers["X-AdCP-Signature"]
+            sent_timestamp = sent_headers["X-AdCP-Timestamp"]
 
-            # Reproduce the signature
-            payload_str = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-            message = f"{sent_timestamp}.{payload_str}"
-            expected = hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
+            # Reproduce the signature over the bytes the receiver actually got —
+            # canonicalization-agnostic, and therefore able to catch a signature
+            # computed over a re-serialization of the payload (#1441).
+            message = f"{sent_timestamp}.".encode() + post_mock.call_args.kwargs["content"]
+            expected = "sha256=" + hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
 
             assert sent_signature == expected
 
@@ -378,7 +387,7 @@ class TestSendWebhookEnhancedBearerAuth:
             )
 
             assert result is True
-            post_mock = env.mock["client"].return_value.__enter__.return_value.post
+            post_mock = env.mock["post"]
             post_mock.assert_called_once()
             sent_headers = post_mock.call_args.kwargs["headers"]
             assert sent_headers["Authorization"] == "Bearer my-secret-token-xyz"
@@ -429,10 +438,13 @@ class TestSendWebhookEnhancedHappyPath:
             )
 
             assert result is True
-            post_mock = env.mock["client"].return_value.__enter__.return_value.post
+            post_mock = env.mock["post"]
             post_mock.assert_called_once()
             assert post_mock.call_args.args[0] == "https://happy.example.com/webhook"
-            assert post_mock.call_args.kwargs["json"] == payload
+            sent = json.loads(post_mock.call_args.kwargs["content"])
+            # The SDK injects the per-event idempotency_key into the signed body.
+            assert {k: v for k, v in sent.items() if k != "idempotency_key"} == payload
+            assert sent["idempotency_key"]
 
     def test_no_configs_returns_false(self, integration_db):
         """When no PushNotificationConfig exists, _send_webhook_enhanced returns False.
@@ -458,7 +470,7 @@ class TestSendWebhookEnhancedHappyPath:
             )
 
             assert result is False
-            env.mock["client"].return_value.__enter__.return_value.post.assert_not_called()
+            env.mock["post"].assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -559,7 +571,7 @@ class TestDeliverWithBackoffRetry:
             assert result is False
 
             # httpx.Client.post should have been called 3 times (max_retries=3)
-            post_mock = env.mock["client"].return_value.__enter__.return_value.post
+            post_mock = env.mock["post"]
             assert post_mock.call_count == 3
 
             # sleep should have been called for backoff (attempts 1 and 2, not before attempt 0)
@@ -608,9 +620,7 @@ class TestDeliverWithBackoffTimeout:
             )
 
             # Make httpx.Client().post() raise TimeoutException
-            env.mock["client"].return_value.__enter__.return_value.post.side_effect = httpx.TimeoutException(
-                "Connection timed out"
-            )
+            env.mock["post"].side_effect = httpx.TimeoutException("Connection timed out")
 
             service = env.get_service()
             result = service._send_webhook_enhanced(
@@ -623,7 +633,7 @@ class TestDeliverWithBackoffTimeout:
             assert result is False
 
             # Should have retried 3 times
-            post_mock = env.mock["client"].return_value.__enter__.return_value.post
+            post_mock = env.mock["post"]
             assert post_mock.call_count == 3
 
             # Circuit breaker should record failure
@@ -681,8 +691,8 @@ class TestIsAdjustedNotificationType:
             )
 
             assert result is True
-            post_mock = env.mock["client"].return_value.__enter__.return_value.post
-            sent_payload = post_mock.call_args.kwargs["json"]
+            post_mock = env.mock["post"]
+            sent_payload = json.loads(post_mock.call_args.kwargs["content"])
             assert sent_payload["notification_type"] == "adjusted"
             assert sent_payload["is_adjusted"] is True
 
@@ -754,7 +764,7 @@ class TestWeakSecretNoSignature:
     """
 
     def test_weak_secret_omits_signature_header(self, integration_db):
-        """When webhook_secret is too short, X-ADCP-Signature is not added.
+        """When the registered HMAC credential is too short, no signature is added.
 
         Covers: webhook_delivery_service.py line 463
         """
@@ -772,7 +782,8 @@ class TestWeakSecretNoSignature:
                 tenant=tenant,
                 principal=principal,
                 url="https://weak-secret.example.com/webhook",
-                webhook_secret="tooshort",  # < 32 chars
+                authentication_type="HMAC-SHA256",
+                authentication_token="tooshort",  # < 32 chars
             )
 
             env.set_http_response(200)
@@ -785,9 +796,9 @@ class TestWeakSecretNoSignature:
             )
 
             assert result is True
-            post_mock = env.mock["client"].return_value.__enter__.return_value.post
+            post_mock = env.mock["post"]
             sent_headers = post_mock.call_args.kwargs["headers"]
-            assert "X-ADCP-Signature" not in sent_headers
+            assert "X-AdCP-Signature" not in sent_headers
 
 
 # ---------------------------------------------------------------------------

@@ -28,9 +28,11 @@ from starlette.routing import Route
 from src.a2a_server.adcp_a2a_server import (
     AdCPRequestHandler,
     create_agent_card,
+    restore_a2a_integer_types,
 )
 from src.a2a_server.context_builder import AdCPCallContextBuilder
 from src.admin.app import create_app
+from src.core.agent_identity import agent_identity_for_tenant_id
 from src.core.auth_middleware import UnifiedAuthMiddleware
 from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain
 from src.core.domain_routing import route_landing_page
@@ -48,6 +50,7 @@ from src.core.http_utils import get_header_case_insensitive as _get_header_case_
 from src.core.lifecycle import run_all_shutdown_callbacks
 from src.core.main import mcp
 from src.core.resolved_identity import resolve_identity
+from src.core.signing import RequestSignatureMiddleware
 from src.core.tool_error_logging import handle_tool_error, record_boundary_error
 from src.landing import generate_tenant_landing_page
 from src.landing.landing_page import generate_fallback_landing_page
@@ -55,6 +58,7 @@ from src.routes.api_v1 import router as api_v1_router
 from src.routes.health import debug_router as health_debug_router
 from src.routes.health import router as health_router
 from src.routes.rest_compat_middleware import RestCompatMiddleware
+from src.routes.well_known import router as well_known_router
 
 logger = logging.getLogger(__name__)
 
@@ -260,7 +264,7 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
 
 @app.exception_handler(PermissionError)
 async def permission_error_handler(request: Request, exc: PermissionError) -> JSONResponse:
-    """Cross-transport symmetry: REST wraps raw ``PermissionError`` as AUTH_REQUIRED.
+    """Cross-transport symmetry: REST wraps raw ``PermissionError`` as PERMISSION_DENIED.
 
     Mirror of the MCP / A2A boundaries which translate ``PermissionError`` to
     a synthetic ``AdCPAuthorizationError`` envelope. Without this handler a
@@ -294,17 +298,84 @@ async def tool_error_handler(request: Request, exc: ToolError) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
+def _restore_a2a_wire_integers(endpoint):
+    """Wrap an a2a-sdk JSON-RPC endpoint to fix up integer fields on the response.
+
+    The a2a-sdk builds the response body via
+    ``google.protobuf.json_format.MessageToDict`` on the ``Task``, which
+    recursively converts every ``Part.data`` (a ``google.protobuf.Value``) to
+    a dict. ``Value`` has no integer variant -- every number comes back as a
+    JSON float (86400 -> 86400.0), regardless of what type was originally
+    placed there. This is the one point where we see the
+    real outgoing JSON body for the ``/a2a`` route and can restore known
+    integer-typed AdCP fields before it reaches the client -- see
+    ``restore_a2a_integer_types`` for the shared coercion logic and the
+    field list's spec citations.
+
+    REMOVAL TRIGGER: an a2a-sdk that does not round-trip AdCP integers through
+    ``protobuf.Value``. This wrapper compensates for an upstream lossy conversion, so
+    it is a seam with an owner elsewhere, not a permanent part of our design -- the
+    same reason ``src/core/signing/_upstream/`` carries deletion triggers rather than
+    living forever. Nothing yet tracks it upstream: file it against a2a-sdk before
+    relying on the trigger, and record the number here. Tracked as
+    ``salesagent-n78j0.11``.
+    """
+
+    async def _wrapped(request):
+        response = await endpoint(request)
+        if isinstance(response, JSONResponse) and response.body:
+            fixed = restore_a2a_integer_types(json.loads(bytes(response.body)))
+            headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
+            return JSONResponse(fixed, status_code=response.status_code, headers=headers)
+        return response
+
+    # Marker for test_guards_a2a_integer_restoration.py -- lets the structural
+    # guard confirm every /a2a route endpoint is wrapped without depending on
+    # closure internals or function identity. setattr (not dot-assignment)
+    # since _wrapped has no statically-declared attribute for this.
+    setattr(_wrapped, "__a2a_integer_restoration_wrapped__", True)  # noqa: B010
+    return _wrapped
+
+
 # Create the A2A application and add routes
 _agent_card = create_agent_card()
 _request_handler = AdCPRequestHandler()
 
-# Build A2A routes using a2a-sdk 1.0 route factories
-_a2a_rpc_routes = create_jsonrpc_routes(
+# Build A2A routes using a2a-sdk 1.0 route factories.
+#
+# enable_v0_3_compat=True is LOAD-BEARING FOR SPEC CONFORMANCE, not a migration
+# convenience, and it has a removal trigger: adcontextprotocol/adcp#6734.
+#
+# AdCP 3.1.1 binds request_signing.protocol_methods_* to A2A 0.3.0 wire names. All
+# three buckets constrain their items with
+# pattern "^[a-z][a-z0-9_]*/[a-z][a-z0-9_]*$", and the field description says the
+# `tasks/*` family "matches the A2A 0.3.0 task-lifecycle methods". Measured against
+# a2a-sdk 1.0.1's own vocabularies: 6 of 11 0.3.0 JSON-RPC names satisfy that pattern
+# and 0 of 9 v1.0 names do -- `SendMessage`, `GetTask`, `CancelTask` and the rest
+# cannot match it at all.
+#
+# So with this flag OFF, our wire would carry v1.0 method names, nothing matching
+# them could ever be listed in protocol_methods_required_for, `required_for` could
+# never fire on the A2A surface, and a seller could not declare a conformant signing
+# posture for an A2A client. The flag is what keeps that surface declarable.
+#
+# REMOVE IT when #6734 resolves and AdCP admits v1.0 method names into
+# protocol_methods_* -- same shape as the deletion triggers on
+# src/core/signing/_upstream/ (#1794), which test_signing_vendored_provenance.py
+# grades. Tracked as salesagent-n78j0.11.
+_a2a_rpc_routes_raw = create_jsonrpc_routes(
     request_handler=_request_handler,
     rpc_url="/a2a",
     context_builder=AdCPCallContextBuilder(),
     enable_v0_3_compat=True,
 )
+# Rebuild each route with an integer-restoring wrapper around its endpoint --
+# mutating route.endpoint in place would not change dispatch, since Starlette
+# builds the actual ASGI app from the endpoint at Route construction time.
+_a2a_rpc_routes = [
+    Route(path=route.path, endpoint=_restore_a2a_wire_integers(route.endpoint), methods=list(route.methods or []))
+    for route in _a2a_rpc_routes_raw
+]
 _a2a_card_routes = create_agent_card_routes(
     agent_card=_agent_card,
     card_url="/.well-known/agent-card.json",
@@ -317,7 +388,7 @@ logger.info("A2A routes added: /a2a, /.well-known/agent-card.json")
 
 
 @app.api_route("/a2a/", methods=["GET", "POST", "OPTIONS"])
-async def a2a_trailing_slash_redirect():
+async def a2a_trailing_slash_redirect() -> RedirectResponse:
     """Preserve historical /a2a/ compatibility.
 
     The admin root fallback mount would otherwise catch `/a2a/` and hand it to
@@ -343,8 +414,44 @@ def _is_valid_hostname(value: str) -> bool:
     return bool(value) and len(value) <= 253 and _VALID_HOSTNAME_RE.match(value) is not None
 
 
+def _card_with_url(server_url: str):
+    """A copy of the static agent card advertising *server_url* as its interface."""
+    dynamic_card = A2AAgentCard()
+    dynamic_card.CopyFrom(_agent_card)
+    if dynamic_card.supported_interfaces:
+        dynamic_card.supported_interfaces[0].url = server_url
+    return dynamic_card
+
+
+def _canonical_a2a_url(headers) -> str | None:
+    """The tenant's canonical A2A endpoint URL for this Host, or None.
+
+    Resolves the Host to a tenant and reads that tenant's STORED host, so the
+    card advertises the same string brand.json's A2A ``agents[].url`` carries —
+    the byte-equal match at security.mdx step 5 compares the URL a counterparty
+    invoked against what we published, and two derivations means two chances to
+    disagree on a scheme, a port or a trailing slash.
+
+    Returns None when the Host routes to no tenant, which is the only case where
+    the caller still has to derive something from headers.
+    """
+    routing = route_landing_page(dict(headers))
+    if not routing.tenant:
+        return None
+    identity = agent_identity_for_tenant_id(routing.tenant["tenant_id"])
+    return identity.endpoints["a2a"] if identity else None
+
+
 def _create_dynamic_agent_card(request: Request):
-    """Create agent card with tenant-specific URL from request headers."""
+    """Create agent card with the tenant's canonical A2A URL.
+
+    When the Host routes to a tenant, the URL comes from that tenant's stored
+    host (:func:`canonical_agent_url`) — NOT from ``Apx-Incoming-Host`` /
+    ``Host`` / ``X-Forwarded-Proto``, which is the reverse-proxy routing state
+    security.mdx step 10 forbids deriving identity from. The header ladder below
+    survives only as the no-tenant fallback, where there is nothing stored to
+    read.
+    """
 
     def get_protocol(hostname: str) -> str:
         # Prefer the scheme the edge proxy terminated and forwarded
@@ -360,6 +467,10 @@ def _create_dynamic_agent_card(request: Request):
             if proto in ("http", "https"):
                 return proto
         return "http" if hostname.startswith("localhost") or hostname.startswith("127.0.0.1") else "https"
+
+    server_url = _canonical_a2a_url(request.headers)
+    if server_url is not None:
+        return _card_with_url(server_url)
 
     apx_incoming_host = _get_header_case_insensitive(request.headers, "Apx-Incoming-Host")
     if apx_incoming_host and not _is_valid_hostname(apx_incoming_host):
@@ -380,12 +491,7 @@ def _create_dynamic_agent_card(request: Request):
         else:
             server_url = get_a2a_server_url() or "http://localhost:8080/a2a"
 
-    dynamic_card = A2AAgentCard()
-    dynamic_card.CopyFrom(_agent_card)
-    # Update the URL in supported_interfaces
-    if dynamic_card.supported_interfaces:
-        dynamic_card.supported_interfaces[0].url = server_url
-    return dynamic_card
+    return _card_with_url(server_url)
 
 
 # Override the SDK's static agent card endpoints with dynamic ones.
@@ -398,7 +504,9 @@ def _replace_routes():
     """Replace SDK agent card routes with dynamic versions that read request headers."""
 
     async def dynamic_agent_card(request: Request):
-        card = _create_dynamic_agent_card(request)
+        # to_thread: the card now reads the tenant's stored host from the
+        # database, and this endpoint is unauthenticated.
+        card = await asyncio.to_thread(_create_dynamic_agent_card, request)
         return JSONResponse(agent_card_to_dict(card))
 
     replaced_paths: set[str] = set()
@@ -470,15 +578,35 @@ async def a2a_messageid_compatibility_middleware(request: Request, call_next):
 app.include_router(api_v1_router)
 app.include_router(health_router)
 app.include_router(health_debug_router)
+# Trust root (#1291 A3): /.well-known/{brand,adagents,jwks}.json. Registered at
+# import time so it is matched before _install_admin_mounts() re-appends the
+# Flask "" catch-all at lifespan startup.
+app.include_router(well_known_router)
 
 # ---------------------------------------------------------------------------
-# Middleware stack (via add_middleware — outermost = last registered):
-#   1. CORSMiddleware (outermost — adds CORS headers to all responses)
-#   2. UnifiedAuthMiddleware (extracts auth token, sets scope["state"]["auth_context"])
+# Middleware stack. `add_middleware` inserts at index 0 and the stack is built
+# with `reversed(user_middleware)`, so LAST REGISTERED IS OUTERMOST and the
+# source order below is the INVERSE of the execution order. Execution, outermost
+# to innermost:
+#
+#   1. CORSMiddleware                        — CORS headers on every response
+#   2. UnifiedAuthMiddleware                 — sets scope["state"]["auth_context"]
+#   3. RequestSignatureMiddleware            — RFC 9421 inbound verifier (#1291 B1)
+#   4. RestCompatMiddleware                  — REWRITES the body (deprecated field names)
+#   5. a2a_messageid_compatibility_middleware — REWRITES the body (registered above via
+#                                              the @app.middleware("http") decorator)
+#   6. router
+#
+# The verifier's position is not stylistic. It must run INSIDE UnifiedAuthMiddleware,
+# because the spec's composition rule decides the required_for rejection on whether the
+# bearer resolves to a principal we accept; and OUTSIDE both body rewriters, because a
+# verifier downstream of one hashes bytes the signer never signed. Both halves are
+# pinned by tests/unit/test_architecture_request_signature_middleware.py.
 # ---------------------------------------------------------------------------
 
-app.add_middleware(UnifiedAuthMiddleware)
 app.add_middleware(RestCompatMiddleware)
+app.add_middleware(RequestSignatureMiddleware)
+app.add_middleware(UnifiedAuthMiddleware)
 
 _cors_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000").split(",")
 

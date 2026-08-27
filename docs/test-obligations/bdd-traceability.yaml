@@ -2846,6 +2846,12 @@ mappings:
       upstream_refs: ["BR-UC-004-alt-webhook", "BR-RULE-029", "SR-NFR-005"]
       business_rules: ["BR-RULE-029"]
       status: new
+    - adcp_scenario_id: "T-UC-004-webhook-9421"
+      adcp_feature: "BR-UC-004-deliver-media-buy-metrics.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-004-alt-webhook", "BR-RULE-029", "SR-NFR-005"]
+      business_rules: ["BR-RULE-029"]
+      status: new
     - adcp_scenario_id: "T-UC-004-webhook-bearer"
       adcp_feature: "BR-UC-004-deliver-media-buy-metrics.feature"
       obligation_id: null
@@ -4870,6 +4876,63 @@ mappings:
       upstream_refs: ["BR-UC-006-main"]
       business_rules: []
       status: new
+    # Locally added (salesagent-n78j0.1.3): inbound RFC 9421 enforcement, graded on the
+    # sync_creatives dispatch. No upstream storyboard scenario exists — the request-signing
+    # obligations are graded upstream only by static conformance vectors, which replay bytes
+    # against a verifier and never drive a real buyer request through a real deployment.
+    - adcp_scenario_id: "T-UC-006-local-signing-required-unsigned"
+      adcp_feature: "local-request-signing-enforcement.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-local-signing-verified"
+      adcp_feature: "local-request-signing-enforcement.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-local-signing-webhook-credentials"
+      adcp_feature: "local-request-signing-enforcement.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main"]
+      business_rules: []
+      status: new
+    # Locally added (salesagent-nx8jp.10): the bucket quantifier. security.mdx @ v3.1.1
+    # :1226 refuses a malformed signature "even for operations not in required_for", and
+    # :1273 scopes warn_for to signed-but-invalid requests. Unreachable from any upstream
+    # artifact: warn_for is this repo's extension, absent from the SDK's VerifierCapability
+    # and appearing zero times in the 40 conformance vectors.
+    - adcp_scenario_id: "T-UC-006-local-signing-malformed-every-bucket"
+      adcp_feature: "local-request-signing-enforcement.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-local-signing-warn-suppresses-checklist"
+      adcp_feature: "local-request-signing-enforcement.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-local-signing-supported-refuses-checklist"
+      adcp_feature: "local-request-signing-enforcement.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main"]
+      business_rules: []
+      status: new
+    # Locally added (salesagent-nx8jp.13): the credential escalation on the SIGNED path.
+    # security.mdx @ v3.1.1 :1462-1465 forces a signature when `authentication` is present
+    # and :1375 fires it "regardless of required_for membership", so warn_for must not
+    # suppress it. Unreachable from any upstream artifact for the same reason as the row
+    # above — warn_for is this repo's extension — and vector 027, the only pinned artifact
+    # for the escalation, is UNSIGNED by construction and so grades one half of the rule.
+    - adcp_scenario_id: "T-UC-006-local-signing-warn-credentials-escalate"
+      adcp_feature: "local-request-signing-enforcement.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main"]
+      business_rules: []
+      status: new
   UC-007:
     - adcp_scenario_id: "T-UC-007-main-rest"
       adcp_feature: "BR-UC-007-list-authorized-properties.feature"
@@ -6164,16 +6227,10 @@ mappings:
       business_rules: ["BR-RULE-284"]
       status: new
   UC-010:
-    - adcp_scenario_id: "T-UC-010-main-mcp"
+    - adcp_scenario_id: "T-UC-010-main"
       adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
       obligation_id: null
-      upstream_refs: ["BR-UC-010-main-mcp"]
-      business_rules: []
-      status: new
-    - adcp_scenario_id: "T-UC-010-main-rest"
-      adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-010-main-rest"]
+      upstream_refs: ["BR-UC-010-main-mcp", "BR-UC-010-main-rest"]
       business_rules: []
       status: new
     - adcp_scenario_id: "T-UC-010-main-readonly"
@@ -6224,13 +6281,7 @@ mappings:
       upstream_refs: ["BR-RULE-041"]
       business_rules: []
       status: new
-    - adcp_scenario_id: "T-UC-010-ext-a-mcp"
-      adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-010-ext-a", "BR-RULE-052"]
-      business_rules: []
-      status: new
-    - adcp_scenario_id: "T-UC-010-ext-a-a2a"
+    - adcp_scenario_id: "T-UC-010-ext-a"
       adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
       obligation_id: null
       upstream_refs: ["BR-UC-010-ext-a", "BR-RULE-052"]
@@ -6302,13 +6353,7 @@ mappings:
       upstream_refs: ["BR-UC-010-ext-d"]
       business_rules: []
       status: new
-    - adcp_scenario_id: "T-UC-010-ext-e-mcp"
-      adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-010-ext-e", "BR-RULE-043"]
-      business_rules: []
-      status: new
-    - adcp_scenario_id: "T-UC-010-ext-e-a2a"
+    - adcp_scenario_id: "T-UC-010-ext-e-echo"
       adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
       obligation_id: null
       upstream_refs: ["BR-UC-010-ext-e", "BR-RULE-043"]
@@ -6327,12 +6372,6 @@ mappings:
       business_rules: []
       status: new
     - adcp_scenario_id: "T-UC-010-ext-e-empty"
-      adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-010-ext-e", "BR-RULE-043"]
-      business_rules: []
-      status: new
-    - adcp_scenario_id: "T-UC-010-ext-e-gap"
       adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
       obligation_id: null
       upstream_refs: ["BR-UC-010-ext-e", "BR-RULE-043"]
@@ -6357,12 +6396,6 @@ mappings:
       business_rules: []
       status: new
     - adcp_scenario_id: "T-UC-010-features-partitions"
-      adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
-      obligation_id: null
-      upstream_refs: ["BR-UC-010-main-mcp"]
-      business_rules: []
-      status: new
-    - adcp_scenario_id: "T-UC-010-features-boundaries"
       adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
       obligation_id: null
       upstream_refs: ["BR-UC-010-main-mcp"]
@@ -6548,6 +6581,30 @@ mappings:
       upstream_refs: ["BR-UC-010-main"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-010-local-backed-specialism"
+      adcp_feature: "local-uc010-declaration-backing.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-010-main"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-local-unbacked-specialism"
+      adcp_feature: "local-uc010-declaration-backing.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-010-main"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-local-orphaned-specialism"
+      adcp_feature: "local-uc010-declaration-backing.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-010-main"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-local-unbacked-protocol"
+      adcp_feature: "local-uc010-declaration-backing.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-010-main"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-010-v31-experimental-features"
       adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
       obligation_id: null
@@ -6620,16 +6677,71 @@ mappings:
       upstream_refs: ["BR-UC-010-main", "BR-RULE-237"]
       business_rules: []
       status: new
-    - adcp_scenario_id: "T-UC-010-v31-agent-signing-key-bounds"
+    # Locally-added scenarios (AdCP 3.1.1 reconciliation, #1592 / salesagent-javb, 2026-07-13)
+    - adcp_scenario_id: "T-UC-010-account-authorization-endpoint"
       adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
       obligation_id: null
-      upstream_refs: ["BR-UC-010-main", "BR-RULE-235"]
+      upstream_refs: []
       business_rules: []
       status: new
-    - adcp_scenario_id: "T-UC-010-v31-agent-encryption-key-bounds"
+    - adcp_scenario_id: "T-UC-010-account-block-presence"
       adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
       obligation_id: null
-      upstream_refs: ["BR-UC-010-main", "BR-RULE-236"]
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-account-financials-declaration"
+      adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-account-require-operator-auth"
+      adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-account-required-for-products"
+      adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-account-supported-billing"
+      adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-v31-creative-agentic-flags"
+      adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-v31-creative-approval-mode"
+      adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-v31-creative-multiplicity"
+      adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-v31-governance-aware"
+      adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-010-v31-vendor-metric-optimization"
+      adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
+      obligation_id: null
+      upstream_refs: []
       business_rules: []
       status: new
   UC-011:
@@ -6658,6 +6770,12 @@ mappings:
       business_rules: []
       status: new
     - adcp_scenario_id: "T-UC-011-list-unauth"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-055"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-c-a2a"
       adcp_feature: "BR-UC-011-manage-accounts.feature"
       obligation_id: null
       upstream_refs: ["BR-RULE-055"]
@@ -6813,6 +6931,12 @@ mappings:
       upstream_refs: ["BR-UC-011-ext-e", "BR-RULE-062"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-011-ext-e-preview-settings-update"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-011-ext-e", "BR-RULE-062"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-011-ext-e-normal"
       adcp_feature: "BR-UC-011-manage-accounts.feature"
       obligation_id: null
@@ -6829,6 +6953,12 @@ mappings:
       adcp_feature: "BR-UC-011-manage-accounts.feature"
       obligation_id: null
       upstream_refs: ["BR-UC-011-ext-f", "BR-RULE-061"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-ext-f-settings-update"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-061"]
       business_rules: []
       status: new
     - adcp_scenario_id: "T-UC-011-ext-f-scoped"
@@ -6853,6 +6983,24 @@ mappings:
       adcp_feature: "BR-UC-011-manage-accounts.feature"
       obligation_id: null
       upstream_refs: ["BR-RULE-061"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-local-dryrun-delete-missing"
+      adcp_feature: "local-uc011-dry-run-preview-parity.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-061", "BR-RULE-062"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-local-dryrun-repeat-key"
+      adcp_feature: "local-uc011-dry-run-preview-parity.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-062"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-local-reserved-tld-normalized"
+      adcp_feature: "local-uc011-reserved-tld-normalization.feature"
+      obligation_id: null
+      upstream_refs: []
       business_rules: []
       status: new
     - adcp_scenario_id: "T-UC-011-ext-g-echo"
@@ -7029,6 +7177,24 @@ mappings:
       upstream_refs: []
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-ADMIN-ACCT-011"
+      adcp_feature: "BR-ADMIN-ACCOUNTS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-ACCT-012"
+      adcp_feature: "BR-ADMIN-ACCOUNTS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-ADMIN-ACCT-013"
+      adcp_feature: "BR-ADMIN-ACCOUNTS.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-011-sandbox-response-shape"
       adcp_feature: "BR-UC-011-manage-accounts.feature"
       obligation_id: null
@@ -7057,6 +7223,151 @@ mappings:
       adcp_feature: "BR-UC-011-manage-accounts.feature"
       obligation_id: null
       upstream_refs: ["BR-UC-011", "BR-UC-011-ext-h", "BR-RULE-238"]
+      business_rules: []
+      status: new
+    # Locally-added scenarios (AdCP 3.1.1 reconciliation, #1592 / salesagent-javb, 2026-07-13)
+    - adcp_scenario_id: "T-UC-011-billing-agent-gate-recover"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-billing-agent-gate-reject"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-billing-entity-roundtrip"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-billing-gate-recover"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-governance-omit-preserves"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-list-account-filter"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-list-authorization"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-list-pagination-terminal"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-list-read-idempotency-tolerance"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-list-status-rejected"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-notif-activation-proof-fail"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-notif-duplicate-subscriber"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-notif-event-scope-reject"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-notif-omit-preserves"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-notif-register-paused"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-notif-replace-clear"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-preferred-reporting-protocol-noop"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-settings-update-billing-forbidden"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-settings-update-sandbox-reject"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-billing-advertiser"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-mode-exclusive"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-natural-key-acceptance"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-settings-update"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-011-sync-settings-update-no-provision"
+      adcp_feature: "BR-UC-011-manage-accounts.feature"
+      obligation_id: null
+      upstream_refs: []
       business_rules: []
       status: new
   UC-012:
@@ -10171,6 +10482,19 @@ mappings:
       adcp_feature: "BR-UC-017-account-financials-usage.feature"
       obligation_id: null
       upstream_refs: ["BR-UC-017-ext-f"]
+      business_rules: []
+      status: new
+    # Locally-added scenarios (AdCP 3.1.1 reconciliation, #1592 / salesagent-javb, 2026-07-13)
+    - adcp_scenario_id: "T-UC-017-ext-a-billing-advertiser"
+      adcp_feature: "BR-UC-017-account-financials-usage.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-017-main-usage-build-variant-link"
+      adcp_feature: "BR-UC-017-account-financials-usage.feature"
+      obligation_id: null
+      upstream_refs: []
       business_rules: []
       status: new
   UC-018:

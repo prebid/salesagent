@@ -10,8 +10,11 @@ import pytest
 from sqlalchemy import delete, select
 
 from src.admin.app import create_app
+from src.admin.blueprints import inventory_profiles as inventory_profiles_module
 from src.core.database.database_session import get_db_session
 from src.core.database.models import InventoryProfile, Tenant
+from tests.factories import InventoryProfileFactory, TenantFactory
+from tests.helpers import concurrent_commit_in_write_window, operator_answer
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 app = create_app()
@@ -48,6 +51,10 @@ def test_tenant(integration_db):
             subdomain="inv-prof-test",
             ad_server="mock",
             is_active=True,
+            # A real virtual_host is required: Tenant.primary_domain no longer
+            # fabricates a placeholder domain, and the inventory-profiles create/edit
+            # routes refuse to proceed without a real one configured.
+            virtual_host="inv-prof-test.real-configured-domain.test",
         )
         session.add(tenant)
         session.commit()
@@ -232,3 +239,57 @@ class TestInventoryProfileDelete:
             follow_redirects=False,
         )
         assert response.status_code == 404
+
+
+class TestAddInventoryProfileDuplicateId:
+    """POST /tenant/<id>/inventory-profiles/add — duplicate profile_id.
+
+    ``uq_inventory_profile`` is the authority. The loser of the race used to get
+    a 302 carrying raw psycopg2 text in the flash, so the grading compares the
+    whole answer — status, redirect target and flash — against the winner's.
+    The loser runs first so its pre-check is genuinely clean.
+    """
+
+    PROFILE_ID = "contested_profile"
+
+    def _form(self):
+        return {
+            "name": "Contested Profile",
+            "profile_id": self.PROFILE_ID,
+            "targeted_ad_unit_ids": "[]",
+            "targeted_placement_ids": "[]",
+            "formats": json.dumps([{"agent_url": "https://formats.example.com", "id": "display_300x250_image"}]),
+            "property_mode": "tags",
+            "property_tags": "all_inventory",
+        }
+
+    def test_winner_and_loser_get_the_same_answer(self, client, factory_session):
+        # A real virtual_host is required to reach the write window at all:
+        # Tenant.primary_domain no longer fabricates a placeholder domain, and the
+        # add route refuses to proceed without one BEFORE it ever gets to the
+        # uq_inventory_profile write this test grades. Same reseeding the
+        # test_tenant fixture above needed.
+        tenant = TenantFactory(virtual_host="contested-profile.real-configured-domain.test")
+        _auth_session(client, tenant.tenant_id)
+
+        def post_add():
+            return client.post(
+                f"/tenant/{tenant.tenant_id}/inventory-profiles/add",
+                data=self._form(),
+                follow_redirects=False,
+            )
+
+        def commit_conflicting_row():
+            InventoryProfileFactory(tenant=tenant, profile_id=self.PROFILE_ID)
+
+        with concurrent_commit_in_write_window(inventory_profiles_module, commit_conflicting_row):
+            loser = operator_answer(client, post_add())
+
+        winner = operator_answer(client, post_add())
+
+        assert winner == (
+            302,
+            f"/tenant/{tenant.tenant_id}/inventory-profiles/add",
+            [("error", f"Inventory profile with ID '{self.PROFILE_ID}' already exists")],
+        )
+        assert loser == winner

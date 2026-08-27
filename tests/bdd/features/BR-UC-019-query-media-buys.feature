@@ -68,9 +68,9 @@ Feature: BR-UC-019 Query Media Buys
   Scenario: Authentication required - identity missing from request
     Given the Buyer has no authentication credentials
     When the Buyer Agent sends a get_media_buys request without authentication
-    Then the operation should fail with error code "AUTH_REQUIRED"
+    Then the operation should fail with error code "AUTH_MISSING"
     And the error message should indicate that identity is required
-    And the error should include a "recovery" field indicating terminal failure
+    And the error should include a "recovery" field indicating correctable failure
     And the error should include a "suggestion" field
     And the suggestion should contain "authentication" or "credentials"
     # POST-F1: Buyer knows the operation failed
@@ -369,10 +369,10 @@ Feature: BR-UC-019 Query Media Buys
       | boundary_point                          | principal_setup                                                       | expected_outcome                                                                                                          |
       | valid principal with multiple media buys | an authenticated principal "buyer-001" who owns 5 media buys         | the response should include 5 media buys scoped to buyer-001                                                              |
       | valid principal with zero media buys    | an authenticated principal "buyer-002" who owns no media buys         | the response should include an empty media_buys array                                                                     |
-      | principal_id is null                    | an authenticated identity with principal_id null                      | empty media_buys with soft error code "AUTH_REQUIRED" message "Principal ID not found in context"                         |
-      | principal_id is empty string            | an authenticated identity with principal_id ""                        | empty media_buys with soft error code "AUTH_REQUIRED" message "Principal ID not found in context"                         |
-      | principal_id not in registry            | an authenticated principal "buyer-ghost" not in registry              | empty media_buys with soft error code "AUTH_REQUIRED" message "Principal buyer-ghost not found"                           |
-      | identity not resolved (no auth)         | no authentication context                                             | hard error code "AUTH_REQUIRED" raised before any DB access                                                               |
+      | principal_id is null                    | an authenticated identity with principal_id null                      | empty media_buys with soft error code "AUTH_MISSING" message "Principal ID not found in context"                          |
+      | principal_id is empty string            | an authenticated identity with principal_id ""                        | empty media_buys with soft error code "AUTH_MISSING" message "Principal ID not found in context"                          |
+      | principal_id not in registry            | an authenticated principal "buyer-ghost" not in registry              | empty media_buys with soft error code "AUTH_INVALID" message "Principal buyer-ghost not found"                            |
+      | identity not resolved (no auth)         | no authentication context                                             | hard error code "AUTH_MISSING" raised before any DB access                                                                |
 
   @T-UC-019-inv-154-tenant @invariant @BR-RULE-154
   Scenario: INV-1 and INV-5 hold - two-layer isolation prevents cross-principal access

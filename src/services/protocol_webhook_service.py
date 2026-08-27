@@ -19,13 +19,13 @@ import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, cast
-from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
-import requests
+import httpx
 from a2a.types import Task, TaskStatusUpdateEvent
-from adcp import extract_webhook_result_data, get_adcp_signed_headers_for_webhook
+from adcp import extract_webhook_result_data
 from adcp.types import McpWebhookPayload
+from adcp.webhooks import generate_webhook_idempotency_key
 from google.protobuf.json_format import MessageToDict
 
 from src.core.audit_logger import get_audit_logger
@@ -33,12 +33,26 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.lifecycle import register_shutdown
+from src.core.signing import deliver_adcp_webhook
 from src.core.webhook_validator import (
     reject_unsafe_outbound_webhook_url,
     webhook_url_for_log,
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _WebhookStatusError(Exception):
+    """A delivery that reached the receiver and came back non-2xx.
+
+    The retry ladder below branches on 4xx (permanent) vs 5xx (transient) exactly as
+    it did when the sender raised ``requests.HTTPError``; raising keeps that ladder
+    in one ``except`` arm instead of duplicating it inline after the call.
+    """
+
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f"webhook receiver returned HTTP {status_code}")
+        self.status_code = status_code
 
 
 # FIXME(gh-#1299): behaviour-identical backport of adcp 5.4.0
@@ -107,37 +121,26 @@ def _to_wire_dict(payload: Any) -> dict[str, Any]:
     )
 
 
-def _normalize_localhost_for_docker(url: str) -> str:
-    """Replace localhost host with host.docker.internal while preserving userinfo and port."""
-    try:
-        parsed = urlparse(url)
-        if parsed.hostname and parsed.hostname.lower() == "localhost":
-            userinfo = ""
-            if parsed.username:
-                userinfo = parsed.username
-                if parsed.password:
-                    userinfo += f":{parsed.password}"
-                userinfo += "@"
-            port = f":{parsed.port}" if parsed.port else ""
-            new_netloc = f"{userinfo}host.docker.internal{port}"
-            return urlunparse(parsed._replace(netloc=new_netloc))
-    except Exception:
-        logger.debug("Docker URL rewrite failed, using original URL", exc_info=True)
-    return url
-
-
 class ProtocolWebhookService:
     """
     Service for sending protocol-level push notifications to clients.
 
-    Supports authentication schemes:
-    - HMAC-SHA256: Signs payload with shared secret
-    - Bearer: Sends credentials as Bearer token
-    - None: No authentication
+    How a delivery is authenticated is NOT decided here: the receiver's own
+    ``PushNotificationConfig`` row selects exactly one mode at the single boundary,
+    ``src.core.signing.webhook_sender_factory`` (#1291 C1). This service owns
+    retry/backoff, delivery logging and the audit trail.
+
+    It also owns ONE long-lived ``httpx.AsyncClient`` so protocol notifications keep
+    a connection pool across deliveries; the signing boundary borrows it rather than
+    opening a socket per webhook, and ``close`` releases it on lifespan shutdown.
     """
 
-    def __init__(self):
-        self._session = requests.Session()
+    def __init__(self) -> None:
+        # ``follow_redirects=False`` is httpx's default, stated here because it is a
+        # security property this service depends on, not an incidental one: the SSRF
+        # gate judges the configured URL, so a followed 302 to a metadata/private IP
+        # would slip past it (open-redirect SSRF).
+        self._client = httpx.AsyncClient(timeout=10.0, follow_redirects=False)
 
     async def send_notification(
         self,
@@ -175,10 +178,21 @@ class ProtocolWebhookService:
         if rejected:
             return False
 
-        url = _normalize_localhost_for_docker(push_notification_config.url)
+        # The URL the gate judged IS the URL dialled. There is no rewrite hop: one
+        # used to swap ``localhost`` for ``host.docker.internal`` so a containerised
+        # server could reach a receiver on the developer's host, but that host is
+        # itself in BLOCKED_HOSTNAMES — so the gate approved one destination and the
+        # process dialled another the gate refuses, making the gate advisory. The e2e
+        # stack now delivers to a real HTTPS origin on a non-private address
+        # (webhooks.adcp-e2e.dev), which the gate accepts unpatched, so nothing needs
+        # the hop. It matters for signing too: ``@target-uri`` and ``@authority`` are
+        # covered components of the RFC 9421 signature, so the signed URI is now the
+        # registered one rather than a post-rewrite variant.
+        url = push_notification_config.url
 
-        # Prepare headers
-        headers = {"Content-Type": "application/json", "User-Agent": "AdCP-Sales-Agent/1.0"}
+        # Content-Type is the sender's (it frames the body it serialized), and the
+        # auth headers are the boundary's. Only genuinely extra headers go here.
+        headers = {"User-Agent": "AdCP-Sales-Agent/1.0"}
 
         # Log sanitized config (exclude sensitive authentication_token)
         safe_config = {
@@ -197,24 +211,14 @@ class ProtocolWebhookService:
         # lowercase enum values; Pydantic -> model_dump; Mapping -> dict.
         payload_dict: dict[str, Any] = _to_wire_dict(payload)
 
-        # Apply authentication based on schemes
-        if (
-            push_notification_config.authentication_type == "HMAC-SHA256"
-            and push_notification_config.authentication_token
-        ):
-            # Sign payload with HMAC-SHA256
-            timestamp = str(int(time.time()))
-            get_adcp_signed_headers_for_webhook(
-                headers, push_notification_config.authentication_token, timestamp, payload_dict
-            )
-
-        elif push_notification_config.authentication_type == "Bearer" and push_notification_config.authentication_token:
-            # Use Bearer token authentication
-            headers["Authorization"] = f"Bearer {push_notification_config.authentication_token}"
-
-        # Send notification with retry logic and logging
+        # Send notification with retry logic and logging. Authentication is chosen
+        # from ``push_notification_config`` at the boundary, once, for every attempt.
         return await self._send_with_retry_and_logging(
-            url=url, payload=payload_dict, headers=headers, metadata=metadata
+            url=url,
+            payload=payload_dict,
+            headers=headers,
+            metadata=metadata,
+            config=push_notification_config,
         )
 
     @staticmethod
@@ -268,11 +272,16 @@ class ProtocolWebhookService:
         payload: dict[str, Any],
         headers: dict,
         metadata: dict[str, Any],
+        config: PushNotificationConfig | None = None,
         max_attempts: int = 3,
     ) -> bool:
         """Send webhook with exponential backoff retry logic, logging, and audit trail."""
         # Calculate payload size for metrics
         payload_size_bytes = len(json.dumps(payload).encode("utf-8"))
+
+        # ONE key per distinct event, reused across this event's retries — a fresh
+        # one per attempt would defeat the receiver's dedup (adcp webhooks.mdx).
+        idempotency_key = generate_webhook_idempotency_key()
 
         task_type = metadata["task_type"] if "task_type" in metadata else None
         tenant_id = metadata["tenant_id"] if "tenant_id" in metadata else None
@@ -314,18 +323,30 @@ class ProtocolWebhookService:
                     max_attempts,
                 )
 
-                def _post() -> requests.Response:
-                    # Never follow redirects: a 302 to metadata/private IPs would
-                    # bypass the pre-POST SSRF check (open-redirect SSRF).
-                    return self._session.post(url, json=payload, headers=headers, timeout=10.0, allow_redirects=False)
-
-                response = await asyncio.to_thread(_post)
-                response.raise_for_status()
+                # Serialize + authenticate + POST as ONE act, so the bytes signed
+                # are the bytes sent (#1441). The key material read behind this runs
+                # on the loop, the same side as ``_write_delivery_log`` below — this
+                # method already does synchronous DB work inline, and moving one of
+                # the two behind a thread hop would only look like a rule.
+                # Redirects are never followed (``self._client`` is built with
+                # ``follow_redirects=False``): a 302 to metadata/private IPs would
+                # bypass the pre-POST SSRF check (open-redirect SSRF).
+                delivery = await deliver_adcp_webhook(
+                    url=url,
+                    payload=payload,
+                    idempotency_key=idempotency_key,
+                    config=config,
+                    tenant_id=tenant_id,
+                    extra_headers=headers,
+                    client=self._client,
+                )
+                if not 200 <= delivery.status_code < 300:
+                    raise _WebhookStatusError(delivery.status_code)
 
                 # Calculate response time
                 response_time_ms = int((time.time() - start_time) * 1000)
 
-                logger.info(f"Successfully sent webhook for task {task_id} (status: {response.status_code})")
+                logger.info(f"Successfully sent webhook for task {task_id} (status: {delivery.status_code})")
 
                 # Write to webhook_delivery_log (success)
                 if (
@@ -345,7 +366,7 @@ class ProtocolWebhookService:
                         sequence_number=sequence_number,
                         notification_type=notification_type,
                         attempt_count=attempt + 1,
-                        http_status_code=response.status_code,
+                        http_status_code=delivery.status_code,
                         payload_size_bytes=payload_size_bytes,
                         response_time_ms=response_time_ms,
                         completed_at=datetime.now(UTC),
@@ -360,10 +381,10 @@ class ProtocolWebhookService:
 
                 return True
 
-            except requests.HTTPError as e:
-                status_code = e.response.status_code if e.response else None
+            except _WebhookStatusError as e:
+                status_code = e.status_code
                 response_time_ms = int((time.time() - start_time) * 1000)
-                error_message = f"HTTP {status_code}: {str(e)}"
+                error_message = f"HTTP {status_code}"
 
                 # Don't retry on 4xx errors (client errors - permanent failures)
                 if status_code and 400 <= status_code < 500:
@@ -470,7 +491,7 @@ class ProtocolWebhookService:
 
                     return False
 
-            except requests.RequestException as e:
+            except httpx.HTTPError as e:
                 response_time_ms = int((time.time() - start_time) * 1000)
                 error_message = f"{type(e).__name__}: {str(e)}"
 
@@ -549,8 +570,8 @@ class ProtocolWebhookService:
         return False
 
     async def close(self):
-        """Close HTTP client."""
-        self._session.close()
+        """Release the connection pool this service owns (lifespan shutdown)."""
+        await self._client.aclose()
 
 
 # Global service instance

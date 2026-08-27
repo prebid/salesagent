@@ -21,6 +21,7 @@ from starlette.testclient import TestClient
 
 from src.app import app
 from tests.factories.principal import PrincipalFactory
+from tests.helpers.agent_card import host_routes_to_no_tenant
 
 _MOCK_IDENTITY = PrincipalFactory.make_identity(
     principal_id="test-principal",
@@ -116,10 +117,18 @@ def _extract_artifact_data(result: dict) -> dict:
 
 @pytest.fixture
 def client():
-    """TestClient for the unified FastAPI app."""
-    c = TestClient(app, raise_server_exceptions=False)
-    yield c
-    c.close()
+    """TestClient for the unified FastAPI app, on a host that routes to no tenant.
+
+    Since #1291 A3 the agent card reads the Host's tenant from the database to
+    advertise that tenant's canonical URL. This is a unit test with no database,
+    so it pins the branch it can actually exercise — an unclaimed host, where the
+    card still derives its URL from headers. ``host_routes_to_no_tenant`` supplies
+    only that routing answer; every other call in this file is untouched by it.
+    """
+    with host_routes_to_no_tenant():
+        c = TestClient(app, raise_server_exceptions=False)
+        yield c
+        c.close()
 
 
 @pytest.fixture

@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
+from src.core.exceptions import AdCPCreativeRejectedError, AdCPError
 from src.core.schemas import AssetStatus
 
 from ..utils.validation import GAMValidator
@@ -249,9 +250,19 @@ class GAMCreativesManager:
 
                 created_asset_statuses.append(_approved(asset["creative_id"]))
 
+            except AdCPError as e:
+                # Typed rejection (e.g. CREATIVE_REJECTED): this surface reports
+                # per-asset partial success, so the buyer-correctable reason
+                # must ride the status — a bare "failed" is unactionable.
+                logger.error(f"Creative {asset['creative_id']} rejected: {e.message}")
+                created_asset_statuses.append(
+                    AssetStatus(creative_id=asset["creative_id"], status="failed", message=e.message)
+                )
             except Exception as e:
                 logger.error(f"Error creating creative {asset['creative_id']}: {str(e)}")
-                created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="failed"))
+                created_asset_statuses.append(
+                    AssetStatus(creative_id=asset["creative_id"], status="failed", message=str(e))
+                )
 
         return created_asset_statuses
 
@@ -678,7 +689,9 @@ class GAMCreativesManager:
         # Get the creative URL
         url = asset.get("url")
         if not url:
-            raise Exception("No URL found for hosted asset creative")
+            raise AdCPCreativeRejectedError(
+                f"Creative {asset.get('creative_id')} has no URL for its hosted asset. Provide the asset's HTTP(S) URL."
+            )
 
         # Determine asset type
         asset_type = self._determine_asset_type(asset)
@@ -692,14 +705,14 @@ class GAMCreativesManager:
             # ImageRedirectCreative requires both image URL and click-through URL
             # Using asset URL as fallback for click_url (see TODO above)
             if not click_url:
-                raise ValueError(
+                raise AdCPCreativeRejectedError(
                     f"Image creative {asset.get('creative_id')} missing required click_url. "
                     f"GAM ImageRedirectCreative requires a destination URL."
                 )
 
             # Validate that image URL is an actual URL, not binary data
             if not url or not isinstance(url, str) or not url.startswith(("http://", "https://")):
-                raise ValueError(
+                raise AdCPCreativeRejectedError(
                     f"Image creative {asset.get('creative_id')} has invalid URL: {url}. "
                     f"GAM ImageRedirectCreative requires an HTTP(S) URL, not binary data."
                 )
@@ -718,7 +731,9 @@ class GAMCreativesManager:
             # https://adcontextprotocol.org/schemas/v1/core/assets/video-asset.json
             duration = asset.get("duration")
             if not duration:
-                raise ValueError(f"Video creative {asset.get('creative_id')} missing required duration field")
+                raise AdCPCreativeRejectedError(
+                    f"Video creative {asset.get('creative_id')} missing required duration field"
+                )
 
             creative = {
                 "xsi_type": "VideoRedirectCreative",
@@ -730,7 +745,9 @@ class GAMCreativesManager:
                 "duration": int(duration * 1000),  # GAM expects milliseconds, AdCP provides seconds
             }
         else:
-            raise Exception(f"Unsupported asset type: {asset_type}")
+            # Internal invariant, not buyer input: _determine_asset_type only
+            # returns "image" or "video".
+            raise AssertionError(f"Unsupported asset type: {asset_type}")
 
         self._add_tracking_urls_to_creative(creative, asset)
         return creative
@@ -807,7 +824,9 @@ class GAMCreativesManager:
         if url:
             return f'<iframe src="{url}" width="100%" height="100%" frameborder="0"></iframe>'
 
-        raise Exception("No HTML5 source content found in asset")
+        raise AdCPCreativeRejectedError(
+            "No HTML5 source content found in asset. Provide media_data, media_url, or url."
+        )
 
     def _upload_binary_asset(self, asset: dict[str, Any]) -> dict[str, Any] | None:
         """Upload binary asset to GAM and return asset info."""

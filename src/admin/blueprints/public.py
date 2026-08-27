@@ -1,6 +1,5 @@
 """Public routes blueprint for self-service tenant signup."""
 
-import json
 import logging
 import secrets
 import string
@@ -11,6 +10,7 @@ from flask import Blueprint, flash, redirect, render_template, request, session,
 from sqlalchemy import or_, select
 
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AdapterConfig, CurrencyLimit, Principal, Tenant, User
 from src.core.domain_config import extract_subdomain_from_host, get_sales_agent_domain, is_sales_agent_domain
 
@@ -162,22 +162,24 @@ def provision_tenant():
                 enable_axe_signals=True,
                 human_review_required=True,
                 admin_token=admin_token,
-                auto_approve_format_ids=json.dumps(["display_300x250", "display_728x90"]),
+                auto_approve_format_ids=["display_300x250", "display_728x90"],
                 # Access control
-                authorized_emails=json.dumps([user_email.lower()]),
-                authorized_domains=json.dumps([email_domain]) if email_domain else None,
+                authorized_emails=[user_email.lower()],
+                authorized_domains=[email_domain] if email_domain else None,
                 # Default policy settings
-                policy_settings=json.dumps(
-                    {
-                        "enabled": True,
-                        "require_manual_review": False,
-                        "prohibited_advertisers": [],
-                        "prohibited_categories": [],
-                        "prohibited_tactics": [],
-                    }
-                ),
+                policy_settings={
+                    "enabled": True,
+                    "require_manual_review": False,
+                    "prohibited_advertisers": [],
+                    "prohibited_categories": [],
+                    "prohibited_tactics": [],
+                },
             )
-            db_session.add(new_tenant)
+            # Both ids are freshly generated above (a uuid4 and its first 8 chars), so a
+            # collision here would be a generator accident, not two users racing for the
+            # same name — the SELECT above is a paranoia fast path, not a claim check.
+            # The user-facing subdomain race is answered in tenant_management_api.
+            db_session.add(new_tenant)  # structural-guard: uniqueness-index-verdict - generated ids, no user race
 
             # Create adapter configuration
             adapter_config = AdapterConfig(tenant_id=tenant_id, adapter_type=adapter_type)
@@ -222,44 +224,41 @@ def provision_tenant():
             # Create or update admin user
             import uuid
 
-            from sqlalchemy.exc import IntegrityError
+            # Adopt an existing user for this tenant rather than inserting.
+            # uq_users_tenant_email is the authority, so the same adoption serves
+            # the loser of a concurrent signup — and the savepoint keeps the
+            # recovery from discarding the tenant, adapter config and currency
+            # limit staged above (a session-wide rollback here would, and the
+            # default principal added below carries an FK to the tenant).
+            existing_user_stmt = select(User).filter_by(tenant_id=tenant_id, email=user_email.lower())
 
-            # Check if user already exists for this tenant
-            stmt = select(User).filter_by(tenant_id=tenant_id, email=user_email.lower())
-            existing_user = db_session.scalars(stmt).first()
+            def adopt_existing_user():
+                existing_user = db_session.scalars(existing_user_stmt).first()
+                if existing_user:
+                    existing_user.last_login = now
+                    existing_user.is_active = True
+                    logger.info(f"User {user_email} already exists for tenant {tenant_id}, updating last_login")
+                    return existing_user
+                return None
 
-            if existing_user:
-                # Update existing user's last login
-                existing_user.last_login = now
-                existing_user.is_active = True
-                logger.info(f"User {user_email} already exists for tenant {tenant_id}, updating last_login")
-            else:
-                # Create new user record for this tenant
-                admin_user = User(
-                    user_id=str(uuid.uuid4()),
-                    tenant_id=tenant_id,
-                    email=user_email.lower(),
-                    name=user_name,
-                    role="admin",
-                    is_active=True,
-                    created_at=now,
-                    last_login=now,
-                )
-                db_session.add(admin_user)
-                try:
-                    db_session.flush()  # Flush to detect constraint violations before full commit
-                    logger.info(f"Created new user {user_email} for tenant {tenant_id}")
-                except IntegrityError:
-                    # Race condition: another request created the user simultaneously
-                    db_session.rollback()
-                    logger.warning(
-                        f"User {user_email} was created concurrently for tenant {tenant_id}, updating instead"
-                    )
-                    stmt = select(User).filter_by(tenant_id=tenant_id, email=user_email.lower())
-                    existing_user = db_session.scalars(stmt).first()
-                    if existing_user:
-                        existing_user.last_login = now
-                        existing_user.is_active = True
+            admin_user = User(
+                user_id=str(uuid.uuid4()),
+                tenant_id=tenant_id,
+                email=user_email.lower(),
+                name=user_name,
+                role="admin",
+                is_active=True,
+                created_at=now,
+                last_login=now,
+            )
+            adopted = resolve_or_write(
+                db_session,
+                conflict=adopt_existing_user,
+                write=lambda: db_session.add(admin_user),
+                constraint="uq_users_tenant_email",
+            )
+            if adopted is None:
+                logger.info(f"Created new user {user_email} for tenant {tenant_id}")
 
             # Create default principal (for testing/demo purposes)
             default_principal = Principal(
@@ -267,14 +266,12 @@ def provision_tenant():
                 principal_id=f"{tenant_id}_default",
                 name=f"{publisher_name} Demo Principal",
                 access_token=admin_token,
-                platform_mappings=json.dumps(
-                    {
-                        "mock": {
-                            "advertiser_id": f"default_{tenant_id[:8]}",
-                            "advertiser_name": f"{publisher_name} Demo",
-                        }
+                platform_mappings={
+                    "mock": {
+                        "advertiser_id": f"default_{tenant_id[:8]}",
+                        "advertiser_name": f"{publisher_name} Demo",
                     }
-                ),
+                },
                 created_at=now,
             )
             db_session.add(default_principal)

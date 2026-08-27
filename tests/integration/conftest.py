@@ -518,15 +518,9 @@ def mcp_server(integration_db):
     import time
     from pathlib import Path
 
-    # Find an available port
-    def get_free_port():
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("", 0))
-            s.listen(1)
-            port = s.getsockname()[1]
-        return port
+    from tests.helpers.ports import free_port
 
-    port = get_free_port()
+    port = free_port()
 
     # Use the integration_db (PostgreSQL database name already created by the integration_db fixture)
     db_name = integration_db
@@ -567,12 +561,15 @@ from src.core.main import mcp
 mcp.run(transport='http', host='0.0.0.0', port={port})
 """
 
-    # The server's output goes to FILES, never PIPEs. A PIPE nobody drains caps
-    # at 64KB; once server logging fills it, the server blocks on a log write
-    # INSIDE a request handler and the calling test awaits forever — this wedged
-    # every full CI run at integration's quiet tail until the >1h run reaper
-    # killed it (#1868 review). Files keep the error-path diagnostics below
-    # without needing a drainer thread.
+    # The server's output goes to FILES, never PIPEs. A PIPE nobody drains caps at
+    # 64KB; once server logging fills it (uvicorn access lines + app INFO + rich
+    # console output), the server's next logging `emit` blocks on the full buffer
+    # INSIDE a request handler and the calling test awaits forever. Observed twice,
+    # independently: create_media_buy hung in four consecutive CI runs, with py-spy
+    # showing the server MainThread parked in logging emit → resolve_tenant_adapter_type;
+    # and full CI runs wedged at integration's quiet tail until the >1h run reaper
+    # killed them (#1868 review). A file-backed stream cannot block the writer, and
+    # the error paths below still read it for diagnostics — no drainer thread needed.
     output_dir = Path(tempfile.mkdtemp(prefix=f"mcp-server-{port}-"))
     stdout_path = output_dir / "stdout.log"
     stderr_path = output_dir / "stderr.log"
@@ -590,11 +587,20 @@ mcp.run(transport='http', host='0.0.0.0', port={port})
         stdout_f.close()
         stderr_f.close()
 
-    def _server_output() -> str:
-        return (
-            f"STDOUT: {stdout_path.read_text(errors='replace') or 'N/A'}\n"
-            f"STDERR: {stderr_path.read_text(errors='replace') or 'N/A'}"
-        )
+    def _server_output(limit: int = 8000) -> str:
+        """Bounded tail of each server stream, for startup/crash diagnostics.
+
+        Tailed so a multi-megabyte log cannot dump in full into an assertion message.
+        """
+
+        def _tail(path: Path) -> str:
+            try:
+                data = path.read_bytes()
+            except OSError:
+                return "N/A (log unreadable)"
+            return data[-limit:].decode(errors="replace") if data else "N/A"
+
+        return f"STDOUT: {_tail(stdout_path)}\nSTDERR: {_tail(stderr_path)}"
 
     # Wait for server to be ready.
     # Server startup is dominated by Python imports (fastmcp + adcp SDK + project)
@@ -1251,3 +1257,24 @@ def seed_error_test_tenant(
         "principal_id": principal_id,
         "access_token": access_token,
     }
+
+
+@pytest.fixture(autouse=True)
+def _reset_signing_warning_state():
+    """Clear the webhook sender factory's warn-once cache between tests.
+
+    The cache is process-level and its entries outlive the per-test database, so a
+    tenant warned in one test stays warned in the next — and a test asserting that a
+    keyless tenant IS warned then passes or fails on the order it ran in. This layer
+    has already produced order-dependent failures of exactly that shape.
+
+    Autouse rather than opt-in: the seam it exercises was previously a reset function
+    with no caller anywhere in ``src/`` or ``tests/``, which is indistinguishable from
+    no reset at all. A fixture every test in this suite loads cannot fall into that
+    state again.
+    """
+    from src.core.signing.webhook_sender_factory import reset_warning_state
+
+    reset_warning_state()
+    yield
+    reset_warning_state()

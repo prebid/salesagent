@@ -54,10 +54,11 @@ def make_mcp_client(
 
 
 class _LiveDBEnv:
-    """Minimal env shim exposing ``get_session()`` over the live e2e database.
+    """Minimal env shim over the live e2e database for ``tests/factories`` helpers.
 
-    Bridges ``tests/factories`` helpers (which expect a harness env exposing
-    ``get_session()``, see tests/harness/_base.py) to the Docker-hosted e2e
+    Bridges factory-level helpers (which expect a harness env exposing
+    ``get_session()`` and ``_commit_factory_data()``, and which may invoke
+    factory classes — see tests/harness/_base.py) to the Docker-hosted e2e
     stack, where only the DSN in ``live_server['postgres']`` is available
     (GH #1423 consolidation).
     """
@@ -68,14 +69,69 @@ class _LiveDBEnv:
     def get_session(self):
         return self._session
 
+    def _commit_factory_data(self) -> None:
+        """Commit pending factory/session state (harness env contract)."""
+        self._session.commit()
+
 
 @contextmanager
 def live_db_env(live_server: dict):
-    """Yield a ``get_session()``-bearing env bound to the live e2e database."""
+    """Yield a harness-contract env bound to the live e2e database.
+
+    Binds ``tests/factories`` to the live-DB session for the duration of the
+    context (mirroring tests/harness/_base.py ``__enter__``/``__exit__``), so
+    factory-based helpers like ``set_adapter_test_behavior`` can create rows —
+    without the binding, factory instantiation crashes with "No session
+    provided". Nested factory-binding envs are rejected the same way the
+    harness rejects them: the binding is global state.
+    """
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
 
-    engine = create_engine(live_server["postgres"])
+    from src.core.database.database_session import _pydantic_json_serializer
+    from tests.factories import ALL_FACTORIES
+
+    engine = create_engine(live_server["postgres"], json_serializer=_pydantic_json_serializer)
+    session = Session(engine)
+    for f in ALL_FACTORIES:
+        assert f._meta.sqlalchemy_session is None, (
+            f"Factory {getattr(f, '__name__', type(f).__name__)} session already bound — "
+            "live_db_env cannot nest inside another factory-binding env"
+        )
+    for f in ALL_FACTORIES:
+        f._meta.sqlalchemy_session = session
+    try:
+        yield _LiveDBEnv(session)
+    finally:
+        for f in ALL_FACTORIES:
+            f._meta.sqlalchemy_session = None
+        session.close()
+        engine.dispose()
+
+
+@contextmanager
+def live_repo_session(live_server: dict):
+    """Yield a harness-contract env over the live e2e database, WITHOUT factory binding.
+
+    For a caller that only needs a production REPOSITORY (``SigningKeyRepository``
+    and friends) — reading or mutating an EXISTING row — never a ``tests/factories``
+    call. :func:`live_db_env` binds ``tests/factories`` for the duration of its
+    ``yield`` and explicitly documents that a second call cannot nest inside it
+    (the binding is global class-attribute state on every factory) — a real
+    constraint one fixture already relies on (``provisioned_trust_root_tenant``'s
+    own docstring: "the session below stays bound for the whole yield: a caller
+    cannot open a second ``live_db_env`` from its test body"). This helper opens
+    an INDEPENDENT engine/session to the same database and touches no factory
+    state at all, so it is safe to call from inside a test body whose fixture
+    already holds a ``live_db_env`` open — the two connections never contend
+    (#1291 mp53.6, Phase D's grace-window backdate).
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from src.core.database.database_session import _pydantic_json_serializer
+
+    engine = create_engine(live_server["postgres"], json_serializer=_pydantic_json_serializer)
     session = Session(engine)
     try:
         yield _LiveDBEnv(session)

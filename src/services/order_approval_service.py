@@ -8,6 +8,7 @@ when approval completes or fails.
 import logging
 import threading
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -15,7 +16,7 @@ import httpx
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import PushNotificationConfig, SyncJob
+from src.core.database.models import SyncJob
 from src.core.thread_registry import ThreadRegistry
 from src.core.webhook_validator import reject_unsafe_outbound_webhook_url, webhook_url_for_log
 
@@ -307,6 +308,15 @@ def _mark_approval_failed(
 ):
     """Mark approval as failed and send webhook notification."""
     try:
+        # Read the progress fields BEFORE the session closes. ``db.commit()``
+        # expires every attribute on ``approval_job``, so touching ``.progress``
+        # after the ``with`` block raises DetachedInstanceError — which the
+        # ``except`` below then swallowed, and the buyer was never told the order
+        # had failed at all (salesagent-98t2, reproduced by
+        # tests/integration/test_order_approval_webhook_signing.py).
+        order_id: str | None = None
+        attempts: int | None = None
+
         with get_db_session() as db:
             stmt = select(SyncJob).where(SyncJob.sync_id == approval_id)
             approval_job = db.scalars(stmt).first()
@@ -315,6 +325,10 @@ def _mark_approval_failed(
                 approval_job.completed_at = datetime.now(UTC)
                 approval_job.error_message = error_message
                 db.commit()
+
+                progress = approval_job.progress or {}
+                order_id = progress.get("order_id")
+                attempts = progress.get("attempts")
 
         # Send webhook notification
         if webhook_url:
@@ -325,27 +339,86 @@ def _mark_approval_failed(
                 media_buy_id=media_buy_id,
                 status="failed",
                 message=error_message,
-                order_id=approval_job.progress.get("order_id") if approval_job and approval_job.progress else None,
-                attempts=approval_job.progress.get("attempts") if approval_job and approval_job.progress else None,
+                order_id=order_id,
+                attempts=attempts,
             )
 
     except Exception as e:
         logger.error(f"Failed to mark approval failed: {e}")
 
 
-def _approval_webhook_headers(config: PushNotificationConfig | None) -> dict[str, str]:
-    """Build HTTP headers for an order-approval webhook POST."""
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": "AdCP-Sales-Agent/1.0 (Order Approval Notifications)",
-    }
-    if not config:
-        return headers
-    if config.authentication_type == "bearer" and config.authentication_token:
-        headers["Authorization"] = f"Bearer {config.authentication_token}"
-    elif config.authentication_type == "basic" and config.authentication_token:
-        headers["Authorization"] = f"Basic {config.authentication_token}"
-    if config.validation_token:
+@dataclass(frozen=True, slots=True)
+class ApprovalWebhookAuth:
+    """The buyer's registration, PROJECTED to primitives — the row never escapes.
+
+    Structurally satisfies :class:`~src.core.signing.webhook_sender_factory.WebhookAuthConfig`
+    (``url`` / ``authentication_type`` / ``authentication_token``), so it is passed as
+    ``config=`` to the delivery boundary unchanged, plus ``validation_token`` for the one
+    extra header this service adds.
+
+    WHY A PROJECTION AND NOT THE ORM ROW (#1878). The loader used to return the live row
+    and carried a paragraph explaining why that was safe: "Detaching it at the end of the
+    session is safe — ``get_db_session`` closes without committing, so the loaded columns
+    survive; the expiry hazard ... needs a ``commit()``." That is correctness resting on a
+    subtle SQLAlchemy behaviour explained in a comment — and it is why the loader could not
+    simply move to a unit of work, since ``BaseUoW.__exit__`` DOES commit
+    (``uow.py`` :107-108) and no session sets ``expire_on_commit=False`` (``uow.py`` :379),
+    which would expire the row before these fields are read.
+
+    Copying the values inside the session removes the hazard rather than documenting it:
+    the unit of work may commit and expire whatever it likes, because nothing downstream
+    holds anything that can expire.
+    """
+
+    url: str
+    authentication_type: str | None
+    authentication_token: str | None
+    validation_token: str | None
+
+
+def _load_approval_webhook_config(tenant_id: str, principal_id: str, webhook_url: str) -> ApprovalWebhookAuth | None:
+    """The buyer's registration for this URL, read through the repository's unit of work.
+
+    That registration is the ONE selector for how this notification is authenticated
+    (#1291 C1, salesagent-98t2): it feeds both :func:`_approval_webhook_headers` and the
+    delivery boundary's auth-strategy choice, so it is read once here rather than at each
+    of those two points.
+
+    Projected to :class:`ApprovalWebhookAuth` INSIDE the unit of work — see that class for
+    why the ORM row must not leave it.
+    """
+    from src.core.database.repositories.uow import PushNotificationConfigUoW
+
+    with PushNotificationConfigUoW(tenant_id) as uow:
+        assert uow.push_notification_configs is not None
+        row = uow.push_notification_configs.get_active_by_url(principal_id, webhook_url)
+        if row is None:
+            return None
+        return ApprovalWebhookAuth(
+            url=row.url,
+            authentication_type=row.authentication_type,
+            authentication_token=row.authentication_token,
+            validation_token=row.validation_token,
+        )
+
+
+def _approval_webhook_headers(config: ApprovalWebhookAuth | None) -> dict[str, str]:
+    """The genuinely EXTRA headers for an order-approval webhook POST.
+
+    Neither ``Content-Type`` nor the authentication header belongs here. The
+    delivery boundary (``src.core.signing.webhook_sender_factory``, #1291 C1)
+    frames the body it serialized, and derives the auth scheme from this same
+    ``config`` row — legacy HMAC, legacy bearer (which is where a ``basic``
+    registration now lands, since any non-HMAC scheme carrying a credential
+    selects the bearer arm), or the RFC 9421 default when no ``authentication``
+    block was registered. Setting either header here would authenticate the
+    delivery twice, in two disagreeing ways.
+
+    ``validation_token`` is a receiver-side echo, not an auth scheme, so it
+    stays a plain extra header.
+    """
+    headers = {"User-Agent": "AdCP-Sales-Agent/1.0 (Order Approval Notifications)"}
+    if config and config.validation_token:
         headers["X-Webhook-Token"] = config.validation_token
     return headers
 
@@ -360,31 +433,58 @@ def _post_approval_webhook_with_retries(
     webhook_url: str,
     payload: dict[str, Any],
     headers: dict[str, str],
+    config: ApprovalWebhookAuth | None,
+    tenant_id: str,
 ) -> None:
-    """POST the approval payload with retries; refuse open redirects."""
+    """Deliver the approval payload with retries, authenticated per *config*.
+
+    Serialization, authentication and the POST are ONE act at the signing
+    boundary (#1441), so the bytes signed are the bytes sent; ``config`` selects
+    the arm. No ``repo`` is passed: this caller holds no session, and
+    ``webhook_sender_factory.signing_repo`` opens a short-lived one per
+    delivery precisely so senders don't each grow their own.
+
+    Redirects are still never followed — the boundary's ``httpx`` client keeps
+    the library default (``follow_redirects=False``), so a 302 to a metadata or
+    private address cannot bypass the pre-send SSRF gate.
+    """
+    from adcp.webhooks import generate_webhook_idempotency_key
+
+    from src.core.signing import deliver_adcp_webhook_sync
+
+    # ONE key per distinct event, reused across this event's retries — a fresh
+    # one per attempt would defeat the receiver's dedup.
+    idempotency_key = generate_webhook_idempotency_key()
+
     safe_url = webhook_url_for_log(webhook_url)
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            with httpx.Client(timeout=10.0, follow_redirects=False) as client:
-                response = client.post(webhook_url, json=payload, headers=headers)
+            delivery = deliver_adcp_webhook_sync(
+                url=webhook_url,
+                payload=payload,
+                idempotency_key=idempotency_key,
+                config=config,
+                tenant_id=tenant_id,
+                extra_headers=headers,
+            )
 
-                if 200 <= response.status_code < 300:
-                    logger.info(
-                        "Approval webhook sent to %s (status: %s, attempt: %s)",
-                        safe_url,
-                        payload.get("status"),
-                        attempt + 1,
-                    )
-                    return
-
-                logger.warning(
-                    "Approval webhook to %s returned status %s (attempt: %s/%s)",
+            if 200 <= delivery.status_code < 300:
+                logger.info(
+                    "Approval webhook sent to %s (status: %s, attempt: %s)",
                     safe_url,
-                    response.status_code,
+                    payload.get("status"),
                     attempt + 1,
-                    max_retries,
                 )
+                return
+
+            logger.warning(
+                "Approval webhook to %s returned status %s (attempt: %s/%s)",
+                safe_url,
+                delivery.status_code,
+                attempt + 1,
+                max_retries,
+            )
 
         except httpx.TimeoutException:
             logger.warning(
@@ -446,20 +546,16 @@ def _send_approval_webhook(
         if attempts is not None:
             payload["attempts"] = attempts
 
-        # Get webhook authentication from push notification config
-        with get_db_session() as db:
-            stmt = select(PushNotificationConfig).filter_by(
-                tenant_id=tenant_id, principal_id=principal_id, url=webhook_url, is_active=True
-            )
-            config = db.scalars(stmt).first()
-
         if _reject_unsafe_approval_webhook_url(webhook_url):
             return
 
+        config = _load_approval_webhook_config(tenant_id, principal_id, webhook_url)
         _post_approval_webhook_with_retries(
             webhook_url,
             payload,
             _approval_webhook_headers(config),
+            config,
+            tenant_id,
         )
 
     except Exception as e:

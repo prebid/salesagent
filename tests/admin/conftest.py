@@ -8,47 +8,32 @@ import os
 from unittest.mock import MagicMock, patch
 
 import pytest
-from sqlalchemy.orm import Session as SASession
 
-# Import integration_db fixture so UI integration tests (e.g. test_product_creation_integration.py)
-# can access it. The fixture is defined in tests/conftest_db.py (shared across suites).
-from tests.conftest_db import integration_db  # noqa: F401
+# Import integration_db and factory_session so UI integration tests (e.g.
+# test_product_creation_integration.py) can access them. Both fixtures are
+# defined in tests/conftest_db.py (shared across suites).
+from tests.conftest_db import factory_session, integration_db  # noqa: F401
 
 
 @pytest.fixture
-def factory_session(integration_db):  # noqa: F811 — fixture parameter, not a redefinition
-    """Bind all factory_boy factories to a live PostgreSQL session for the test.
+def admin_client(monkeypatch):
+    """Flask test client against the REAL admin app (no DB mocking, CSRF off).
 
-    Use this fixture in new admin blueprint tests to create test data via factories
-    (e.g. ``TenantFactory(tenant_id="t1")``) instead of inline ``session.add()``.
-    Factories are unbound on teardown so the binding doesn't leak into other tests.
-
-    Returns the bound session for use in post-POST DB state assertions.
-
-    Note: the factory session binding is stored on class attributes of each factory,
-    so this fixture mutates process-wide state. Two tests in the same worker cannot
-    use ``factory_session`` concurrently — the ``assert ... is None`` precondition
-    below catches nesting. Parallel test runners must assign distinct workers per
-    test (pytest-xdist's default ``--dist=load`` is fine; avoid ``--dist=each``).
+    Canonical client for blueprint integration tests; enables the global test
+    auth mode so ``require_tenant_access`` accepts the ``admin_auth_session``
+    populated session (``tests.helpers.admin_auth_session``). Older blueprint
+    test modules still build their own module-level app + client copies
+    (pre-existing duplication debt); new modules must use this fixture.
     """
-    from src.core.database.database_session import get_engine
-    from tests.factories import ALL_FACTORIES
+    monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")
+    from src.admin.app import create_app
 
-    for f in ALL_FACTORIES:
-        assert f._meta.sqlalchemy_session is None, (
-            f"Factory {f.__name__} session already bound — nested factory_session fixtures are not supported"
-        )
-
-    session = SASession(bind=get_engine())
-    for f in ALL_FACTORIES:
-        f._meta.sqlalchemy_session = session
-
-    try:
-        yield session
-    finally:
-        for f in ALL_FACTORIES:
-            f._meta.sqlalchemy_session = None
-        session.close()
+    app = create_app()
+    app.config["TESTING"] = True
+    app.config["WTF_CSRF_ENABLED"] = False
+    app.config["SESSION_COOKIE_PATH"] = "/"
+    with app.test_client() as client:
+        yield client
 
 
 @pytest.fixture

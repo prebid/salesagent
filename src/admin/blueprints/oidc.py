@@ -12,6 +12,7 @@ from sqlalchemy import select
 from src.admin.auth_utils import extract_user_info
 from src.admin.utils import require_tenant_access
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, User
 from src.services.auth_config_service import (
     disable_oidc,
@@ -310,7 +311,8 @@ def callback():
         session.pop("oidc_login_tenant_id", None)
 
         with get_db_session() as db_session:
-            user = db_session.scalars(select(User).filter_by(email=email.lower(), tenant_id=tenant_id)).first()
+            user_stmt = select(User).filter_by(email=email.lower(), tenant_id=tenant_id)
+            user = db_session.scalars(user_stmt).first()
 
             if not user:
                 # Check if user's domain is authorized - auto-create user if so
@@ -323,7 +325,7 @@ def callback():
                     import uuid
                     from datetime import UTC, datetime
 
-                    user = User(
+                    new_user = User(
                         user_id=str(uuid.uuid4()),
                         tenant_id=tenant_id,
                         email=email.lower(),
@@ -332,10 +334,21 @@ def callback():
                         is_active=True,
                         created_at=datetime.now(UTC),
                     )
-                    db_session.add(user)
-                    db_session.commit()
-                    db_session.refresh(user)
-                    logger.info(f"Auto-created user {email} from authorized domain {email_domain}")
+                    winner = resolve_or_write(
+                        db_session,
+                        conflict=lambda: db_session.scalars(user_stmt).first(),
+                        write=lambda: db_session.add(new_user),
+                        constraint="uq_users_tenant_email",
+                    )
+                    if winner is not None:
+                        # A concurrent login for the same address got its row in
+                        # first; adopt it, exactly as the pre-check above would have.
+                        user = winner
+                    else:
+                        user = new_user
+                        db_session.commit()
+                        db_session.refresh(user)
+                        logger.info(f"Auto-created user {email} from authorized domain {email_domain}")
                 else:
                     flash("Access denied. You don't have permission to access this tenant.", "error")
                     logger.warning(f"OIDC login denied: no User record for {email} in tenant {tenant_id}")

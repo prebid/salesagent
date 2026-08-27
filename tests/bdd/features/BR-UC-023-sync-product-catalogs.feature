@@ -401,7 +401,7 @@ Feature: BR-UC-023 Sync Product Catalogs
     Given the Buyer has no authentication credentials
     When the Buyer Agent sends a sync_catalogs request
     Then the operation should fail
-    And the error code should be "AUTH_REQUIRED"
+    And the error code should be "AUTH_MISSING"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "authentication"
@@ -415,8 +415,8 @@ Feature: BR-UC-023 Sync Product Catalogs
     Given the Buyer Agent has an expired authentication token
     When the Buyer Agent sends a sync_catalogs request
     Then the operation should fail
-    And the error code should be "AUTH_REQUIRED"
-    And the error recovery should be "correctable"
+    And the error code should be "AUTH_INVALID"
+    And the error recovery should be "terminal"
     And the error should include "suggestion" field
     And the suggestion should contain "authentication" or "token"
     # POST-F2: Expired token treated as auth failure

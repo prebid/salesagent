@@ -520,19 +520,25 @@ def test_slack(tenant_id):
             if not tenant.slack_webhook_url:
                 return jsonify({"success": False, "error": "No Slack webhook configured"}), 400
 
-            # Send test message
-            import requests
+            from src.core.webhook_validator import deliver_json_to_allowed_destination
 
-            response = requests.post(
+            # Re-judged at SEND time, not trusted because update_slack gated it on
+            # WRITE: this row may predate that gate, or have been edited directly in
+            # the database. One shared sender so this path cannot drift onto a
+            # different policy from the other stored-URL senders.
+            delivered = deliver_json_to_allowed_destination(
                 tenant.slack_webhook_url,
-                json={
-                    "text": f"🎉 Test message from Prebid Sales Agent for {tenant.name}",
+                {
+                    "text": f"\N{PARTY POPPER} Test message from Prebid Sales Agent for {tenant.name}",
                     "blocks": [
                         {
                             "type": "section",
                             "text": {
                                 "type": "mrkdwn",
-                                "text": f"*Test Notification*\nThis is a test message from the Prebid Sales Agent for *{tenant.name}*.",
+                                "text": (
+                                    f"*Test Notification*\nThis is a test message from the "
+                                    f"Prebid Sales Agent for *{tenant.name}*."
+                                ),
                             },
                         },
                         {
@@ -546,22 +552,27 @@ def test_slack(tenant_id):
                         },
                     ],
                 },
+                kind="TenantTestSlack",
                 timeout=5,
+                log=logger,
             )
 
-            if response.status_code == 200:
+            if delivered:
                 return jsonify({"success": True, "message": "Test message sent successfully"})
-            else:
-                return (
-                    jsonify(
-                        {"success": False, "error": f"Slack returned status {response.status_code}: {response.text}"}
-                    ),
-                    400,
-                )
+            # The cause is logged, never returned: it names the destination policy
+            # and our topology (AdCP 3.1.1 L1/security.mdx:104-119 step 6).
+            return (
+                jsonify({"success": False, "error": "Test message could not be delivered"}),
+                400,
+            )
 
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error testing Slack webhook: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+    # No `except requests.exceptions.RequestException` here: 1910d8489 routed this
+    # send through deliver_json_to_allowed_destination, which catches
+    # requests.RequestException itself (src/core/webhook_validator.py:187) and reports
+    # failure as a False return. The handler that used to sit here was left behind with
+    # its `import requests` already gone, so it was both unreachable AND a NameError if
+    # anything had reached it -- it would have masked the real exception with a lookup
+    # failure. mypy --check-untyped-defs caught it (name-defined, ADR-009 / #1611).
     except Exception as e:
         logger.error(f"Unexpected error testing Slack: {e}", exc_info=True)
         return jsonify({"success": False, "error": "Internal server error"}), 500

@@ -217,15 +217,27 @@ class TestGetAdcpCapabilitiesWithTenant:
         current_tenant.set(mock_tenant)
 
         try:
-            # Mock TenantConfigUoW to avoid actual DB calls
+            # Mock CapabilitiesUoW to avoid actual DB calls. A real publisher partner is
+            # seeded so portfolio is populated (salesagent-piyo: portfolio is omitted
+            # entirely, never fabricated, when no real publisher domain exists) -- this
+            # test's concern is the OTHER portfolio fields (description, features), not
+            # publisher domain resolution, which TestPublisherDomains covers directly.
+            mock_partner = MagicMock()
+            mock_partner.publisher_domain = "testpub.com"
             mock_repo = MagicMock()
-            mock_repo.list_publisher_partners.return_value = []
+            mock_repo.list_publisher_partners.return_value = [mock_partner]
             mock_uow = MagicMock()
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow.tenant_config = mock_repo
 
-            with patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow):
+            with (
+                patch("src.core.tools.capabilities.CapabilitiesUoW", return_value=mock_uow),
+                patch(
+                    "src.core.tools.capabilities.get_adapter_class_for_tenant",
+                    side_effect=Exception("adapter unavailable (test)"),
+                ),
+            ):
                 from tests.factories import PrincipalFactory
 
                 identity = PrincipalFactory.make_identity(
@@ -303,7 +315,7 @@ class TestGetAdcpCapabilitiesWithTenant:
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow.tenant_config = mock_repo
 
-            with patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow):
+            with patch("src.core.tools.capabilities.CapabilitiesUoW", return_value=mock_uow):
                 from tests.factories import PrincipalFactory
 
                 identity = PrincipalFactory.make_identity(
@@ -313,29 +325,29 @@ class TestGetAdcpCapabilitiesWithTenant:
                     protocol="mcp",
                 )
 
-                with patch("src.core.tools.capabilities.get_principal_object") as mock_principal:
-                    mock_principal.return_value = MagicMock()
+                with patch("src.core.tools.capabilities.get_adapter_class_for_tenant") as mock_get_adapter_class:
+                    mock_get_adapter_class.return_value = mock_adapter
 
-                    with patch("src.core.tools.capabilities.get_adapter") as mock_get_adapter:
-                        mock_get_adapter.return_value = mock_adapter
+                    response = _get_adcp_capabilities_impl(None, identity)
 
-                        response = _get_adcp_capabilities_impl(None, identity)
+                    # Verify targeting from adapter
+                    assert response.media_buy is not None
+                    assert response.media_buy.execution is not None
+                    targeting = response.media_buy.execution.targeting
+                    assert targeting is not None
+                    assert targeting.geo_countries is True
+                    assert targeting.geo_regions is True
 
-                        # Verify targeting from adapter
-                        assert response.media_buy is not None
-                        assert response.media_buy.execution is not None
-                        targeting = response.media_buy.execution.targeting
-                        assert targeting is not None
-                        assert targeting.geo_countries is True
-                        assert targeting.geo_regions is True
+                    # Should have geo_metros with nielsen_dma
+                    assert targeting.geo_metros is not None
+                    assert targeting.geo_metros.nielsen_dma is True
 
-                        # Should have geo_metros with nielsen_dma
-                        assert targeting.geo_metros is not None
-                        assert targeting.geo_metros.nielsen_dma is True
-
-                        # Should have geo_postal_areas with us_zip
-                        assert targeting.geo_postal_areas is not None
-                        assert targeting.geo_postal_areas.us_zip is True
+                    # Should have geo_postal_areas with native US=["zip"] (salesagent-y9ld
+                    # R4 -- native country-keyed map, never the deprecated us_zip alias).
+                    assert targeting.geo_postal_areas is not None
+                    assert targeting.geo_postal_areas.US is not None
+                    assert "zip" in targeting.geo_postal_areas.US
+                    assert targeting.geo_postal_areas.us_zip is None
         finally:
             current_tenant.set(None)
 
@@ -388,34 +400,63 @@ def _patch_capabilities_deps(
 ):
     """Return a context manager stack patching common capabilities dependencies.
 
+    Adapter resolution is tenant-only (salesagent-dn2s / INV-4): production
+    calls ``get_adapter_class_for_tenant(tenant)`` unconditionally, regardless
+    of whether the caller is authenticated. ``adapter=None`` here reproduces
+    the "adapter unavailable" degradation path (production catches the
+    exception and falls back to display-only channels / no targeting caps) —
+    not "no principal", which no longer affects adapter resolution at all.
+
     Args:
-        adapter: Mock adapter to return from get_adapter (None = no adapter).
+        adapter: Mock adapter CLASS-equivalent to return from
+            get_adapter_class_for_tenant (None = adapter resolution raises).
         db_partners: List of mock PublisherPartner objects from DB query.
     """
     from contextlib import ExitStack
 
     stack = ExitStack()
 
-    # Mock TenantConfigUoW — the repository pattern replacement for get_db_session
+    # Mock CapabilitiesUoW — the ONE session a capabilities request opens (#1291 D1
+    # widened TenantConfigUoW into it so the signing-key and tenant-host reads share it).
     mock_repo = MagicMock()
     mock_repo.list_publisher_partners.return_value = db_partners or []
+    # No ORM tenant row: these unit tests drive the impl from a tenant DICT, and the
+    # identity block is derived from the ROW. Returning None takes the documented
+    # "resolved a tenant the tenants table does not carry" branch — keyless, no trust
+    # root — rather than letting a MagicMock fabricate a host and a key.
+    mock_repo.get_tenant.return_value = None
     mock_uow = MagicMock()
     mock_uow.__enter__ = MagicMock(return_value=mock_uow)
     mock_uow.__exit__ = MagicMock(return_value=False)
     mock_uow.tenant_config = mock_repo
-    stack.enter_context(patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow))
+    mock_uow.signing_keys = MagicMock()
+    stack.enter_context(patch("src.core.tools.capabilities.CapabilitiesUoW", return_value=mock_uow))
 
     # Mock log_tool_activity (no-op)
     stack.enter_context(patch("src.core.tools.capabilities.log_tool_activity"))
 
-    # Mock get_principal_object
     if adapter is not None:
-        stack.enter_context(patch("src.core.tools.capabilities.get_principal_object", return_value=MagicMock()))
-        stack.enter_context(patch("src.core.tools.capabilities.get_adapter", return_value=adapter))
+        stack.enter_context(patch("src.core.tools.capabilities.get_adapter_class_for_tenant", return_value=adapter))
     else:
-        stack.enter_context(patch("src.core.tools.capabilities.get_principal_object", return_value=None))
+        stack.enter_context(
+            patch(
+                "src.core.tools.capabilities.get_adapter_class_for_tenant",
+                side_effect=Exception("adapter unavailable (test)"),
+            )
+        )
 
     return stack
+
+
+def _mock_domain_partner() -> MagicMock:
+    """A PublisherPartner mock with a real domain -- pass via db_partners= so
+    portfolio is populated (salesagent-piyo: portfolio is omitted entirely,
+    never fabricated, when no real publisher domain exists) in tests whose
+    concern is some OTHER portfolio field (channels, policies, description).
+    """
+    partner = MagicMock()
+    partner.publisher_domain = "testpub.com"
+    return partner
 
 
 class TestChannelMapping:
@@ -432,7 +473,7 @@ class TestChannelMapping:
         mock_adapter.get_targeting_capabilities.return_value = None
 
         identity = _make_capabilities_identity()
-        stack = _patch_capabilities_deps(adapter=mock_adapter)
+        stack = _patch_capabilities_deps(adapter=mock_adapter, db_partners=[_mock_domain_partner()])
 
         with stack:
             response = _get_adcp_capabilities_impl(None, identity)
@@ -452,7 +493,7 @@ class TestChannelMapping:
         mock_adapter.get_targeting_capabilities.return_value = None
 
         identity = _make_capabilities_identity()
-        stack = _patch_capabilities_deps(adapter=mock_adapter)
+        stack = _patch_capabilities_deps(adapter=mock_adapter, db_partners=[_mock_domain_partner()])
 
         with stack:
             response = _get_adcp_capabilities_impl(None, identity)
@@ -471,7 +512,7 @@ class TestChannelMapping:
         mock_adapter.get_targeting_capabilities.return_value = None
 
         identity = _make_capabilities_identity()
-        stack = _patch_capabilities_deps(adapter=mock_adapter)
+        stack = _patch_capabilities_deps(adapter=mock_adapter, db_partners=[_mock_domain_partner()])
 
         with stack:
             response = _get_adcp_capabilities_impl(None, identity)
@@ -490,7 +531,7 @@ class TestChannelMapping:
         # Adapter without default_channels attribute
         mock_adapter = MagicMock(spec=[])
         identity = _make_capabilities_identity()
-        stack = _patch_capabilities_deps(adapter=mock_adapter)
+        stack = _patch_capabilities_deps(adapter=mock_adapter, db_partners=[_mock_domain_partner()])
 
         with stack:
             response = _get_adcp_capabilities_impl(None, identity)
@@ -510,18 +551,24 @@ class TestGracefulDegradation:
 
         identity = _make_capabilities_identity()
 
+        # A real publisher partner is seeded so portfolio is populated
+        # (salesagent-piyo: portfolio is omitted entirely, never fabricated, when
+        # no real publisher domain exists) -- this test's concern is the adapter
+        # exception's channel fallback, not publisher domain resolution.
         mock_repo = MagicMock()
-        mock_repo.list_publisher_partners.return_value = []
+        mock_repo.list_publisher_partners.return_value = [_mock_domain_partner()]
         mock_uow = MagicMock()
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=False)
         mock_uow.tenant_config = mock_repo
 
         with (
-            patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow),
+            patch("src.core.tools.capabilities.CapabilitiesUoW", return_value=mock_uow),
             patch("src.core.tools.capabilities.log_tool_activity"),
-            patch("src.core.tools.capabilities.get_principal_object", return_value=MagicMock()),
-            patch("src.core.tools.capabilities.get_adapter", side_effect=Exception("Adapter init failed")),
+            patch(
+                "src.core.tools.capabilities.get_adapter_class_for_tenant",
+                side_effect=Exception("Adapter init failed"),
+            ),
         ):
             response = _get_adcp_capabilities_impl(None, identity)
 
@@ -529,8 +576,16 @@ class TestGracefulDegradation:
         assert response.media_buy is not None
         assert MediaChannel.display in response.media_buy.portfolio.primary_channels
 
-    def test_db_exception_uses_placeholder_domain(self):
-        """Database exception during publisher domain query uses placeholder domain."""
+    def test_db_exception_omits_portfolio_never_fabricates_a_domain(self):
+        """Database exception during publisher domain query omits portfolio entirely.
+
+        Was test_db_exception_uses_placeholder_domain, asserting the fabricated
+        '<subdomain>.example.com' placeholder -- that was the bug (salesagent-piyo).
+        A DB failure means no real publisher_domain data was read, which is the same
+        "no real domain" case as an empty PublisherPartner table: portfolio.publisher_domains
+        is REQUIRED+minItems:1 (pinned v3.1.1 schema), so the only spec-legal response
+        is to omit portfolio entirely, never fabricate a domain.
+        """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
         identity = _make_capabilities_identity(
@@ -538,16 +593,20 @@ class TestGracefulDegradation:
         )
 
         with (
-            patch("src.core.tools.capabilities.TenantConfigUoW", side_effect=Exception("DB down")),
+            patch("src.core.tools.capabilities.CapabilitiesUoW", side_effect=Exception("DB down")),
             patch("src.core.tools.capabilities.log_tool_activity"),
-            patch("src.core.tools.capabilities.get_principal_object", return_value=None),
+            patch(
+                "src.core.tools.capabilities.get_adapter_class_for_tenant",
+                side_effect=Exception("adapter unavailable (test)"),
+            ),
         ):
             response = _get_adcp_capabilities_impl(None, identity)
 
         assert response.media_buy is not None
-        domains = response.media_buy.portfolio.publisher_domains
-        assert len(domains) == 1
-        assert "testpub.example.com" in domains[0].root
+        assert response.media_buy.portfolio is None, (
+            f"expected portfolio to be omitted on a DB failure (no real domain data was "
+            f"read), got portfolio={response.media_buy.portfolio!r}"
+        )
 
 
 class TestAdvertisingPolicies:
@@ -564,7 +623,7 @@ class TestAdvertisingPolicies:
             "advertising_policy": {"description": "No adult content allowed"},
         }
         identity = _make_capabilities_identity(principal_id=None, tenant=tenant)
-        stack = _patch_capabilities_deps()
+        stack = _patch_capabilities_deps(db_partners=[_mock_domain_partner()])
 
         with stack:
             response = _get_adcp_capabilities_impl(None, identity)
@@ -578,7 +637,7 @@ class TestAdvertisingPolicies:
 
         tenant = {"tenant_id": "t1", "name": "No Policy Pub", "subdomain": "nopolicy"}
         identity = _make_capabilities_identity(principal_id=None, tenant=tenant)
-        stack = _patch_capabilities_deps()
+        stack = _patch_capabilities_deps(db_partners=[_mock_domain_partner()])
 
         with stack:
             response = _get_adcp_capabilities_impl(None, identity)
@@ -676,7 +735,7 @@ class TestResponseShapeCapabilities:
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
         identity = _make_capabilities_identity(principal_id=None)
-        stack = _patch_capabilities_deps()
+        stack = _patch_capabilities_deps(db_partners=[_mock_domain_partner()])
 
         with stack:
             response = _get_adcp_capabilities_impl(None, identity)
@@ -699,6 +758,183 @@ class TestResponseShapeCapabilities:
         data = response.model_dump(mode="json")
         # media_buy is excluded from serialization when None
         assert "media_buy" not in data
+
+
+class TestAccountBlockAndSigningDeclarations:
+    """Pin the salesagent-3s5a contract: account block + honest signing declarations.
+
+    Core Invariant (salesagent-3s5a): every field capabilities.py emits is either
+    (a) read from the exact tenant config the corresponding enforcement path reads
+    (supported_billing via resolve_supported_billing, mirroring _check_billing_policy),
+    or (b) a true constant of the current architecture (require_operator_auth=False)
+    -- never fabricated.
+
+    The two signing blocks moved from category (b) to category (a) under #1291 D1: they
+    are no longer constants at all. ``request_signing.supported`` is
+    ``SigningConfig.verifier_enabled`` (the pin defines the field as "whether this agent
+    VERIFIES signatures on incoming requests", and the middleware is mounted
+    process-wide), while ``webhook_signing.supported`` is derived from THIS tenant's
+    signing keys plus trust-root publishability. What has NOT changed is that both are
+    always PRESENT: an explicit false may become a different value, never silence.
+    """
+
+    def test_no_tenant_response_omits_account_and_declares_the_agent_level_posture(self):
+        """No-tenant (minimal) path: account absent, both signing blocks present.
+
+        ``request_signing`` is an AGENT-level fact and stays honest with no tenant
+        resolved -- the verifier really does run for that caller, so a literal false
+        would under-declare it (#1291 D1). ``webhook_signing`` is the opposite case:
+        no tenant means no key, so false is the honest value. account stays absent
+        (BR-RULE-052 / ext-a: no tenant to derive billing/sandbox from).
+        """
+        from src.core.config import get_config
+        from src.core.config_loader import current_tenant
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        current_tenant.set(None)
+
+        response = _get_adcp_capabilities_impl(None, None)
+
+        assert response.account is None
+
+        assert response.webhook_signing is not None
+        assert response.webhook_signing.supported is False
+
+        assert response.request_signing is not None
+        assert response.request_signing.supported is get_config().signing.verifier_enabled
+        assert response.identity is None, "no tenant means no trust root to point a key origin at"
+
+    def test_account_block_present_with_tenant_and_honest_constants(self):
+        """Tenant-resolved path: account block present with the exact honest-constant shape.
+
+        require_operator_auth is a true architectural constant (False) -- config
+        surfaces to make it configurable are explicitly out of scope for this task.
+        authorization_endpoint/required_for_products/account_financials are omitted
+        (not fabricated) because no config or enforcement path backs them yet.
+        """
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        tenant = {
+            "tenant_id": "t-account-1",
+            "name": "Account Block Pub",
+            "subdomain": "acctpub",
+            "supported_billing": ["operator", "advertiser"],
+            "account_sandbox": False,
+        }
+        identity = _make_capabilities_identity(principal_id=None, tenant=tenant)
+        stack = _patch_capabilities_deps()
+
+        with stack:
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        assert response.account is not None
+        assert response.account.require_operator_auth is False
+        assert response.account.authorization_endpoint is None
+        assert response.account.required_for_products is None
+        assert response.account.account_financials is None
+
+    def test_account_supported_billing_matches_resolve_supported_billing(self):
+        """account.supported_billing must equal resolve_supported_billing(tenant) exactly.
+
+        This mirrors _check_billing_policy's own read of the same helper -- the
+        capability declaration and the enforcement path must never diverge.
+        """
+        from src.core.billing_policy import resolve_supported_billing
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        tenant = {
+            "tenant_id": "t-account-2",
+            "name": "Billing Pub",
+            "subdomain": "billingpub",
+            "supported_billing": ["operator", "advertiser"],
+        }
+        identity = _make_capabilities_identity(principal_id=None, tenant=tenant)
+        stack = _patch_capabilities_deps()
+
+        with stack:
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        expected = resolve_supported_billing(tenant)
+        assert [bp.value for bp in response.account.supported_billing] == expected
+        assert expected == ["operator", "advertiser"]
+
+    def test_account_supported_billing_defaults_to_full_enum_when_tenant_silent(self):
+        """An unconfigured tenant (no supported_billing key) declares the full 3-value enum.
+
+        Matches resolve_supported_billing's own documented semantics: None means
+        unconfigured, and unconfigured means "accept every billing model."
+        """
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        tenant = {
+            "tenant_id": "t-account-3",
+            "name": "Silent Billing Pub",
+            "subdomain": "silentpub",
+        }
+        identity = _make_capabilities_identity(principal_id=None, tenant=tenant)
+        stack = _patch_capabilities_deps()
+
+        with stack:
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        assert response.account is not None
+        assert sorted(bp.value for bp in response.account.supported_billing) == [
+            "advertiser",
+            "agent",
+            "operator",
+        ]
+
+    def test_account_sandbox_reflects_tenant_column(self):
+        """account.sandbox must equal the tenant's account_sandbox value, not a hardcoded constant."""
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        tenant_sandbox_off = {
+            "tenant_id": "t-account-4",
+            "name": "Sandbox Off Pub",
+            "subdomain": "sandboxoff",
+            "account_sandbox": False,
+        }
+        identity = _make_capabilities_identity(principal_id=None, tenant=tenant_sandbox_off)
+        stack = _patch_capabilities_deps()
+
+        with stack:
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        assert response.account.sandbox is False
+
+    def test_signing_blocks_split_the_agent_level_fact_from_the_per_tenant_one(self):
+        """Tenant-resolved path: verify true (agent-level), sign false (no key).
+
+        Both blocks come from ONE builder shared with the no-tenant path (DRY), but they
+        are backed by different things and a keyless tenant is where that shows.
+        ``request_signing`` declares that we verify with the COUNTERPARTY's keys, so it is
+        not key-backed; ``webhook_signing`` declares that we sign with OUR OWN, so it is.
+        Collapsing them onto one literal is what made a keyless tenant and a keyed one
+        indistinguishable on the wire while #1291 C1 was already signing (D1).
+        """
+        from src.core.config import get_config
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        tenant = {
+            "tenant_id": "t-account-5",
+            "name": "Signing Pub",
+            "subdomain": "signingpub",
+        }
+        identity = _make_capabilities_identity(principal_id=None, tenant=tenant)
+        stack = _patch_capabilities_deps()
+
+        with stack:
+            response = _get_adcp_capabilities_impl(None, identity)
+
+        assert response.webhook_signing is not None
+        assert response.webhook_signing.supported is False
+
+        assert response.request_signing is not None
+        assert response.request_signing.supported is get_config().signing.verifier_enabled
+        assert not response.request_signing.required_for, (
+            "the default posture ships an EMPTY required_for -- a non-empty default would "
+            "reject every existing buyer at once"
+        )
 
 
 class TestGeoPostalAreas:
@@ -727,12 +963,19 @@ class TestGeoPostalAreas:
 
         postal = response.media_buy.execution.targeting.geo_postal_areas
         assert postal is not None
-        assert postal.us_zip is True
-        assert postal.ca_fsa is True
-        assert postal.gb_outward is True
-        # Fields not set should be None
-        assert postal.de_plz is None
-        assert postal.fr_code_postal is None
+        # Native country-keyed map (salesagent-y9ld R4) -- production emits ONLY the
+        # native shape, never the deprecated boolean aliases (us_zip/ca_fsa/gb_outward
+        # are `deprecated: true` at v3.1.1, postal-area-support.json).
+        assert postal.US is not None and "zip" in postal.US
+        assert postal.CA is not None and "fsa" in postal.CA
+        assert postal.GB is not None and "outward" in postal.GB
+        # Countries not set should be absent
+        assert postal.DE is None
+        assert postal.FR is None
+        # Deprecated aliases are never co-emitted
+        assert postal.us_zip is None
+        assert postal.ca_fsa is None
+        assert postal.gb_outward is None
 
     def test_no_postal_targeting_means_none(self):
         """When no postal targeting capabilities, geo_postal_areas is None."""

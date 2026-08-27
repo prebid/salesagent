@@ -5,12 +5,30 @@ from __future__ import annotations
 import factory
 from factory.alchemy import SQLAlchemyModelFactory
 
-from src.core.database.models import Creative, CreativeAssignment
+from src.core.database.models import Creative, CreativeAgent, CreativeAssignment
 
 from .core import TenantFactory
 from .creative_asset import build_assets, image_spec
 from .media_buy import MediaBuyFactory
 from .principal import PrincipalFactory
+
+
+class CreativeAgentFactory(SQLAlchemyModelFactory):
+    """A tenant's registered creative agent (src.core.database.models.CreativeAgent)."""
+
+    class Meta:
+        model = CreativeAgent
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+        exclude = ("tenant",)
+
+    tenant = factory.SubFactory(TenantFactory)
+    tenant_id = factory.LazyAttribute(lambda o: o.tenant.tenant_id)
+    agent_url = "https://creative.example.com"
+    name = factory.LazyAttribute(lambda o: f"Test Creative Agent {o.agent_url}")
+    enabled = True
+    priority = 10
+    timeout = 30
 
 
 class CreativeFactory(SQLAlchemyModelFactory):
@@ -31,7 +49,11 @@ class CreativeFactory(SQLAlchemyModelFactory):
     name = factory.LazyAttribute(lambda o: f"Test Creative {o.creative_id}")
     agent_url = "https://creative.adcontextprotocol.org"
     format = "display_300x250"
-    status = "pending"
+    # Mirrors the production default. Must stay an AdCP CreativeStatus member: a non-spec
+    # value (this was "pending") made every factory-built creative reach list_creatives
+    # through the reader's unparseable-status branch rather than through real status
+    # semantics.
+    status = "pending_review"
     data = factory.LazyFunction(lambda: {"assets": build_assets(image_spec("banner"))})
 
     class Params:

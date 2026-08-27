@@ -16,6 +16,7 @@ import uuid
 from pytest_bdd import given, then
 
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic.then_error import _wire_error_object
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — NFR preconditions
@@ -128,13 +129,16 @@ def then_auth_before_business_logic(ctx: dict) -> None:
 
     Sends a SECOND request with invalid credentials (no principal_id) THROUGH
     THE WIRE (the parametrized transport) and verifies: (1) the wire envelope
-    carries the AUTH_REQUIRED error code, and (2) no adapter calls were made —
-    proving auth blocks before business logic side effects.
+    carries the AUTH_MISSING error code (absent credential — no principal_id
+    resolved at all), and (2) no adapter calls were made — proving auth blocks
+    before business logic side effects.
 
     Per the Error Verification Policy (tests/CLAUDE.md), this asserts on the
-    wire envelope, not a reconstructed exception. The auth error code is
-    AUTH_REQUIRED on the wire (a recent reversal flipped AUTH_TOKEN_INVALID ->
-    AUTH_REQUIRED); the "Principal ID not found" message still holds.
+    wire envelope, not a reconstructed exception. Split from the deprecated
+    AUTH_REQUIRED to AUTH_MISSING/AUTH_INVALID per v3.1.1 error-code.json
+    (salesagent-mkso; a prior reversal flipped AUTH_TOKEN_INVALID ->
+    AUTH_REQUIRED, now split again); the "Principal ID not found" message
+    still holds.
     """
     from src.core.exceptions import AdCPAuthenticationError
     from src.core.schemas import CreateMediaBuyRequest
@@ -175,10 +179,10 @@ def then_auth_before_business_logic(ctx: dict) -> None:
 
     result = auth_ctx.get("result")
     assert result is not None, "dispatch_request did not produce a TransportResult for the invalid-identity request"
-    # recovery omitted -> defaults to the pinned AUTH_REQUIRED enum (correctable). Do not
+    # recovery omitted -> defaults to the pinned AUTH_MISSING enum (correctable). Do not
     # pass an explicit recovery= that shadows the pinned enum (#1417: superseded
     # the earlier terminal override; the pinned enum is the single source of truth).
-    result.assert_wire_error("AUTH_REQUIRED", message_substr="Principal ID not found")
+    result.assert_wire_error("AUTH_MISSING", message_substr="Principal ID not found")
 
     # Verify no business logic side effects occurred
     assert not mock_adapter.create_media_buy.called, (
@@ -219,18 +223,13 @@ def then_rate_limiting_enforced(ctx: dict) -> None:
 
     # Gap preserved: production never emits RATE_LIMITED, so the follow-up
     # succeeds (or fails for an unrelated reason) and no RATE_LIMITED wire
-    # envelope is produced. This assertion fails — proving the gap — exactly
-    # as the call_impl version did.
+    # envelope is produced. assert_wire_error then fails — proving the gap —
+    # exactly as the hand-rolled envelope read did. RATE_LIMITED is a canonical
+    # pinned code, so the assertion grades the wire rather than hard-failing on
+    # an unknown code. FIXME(salesagent-9vgz.92): rate limiting middleware.
     result = rate_ctx.get("result")
-    envelope = result.wire_error_envelope if result is not None else None
-    rate_limit_hit = bool(envelope) and envelope.get("errors", [{}])[0].get("code") == "RATE_LIMITED"
-
-    assert rate_limit_hit, (
-        "SPEC-PRODUCTION GAP: Rate limiting not implemented. "
-        "Sent a rapid follow-up request through the wire — not rejected with a RATE_LIMITED envelope. "
-        "AdCPRateLimitError class exists but is never raised. "
-        "FIXME(salesagent-9vgz.92)"
-    )
+    assert result is not None, "Expected a dispatched follow-up result in rate_ctx"
+    result.assert_wire_error("RATE_LIMITED")
 
 
 @then("the system should validate payload size limits")
@@ -244,8 +243,10 @@ def then_payload_size_limits(ctx: dict) -> None:
     FIXME(salesagent-9vgz.92): Implement payload size validation middleware.
 
     Note: PAYLOAD_TOO_LARGE is not a canonical AdCP error code in the pinned
-    enum, so assert_wire_error() cannot be used here — the assertion inspects
-    the raw wire envelope (and any dispatch error) for a payload-size rejection.
+    enum, so assert_wire_error() cannot be used here. The wire error object is
+    still read through the sanctioned ``_wire_error_object`` helper rather than
+    walking ``result.wire_error_envelope`` by hand (salesagent-n78j0.1.5): the
+    non-pinned code rules out the ASSERTION helper, not the READER.
     """
     import uuid
     from copy import deepcopy
@@ -267,11 +268,10 @@ def then_payload_size_limits(ctx: dict) -> None:
     # body is accepted and no payload-size rejection appears on the wire (nor in
     # any dispatch error). Inspect both the wire envelope and a transport error.
     payload_rejected = False
-    result = payload_ctx.get("result")
-    envelope = result.wire_error_envelope if result is not None else None
-    if envelope:
-        code = envelope.get("errors", [{}])[0].get("code", "")
-        msg = (envelope.get("errors", [{}])[0].get("message") or "").lower()
+    wire_error = _wire_error_object(payload_ctx)
+    if wire_error:
+        code = wire_error.get("code", "")
+        msg = (wire_error.get("message") or "").lower()
         if code == "PAYLOAD_TOO_LARGE" or "payload" in msg or "too large" in msg or "content-length" in msg:
             payload_rejected = True
     dispatch_error = payload_ctx.get("error")
@@ -459,20 +459,15 @@ def then_budget_validated_against_min_order(ctx: dict) -> None:
     dispatch_request(low_budget_ctx, req=low_budget_req)
 
     # Step 3: Assert the specific minimum spend rejection on the wire envelope.
+    # Production routes a minimum-spend shortfall through AdCPBudgetTooLowError
+    # (financial_validation.raise_if_validation_failed selects the subclass by
+    # failure kind), so the canonical pinned wire code is BUDGET_TOO_LOW with a
+    # message "...does not meet the minimum spend requirement...". BUDGET_EXCEEDED
+    # is a distinct failure kind (daily-spend ceiling), not this path — asserting
+    # code + message together is stricter than the old disjunctive OR-check.
     result = low_budget_ctx.get("result")
     assert result is not None, "dispatch_request did not produce a TransportResult for the low-budget request"
-    envelope = result.wire_error_envelope
-    assert envelope is not None, (
-        f"Expected a wire rejection for budget {below_min} below min_package_budget {min_budget}, "
-        f"but no wire_error_envelope was captured (is_error={result.is_error}, payload={result.payload!r})"
-    )
-    first_error = envelope.get("errors", [{}])[0]
-    error_code = first_error.get("code", "")
-    error_msg = (first_error.get("message") or "").lower()
-    assert "minimum spend" in error_msg or error_code == "BUDGET_EXCEEDED", (
-        f"Expected minimum spend rejection (wire message containing 'minimum spend' "
-        f"or code 'BUDGET_EXCEEDED'), got: code={error_code!r}, message={first_error.get('message')!r}"
-    )
+    result.assert_wire_error("BUDGET_TOO_LOW", message_substr="minimum spend")
 
 
 # ═══════════════════════════════════════════════════════════════════════

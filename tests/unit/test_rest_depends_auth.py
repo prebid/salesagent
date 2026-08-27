@@ -150,13 +150,32 @@ class TestRouteSignaturesUseDependsForIdentity:
 class TestResolveAuthDepBehavior:
     """Test the resolve_auth dependency function behavior directly."""
 
-    def test_returns_none_without_token(self):
-        """resolve_auth dep should return None when no auth token present."""
+    def test_returns_identity_without_token(self):
+        """resolve_auth dep must still return a ResolvedIdentity (not bare None)
+        when no auth token is present (salesagent-zna9) — matching
+        resolve_identity_from_context()'s MCP/A2A contract, so header-based
+        tenant detection (Host / x-adcp-tenant) always runs for discovery
+        endpoints regardless of credential presence.
+
+        Mocks resolve_identity() (unit test, no DB) — the real header-based
+        DB resolution is covered by
+        tests/integration/test_rest_auth_optional_tenant_resolution.py.
+        """
+        from unittest.mock import patch
+
         from src.core.auth_context import AuthContext, _resolve_auth_dep
+        from src.core.resolved_identity import ResolvedIdentity
+        from tests.factories.principal import PrincipalFactory
 
         auth_ctx = AuthContext.unauthenticated()
-        result = _resolve_auth_dep(auth_ctx)
-        assert result is None
+        mock_identity = PrincipalFactory.make_identity(principal_id=None, tenant_id=None, tenant=None, protocol="rest")
+
+        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity) as mock_resolve:
+            result = _resolve_auth_dep(auth_ctx)
+
+        mock_resolve.assert_called_once_with(headers={}, auth_token=None, require_valid_token=False, protocol="rest")
+        assert isinstance(result, ResolvedIdentity)
+        assert result.principal_id is None
 
     def test_returns_identity_with_valid_token(self):
         """resolve_auth dep should return ResolvedIdentity with valid token."""

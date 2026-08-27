@@ -7,7 +7,7 @@ description: >
 
 variables:
   BATCH_IDS:
-    description: "Space-separated beads task IDs for step batches (max 5)"
+    description: "Space-separated beads task IDs for step batches. Keep to <=5 — this is advisory (nothing enforces it); more than ~5 makes the inspect gate's manual check unreliable. NOTE: the write atom is `depends_on_prev_barrier`, so writes run SEQUENTIALLY across batches even though orient/inspect can overlap — do not estimate throughput as fully parallel."
     required: true
 
 labels:
@@ -17,17 +17,26 @@ setup:
   - id: "baseline"
     title: "Establish BDD baseline"
     description: |
-      Run BDD tests BEFORE any changes. Record counts.
+      Run the BDD modules this batch touches BEFORE any changes and record
+      counts. Name the FILES — a whole-`tests/bdd/` slice deadlocks under xdist
+      against the single agent-db; the offload path is `saci test bdd <files>`.
 
       ```bash
-      scripts/run-test.sh tests/bdd/ --no-header -q 2>&1 | tail -5
+      # the module(s) for the batch's scenarios (from orient), e.g.:
+      saci test bdd tests/bdd/test_uc0XX_*.py -rxX --no-header -q 2>&1 | tail -8
       ```
 
-      Record in epic notes: passed, xpassed, xfailed, failed.
+      Record in epic notes: passed, xpassed (with the nodeid set), xfailed, failed.
+      The xpassed nodeid SET is required — the finalize check compares identity,
+      not just counts.
 
       ## Gate — HARD STOP on unexpected failures
-
-    acceptance: "Baseline recorded in epic notes."
+      Read the counts, do not just record them:
+      - `failed` / `error` == 0. If not, STOP — the batch cannot be graded
+        against a red baseline; fix or report the pre-existing failure first.
+      - Capture the exact `xpassed` nodeids and `xfailed` count now; finalize
+        requires every later delta in both to be explained.
+    acceptance: "Baseline recorded (passed / xfailed / xpassed-nodeid-set / failed) AND failed==error==0 verified, not merely logged."
     labels: ["atom:baseline"]
 
 iterate:
@@ -58,7 +67,8 @@ iterate:
         After reading, note in bead {BATCH_ID}:
         - Which env class does this UC use?
         - Which factories exist for the entities needed?
-        - What call_impl() / call_via() signatures are available?
+        - What `dispatch_request` / `env.call_via(transport)` signatures are
+          available? (NOT `call_impl` — it is banned in steps; see antipattern #7)
 
         ## Step 2: Read the batch task
 
@@ -143,18 +153,32 @@ iterate:
         6. **Hardcoded IDs**: `assert result.id == "mb-001"`.
            → Resolve through ctx: `ctx["expected_id"]`.
 
-        7. **Bypass harness**: Calling production code directly.
-           → Use `env.call_impl()` or `env.call_via(transport)`.
+        7. **Bypass harness**: a step calling production `_impl` / `call_impl`
+           directly — it runs IMPL regardless of `ctx["transport"]`, the exact
+           TRANSPORT-BYPASS `test_architecture_bdd_no_direct_call_impl.py` (and
+           `..._no_partial_account_call_impl.py`) fail the build for. There are
+           currently ZERO `call_impl` calls in `tests/bdd/steps/`; do not add one.
+           → `dispatch_request(ctx, req=<AdCP request model>)` (dispatches through
+             all four transports), or `env.call_via(transport)`. NEVER `call_impl`.
 
         8. **elif dispatch in Then**: Chain of conditions in one function.
            → One function per step text, or parsers.parse().
+
+        9. **Typed payload as oracle**: asserting on `result.payload.<field>` or
+           `result.payload.model_dump()`. That round-trips the model and proves
+           serializer self-consistency — NOT what the buyer received on the wire.
+           → assert on the WIRE via the canonical helpers (`wire_field` /
+             `wire_dict` / `assert_wire_error`); enforced by
+             `test_architecture_bdd_wire_discipline.py`.
 
         ## Pattern
 
         For each scenario:
         1. Given steps: set up ctx using factories
-        2. When steps: call env.call_impl() / env.call_via()
-        3. Then steps: assert response fields == SPECIFIC values
+        2. When steps: `dispatch_request(ctx, req=<AdCP request model>)` — never
+           `call_impl` (banned by test_architecture_bdd_no_direct_call_impl.py)
+        3. Then steps: assert the WIRE envelope fields == SPECIFIC values via the
+           canonical helpers (never `result.payload.model_dump()` — see #9)
 
         ## After changes
 
@@ -176,7 +200,11 @@ iterate:
       description: |
         Run structural guards + manual assertion check. Fix before committing.
 
-        ## Run guards
+        ## Run guards — every antipattern in the write atom must have a check
+        here, or the gate is theatre (an agent that wrote `call_impl` or a
+        typed-payload oracle would otherwise sail through and only fail at
+        `make quality` in commit, where the cheap escape is a TRANSPORT-BYPASS
+        allowlist entry — the exact defect these guards exist to prevent).
 
         ```bash
         uv run pytest \
@@ -184,10 +212,16 @@ iterate:
           tests/unit/test_architecture_bdd_assertion_strength.py \
           tests/unit/test_architecture_bdd_no_pass_steps.py \
           tests/unit/test_architecture_bdd_no_request_in_then.py \
+          tests/unit/test_architecture_bdd_no_direct_call_impl.py \
+          tests/unit/test_architecture_bdd_no_partial_account_call_impl.py \
+          tests/unit/test_architecture_bdd_wire_discipline.py \
+          tests/unit/test_architecture_bdd_no_silent_env.py \
+          tests/unit/test_architecture_repository_pattern.py \
           -x -q
         ```
 
         If ANY fail: go back, fix, re-run. Do NOT close this atom with failures.
+        Do NOT silence a guard by adding an allowlist entry — fix the step.
 
         ## Manual check each Then step you wrote/modified
 
@@ -222,22 +256,23 @@ iterate:
 
 finalize:
   - id: verify-no-regression
-    title: "Verify zero regressions vs baseline"
+    title: "Verify zero regressions vs baseline (count + xpass identity)"
     description: |
-      Compare final BDD counts against baseline from setup atom.
-      passes >= baseline, failures = 0, xfails may decrease.
+      Re-run the batch's BDD modules (`saci test bdd <files>`, named — never the
+      whole dir, which deadlocks under xdist) and compare against the baseline:
+      - `failed` / `error` == 0.
+      - `passed >= baseline` is NOT sufficient on its own: one test starting to
+        pass while another regresses to xfail satisfies it while hiding a loss.
+        Compare `xfailed` too — an increase is a regression until explained.
+      - Compare the `xpassed` nodeid SET by IDENTITY against the baseline set. A
+        green suite CANNOT report a regression-to-xfail; this is the only check
+        that catches it. Every added/missing xpassed nodeid and every xfailed
+        delta must be explained — a deliberate graduation (with citation) or a
+        fix — not merely counted.
 
-    acceptance: "Zero regressions. Final counts recorded."
+      No `bd sync`: since 2026-08-11 all worktrees share one Dolt server, filing
+      is globally visible, and there is no sync step (on older bd it was
+      destructive across worktrees).
+    acceptance: "failed==error==0; xfailed AND xpassed-nodeid-set compared vs baseline by identity; every delta explained (graduation-with-citation or fix)."
     depends_on_all_barriers: true
     labels: ["atom:verify-regression"]
-
-  - id: sync
-    title: "Sync beads"
-    description: |
-      ```bash
-      bd sync
-      ```
-
-    acceptance: "All batches closed. bd sync done."
-    depends_on: ["verify-no-regression"]
-    labels: ["atom:verify"]

@@ -19,7 +19,7 @@ import requests
 
 from src.core.database.database_session import get_db_session
 from src.core.webhook_authenticator import WebhookAuthenticator
-from src.core.webhook_validator import WebhookURLValidator
+from src.core.webhook_validator import reject_unsafe_outbound_webhook_url
 
 logger = logging.getLogger(__name__)
 
@@ -87,10 +87,14 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
             "attempts": 0,
         }
 
-    # Validate webhook URL for SSRF protection
-    is_valid, error_msg = WebhookURLValidator.validate_webhook_url(delivery.webhook_url)
-    if not is_valid:
-        logger.error(f"Webhook URL validation failed: {error_msg}")
+    # The SEND-time gate, through the shared entry point the three service senders
+    # use. This previously called validate_webhook_url — the REGISTRATION-time gate,
+    # which under ADCP_TESTING refuses the local capture receiver the send-time gate
+    # admits. Same act, two policies, decided by which module the caller sat in
+    # (salesagent-og9k.8). The helper also carries the standardized refusal logging,
+    # so the paths cannot drift on their log shape either.
+    rejected, error_msg = reject_unsafe_outbound_webhook_url(delivery.webhook_url, log=logger, kind="Application")
+    if rejected:
         # Record validation failure metrics
         if delivery.tenant_id and delivery.event_type:
             webhook_delivery_total.labels(

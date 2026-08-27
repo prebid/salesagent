@@ -1,4 +1,10 @@
-"""Lock test for the e2e_rest known-failures ledger (#1418, Wave 3).
+"""Lock tests for the e2e_rest xfail ledgers (#1418, Wave 3).
+
+Two ledgers, one discipline. The nodeid ledger below is the original; the
+``_UC004_E2E_WEBHOOK_INTERNAL_TAGS`` tag set in ``tests/bdd/conftest.py`` is the
+second — a blanket ``is_e2e_rest`` xfail route whose CONTENTS were protected only
+by a prose comment, which is why the set grew. Both are pinned by exact-set
+equality in BOTH directions here.
 
 The ledger (``tests/bdd/e2e_rest_known_failures.txt``) is a shrinking work-list of
 e2e_rest BDD scenarios that fail over real HTTP. Wave 3 graduated every scenario
@@ -20,6 +26,7 @@ in the same change.
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 # The 17 e2e_rest nodeids remaining: 7 genuine gaps + 10 parallel-e2e_rest
@@ -78,6 +85,14 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/bdd/test_uc018_list_creatives.py::test_brrule034_inv1_counter__crossprincipal_creatives_never_visible[e2e_rest]",
         "tests/bdd/test_uc018_list_creatives.py::test_brrule034_inv1_holds__query_always_scoped_by_principal[e2e_rest]",
         "tests/bdd/test_uc018_list_creatives.py::test_list_creatives_filtered_by_concept_ids_returns_only_creatives_in_that_concept_carrying_concept_id_and_concept_name[e2e_rest]",
+        # Added by bug-triage epic salesagent-jl20 (2026-07-16): 2 genuine e2e-only
+        # gaps surfaced by un-xfailing dn2s/mkso's scenarios — see ledger file
+        # section comments for full root-cause analysis of each.
+        # uc010 auth-data-identity graduated at salesagent-zna9 (_resolve_auth_dep
+        # now resolves tenant from headers regardless of credential presence).
+        # uc003 ext-a-unknown graduated at salesagent-z9e0 (harness identity_for()
+        # now nulls principal_id on a failed token->principal DB lookup, mirroring
+        # production's resolve_identity() — all transports agree now).
     }
 )
 
@@ -122,3 +137,135 @@ def test_conftest_loader_reads_this_ledger() -> None:
     from tests.bdd.conftest import _E2E_REST_KNOWN_FAILURES
 
     assert _E2E_REST_KNOWN_FAILURES == EXPECTED_LEDGER
+
+
+# ---------------------------------------------------------------------------
+# Second ledger: the UC-004 webhook blanket-xfail tag set in the BDD conftest
+# ---------------------------------------------------------------------------
+
+_BDD_CONFTEST = Path(__file__).resolve().parents[1] / "bdd" / "conftest.py"
+_WEBHOOK_TAGS_NAME = "_UC004_E2E_WEBHOOK_INTERNAL_TAGS"
+
+# The 11 UC-004 webhook tags blanket-xfailed on e2e_rest. This set is a work-list,
+# not a config: every entry is a scenario that does NOT grade the live delivery
+# path. It is pinned by EXACT SET EQUALITY, in both directions, on purpose:
+#
+#   * an ADDITION fails here even when it is legitimate — parking a scenario has
+#     to be a deliberate edit to this constant with a stated reason, which is
+#     precisely the review step the prose comment in the conftest could not force
+#     (the set grew under it);
+#   * a REMOVAL fails here too — an un-graduated deletion silently un-xfails a
+#     scenario whose Thens can no longer observe anything, which is the failure
+#     mode salesagent-n78j0.1.4 nearly shipped. Removals follow
+#     .claude/rules/workflows/xpass-graduation.md, one scenario at a time, and
+#     update this constant in the same change.
+#
+# Graduated on the way here: T-UC-004-webhook-9421 (salesagent-n78j0.1.4 — the
+# delivery ACTION moved into env.deliver_webhook(), which drives the live server's
+# own trigger route over e2e; see the conftest comment for the mutation evidence).
+# Graduated on the way here: T-UC-004-webhook-hmac (salesagent-n78j0.13 — traced
+# independently of the 9421 sibling rather than assumed to ride along with it. Its
+# three Thens read env.last_delivery() and the last RECOMPUTES the digest over the
+# received bytes; production reaches the HMAC arm because _send_report_for_media_buy
+# looks the registration up in DBPushNotificationConfig, which overrides the
+# auth-less raw_request the harness writes. Mutation evidence in the conftest
+# comment; this lock is what caught the removal before the pin was updated, which
+# is the review step it exists to force).
+# Graduated on the way here: T-UC-004-webhook-bearer (salesagent-n78j0.13 — traced
+# independently of the hmac row again, not carried by it. This one is structurally
+# weaker than hmac (ONE Then, no recompute-over-received-bytes), so the inspection
+# turned on a single question: does that Then grade the token's VALUE or merely the
+# header's PRESENCE? It grades the value — expected comes from the test's own ctx,
+# actual off the wire via env.last_delivery() — and the mutation that proves it is a
+# WRONG-BUT-PRESENT token, deliberately not a removed header, since a removed header
+# would only re-prove presence. Mutation evidence in the conftest comment).
+EXPECTED_WEBHOOK_INTERNAL_TAGS: frozenset[str] = frozenset(
+    {
+        # Server-side gap, not a harness bypass: the live delivery path emits
+        # NotificationType.scheduled unconditionally (delivery_webhook_scheduler.py),
+        # so the final/delayed/adjusted Examples rows cannot pass over e2e_rest.
+        "T-UC-004-webhook-notification-type",
+        "T-UC-004-webhook-no-aggregated",
+        "T-UC-004-webhook-circuit-open",
+        "T-UC-004-webhook-circuit-recovery",
+        "T-UC-004-webhook-retry-success",
+        # jdy1-M4: retry/sequence observability — assert on env.mock['post'] call
+        # counts / args, not visible over the Docker HTTP path.
+        "T-UC-004-webhook-retry-5xx",
+        "T-UC-004-webhook-retry-network",
+        "T-UC-004-webhook-no-retry-4xx",
+        "T-UC-004-webhook-sequence",
+    }
+)
+
+
+def find_webhook_internal_tags(tree: ast.Module) -> frozenset[str]:
+    """Extract the ``_UC004_E2E_WEBHOOK_INTERNAL_TAGS`` literal from the conftest AST.
+
+    The set is a local inside ``pytest_collection_modifyitems``, so it cannot be
+    imported; it is read structurally instead (same technique as
+    ``test_architecture_e2e_rest_escape_hatches.find_e2e_rest_xfail_conditions``).
+
+    Raises if the binding is missing or is no longer a set of string literals —
+    deleting or dynamically building the set must fail this lock loudly rather
+    than reduce it to an empty set that compares unequal for the wrong reason.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            name, value = node.target.id, node.value
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            name, value = node.targets[0].id, node.value
+        else:
+            continue
+        if name != _WEBHOOK_TAGS_NAME:
+            continue
+        if not isinstance(value, ast.Set) or not all(
+            isinstance(elt, ast.Constant) and isinstance(elt.value, str) for elt in value.elts
+        ):
+            raise AssertionError(
+                f"{_WEBHOOK_TAGS_NAME} is no longer a literal set of strings. This lock reads "
+                "it structurally; a computed set cannot be pinned and would silently disable "
+                "the ledger discipline."
+            )
+        return frozenset(elt.value for elt in value.elts)
+    raise AssertionError(
+        f"{_WEBHOOK_TAGS_NAME} not found in {_BDD_CONFTEST}. If the blanket e2e_rest webhook "
+        "xfail route was retired, delete EXPECTED_WEBHOOK_INTERNAL_TAGS and this lock in the "
+        "same change (and drop the route from EXPECTED_XFAIL_ROUTES)."
+    )
+
+
+def test_webhook_internal_tags_match_pin() -> None:
+    """The conftest's UC-004 webhook xfail tag set is exactly the pinned set."""
+    actual = find_webhook_internal_tags(ast.parse(_BDD_CONFTEST.read_text()))
+    added = actual - EXPECTED_WEBHOOK_INTERNAL_TAGS
+    removed = EXPECTED_WEBHOOK_INTERNAL_TAGS - actual
+    assert actual == EXPECTED_WEBHOOK_INTERNAL_TAGS, (
+        f"{_WEBHOOK_TAGS_NAME} drifted from its pin.\n"
+        f"Parked without a deliberate pin update: {sorted(added)}\n"
+        f"Un-parked without a graduation: {sorted(removed)}\n"
+        "Growth is not forbidden, but it must be a reviewed edit to "
+        "EXPECTED_WEBHOOK_INTERNAL_TAGS stating why the scenario cannot grade the live "
+        "delivery path. Removal follows .claude/rules/workflows/xpass-graduation.md."
+    )
+
+
+def test_webhook_tag_extractor_rejects_a_computed_set() -> None:
+    """Meta-test: a non-literal set fails loudly instead of pinning nothing."""
+    src = f"def hook():\n    {_WEBHOOK_TAGS_NAME} = set(SOME_OTHER_TAGS)\n"
+    try:
+        find_webhook_internal_tags(ast.parse(src))
+    except AssertionError as exc:
+        assert "no longer a literal set" in str(exc)
+    else:
+        raise AssertionError("extractor accepted a computed set")
+
+
+def test_webhook_tag_extractor_rejects_a_missing_binding() -> None:
+    """Meta-test: deleting the set fails the lock instead of passing vacuously."""
+    try:
+        find_webhook_internal_tags(ast.parse("def hook():\n    pass\n"))
+    except AssertionError as exc:
+        assert "not found" in str(exc)
+    else:
+        raise AssertionError("extractor accepted a missing binding")

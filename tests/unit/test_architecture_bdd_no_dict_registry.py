@@ -12,31 +12,17 @@ beads: beads-7ka
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
 import pytest
 
 from tests.unit._architecture_helpers import iter_call_expressions
-
-_BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
+from tests.unit._bdd_guard_helpers import BDD_STEPS_DIR, iter_bdd_steps
 
 # Files that contain Given steps populating registry_formats
 _GIVEN_FILES = [
-    _BDD_STEPS_DIR / "generic" / "given_entities.py",
-    _BDD_STEPS_DIR / "generic" / "given_config.py",
+    BDD_STEPS_DIR / "generic" / "given_entities.py",
+    BDD_STEPS_DIR / "generic" / "given_config.py",
 ]
-
-
-def _is_given_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """Check if function is decorated with @given(...)."""
-    for dec in func.decorator_list:
-        if isinstance(dec, ast.Call):
-            func_node = dec.func
-            if isinstance(func_node, ast.Name) and func_node.id == "given":
-                return True
-        if isinstance(dec, ast.Name) and dec.id == "given":
-            return True
-    return False
 
 
 def _body_appends_dict_to_registry(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -82,23 +68,11 @@ def _value_contains_dict(node: ast.AST) -> bool:
 
 def _scan_given_steps() -> list[str]:
     """Find Given steps that store raw dicts in registry_formats."""
-    violations = []
-    for py_file in _GIVEN_FILES:
-        if not py_file.exists():
-            continue
-        source = py_file.read_text()
-        tree = ast.parse(source, filename=str(py_file))
-        relative = py_file.relative_to(_BDD_STEPS_DIR.parent.parent)
-
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            if not _is_given_decorated(node):
-                continue
-            if _body_appends_dict_to_registry(node):
-                violations.append(f"{relative}:{node.lineno} {node.name}")
-
-    return violations
+    return [
+        step.key
+        for step in iter_bdd_steps(step_names=("given",), files=_GIVEN_FILES)
+        if _body_appends_dict_to_registry(step.node)
+    ]
 
 
 class TestBddNoDictRegistry:

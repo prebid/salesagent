@@ -8,9 +8,24 @@ import threading
 from datetime import UTC, datetime
 
 from src.core.thread_registry import ThreadRegistry
-from src.services.webhook_delivery_service import webhook_delivery_service
 
 logger = logging.getLogger(__name__)
+
+
+def _webhook_delivery_service():
+    """The delivery-webhook singleton, resolved at CALL time rather than import time.
+
+    An adapter must not pull a service in at module-import time. Doing so closes a
+    cycle now that both halves of it exist: this module is reached from
+    ``src.core.helpers`` (via ``adapter_helpers`` -> ``src.adapters`` -> gam), which
+    ``repositories.account`` imports for ``brand_key_parts``; and
+    ``webhook_delivery_service`` in turn imports ``src.core.signing``, whose
+    ``provider`` imports the repositories package. Either edge alone is acyclic --
+    together they are not, so the import is deferred here.
+    """
+    from src.services.webhook_delivery_service import webhook_delivery_service
+
+    return webhook_delivery_service
 
 
 class GAMReportingManager:
@@ -149,7 +164,7 @@ class GAMReportingManager:
             )
 
             # Send initial webhook - campaign started
-            webhook_delivery_service.send_delivery_webhook(
+            _webhook_delivery_service().send_delivery_webhook(
                 media_buy_id=media_buy_id,
                 tenant_id=tenant_id,
                 principal_id=principal_id,
@@ -179,7 +194,7 @@ class GAMReportingManager:
                     is_final = now >= end_time
 
                     # Send delivery webhook
-                    webhook_delivery_service.send_delivery_webhook(
+                    _webhook_delivery_service().send_delivery_webhook(
                         media_buy_id=media_buy_id,
                         tenant_id=tenant_id,
                         principal_id=principal_id,
@@ -213,7 +228,7 @@ class GAMReportingManager:
                 self._stop_signals.pop(media_buy_id, None)
 
             # Reset webhook sequence number
-            webhook_delivery_service.reset_sequence(media_buy_id)
+            _webhook_delivery_service().reset_sequence(media_buy_id)
 
     def _fetch_gam_delivery_metrics(self, order_id: str, start_date: datetime, end_date: datetime) -> dict:
         """Fetch delivery metrics from GAM API.

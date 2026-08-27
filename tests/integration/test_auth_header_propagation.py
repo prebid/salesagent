@@ -30,7 +30,7 @@ class TestAuthHeaderPropagation:
         )
 
         # Build adcp client
-        with patch("src.core.creative_agent_registry.ADCPMultiAgentClient") as mock_client_class:
+        with patch("adcp.ADCPMultiAgentClient") as mock_client_class:
             mock_client = Mock()
             mock_client_class.return_value = mock_client
 
@@ -63,7 +63,7 @@ class TestAuthHeaderPropagation:
             auth_header=None,  # No custom header
         )
 
-        with patch("src.core.creative_agent_registry.ADCPMultiAgentClient") as mock_client_class:
+        with patch("adcp.ADCPMultiAgentClient") as mock_client_class:
             mock_client = Mock()
             mock_client_class.return_value = mock_client
 
@@ -90,7 +90,7 @@ class TestAuthHeaderPropagation:
         )
 
         # Build adcp client
-        with patch("src.core.signals_agent_registry.ADCPMultiAgentClient") as mock_client_class:
+        with patch("adcp.ADCPMultiAgentClient") as mock_client_class:
             mock_client = Mock()
             mock_client_class.return_value = mock_client
 
@@ -122,7 +122,7 @@ class TestAuthHeaderPropagation:
             auth_header=None,  # No custom header
         )
 
-        with patch("src.core.signals_agent_registry.ADCPMultiAgentClient") as mock_client_class:
+        with patch("adcp.ADCPMultiAgentClient") as mock_client_class:
             mock_client = Mock()
             mock_client_class.return_value = mock_client
 
@@ -166,7 +166,7 @@ class TestAuthHeaderPropagation:
             ),
         ]
 
-        with patch("src.core.creative_agent_registry.ADCPMultiAgentClient") as mock_client_class:
+        with patch("adcp.ADCPMultiAgentClient") as mock_client_class:
             mock_client = Mock()
             mock_client_class.return_value = mock_client
 
@@ -198,6 +198,7 @@ class TestAuthHeaderPropagation:
         # Mock the adcp client to verify headers are passed
         mock_client = Mock()
         mock_agent_client = Mock()
+        mock_agent_client.signing = None
 
         # Mock successful response
         mock_result = Mock()

@@ -61,7 +61,7 @@ class TestRegistryConnectionRouting:
 
         with (
             patch("src.core.helpers.adapter_helpers.build_agent_config") as bac,
-            patch("src.core.creative_agent_registry.ADCPMultiAgentClient"),
+            patch("adcp.ADCPMultiAgentClient"),
         ):
             bac.side_effect = lambda agent: captured.append(agent.agent_url) or MagicMock()
             registry._build_adcp_client([CreativeAgent(agent_url=PUBLIC_DEFAULT_AGENT_URL, name="x", enabled=True)])

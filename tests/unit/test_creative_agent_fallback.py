@@ -29,6 +29,26 @@ def agent():
     )
 
 
+@pytest.fixture(autouse=True)
+def agent_host_resolves_publicly():
+    """Make the fixture agent's hostname resolve, without disarming the gate.
+
+    ``_fetch_formats_raw_mcp`` applies the fire-time SSRF check, which resolves
+    DNS. The fixture agent is ``https://creative.example.com``, a name that does
+    not resolve anywhere — so every test that exercises the transport would fail
+    as "Cannot resolve hostname" rather than for its own reason.
+
+    This stubs the RESOLVER (an external dependency), not the policy: scheme,
+    blocked-hostname, IP-literal and resolved-range checks all still run, against
+    a public address. Tests that need a different resolution re-patch inside
+    (see ``test_host_resolving_to_a_private_address_is_refused``), and the
+    blocked-destination cases are decided before DNS is consulted at all, so this
+    cannot mask them.
+    """
+    with patch("socket.gethostbyname", return_value="93.184.216.34"):
+        yield
+
+
 SAMPLE_FORMATS_JSON = '{"formats": [{"format_id": {"agent_url": "https://creative.example.com", "id": "display_image"}, "name": "Display Image", "type": "display"}]}'
 
 
@@ -43,6 +63,7 @@ class TestStructuredContentFallbackTrigger:
         mock_result.error = "MCP tool list_creative_formats did not return structuredContent. This SDK requires..."
 
         mock_agent_proxy = MagicMock()
+        mock_agent_proxy.signing = None
         mock_agent_proxy.list_creative_formats = AsyncMock(return_value=mock_result)
         mock_client = MagicMock()
         mock_client.agent.return_value = mock_agent_proxy
@@ -63,6 +84,7 @@ class TestStructuredContentFallbackTrigger:
         mock_result.message = None
 
         mock_agent_proxy = MagicMock()
+        mock_agent_proxy.signing = None
         mock_agent_proxy.list_creative_formats = AsyncMock(return_value=mock_result)
         mock_client = MagicMock()
         mock_client.agent.return_value = mock_agent_proxy
@@ -403,6 +425,7 @@ class TestSchemaValidationFailureTriggersFallback:
         mock_result.message = None
 
         mock_agent_proxy = MagicMock()
+        mock_agent_proxy.signing = None
         mock_agent_proxy.list_creative_formats = AsyncMock(return_value=mock_result)
         mock_client = MagicMock()
         mock_client.agent.return_value = mock_agent_proxy
@@ -433,3 +456,100 @@ class TestSchemaValidationFailureTriggersFallback:
             agent,
             "Schema validation failed for list_creative_formats: /formats/0/assets/1 oneOf composition failed (+47 more)",
         )
+
+
+class TestRawMcpFallbackEgressGate:
+    """The raw-httpx fallback must apply the seam's destination policy.
+
+    ``_fetch_formats_raw_mcp`` dials an operator-configured ``agent.agent_url``
+    directly with httpx, bypassing the adcp SDK's transport. Sibling paths that
+    dial the same CLASS of URL do gate it —
+    ``property_list_resolver._validate_agent_url`` (check_url_ssrf, HTTPS
+    required) and ``signals_agents`` at the admin ingestion boundary — so a
+    creative agent URL is the one that reaches the network on nobody's policy.
+
+    The discriminator is that NO HTTP client is constructed: a test that only
+    asserted "an error was raised" would pass against a connection failure and
+    grade nothing, since a blocked host also fails to connect.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "blocked_url",
+        [
+            "http://169.254.169.254/latest/meta-data",  # cloud metadata (credential-leak primitive)
+            "http://host.docker.internal:9999",  # BLOCKED_HOSTNAMES, the #1697 audit vector
+            "http://10.0.0.5/mcp",  # RFC 1918 literal
+            "http://[::1]/mcp",  # IPv6 loopback literal
+        ],
+    )
+    async def test_blocked_destination_is_refused_without_dialling(self, registry, blocked_url):
+        blocked_agent = CreativeAgent(
+            agent_url=blocked_url,
+            name="hostile-agent",
+            auth=None,
+            auth_header=None,
+        )
+        with patch("httpx.AsyncClient") as mock_client:
+            with pytest.raises(AdCPAdapterError) as exc_info:
+                await registry._fetch_formats_raw_mcp(blocked_agent)
+
+        assert mock_client.call_count == 0, (
+            f"An HTTP client was constructed for {blocked_url!r} — the destination policy ran "
+            "after the socket, or not at all"
+        )
+        # The refusal must not disclose our policy or the resolved address
+        # (AdCP 3.1.1 building/by-layer/L1/security.mdx:104-119 step 6).
+        message = str(exc_info.value)
+        assert "10.0.0.0/8" not in message and "169.254.0.0/16" not in message, (
+            f"Refusal leaks the blocked CIDR to the caller: {message}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_public_destination_still_reaches_the_transport(self, registry, agent):
+        """The gate must not refuse the ordinary case — otherwise it is a kill switch.
+
+        Pairs with the parametrized refusals above: without this, deleting the
+        fetch entirely would satisfy them.
+
+        DNS is stubbed by ``agent_host_resolves_publicly``, not the gate — the
+        real policy still runs against a public address. Patching
+        ``check_url_ssrf`` instead would make this control vacuous, which is the
+        mock-based gate control this project forbids.
+        """
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.headers = {"content-type": "application/json"}
+        mock_response.json.return_value = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"content": [{"type": "text", "text": SAMPLE_FORMATS_JSON}]},
+        }
+
+        mock_http = AsyncMock()
+        mock_http.post.return_value = mock_response
+        mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+        mock_http.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("httpx.AsyncClient", return_value=mock_http):
+            formats = await registry._fetch_formats_raw_mcp(agent)
+
+        assert len(formats) == 1
+        assert mock_http.post.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_host_resolving_to_a_private_address_is_refused(self, registry, agent):
+        """A public-looking NAME that resolves into a private range is refused.
+
+        The four parametrized cases above are all decidable without DNS (blocked
+        hostname, or an IP literal), so they would pass against a syntax-only
+        check. This one only passes if the gate actually resolves — it pins that
+        the fire-time check was not quietly downgraded to ``check_url_syntax``.
+        """
+        with patch("socket.gethostbyname", return_value="10.1.2.3") as resolver:
+            with patch("httpx.AsyncClient") as mock_client:
+                with pytest.raises(AdCPAdapterError):
+                    await registry._fetch_formats_raw_mcp(agent)
+
+        assert resolver.called, "The gate did not resolve DNS — it is not the fire-time check"
+        assert mock_client.call_count == 0, "An HTTP client was constructed for a private-resolving host"

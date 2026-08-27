@@ -56,12 +56,15 @@ def test_tenant_and_products(integration_db):
         )
         PricingOptionFactory(product=p2, pricing_model="cpm", rate=Decimal("15.00"), is_fixed=False)
 
-        # Product with invalid format data (string, not list) for validation testing
+        # Product whose format entries don't match the FormatId shape, for
+        # validation testing. (This used to be a json.dumps STRING, which
+        # JSONType silently coerced to {} — the invalid-format scenario never
+        # actually existed on disk; the bind now rejects strings loudly.)
         p3 = ProductFactory(
             tenant=tenant,
             product_id="test_product_invalid",
             name="Test Product Invalid Format",
-            format_ids='[{"format_id": "test", "type": "invalid_type"}]',
+            format_ids=[{"format_id": "test", "type": "invalid_type"}],
         )
         PricingOptionFactory(product=p3, pricing_model="cpm", rate=Decimal("20.00"), is_fixed=False)
 
@@ -352,8 +355,15 @@ class TestProductDeletion:
 class TestEnvironmentFirstAuthentication:
     """Test the environment-first authentication approach we implemented."""
 
-    def test_environment_super_admin_check(self):
-        """Test that environment variables are checked first for super admin status."""
+    def test_environment_super_admin_check(self, integration_db):
+        """Test that environment variables are checked first for super admin status.
+
+        Needs ``integration_db``: the not-admin assertion falls back to the
+        database inside ``is_super_admin``; without the fixture the engine may
+        be stale/unconfigured, and the swallowed OperationalError trips the
+        get_db_session circuit breaker — failing the NEXT db-touching test in
+        the 10-second fail-fast window.
+        """
         from src.admin.utils import is_super_admin
 
         # Test with environment variable
@@ -372,8 +382,12 @@ class TestEnvironmentFirstAuthentication:
             assert is_super_admin("test@example.com") is True
             assert is_super_admin("not-admin@example.com") is False
 
-    def test_domain_based_super_admin_environment(self):
-        """Test domain-based super admin authentication from environment."""
+    def test_domain_based_super_admin_environment(self, integration_db):
+        """Test domain-based super admin authentication from environment.
+
+        ``integration_db`` for the same circuit-breaker reason as
+        ``test_environment_super_admin_check``.
+        """
         from src.admin.utils import is_super_admin
 
         with patch.dict("os.environ", {"SUPER_ADMIN_DOMAINS": "example.com,admin.org"}):

@@ -88,7 +88,6 @@ dev = [
     "pytest-mock>=3.14.1",
     "pytest-timeout>=2.3.1",
     "ruff>=0.8.0",
-    "datamodel-code-generator>=0.26.0",
     "jsonref>=1.1.0",
     "types-psycopg2>=2.9.21.20251012",
     "types-requests>=2.32.4.20250913",
@@ -127,6 +126,12 @@ exclude = [
     "alembic/versions",  # Never format migration files
 ]
 
+[tool.ruff.format]
+# Verbatim upstream copies — unit bodies must stay byte-diffable against upstream
+# (enforced by tests/unit/test_signing_vendored_provenance.py). Format-only exclusion:
+# a global exclude would also change isort's first-party resolution for the package.
+exclude = ["src/core/signing_contract/_upstream/*.py"]
+
 [tool.ruff.lint]
 select = [
     "E",      # pycodestyle errors
@@ -149,6 +154,7 @@ ignore = [
     "C901",    # complexity
     "PLR0912", # too-many-branches
     "PLR0915", # too-many-statements
+    "F841",    # unused local variable — was a blanket keep until it hid a computed-then-dropped warning
     #
     # --- Permanently accepted (low-signal style; ADR-009) ---
     "PLR0911", # too-many-return-statements — guard-clause returns; low signal
@@ -165,7 +171,6 @@ ignore = [
     "E741",    # Short `l` in math-heavy loops — renaming hurts readability
     "B904",    # raise-without-from in adapter error handling — add `from e` when touching
     "B027",    # Empty methods in BaseAdapter — intentional optional interface, not abstract
-    "F841",    # Unused vars in complex destructuring — each reviewed, kept for clarity
 ]
 
 

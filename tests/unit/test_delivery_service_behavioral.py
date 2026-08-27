@@ -583,6 +583,7 @@ class TestDeliverWithBackoffGenericException:
 
         from src.services.webhook_delivery_service import (
             CircuitBreaker,
+            QueuedWebhook,
             WebhookDeliveryService,
             WebhookQueue,
         )
@@ -591,18 +592,19 @@ class TestDeliverWithBackoffGenericException:
         cb = CircuitBreaker()
         queue = WebhookQueue()
 
-        mock_config = MagicMock()
-        mock_config.url = "https://example.com/hook"
-        mock_config.webhook_secret = None
-        mock_config.authentication_type = None
-        mock_config.authentication_token = None
-
+        # A QueuedWebhook, not a MagicMock config: the queue carries PRIMITIVES ONLY
+        # (#1757), so the retry loop cannot hold a session across its sleep and POST.
+        # The three fields below are exactly what the mock used to expose.
         queue.enqueue(
-            {
-                "config": mock_config,
-                "payload": {"test": "data"},
-                "timestamp": datetime.now(UTC),
-            }
+            QueuedWebhook(
+                url="https://example.com/hook",
+                authentication_type=None,
+                authentication_token=None,
+                payload={"test": "data"},
+                tenant_id="test_tenant",
+                idempotency_key="whk_behavioral_test",
+                timestamp=datetime.now(UTC),
+            )
         )
 
         with patch("src.services.webhook_delivery_service.httpx") as mock_httpx:

@@ -1,5 +1,8 @@
 """Test normalize_agent_url function."""
 
+import pytest
+
+from src.core.signing import TargetUriMalformedError
 from src.core.validation import normalize_agent_url
 
 
@@ -61,6 +64,36 @@ def test_normalize_agent_url_consistency():
     # All should normalize to the same value
     assert len(set(normalized_urls)) == 1
     assert normalized_urls[0] == "https://creative.adcontextprotocol.org"
+
+
+@pytest.mark.parametrize(
+    "malformed_url",
+    [
+        "https:///path",
+        "https://[::1/path",
+        "https://[fe80::1%eth0]/path",
+        "https://exämple.com/path",
+        "https://:443/path",
+    ],
+    ids=[
+        "empty-authority",
+        "unterminated-ipv6-bracket",
+        "ipv6-zone-identifier",
+        "raw-non-ascii-host",
+        "port-but-no-host",
+    ],
+)
+def test_normalize_agent_url_rejects_malformed_authority(malformed_url):
+    """normalize_agent_url must reject exactly what the signing layer's
+    canonicalization gate (src.core.signing.canonical) rejects as malformed.
+
+    Bug #1291: normalize_agent_url hand-rolls its own normalization
+    instead of sharing canonical.py's malformed_authority_reason predicate, so
+    a URL our RFC 9421 verifier would refuse as malformed can still be
+    silently accepted and compared/stored by the validation-layer path.
+    """
+    with pytest.raises(TargetUriMalformedError):
+        normalize_agent_url(malformed_url)
 
 
 def test_normalize_agent_url_only_strips_one_suffix():

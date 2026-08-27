@@ -15,15 +15,35 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from src.core.request_compat import normalize_request_params
+from src.core.signing import operation_for_rest_route
 
 logger = logging.getLogger(__name__)
 
-# Map URL path suffixes to tool names for normalization.
+#: The POST routes whose bodies get deprecated-field normalization.
+#:
+#: The KEYS are the gate and stay hand-listed on purpose: ``normalize_request_params``
+#: applies its top-level translations for ALL tools, so there is no per-tool translation
+#: registry to derive a wider set from — widening this would start normalizing
+#: deprecated fields on 10 REST routes that do not get it today, a compat decision
+#: rather than a refactor (#1291 B2 refinement R-M2; tracked as salesagent-i12h).
+#:
+#: The VALUES are derived from the ONE route registry
+#: (``src/core/signing/operations.py``), so this table cannot drift from the route it
+#: names; ``tests/unit/test_architecture_signing_operations.py::TestRestCompatTableAgreesWithTheRouteTable``
+#: fails the build if it ever does.
+_NORMALIZED_POST_PATHS: tuple[str, ...] = ("/products", "/media-buys", "/creatives/sync")
+
 _PATH_TO_TOOL: dict[str, str] = {
-    "/products": "get_products",
-    "/media-buys": "create_media_buy",
-    "/creatives/sync": "sync_creatives",
+    suffix: operation_for_rest_route("POST", f"/api/v1{suffix}") for suffix in _NORMALIZED_POST_PATHS
 }
+
+_UNROUTED_SUFFIXES = sorted(suffix for suffix, tool in _PATH_TO_TOOL.items() if not tool)
+if _UNROUTED_SUFFIXES:  # pragma: no cover - import-time wiring check
+    # A suffix that names no route would derive "", and an empty tool name makes
+    # ``_resolve_tool_name`` fall through — normalization would silently stop for that
+    # route while the drift guard stayed green (it compares two empty strings). Loud
+    # at import instead.
+    raise RuntimeError(f"rest-compat normalization targets paths with no POST /api/v1 route: {_UNROUTED_SUFFIXES}")
 
 
 class RestCompatMiddleware(BaseHTTPMiddleware):

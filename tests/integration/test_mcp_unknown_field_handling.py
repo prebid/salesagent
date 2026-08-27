@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tests.factories import PricingOptionFactory, ProductFactory, TenantFactory
+from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.harness.transport import Transport
 from tests.helpers import assert_envelope_shape
 
@@ -21,8 +21,16 @@ TENANT_ID = "mcptest"
 
 
 def _create_tenant_with_product():
-    """Create minimal tenant with a product inside an active env session."""
+    """Create minimal tenant with a product inside an active env session.
+
+    Includes a Principal row matching ProductEnv's default principal_id
+    ("test_principal") — the harness's identity_for() now nulls principal_id
+    when no matching DB row exists (salesagent-z9e0), so a real row is
+    required for these calls to actually authenticate rather than fall
+    through to the tenant's default require_auth brand_manifest_policy gate.
+    """
     tenant = TenantFactory(tenant_id=TENANT_ID)
+    PrincipalFactory(tenant=tenant, principal_id="test_principal")
     product = ProductFactory(tenant=tenant, product_id="mcp_prod_1")
     PricingOptionFactory(product=product)
     return tenant

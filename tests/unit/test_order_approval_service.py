@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from src.services.order_approval_service import (
@@ -185,14 +186,19 @@ def test_get_approval_status_not_found(mock_db_session):
 def test_webhook_notification_sent_on_success():
     """Test webhook notification is sent when approval succeeds."""
     from src.services.order_approval_service import _send_approval_webhook
+    from tests.helpers.webhook_wire import capture_outbound_webhooks, constructed_http_clients
 
+    # The client the sender builds is spied THROUGH the wire capture: the capture
+    # rebinds httpx.Client/AsyncClient to inject its transport, so the spy has to be
+    # installed first for the capture to wrap it.
+    # The loader now opens a UNIT OF WORK and returns a PROJECTION, so it is patched at
+    # its own seam rather than through a session it no longer opens (#1878). The
+    # get_db_session patch still stands for the signing path's own reads.
     with (
         patch("src.services.order_approval_service.get_db_session") as mock_db,
-        patch("httpx.Client") as mock_httpx,
-        patch(
-            "src.core.webhook_validator.WebhookURLValidator.validate_outbound_webhook_url",
-            return_value=(True, ""),
-        ),
+        patch("src.services.order_approval_service._load_approval_webhook_config") as mock_load,
+        constructed_http_clients() as built,
+        capture_outbound_webhooks() as captured,
     ):
         # Mock push notification config
         mock_db_instance = MagicMock()
@@ -208,14 +214,24 @@ def test_webhook_notification_sent_on_success():
             authentication_token="test_token",
             is_active=True,
         )
+        # Answered on BOTH shapes so the test grades the sender, not the query style:
+        # PushNotificationConfigRepository.list_active_by_principal reads `.all()`, the
+        # direct `select(PushNotificationConfig)` in the signing path reads `.first()`.
+        mock_db_instance.scalars.return_value.all.return_value = [mock_config]
         mock_db_instance.scalars.return_value.first.return_value = mock_config
 
-        # Mock HTTP client
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_client_instance = MagicMock()
-        mock_client_instance.post.return_value = mock_response
-        mock_httpx.return_value.__enter__.return_value = mock_client_instance
+        from src.services.order_approval_service import ApprovalWebhookAuth
+
+        mock_load.return_value = ApprovalWebhookAuth(
+            url="https://example.com/webhook",
+            authentication_type="bearer",
+            authentication_token="test_token",
+            validation_token=None,
+        )
+
+        # The loader now opens a UNIT OF WORK and returns a PROJECTION, so it is patched
+        # at its own seam rather than through a session it no longer opens (#1878). The
+        # get_db_session patch above still stands for the signing path's own reads.
 
         # Send webhook
         _send_approval_webhook(
@@ -229,36 +245,46 @@ def test_webhook_notification_sent_on_success():
             attempts=3,
         )
 
-        # Verify HTTP POST was made
-        mock_client_instance.post.assert_called_once()
-        mock_httpx.assert_called_with(timeout=10.0, follow_redirects=False)
-        call_args = mock_client_instance.post.call_args
+        # Verify HTTP POST was made — graded on the bytes and headers that would
+        # have gone on the socket, not on a mock's call args.
+        assert len(captured) == 1
+        request = captured[0]
 
         # Check webhook payload
-        assert call_args[0][0] == "https://example.com/webhook"
-        payload = call_args[1]["json"]
+        assert request.url == "https://example.com/webhook"
+        payload = request.payload
         assert payload["event"] == "order_approval_update"
         assert payload["media_buy_id"] == "mb_123"
         assert payload["status"] == "approved"
         assert payload["order_id"] == "12345"
         assert payload["attempts"] == 3
 
-        # Check authentication header
-        headers = call_args[1]["headers"]
-        assert headers["Authorization"] == "Bearer test_token"
+        # Check authentication header — the buyer registered `bearer`, so the
+        # boundary must select the legacy token mode and NOT sign (#1291 C1).
+        assert request.headers["authorization"] == "Bearer test_token"
+        assert "signature-input" not in request.headers
+
+        # The delivering client must refuse redirects — an open redirect would walk this
+        # POST, Authorization header and all, to whatever host the receiver names — and
+        # must not hang waiting on it.
+        assert built, "no HTTP client was constructed for the approval webhook"
+        assert all(client.follow_redirects is False for client in built)
+        assert all(client.timeout == httpx.Timeout(10.0) for client in built)
 
 
 def test_approval_webhook_rejects_metadata_url_without_post():
     """Order-approval sender must share the outbound SSRF gate (no open redirect)."""
     from src.services.order_approval_service import _send_approval_webhook
+    from tests.helpers.webhook_wire import capture_outbound_webhooks
 
     with (
         patch("src.services.order_approval_service.get_db_session") as mock_db,
-        patch("httpx.Client") as mock_httpx,
+        capture_outbound_webhooks() as captured,
     ):
         mock_db_instance = MagicMock()
         mock_db.return_value.__enter__.return_value = mock_db_instance
         mock_db_instance.scalars.return_value.first.return_value = None
+        mock_db_instance.scalars.return_value.all.return_value = []
 
         _send_approval_webhook(
             webhook_url="http://169.254.169.254/latest/meta-data/",
@@ -269,51 +295,33 @@ def test_approval_webhook_rejects_metadata_url_without_post():
             message="Order approved successfully",
         )
 
-        mock_httpx.assert_not_called()
+        # Nothing reached the socket on ANY client — stronger than "httpx.Client was
+        # never constructed", which a delivery path that moved to the async signing
+        # client would satisfy vacuously. The link-local literal is refused by the real
+        # gate (no DNS involved), so the gate itself is graded rather than mocked out.
+        assert captured == []
 
 
 @patch("src.services.order_approval_service.time.sleep")
 def test_webhook_retries_on_failure(mock_sleep):
     """Test webhook retries on HTTP failure."""
     import src.services.order_approval_service as service_module
+    from tests.helpers.webhook_wire import capture_outbound_webhooks
 
+    # The receiver fails twice, then accepts.
     with (
         patch.object(service_module, "get_db_session") as mock_db,
-        patch("httpx.Client") as mock_httpx,
-        patch(
-            "src.core.webhook_validator.WebhookURLValidator.validate_outbound_webhook_url",
-            return_value=(True, ""),
-        ),
+        # No registration for this URL — patched at the loader's own seam, which now
+        # opens a unit of work rather than the session this test mocks (#1878).
+        patch.object(service_module, "_load_approval_webhook_config", return_value=None),
+        capture_outbound_webhooks(status_codes=(500, 500, 200)) as captured,
     ):
-        # Mock DB
+        # Mock DB — no auth config, on both the repository (`.all()`) and the direct
+        # `select()` (`.first()`) read shapes.
         mock_db_instance = MagicMock()
         mock_db.return_value.__enter__.return_value = mock_db_instance
-        mock_db_instance.scalars.return_value.first.return_value = None  # No auth config
-
-        # Mock HTTP client - fails twice, succeeds third time
-        mock_response_fail = MagicMock()
-        mock_response_fail.status_code = 500
-        mock_response_success = MagicMock()
-        mock_response_success.status_code = 200
-
-        # Track calls explicitly with closure
-        call_counter = {"count": 0}
-        responses = [mock_response_fail, mock_response_fail, mock_response_success]
-
-        def post_side_effect(*args, **kwargs):
-            call_counter["count"] += 1
-            idx = min(call_counter["count"] - 1, len(responses) - 1)
-            return responses[idx]
-
-        # Create a fresh MagicMock for the client instance
-        mock_client_instance = MagicMock()
-        mock_client_instance.post.side_effect = post_side_effect
-
-        # Create a fresh context manager mock
-        mock_context = MagicMock()
-        mock_context.__enter__.return_value = mock_client_instance
-        mock_context.__exit__.return_value = None
-        mock_httpx.return_value = mock_context
+        mock_db_instance.scalars.return_value.first.return_value = None
+        mock_db_instance.scalars.return_value.all.return_value = []
 
         # Send webhook
         service_module._send_approval_webhook(
@@ -325,9 +333,13 @@ def test_webhook_retries_on_failure(mock_sleep):
             message="Order approved",
         )
 
-        # Verify retry logic works - should be at least 3 attempts
-        # Note: Due to test pollution in full suite, may see 4 calls, but minimum is 3
-        assert call_counter["count"] >= 3, f"Expected at least 3 retry attempts, got {call_counter['count']}"
-        assert call_counter["count"] <= 4, (
-            f"Expected at most 4 retry attempts (3 + 1 pollution), got {call_counter['count']}"
-        )
+        # EXACTLY three: two refusals and the acceptance. This was `>= 3 and <= 4` with
+        # the comment "may see 4 calls ... 3 + 1 pollution" — a bound widened to tolerate
+        # another test's delivery landing in the capture window. The capture is scoped to
+        # this test's own traffic now (GH #2055), so the tolerance is no longer needed and
+        # an extra delivery is a defect again rather than an expected nuisance.
+        assert len(captured) == 3, f"Expected exactly 3 retry attempts, got {len(captured)}"
+
+        # Every retry carries the SAME idempotency_key, so the receiver dedupes the
+        # event rather than processing it three times.
+        assert len({request.payload["idempotency_key"] for request in captured}) == 1

@@ -21,138 +21,120 @@ from adcp import get_adcp_spec_version
 # Add parent directories to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from tests.e2e.conftest import e2e_host
-
-
-def _a2a_base_url() -> str:
-    """Get A2A server base URL from environment (supports dynamic ports)."""
-    port = os.getenv("ADCP_SALES_PORT", "8080")
-    return f"http://{e2e_host()}:{port}"
-
 
 class TestA2AEndpointsActual:
-    """Test actual A2A endpoints that we implement."""
+    """Test actual A2A endpoints that we implement.
+
+    The base URL arrives as the ``live_server`` fixture VALUE, not out of
+    ``ADCP_SALES_PORT``. A process-global carries no sender (the fixture, the
+    compose file and scripts/test-stack.sh all write that variable), no lifetime
+    and no multiplicity, and its ``"8080"`` default silently aimed these tests at
+    whatever happened to be listening there. Taking ``live_server`` also means the
+    stack is guaranteed up, so a connection failure is a real failure instead of a
+    skip — same rule as ``test_unknown_task_id_returns_task_not_found_code_on_the_wire``
+    below.
+    """
 
     @pytest.mark.integration
-    def test_well_known_agent_json_endpoint_live(self):
+    def test_well_known_agent_json_endpoint_live(self, live_server):
         """Test /.well-known/agent-card.json endpoint against live server."""
-        try:
-            # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
-            response = requests.get(f"{_a2a_base_url()}/.well-known/agent-card.json", timeout=2)
+        # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
+        response = requests.get(f"{live_server['a2a']}/.well-known/agent-card.json", timeout=2)
 
-            if response.status_code == 200:
-                # Endpoint works - validate response
-                assert response.headers["content-type"].startswith("application/json")
+        if response.status_code == 200:
+            # Endpoint works - validate response
+            assert response.headers["content-type"].startswith("application/json")
 
-                data = response.json()
-                assert "name" in data
-                assert "description" in data
-                assert "version" in data
-                assert "skills" in data
+            data = response.json()
+            assert "name" in data
+            assert "description" in data
+            assert "version" in data
+            assert "skills" in data
 
-                # a2a-sdk 1.0 (protobuf): URL is in supportedInterfaces, not top-level
-                assert "supportedInterfaces" in data, "Agent card must have supportedInterfaces"
-                interfaces = data["supportedInterfaces"]
-                assert len(interfaces) > 0
-                url = interfaces[0]["url"]
+            # a2a-sdk 1.0 (protobuf): URL is in supportedInterfaces, not top-level
+            assert "supportedInterfaces" in data, "Agent card must have supportedInterfaces"
+            interfaces = data["supportedInterfaces"]
+            assert len(interfaces) > 0
+            url = interfaces[0]["url"]
 
-                # Critical regression test: URL should not have trailing slash
-                assert not url.endswith("/"), f"Agent card URL should not have trailing slash: {url}"
-                assert url.endswith("/a2a"), f"Agent card URL should end with '/a2a': {url}"
+            # Critical regression test: URL should not have trailing slash
+            assert not url.endswith("/"), f"Agent card URL should not have trailing slash: {url}"
+            assert url.endswith("/a2a"), f"Agent card URL should end with '/a2a': {url}"
 
-                # Should be Prebid Sales Agent
-                assert data["name"] == "Prebid Sales Agent"
+            # Should be Prebid Sales Agent
+            assert data["name"] == "Prebid Sales Agent"
 
-                # Should have skills
-                assert "skills" in data
-                assert len(data["skills"]) > 0
+            # Should have skills
+            assert "skills" in data
+            assert len(data["skills"]) > 0
 
-                # AdCP 2.5: Should have AdCP extension in capabilities
-                assert "capabilities" in data
-                assert "extensions" in data["capabilities"]
-                extensions = data["capabilities"]["extensions"]
-                assert len(extensions) > 0
+            # AdCP 2.5: Should have AdCP extension in capabilities
+            assert "capabilities" in data
+            assert "extensions" in data["capabilities"]
+            extensions = data["capabilities"]["extensions"]
+            assert len(extensions) > 0
 
-                # Find AdCP extension
-                adcp_ext = None
-                for ext in extensions:
-                    if "adcp-extension" in ext.get("uri", ""):
-                        adcp_ext = ext
-                        break
+            # Find AdCP extension
+            adcp_ext = None
+            for ext in extensions:
+                if "adcp-extension" in ext.get("uri", ""):
+                    adcp_ext = ext
+                    break
 
-                assert adcp_ext is not None, "AdCP extension not found in live agent card"
-                assert adcp_ext["params"]["adcp_version"] == get_adcp_spec_version()
-                assert "media_buy" in adcp_ext["params"]["protocols_supported"]
-
-        except (requests.ConnectionError, requests.Timeout):
-            pytest.skip(f"A2A server not running at {_a2a_base_url()}")
+            assert adcp_ext is not None, "AdCP extension not found in live agent card"
+            assert adcp_ext["params"]["adcp_version"] == get_adcp_spec_version()
+            assert "media_buy" in adcp_ext["params"]["protocols_supported"]
 
     @pytest.mark.integration
-    def test_agent_json_endpoint_live(self):
+    def test_agent_json_endpoint_live(self, live_server):
         """Test /agent.json endpoint against live server."""
-        try:
-            response = requests.get(f"{_a2a_base_url()}/agent.json", timeout=2)
+        response = requests.get(f"{live_server['a2a']}/agent.json", timeout=2)
 
-            if response.status_code == 200:
-                assert response.headers["content-type"].startswith("application/json")
-                data = response.json()
-                assert data["name"] == "Prebid Sales Agent"
+        if response.status_code == 200:
+            assert response.headers["content-type"].startswith("application/json")
+            data = response.json()
+            assert data["name"] == "Prebid Sales Agent"
 
-                # Same URL validation as well-known endpoint
-                url = data["url"]
-                assert not url.endswith("/"), f"Agent card URL should not have trailing slash: {url}"
-
-        except (requests.ConnectionError, requests.Timeout):
-            pytest.skip(f"A2A server not running at {_a2a_base_url()}")
+            # Same URL validation as well-known endpoint
+            url = data["url"]
+            assert not url.endswith("/"), f"Agent card URL should not have trailing slash: {url}"
 
     @pytest.mark.integration
-    def test_a2a_endpoint_accessible(self):
+    def test_a2a_endpoint_accessible(self, live_server):
         """Test that /a2a endpoint is accessible (may require auth)."""
-        try:
-            # Test both /a2a and /a2a/ paths
-            for path in ["/a2a", "/a2a/"]:
-                response = requests.post(f"{_a2a_base_url()}{path}", json={"test": "data"}, timeout=2)
+        # Test both /a2a and /a2a/ paths
+        for path in ["/a2a", "/a2a/"]:
+            response = requests.post(f"{live_server['a2a']}{path}", json={"test": "data"}, timeout=2)
 
-                # Should not be 404 (endpoint exists)
-                assert response.status_code != 404, f"Endpoint {path} should exist"
-
-        except (requests.ConnectionError, requests.Timeout):
-            pytest.skip(f"A2A server not running at {_a2a_base_url()}")
+            # Should not be 404 (endpoint exists)
+            assert response.status_code != 404, f"Endpoint {path} should exist"
 
     @pytest.mark.integration
-    def test_cors_headers_present(self):
+    def test_cors_headers_present(self, live_server):
         """Test that CORS headers are present for browser compatibility."""
-        try:
-            # CORS headers are only returned when the Origin matches an allowed origin.
-            # Default ALLOWED_ORIGINS is "http://localhost:8000" — use that as Origin.
-            allowed_origin = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000").split(",")[0].strip()
+        # CORS headers are only returned when the Origin matches an allowed origin.
+        # Default ALLOWED_ORIGINS is "http://localhost:8000" — use that as Origin.
+        allowed_origin = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000").split(",")[0].strip()
 
-            # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
-            response = requests.get(
-                f"{_a2a_base_url()}/.well-known/agent-card.json",
-                headers={"Origin": allowed_origin},
-                timeout=2,
-            )
+        # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
+        response = requests.get(
+            f"{live_server['a2a']}/.well-known/agent-card.json",
+            headers={"Origin": allowed_origin},
+            timeout=2,
+        )
 
-            if response.status_code == 200:
-                # Should have CORS headers for an allowed origin
-                assert "Access-Control-Allow-Origin" in response.headers, "Missing CORS headers"
-
-        except (requests.ConnectionError, requests.Timeout):
-            pytest.skip(f"A2A server not running at {_a2a_base_url()}")
+        if response.status_code == 200:
+            # Should have CORS headers for an allowed origin
+            assert "Access-Control-Allow-Origin" in response.headers, "Missing CORS headers"
 
     @pytest.mark.integration
-    def test_options_preflight_support(self):
+    def test_options_preflight_support(self, live_server):
         """Test that OPTIONS requests work for CORS preflight."""
-        try:
-            # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
-            response = requests.options(f"{_a2a_base_url()}/.well-known/agent-card.json", timeout=2)
+        # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
+        response = requests.options(f"{live_server['a2a']}/.well-known/agent-card.json", timeout=2)
 
-            # Should handle OPTIONS requests
-            assert response.status_code in [200, 204], "OPTIONS request should be handled"
-
-        except (requests.ConnectionError, requests.Timeout):
-            pytest.skip(f"A2A server not running at {_a2a_base_url()}")
+        # Should handle OPTIONS requests
+        assert response.status_code in [200, 204], "OPTIONS request should be handled"
 
 
 class TestA2AAgentCardCreation:
@@ -415,57 +397,49 @@ class TestA2AServerIntegration:
         )
 
     @pytest.mark.integration
-    def test_server_discovery_flow(self):
+    def test_server_discovery_flow(self, live_server):
         """Test complete A2A client discovery flow."""
-        try:
-            # Step 1: Client discovers agent (a2a-sdk 1.0 canonical path)
-            response = requests.get(f"{_a2a_base_url()}/.well-known/agent-card.json", timeout=2)
+        # Step 1: Client discovers agent (a2a-sdk 1.0 canonical path)
+        response = requests.get(f"{live_server['a2a']}/.well-known/agent-card.json", timeout=2)
 
-            if response.status_code != 200:
-                pytest.skip("A2A server not responding")
+        if response.status_code != 200:
+            pytest.skip("A2A server not responding")
 
-            agent_card = response.json()
+        agent_card = response.json()
 
-            # Step 2: Validate agent card has what client needs
-            assert "skills" in agent_card
-            # a2a-sdk 1.0 (protobuf): URL is in supportedInterfaces, not top-level
-            assert "supportedInterfaces" in agent_card
+        # Step 2: Validate agent card has what client needs
+        assert "skills" in agent_card
+        # a2a-sdk 1.0 (protobuf): URL is in supportedInterfaces, not top-level
+        assert "supportedInterfaces" in agent_card
 
-            # Step 3: Validate URL format for messaging
-            url = agent_card["supportedInterfaces"][0]["url"]
-            assert not url.endswith("/"), "URL should not have trailing slash (causes redirects)"
+        # Step 3: Validate URL format for messaging
+        url = agent_card["supportedInterfaces"][0]["url"]
+        assert not url.endswith("/"), "URL should not have trailing slash (causes redirects)"
 
-            # Step 4: Test that messaging endpoint exists
-            messaging_url = url if url.endswith("/a2a") else f"{url}/a2a"
+        # Step 4: Test that messaging endpoint exists
+        messaging_url = url if url.endswith("/a2a") else f"{url}/a2a"
 
-            # Try to connect (will fail with auth error, but should not be 404)
-            response = requests.post(messaging_url, json={"test": "message"}, timeout=2)
-            assert response.status_code != 404, "Messaging endpoint should exist"
-
-        except (requests.ConnectionError, requests.Timeout):
-            pytest.skip("A2A server not running")
+        # Try to connect (will fail with auth error, but should not be 404)
+        response = requests.post(messaging_url, json={"test": "message"}, timeout=2)
+        assert response.status_code != 404, "Messaging endpoint should exist"
 
     @pytest.mark.integration
-    def test_authentication_flow(self):
+    def test_authentication_flow(self, live_server):
         """Test authentication requirements."""
-        try:
-            # Should require Bearer token for messaging
-            response = requests.post(
-                f"{_a2a_base_url()}/a2a",
-                headers={"Authorization": "Bearer invalid-token"},
-                json={"method": "message/send", "params": {}},
-                timeout=2,
-            )
+        # Should require Bearer token for messaging
+        response = requests.post(
+            f"{live_server['a2a']}/a2a",
+            headers={"Authorization": "Bearer invalid-token"},
+            json={"method": "message/send", "params": {}},
+            timeout=2,
+        )
 
-            # Should reject invalid token (401) not be 404
-            assert response.status_code != 404, "Endpoint should exist"
+        # Should reject invalid token (401) not be 404
+        assert response.status_code != 404, "Endpoint should exist"
 
-            # Missing auth should also not be 404
-            response = requests.post(f"{_a2a_base_url()}/a2a", json={"method": "message/send", "params": {}}, timeout=2)
-            assert response.status_code != 404, "Endpoint should exist even without auth"
-
-        except (requests.ConnectionError, requests.Timeout):
-            pytest.skip("A2A server not running")
+        # Missing auth should also not be 404
+        response = requests.post(f"{live_server['a2a']}/a2a", json={"method": "message/send", "params": {}}, timeout=2)
+        assert response.status_code != 404, "Endpoint should exist even without auth"
 
 
 def test_a2a_regression_summary():

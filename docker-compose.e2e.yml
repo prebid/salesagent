@@ -58,6 +58,16 @@ services:
       SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
       ADCP_TESTING: ${ADCP_TESTING:-true}
       ADCP_AUTH_TEST_MODE: ${ADCP_AUTH_TEST_MODE:-true}
+      # Must match the `tests` service's ADCP_WEBHOOK_HOST below: this is the
+      # SERVER's own trusted-test-host allowlist entry for outbound webhook SSRF
+      # validation (WebhookURLValidator._is_trusted_test_host), not just the
+      # runner's callback-URL construction. Without it here, every webhook the
+      # server tries to send to the e2e capture server (http://tests/webhook,
+      # which DNS-resolves to a private compose-network IP) is rejected by the
+      # SSRF gate even under ADCP_TESTING=true, because the gate only trusts
+      # literal localhost/127.0.0.1 plus whatever ADCP_WEBHOOK_HOST names --
+      # and this service never saw that name.
+      ADCP_WEBHOOK_HOST: tests
       # The SERVER must know about the pinned in-network creative agent: sync/
       # create flows resolve format specs server-side, and references carry the
       # PUBLIC canonical agent_url — without this, the registry's connection
@@ -66,6 +76,35 @@ services:
       # already sets the same value for the direct integration tests.
       CREATIVE_AGENT_URL: http://creative-agent:8080/api/creative-agent
       CREATE_DEMO_TENANT: "true"
+      # The LIVE server needs the same signing KEK the dev stack has (#1291 D1).
+      # A scenario's Given mints a tenant signing key through production, which
+      # stores the private PEM encrypted under this KEK; the server then has to
+      # DECRYPT it to derive webhook_signing.supported. Without these two lines the
+      # server cannot open a key the runner just minted, derives supported=false,
+      # and the e2e_rest leg of every key-dependent capability row fails against a
+      # key that genuinely exists — a failure that no in-process run can reproduce,
+      # because only e2e_rest crosses into this container.
+      # Same worthless value as docker-compose.yml, and for the same reason.
+      # The trust store for this server's OUTBOUND counterparty walk
+      # (salesagent-mp53.8). The inbound verifier resolves an unknown signer by
+      # fetching capabilities -> brand.json -> JWKS from the counterparty over
+      # the stack's own TLS front, and the SDK builds that client with a bare
+      # ssl.create_default_context() per hop — trust_env=False on its httpx
+      # clients is an httpx-level flag and provably cannot reach it, so only the
+      # OpenSSL env vars do. Without this the walk dies at certificate
+      # verification and surfaces as capabilities_unreachable, i.e. a SILENT
+      # request_signature_key_unknown.
+      #
+      # The file is the CONCATENATED bundle (public roots + our test CA), emitted
+      # by gen_test_tls.py so it stays in step with the CA it trusts, and already
+      # visible in here through the .:/app mount below. Verification stays fully
+      # ON against a real CA — this is the receiver-side twin of the runner's
+      # E2E_CA_BUNDLE, not a hatch, and it is NOT the private-destination pin
+      # (that one has no env reader by design — see
+      # tests/unit/test_architecture_no_private_destinations.py).
+      SSL_CERT_FILE: /app/.test-tls/ca-bundle.pem
+      ADCP_SIGNING_KEY_PASSPHRASE_ENV: "ADCP_SIGNING_DEV_KEK"
+      ADCP_SIGNING_DEV_KEK: "dev-only-signing-kek-not-a-secret"
       DELIVERY_WEBHOOK_INTERVAL: ${DELIVERY_WEBHOOK_INTERVAL:-}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}  # TEST ONLY — never use in production
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
@@ -110,6 +149,59 @@ services:
       timeout: 5s
       retries: 5
 
+  # ─── TLS listener (salesagent-tgzb) ────────────────────────────────────────
+  # ADDITIVE, never a migration: `proxy` above keeps its plaintext :8000 exactly
+  # as it is, and E2E_BASE_URL still points there. This is a SECOND listener, on
+  # a SECOND port, at a DOTTED name — the one thing the plaintext stack cannot
+  # provide. `_get_protocol_for_domain` answers https for `proxy.adcp.test:8443`
+  # because the name has a dot and is not loopback; this service is what makes
+  # that answer true rather than merely asserted.
+  #
+  # Stock nginx:stable — the entrypoint renders /etc/nginx/templates/*.template
+  # into conf.d with envsubst, so ${TLS_UPSTREAM} is per-instance and no custom
+  # image is needed. Per-worker bdd_e2e sidecars run this same service with their
+  # own upstream (see run_all_tests.sh).
+  #
+  # The certificate must exist BEFORE `up`: every entry point calls
+  # scripts/dev/ensure-test-tls.sh first (test-stack.sh, run_all_tests.sh,
+  # tests/e2e/conftest.py). Without it the bind mount below would materialise an
+  # empty directory and nginx would fail to start.
+  tls-proxy:
+    image: nginx:stable
+    environment:
+      TLS_UPSTREAM: ${TLS_UPSTREAM:-adcp-server:8080}
+    volumes:
+      - ./config/nginx/nginx-tls-test.conf.template:/etc/nginx/templates/tls-test.conf.template:ro
+      - ./.test-tls:/app/.test-tls:ro
+    depends_on:
+      - adcp-server
+    networks:
+      default:
+        # A dotted alias is the whole mechanism for the SHARED stack. (The
+        # per-worker sidecars cannot use one — `docker compose run` has no
+        # --network-alias — so they carry a dotted CONTAINER NAME instead.)
+        aliases:
+          - proxy.adcp.test
+          # The e2e webhook-capture origin (salesagent-mp53.9). An ALIAS on the
+          # existing front, never a second `listen ... ssl` service: one
+          # terminator, one certificate, one place to keep in step. SNI decides
+          # which upstream a connection reaches — see the $ssl_server_name map in
+          # config/nginx/nginx-tls-test.conf.template.
+          - webhooks.adcp-e2e.dev
+          # The counterparty identity origin (salesagent-mp53.8). Another SNI
+          # alias on the SAME front — see the $ssl_server_name map. Unlike the
+          # webhook receiver this one may sit under .adcp.test: the reserved-TLD
+          # gate lives on the outbound WEBHOOK path (notification_proof_service),
+          # and the inbound counterparty walk is gated by SDK address arithmetic
+          # alone (resolve_and_validate_host applies no TLD rule). So it needs no
+          # new SAN — *.adcp.test already covers it.
+          - counterparty.adcp-e2e.dev
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--cacert", "/app/.test-tls/ca.pem", "https://proxy.adcp.test:8443/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # In-network test runner (Option 1). Reaches Postgres/the server by SERVICE
   # NAME on the compose network — postgres:5432, proxy:8000 — so it needs NO
   # published host ports. Each `docker compose -p <project>` gets its own
@@ -122,37 +214,42 @@ services:
   # (see run_all_tests.sh).
   tests:
     profiles: ["runner"]
-    # Runs as the INVOKING host user, not the image's default root --
-    # Dockerfile.test has no USER directive, so without this the container
-    # writes test-results/.tox/schemas/logs into the bind-mounted /app as
-    # literal root (no userns-remap on these hosts, so container root IS host
-    # root), and the next run -- as an ordinary user -- dies on `mkdir:
-    # Permission denied` before a single suite starts.
+    # NO `user:` pin, deliberately -- back to main's shape (Aug 2026).
     #
-    # Derived, never hardcoded. run_all_tests.sh exports TEST_UID/TEST_GID from
-    # `id -u`/`id -g`; the defaults here are only for a bare `docker compose
-    # run tests` and reproduce the old root behaviour rather than guessing.
-    # A literal uid here was correct on exactly one machine: pinning the CI
-    # box's 1003:1001 turned GitHub Actions red with
-    # `PermissionError: '/app/.tox'`, because .tox lives on the bind mount
-    # (see the volumes block) and the Actions checkout is owned by a different
-    # uid. Nothing local can catch that -- `BDD In-Network (e2e_rest)` is the
-    # only job that runs the suite INSIDE this container.
-    user: "${TEST_UID:-0}:${TEST_GID:-0}"
+    # The pin was added to stop the container writing test-results/.tox/schemas/
+    # logs into the bind-mounted /app as literal root, on the premise that there
+    # is "no userns-remap on these hosts, so container root IS host root". That
+    # premise no longer holds where it matters: the CI box runs ROOTLESS docker,
+    # where container root already maps to the invoking user, so the pin bought
+    # nothing there. Worse, it derived its value from `id -u` inside a
+    # supervisor that runs as root -- resolving to 0:0, i.e. exactly the image
+    # default it was written to override.
+    #
+    # What it did cost was real. Being non-root forced three separate
+    # workarounds for image paths owned by root (HOME/UV_CACHE_DIR,
+    # PLAYWRIGHT_BROWSERS_PATH -- the last re-downloading 113 MiB of chromium
+    # every run because the baked copy was unreachable), and it is why the
+    # tox_data volume had to be dropped: a fresh named volume's mountpoint is
+    # created root:root by the daemon before the container starts, which EACCES-
+    # blocks a non-root user from `mkdir .tox/<env>`. Running as root makes that
+    # mountpoint writable again, so the volume comes back below and .tox leaves
+    # the bind mount -- which was the pin's own stated reason for existing.
     build:
       context: .
       dockerfile: Dockerfile.test
     environment:
-      # Non-root (user: above) has no /etc/passwd entry for a raw numeric
-      # UID, so HOME defaults to "/" and Dockerfile.test's baked
-      # UV_CACHE_DIR=/cache/uv (root:root 755, no group-write) is
-      # unreachable -- uv fails with "Permission denied" trying to even
-      # create its cache dir, surfacing as a confusing "could not find
-      # python interpreter" error from tox. Redirect both to a
-      # container-local writable path (not the bind mount -- this is a
-      # throwaway per-run cache, no reason to fight over its ownership too).
-      HOME: /tmp
-      UV_CACHE_DIR: /tmp/uv-cache
+      # HOME, UV_CACHE_DIR and PLAYWRIGHT_BROWSERS_PATH overrides removed with
+      # the `user:` pin above (Aug 2026). All three existed solely to route
+      # around image paths owned by root (/cache/uv, /ms-playwright) that a raw
+      # numeric non-root UID could not write. As root those are writable again,
+      # and dropping PLAYWRIGHT_BROWSERS_PATH restores the chromium baked in at
+      # build time instead of re-downloading it into /tmp on every run.
+      #
+      # Unbuffered so pytest's progress reaches the run log as it happens rather
+      # than in block-sized bursts: the supervisor log IS the only live view of
+      # a detached run, and a buffered stream makes a working run look wedged
+      # and a wedged one look busy.
+      PYTHONUNBUFFERED: "1"
       # Fixed in-network DB address — never a host port, never collides. This is
       # the SUITE database used by unit(skip)/integration/bdd/admin.
       DATABASE_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp_test?sslmode=disable
@@ -168,6 +265,22 @@ services:
       BDD_E2E_ENABLED: "${BDD_E2E_ENABLED:-true}"
       E2E_BASE_URL: http://proxy:8000
       E2E_POSTGRES_URL: postgresql://adcp_user:secure_password_change_me@postgres:5432/adcp?sslmode=disable
+      # The TLS listener is ADDITIVE: E2E_BASE_URL above keeps its plaintext
+      # value (487 bdd_e2e + 95 e2e tests target it), and these two name the
+      # SECOND origin for the scenarios that need a real handshake. The CA path
+      # is ABSOLUTE — pytest does not always run from the repo root, and /app IS
+      # the repo root here (the `.:/app` bind mount), so the runner reads the
+      # very file the generator wrote on the host.
+      E2E_TLS_BASE_URL: ${E2E_TLS_BASE_URL:-https://proxy.adcp.test:8443}
+      E2E_CA_BUNDLE: /app/.test-tls/ca.pem
+      # The slice the allocator handed this stack (salesagent-mp53.9). The host
+      # side uses it to CREATE the network; the runner needs it to ASSERT on it —
+      # tests/e2e/test_webhook_capture_egress_gate_e2e.py checks that the capture
+      # hostname resolves INTO this stack's own subnet, which is what
+      # distinguishes "the gate accepted a genuinely non-private address" from
+      # "something answered". Without this line the value exists on the host and
+      # is invisible in here, and that assertion cannot run at all.
+      E2E_NETWORK_SUBNET: ${E2E_NETWORK_SUBNET:-}
       # Suites that hit the running server reach it in-network (no host port).
       ADCP_SERVER_URL: http://proxy:8000
       ADCP_SALES_PORT: "8000"
@@ -183,20 +296,12 @@ services:
       # Pinned reference creative agent, reachable in-network by service name
       # (no host :9999). Clears the 18 test_creative_agent_live integration tests.
       CREATIVE_AGENT_URL: http://creative-agent:8080/api/creative-agent
-      # Was /ms-playwright (root:root, chromium pre-installed in Dockerfile.test
-      # at build time) -- non-root can't write into it, so `playwright install
-      # chromium` silently hangs trying to verify/write a lock file there
-      # instead of erroring cleanly (found live, Aug 2026, after this exact
-      # duplicate-key mistake first masked it: a stray earlier attempt to fix
-      # this added a SECOND PLAYWRIGHT_BROWSERS_PATH key instead of editing
-      # this one -- YAML last-key-wins silently kept using /ms-playwright, so
-      # the "fix" looked applied and wasn't, and newer docker compose now
-      # hard-rejects duplicate keys outright). Redirecting here means chromium
-      # reinstalls fresh into a writable path every run -- a real cost, but
-      # correctness over reusing the wasted baked-in copy. The complete fix is
-      # a real non-root USER in Dockerfile.test with paths pre-chowned at
-      # build time, deferred in favor of compose-only overrides.
-      PLAYWRIGHT_BROWSERS_PATH: /tmp/ms-playwright
+      # PLAYWRIGHT_BROWSERS_PATH moved UP in this same environment block (Aug 2026)
+      # when the runner stopped running as root. The duplicate key that briefly
+      # existed here was not merely redundant: YAML last-wins meant this stale
+      # entry silently overrode the new one, so the fix looked applied and was not
+      # — and newer `docker compose` rejects the file outright with
+      # "mapping key PLAYWRIGHT_BROWSERS_PATH already defined".
       # bdd runs truly serial in-network: -n0 (no xdist subprocess). Two reasons:
       # (1) all bdd workers share ONE live Postgres in e2e mode -> xdist races; and
       # (2) under xdist BDD_E2E_ENABLED doesn't reach the worker's collection, so
@@ -261,15 +366,14 @@ services:
       - single-request-reopen
     volumes:
       - .:/app
-      # tox_data named volume removed (Aug 2026): it's destroyed+recreated
-      # fresh every run (cleanup's `dc down -v`), so nothing ever persisted
-      # across runs anyway, and a fresh named volume's mountpoint is created
-      # root:root regardless of the `user:` override above (volume dir
-      # creation happens at the Docker daemon level, before the container
-      # process starts) -- permanently EACCES-blocking the non-root tests
-      # user from `mkdir .tox/<env>` every single run. .tox now lives on the
-      # bind mount instead, same as test-results, which already works
-      # correctly under the `user:` override.
+      # Restored with the removal of the `user:` pin above (Aug 2026), matching
+      # main. It was dropped because a fresh named volume's mountpoint is
+      # created root:root by the daemon before the container process starts,
+      # which EACCES-blocked a NON-ROOT tests user from `mkdir .tox/<env>`.
+      # That failure was a consequence of the pin, not of the volume: as root
+      # the mountpoint is writable, and .tox stays off the bind-mounted host
+      # tree where its ownership was never anyone's to fight over.
+      - tox_data:/app/.tox  # keep tox envs off the bind-mounted host tree
     working_dir: /app
     # venv lives at /opt/venv (UV_PROJECT_ENVIRONMENT in Dockerfile.test), outside
     # the /app bind mount, so it is never shadowed — no .venv anonymous volume.
@@ -328,5 +432,117 @@ services:
       retries: 18
       start_period: 30s
 
+  # Long-lived webhook receiver for the e2e stack (salesagent-mp53.9). Runs the
+  # stdlib-only capture service on a BARE python image: Dockerfile.test bakes a
+  # multi-minute playwright/chromium install this service has no use for, and
+  # tests/e2e/webhook_capture_service.py is deliberately import-free of
+  # tests.helpers.* so a bare image can run it (that package's __init__ pulls in
+  # factory-boy, which is not installed here).
+  #
+  # It speaks PLAINTEXT and is never dialled directly by the server: deliveries
+  # arrive through the shared tls-proxy front at https://webhooks.adcp-e2e.dev:8443,
+  # which terminates TLS and forwards here by SNI. That is the whole point of the
+  # ticket — the server reaches a real HTTPS origin on a NON-PRIVATE address, so
+  # production's SSRF gate accepts it on its own terms with nothing patched.
+  webhook-capture:
+    image: python:3.12-slim
+    working_dir: /app
+    command: ["python", "-m", "tests.e2e.webhook_capture_service"]
+    environment:
+      PORT: "8080"
+      # Reported by GET /health so a readback client can prove it is talking to
+      # its OWN stack rather than a cross-wired sibling on the same host port.
+      COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-adcp-e2e}
+    volumes:
+      - .:/app
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/health',timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Static counterparty identity origin for the inbound signing walk
+  # (salesagent-mp53.8). A SIBLING of webhook-capture, not a mode inside it: what
+  # would be shared is ~30 lines of BaseHTTPRequestHandler, while the coupling
+  # would be real — that service's other mode records raw bytes for the signing
+  # suite and its do_POST semantics must not bleed into an identity origin.
+  #
+  # Serves the three hops async_resolve_agent walks (capabilities ->
+  # brand_json_url -> brand.json -> jwks_uri -> JWKS) as plain GETs, because
+  # _fetch_capabilities does a raw GET with follow_redirects=False and demands a
+  # 200 JSON object — which is exactly why the seller's OWN trust root cannot
+  # stand in as the counterparty: our /mcp answers GET with an SSE redirect.
+  counterparty-origin:
+    image: python:3.12-slim
+    working_dir: /app
+    command: ["python", "-m", "tests.e2e.counterparty_origin_service"]
+    environment:
+      PORT: "8080"
+      # Every absolute URL this origin publishes about ITSELF must be the name
+      # the SERVER dials, not the container-internal address it binds — a
+      # mismatch here sends hop 2 or 3 somewhere unreachable and surfaces as an
+      # unresolvable key three assertions later.
+      COUNTERPARTY_PUBLIC_ORIGIN: https://counterparty.adcp-e2e.dev:8443
+      COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-adcp-e2e}
+    volumes:
+      - .:/app
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/health',timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  # Declaring the network is what makes production's SSRF gate PASSABLE rather
+  # than something the stack has to be exempted from. Docker's default bridge
+  # hands out 172.16/12 addresses, which check_url_ssrf refuses outright
+  # (url_validator.py BLOCKED_NETWORKS) — so no hostname, alias or certificate
+  # could ever make an in-stack receiver reachable while the gate stayed armed.
+  #
+  # TEMPLATED, never a literal: `docker network create --subnet 192.88.99.0/24`
+  # succeeds once and the SECOND stack on the box fails with "Pool overlaps with
+  # other one on this address space" — even for a /28 inside the held /24. This
+  # repo runs stacks concurrently BY DESIGN (scripts/test-stack.sh sets
+  # COMPOSE_PROJECT_NAME="adcp-test-$$"), so the allocator hands each stack a
+  # DISJOINT slice the same way it hands out host ports.
+  #
+  # SIZED FROM THE PEAK CONTAINER COUNT, not guessed. A full run is NOT the 8
+  # services below: run_all_tests.sh provisions per-worker stacks when
+  # E2E_WORKERS>0, and salesagent-remote-run defaults it to 8 on the CI box. Each
+  # worker adds TWO containers (`-server-gwN` and `-tls-gwN.adcp.test`), so peak
+  # is 8 + 2*8 = 24 containers plus the gateway.
+  #   /28 -> 13 usable  — TOO SMALL, fails partway into a full run
+  #   /27 -> 29 usable  — fits 24, only 5 spare
+  #   /26 -> 61 usable  — fits with headroom; 4 concurrent stacks per /24
+  # /26 is the default because a stack that dies at container 14 of a 20-minute
+  # run costs far more than the concurrency. Raise E2E_WORKERS and this must be
+  # re-sized: the failure mode is an address-exhaustion error from Docker, not a
+  # test failure.
+  #
+  # 192.88.99.0/24 is IANA-allocated 6to4 relay anycast space, DEPRECATED by
+  # RFC 7526 and no longer routed for its original purpose. Squatting it is
+  # confined to this container network namespace and reaches no real host. It is
+  # the least-bad choice available: every documentation range (192.0.2/24,
+  # 198.51.100/24, 203.0.113/24), 240/4 and the RFC 2544 benchmarking range all
+  # report is_private=True in Python's ipaddress and would be refused by the very
+  # gate this exists to satisfy.
+  #
+  # KNOWN AND ACCEPTED COST: with the network non-private, other in-stack
+  # services (postgres:5432, tests:8080) also become addresses the gate accepts,
+  # so this stack does NOT grade "a webhook aimed at another service on my own
+  # network is refused". That loss is bounded to this one slice. The alternative
+  # considered and rejected was an ADCP_OUTBOUND_ALLOW_PRIVATE env hatch, which
+  # would open 127.0.0.1, 169.254.169.254, host.docker.internal and all of
+  # RFC1918 in every deployment that set it — unbounded, and the exact shape
+  # tests/unit/test_architecture_no_private_destinations.py exists to catch.
+  default:
+    ipam:
+      config:
+        - subnet: ${E2E_NETWORK_SUBNET:-192.88.99.0/26}
+
 volumes:
   creative_pg_data:
+  # Destroyed and recreated by cleanup's `dc down -v` every run, so it persists
+  # nothing across runs by design -- its job is to keep .tox OFF the bind mount,
+  # not to cache anything.
+  tox_data:

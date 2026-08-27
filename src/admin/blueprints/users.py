@@ -1,6 +1,5 @@
 """User management blueprint for admin UI."""
 
-import json
 import logging
 from datetime import UTC, datetime
 
@@ -9,8 +8,11 @@ from sqlalchemy import select
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.operator_errors import safe_error_message
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, TenantAuthConfig, User
+from src.core.database.repositories.uow import TenantConfigUoW
 
 logger = logging.getLogger(__name__)
 
@@ -90,11 +92,16 @@ def add_user(tenant_id):
             return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
         with get_db_session() as db_session:
-            # Check if user already exists
-            existing = db_session.scalars(select(User).filter_by(tenant_id=tenant_id, email=email)).first()
-            if existing:
-                flash(f"User {email} already exists", "error")
-                return redirect(url_for("users.list_users", tenant_id=tenant_id))
+            # Check if user already exists. uq_users_tenant_email is the authority,
+            # so this same answer serves the loser of a concurrent add.
+            existing_user_stmt = select(User).filter_by(tenant_id=tenant_id, email=email)
+
+            def already_exists():
+                existing = db_session.scalars(existing_user_stmt).first()
+                if existing:
+                    flash(f"User {email} already exists", "error")
+                    return redirect(url_for("users.list_users", tenant_id=tenant_id))
+                return None
 
             # Create new user
             import uuid
@@ -112,14 +119,21 @@ def add_user(tenant_id):
                 created_at=datetime.now(UTC),
             )
 
-            db_session.add(user)
+            conflict = resolve_or_write(
+                db_session,
+                conflict=already_exists,
+                write=lambda: db_session.add(user),
+                constraint="uq_users_tenant_email",
+            )
+            if conflict is not None:
+                return conflict
             db_session.commit()
 
             flash(f"User {email} added successfully", "success")
 
     except Exception as e:
         logger.error(f"Error adding user: {e}", exc_info=True)
-        flash(f"Error adding user: {str(e)}", "error")
+        flash(f"Error adding user: {safe_error_message(e)}", "error")
 
     return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
@@ -144,7 +158,7 @@ def toggle_user(tenant_id, user_id):
 
     except Exception as e:
         logger.error(f"Error toggling user: {e}", exc_info=True)
-        flash(f"Error toggling user: {str(e)}", "error")
+        flash(f"Error toggling user: {safe_error_message(e)}", "error")
 
     return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
@@ -173,7 +187,7 @@ def update_role(tenant_id, user_id):
 
     except Exception as e:
         logger.error(f"Error updating user role: {e}", exc_info=True)
-        flash(f"Error updating role: {str(e)}", "error")
+        flash(f"Error updating role: {safe_error_message(e)}", "error")
 
     return redirect(url_for("users.list_users", tenant_id=tenant_id))
 
@@ -194,31 +208,22 @@ def add_domain(tenant_id):
         if "." not in domain or domain.startswith(".") or domain.endswith("."):
             return jsonify({"success": False, "error": "Invalid domain format"}), 400
 
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                return jsonify({"success": False, "error": "Tenant not found"}), 404
+        # Atomic append: the membership check rides in the UPDATE's WHERE
+        # clause, so a concurrent add can be neither lost nor duplicated.
+        with TenantConfigUoW(tenant_id) as uow:
+            assert uow.tenant_config is not None
+            outcome = uow.tenant_config.add_to_authorized_list("authorized_domains", domain)
 
-            # Get current domains
-            domains = tenant.authorized_domains or []
-            if isinstance(domains, str):
-                domains = json.loads(domains)
-            domains = list(domains)
+        if outcome == "missing_tenant":
+            return jsonify({"success": False, "error": "Tenant not found"}), 404
+        if outcome == "duplicate":
+            return jsonify({"success": False, "error": "Domain already exists"}), 400
 
-            # Check if already exists
-            if domain in domains:
-                return jsonify({"success": False, "error": "Domain already exists"}), 400
-
-            # Add domain
-            domains.append(domain)
-            tenant.authorized_domains = domains
-            db_session.commit()
-
-            return jsonify({"success": True, "domain": domain})
+        return jsonify({"success": True, "domain": domain})
 
     except Exception as e:
         logger.error(f"Error adding domain: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": safe_error_message(e)}), 500
 
 
 @users_bp.route("/domains", methods=["DELETE"])
@@ -233,28 +238,19 @@ def remove_domain(tenant_id):
         if not domain:
             return jsonify({"success": False, "error": "Domain is required"}), 400
 
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if not tenant:
-                return jsonify({"success": False, "error": "Tenant not found"}), 404
+        with TenantConfigUoW(tenant_id) as uow:
+            assert uow.tenant_config is not None
+            outcome = uow.tenant_config.remove_from_authorized_list("authorized_domains", domain)
 
-            # Get current domains
-            domains = tenant.authorized_domains or []
-            if isinstance(domains, str):
-                domains = json.loads(domains)
-            domains = list(domains)
+        if outcome == "missing_tenant":
+            return jsonify({"success": False, "error": "Tenant not found"}), 404
 
-            # Remove domain
-            if domain in domains:
-                domains.remove(domain)
-                tenant.authorized_domains = domains
-                db_session.commit()
-
-            return jsonify({"success": True})
+        # "removed" and "absent" both answer success — removal is idempotent.
+        return jsonify({"success": True})
 
     except Exception as e:
         logger.error(f"Error removing domain: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": safe_error_message(e)}), 500
 
 
 @users_bp.route("/disable-setup-mode", methods=["POST"])
@@ -307,7 +303,7 @@ def disable_setup_mode(tenant_id):
 
     except Exception as e:
         logger.error(f"Error disabling setup mode: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": safe_error_message(e)}), 500
 
 
 @users_bp.route("/enable-setup-mode", methods=["POST"])
@@ -332,4 +328,4 @@ def enable_setup_mode(tenant_id):
 
     except Exception as e:
         logger.error(f"Error enabling setup mode: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+        return jsonify({"success": False, "error": safe_error_message(e)}), 500

@@ -1,7 +1,7 @@
 """Integration regression tests for the FastAPI lifespan shutdown registry.
 
 PR #1264 fix #3 wired the ``ProtocolWebhookService.close()`` (which releases a
-long-lived ``requests.Session`` connection pool — real OS file descriptors)
+long-lived ``httpx.AsyncClient`` connection pool — real OS file descriptors)
 into ``src.app.app_lifespan``'s shutdown phase. salesagent-x2h.6 inverted the
 dependency: the service self-registers ``close`` via
 ``src.core.lifecycle.register_shutdown`` at first construction, and
@@ -13,8 +13,7 @@ These are INTEGRATION tests: they drive the real ASGI lifespan protocol
 exercise the genuine production ``app_lifespan`` — including the real
 ``_install_admin_mounts()`` startup hook — with a REAL
 ``ProtocolWebhookService`` instance registered through the REAL lifecycle
-registry. They assert on the real ``requests.Session`` connection-pool state,
-never on a mock.
+registry. They assert on the real ``httpx.AsyncClient`` state, never on a mock.
 
 No production symbol is patched. ``app_lifespan``'s startup legitimately
 mutates the module-global ``src.app.app`` route table. The
@@ -33,16 +32,16 @@ pins the service-agnostic contract so (b)-style regressions also fail fast.
 
 from __future__ import annotations
 
+import httpx
 import pytest
-import requests
 from asgi_lifespan import LifespanManager
 from fastapi import FastAPI
 
-import src.app as app_module
 from src.app import app_lifespan
 from src.core import lifecycle
 from src.services import protocol_webhook_service
 from src.services.protocol_webhook_service import ProtocolWebhookService, get_protocol_webhook_service
+from tests.helpers.app_state import preserved_global_app_state
 
 pytestmark = pytest.mark.integration
 
@@ -51,70 +50,46 @@ pytestmark = pytest.mark.integration
 def isolated_global_app_state():
     """Snapshot/restore the legitimate global side-effects of lifespan startup.
 
-    - ``src.app.app.router.routes``: ``_install_admin_mounts()`` (run for real,
-      not stubbed) rewrites this module-global list.
-    - ``protocol_webhook_service._webhook_service``: the documented singleton
-      slot; ``get_protocol_webhook_service()`` populates it and self-registers.
-    - ``lifecycle._shutdown_callbacks``: the service-agnostic registry the
-      shutdown hook drains; self-registration appends to it.
-
-    Restoring these afterwards keeps the real startup from polluting sibling
-    tests without patching any production code.
+    Which globals, and why each one leaks, is documented once in
+    :mod:`tests.helpers.app_state` — every test that starts the real lifespan needs the
+    same restore, and a second hand-rolled copy of the list drifts (it already did:
+    ``test_signing_conformance_vectors.py`` had none, and its leaked route table broke
+    the trust-root suite whenever ``--dist loadfile`` put them on one worker).
     """
-    original_routes = list(app_module.app.router.routes)
-    original_singleton = protocol_webhook_service._webhook_service
-    original_callbacks = list(lifecycle._shutdown_callbacks)
-    try:
+    with preserved_global_app_state():
         yield
-    finally:
-        app_module.app.router.routes = original_routes
-        protocol_webhook_service._webhook_service = original_singleton
-        lifecycle._shutdown_callbacks[:] = original_callbacks
-
-
-def _prime_real_connection_pool(session: requests.Session) -> object:
-    """Force the real session to cache a connection pool WITHOUT any network I/O.
-
-    ``HTTPAdapter.poolmanager.connection_from_url`` lazily creates and caches an
-    ``HTTPConnectionPool`` in ``poolmanager.pools``; no socket is opened until an
-    actual request is made. ``requests.Session.close()`` -> ``HTTPAdapter.close()``
-    -> ``poolmanager.clear()`` empties that cache. Returning the live poolmanager
-    lets the test assert the real pre/post state of the real object.
-    """
-    adapter = session.get_adapter("http://localhost")
-    adapter.poolmanager.connection_from_url("http://localhost")
-    return adapter.poolmanager
 
 
 async def test_lifespan_closes_real_webhook_session_pool(isolated_global_app_state):
-    """The real lifespan shutdown must release the real requests.Session pool.
+    """The real lifespan shutdown must release the real httpx.AsyncClient pool.
 
     Constructs the REAL service through ``get_protocol_webhook_service()`` so it
-    self-registers with the REAL lifecycle registry. Primes a real connection
-    pool, runs the genuine ASGI lifespan (real startup including
-    ``_install_admin_mounts``, then shutdown), and asserts the real poolmanager
-    was emptied by production's ``run_all_shutdown_callbacks()`` -> ``close()``.
+    self-registers with the REAL lifecycle registry, runs the genuine ASGI
+    lifespan (real startup including ``_install_admin_mounts``, then shutdown),
+    and asserts the real client was closed by production's
+    ``run_all_shutdown_callbacks()`` -> ``close()``.
 
-    Fails under mutation (a) (no await -> coroutine never runs -> pool intact)
-    and mutation (b) (no register_shutdown -> close never invoked).
+    ``is_closed`` is real state on the real client — ``aclose()`` sets it and
+    nothing else does — so this fails under mutation (a) (no await -> coroutine
+    never runs -> client still open) and mutation (b) (no register_shutdown ->
+    close never invoked).
     """
     protocol_webhook_service._webhook_service = None
     lifecycle._shutdown_callbacks.clear()
     service = get_protocol_webhook_service()  # self-registers close
 
-    poolmanager = _prime_real_connection_pool(service._session)
-    assert len(poolmanager.pools) >= 1, "precondition: a real connection pool must be cached before shutdown"
+    assert isinstance(service._client, httpx.AsyncClient)
+    assert not service._client.is_closed, "precondition: the real client must be open before shutdown"
 
     app = FastAPI(lifespan=app_lifespan)
     async with LifespanManager(app):
-        # Startup ran the real _install_admin_mounts(); pool intact mid-lifespan.
-        assert len(poolmanager.pools) >= 1, "pool must survive until shutdown"
+        # Startup ran the real _install_admin_mounts(); client intact mid-lifespan.
+        assert not service._client.is_closed, "client must survive until shutdown"
     # Exiting LifespanManager ran the real shutdown phase -> real close().
 
-    assert len(poolmanager.pools) == 0, (
+    assert service._client.is_closed, (
         "FastAPI lifespan shutdown did not release the ProtocolWebhookService "
-        "requests.Session connection pool. PR #1264 fix #3 regression: the real "
-        f"poolmanager still holds {len(poolmanager.pools)} pool(s). The shutdown "
+        "httpx.AsyncClient connection pool. PR #1264 fix #3 regression: the shutdown "
         "hook either did not await run_all_shutdown_callbacks() or the service "
         "never self-registered its close callback."
     )
@@ -137,46 +112,46 @@ async def test_lifespan_safe_when_no_callbacks_registered(isolated_global_app_st
     assert protocol_webhook_service._webhook_service is None
 
 
-class _RaisingCloseSession(requests.Session):
-    """A REAL ``requests.Session`` whose ``close()`` raises — not a mock.
+class _RaisingCloseClient(httpx.AsyncClient):
+    """A REAL ``httpx.AsyncClient`` whose ``aclose()`` raises — not a mock.
 
-    Subclassing the real ``Session`` keeps every other behaviour real while
-    letting the test prove the registry's per-callback ``try/except`` actually
-    swallows a failing ``close()``. ``super().close()`` still runs (real pool
-    release) before the simulated failure.
+    Subclassing the real client keeps every other behaviour real while letting
+    the test prove the registry's per-callback ``try/except`` actually swallows a
+    failing ``close()``. ``super().aclose()`` still runs (real pool release)
+    before the simulated failure.
     """
 
     close_calls = 0
 
-    def close(self) -> None:  # type: ignore[override]
+    async def aclose(self) -> None:  # type: ignore[override]
         type(self).close_calls += 1
-        super().close()
-        raise RuntimeError("simulated requests.Session.close() failure")
+        await super().aclose()
+        raise RuntimeError("simulated httpx.AsyncClient.aclose() failure")
 
 
 async def test_lifespan_swallows_webhook_close_errors(isolated_global_app_state):
     """A failing ``close()`` must be logged and swallowed, never escape the lifespan.
 
-    Registers a real ``ProtocolWebhookService`` whose real ``Session`` subclass
-    raises in ``close()``. The registry's per-callback ``try/except`` must
+    Registers a real ``ProtocolWebhookService`` whose real ``AsyncClient``
+    subclass raises in ``aclose()``. The registry's per-callback ``try/except`` must
     contain it so ``LifespanManager`` exits normally. Fails under mutation (c)
     (try/except removed -> ``RuntimeError`` propagates out of ``LifespanManager``).
     """
     protocol_webhook_service._webhook_service = None
     lifecycle._shutdown_callbacks.clear()
     service = ProtocolWebhookService()
-    service._session = _RaisingCloseSession()
+    service._client = _RaisingCloseClient()
     protocol_webhook_service._webhook_service = service
     lifecycle.register_shutdown(service.close)
-    _RaisingCloseSession.close_calls = 0
+    _RaisingCloseClient.close_calls = 0
 
     app = FastAPI(lifespan=app_lifespan)
     # Must NOT raise: the registry wraps each callback in try/except.
     async with LifespanManager(app):
         pass
 
-    assert _RaisingCloseSession.close_calls == 1, (
-        "production shutdown must have invoked the real session.close() exactly "
-        f"once; got {_RaisingCloseSession.close_calls} — the close callback was "
+    assert _RaisingCloseClient.close_calls == 1, (
+        "production shutdown must have invoked the real client.aclose() exactly "
+        f"once; got {_RaisingCloseClient.close_calls} — the close callback was "
         "not registered/awaited"
     )

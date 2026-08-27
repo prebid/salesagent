@@ -133,6 +133,41 @@ Tenants without configured ad servers show a "Pending Configuration" page instea
 - Includes timestamp, user, action, and result
 - Used for compliance and security monitoring
 
+## Message Signing (RFC 9421)
+
+Everything above concerns **admin** authentication — who may log into the dashboard and
+what they may do. Protocol-level authentication between agents is a separate mechanism:
+RFC 9421 HTTP message signatures, covering both inbound requests we verify and outbound
+webhooks we sign.
+
+It is documented in full elsewhere; this section exists so a reader arriving here for
+"how do agents authenticate to each other" is not left at a dead end.
+
+- **[Signing posture and key discovery](signing/posture-and-discovery.md)** — what we
+  advertise, the `supported_for` / `warn_for` / `required_for` enforcement ladder, and the
+  brand.json walk a counterparty uses to find our public key. Includes the documented
+  trap: a bare `.well-known/jwks.json` lookup is **not** the discovery mechanism.
+- **[Verifying our outbound webhooks](signing/verifying-our-webhooks.md)** — the profile
+  tag, which document answers which question, and the deprecated HMAC-SHA256 path with its
+  AdCP 4.0 removal.
+- **[Signing key runbook](operations/signing-key-runbook.md)** — operator-facing:
+  provisioning, rotation, revocation, rollout and rollback.
+
+Four properties are security-relevant enough to state here rather than only in the
+runbook:
+
+- **No private key material is written to a filesystem.** A provisioned key's private PEM
+  is stored encrypted on its own database row under a deployment-wide key encryption key
+  (KEK), named by `SigningConfig.key_passphrase_env`.
+- **There is no plaintext fallback.** Minting refuses outright when no KEK is configured,
+  rather than degrading to storing the key unencrypted.
+- **Signing failures fail closed, not open.** A tenant with no usable signing key cannot
+  activate a notification subscriber, because the proof-of-control challenge must be
+  signed and we will not send an unsigned one.
+- **Rollback is a configuration change, never a deploy.** A per-tenant posture edit rolls
+  back one counterparty; `SigningConfig.verifier_enabled` is the deployment-wide kill
+  switch. See the runbook for which to reach for — they differ in blast radius.
+
 ## Security Testing Requirements
 
 All authentication changes must include tests for:

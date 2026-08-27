@@ -350,10 +350,21 @@ class TestWireBytesIdenticalAcrossTransports:
         from starlette.testclient import TestClient
 
         from src.app import app
+        from tests.factories.principal import PrincipalFactory
 
-        with patch(
-            "src.core.tools.capabilities.get_adcp_capabilities_raw",
-            side_effect=exc,
+        # _resolve_auth_dep always calls resolve_identity() now (salesagent-zna9,
+        # header-based tenant detection regardless of credential presence) —
+        # mock it (unit test, no DB) so this stays isolated to error-envelope
+        # translation, not real tenant resolution.
+        anonymous_identity = PrincipalFactory.make_identity(
+            principal_id=None, tenant_id=None, tenant=None, protocol="rest"
+        )
+        with (
+            patch("src.core.resolved_identity.resolve_identity", return_value=anonymous_identity),
+            patch(
+                "src.core.tools.capabilities.get_adcp_capabilities_raw",
+                side_effect=exc,
+            ),
         ):
             client = TestClient(app, raise_server_exceptions=False)
             response = client.get("/api/v1/capabilities")

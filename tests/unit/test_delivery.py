@@ -1689,13 +1689,13 @@ class TestDeliveryAdapterError:
 
         Advisory errors[] entries serialize verbatim (no boundary translation), so this
         is the only thing standing between an internal code and the buyer. Reddens if
-        _normalize_advisory_errors stops normalizing (e.g. returns code=e.code).
+        normalize_advisory_errors stops normalizing (e.g. returns code=e.code).
         """
         from adcp.types import Error
 
-        from src.core.tools.media_buy_delivery import _normalize_advisory_errors
+        from src.core.exceptions import normalize_advisory_errors
 
-        out = _normalize_advisory_errors(
+        out = normalize_advisory_errors(
             [
                 Error(code="API_ERROR", message="internal adapter detail for mb_x"),  # internal, unmapped
                 Error(code="INTERNAL_ERROR", message="mapped internal for mb_y"),  # internal, mapped
@@ -1811,35 +1811,69 @@ class TestDeliveryWebhookHappyPath:
         assert "next_expected_at" in payload
         assert payload["notification_type"] == "scheduled"
 
-    def test_hmac_sha256_signature_headers(self):
+    def test_hmac_sha256_signature_headers(self, mocker):
         """UC-004-WH-07: webhook payload signed with HMAC-SHA256.
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/reporting-webhook.json
         CONFIRMED: authentication.schemes supports ['HMAC-SHA256'] for signature verification.
-        Tests that WebhookDeliveryService._generate_hmac_signature produces a valid hex signature,
-        and that signing with the same inputs is deterministic.
+
+        Graded on the WIRE rather than on a private helper (#1291 C1 deleted
+        ``_generate_hmac_signature``; the receiver's registration now selects the
+        mode at one boundary). The assertion is strictly stronger than the
+        determinism check it replaces: the signature must VERIFY, over the bytes the
+        receiver actually got, with the secret the buyer registered — which is what
+        a receiver does and what the old helper-level test could not observe
+        (#1441: a signature over a re-serialization is deterministic too).
+
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
         """
-        service = WebhookDeliveryService()
+        import hashlib
+        import hmac
 
-        payload = {"media_buy_id": "mb_wh07", "impressions": 1000}
-        secret = "a" * 32  # 32-char minimum secret
-        timestamp = "2025-06-15T12:00:00Z"
+        from tests.helpers.webhook_wire import capture_outbound_webhooks
 
-        sig1 = service._generate_hmac_signature(payload, secret, timestamp)
-        sig2 = service._generate_hmac_signature(payload, secret, timestamp)
+        secret = "a" * 44  # clears the legacy 32-char floor
+        start_time = datetime.now(UTC)
 
-        # Signature is a hex string
-        assert isinstance(sig1, str)
-        assert len(sig1) == 64  # SHA-256 hex = 64 chars
+        session = MagicMock()
+        scalars = MagicMock()
+        config = MagicMock()
+        config.url = "https://buyer.example.com/webhook"
+        config.authentication_type = "HMAC-SHA256"
+        config.authentication_token = secret
+        config.validation_token = None
+        scalars.all.return_value = [config]
+        scalars.first.return_value = None  # no tenant signing key -> legacy arm only
+        session.scalars.return_value = scalars
+        context = MagicMock()
+        context.__enter__.return_value = session
+        context.__exit__.return_value = None
+        mocker.patch("src.core.database.database_session.get_db_session", return_value=context)
 
-        # Deterministic
-        assert sig1 == sig2
+        with capture_outbound_webhooks() as captured:
+            WebhookDeliveryService().send_delivery_webhook(
+                media_buy_id="mb_wh07",
+                tenant_id="tenant1",
+                principal_id="principal1",
+                reporting_period_start=start_time,
+                reporting_period_end=start_time,
+                impressions=1000,
+                spend=100.0,
+            )
 
-        # Different payload produces different signature
-        different_payload = {"media_buy_id": "mb_wh07", "impressions": 2000}
-        sig3 = service._generate_hmac_signature(different_payload, secret, timestamp)
-        assert sig3 != sig1
+        assert len(captured) == 1, "a receiver registered as HMAC-SHA256 was not delivered to"
+        request = captured[0]
+
+        signature = request.headers.get("x-adcp-signature")
+        timestamp = request.headers.get("x-adcp-timestamp")
+        assert signature, f"delivery went out UNSIGNED; headers were {sorted(request.headers.keys())}"
+        assert timestamp, "signature present but nothing binds it against replay"
+
+        message = f"{timestamp}.".encode() + request.content
+        expected = "sha256=" + hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
+        assert signature == expected, (
+            f"X-AdCP-Signature does not verify over the bytes POSTed. body={request.content!r}"
+        )
 
     def test_webhook_excludes_aggregated_totals(self):
         """UC-004-WH-09: webhook does NOT include aggregated_totals.

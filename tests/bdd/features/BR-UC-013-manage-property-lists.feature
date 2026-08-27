@@ -506,7 +506,7 @@ Feature: BR-UC-013 Manage Property Lists
   Scenario: Reference property list -- auth_token missing when seller tries to resolve
     Given a property list "list-abc" exists and requires an auth_token for seller resolution
     When a seller references "list-abc" without providing an auth_token
-    Then the error code should be "AUTH_REQUIRED"
+    Then the error code should be "AUTH_MISSING"
     And the error should include "suggestion" field
 
   @T-UC-013-054 @auth @post-s7 @br-rule-074

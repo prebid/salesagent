@@ -6,7 +6,8 @@ import logging
 from sqlalchemy import select
 
 from src.core.database.database_session import execute_with_retry
-from src.core.database.models import Principal, Tenant
+from src.core.database.models import Tenant
+from src.core.database.repositories.principal import PrincipalRepository
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +28,10 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> tuple[
     """
 
     def _lookup_principal(session):
+        principals = PrincipalRepository(session)
         if tenant_id:
             # If tenant_id specified, ONLY look in that tenant
-            stmt = select(Principal).filter_by(access_token=token, tenant_id=tenant_id)
-            principal = session.scalars(stmt).first()
+            principal = principals.get_by_token(token, tenant_id)
             if principal:
                 return principal.principal_id, None
 
@@ -44,8 +45,7 @@ def get_principal_from_token(token: str, tenant_id: str | None = None) -> tuple[
             return None, None
         else:
             # No tenant specified - search globally
-            stmt = select(Principal).filter_by(access_token=token)
-            principal = session.scalars(stmt).first()
+            principal = principals.get_by_token(token)
             logger.debug(f"[AUTH] Looking up principal with token: {token[:20]}...")
             if principal:
                 logger.info(f"[AUTH] Principal found: {principal.principal_id}, tenant_id={principal.tenant_id}")

@@ -15,15 +15,36 @@ from typing import Any
 
 from pytest_bdd import parsers, then
 
-from tests.bdd.steps._outcome_helpers import wire_field
+from tests.bdd.steps._outcome_helpers import is_e2e, wire_field
 
 # -- Helpers -------------------------------------------------------------------
 
 
 def _is_e2e(ctx: dict) -> bool:
-    """Check if the current scenario runs via an E2E transport."""
-    transport = ctx.get("transport")
-    return transport is not None and hasattr(transport, "value") and str(transport.value).startswith("e2e_")
+    """Assertion-time E2E check: an unset transport is a wiring bug, not "not e2e".
+
+    Every caller here (:func:`then_all_formats`, :func:`then_has_referrals`) uses
+    the result to CHOOSE WHICH ASSERTIONS RUN. The previous body returned ``False``
+    for an unset transport, so a Then reached without a preceding dispatch skipped
+    its entire e2e assertion block and passed having graded nothing — the vacuity
+    this guard exists to remove (salesagent-n78j0.1.5).
+
+    The predicate itself stays in :func:`~tests.bdd.steps._outcome_helpers.is_e2e`
+    (one definition of "what counts as e2e"); this wrapper only adds the
+    unset-transport contract that assertion sites need. Normal flow cannot reach
+    the raise: ``_dispatch.dispatch_request`` and ``when_request._call`` both raise
+    on an unset transport during the When, and UC-005 (the only feature using these
+    steps) has no @rest/@mcp/@a2a-tagged scenarios, so ``ctx['transport']`` is
+    always set by the parametrization.
+    """
+    if ctx.get("transport") is None:
+        raise AssertionError(
+            "then_payload: ctx['transport'] is unset at assertion time — the e2e branch "
+            "would silently evaluate False and skip its assertions. Dispatch through "
+            "dispatch_request (which raises on an unset transport) or set "
+            "ctx['transport'] explicitly."
+        )
+    return is_e2e(ctx)
 
 
 def _get_formats(ctx: dict) -> list[Any]:

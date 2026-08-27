@@ -254,10 +254,33 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the shared secret is a valid 32+ character string
     When the system delivers a webhook report for "mb-001"
     Then the request should include header "X-ADCP-Signature" with hex-encoded HMAC
-    And the request should include header "X-ADCP-Timestamp" with ISO timestamp
+    And the request should include header "X-ADCP-Timestamp" with a UNIX timestamp
     And the HMAC should be computed over "timestamp.payload" concatenation
     # POST-S8: Buyer can verify report authenticity
     # BR-RULE-029 INV-1: monotonically increasing sequence (signing is precondition)
+    # Webhook auth: traces to SR-NFR-005
+
+  @T-UC-004-webhook-9421 @alternative @webhook @invariant @BR-RULE-029 @post-s8 @nfr @nfr-005
+  Scenario: RFC 9421 signed webhook payload when no authentication block is registered
+    # The mutually exclusive TWIN of @T-UC-004-webhook-hmac, not an addition to it.
+    # security.mdx @ v3.1.1 :1424 — the buyer's `authentication` block is the mode
+    # switch: present selects legacy HMAC/Bearer, ABSENT selects RFC 9421. ":1425
+    # Sellers MUST NOT sign the same webhook both ways", which is why the last Then
+    # is here: a delivery carrying both signatures would satisfy this scenario's
+    # positive clauses and still be non-conformant.
+    Given a media buy "mb-001" with an active reporting_webhook configured
+    And the reporting_webhook registers no authentication block
+    And the tenant publishes an RFC 9421 webhook signing key
+    When the system delivers a webhook report for "mb-001"
+    Then the request should include header "Signature"
+    And the request should include header "Signature-Input"
+    And the request should include header "Content-Digest"
+    And the Signature-Input tag should equal the advertised webhook_signing profile
+    And the covered components should include "content-digest"
+    And the signature should verify against the tenant's published JWKS
+    And the request should not include header "X-ADCP-Signature"
+    # POST-S8: Buyer can verify report authenticity — here by resolving our published
+    # JWKS rather than by sharing a secret out of band.
     # Webhook auth: traces to SR-NFR-005
 
   @T-UC-004-webhook-bearer @alternative @webhook @invariant @BR-RULE-029
@@ -274,6 +297,14 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     When the system delivers a "<type>" webhook report for "mb-001"
     Then the payload notification_type should be "<type>"
     And the payload <next_expected> include next_expected_at
+    # This webhook registers no authentication block either, so :1424 selects the same
+    # RFC 9421 arm as @T-UC-004-webhook-9421 — but no key was provisioned for it, and
+    # an unpublishable origin means the delivery must go out UNSIGNED rather than
+    # carrying a signature no receiver could resolve a key for. Asserted here because
+    # the sibling's key provisioning is a PER-SCENARIO opt-in: if it ever becomes an
+    # env default, every scenario on this page silently changes posture and this is
+    # the line that says so.
+    And the request should not include header "Signature"
     # POST-S9: Buyer knows the notification type
     # BR-RULE-029 INV-2: final -> no next_expected_at
 

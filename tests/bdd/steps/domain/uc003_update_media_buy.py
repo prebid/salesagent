@@ -15,7 +15,7 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
-from tests.bdd.steps._outcome_helpers import _require_response
+from tests.bdd.steps._outcome_helpers import wire_dict
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.given_media_buy import _resolve_date_token
@@ -117,8 +117,6 @@ def _assert_wire_field_equals(ctx: dict, field: str, expected: str) -> None:
 
     Reads ctx['wire_response'] (the buyer-facing body), not the reconstructed
     payload. Shared dumb value comparator for the wire value-pin steps."""
-    from tests.bdd.steps._outcome_helpers import wire_dict
-
     wire = wire_dict(ctx)
     actual = wire.get(field)
     assert actual == expected, f"Expected wire {field} '{expected}', got {actual!r} (wire keys: {sorted(wire)})"
@@ -152,8 +150,6 @@ def then_wire_valid_actions_include(ctx: dict, action: str) -> None:
     valid_actions must be derived from the NORMALIZED AdCP status, so a persisted
     'scheduled' buy reports pending_start's actions (not [] from the raw string)
     (#1417)."""
-    from tests.bdd.steps._outcome_helpers import wire_dict
-
     wire = wire_dict(ctx)
     actions = wire.get("valid_actions") or []
     assert action in actions, f"Expected '{action}' in wire valid_actions, got {actions!r}"
@@ -248,6 +244,7 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
     _supported_fields = {
         "media_buy_id",
         "paused",
+        "canceled",
         "start_time",
         "end_time",
         "packages",
@@ -273,6 +270,8 @@ def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> No
             kwargs["media_buy_id"] = _resolve_media_buy_id(ctx, value)
         elif field == "paused":
             kwargs["paused"] = value.lower() == "true"
+        elif field == "canceled":
+            kwargs["canceled"] = value.lower() == "true"
         elif field == "start_time":
             kwargs["start_time"] = _resolve_date_token(value, clock)
         elif field == "end_time":
@@ -319,7 +318,7 @@ def given_request_omits_start_end_paused(ctx: dict) -> None:
         kwargs.pop(field, None)
 
 
-# Step "the request does NOT include an idempotency_key" is owned by
+# Step "the request does NOT include an idempotency_key" is defined in
 # tests/bdd/steps/domain/uc002_create_media_buy.py (canonical, shared across
 # UC-002/003) to avoid a cross-module shadow now that this module is registered.
 # No graded UC-003 scenario uses that text; when the dormant UC-003 idempotency
@@ -1132,28 +1131,6 @@ def then_response_has_errors_array(ctx: dict) -> None:
     assert error.message, f"Promoted error missing required 'message' field: {error!r}"
 
 
-def _submitted_wire_dict(ctx: dict) -> dict[str, Any]:
-    """Return the success-path response as the buyer sees it on the serialized wire.
-
-    REST/A2A/MCP expose the real success-path wire dict via ``ctx["wire_response"]``
-    (stashed by the dispatcher). IMPL has no wire, so serialize the typed payload
-    through the production serializer — the same path that produces wire bytes for
-    the other transports. A real-wire transport that did NOT stash wire_response is
-    a loud failure, not a silent fallback to the typed model (which would let the
-    UpdateMediaBuySubmitted assertions pass vacuously). Mirrors
-    tests/bdd/steps/domain/uc005_format_id_shape.py::_serialized_formats.
-    """
-    from tests.harness.transport import Transport
-
-    wire = ctx.get("wire_response")
-    transport = ctx.get("transport")
-    if wire is None and transport not in (None, Transport.IMPL):
-        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
-    if wire is not None:
-        return wire
-    return _require_response(ctx).model_dump(mode="json")
-
-
 @then("the response should contain a task_id")
 def then_response_contains_task_id(ctx: dict) -> None:
     """Assert the submitted envelope carries a non-empty task_id on the real wire.
@@ -1162,7 +1139,7 @@ def then_response_contains_task_id(ctx: dict) -> None:
     serialized wire (ctx['wire_response']) so an A2A/MCP/REST regression that
     drops task_id is caught — not on the coerced typed payload.
     """
-    data = _submitted_wire_dict(ctx)
+    data = wire_dict(ctx)
     task_id = data.get("task_id")
     assert isinstance(task_id, str) and task_id, (
         f"Submitted response must carry a non-empty task_id on the wire, got {task_id!r} (wire keys: {sorted(data)})"
@@ -1181,9 +1158,23 @@ def _assert_a2a_submitted_task_has_no_artifacts(ctx: dict) -> None:
     """
     from tests.harness.transport import Transport
 
-    if ctx.get("transport") is not Transport.A2A:
+    # The A2A branch below is a LEGITIMATE transport-aware assertion (see the
+    # docstring): on A2A the wire-dict NOT-contain checks are vacuous, so the real
+    # Task is graded instead. What is NOT legitimate is reaching it with the
+    # transport unset — `None is not Transport.A2A` silently reads as "some other
+    # transport" and returns, grading nothing on the only transport this guard
+    # exists for. An unset transport is a wiring bug; report it (salesagent-n78j0.1.5).
+    transport = ctx.get("transport")
+    if transport is None:
+        raise AssertionError(
+            "A2A submitted-artifact guard reached with ctx['transport'] unset — the "
+            "check would silently downgrade to 'not A2A' and grade nothing. Dispatch "
+            "through dispatch_request (which raises on an unset transport) or set "
+            "ctx['transport'] explicitly."
+        )
+    if transport is not Transport.A2A:
         return
-    if (ctx.get("wire_response") or {}).get("status") != "submitted":
+    if wire_dict(ctx).get("status") != "submitted":
         return
     env = ctx.get("env")
     task = getattr(env, "last_a2a_task", None)
@@ -1203,7 +1194,7 @@ def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
     directions by checking ctx['response'] (success) first, then error_response/error.
 
     The success-path check reads the REAL serialized wire (``ctx["wire_response"]``
-    via ``_submitted_wire_dict``), not ``response.model_dump()``: media_buy_id and
+    via ``wire_dict``), not ``response.model_dump()``: media_buy_id and
     implementation_date are not declared on UpdateMediaBuySubmitted, so a
     model-level check passes vacuously and can never catch a wire regression (e.g.
     the A2A submitted reconstruction leaking a field). Absent-or-null on the wire
@@ -1213,7 +1204,7 @@ def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
     # Success-path response — assert against the buyer-facing serialized wire.
     response = ctx.get("response")
     if response is not None:
-        data = _submitted_wire_dict(ctx)
+        data = wire_dict(ctx)
         assert data.get(field_name) is None, (
             f"Response should NOT contain '{field_name}' field on the wire (BR-RULE-018), "
             f"but found: {data.get(field_name)!r}"

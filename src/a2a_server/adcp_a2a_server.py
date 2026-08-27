@@ -8,7 +8,7 @@ import copy
 import json
 import logging
 import uuid
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator
 
 # Import core functions for direct calls (raw functions without FastMCP decorators)
 from datetime import UTC, datetime
@@ -54,12 +54,12 @@ from adcp.types.base import AdCPBaseModel
 from google.protobuf import json_format, struct_pb2
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import AUTH_REQUIRED_SUGGESTION
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.repositories import PushNotificationConfigUoW
 from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import (
+    AUTH_MISSING_SUGGESTION,
     AdCPAuthenticationError,
     AdCPAuthRequiredError,
     AdCPCapabilityNotSupportedError,
@@ -168,6 +168,83 @@ def _dict_to_struct(d: dict) -> struct_pb2.Struct:
     s = struct_pb2.Struct()
     s.update(d)
     return s
+
+
+# Field names typed `integer` (not `number`) in the pinned AdCP v3.1.1 schema
+# that this server can place in an A2A Part.data (via _dict_to_value above).
+#
+# google.protobuf.Value/Struct -- the well-known types backing Part.data --
+# have NO integer variant: every JSON number is stored as number_value (a
+# double), by protobuf's own well-known-type design. Any int placed in a
+# Part.data is therefore irreversibly widened to a double the moment it
+# enters the Struct/Value, and comes back out as a JSON float (86400 ->
+# 86400.0) from ANY subsequent json_format.MessageToJson/MessageToDict call
+# -- ours or the a2a-sdk's own jsonrpc_dispatcher.py, which performs the
+# identical conversion to build the real HTTP response body. There is no way
+# to preserve the distinction inside the Struct/Value representation itself;
+# the only fix point is a coercion applied to the JSON produced FROM the
+# Struct/Value, driven by which fields are known to be integer-typed per spec.
+#
+# Spec: v3.1.1 (adcp==6.6.0) -- replay_ttl_seconds:
+# get-adcp-capabilities-response.json #/properties/adcp/properties/idempotency
+# (type: integer). limit: get-creative-delivery-response.json
+# #/properties/limit. Others below are verified `type: integer` fields on
+# this server's other explicit-skill responses (sync/assign counts, delivery
+# totals, revision, attribution window). Extend this set as new integer
+# fields are found on the A2A wire -- coercion only fires for a listed name
+# whose value is a whole-numbered float, so an unlisted or genuinely
+# fractional field is never touched.
+A2A_WIRE_INTEGER_FIELDS = frozenset(
+    {
+        "replay_ttl_seconds",
+        "limit",
+        "returned_count",
+        "revision",
+        "interval",
+        "attribution_window_days",
+        "total_processed",
+        "created",
+        "updated",
+        "unchanged",
+        "failed",
+        "deleted",
+        "total_assignments_processed",
+        "assigned",
+        "unassigned",
+        "total_impressions",
+        "active_count",
+        "impressions",
+    }
+)
+
+
+def restore_a2a_integer_types(data: Any, integer_field_names: frozenset[str] = A2A_WIRE_INTEGER_FIELDS) -> Any:
+    """Recursively coerce known integer-typed fields back to ``int``.
+
+    Reverses the double-widening every number undergoes when it round-trips
+    through a protobuf Struct/Value (see A2A_WIRE_INTEGER_FIELDS above).
+    Only touches a value that is BOTH a whole-numbered float AND at a key in
+    ``integer_field_names`` -- an unlisted key or a genuinely fractional
+    value is returned unchanged, so this cannot silently corrupt real
+    ``number``-typed fields.
+
+    Shared by the production ``/a2a`` route wrapper (src/app.py) and the test
+    harness's ``extract_data_from_artifact`` (tests/utils/a2a_helpers.py) --
+    both perform the same Struct/Value -> JSON conversion the a2a-sdk itself
+    performs, so both need the same restoration to keep the harness's "real
+    A2A wire" claim honest.
+    """
+    if isinstance(data, dict):
+        result: dict[str, Any] = {}
+        for key, value in data.items():
+            if key in integer_field_names and isinstance(value, float) and value.is_integer():
+                result[key] = int(value)
+            else:
+                result[key] = restore_a2a_integer_types(value, integer_field_names)
+        return result
+    if isinstance(data, list):
+        return [restore_a2a_integer_types(item, integer_field_names) for item in data]
+    return data
 
 
 # ADCP Discovery Skills: Skills that don't require authentication
@@ -305,7 +382,12 @@ class AdCPRequestHandler(RequestHandler):
         headers = auth_ctx.headers if auth_ctx else {}
 
         if require_valid_token and not auth_token:
-            raise InvalidRequestError(message="Missing authentication token")
+            raise InvalidRequestError(
+                message="Missing authentication token",
+                data=build_two_layer_error_envelope(
+                    AdCPAuthRequiredError("Missing authentication token", suggestion=AUTH_MISSING_SUGGESTION)
+                ),
+            )
 
         # Extract testing context from A2A request headers (same as MCP does)
         testing_context = AdCPTestContext.from_headers(headers)
@@ -319,13 +401,30 @@ class AdCPRequestHandler(RequestHandler):
                 testing_context=testing_context,
             )
         except AdCPAuthenticationError as e:
-            raise InvalidRequestError(message=str(e)) from e
+            # resolve_identity raises AdCPAuthenticationError (AUTH_INVALID)
+            # for a presented-but-invalid token. Route through the same
+            # two-layer envelope builder used elsewhere in this file instead
+            # of dropping the wire code entirely (salesagent-mkso — this
+            # branch previously re-wrapped as a bare InvalidRequestError with
+            # no error_code/wire-code field at all).
+            raise InvalidRequestError(message=str(e), data=build_two_layer_error_envelope(e)) from e
 
         if require_valid_token:
             if not identity.principal_id:
-                raise InvalidRequestError(message="Authentication token is invalid or expired.")
+                # No principal_id at all -> AUTH_MISSING per v3.1.1
+                # error-code.json.
+                raise InvalidRequestError(
+                    message="Authentication token is invalid or expired.",
+                    data=build_two_layer_error_envelope(
+                        AdCPAuthRequiredError(
+                            "Authentication token is invalid or expired.", suggestion=AUTH_MISSING_SUGGESTION
+                        )
+                    ),
+                )
 
             if not identity.tenant:
+                # DEFER: tenant-axis, out of scope for the AUTH_MISSING/
+                # AUTH_INVALID split (salesagent-40kk) — left unchanged.
                 raise InvalidRequestError(
                     message=f"Unable to determine tenant from authentication. Principal: {identity.principal_id}"
                 )
@@ -407,6 +506,7 @@ class AdCPRequestHandler(RequestHandler):
         status: str,
         result: dict[str, Any] | None = None,
         error: str | None = None,
+        identity: ResolvedIdentity | None = None,
     ):
         """Send protocol-level push notification if configured.
 
@@ -415,6 +515,12 @@ class AdCPRequestHandler(RequestHandler):
         - Intermediate states (working, input-required, submitted): Send TaskStatusUpdateEvent
 
         Uses create_a2a_webhook_payload from adcp library to automatically select correct type.
+
+        ``identity`` carries the tenant/principal resolved at the transport boundary
+        for this request. Without it, ``metadata`` lacks ``tenant_id`` and the RFC 9421
+        signing boundary (``webhook_sender_factory._rfc9421_sender``) takes that as
+        "no tenant to sign for" and delivers unauthenticated — silently, and regardless
+        of whether the tenant actually owns a signing key (#1291).
         """
         try:
             # Check if task has push notification config stored
@@ -435,10 +541,13 @@ class AdCPRequestHandler(RequestHandler):
             auth_type = auth.scheme if auth and auth.scheme else None
             auth_token = auth.credentials if auth and auth.credentials else None
 
+            tenant_id = identity.tenant_id if identity else None
+            principal_id = identity.principal_id if identity else None
+
             push_notification_config = DBPushNotificationConfig(
                 id=webhook_config.id or f"pnc_{uuid4().hex[:16]}",
-                tenant_id="",
-                principal_id="",
+                tenant_id=tenant_id or "",
+                principal_id=principal_id or "",
                 url=url,
                 authentication_type=auth_type,
                 authentication_token=auth_token,
@@ -474,6 +583,8 @@ class AdCPRequestHandler(RequestHandler):
             skills = list(meta_dict.get("skills_requested", []))
             metadata = {
                 "task_type": skills[0] if skills else "unknown",
+                "tenant_id": tenant_id,
+                "principal_id": principal_id,
             }
 
             sent = await push_notification_service.send_notification(
@@ -580,16 +691,17 @@ class AdCPRequestHandler(RequestHandler):
             # Require authentication for non-public skills. Stay a JSON-RPC
             # InvalidRequestError (protocol-level rejection, top-level error), but
             # carry the two-layer envelope in ``data`` so the buyer-facing
-            # AUTH_REQUIRED code + AUTH_REQUIRED_SUGGESTION reach the A2A wire —
-            # matching REST's no-identity envelope (auth_context.py), which the
-            # bare A2AError previously dropped. (#1417)
+            # AUTH_MISSING code + suggestion reach the A2A wire — matching
+            # REST's no-identity envelope (auth_context.py), which the bare
+            # A2AError previously dropped. (#1417; split to AUTH_MISSING per
+            # v3.1.1 error-code.json — salesagent-mkso)
             if requires_auth and not auth_token:
                 raise InvalidRequestError(
                     message="Missing authentication token - Bearer token required in Authorization header",
                     data=build_two_layer_error_envelope(
                         AdCPAuthRequiredError(
                             "Authentication required - Bearer token required in Authorization header",
-                            suggestion=AUTH_REQUIRED_SUGGESTION,
+                            suggestion=AUTH_MISSING_SUGGESTION,
                         )
                     ),
                 )
@@ -611,7 +723,16 @@ class AdCPRequestHandler(RequestHandler):
             # to all downstream handlers. No handler should call resolve_identity().
             identity: ResolvedIdentity | None = None
             if auth_token:
-                identity = self._resolve_a2a_identity(auth_token, require_valid_token=requires_auth, context=context)
+                # A PRESENTED token must always be validated, regardless of
+                # whether the requested skill itself requires auth — absent
+                # token -> proceed anonymous (fine); presented-but-invalid
+                # token -> must reject with AUTH_INVALID (terminal), even on
+                # a public/discovery-only skill request. Previously this
+                # reused `requires_auth` (skill-based) here, so an invalid
+                # token on a discovery-only request was silently swallowed as
+                # anonymous by resolve_identity()'s require_valid_token=False
+                # path instead of being rejected (salesagent-7moz).
+                identity = self._resolve_a2a_identity(auth_token, require_valid_token=True, context=context)
             elif not requires_auth:
                 # Unauthenticated discovery request — resolve tenant from headers only
                 identity = self._resolve_a2a_identity(None, require_valid_token=False, context=context)
@@ -682,7 +803,7 @@ class AdCPRequestHandler(RequestHandler):
                                 f"Task {task_id} requires manual approval, returning status=submitted with no artifacts"
                             )
                             # Send protocol-level webhook notification
-                            await self._send_protocol_webhook(task, status="submitted")
+                            await self._send_protocol_webhook(task, status="submitted", identity=identity)
                             self.tasks[task_id] = task
                             return task
 
@@ -745,7 +866,9 @@ class AdCPRequestHandler(RequestHandler):
                     error_messages = [
                         res["error_envelope"]["errors"][0]["message"] for res in results if not res["success"]
                     ]
-                    await self._send_protocol_webhook(task, status="failed", error="; ".join(error_messages))
+                    await self._send_protocol_webhook(
+                        task, status="failed", error="; ".join(error_messages), identity=identity
+                    )
 
                     return task
                 elif successful_skills:
@@ -947,7 +1070,7 @@ class AdCPRequestHandler(RequestHandler):
             task.status.CopyFrom(TaskStatus(state=task_state))
 
             # Send protocol-level webhook notification if configured
-            await self._send_protocol_webhook(task, status=task_status_str)
+            await self._send_protocol_webhook(task, status=task_status_str, identity=identity)
 
         except A2AError:
             # Re-raise A2AError as-is (will be caught by JSON-RPC handler)
@@ -980,7 +1103,7 @@ class AdCPRequestHandler(RequestHandler):
                 )
             )
 
-            await self._send_protocol_webhook(task, status="failed")
+            await self._send_protocol_webhook(task, status="failed", identity=identity)
 
             # Raise A2A error instead of creating failed task
             raise _internal_error_for("message processing", e)
@@ -1461,49 +1584,27 @@ class AdCPRequestHandler(RequestHandler):
 
         logger.info("Handling explicit skill: %s with parameters: %s", skill_name, list(parameters.keys()))
 
-        # Validate identity for non-discovery skills
+        # Validate identity for non-discovery skills. No identity / no
+        # principal_id resolved at all -> AUTH_MISSING per v3.1.1
+        # error-code.json. Previously a bare InvalidRequestError with no
+        # error_code/wire-code field at all — same layering violation as
+        # the :282-283/:286-287 sites above (salesagent-mkso).
         if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
-            raise InvalidRequestError(message="Authentication required for skill invocation")
+            raise InvalidRequestError(
+                message="Authentication required for skill invocation",
+                data=build_two_layer_error_envelope(
+                    AdCPAuthRequiredError(
+                        "Authentication required for skill invocation", suggestion=AUTH_MISSING_SUGGESTION
+                    )
+                ),
+            )
 
-        # Map skill names to handlers. Handler signatures are heterogeneous
-        # (discovery skills accept ``identity: ResolvedIdentity | None``; the rest
-        # require non-None), so the dispatch is typed dynamically — the non-discovery
-        # guard above enforces a non-None identity before the call.
-        skill_handlers: dict[str, Callable[..., Awaitable[Any]]] = {
-            # Core AdCP Discovery Skills
-            "get_adcp_capabilities": self._handle_get_adcp_capabilities_skill,
-            # Core AdCP Media Buy Skills
-            "get_products": self._handle_get_products_skill,
-            "create_media_buy": self._handle_create_media_buy_skill,
-            # ✅ NEW: Missing AdCP Discovery Skills (CRITICAL for protocol compliance)
-            "list_creative_formats": self._handle_list_creative_formats_skill,
-            "list_accounts": self._handle_list_accounts_skill,
-            "sync_accounts": self._handle_sync_accounts_skill,
-            "list_authorized_properties": self._handle_list_authorized_properties_skill,
-            # ✅ NEW: Missing Media Buy Management Skills (CRITICAL for campaign lifecycle)
-            "update_media_buy": self._handle_update_media_buy_skill,
-            "get_media_buys": self._handle_get_media_buys_skill,
-            "get_media_buy_delivery": self._handle_get_media_buy_delivery_skill,
-            "update_performance_index": self._handle_update_performance_index_skill,
-            # AdCP Spec Creative Management (centralized library approach)
-            "sync_creatives": self._handle_sync_creatives_skill,
-            "list_creatives": self._handle_list_creatives_skill,
-            "create_creative": self._handle_create_creative_skill,
-            "assign_creative": self._handle_assign_creative_skill,
-            # Creative Management & Approval
-            "approve_creative": self._handle_approve_creative_skill,
-            "get_media_buy_status": self._handle_get_media_buy_status_skill,
-            "optimize_media_buy": self._handle_optimize_media_buy_skill,
-            # Note: signals skills removed - should come from dedicated signals agents
-            # Note: legacy get_pricing/get_targeting removed - use get_products and get_adcp_capabilities instead
-        }
-
-        if skill_name not in skill_handlers:
-            available_skills = list(skill_handlers.keys())
+        if skill_name not in SKILL_HANDLERS:
+            available_skills = list(SKILL_HANDLERS.keys())
             raise MethodNotFoundError(message=f"Unknown skill '{skill_name}'. Available skills: {available_skills}")
 
         try:
-            handler = skill_handlers[skill_name]
+            handler = getattr(self, SKILL_HANDLERS[skill_name])
             # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
             if skill_name == "create_media_buy":
                 result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload)
@@ -1849,6 +1950,9 @@ class AdCPRequestHandler(RequestHandler):
         # Call core function with identity
         response = await get_adcp_capabilities_raw(
             protocols=parameters.get("protocols"),
+            context=parameters.get("context"),
+            adcp_version=parameters.get("adcp_version"),
+            adcp_major_version=parameters.get("adcp_major_version"),
             identity=identity,
         )
 
@@ -1898,9 +2002,12 @@ class AdCPRequestHandler(RequestHandler):
         # Same context string as the REST route's boundary (klkg parity).
         with adcp_validation_boundary(context="list_accounts request"):
             request = ListAccountsRequest(
+                account=parameters.get("account"),
                 status=parameters.get("status"),
                 pagination=parameters.get("pagination"),
                 sandbox=parameters.get("sandbox"),
+                idempotency_key=parameters.get("idempotency_key"),
+                ext=parameters.get("ext"),
                 context=parameters.get("context"),
             )
         return core_list_accounts_tool(req=request, identity=identity)
@@ -2172,6 +2279,62 @@ class AdCPRequestHandler(RequestHandler):
             "Natural-language create_media_buy is not supported. "
             "Invoke the explicit ``create_media_buy`` skill with AdCP-spec parameters."
         )
+
+
+#: The A2A skill dispatch table — skill id -> the handler that serves it.
+#:
+#: Module scope rather than a local inside ``_handle_explicit_skill`` (#1291 B2,
+#: refinement R-M4): it is one of A2A's TWO hand-maintained skill-name lists, the other
+#: being the ``AgentSkill`` ids on the AgentCard below, and a rename that touches only
+#: one of them leaks straight into the signing posture's operation namespace — A2A skill
+#: ids ARE the AdCP operation names the resolver emits
+#: (``src/core/signing/operations.py``). Reconciling the two lists is what makes such a
+#: rename fail the build instead;
+#: ``tests/unit/test_architecture_signing_operations.py::TestA2ASkillListsAgree`` is
+#: what does the reconciling, and it cannot iterate a local.
+#:
+#: The values are handler METHOD NAMES, resolved per call with ``getattr(self, ...)``.
+#: Holding the function objects instead would freeze the binding at import time and
+#: silently defeat instance-level substitution, which is how the A2A error-boundary
+#: tests drive individual handlers. Handler signatures are heterogeneous — discovery
+#: skills accept ``identity: ResolvedIdentity | None``, the rest require non-None — so
+#: the dispatch stays dynamically typed; ``_handle_explicit_skill`` enforces a non-None
+#: identity for every non-discovery skill before it calls one.
+SKILL_HANDLERS: dict[str, str] = {
+    # Core AdCP Discovery Skills
+    "get_adcp_capabilities": "_handle_get_adcp_capabilities_skill",
+    # Core AdCP Media Buy Skills
+    "get_products": "_handle_get_products_skill",
+    "create_media_buy": "_handle_create_media_buy_skill",
+    # AdCP Discovery Skills
+    "list_creative_formats": "_handle_list_creative_formats_skill",
+    "list_accounts": "_handle_list_accounts_skill",
+    "sync_accounts": "_handle_sync_accounts_skill",
+    "list_authorized_properties": "_handle_list_authorized_properties_skill",
+    # Media Buy Management Skills
+    "update_media_buy": "_handle_update_media_buy_skill",
+    "get_media_buys": "_handle_get_media_buys_skill",
+    "get_media_buy_delivery": "_handle_get_media_buy_delivery_skill",
+    "update_performance_index": "_handle_update_performance_index_skill",
+    # AdCP Spec Creative Management (centralized library approach)
+    "sync_creatives": "_handle_sync_creatives_skill",
+    "list_creatives": "_handle_list_creatives_skill",
+    "create_creative": "_handle_create_creative_skill",
+    "assign_creative": "_handle_assign_creative_skill",
+    # Creative Management & Approval
+    "approve_creative": "_handle_approve_creative_skill",
+    "get_media_buy_status": "_handle_get_media_buy_status_skill",
+    "optimize_media_buy": "_handle_optimize_media_buy_skill",
+    # Note: signals skills removed - should come from dedicated signals agents
+    # Note: legacy get_pricing/get_targeting removed - use get_products and get_adcp_capabilities instead
+}
+
+_UNBOUND_SKILLS = sorted(skill for skill, method in SKILL_HANDLERS.items() if not hasattr(AdCPRequestHandler, method))
+if _UNBOUND_SKILLS:  # pragma: no cover - import-time wiring check
+    # Naming the handler by string is what keeps instance-level substitution working;
+    # this turns the typo that indirection allows into an import failure rather than an
+    # AttributeError on the one skill nobody exercised.
+    raise RuntimeError(f"SKILL_HANDLERS names handler methods AdCPRequestHandler does not define: {_UNBOUND_SKILLS}")
 
 
 def create_agent_card() -> AgentCard:

@@ -46,7 +46,9 @@ class TestCircuitBreakerEnvContract:
     def test_mock_access(self):
         """env.mock[name] provides access to all patch targets."""
         with CircuitBreakerEnv() as env:
-            assert "client" in env.mock
+            # "post" IS the outbound webhook socket after #1291 C1 — there is no
+            # module-level httpx.Client left to patch.
+            assert "post" in env.mock
             assert "sleep" in env.mock
             assert "random" in env.mock
             assert "db" in env.mock
@@ -58,12 +60,23 @@ class TestCircuitBreakerEnvContract:
                 url="https://test.com/hook",
                 auth_type="bearer",
                 auth_token="tok123",
-                secret="s3cret",
             )
             assert config.url == "https://test.com/hook"
             assert config.authentication_type == "bearer"
             assert config.authentication_token == "tok123"
-            assert config.webhook_secret == "s3cret"
+
+    def test_make_webhook_config_puts_the_hmac_secret_on_the_spec_selector(self):
+        """``secret=`` seeds ``authentication``, not the retired webhook_secret column.
+
+        security.mdx @ v3.1.1 :1424 defines ONE selector for how a webhook is
+        authenticated; #1291 C1 collapsed the delivery service's second one
+        (``webhook_secret``, which production never wrote) onto it.
+        """
+        with CircuitBreakerEnv() as env:
+            config = env.make_webhook_config(url="https://test.com/hook", secret="s3cret")
+
+            assert config.authentication_type == "HMAC-SHA256"
+            assert config.authentication_token == "s3cret"
 
     def test_get_breaker_accepts_kwargs(self):
         """get_breaker passes keyword args to CircuitBreaker constructor."""

@@ -14,9 +14,11 @@ from adcp.exceptions import AdagentsNotFoundError, AdagentsTimeoutError, Adagent
 from flask import Blueprint, Response, jsonify, request
 from sqlalchemy import select
 
+from src.admin.utils.operator_errors import safe_error_message
 from src.core.config import get_config
 from src.core.database.database_session import get_db_session
-from src.core.database.models import PublisherPartner, Tenant
+from src.core.database.integrity import resolve_or_write
+from src.core.database.models import AuthorizedProperty, PropertyTag, PublisherPartner, Tenant
 from src.core.domain_config import get_tenant_url
 
 logger = logging.getLogger(__name__)
@@ -81,7 +83,7 @@ def list_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 
     except Exception as e:
         logger.error(f"Error listing publisher partners: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": safe_error_message(e)}), 500
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners", methods=["POST"])
@@ -115,11 +117,17 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
             is_mock = tenant.adapter_config and tenant.adapter_config.adapter_type == "mock"
             should_auto_verify = is_dev or is_mock
 
-            # Check if already exists
-            stmt = select(PublisherPartner).filter_by(tenant_id=tenant_id, publisher_domain=publisher_domain)
-            existing = session.scalars(stmt).first()
-            if existing:
-                return jsonify({"error": "Publisher already exists"}), 409
+            # Check if already exists. The unique index is the authority, so this
+            # same answer serves the loser of a concurrent create (see
+            # resolve_or_write) rather than a 500 carrying the driver's message.
+            existing_partner_stmt = select(PublisherPartner).filter_by(
+                tenant_id=tenant_id, publisher_domain=publisher_domain
+            )
+
+            def already_exists() -> tuple[Response, int] | None:
+                if session.scalars(existing_partner_stmt).first():
+                    return jsonify({"error": "Publisher already exists"}), 409
+                return None
 
             # Create new partner
             # Auto-verify for dev environment or mock adapters (no real adagents.json to check)
@@ -131,7 +139,14 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
                 is_verified=should_auto_verify,
                 last_synced_at=datetime.now(UTC) if should_auto_verify else None,
             )
-            session.add(partner)
+            conflict = resolve_or_write(
+                session,
+                conflict=already_exists,
+                write=lambda: session.add(partner),
+                constraint="uq_tenant_publisher",
+            )
+            if conflict is not None:
+                return conflict
             session.commit()
 
             # Build message
@@ -160,7 +175,7 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
 
     except Exception as e:
         logger.error(f"Error adding publisher partner: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": safe_error_message(e)}), 500
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/<int:partner_id>", methods=["DELETE"])
@@ -181,7 +196,7 @@ def delete_publisher_partner(tenant_id: str, partner_id: int) -> Response | tupl
 
     except Exception as e:
         logger.error(f"Error deleting publisher partner: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": safe_error_message(e)}), 500
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/sync", methods=["POST"])
@@ -268,23 +283,33 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
                                 f"creating fallback mock property"
                             )
 
-                            from src.core.database.models import AuthorizedProperty, PropertyTag
-
                             # Ensure 'all_inventory' tag exists
                             tag_stmt = select(PropertyTag).where(
                                 PropertyTag.tenant_id == tenant_id, PropertyTag.tag_id == "all_inventory"
                             )
-                            all_inventory_tag = session.scalars(tag_stmt).first()
-                            if not all_inventory_tag:
-                                all_inventory_tag = PropertyTag(
-                                    tag_id="all_inventory",
-                                    tenant_id=tenant_id,
-                                    name="All Inventory",
-                                    description="Default tag that applies to all properties.",
-                                    created_at=datetime.now(UTC),
-                                    updated_at=datetime.now(UTC),
+                            all_inventory_tag = PropertyTag(
+                                tag_id="all_inventory",
+                                tenant_id=tenant_id,
+                                name="All Inventory",
+                                description="Default tag that applies to all properties.",
+                                created_at=datetime.now(UTC),
+                                updated_at=datetime.now(UTC),
+                            )
+
+                            # A tag and a property are each identified by their own primary
+                            # key, so losing the race leaves exactly the row this branch
+                            # wanted — nothing to count, nothing to redo. Both callables run
+                            # before this iteration ends, so the late binding B023 warns
+                            # about cannot happen.
+                            if (
+                                resolve_or_write(
+                                    session,
+                                    conflict=lambda: session.scalars(tag_stmt).first(),  # noqa: B023
+                                    write=lambda: session.add(all_inventory_tag),  # noqa: B023
+                                    constraint="property_tags_pkey",
                                 )
-                                session.add(all_inventory_tag)
+                                is None
+                            ):
                                 tags_created += 1
 
                             # Create fallback property
@@ -293,22 +318,29 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
                                 AuthorizedProperty.tenant_id == tenant_id,
                                 AuthorizedProperty.property_id == property_id,
                             )
-                            existing = session.scalars(prop_stmt).first()
-                            if not existing:
-                                fallback_property = AuthorizedProperty(
-                                    tenant_id=tenant_id,
-                                    property_id=property_id,
-                                    property_type="website",
-                                    name=domain,
-                                    publisher_domain=domain,
-                                    identifiers=[{"type": "domain", "value": domain}],
-                                    tags=["all_inventory"],
-                                    verification_status="verified",
-                                    verification_checked_at=datetime.now(UTC),
-                                    created_at=datetime.now(UTC),
-                                    updated_at=datetime.now(UTC),
+                            fallback_property = AuthorizedProperty(
+                                tenant_id=tenant_id,
+                                property_id=property_id,
+                                property_type="website",
+                                name=domain,
+                                publisher_domain=domain,
+                                identifiers=[{"type": "domain", "value": domain}],
+                                tags=["all_inventory"],
+                                verification_status="verified",
+                                verification_checked_at=datetime.now(UTC),
+                                created_at=datetime.now(UTC),
+                                updated_at=datetime.now(UTC),
+                            )
+
+                            if (
+                                resolve_or_write(
+                                    session,
+                                    conflict=lambda: session.scalars(prop_stmt).first(),  # noqa: B023
+                                    write=lambda: session.add(fallback_property),  # noqa: B023
+                                    constraint="authorized_properties_pkey",
                                 )
-                                session.add(fallback_property)
+                                is None
+                            ):
                                 fallback_properties += 1
 
                             session.commit()
@@ -402,7 +434,7 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
                         {
                             "status": "error",
                             "is_verified": False,
-                            "error": f"Unexpected error: {str(e)}",
+                            "error": f"Unexpected error: {safe_error_message(e)}",
                             "context": None,
                         },
                     )
@@ -469,7 +501,7 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 
     except Exception as e:
         logger.error(f"Error syncing publisher partners: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": safe_error_message(e)}), 500
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners/<int:partner_id>/properties", methods=["GET"])
@@ -546,4 +578,4 @@ def get_publisher_properties(tenant_id: str, partner_id: int) -> Response | tupl
 
     except Exception as e:
         logger.error(f"Error fetching publisher properties: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": safe_error_message(e)}), 500

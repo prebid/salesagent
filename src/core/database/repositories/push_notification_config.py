@@ -11,12 +11,21 @@ Write methods add objects to the session but never commit — the Unit of Work
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import PushNotificationConfig
 from src.core.webhook_validator import WebhookURLValidator
+
+# Preserve-if-not-passed sentinel for upsert(): distinguishes "caller did not
+# supply this field" (keep the existing row's value) from an explicit None
+# (clear it). Without it, migrating callers onto upsert() would silently null
+# a validation_token set through another path for the same config id.
+_UNSET: Any = object()
 
 
 class PushNotificationConfigRepository:
@@ -79,6 +88,17 @@ class PushNotificationConfigRepository:
             ).all()
         )
 
+    def get_active_by_url(self, principal_id: str, url: str) -> PushNotificationConfig | None:
+        """Return the active config with this exact URL, if any."""
+        return self._session.scalars(
+            select(PushNotificationConfig).where(
+                PushNotificationConfig.tenant_id == self._tenant_id,
+                PushNotificationConfig.principal_id == principal_id,
+                PushNotificationConfig.url == url,
+                PushNotificationConfig.is_active.is_(True),
+            )
+        ).first()
+
     # ------------------------------------------------------------------
     # Writes
     # ------------------------------------------------------------------
@@ -91,10 +111,15 @@ class PushNotificationConfigRepository:
         url: str,
         authentication_type: str | None,
         authentication_token: str | None,
-        validation_token: str | None,
-        session_id: str | None = None,
+        validation_token: str | None = _UNSET,
+        session_id: str | None = _UNSET,
+        webhook_secret: str | None = _UNSET,
     ) -> tuple[PushNotificationConfig, bool]:
         """Insert or update a config within the (tenant, principal) scope.
+
+        ``validation_token`` / ``session_id`` / ``webhook_secret`` are
+        preserve-if-not-passed: omitting one keeps the existing row's value
+        (``None`` on insert); passing ``None`` explicitly clears it.
 
         Returns:
             (config, created): ``created`` is True if a new row was inserted,
@@ -121,8 +146,12 @@ class PushNotificationConfigRepository:
             existing.url = url
             existing.authentication_type = authentication_type
             existing.authentication_token = authentication_token
-            existing.validation_token = validation_token
-            existing.session_id = session_id
+            if validation_token is not _UNSET:
+                existing.validation_token = validation_token
+            if session_id is not _UNSET:
+                existing.session_id = session_id
+            if webhook_secret is not _UNSET:
+                existing.webhook_secret = webhook_secret
             existing.updated_at = now
             existing.is_active = True
             self._session.flush()
@@ -132,16 +161,103 @@ class PushNotificationConfigRepository:
             id=config_id,
             tenant_id=self._tenant_id,
             principal_id=principal_id,
-            session_id=session_id,
+            session_id=None if session_id is _UNSET else session_id,
             url=url,
             authentication_type=authentication_type,
             authentication_token=authentication_token,
-            validation_token=validation_token,
+            validation_token=None if validation_token is _UNSET else validation_token,
+            webhook_secret=None if webhook_secret is _UNSET else webhook_secret,
             is_active=True,
         )
         self._session.add(config)
         self._session.flush()
         return config, True
+
+    # ------------------------------------------------------------------
+    # Admin registration (race-safe)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def admin_config_id(tenant_id: str, principal_id: str, url: str) -> str:
+        """Deterministic id for ADMIN-registered configs.
+
+        Two racing admin registrations of the same URL compute the same id, so
+        the primary key — not the pre-check — decides the race. This enforces
+        a SCOPED invariant: one active admin-registered config per
+        (tenant, principal, url). It deliberately does NOT impose DB-wide URL
+        uniqueness: AdCP 3.1.1 keys push_notification_configs by id and is
+        silent on URL uniqueness, so a protocol-path config (buyer-chosen id)
+        with the same URL remains legal.
+        """
+        return "pnc_" + uuid5(NAMESPACE_URL, f"{tenant_id}:{principal_id}:{url}").hex
+
+    def register_admin_webhook(
+        self,
+        *,
+        principal_id: str,
+        url: str,
+        authentication_type: str | None,
+        authentication_token: str | None,
+        webhook_secret: str | None,
+    ) -> PushNotificationConfig | None:
+        """Race-safe admin registration of a webhook URL.
+
+        Returns the EXISTING active config when this URL is already registered
+        for the principal — whether the pre-check saw it or this call lost the
+        insert race to a concurrent registration — and ``None`` when a config
+        was created (or a soft-deleted one reactivated).
+        """
+
+        def conflict() -> PushNotificationConfig | None:
+            return self.get_active_by_url(principal_id, url)
+
+        def write() -> None:
+            self.upsert(
+                config_id=self.admin_config_id(self._tenant_id, principal_id, url),
+                principal_id=principal_id,
+                url=url,
+                authentication_type=authentication_type,
+                authentication_token=authentication_token,
+                webhook_secret=webhook_secret,
+            )
+
+        return resolve_or_write(
+            self._session,
+            conflict=conflict,
+            write=write,
+            constraint="push_notification_configs_pkey",
+        )
+
+    def delete(self, config_id: str, principal_id: str) -> bool:
+        """Hard-delete a config within the (tenant, principal) scope.
+
+        Admin-management semantics: the row disappears from the management
+        page entirely (unlike ``soft_delete``, whose inactive rows the page
+        still lists with a re-activate toggle).
+
+        Returns:
+            True if a matching row was found and deleted, False otherwise.
+        """
+        config = self.get_by_id(config_id, principal_id, active_only=False)
+        if config is None:
+            return False
+        self._session.delete(config)
+        self._session.flush()
+        return True
+
+    def toggle_active(self, config_id: str, principal_id: str) -> bool | None:
+        """Flip a config's ``is_active`` within the (tenant, principal) scope.
+
+        Returns:
+            The NEW ``is_active`` value, or ``None`` if no matching row exists.
+        """
+        config = self.get_by_id(config_id, principal_id, active_only=False)
+        if config is None:
+            return None
+        config.is_active = not config.is_active
+        config.updated_at = datetime.now(UTC)
+        self._session.flush()
+        return config.is_active
 
     def soft_delete(self, config_id: str, principal_id: str) -> bool:
         """Mark a config inactive within the (tenant, principal) scope.

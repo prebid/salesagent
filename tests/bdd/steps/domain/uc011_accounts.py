@@ -12,14 +12,16 @@ ctx["error"] is any exception raised.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require_response
+from src.core.billing_policy import BILLING_PARTY_VALUES
+from tests.bdd.steps._outcome_helpers import _require_response, wire_absent, wire_dict
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic.then_error import _wire_code
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
-from tests.helpers import assert_envelope_shape
 
 # ═══════════════════════════════════════════════════════════════════════
 # Helpers
@@ -88,24 +90,24 @@ def _find_account_by_brand(resp: Any, domain: str, brand_id: str | None = None) 
     raise AssertionError(f"No account found for domain '{domain}'{suffix}. Available: {domains}")
 
 
-def _make_governance_agent(
-    url: str = "https://compliance.example.com/check",
-    categories: list[str] | None = None,
-) -> dict[str, Any]:
+def _make_governance_agent(url: str = "https://compliance.example.com/check") -> dict[str, Any]:
     """Build a valid GovernanceAgent dict matching the adcp schema.
 
     Uses the library GovernanceAgent model for validation, then dumps to dict
     for use in SyncAccountsRequest entries.
 
-    Note: authentication was removed from GovernanceAgent in adcp 3.12.
+    ``url`` is the ONLY property the pinned model declares (extra="forbid"), so
+    the helper takes nothing else. It previously also passed ``categories``,
+    which the pinned GovernanceAgent has not declared since ``authentication``
+    was dropped in adcp 3.12 — every call raised
+    ``ValidationError: categories Extra inputs are not permitted``. That went
+    unnoticed because no BR-UC-011 scenario referenced these steps; the
+    omission-preserves scenario (salesagent-gcze) is the first, and it must
+    fail on the governance wipe, not on the fixture.
     """
     from adcp.types.generated_poc.core.account import GovernanceAgent  # TODO: no stable alias in adcp.types
 
-    agent = GovernanceAgent(
-        url=url,
-        categories=categories,
-    )
-    return agent.model_dump()
+    return GovernanceAgent(url=url).model_dump(mode="json")
 
 
 def _sync_pre_create(ctx: dict, brand_domain: str, operator: str, billing: str, **extra: Any) -> None:
@@ -174,7 +176,26 @@ def given_unauthenticated(ctx: dict, transport: str | None = None) -> None:
 
 @given("the Buyer Agent has an A2A connection with an expired token")
 def given_expired_token(ctx: dict) -> None:
-    """Set up A2A connection with an expired/invalid token."""
+    """Set up A2A connection with an expired/invalid token.
+
+    KNOWN ISSUE (GH #1886): this Given is textually "expired token" but its
+    implementation is identical to ``given_unauthenticated`` (no credential
+    at all) — it does not actually drive a PRESENTED-but-rejected token
+    through the real resolution chain. That distinction was unobservable
+    before the AUTH_MISSING/AUTH_INVALID split (both cases collapsed to the
+    deprecated AUTH_REQUIRED); it is real now (absent -> AUTH_MISSING,
+    presented-but-invalid -> AUTH_INVALID). Attempted a real fix here (an
+    identity carrying a bogus ``auth_token``, mirroring
+    ``CapabilitiesEnv.invalid_token_identity()``): A2A correctly exercises
+    the real chain and rejects with AUTH_INVALID, but the REST harness's
+    ``_configure_rest_auth`` dependency override always treats a non-None
+    identity as a valid, already-resolved token (no real header/token-lookup
+    path exists in-process for REST — see tests/harness/capabilities.py's
+    "real header path is exercised on e2e_rest" note), so it collapses to
+    AUTH_MISSING via ``require_principal_id``. Fixing that needs a REST
+    real-token harness seam (GH #1886). Pinned to what this Given actually
+    produces (AUTH_MISSING) rather than force a wrong assertion.
+    """
     ctx["has_auth"] = False
     ctx["force_identity"] = None
 
@@ -200,12 +221,13 @@ def given_seller_no_billing(ctx: dict) -> None:
 def _set_billing_policy(ctx: dict, supported: list[str]) -> None:
     """Set billing policy via the harness."""
     ctx["env"].set_billing_policy(supported)
+    ctx["configured_billing_policy"] = list(supported)
 
 
 @given(parsers.parse('the seller does not support "{billing}" billing'))
 def given_seller_no_specific_billing(ctx: dict, billing: str) -> None:
     """Configure seller to not support a specific billing model."""
-    all_models = {"operator", "agent"}
+    all_models = set(BILLING_PARTY_VALUES)
     _set_billing_policy(ctx, sorted(all_models - {billing}))
 
 
@@ -213,6 +235,30 @@ def given_seller_no_specific_billing(ctx: dict, billing: str) -> None:
 def given_seller_partial_billing(ctx: dict, supported: str, rejected: str) -> None:
     """Configure seller to support one billing model but not another."""
     _set_billing_policy(ctx, [supported])
+
+
+@given("the Buyer Agent is registered with the seller as passthrough-only")
+def given_agent_passthrough_only(ctx: dict) -> None:
+    """Register the calling buyer agent as passthrough-only (no payments relationship).
+
+    Spec (error-details/billing-not-permitted-for-agent.json#/description): the
+    per-agent gate fires when "the seller's declared ``supported_billing``
+    capability ACCEPTS the requested value but the calling buyer agent's
+    commercial relationship with the seller does not (e.g., the agent is
+    onboarded as passthrough-only — no payments relationship — so ``agent`` and
+    ``advertiser`` reject)." The correct fixture therefore declares agent (and
+    advertiser) as *capability-supported* — the value is enum-valid AND in the
+    seller's supported_billing — so the ONLY thing that could reject it is the
+    per-buyer-agent commercial gate. Production has no such gate (GH #1772), so it
+    accepts the capability-supported value and provisions the account; that is
+    the gap these scenarios grade (strict xfail in conftest _XFAIL_TAGS).
+
+    Real DB seeding via ``set_billing_policy`` (writes the tenant
+    ``supported_billing`` column) — NOT mock injection — so the setup is
+    e2e_rest-compatible.
+    """
+    _set_billing_policy(ctx, ["operator", "agent", "advertiser"])
+    ctx["agent_passthrough_only"] = True
 
 
 def _set_approval_mode(ctx: dict, mode: str) -> None:
@@ -388,6 +434,13 @@ def when_list_accounts_status_filter(ctx: dict, status: str) -> None:
 def when_list_accounts_no_auth(ctx: dict) -> None:
     """Send list_accounts without authentication."""
     dispatch_request(ctx, identity=None)
+
+
+@when("the Buyer Agent sends a list_accounts skill request via A2A with the token")
+def when_list_accounts_a2a_invalid_token(ctx: dict) -> None:
+    """Send list_accounts via A2A with an invalid (presented but not valid) token."""
+    ctx["transport"] = "A2A"
+    dispatch_request(ctx, identity=ctx["env"].invalid_token_identity())
 
 
 @when(parsers.parse("the Buyer Agent sends a list_accounts request with max_results {value:d}"))
@@ -782,6 +835,195 @@ def then_response_outcome(ctx: dict, outcome: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# UC-011 list Then/When/Given hardening (salesagent-9if1 / eiww batch B1)
+#
+# Wires the previously-dormant list scenarios and de-vacuums the
+# status-rejected assertions. Every Then reads the buyer-facing wire body
+# (wire_dict/wire_absent) and asserts VALUES, not existence. Spec anchors are
+# cited per scenario against v3.1.1 (the pinned target, docs/adcp-spec-version.md).
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@then(parsers.parse('every returned account has status "{status}"'))
+def then_every_account_has_status(ctx: dict, status: str) -> None:
+    """Assert the wire accounts array is non-empty AND every element has ``status``.
+
+    Non-vacuous replacement for the ``only accounts with status`` /
+    ``accounts with other statuses are excluded`` pair on
+    @T-UC-011-list-status-rejected: the fixture seeds exactly one matching
+    account (rejected) plus two non-matching (active), so an empty array is a
+    filter defect, not a pass.
+
+    Spec: account/list-accounts-request.json#/properties/status (v3.1.1) —
+    "Filter accounts by status"; account-status enum contains ``rejected``.
+    """
+    body = wire_dict(ctx)
+    accounts = body.get("accounts")
+    assert accounts, f"expected a non-empty accounts array for status filter {status!r}, got {accounts!r}"
+    actual = [a.get("status") for a in accounts]
+    assert all(s == status for s in actual), f"expected every returned account status == {status!r}, got {actual}"
+
+
+@then("the response pagination has has_more false and no cursor")
+def then_pagination_terminal(ctx: dict) -> None:
+    """Assert the terminal page reports has_more=false and OMITS the cursor.
+
+    Spec: core/pagination-response.json (v3.1.1) — cursor is "Only present when
+    has_more is true"; ``required: ["has_more"]``. A serialized ``cursor: null``
+    would be a schema-invalid emission of an unset optional, so wire_absent (not
+    a null-tolerant check) is the correct oracle.
+    """
+    pagination = wire_dict(ctx, "pagination")
+    assert pagination.get("has_more") is False, (
+        f"expected pagination.has_more is false on the terminal page, got {pagination.get('has_more')!r}"
+    )
+    wire_absent(ctx, "pagination.cursor")
+
+
+@given(parsers.parse('accessible accounts exist for brand domains "{d1}" and "{d2}"'))
+def given_accounts_for_brand_domains(ctx: dict, d1: str, d2: str) -> None:
+    """Seed two accessible accounts keyed by distinct brand domains.
+
+    Records each seller-assigned account_id under ctx["accounts_by_domain"] so
+    the account_id-keyed filter row can build a real AccountRef.
+    """
+    by_domain = ctx.setdefault("accounts_by_domain", {})
+    for domain in (d1, d2):
+        acct = _create_accessible_account(ctx, brand={"domain": domain}, operator=domain)
+        by_domain[domain] = acct.account_id
+
+
+@when(
+    parsers.parse(
+        "the Buyer Agent sends a list_accounts request with an account filter "
+        'keyed by {key_shape} for brand domain "{domain}"'
+    )
+)
+def when_list_with_account_filter(ctx: dict, key_shape: str, domain: str) -> None:
+    """Send list_accounts with an exact ``account`` filter (AccountRef).
+
+    Spec: account/list-accounts-request.json#/properties/account (v3.1.1) →
+    core/account-ref.json#/oneOf — arm 0 is keyed by account_id, arm 1 by the
+    natural key (brand + operator).
+    """
+    from src.core.schemas.account import ListAccountsRequest
+
+    if key_shape == "account_id":
+        account_ref: dict[str, Any] = {"account_id": ctx["accounts_by_domain"][domain]}
+    else:  # "brand and operator"
+        account_ref = {"brand": {"domain": domain}, "operator": domain}
+    try:
+        req = ListAccountsRequest(account=account_ref)
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+@then(parsers.parse('the returned account has brand domain "{domain}" and operator "{operator}"'))
+def then_returned_account_identity(ctx: dict, domain: str, operator: str) -> None:
+    """Assert the filter returned exactly one account with the expected natural key.
+
+    "is the one for brand domain X" is under-specified — brand.domain alone does
+    not distinguish accounts differing by operator. The natural key
+    (brand + operator) is what core/account-ref.json#/oneOf/1 identifies by.
+    """
+    body = wire_dict(ctx)
+    accounts = body.get("accounts")
+    assert accounts and len(accounts) == 1, f"expected exactly one filtered account, got {accounts!r}"
+    acct = accounts[0]
+    actual_domain = (acct.get("brand") or {}).get("domain")
+    assert actual_domain == domain, f"expected brand domain {domain!r}, got {actual_domain!r}"
+    assert acct.get("operator") == operator, f"expected operator {operator!r}, got {acct.get('operator')!r}"
+
+
+@given("the seller supports scope introspection for the authenticated agent")
+def given_scope_introspection(ctx: dict) -> None:
+    """Declare that the seller can introspect the agent's task scope.
+
+    Production has no scope-introspection surface, so no config is applied; the
+    flag records intent for the wired (currently-xfailing) authorization check.
+    """
+    _setup_tenant_and_principal(ctx)
+    ctx["scope_introspection"] = True
+
+
+@then('each returned account includes an authorization object with required key "allowed_tasks"')
+def then_account_has_authorization(ctx: dict) -> None:
+    """Assert every listed account carries an ``authorization`` object bearing allowed_tasks.
+
+    Spec: account/list-accounts-response.json#/properties/accounts/items →
+    core/account-with-authorization.json; core/account-authorization.json
+    ``required: ["allowed_tasks"]`` (v3.1.1). Absence of the whole object means
+    "no introspection" — callers MUST NOT infer denial — but when the seller
+    DOES support introspection each item MUST carry it.
+    """
+    body = wire_dict(ctx)
+    accounts = body.get("accounts")
+    assert accounts, f"expected a non-empty accounts array, got {accounts!r}"
+    for acct in accounts:
+        authz = acct.get("authorization")
+        assert isinstance(authz, dict), f"account {acct.get('account_id')!r} missing authorization object: {acct!r}"
+        assert "allowed_tasks" in authz, f"authorization missing required key allowed_tasks: {authz!r}"
+
+
+@then("each allowed_tasks array is a non-empty list of unique snake_case task names")
+def then_allowed_tasks_snake_case(ctx: dict) -> None:
+    """Assert allowed_tasks is a non-empty, duplicate-free snake_case task list.
+
+    Spec: core/account-authorization.json#/properties/allowed_tasks (v3.1.1) —
+    items ``pattern: "^[a-z][a-z0-9_]*$"``, ``uniqueItems: true``.
+    """
+    import re
+
+    pattern = re.compile(r"^[a-z][a-z0-9_]*$")
+    body = wire_dict(ctx)
+    accounts = body.get("accounts")
+    assert accounts, f"expected a non-empty accounts array, got {accounts!r}"
+    for acct in accounts:
+        authz = acct.get("authorization") or {}
+        tasks = authz.get("allowed_tasks")
+        assert isinstance(tasks, list) and tasks, f"allowed_tasks must be a non-empty list, got {tasks!r}"
+        assert len(tasks) == len(set(tasks)), f"allowed_tasks contains duplicates: {tasks!r}"
+        bad = [t for t in tasks if not (isinstance(t, str) and pattern.match(t))]
+        assert not bad, f"allowed_tasks not all snake_case task names: {bad!r}"
+
+
+@when(
+    parsers.re(
+        r'the Buyer Agent sends a list_accounts request carrying idempotency_key "(?P<idem>[^"]+)", '
+        r"an ext object, and context (?P<ctx_json>\{.*\})"
+    )
+)
+def when_list_with_idempotency_envelope(ctx: dict, idem: str, ctx_json: str) -> None:
+    """Send list_accounts carrying the 3.1 every-request envelope extras.
+
+    Spec: compliance/3.1.1/universal/read-tool-idempotency.yaml
+    (phase read_requests_accept_idempotency_key) requires read tools to ACCEPT
+    idempotency_key/ext without rejection; list-accounts-request.json declares
+    ``additionalProperties: true`` and does NOT list idempotency_key as a field.
+    The duty is tolerance. In dev/CI the request model runs extra="forbid", so
+    constructing it with idempotency_key is rejected here — captured as the error
+    that grades the tolerance gap.
+    """
+    from adcp.types import ContextObject
+
+    from src.core.schemas.account import ListAccountsRequest
+
+    context_data = _parse_inline_context(ctx_json)
+    ctx["sent_context"] = context_data
+    context_obj = ContextObject.model_validate(context_data)
+    try:
+        req = ListAccountsRequest(
+            idempotency_key=idem,  # type: ignore[call-arg]
+            ext={"probe": "read-tool-idempotency"},
+            context=context_obj,
+        )
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # WHEN steps — sync_accounts requests
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -822,12 +1064,13 @@ def _parse_sync_table(datatable: Any) -> list[dict[str, Any]]:
     return accounts
 
 
-@when("the Buyer Agent sends a sync_accounts request with:")
-def when_sync_accounts_with_table(ctx: dict, datatable: Any) -> None:
-    """Send sync_accounts with accounts from Gherkin data table.
+def _dispatch_sync_table(ctx: dict, datatable: Any) -> None:
+    """Parse a Gherkin sync_accounts data table and dispatch it on the wire.
 
     pytest-bdd datatable: list of lists. First row = headers, rest = data rows.
     Handles force_identity (unauthenticated) and force_internal_error contexts.
+    Shared by the plain ``with:`` table When and the ``with idempotency_key … and:``
+    variant so the two paths cannot drift (DRY invariant).
     """
     from src.core.schemas.account import SyncAccountsRequest
 
@@ -836,6 +1079,9 @@ def when_sync_accounts_with_table(ctx: dict, datatable: Any) -> None:
     accounts = _parse_sync_table(rows)
 
     ctx["sync_request_brand_pairs"] = _extract_brand_pairs(accounts)
+    # Retain the parsed entries so a recovery retry (fresh idempotency_key,
+    # changed billing) can re-issue against the SAME natural key(s).
+    ctx["last_sync_accounts"] = accounts
 
     kwargs: dict[str, Any] = {}
 
@@ -859,6 +1105,26 @@ def when_sync_accounts_with_table(ctx: dict, datatable: Any) -> None:
         ctx["error"] = exc
 
 
+@when("the Buyer Agent sends a sync_accounts request with:")
+def when_sync_accounts_with_table(ctx: dict, datatable: Any) -> None:
+    """Send sync_accounts with accounts from a Gherkin data table."""
+    _dispatch_sync_table(ctx, datatable)
+
+
+@when(parsers.re(r'the Buyer Agent sends a sync_accounts request with idempotency_key "(?P<key>[^"]+)" and:'))
+def when_sync_accounts_with_key_and_table(ctx: dict, key: str, datatable: Any) -> None:
+    """Send sync_accounts from a data table, ignoring the descriptive idempotency_key.
+
+    The Gherkin names an idempotency_key for narrative/traceability, but production
+    does not carry idempotency_key on the sync_accounts wire — the REST request model
+    rejects it as an extra input (#1592), matching the empirical finding recorded in
+    salesagent-9jiu. Dispatching a keyless request is therefore the faithful wire call;
+    the key is retained on ctx only so a later step could reference it.
+    """
+    ctx["sync_idempotency_key"] = key
+    _dispatch_sync_table(ctx, datatable)
+
+
 @when(parsers.parse('the Buyer Agent sends a sync_accounts request with governance_agents for brand "{domain}"'))
 def when_sync_with_governance_agents(ctx: dict, domain: str) -> None:
     """Send sync_accounts with governance_agents for a brand domain.
@@ -868,12 +1134,7 @@ def when_sync_with_governance_agents(ctx: dict, domain: str) -> None:
     """
     from src.core.schemas.account import SyncAccountsRequest
 
-    governance_agents = [
-        _make_governance_agent(
-            url="https://governance.example.com/check",
-            categories=["budget_authority", "strategic_alignment"],
-        )
-    ]
+    governance_agents = [_make_governance_agent(url="https://governance.example.com/check")]
     try:
         req = SyncAccountsRequest(
             accounts=[
@@ -888,6 +1149,419 @@ def when_sync_with_governance_agents(ctx: dict, domain: str) -> None:
         dispatch_request(ctx, req=req)
     except Exception as exc:
         ctx["error"] = exc
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# UC-011 sync settings-update / mode-exclusive wiring
+#
+# Graduated: settings-update (AccountReference) mode implemented via
+# _process_settings_update_entry (both AccountReference1/account_id and
+# AccountReference2/natural-key arms), mode-exclusivity enforced in _impl before
+# dispatch (VALIDATION_ERROR naming accounts[i]), unmatched references rejected
+# with UNSUPPORTED_PROVISIONING. The settings-update, no-provision, and
+# mode-exclusive tags are no longer xfailed (removed from conftest _XFAIL_TAGS).
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@when(
+    parsers.parse(
+        "the Buyer Agent sends a sync_accounts request with a settings-update entry "
+        'keyed by the existing account\'s account_id setting payment_terms "{pt}"'
+    )
+)
+def when_sync_settings_update_by_account_id(ctx: dict, pt: str) -> None:
+    """Dispatch a SettingsUpdateMode entry (AccountReference by account_id) setting payment_terms.
+
+    The entry carries only ``account`` + ``payment_terms`` (no brand/operator/billing
+    trio) — the SettingsUpdateMode arm of the item oneOf. The target account_id is
+    the one the ``already exists`` Given captured via the real pre-create sync.
+
+    Spec: account/sync-accounts-request.json#/properties/accounts/items/oneOf/1
+    (SettingsUpdateMode requires ``account``; trio fields MUST be absent).
+    """
+    _dispatch_settings_update_payment_terms(ctx, pt)
+
+
+@when(
+    parsers.parse(
+        "the Buyer Agent sends a sync_accounts request with dry_run true and a settings-update entry "
+        'keyed by the existing account\'s account_id setting payment_terms "{pt}"'
+    )
+)
+def when_sync_settings_update_dry_run(ctx: dict, pt: str) -> None:
+    """Dispatch the same SettingsUpdateMode entry under dry_run=true.
+
+    Spec: account/sync-accounts-request.json#/properties/dry_run — "When true,
+    preview what would change without applying."
+    """
+    _dispatch_settings_update_payment_terms(ctx, pt, dry_run=True)
+
+
+@when(
+    parsers.parse(
+        "the Buyer Agent sends a sync_accounts request with delete_missing true and a settings-update entry "
+        'keyed by the existing account\'s account_id setting payment_terms "{pt}"'
+    )
+)
+def when_sync_settings_update_delete_missing(ctx: dict, pt: str) -> None:
+    """Dispatch the same SettingsUpdateMode entry with delete_missing=true.
+
+    Spec: account/sync-accounts-request.json#/properties/delete_missing — only
+    accounts "not included in this request" may be deactivated; the entry's
+    target account IS included.
+    """
+    _dispatch_settings_update_payment_terms(ctx, pt, delete_missing=True)
+
+
+def _dispatch_settings_update_payment_terms(
+    ctx: dict, pt: str, dry_run: bool | None = None, delete_missing: bool | None = None
+) -> None:
+    """Shared dispatch for the settings-update-by-account_id Whens (live/dry_run/delete_missing)."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    account_id = ctx.get("original_field_values", {}).get("account_id")
+    assert account_id, "Given must pre-create an account and capture its account_id in original_field_values"
+    kwargs: dict[str, Any] = {"accounts": [{"account": {"account_id": account_id}, "payment_terms": pt}]}
+    if dry_run is not None:
+        kwargs["dry_run"] = dry_run
+    if delete_missing is not None:
+        kwargs["delete_missing"] = delete_missing
+    try:
+        req = SyncAccountsRequest(**kwargs)
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+@when(
+    parsers.parse(
+        'the Buyer Agent sends a sync_accounts request with a settings-update entry keyed by unknown account_id "{account_id}"'
+    )
+)
+def when_sync_settings_update_unknown_account(ctx: dict, account_id: str) -> None:
+    """Dispatch a SettingsUpdateMode entry referencing an account that does not exist.
+
+    A settings-update entry MUST NOT provision; an unknown ``account`` is the
+    per-entry UNSUPPORTED_PROVISIONING case.
+
+    Spec: account/sync-accounts-request.json#/properties/accounts/items/properties/account/description
+    ("the seller MUST NOT create a new account — entries that would otherwise
+    trigger provisioning are rejected with UNSUPPORTED_PROVISIONING").
+    """
+    from src.core.schemas.account import SyncAccountsRequest
+
+    _setup_tenant_and_principal(ctx)
+    try:
+        req = SyncAccountsRequest(accounts=[{"account": {"account_id": account_id}}])
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+@when(
+    "the Buyer Agent sends a sync_accounts request with an entry carrying both "
+    "an account reference and the provisioning trio"
+)
+def when_sync_both_account_and_trio(ctx: dict) -> None:
+    """Dispatch an entry that satisfies BOTH item-oneOf arms (account AND the trio).
+
+    Such an entry violates oneOf(ProvisioningMode XOR SettingsUpdateMode) and is
+    rejected as a request VALIDATION_ERROR naming accounts[i] (mode-exclusivity is
+    now enforced in _impl before dispatch — graduated).
+
+    Spec: account/sync-accounts-request.json#/properties/accounts/items/oneOf.
+    """
+    from src.core.schemas.account import SyncAccountsRequest
+
+    _setup_tenant_and_principal(ctx)
+    try:
+        req = SyncAccountsRequest(
+            accounts=[
+                {
+                    "account": {"account_id": "acc_target_ref"},
+                    "brand": {"domain": "acme-corp.com"},
+                    "operator": "acme-corp.com",
+                    "billing": "operator",
+                }
+            ]
+        )
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+@then(parsers.parse('the account payment_terms is "{pt}"'))
+def then_account_payment_terms(ctx: dict, pt: str) -> None:
+    """Assert the referenced account echoes the expected payment_terms.
+
+    Spec: account/sync-accounts-response.json#/oneOf/0/properties/accounts/items/properties/payment_terms;
+    ``net_45`` is in enums/payment-terms.json#/enum
+    (["net_15","net_30","net_45","net_60","net_90","prepay"]).
+    """
+    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
+    actual = getattr(acct, "payment_terms", None)
+    actual = _status_str(actual) if actual is not None else None
+    assert actual == pt, f"Expected payment_terms '{pt}', got '{actual}'"
+
+
+@then(parsers.parse('the settings-update entry has action "{action}"'))
+def then_settings_update_entry_action(ctx: dict, action: str) -> None:
+    """Assert the single settings-update result entry has the expected action.
+
+    Requires a success-variant response (per-account results). If an operation-level
+    error were returned instead there is no response — this fails loudly rather than
+    treating a request-level error as a per-account 'failed'.
+
+    Spec: account/sync-accounts-response.json#/oneOf/0/properties/accounts/items/properties/action/enum
+    = ["created","updated","unchanged","failed"].
+    """
+    resp = _require_response(ctx)
+    assert resp.accounts, f"Expected a per-account result entry, got {resp.accounts!r}"
+    acct = resp.accounts[0]
+    actual = _action_str(acct.action)
+    assert actual == action, f"Expected settings-update entry action '{action}', got '{actual}'"
+    ctx["last_account"] = acct
+
+
+@then(parsers.parse('the per-account error recovery is "{recovery}"'))
+def then_per_account_error_recovery(ctx: dict, recovery: str) -> None:
+    """Assert the failed account's per-account error carries the expected recovery.
+
+    Spec: core/error.json#/properties/recovery/enum = ["transient","correctable","terminal"];
+    enums/error-code.json#/enumMetadata/UNSUPPORTED_PROVISIONING recovery = "correctable".
+    """
+    acct = ctx.get("last_account")
+    assert acct is not None, "No account referenced — need a prior settings-update entry step"
+    assert acct.errors, f"Expected a non-empty per-account errors array, got {acct.errors!r}"
+    recoveries = [getattr(e, "recovery", None) for e in acct.errors]
+    assert recovery in recoveries, f"Expected per-account error recovery '{recovery}', got {recoveries}"
+
+
+@then(parsers.parse('the per-account error details scope is "{scope}"'))
+def then_per_account_error_details_scope(ctx: dict, scope: str) -> None:
+    """Assert the failed account's BILLING_NOT_SUPPORTED error details.scope value.
+
+    Spec: error-details/billing-not-supported.json#/properties/scope/enum =
+    ["capability","account"]; billing-gate-dispatch.yaml capability_gate phase
+    emits scope="capability" for a seller-wide unsupported-billing rejection.
+    """
+    errors = _last_account_errors(ctx)
+    err = next((e for e in errors if e.code == "BILLING_NOT_SUPPORTED"), None)
+    assert err is not None, f"No BILLING_NOT_SUPPORTED error present, got codes {[e.code for e in errors]}"
+    details = getattr(err, "details", None) or {}
+    actual = details.get("scope")
+    assert actual == scope, f"Expected per-account error details.scope '{scope}', got {actual!r}"
+
+
+@then("the per-account error details supported_billing echoes the seller's supported billing values")
+def then_per_account_error_details_supported_billing(ctx: dict) -> None:
+    """Assert details.supported_billing echoes the seller's configured supported set.
+
+    Spec: error-details/billing-not-supported.json#/properties/supported_billing
+    (array, minItems: 1, "Sellers MAY omit this field" when the resolved supported
+    set is empty) -- compares order-insensitively against the policy the Given step
+    configured via ``_set_billing_policy``, stashed at ``ctx["configured_billing_policy"]``.
+    """
+    configured = ctx.get("configured_billing_policy")
+    assert configured is not None, "No configured billing policy captured — a prior Given must set the seller's policy"
+    errors = _last_account_errors(ctx)
+    err = next((e for e in errors if e.code == "BILLING_NOT_SUPPORTED"), None)
+    assert err is not None, f"No BILLING_NOT_SUPPORTED error present, got codes {[e.code for e in errors]}"
+    details = getattr(err, "details", None) or {}
+    actual = details.get("supported_billing")
+    assert actual is not None, f"Expected details.supported_billing to be present, got details={details!r}"
+    assert set(actual) == set(configured), (
+        f"Expected details.supported_billing to echo the seller's supported billing values "
+        f"{configured!r} (order-insensitive), got {actual!r}"
+    )
+
+
+@then(parsers.parse("the echoed account_id equals the account_id from the first response"))
+def then_echoed_account_id_stable(ctx: dict) -> None:
+    """Assert the second natural-key call echoed the SAME seller-assigned account_id.
+
+    Grades the stability invariant: a seller MAY echo an internal handle but MUST
+    keep resolving the same natural key to the same account_id on subsequent calls.
+    A second call that minted a different account_id would pass the bare-presence
+    check while breaking this invariant.
+
+    Spec: account/sync-accounts-response.json#/oneOf/0/properties/accounts/items/properties/account_id/description
+    ("the seller MUST continue accepting the natural-key AccountRef for subsequent calls").
+    """
+    first = ctx.get("first_seller_account_id")
+    assert first, "No first-call account_id captured — the first 'seller-assigned account_id' Then must run first"
+    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
+    second = getattr(acct, "account_id", None)
+    assert second == first, f"Expected the echoed account_id to stay '{first}', got '{second}'"
+
+
+@then(parsers.parse('the request is rejected at the operation level with error code "{code}" naming field "{field}"'))
+def then_operation_error_naming_field(ctx: dict, code: str, field: str) -> None:
+    """Assert an operation-level wire error variant with ``code`` and ``errors[0].field``.
+
+    Uses the single sanctioned wire-error surface (TransportResult.assert_wire_error),
+    which hard-fails on a non-canonical code and defaults recovery to the pinned
+    v3.1.1 enum classification. For a oneOf structural violation the spec-correct
+    grade is the response error variant (oneOf arm 1) carrying VALIDATION_ERROR.
+
+    Spec: account/sync-accounts-response.json#/oneOf/1 (error variant, top-level
+    errors[]); core/error.json#/properties/field (JSONPath-lite);
+    enums/error-code.json#/enumMetadata/VALIDATION_ERROR.
+    """
+    result = ctx.get("result")
+    assert result is not None, (
+        f"No transport result captured — the request did not reach a transport. Recorded error: {ctx.get('error')!r}"
+    )
+    result.assert_wire_error(code, field=field)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# UC-011 billing-gate recovery + per-agent-gate wiring (salesagent-9jiu / eiww batch B3)
+#
+# Wires the previously-dormant billing recovery scenarios (retry Whens) and the
+# per-agent-gate reject detail-field Thens, spec-grounded against v3.1.1
+# (docs/adcp-spec-version.md — the pinned target).
+#
+# Production trace (src/core/tools/accounts.py, verified empirically):
+#   - _check_billing_policy rejects an UNSUPPORTED billing value with
+#     Error(code="BILLING_NOT_SUPPORTED", message, suggestion) — it emits NO
+#     ``recovery`` and NO ``details`` (scope/supported_billing), and the rejected
+#     entry is NOT persisted (the loop ``continue``s), so a recovery retry with a
+#     supported value provisions a fresh account (action "created").
+#   - There is NO per-buyer-agent commercial gate anywhere in production: a
+#     capability-supported billing value ("agent" when the tenant declares it in
+#     supported_billing) is accepted and the account is provisioned. Production
+#     therefore never emits BILLING_NOT_PERMITTED_FOR_AGENT — the per-agent
+#     reject/recover scenarios stay strict tag-level xfails (conftest _XFAIL_TAGS).
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _retry_sync_with_billing(ctx: dict, billing: str) -> None:
+    """Re-issue the prior sync_accounts request with a new billing value + fresh idempotency_key.
+
+    Reconstructs the previously-parsed entries (``ctx['last_sync_accounts']``),
+    swaps every entry's ``billing`` to ``billing``, and re-dispatches. A recovery
+    retry is a NEW request against the SAME natural key — not a replay. The prior
+    (rejected) leg was never persisted (``_check_billing_policy`` ``continue``s
+    without creating the account), so the natural key is fresh and no
+    idempotency_key is needed to avoid an IDEMPOTENCY_CONFLICT — production does
+    not carry idempotency_key on the sync_accounts wire (the REST request model
+    rejects it as an extra input; #1592), so a keyless re-dispatch IS the fresh
+    request the recovery contract calls for.
+
+    Spec: enums/error-code.json#/enumMetadata/BILLING_NOT_SUPPORTED (recovery
+    contract: "resubmit with a supported value"); compliance/3.1.1/universal/
+    billing-gate-dispatch.yaml phase per_agent_gate_recover.
+    """
+    from src.core.schemas.account import SyncAccountsRequest
+
+    prior = ctx.get("last_sync_accounts")
+    assert prior, "No prior sync_accounts request captured — a table When must run before the retry"
+    retried = [{**entry, "billing": billing} for entry in prior]
+    try:
+        req = SyncAccountsRequest(accounts=retried)
+        dispatch_request(ctx, req=req)
+    except Exception as exc:  # noqa: BLE001 — capture for the error-path Thens
+        ctx["error"] = exc
+
+
+@when(
+    parsers.parse(
+        'the Buyer Agent retries the sync_accounts request with billing "{billing}" and a fresh idempotency_key'
+    )
+)
+def when_retry_sync_with_billing(ctx: dict, billing: str) -> None:
+    """Retry the prior request with an explicit supported billing value (BILLING_NOT_SUPPORTED recovery)."""
+    _retry_sync_with_billing(ctx, billing)
+
+
+@when(
+    "the Buyer Agent retries the sync_accounts request with the seller's suggested_billing value and a fresh idempotency_key"
+)
+def when_retry_sync_with_suggested_billing(ctx: dict) -> None:
+    """Retry the prior request with the seller's suggested_billing value.
+
+    For a passthrough-only agent the single canonical retry value is
+    ``operator`` (error-details/billing-not-permitted-for-agent.json:
+    "Typically ``operator`` for passthrough-only agents"; examples[0] =
+    {"rejected_billing": "agent", "suggested_billing": "operator"}). Production
+    never emits ``suggested_billing`` (no per-agent gate, GH #1772), so this leg is
+    only reached after the scenario has already xfailed on the missing
+    BILLING_NOT_PERMITTED_FOR_AGENT error — the step exists so the scenario runs
+    non-dormant.
+    """
+    _retry_sync_with_billing(ctx, "operator")
+
+
+def _last_account_errors(ctx: dict) -> list[Any]:
+    """Resolve the referenced per-account result's errors[] array.
+
+    Prefers ``ctx['last_account']`` (set by a prior action/error Then); falls
+    back to the first response account so an error-code Then placed first in a
+    scenario grades the real response instead of erroring on step ordering.
+    """
+    acct = ctx.get("last_account")
+    if acct is None:
+        acct = _require_response(ctx).accounts[0]
+        ctx["last_account"] = acct
+    assert acct.errors, f"Expected a non-empty per-account errors array, got {acct.errors!r}"
+    return list(acct.errors)
+
+
+def _agent_gate_error_details(ctx: dict) -> dict[str, Any]:
+    """Return the details dict of the per-account BILLING_NOT_PERMITTED_FOR_AGENT error."""
+    errors = _last_account_errors(ctx)
+    err = next((e for e in errors if e.code == "BILLING_NOT_PERMITTED_FOR_AGENT"), None)
+    assert err is not None, f"No BILLING_NOT_PERMITTED_FOR_AGENT error present, got codes {[e.code for e in errors]}"
+    details = getattr(err, "details", None) or {}
+    return dict(details)
+
+
+@then(parsers.parse('the per-account error details rejected_billing is "{value}"'))
+def then_agent_gate_rejected_billing(ctx: dict, value: str) -> None:
+    """Assert details.rejected_billing echoes the rejected value verbatim.
+
+    Spec: error-details/billing-not-permitted-for-agent.json#/properties/rejected_billing
+    ("echoed verbatim from the request"), required; examples[0].rejected_billing = "agent".
+    """
+    details = _agent_gate_error_details(ctx)
+    actual = details.get("rejected_billing")
+    assert actual == value, f"Expected details.rejected_billing '{value}', got {actual!r}"
+
+
+@then(parsers.parse('the per-account error details suggested_billing is "{value}"'))
+def then_agent_gate_suggested_billing(ctx: dict, value: str) -> None:
+    """Assert details.suggested_billing is the single canonical retry value.
+
+    Spec: error-details/billing-not-permitted-for-agent.json#/properties/suggested_billing
+    ("A single billing value the calling buyer agent MAY retry with autonomously.
+    Typically ``operator`` for passthrough-only agents"); examples[0].suggested_billing
+    = "operator"; the value is a member of enums/billing-party.json#/enum
+    (["operator","agent","advertiser"]).
+    """
+    details = _agent_gate_error_details(ctx)
+    actual = details.get("suggested_billing")
+    assert actual == value, f"Expected details.suggested_billing '{value}', got {actual!r}"
+
+
+@then(
+    "the per-account error details do not include permitted_billing, rate_card, "
+    "payment_terms, credit_limit, billing_entity, or account_id"
+)
+def then_agent_gate_details_clamped(ctx: dict) -> None:
+    """Assert the clamped details shape carries no commercial-state oracle keys.
+
+    Spec: error-details/billing-not-permitted-for-agent.json — the object is
+    ``additionalProperties: false`` with only ``rejected_billing`` (required) and
+    ``suggested_billing`` (optional) permitted; the description forbids "the
+    agent's full permitted-billing subset, the agent's other commercial state
+    (rate cards, payment terms, credit limit, billing entity), or any per-account
+    state — those are commercial-state oracles."
+    """
+    details = _agent_gate_error_details(ctx)
+    forbidden = {"permitted_billing", "rate_card", "payment_terms", "credit_limit", "billing_entity", "account_id"}
+    leaked = forbidden & set(details)
+    assert not leaked, f"Clamped agent-gate details leaked commercial-state keys: {sorted(leaked)}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -932,12 +1606,19 @@ def then_account_action(ctx: dict, domain: str, action: str) -> None:
 
 @then("the account has a seller-assigned account_id")
 def then_account_has_id(ctx: dict) -> None:
-    """Assert the last referenced account has a seller-assigned account_id."""
+    """Assert the last referenced account has a seller-assigned account_id.
+
+    Captures the FIRST such account_id under ctx["first_seller_account_id"]
+    (setdefault, so only the first call wins) for the natural-key stability
+    invariant graded by ``the echoed account_id equals the account_id from the
+    first response`` — that Then compares the second call's handle to this one.
+    """
     acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
     account_id = getattr(acct, "account_id", None)
     assert account_id is not None and isinstance(account_id, str) and len(account_id) > 0, (
         f"Account missing non-empty seller-assigned account_id: {acct}"
     )
+    ctx.setdefault("first_seller_account_id", account_id)
 
 
 @then(parsers.parse('the account has status "{status}"'))
@@ -1062,11 +1743,15 @@ def then_error_variant_no_accounts(ctx: dict) -> None:
 
 @then(parsers.re(r"the response is an error variant"))
 def then_error_exists(ctx: dict) -> None:
-    """Assert an error occurred — the response is an error variant."""
-    error = _get_error(ctx)
-    # Verify the error has a meaningful error_code (not just any exception)
-    error_code = getattr(error, "error_code", None)
-    assert error_code is not None, f"Error variant must carry an error_code, got: {error}"
+    """Assert an error occurred — the response is an error variant.
+
+    Wire-first, reconstructed fallback -- same strategy as then_error_code.
+    """
+    error_code = _wire_code(ctx)
+    if error_code is None:
+        error = _get_error(ctx)
+        error_code = getattr(error, "error_code", None)
+    assert error_code is not None, f"Error variant must carry an error_code, got: {ctx.get('error')!r}"
     assert isinstance(error_code, str) and error_code.strip(), (
         f"Error variant error_code must be a non-empty string, got: {error_code!r}"
     )
@@ -1119,10 +1804,20 @@ def then_errors_array_may_contain_multiple(ctx: dict) -> None:
 
 @then(parsers.parse('the error code is "{code}"'))
 def then_error_code(ctx: dict, code: str) -> None:
-    """Assert the error has the expected error code."""
-    error = _get_error(ctx)
-    actual = getattr(error, "error_code", None)
-    assert actual is not None, f"Error has no error_code: {error}"
+    """Assert the error has the expected error code — wire-first, reconstructed fallback.
+
+    Consolidated onto the same wire-first strategy as the canonical
+    ``then_error.py:340`` step (tests/CLAUDE.md Error Verification Policy):
+    prefer the real wire envelope's code over the lossy reconstructed
+    ``ctx['error']`` (which collapses distinct wire codes onto one exception
+    class). Kept as a separate step function because BR-UC-011/BR-UC-030 pin
+    the "the error code is" wording rather than "the error code should be".
+    """
+    actual = _wire_code(ctx)
+    if actual is None:
+        error = _get_error(ctx)
+        actual = getattr(error, "error_code", None)
+        assert actual is not None, f"Error has no error_code: {error}"
     assert actual == code, f"Expected error code '{code}', got '{actual}'"
 
 
@@ -1345,12 +2040,28 @@ def then_no_operation_level_errors(ctx: dict) -> None:
     assert errors is None or len(errors) == 0, f"Unexpected operation-level errors: {errors}"
 
 
-@then(parsers.parse('the per-account errors array contains an error with code "{code}"'))
+@then(parsers.re(r'the per-account errors array contains an error with code "(?P<code>[^"]+)"$'))
 def then_per_account_error_code(ctx: dict, code: str) -> None:
-    """Assert the failed account's errors contain a specific error code."""
+    """Assert the failed account's errors contain a specific error code.
+
+    Resolves the account from ``ctx['last_account']`` when a prior action/error
+    Then set it, else from the first response account — so an error-code Then
+    placed first in a scenario grades the real response (e.g. a provisioned
+    account with an empty errors[]) rather than erroring on step ordering.
+
+    ``parsers.re`` with ``[^"]+`` and an end anchor, NOT ``parsers.parse`` with
+    ``{code}``: parse's capture is greedy and spans quotes, so on the disjunction
+    text ``code "INVALID_REQUEST" or "VALIDATION_ERROR"`` it matched FIRST and
+    bound the literal ``INVALID_REQUEST" or "VALIDATION_ERROR`` as a single code —
+    shadowing the dedicated or-variant below and failing against a correct
+    production response. A capture that cannot cross a quote makes the specific
+    step win by construction rather than by registration order.
+    """
     acct = ctx.get("last_account")
-    assert acct is not None, "No account referenced"
-    assert acct.errors is not None, "No errors on account"
+    if acct is None:
+        acct = _require_response(ctx).accounts[0]
+        ctx["last_account"] = acct
+    assert acct.errors, f"Expected a non-empty per-account errors array, got {acct.errors!r}"
     codes = [e.code for e in acct.errors]
     assert code in codes, f"Expected error code '{code}' in {codes}"
 
@@ -1778,11 +2489,14 @@ def then_dry_run_true(ctx: dict) -> None:
 
 @then("the response does not include a dry_run field")
 def then_no_dry_run_include(ctx: dict) -> None:
-    """Assert the response doesn't include dry_run (alias for 'does not contain')."""
-    resp = ctx.get("response")
-    if resp is not None:
-        dry_run = getattr(resp, "dry_run", None)
-        assert dry_run is None, f"Expected no dry_run, got {dry_run}"
+    """Assert the wire response omits the dry_run field entirely (not just None).
+
+    ``wire_absent`` distinguishes "field genuinely absent from the wire" from
+    "field present with a null value" — the distinction the prior
+    ``getattr(..., None)`` check collapsed, and it fails loudly (rather than
+    silently passing) when the response never arrived at all.
+    """
+    wire_absent(ctx, "dry_run")
 
 
 @then(parsers.parse('the account for brand domain "{domain}" shows action "{action}"'))
@@ -1795,37 +2509,82 @@ def then_account_shows_action(ctx: dict, domain: str, action: str) -> None:
     ctx["last_account"] = acct
 
 
-@then("no accounts were actually created or modified on the seller")
-def then_no_db_writes(ctx: dict) -> None:
-    """Assert dry_run didn't write to DB — query repo and verify no accounts exist."""
+@then(
+    parsers.parse(
+        'result {position:d} on the wire shows brand domain "{domain}" with action "{action}" and billing "{billing}"'
+    )
+)
+def then_positional_result_on_the_wire(ctx: dict, position: int, domain: str, action: str, billing: str) -> None:
+    """Assert the ``position``-th (1-based) result on the wire, by ORDER not by brand.
+
+    Positional deliberately: the scenarios this serves carry ONE natural key
+    TWICE, so both results echo the same brand and a lookup-by-domain step can
+    only ever see the first — it would grade the second vacuously. Reading the
+    wire rather than the typed payload because ``billing`` is the field a preview
+    got wrong by echoing the value the buyer was REPLACING, and only the wire
+    says what the buyer actually received.
+    """
+    accounts = wire_dict(ctx)["accounts"]
+    assert len(accounts) >= position, (
+        f"expected at least {position} results on the wire, got {len(accounts)}: {accounts}"
+    )
+    result = accounts[position - 1]
+    actual = (
+        (result.get("brand") or {}).get("domain"),
+        result.get("action"),
+        result.get("billing"),
+    )
+    assert actual == (domain, action, billing), (
+        f"result {position} on the wire is {actual}, expected {(domain, action, billing)} — full wire: {accounts}"
+    )
+
+
+def _persisted_accounts(ctx: dict, principal_id: str | None = None) -> list[dict[str, Any]]:
+    """The accounts an agent actually has on the seller, as plain values.
+
+    The ONE place this slice reaches the database. Six Then steps repeated the
+    same session/repository/``list_by_principal`` triple, each with its own idea
+    of which fields were worth looking at — and the weakest of them (status only)
+    is what let a dry_run that WROTE the row still pass. Returning plain values
+    also keeps callers off detached ORM instances once the session closes.
+
+    ``principal_id`` defaults to the scenario's own agent; the agent-scoping
+    steps pass another agent's id.
+    """
     from src.core.database.database_session import get_db_session
     from src.core.database.repositories.account import AccountRepository
 
-    tenant, principal = ctx["tenant"], ctx["principal"]
+    pid = principal_id or ctx["principal"].principal_id
     with get_db_session() as session:
-        repo = AccountRepository(session, tenant.tenant_id)
-        accounts = repo.list_by_principal(principal.principal_id)
-        assert len(accounts) == 0, (
-            f"Expected 0 accounts after dry_run, but found {len(accounts)}: {[a.brand.domain for a in accounts]}"
-        )
+        repo = AccountRepository(session, ctx["tenant"].tenant_id)
+        return [
+            {
+                "account_id": row.account_id,
+                "status": _status_str(row.status),
+                "domain": row.brand.domain if row.brand else None,
+                "billing": row.billing,
+                "payment_terms": row.payment_terms,
+            }
+            for row in repo.list_by_principal(pid)
+        ]
+
+
+@then("no accounts were actually created or modified on the seller")
+def then_no_db_writes(ctx: dict) -> None:
+    """Assert dry_run didn't write to DB — query repo and verify no accounts exist."""
+    accounts = _persisted_accounts(ctx)
+    assert accounts == [], f"Expected 0 accounts after dry_run, but found {[a['domain'] for a in accounts]}"
 
 
 @then("the account was actually created on the seller")
 def then_account_in_db(ctx: dict) -> None:
     """Assert the sync actually wrote to DB — verify the response account_id is persisted."""
-    from src.core.database.database_session import get_db_session
-    from src.core.database.repositories.account import AccountRepository
-
-    tenant, principal = ctx["tenant"], ctx["principal"]
     # The response should have the account that was just created
     resp = ctx.get("response")
     assert resp is not None, "Expected a response from the sync"
     expected_id = resp.accounts[0].account_id
-    with get_db_session() as session:
-        repo = AccountRepository(session, tenant.tenant_id)
-        accounts = repo.list_by_principal(principal.principal_id)
-        db_ids = {a.account_id for a in accounts}
-        assert expected_id in db_ids, f"Expected account '{expected_id}' in DB, found: {db_ids}"
+    db_ids = {a["account_id"] for a in _persisted_accounts(ctx)}
+    assert expected_id in db_ids, f"Expected account '{expected_id}' in DB, found: {db_ids}"
 
 
 # ── Then: delete_missing assertions ───────────────────────────────────
@@ -1859,19 +2618,12 @@ def then_account_unchanged_or_updated(ctx: dict, domain: str) -> None:
 @then(parsers.parse('agent B\'s account for brand domain "{domain}" is not affected'))
 def then_agent_b_not_affected(ctx: dict, domain: str) -> None:
     """Assert agent B's account is still active (not deactivated by agent A)."""
-    from src.core.database.database_session import get_db_session
-    from src.core.database.repositories.account import AccountRepository
-
-    tenant = ctx["tenant"]
-    agent_b = ctx["agents"]["B"]
-    with get_db_session() as session:
-        repo = AccountRepository(session, tenant.tenant_id)
-        accounts = repo.list_by_principal(agent_b.principal_id)
-        matching = [a for a in accounts if a.brand and a.brand.domain == domain]
-        assert len(matching) == 1, f"Expected 1 account for agent B domain {domain}, got {len(matching)}"
-        assert matching[0].status != "closed", (
-            f"Agent B's account {domain} was deactivated (status={matching[0].status})"
-        )
+    accounts = _persisted_accounts(ctx, ctx["agents"]["B"].principal_id)
+    matching = [a for a in accounts if a["domain"] == domain]
+    assert len(matching) == 1, f"Expected 1 account for agent B domain {domain}, got {len(matching)}"
+    assert matching[0]["status"] != "closed", (
+        f"Agent B's account {domain} was deactivated (status={matching[0]['status']})"
+    )
 
 
 @then("only agent A's absent accounts are deactivated")
@@ -1881,17 +2633,11 @@ def then_only_agent_a_deactivated(ctx: dict) -> None:
     Verifies production's agent-scoping: agent B's accounts must remain active
     (not closed) after agent A's delete_missing operation.
     """
-    from src.core.database.database_session import get_db_session
-    from src.core.database.repositories.account import AccountRepository
-
     agent_b = ctx.get("agents", {}).get("B")
     assert agent_b is not None, "Test setup error: no agent B in context"
-    tenant = ctx["tenant"]
-    with get_db_session() as session:
-        repo = AccountRepository(session, tenant.tenant_id)
-        agent_b_accounts = repo.list_by_principal(agent_b.principal_id)
+    agent_b_accounts = _persisted_accounts(ctx, agent_b.principal_id)
     assert agent_b_accounts, "Test setup error: agent B should have at least one account"
-    statuses = {a.account_id: _status_str(a.status) for a in agent_b_accounts}
+    statuses = {a["account_id"]: a["status"] for a in agent_b_accounts}
     for acct_id, status in statuses.items():
         assert status != "closed", f"Agent A's delete_missing deactivated agent B's account {acct_id} (status={status})"
 
@@ -1899,19 +2645,44 @@ def then_only_agent_a_deactivated(ctx: dict) -> None:
 @then(parsers.parse('brand domain "{domain}" remains in its current state'))
 def then_brand_unchanged(ctx: dict, domain: str) -> None:
     """Assert the account for the given domain was NOT deactivated."""
-    from src.core.database.database_session import get_db_session
-    from src.core.database.repositories.account import AccountRepository
+    matching = [a for a in _persisted_accounts(ctx) if a["domain"] == domain]
+    assert len(matching) == 1, f"Expected account for {domain}, got {len(matching)}"
+    assert matching[0]["status"] != "closed", (
+        f"Account {domain} was deactivated (status={matching[0]['status']}) but should be unchanged"
+    )
 
-    tenant = ctx["tenant"]
-    principal = ctx["principal"]
-    with get_db_session() as session:
-        repo = AccountRepository(session, tenant.tenant_id)
-        accounts = repo.list_by_principal(principal.principal_id)
-        matching = [a for a in accounts if a.brand and a.brand.domain == domain]
-        assert len(matching) == 1, f"Expected account for {domain}, got {len(matching)}"
-        assert matching[0].status != "closed", (
-            f"Account {domain} was deactivated (status={matching[0].status}) but should be unchanged"
-        )
+
+@then(parsers.parse('the persisted account for brand domain "{domain}" still has billing "{billing}"'))
+def then_persisted_billing_unchanged(ctx: dict, domain: str, billing: str) -> None:
+    """Assert a preview left the account's settable state alone, not just its status.
+
+    "Remains in its current state" checked only that the account was not CLOSED,
+    which a dry_run that mutated the loaded row and let the transaction commit
+    passes cleanly. This pins the field the preview reports on, so an outcome the
+    buyer was only shown cannot also have been applied.
+    """
+    matching = [a for a in _persisted_accounts(ctx) if a["domain"] == domain]
+    assert len(matching) == 1, f"Expected exactly one persisted account for {domain}, got {matching}"
+    assert matching[0]["billing"] == billing, (
+        f"Expected persisted billing {billing!r} for {domain}, got {matching[0]['billing']!r} — "
+        "the run wrote a value it only promised to preview"
+    )
+
+
+@then(parsers.parse('the persisted account for brand domain "{domain}" has no payment_terms set'))
+def then_persisted_payment_terms_unset(ctx: dict, domain: str) -> None:
+    """Assert a settings-update preview left payment_terms unpersisted.
+
+    The dry_run settings-update scenario targets payment_terms specifically:
+    asserting only billing (which the entry never touches) would pass even when
+    the preview wrote the row. This pins the exact field the preview reports on.
+    """
+    matching = [a for a in _persisted_accounts(ctx) if a["domain"] == domain]
+    assert len(matching) == 1, f"Expected exactly one persisted account for {domain}, got {matching}"
+    assert matching[0]["payment_terms"] is None, (
+        f"Expected no persisted payment_terms for {domain}, got {matching[0]['payment_terms']!r} — "
+        "the dry_run settings-update wrote a value it only promised to preview"
+    )
 
 
 @then("only the included accounts are processed")
@@ -1963,18 +2734,33 @@ def then_account_processed_normally(ctx: dict, domain: str) -> None:
 # ── Given: sandbox setup ───────────────────────────────────────────────
 
 
-@given("the seller declares features.sandbox equals true in capabilities")
+@given("the seller declares account.sandbox equals true in capabilities")
+@given("the seller declares features.sandbox equals true in capabilities")  # legacy alias (pre-3.1.1 wording)
 def given_sandbox_supported(ctx: dict) -> None:
-    """Configure seller to support sandbox mode."""
+    """Configure seller to support sandbox mode.
+
+    3.1.1 locates the sandbox capability at account.sandbox on the capabilities
+    response (get-adcp-capabilities-response.json#/properties/account/properties/sandbox);
+    the features.sandbox alias is kept for any un-migrated feature text.
+    """
     _setup_tenant_and_principal(ctx)
     ctx["sandbox_supported"] = True
 
 
 @given("both sandbox and production accounts exist for the Buyer")
 def given_sandbox_and_production_accounts(ctx: dict) -> None:
-    """Create one sandbox and one production account with agent access."""
-    _create_accessible_account(ctx, status="active", sandbox=True)
-    _create_accessible_account(ctx, status="active", sandbox=False)
+    """Create one sandbox and one production account with agent access.
+
+    Records the sandbox and production account_ids separately (not just the
+    combined ``expected_account_ids`` set) so the sandbox-filter Thens can grade
+    the filter non-vacuously: the sandbox account MUST be returned and the
+    production account MUST be absent — an empty result is a filter defect, not a
+    pass. Real DB seeding via factories (not mock injection).
+    """
+    sandbox_acct = _create_accessible_account(ctx, status="active", sandbox=True)
+    prod_acct = _create_accessible_account(ctx, status="active", sandbox=False)
+    ctx["sandbox_account_ids"] = {sandbox_acct.account_id}
+    ctx["production_account_ids"] = {prod_acct.account_id}
 
 
 # ── When: context-bearing requests ─────────────────────────────────────
@@ -2231,10 +3017,12 @@ def then_no_context(ctx: dict) -> None:
 
 @then(parsers.re(r"the response is an error variant with (?P<code>\w+)"))
 def then_error_with_code(ctx: dict, code: str) -> None:
-    """Assert the response is an error with a specific error code."""
-    error = _get_error(ctx)
-    actual = getattr(error, "error_code", None)
-    assert actual == code, f"Expected error code '{code}', got '{actual}'"
+    """Assert the response is an error with a specific error code -- wire-first.
+
+    Same wire-first strategy as then_error_code (:1803): prefer the real wire
+    envelope's code over the lossy reconstructed ctx['error'].
+    """
+    ctx["result"].assert_wire_error(code)
 
 
 # ── Then: input validation assertions ──────────────────────────────────
@@ -2301,10 +3089,17 @@ def then_account_sandbox_true(ctx: dict) -> None:
 
 @then("the account should have a seller-assigned account_id")
 def then_sandbox_account_has_id(ctx: dict) -> None:
-    """Assert the account has a seller-assigned account_id."""
+    """Assert the account has a non-empty seller-assigned account_id.
+
+    Matches ``then_account_has_id`` (a bare ``is not None`` accepts ``""``, which
+    is not a seller assignment): the account_id must be a non-empty string.
+    Spec: account/sync-accounts-response.json#/oneOf/0/properties/accounts/items/properties/account_id.
+    """
     acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
     account_id = getattr(acct, "account_id", None)
-    assert account_id is not None, f"Account missing seller-assigned account_id: {acct}"
+    assert isinstance(account_id, str) and len(account_id) > 0, (
+        f"Account missing non-empty seller-assigned account_id: {acct}"
+    )
 
 
 @then("no real ad platform account should have been created")
@@ -2337,23 +3132,693 @@ def then_no_real_platform_account(ctx: dict) -> None:
 
 @then("all returned accounts should have sandbox equals true")
 def then_all_accounts_sandbox_true(ctx: dict) -> None:
-    """Assert every account in the response has sandbox=True."""
+    """Assert the sandbox filter returned the seeded sandbox account and only it.
+
+    Non-vacuous: an empty response is a filter defect, not a pass (the prior
+    ``for acct in resp.accounts`` loop passed on ``[]``). The Given seeded exactly
+    one sandbox account; that id MUST be present, and every returned account MUST
+    carry sandbox=True.
+
+    Spec: account/list-accounts-request.json#/properties/sandbox — "true returns
+    only sandbox accounts"; core/account.json#/properties/sandbox (boolean).
+    """
     resp = _require_response(ctx)
+    returned_ids = {acct.account_id for acct in resp.accounts}
+    expected_sandbox_ids = ctx.get("sandbox_account_ids", set())
+    assert expected_sandbox_ids, "Given did not record sandbox_account_ids — fixture wiring bug"
+    assert expected_sandbox_ids <= returned_ids, (
+        f"Sandbox filter dropped the seeded sandbox account(s): expected {expected_sandbox_ids} "
+        f"present, got returned ids {returned_ids}"
+    )
     for acct in resp.accounts:
         assert acct.sandbox is True, f"Expected sandbox=True, got sandbox={acct.sandbox} for {acct.name}"
 
 
 @then("the response should not include production accounts")
 def then_no_production_accounts(ctx: dict) -> None:
-    """Assert all returned accounts are sandbox (no production accounts).
+    """Assert the seeded production account is absent (sandbox=true filter excludes it).
 
-    The sandbox filter was applied in the When step. Every returned account
-    must have sandbox=True; any sandbox=False or sandbox=None is a production
-    account that should have been filtered out.
+    Non-vacuous: names the concrete production account_id from the Given and
+    asserts it is NOT in the returned set — the prior ``sandbox is True`` loop
+    passed on an empty result. Absence (not merely sandbox=false) is the
+    production signal per the request-filter contract.
+
+    Spec: account/list-accounts-request.json#/properties/sandbox — "false returns
+    only production accounts. Omit to return all accounts."; core/account.json
+    #/properties/sandbox (absence means production).
     """
     resp = _require_response(ctx)
+    returned_ids = {acct.account_id for acct in resp.accounts}
+    prod_ids = ctx.get("production_account_ids", set())
+    assert prod_ids, "Given did not record production_account_ids — fixture wiring bug"
+    leaked = prod_ids & returned_ids
+    assert not leaked, f"Production account(s) {sorted(leaked)} leaked past the sandbox=true filter"
     for acct in resp.accounts:
-        assert acct.sandbox is True, f"Production account found: {acct.account_id} (sandbox={acct.sandbox})"
+        assert acct.sandbox is True, f"Non-sandbox account found: {acct.account_id} (sandbox={acct.sandbox})"
+
+
+# ── Given: sandbox capability not declared ─────────────────────────────
+
+
+@given("the seller does not declare account.sandbox in capabilities")
+def given_sandbox_not_supported(ctx: dict) -> None:
+    """Configure a seller that does NOT advertise the account.sandbox capability.
+
+    v3.1.1 locates the sandbox capability at account.sandbox on the capabilities
+    response (get-adcp-capabilities-response.json#/properties/account/properties/sandbox,
+    default false). This Given is the negative of ``given_sandbox_supported``: the
+    seller has not opted in, so a sync_accounts request carrying sandbox: true MUST
+    be rejected per-account (BR-RULE-209 INV-6). Sets Tenant.account_sandbox=False
+    via the real DB (env.setup_default_data), the production capability-gate column
+    read by the sandbox provisioning gate — not just a ctx-level test flag.
+    """
+    env = ctx["env"]
+    # setup_default_data is idempotent (get-or-create) and safe even when a prior
+    # Given (e.g. "the Buyer Agent has an authenticated connection") already
+    # created the tenant.
+    tenant, principal = env.setup_default_data()
+    # configure_tenant_field writes BOTH paths: the in-memory _tenant_overrides
+    # PrincipalFactory.make_identity() reads to build REST's synthetic identity
+    # (REST's auth-dep override installs a pre-built ResolvedIdentity, bypassing
+    # the real DB-backed resolution a2a/mcp exercise -- so a plain DB write alone
+    # is invisible to REST), AND the real Tenant row a2a/mcp read via the
+    # production auth chain. Also clears the identity cache.
+    env.configure_tenant_field("account_sandbox", False)
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    ctx["sandbox_supported"] = False
+
+
+# ── When: sandbox response-shape request items ─────────────────────────
+
+
+@when(
+    parsers.re(
+        r'the Buyer Agent sends a sync_accounts request with idempotency_key "(?P<key>[^"]+)" '
+        r"and a request item where sandbox is (?P<request_item>true|false|omitted)"
+    )
+)
+def when_sync_sandbox_shape(ctx: dict, key: str, request_item: str) -> None:
+    """Send one sync_accounts account entry whose sandbox field is true/false/omitted.
+
+    Grades the response-shape echo (true→true, false→false, omitted→absent) against
+    account/sync-accounts-response.json#/oneOf/0/properties/accounts/items/properties/sandbox
+    ("echoed from the request. Only present for buyer-declared accounts"). The
+    descriptive idempotency_key is not carried on the wire (see
+    ``when_sync_accounts_with_key_and_table``).
+    """
+    from src.core.schemas.account import SyncAccountsRequest
+
+    ctx["sync_idempotency_key"] = key
+    entry: dict[str, Any] = {
+        "brand": {"domain": "acme-corp.com"},
+        "operator": "acme-corp.com",
+        "billing": "operator",
+    }
+    if request_item == "true":
+        entry["sandbox"] = True
+    elif request_item == "false":
+        entry["sandbox"] = False
+    # "omitted": leave sandbox out of the entry entirely
+
+    try:
+        req = SyncAccountsRequest(accounts=[entry])
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+# ── Then: sandbox response-shape + capability error assertions ─────────
+
+
+@then(parsers.parse('the per-account result sandbox field is "{expected}"'))
+def then_per_account_sandbox_field(ctx: dict, expected: str) -> None:
+    """Assert the per-account result's sandbox field on the wire is true/false/absent.
+
+    Tri-state, read on the buyer-facing success wire (absent ≠ false ≠ true):
+    "omitted" in the request MUST echo as absent, not a JSON null — an unset
+    optional is not serialized. "false" and "true" echo the literal boolean.
+
+    Spec: account/sync-accounts-response.json#/oneOf/0/properties/accounts/items/properties/sandbox
+    ("Whether this is a sandbox account, echoed from the request. Only present for
+    buyer-declared accounts.").
+    """
+    body = wire_dict(ctx)
+    accounts = body.get("accounts")
+    assert isinstance(accounts, list) and accounts, f"success wire body carries no accounts[]: {body!r}"
+    acct0 = accounts[0]
+    assert isinstance(acct0, dict), f"accounts[0] is not a JSON object on the wire: {acct0!r}"
+    if expected == "absent":
+        assert "sandbox" not in acct0, (
+            f"expected sandbox absent from the wire (production account), got sandbox={acct0.get('sandbox')!r}"
+        )
+    elif expected == "true":
+        assert acct0.get("sandbox") is True, f"expected sandbox true on the wire, got {acct0.get('sandbox')!r}"
+    elif expected == "false":
+        assert acct0.get("sandbox") is False, f"expected sandbox false on the wire, got {acct0.get('sandbox')!r}"
+    else:
+        raise AssertionError(f"unknown expected sandbox shape {expected!r} (want true/false/absent)")
+
+
+def _last_account_error_matching(ctx: dict, code: str) -> Any:
+    """Return the per-account error object carrying ``code`` on the referenced account."""
+    errors = _last_account_errors(ctx)
+    err = next((e for e in errors if getattr(e, "code", None) == code), None)
+    assert err is not None, (
+        f"No per-account error with code {code!r}; got codes {[getattr(e, 'code', None) for e in errors]}"
+    )
+    return err
+
+
+@then(parsers.parse('the per-account error field points at "{field}"'))
+def then_per_account_error_field(ctx: dict, field: str) -> None:
+    """Assert the referenced account's error names WHICH request field was rejected.
+
+    Spec: core/error.json#/properties/field — the JSONPath-lite pointer at the
+    offending request field (e.g. 'accounts[0].sandbox').
+    """
+    errors = _last_account_errors(ctx)
+    fields = [getattr(e, "field", None) for e in errors]
+    assert field in fields, f"Expected a per-account error field pointing at {field!r}, got {fields}"
+
+
+@then(parsers.parse('the per-account error suggestion mentions "{needle}"'))
+def then_per_account_error_suggestion_mentions(ctx: dict, needle: str) -> None:
+    """Assert a per-account error's suggestion string contains the remediation cue.
+
+    Spec: core/error.json#/properties/suggestion ("Suggested fix for the error").
+    For UNSUPPORTED_FEATURE the documented remediation is
+    enums/error-code.json#/enumMetadata/UNSUPPORTED_FEATURE/suggestion =
+    "check get_adcp_capabilities and remove unsupported fields".
+    """
+    errors = _last_account_errors(ctx)
+    suggestions = [getattr(e, "suggestion", None) or "" for e in errors]
+    assert any(needle in s for s in suggestions), (
+        f"Expected a per-account error suggestion mentioning {needle!r}, got {suggestions!r}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# UC-011 account-level notification_configs wiring
+#
+# Graduated (T2 increment F4a): the sync_accounts pipeline now processes
+# accounts[].notification_configs — SyncResponseAccount persists and echoes the
+# whole-array JSONType column with declarative-replace semantics (omit
+# preserves, [] clears, re-sent subscriber_id replaces in place), scrubbing
+# authentication.credentials on echo. The register/replace-clear/omit-preserves
+# tags are no longer xfailed (removed from conftest _XFAIL_TAGS). The per-account
+# REJECTION families below (event-scope, duplicate-subscriber, activation-proof)
+# graduated separately as F4b/F4c.
+#
+# Spec (v3.1.1): core/notification-config.json (subscriber shape; write-only
+# credentials; active flag persisted even when false); account/
+# sync-accounts-request.json#/properties/accounts/items/properties/notification_configs
+# (declarative replace — omit=leave unchanged, []=clear, re-send subscriber_id
+# replaces in place); account/sync-accounts-response.json#/oneOf/0/.../
+# notification_configs (applied subscribers echoed; authentication.credentials
+# omitted); compliance/3.1.1/universal/notification-config-lifecycle.yaml
+# (graded storyboard: register_and_echo_paused_subscriber, replace_pause_and_clear).
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _parse_event_types(ets: str) -> list[str]:
+    """Split a comma-space-separated event_types string into a list of names."""
+    return [e.strip() for e in ets.split(",") if e.strip()]
+
+
+def _notif_config(
+    subscriber_id: str, url: str, event_types: str, *, active: bool, authentication: dict | None = None
+) -> dict[str, Any]:
+    """Build a notification_configs[] entry dict for a sync_accounts request."""
+    entry: dict[str, Any] = {
+        "subscriber_id": subscriber_id,
+        "url": url,
+        "event_types": _parse_event_types(event_types),
+        "active": active,
+    }
+    if authentication is not None:
+        entry["authentication"] = authentication
+    return entry
+
+
+def _dispatch_sync_notification(ctx: dict, domain: str, notification_configs: list[dict[str, Any]]) -> None:
+    """Dispatch a sync_accounts request carrying a notification_configs array for one account.
+
+    ``ctx["signed"]`` asks for a REAL RFC 9421 signature on this dispatch and is
+    forwarded rather than branched on (salesagent-n78j0.1.3): a registration carrying
+    ``notification_configs[].authentication`` is one the seller MUST refuse unless it is
+    signed (security.mdx @ v3.1.1 :1462-1465), so the credential-carrying scenario has
+    to be able to sign. Defaults to False, leaving every other scenario byte-identical.
+    """
+    from src.core.schemas.account import SyncAccountsRequest
+
+    entry = {
+        "brand": {"domain": domain},
+        "operator": domain,
+        "billing": "operator",
+        "notification_configs": notification_configs,
+    }
+    try:
+        req = SyncAccountsRequest(accounts=[entry])
+        dispatch_request(ctx, req=req, signed=ctx.get("signed", False))
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+def _sub_attr(sub: Any, name: str) -> Any:
+    """Read a subscriber attribute from a dict or a typed NotificationConfig."""
+    return sub.get(name) if isinstance(sub, dict) else getattr(sub, name, None)
+
+
+def _echoed_subscribers(ctx: dict, domain: str | None = None) -> list[Any]:
+    """Return the referenced account's echoed notification_configs (or [] when absent).
+
+    Reads the typed response's per-account notification_configs, which SyncResponseAccount
+    now persists and echoes (graduated, T2 increment F4a).
+    """
+    resp = _require_response(ctx)
+    if domain is not None:
+        acct = next((a for a in resp.accounts if a.brand.domain == domain), None)
+        assert acct is not None, (
+            f"No account for domain {domain!r} in response; domains={[a.brand.domain for a in resp.accounts]}"
+        )
+    else:
+        acct = ctx.get("last_account") or resp.accounts[0]
+    configs = getattr(acct, "notification_configs", None)
+    return list(configs) if configs else []
+
+
+def _persisted_subscribers(ctx: dict, domain: str | None = None) -> list[Any]:
+    """Read the account's PERSISTED notification_configs back through list_accounts.
+
+    Used where the graded obligation is "the stored array is unchanged" rather than
+    "the response echoed X" — notably after a rejected entry, whose failed result
+    carries no notification_configs at all.
+
+    Reuses the list read-back the register-paused scenario already exercises, so
+    the credential scrub and the JSONType None-vs-[] round trip are graded on the
+    same path a buyer would actually use.
+    """
+    from src.core.tools.accounts import _list_accounts_impl
+
+    env = ctx["env"]
+    env._commit_factory_data()
+    listed = _list_accounts_impl(identity=env.identity)
+    if domain is not None:
+        acct = next((a for a in listed.accounts if a.brand and a.brand.domain == domain), None)
+        assert acct is not None, (
+            f"No persisted account for domain {domain!r}; "
+            f"domains={[a.brand.domain for a in listed.accounts if a.brand]}"
+        )
+    else:
+        acct = listed.accounts[0]
+    configs = getattr(acct, "notification_configs", None)
+    return list(configs) if configs else []
+
+
+def _find_subscriber(subs: list[Any], subscriber_id: str) -> Any:
+    """Find an echoed subscriber by subscriber_id, or None."""
+    return next((s for s in subs if str(_sub_attr(s, "subscriber_id")) == subscriber_id), None)
+
+
+@given(
+    parsers.re(
+        r'an account for brand domain "(?P<domain>[^"]+)" exists with notification config '
+        r'subscriber "(?P<sub>[^"]+)" for url "(?P<url>[^"]+)"'
+    )
+)
+def given_account_with_notif_subscriber(ctx: dict, domain: str, sub: str, url: str) -> None:
+    """Pre-create an account carrying one PAUSED notification subscriber.
+
+    Paused (``active: false``) deliberately, and it is the same prior state on every
+    transport. An active seed would need a successful proof-of-control challenge to
+    persist (T2 increment F4c), and the scenario urls are under a reserved TLD that
+    production's prover refuses by design — so on e2e_rest the seed itself would be
+    rejected and the "prior set" the scenario grades would never exist.
+
+    Nothing is weakened: the scenario text says only that a subscriber exists, and a
+    paused prior set grades the obligation MORE sharply — a failed activation must
+    leave the paused entry exactly as it was, rather than partially applying the
+    active re-send.
+    """
+    _setup_tenant_and_principal(ctx)
+    cfg = _notif_config(sub, url, "creative.status_changed, creative.purged", active=False)
+    _dispatch_sync_notification(ctx, domain, [cfg])
+    ctx["notif_domain"] = domain
+    ctx["notif_prior"] = {"subscriber_id": sub, "url": url, "active": False}
+
+
+@when(
+    parsers.re(
+        r'the Buyer Agent sends a sync_accounts request re-sending subscriber "(?P<sub>[^"]+)" '
+        r'as paused with url "(?P<url>[^"]+)" and event_types "(?P<ets>[^"]+)"'
+    )
+)
+def when_sync_resend_subscriber_paused(ctx: dict, sub: str, url: str, ets: str) -> None:
+    """Declarative replace: re-send the same subscriber_id as paused (active:false).
+
+    Spec: sync-accounts-request notification_configs description — "Re-sending an
+    existing subscriber_id for the account replaces that subscriber's config."
+    core/notification-config.json#/properties/subscriber_id: replaces URL,
+    event_types, authentication selector, AND active flag.
+    """
+    domain = ctx.get("notif_domain", "acme-corp.com")
+    cfg = _notif_config(sub, url, ets, active=False)
+    _dispatch_sync_notification(ctx, domain, [cfg])
+
+
+@when(
+    parsers.re(
+        r"the Buyer Agent sends a sync_accounts request with an empty notification_configs array "
+        r'for brand domain "(?P<domain>[^"]+)"'
+    )
+)
+def when_sync_clear_notification_configs(ctx: dict, domain: str) -> None:
+    """Declarative clear: send [] to remove all subscribers.
+
+    Spec: sync-accounts-request notification_configs description — "send [] to
+    remove all subscribers."
+    """
+    _dispatch_sync_notification(ctx, domain, [])
+
+
+@then(parsers.re(r"the account notification_configs echo exactly (?P<count>\d+) subscribers?"))
+def then_notif_echo_count(ctx: dict, count: str) -> None:
+    """Assert the account echoes exactly N applied notification subscribers.
+
+    Spec: sync-accounts-response.json#/oneOf/0/.../notification_configs — "Only
+    configs that the seller has persisted are echoed." Storyboard field_absent
+    check on notification_configs[1] pins "exactly one subscriber".
+    """
+    subs = _echoed_subscribers(ctx)
+    assert len(subs) == int(count), f"Expected {count} echoed subscriber(s), got {len(subs)}: {subs!r}"
+
+
+@then(parsers.re(r'the echoed subscriber "(?P<sub>[^"]+)" has url "(?P<url>[^"]+)" and active (?P<flag>true|false)'))
+def then_echoed_subscriber_url_active(ctx: dict, sub: str, url: str, flag: str) -> None:
+    """Assert the echoed subscriber carries the exact url and active flag.
+
+    Spec: core/notification-config.json#/properties/{url,active}; the storyboard
+    grades subscriber url and active=false field_value checks.
+    """
+    subs = _echoed_subscribers(ctx)
+    match = _find_subscriber(subs, sub)
+    assert match is not None, f"No echoed subscriber {sub!r} in {subs!r}"
+    assert str(_sub_attr(match, "url")) == url, f"Expected url {url!r}, got {_sub_attr(match, 'url')!r}"
+    expected_active = flag == "true"
+    assert _sub_attr(match, "active") is expected_active, (
+        f"Expected active {expected_active}, got {_sub_attr(match, 'active')!r}"
+    )
+
+
+@then(parsers.parse('the echoed subscriber has event_types "{ets}"'))
+def then_echoed_subscriber_event_types(ctx: dict, ets: str) -> None:
+    """Assert the echoed subscriber's event_types equal the registered set, in order.
+
+    Spec: core/notification-config.json#/properties/event_types (minItems 1,
+    uniqueItems); the storyboard grades event_types[0]/[1] field_value checks.
+    """
+    subs = _echoed_subscribers(ctx)
+    assert subs, f"No echoed subscribers to check event_types on: {subs!r}"
+    expected = _parse_event_types(ets)
+    actual = [str(e) for e in (_sub_attr(subs[0], "event_types") or [])]
+    assert actual == expected, f"Expected event_types {expected}, got {actual}"
+
+
+@then(parsers.parse('the echoed subscriber\'s authentication object omits "{field}"'))
+def then_echoed_subscriber_auth_omits(ctx: dict, field: str) -> None:
+    """Assert the echoed authentication object does not carry the write-only field.
+
+    Spec: core/notification-config.json top-level — "Credentials and shared secrets
+    in authentication.credentials are write-only — sellers MUST NOT echo them back";
+    sync-accounts-response notification_configs — "authentication.credentials is
+    omitted on every entry (write-only)."
+
+    RESTORED with the branch that made it vacuous REMOVED (salesagent-n78j0.1.3). The
+    original returned early when no ``authentication`` object was echoed at all, which
+    is a pass for a response that echoed the credential under any OTHER key — and for a
+    response that echoed nothing, which is not what the Then claims. Both halves are now
+    graded: the named field is absent from the authentication object (empty when the
+    object is omitted, which legitimately satisfies "omits"), AND the registered
+    credential VALUE appears nowhere in the serialized subscriber. The value check is
+    what gives the step teeth on the omitted-object path, and it is the whole point of a
+    write-only rule.
+    """
+    subs = _echoed_subscribers(ctx)
+    assert subs, f"No echoed subscribers to check authentication on: {subs!r}"
+    subscriber = subs[0]
+    auth = _sub_attr(subscriber, "authentication")
+    if auth is None:
+        auth_dict: dict[str, Any] = {}
+    else:
+        auth_dict = auth if isinstance(auth, dict) else auth.model_dump(exclude_none=True)
+    assert field not in auth_dict, f"authentication echoed write-only {field!r}: {auth_dict!r}"
+
+    credential = ctx.get("notif_credential")
+    assert credential, (
+        "the When that registers a subscriber must record the credential it sent "
+        "(ctx['notif_credential']); without it this Then cannot tell an omitted "
+        "authentication object apart from a credential echoed under another key"
+    )
+    serialized = json.dumps(subscriber, default=str) if isinstance(subscriber, dict) else subscriber.model_dump_json()
+    assert credential not in serialized, (
+        f"the registered credential was echoed back in the subscriber document: {serialized!r}. "
+        "core/notification-config.json makes authentication.credentials write-only, which is a "
+        "statement about the WHOLE echoed document, not only about the field it was sent in."
+    )
+
+
+@then(
+    parsers.re(
+        r'the listed account for brand domain "(?P<domain>[^"]+)" echoes subscriber "(?P<sub>[^"]+)" '
+        r"with active (?P<flag>true|false)"
+    )
+)
+def then_listed_account_echoes_subscriber(ctx: dict, domain: str, sub: str, flag: str) -> None:
+    """Assert a list_accounts read-back echoes the persisted paused subscriber.
+
+    Spec: core/account.json carries notification_configs; paused entries MUST be
+    observable on the buyer's next read (core/notification-config.json#/properties/active:
+    "the buyer's next sync_accounts MUST observe the same array").
+    """
+    subs = _echoed_subscribers(ctx, domain=domain)
+    match = _find_subscriber(subs, sub)
+    assert match is not None, f"No echoed subscriber {sub!r} for listed account {domain!r}: {subs!r}"
+    expected_active = flag == "true"
+    assert _sub_attr(match, "active") is expected_active, (
+        f"Expected active {expected_active}, got {_sub_attr(match, 'active')!r}"
+    )
+
+
+# ── UC-011 notification_configs — final batch ──
+# event-scope-reject, duplicate-subscriber, activation-proof-fail, omit-preserves.
+# All four grade the account-level notification_configs surface. Graduated
+# (T2 increments F4a/F4b/F4c): _check_notification_configs runs pre-persist and
+# rejects media-buy-anchored event_types / duplicate subscriber_ids per entry;
+# SyncResponseAccount persists and echoes notification_configs; NotificationProofService
+# performs a bounded proof-of-control challenge before the write transaction opens.
+# Spec (v3.1.1): core/notification-config.json (event_types media-buy-anchored
+# rejection with INVALID_REQUEST/VALIDATION_ERROR at the event_types entry;
+# subscriber_id uniqueness rejection at the duplicate entry; active flag is
+# replaced per-subscriber state; proof-of-control before treating a new/changed
+# active subscriber as active); enums/error-code.json (INVALID_REQUEST and
+# VALIDATION_ERROR are canonical, recovery 'correctable').
+
+
+@given(
+    parsers.re(
+        r'an account for brand domain "(?P<domain>[^"]+)" exists with a paused notification config '
+        r'subscriber "(?P<sub>[^"]+)" for url "(?P<url>[^"]+)"'
+    )
+)
+def given_account_with_paused_notif_subscriber(ctx: dict, domain: str, sub: str, url: str) -> None:
+    """Pre-create an account carrying one PAUSED (active:false) notification subscriber.
+
+    F19: the omit-preserves Then asserts ``active false`` on the read-back, so the seed
+    MUST declare the paused state rather than lean on an undeclared fixture default.
+
+    Spec: core/notification-config.json#/properties/active — "When false, the seller
+    persists the configuration but suppresses fires"; the active flag is part of the
+    per-subscriber replaced state (#/properties/subscriber_id), so it must be declared
+    to be assertable on the echo.
+    """
+    _setup_tenant_and_principal(ctx)
+    cfg = _notif_config(sub, url, "creative.status_changed, creative.purged", active=False)
+    _dispatch_sync_notification(ctx, domain, [cfg])
+    ctx["notif_domain"] = domain
+    ctx["notif_prior"] = {"subscriber_id": sub, "url": url, "active": False}
+
+
+@when(
+    parsers.re(
+        r'the Buyer Agent sends a sync_accounts request provisioning brand domain "(?P<domain>[^"]+)" '
+        r'with a paused notification config subscriber "(?P<sub>[^"]+)" for url "(?P<url>[^"]+)" '
+        r'and event_types "(?P<ets>[^"]+)"'
+    )
+)
+def when_sync_provision_paused_subscriber_event_types(ctx: dict, domain: str, sub: str, url: str, ets: str) -> None:
+    """Provision an account with one paused subscriber whose event_types are under test.
+
+    The credential-free sibling of the ``…, and legacy Bearer authentication`` When
+    below: this variant carries only the event_types, so the scenarios that use it grade
+    event-scope rejection rather than credential handling.
+
+    Spec: core/notification-config.json#/properties/event_types — media-buy-anchored
+    types (scheduled, final, delayed, adjusted, impairment) "are invalid on this
+    surface; sellers MUST reject those entries as per-account validation failures with
+    INVALID_REQUEST or VALIDATION_ERROR and error.field pointing at the invalid
+    event_types entry rather than silently dropping them".
+    """
+    ctx["notif_domain"] = domain
+    cfg = _notif_config(sub, url, ets, active=False)
+    _dispatch_sync_notification(ctx, domain, [cfg])
+
+
+@when(
+    parsers.re(
+        r'the Buyer Agent sends a sync_accounts request provisioning brand domain "(?P<domain>[^"]+)" '
+        r'with a paused notification config subscriber "(?P<sub>[^"]+)" for url "(?P<url>[^"]+)", '
+        r'event_types "(?P<ets>[^"]+)", and legacy Bearer authentication'
+    )
+)
+def when_sync_provision_paused_subscriber(ctx: dict, domain: str, sub: str, url: str, ets: str) -> None:
+    """Provision an account with one paused (active:false) subscriber carrying legacy Bearer auth.
+
+    The authentication block (Bearer scheme + a 32-char write-only credential per
+    core/notification-config.json#/properties/authentication/properties/credentials)
+    gives the credentials-omitted echo assertion teeth: the input declares a
+    credential, so an echo that returns it is a real write-only leak.
+
+    RESTORED SIGNED (salesagent-n78j0.1.3). Registering a credential is exactly the
+    payload that forces a signature (security.mdx @ v3.1.1 :1462-1465), so the scenario
+    that uses this When declares ``the Buyer Agent signs the request`` — without it the
+    seller would (correctly) answer ``request_signature_required`` and the echo
+    assertions would never be reached. The step itself stays transport-blind: it does
+    not know what signing means on any leg, only that ``ctx["signed"]`` travels with the
+    dispatch.
+    """
+    ctx["notif_domain"] = domain
+    credential = "x" * 32
+    ctx["notif_credential"] = credential
+    auth = {"schemes": ["Bearer"], "credentials": credential}
+    cfg = _notif_config(sub, url, ets, active=False, authentication=auth)
+    _dispatch_sync_notification(ctx, domain, [cfg])
+
+
+@when(
+    parsers.re(
+        r'the Buyer Agent sends a sync_accounts request provisioning brand domain "(?P<domain>[^"]+)" '
+        r'with two notification config entries both using subscriber "(?P<sub>[^"]+)"'
+    )
+)
+def when_sync_provision_duplicate_subscriber(ctx: dict, domain: str, sub: str) -> None:
+    """Provision an account with two notification_configs entries sharing one subscriber_id.
+
+    Spec: core/notification-config.json#/properties/subscriber_id — "Sending two
+    entries with the same subscriber_id in a single sync_accounts request array is
+    rejected as a per-account validation failure with INVALID_REQUEST or
+    VALIDATION_ERROR, and error.field MUST point at the duplicate entry."
+    """
+    ctx["notif_domain"] = domain
+    first = _notif_config(sub, "https://buyer.example/webhooks/adcp/one", "creative.status_changed", active=False)
+    second = _notif_config(sub, "https://buyer.example/webhooks/adcp/two", "creative.purged", active=False)
+    _dispatch_sync_notification(ctx, domain, [first, second])
+
+
+@given(parsers.re(r'the webhook proof-of-control challenge for "(?P<url>[^"]+)" fails'))
+def given_proof_of_control_fails(ctx: dict, url: str) -> None:
+    """Force the seller's proof-of-control challenge for ``url`` to fail.
+
+    A REAL env seam, not a ctx intent marker: in process it overrides the
+    proof-of-control service so the challenge returns "not proven"; out of process
+    the seam is unreachable but unnecessary, because the URL sits under an RFC
+    2606/6761 reserved TLD (``.example``) and the real prover refuses those without
+    a DNS lookup. Both routes fail closed for the same reason, so the scenario
+    grades identical behaviour on every transport rather than depending on whether
+    the local resolver hijacks NXDOMAIN.
+
+    Spec: core/notification-config.json top-level — "Sellers MUST verify endpoint
+    control before activating a new or changed active account-level notification
+    config"; #/properties/active — "Reactivation requires full SSRF validation with
+    connect pinning plus proof-of-control".
+    """
+    ctx["proof_fail_url"] = url
+    ctx["env"].set_notification_proof_result(succeeds=False, url=url)
+
+
+@when(
+    parsers.re(
+        r'the Buyer Agent sends a sync_accounts request re-sending subscriber "(?P<sub>[^"]+)" '
+        r'as active with url "(?P<url>[^"]+)"'
+    )
+)
+def when_sync_resend_subscriber_active(ctx: dict, sub: str, url: str) -> None:
+    """Declarative replace: re-send the same subscriber_id as active (active:true).
+
+    Reactivating or changing an active subscriber's url MUST trigger the
+    proof-of-control challenge before the seller treats it as active; on challenge
+    failure the entry is rejected. Reuses the seed's event_types (declarative replace
+    carries the full desired entry).
+
+    Spec: sync-accounts-request.json notification_configs description — proof-of-control
+    "before treating a new or changed active subscriber as active"; on failure the
+    entry is rejected (action=failed) with VALIDATION_ERROR at notification_configs[0].url.
+    """
+    domain = ctx.get("notif_domain", "acme-corp.com")
+    cfg = _notif_config(sub, url, "creative.status_changed, creative.purged", active=True)
+    _dispatch_sync_notification(ctx, domain, [cfg])
+
+
+@then("the account keeps its prior notification_configs set unchanged")
+def then_account_keeps_prior_notif_set(ctx: dict) -> None:
+    """Assert the rejected activation left the prior persisted subscriber set intact.
+
+    On proof-of-control failure the seller rejects the entry and leaves the prior
+    notification_configs[] set unchanged — the buyer's read-back MUST still show the
+    original subscriber with its original url and active state (the Given's seed).
+
+    Spec: core/notification-config.json#/properties/active — "the buyer's next
+    sync_accounts MUST observe the same array".
+    """
+    prior = ctx.get("notif_prior")
+    assert prior is not None, "No prior notification_configs state recorded by the Given"
+    # Grade PERSISTENCE, not the failed result's echo. The response-schema presence
+    # rule covers created/updated/unchanged only, so a `failed` entry legitimately
+    # carries no notification_configs — asserting on its echo would grade an
+    # unmandated field and read as "prior set lost" on a correct implementation.
+    # The buyer's observable is the next read.
+    subs = _persisted_subscribers(ctx, domain=ctx.get("notif_domain"))
+    match = _find_subscriber(subs, prior["subscriber_id"])
+    assert match is not None, f"Prior subscriber {prior['subscriber_id']!r} missing from persisted set {subs!r}"
+    assert str(_sub_attr(match, "url")) == prior["url"], (
+        f"Prior url changed: expected {prior['url']!r}, got {_sub_attr(match, 'url')!r}"
+    )
+    assert _sub_attr(match, "active") is prior["active"], (
+        f"Prior active flag changed: expected {prior['active']!r}, got {_sub_attr(match, 'active')!r}"
+    )
+
+
+@then(parsers.re(r'the per-account errors array contains an error with code "(?P<code1>[^"]+)" or "(?P<code2>[^"]+)"'))
+def then_per_account_error_code_or(ctx: dict, code1: str, code2: str) -> None:
+    """Assert the failed account's errors contain either of two spec-permitted codes.
+
+    The spec permits INVALID_REQUEST OR VALIDATION_ERROR for these per-account
+    notification validation failures (core/notification-config.json event_types and
+    subscriber_id descriptions), so the scenario pins the disjunction. A dedicated
+    or-variant step is required because the greedy single-code binding
+    (then_per_account_error_code, ``code "{code}"`` via parse) would capture the
+    literal string 'INVALID_REQUEST" or "VALIDATION_ERROR' as one code and never match.
+
+    Spec: enums/error-code.json#/enum — both INVALID_REQUEST and VALIDATION_ERROR are
+    canonical members; #/enumMetadata — both carry recovery 'correctable'.
+    """
+    acct = ctx.get("last_account")
+    if acct is None:
+        acct = _require_response(ctx).accounts[0]
+        ctx["last_account"] = acct
+    assert acct.errors, f"Expected a non-empty per-account errors array, got {acct.errors!r}"
+    codes = [e.code for e in acct.errors]
+    assert code1 in codes or code2 in codes, f"Expected error code {code1!r} or {code2!r} in {codes}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2789,10 +4254,12 @@ def then_brandless_rejected_validation_error(ctx: dict) -> None:
     """The seller refuses a brandless entry as a correctable validation error.
 
     Two boundaries, one buyer contract (never accepted, never a 500):
-    - IMPL/A2A/REST: the request reaches _sync_accounts_impl (Accounts3 arm,
+    - A2A/REST: the request reaches _sync_accounts_impl (Accounts3 arm,
       brand=None); _extract_natural_key raises AdCPValidationError, so the
-      two-layer wire (A2A/REST) or synthesized (IMPL) envelope carries
-      code VALIDATION_ERROR with recovery=correctable.
+      two-layer wire envelope carries code VALIDATION_ERROR with
+      recovery=correctable. Graded through the canonical result surface;
+      the AdCPValidationError at accounts.py carries no errors[].field pointer,
+      so no field= is asserted (recovery defaults from the pinned enum).
     - MCP: the tool surface types accounts as list[Accounts] (brand required),
       so the FastMCP TypeAdapter rejects the brandless entry at the schema
       boundary before _impl, naming the missing 'brand' field.
@@ -2803,10 +4270,9 @@ def then_brandless_rejected_validation_error(ctx: dict) -> None:
     error = ctx.get("error")
     assert error is not None, "expected the brandless entry to be rejected with an error"
 
-    envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
-    if envelope is not None:
-        # Seller's own validation (IMPL/A2A/REST) → assert the two-layer AdCP envelope.
-        assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
+    if ctx.get("wire_error_envelope") is not None:
+        # Seller's own validation (A2A/REST) → assert the two-layer AdCP envelope.
+        ctx["result"].assert_wire_error("VALIDATION_ERROR", recovery="correctable")
     else:
         # MCP: the tool surface types accounts as list[Accounts] (brand required),
         # so FastMCP's TypeAdapter rejects the brandless dict at the schema
@@ -2819,3 +4285,344 @@ def then_brandless_rejected_validation_error(ctx: dict) -> None:
             f"expected a FastMCP ToolError at the MCP schema boundary, got {type(error).__name__}: {error}"
         )
         assert "brand" in str(error), f"MCP rejection must name the missing 'brand' field; got: {error}"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# UC-011 entry-field disposition (salesagent-gcze step 12)
+#
+# Grades the per-mode disposition of every settable entry field that no
+# scenario graded before, so the single field-policy table replacing the two
+# hand-maintained allowlists is written against the CONTRACT, not the code.
+#
+# Production trace (src/core/tools/accounts.py, verified in-process):
+#   - _account_fields_changed:418-424 compares
+#     _serialize_governance_agents(getattr(entry, "governance_agents", None))
+#     against the persisted value. Both request arms are extra="allow", so an
+#     OMITTED field reads None, None != db_gov, and changes["governance_agents"]
+#     = None reaches repo.update_fields -> the binding is WIPED by a re-sync that
+#     never mentioned governance. check_governance keys off that binding.
+#   - _process_settings_update_entry:806-818 builds `changes` for payment_terms
+#     and notification_configs ONLY. Entry-root `sandbox` parses on that arm
+#     (Accounts1.model_validate({"account": {...}, "sandbox": True}) succeeds) and
+#     is then silently ignored.
+#   - billing_entity: no DB column, no application site, and SyncResponseAccount
+#     declares no such field -- accepted on the wire, dropped, success returned.
+#   - preferred_reporting_protocol: same acceptance, and that is CORRECT (declared
+#     no-op); the scenario is a lock so it cannot become a rejection.
+#   - billing on a settings-update entry: the F1a mode-exclusivity guard
+#     (accounts.py:1076-1086) raises AdCPValidationError at the operation level
+#     BEFORE dispatch. Also a lock -- it is what earns that row `spec_forbidden`.
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _existing_account_id(ctx: dict) -> str:
+    """The account_id the ``already exists`` Given captured from its pre-create sync."""
+    account_id = ctx.get("original_field_values", {}).get("account_id")
+    assert account_id, "Given must pre-create an account and capture its account_id in original_field_values"
+    return account_id
+
+
+def _dispatch_entry(ctx: dict, entry: dict[str, Any]) -> None:
+    """Dispatch a one-entry sync_accounts request on the wire.
+
+    Single dispatch path for every field-disposition When below: they differ only
+    in the entry they submit, so a per-step copy of build/try/except would be the
+    duplication the DRY invariant bans.
+    """
+    from src.core.schemas.account import SyncAccountsRequest
+
+    try:
+        dispatch_request(ctx, req=SyncAccountsRequest(accounts=[entry]))
+    except Exception as exc:
+        ctx["error"] = exc
+
+
+def _listed_account(ctx: dict, domain: str) -> Any:
+    """The account with ``domain`` from the CURRENT list_accounts response.
+
+    Read-back legs assert on the typed list response rather than ``wire_dict``:
+    under AccountSyncEnv the list_accounts When is a documented transport bypass
+    (it calls _list_accounts_impl directly), so no success-path wire is stashed
+    and wire_dict would fail on harness wiring instead of on the obligation. The
+    sync legs, which DO go through the wire, assert on ``wire_dict``.
+    """
+    resp = _require_response(ctx)
+    accounts = getattr(resp, "accounts", None) or []
+    acct = next((a for a in accounts if getattr(a, "brand", None) and a.brand.domain == domain), None)
+    assert acct is not None, (
+        f"No listed account for brand domain {domain!r}; "
+        f"domains={[a.brand.domain for a in accounts if getattr(a, 'brand', None)]}"
+    )
+    return acct
+
+
+def _wire_account(ctx: dict, index: int = 0) -> dict[str, Any]:
+    """The per-account result at ``index`` on the success-path sync wire."""
+    body = wire_dict(ctx)
+    accounts = body.get("accounts")
+    assert isinstance(accounts, list) and len(accounts) > index, (
+        f"success wire body carries no accounts[{index}]: {body!r}"
+    )
+    acct = accounts[index]
+    assert isinstance(acct, dict), f"accounts[{index}] is not a JSON object on the wire: {acct!r}"
+    return acct
+
+
+# ── When: entry-field disposition dispatches ───────────────────────────
+
+
+@when(
+    "the Buyer Agent sends a sync_accounts request with a settings-update entry "
+    "keyed by the existing account's account_id carrying entry-root sandbox true"
+)
+def when_sync_settings_update_with_sandbox(ctx: dict) -> None:
+    """Dispatch a settings-update entry carrying entry-root ``sandbox: true``.
+
+    Schema-legal on this arm (``sandbox`` is absent from the SettingsUpdateMode
+    ``not:`` list) but scoped by its description to provisioning mode, and part of
+    the buyer-declared natural key -- honoring it would re-key the account.
+
+    Spec: account/sync-accounts-request.json#/properties/accounts/items/properties/sandbox/description;
+    core/account.json#/properties/sandbox ("sandbox is part of the natural key").
+    """
+    _dispatch_entry(ctx, {"account": {"account_id": _existing_account_id(ctx)}, "sandbox": True})
+
+
+@when(
+    parsers.parse(
+        "the Buyer Agent sends a sync_accounts request with a settings-update entry "
+        'keyed by the existing account\'s account_id carrying billing "{billing}"'
+    )
+)
+def when_sync_settings_update_with_billing(ctx: dict, billing: str) -> None:
+    """Dispatch a settings-update entry carrying ``billing`` and nothing else.
+
+    ``billing`` is MUST-be-absent on this arm ("billing is fixed at provisioning
+    time and cannot be changed via settings-update"), structurally enforced by the
+    item oneOf's SettingsUpdateMode ``allOf: [... {not: {required: ["billing"]}}]``.
+
+    Spec: account/sync-accounts-request.json#/properties/accounts/items/oneOf/1/allOf/2.
+    """
+    _dispatch_entry(ctx, {"account": {"account_id": _existing_account_id(ctx)}, "billing": billing})
+
+
+@when(
+    parsers.parse(
+        'the Buyer Agent sends a sync_accounts request provisioning brand domain "{domain}" '
+        'with a billing_entity legal_name "{legal_name}" and bank details'
+    )
+)
+def when_sync_provision_with_billing_entity(ctx: dict, domain: str, legal_name: str) -> None:
+    """Provision an account whose entry carries a full ``billing_entity``, bank included.
+
+    The bank block is DECLARED on purpose: the echo obligation is "bank details are
+    omitted (write-only)", so a response that returns them is a real leak rather
+    than a vacuously-absent optional. Built by BusinessEntityFactory, not a literal
+    dict, so the payload shape stays one definition.
+
+    Spec: account/sync-accounts-request.json#/properties/accounts/items/properties/billing_entity/description
+    ("Permitted in both modes"); core/business-entity.json#/properties/bank.
+    """
+    from tests.factories.account import BusinessEntityFactory
+
+    _setup_tenant_and_principal(ctx)
+    ctx["billing_entity_domain"] = domain
+    _dispatch_entry(
+        ctx,
+        {
+            "brand": {"domain": domain},
+            "operator": domain,
+            "billing": "operator",
+            "billing_entity": BusinessEntityFactory.build_payload(legal_name=legal_name),
+        },
+    )
+    resp = ctx.get("response")
+    if resp is not None and getattr(resp, "accounts", None):
+        ctx.setdefault("original_field_values", {})["account_id"] = resp.accounts[0].account_id
+
+
+@when(
+    parsers.parse(
+        "the Buyer Agent sends a sync_accounts request with a settings-update entry "
+        'keyed by the existing account\'s account_id refining billing_entity legal_name to "{legal_name}"'
+    )
+)
+def when_sync_settings_update_billing_entity(ctx: dict, legal_name: str) -> None:
+    """Refine ``billing_entity`` through the settings-update arm.
+
+    "Sellers MAY accept refinements in settings-update mode (e.g., updated bank
+    details)" -- the field is permitted in BOTH modes, so the same value must be
+    settable here as at provisioning time.
+
+    Spec: account/sync-accounts-request.json#/properties/accounts/items/properties/billing_entity/description.
+    """
+    from tests.factories.account import BusinessEntityFactory
+
+    _dispatch_entry(
+        ctx,
+        {
+            "account": {"account_id": _existing_account_id(ctx)},
+            "billing_entity": BusinessEntityFactory.build_payload(legal_name=legal_name),
+        },
+    )
+
+
+@when(
+    parsers.parse(
+        'the Buyer Agent sends a sync_accounts request provisioning brand domain "{domain}" '
+        'with preferred_reporting_protocol "{protocol}"'
+    )
+)
+def when_sync_provision_with_reporting_protocol(ctx: dict, domain: str, protocol: str) -> None:
+    """Provision an account whose entry carries the advisory reporting-protocol hint.
+
+    Spec: account/sync-accounts-request.json#/properties/accounts/items/properties/preferred_reporting_protocol
+    ("The seller provisions the account's reporting_bucket using this protocol IF
+    SUPPORTED ... When omitted, the seller chooses"); enums/cloud-storage-protocol.json
+    #/enum = ["s3","gcs","azure_blob"].
+    """
+    _setup_tenant_and_principal(ctx)
+    _dispatch_entry(
+        ctx,
+        {
+            "brand": {"domain": domain},
+            "operator": domain,
+            "billing": "operator",
+            "preferred_reporting_protocol": protocol,
+        },
+    )
+
+
+# ── Then: entry-field disposition assertions ───────────────────────────
+
+
+@then(parsers.parse('the listed account for brand domain "{domain}" binds governance agent "{url}"'))
+def then_listed_account_binds_governance_agent(ctx: dict, domain: str, url: str) -> None:
+    """Assert the persisted governance binding survived a sync that omitted it.
+
+    Read on the buyer-facing list_accounts echo (_db_account_to_schema already
+    carries governance_agents), because "the binding still exists" is only a
+    security property if the buyer can still observe it.
+
+    LOCAL EXTENSION: governance_agents is not a sync-accounts-request property
+    (the entry accepts it via additionalProperties only) and the spec's designated
+    surface is sync_governance -- so the obligation graded here is ours: omission
+    is not clearance, exactly as core/notification-config.json states for the one
+    field whose omission semantics the spec DOES define.
+    """
+    acct = _listed_account(ctx, domain)
+    agents = getattr(acct, "governance_agents", None) or []
+    urls = [str(a.get("url")) if isinstance(a, dict) else str(getattr(a, "url", None)) for a in agents]
+    assert urls == [url], (
+        f"governance binding for {domain!r} must survive a re-sync that omitted governance_agents; "
+        f"expected exactly ['{url}'], got {urls} (an omission-wipe is a governance BYPASS: "
+        f"check_governance keys off this binding)"
+    )
+
+
+@then(parsers.re(r'the listed account for brand domain "(?P<domain>[^"]+)" has sandbox (?P<flag>true|false)'))
+def then_listed_account_sandbox(ctx: dict, domain: str, flag: str) -> None:
+    """Assert the persisted sandbox flag, i.e. that the natural key was not re-keyed.
+
+    Spec: core/account.json#/properties/sandbox ("For buyer-declared accounts,
+    sandbox is part of the natural key"). A rejected settings-update entry must
+    leave it exactly as provisioned, or every later natural-key sync misses.
+    """
+    acct = _listed_account(ctx, domain)
+    expected = flag == "true"
+    actual = bool(getattr(acct, "sandbox", None))
+    assert actual is expected, f"Expected persisted sandbox {expected} for {domain!r}, got {actual}"
+
+
+@then(parsers.parse('the listed account for brand domain "{domain}" has billing "{billing}"'))
+def then_listed_account_billing(ctx: dict, domain: str, billing: str) -> None:
+    """Assert the persisted billing value is untouched by a rejected entry.
+
+    Spec: account/sync-accounts-request.json#/properties/accounts/items/properties/billing/description
+    ("billing is fixed at provisioning time and cannot be changed via settings-update").
+    """
+    acct = _listed_account(ctx, domain)
+    actual = _status_str(getattr(acct, "billing", None))
+    assert actual == billing, f"Expected persisted billing '{billing}' for {domain!r}, got '{actual}'"
+
+
+@then(parsers.parse('the echoed billing_entity legal_name is "{legal_name}"'))
+def then_echoed_billing_entity_legal_name(ctx: dict, legal_name: str) -> None:
+    """Assert the sync response echoes the submitted billing_entity, on the WIRE.
+
+    Spec: account/sync-accounts-response.json#/oneOf/0/properties/accounts/items/properties/billing_entity
+    ("Business entity details ... echoed from the request").
+    """
+    acct = _wire_account(ctx)
+    entity = acct.get("billing_entity")
+    assert isinstance(entity, dict), (
+        f"sync wire result carries no billing_entity object (got {entity!r}) -- the field was accepted "
+        f"on the request and never echoed; account={acct!r}"
+    )
+    assert entity.get("legal_name") == legal_name, (
+        f"Expected echoed billing_entity.legal_name '{legal_name}', got {entity.get('legal_name')!r}"
+    )
+
+
+@then(parsers.parse('the echoed billing_entity omits "{field}"'))
+def then_echoed_billing_entity_omits(ctx: dict, field: str) -> None:
+    """Assert a write-only billing_entity sub-object is absent from the sync WIRE.
+
+    Spec: account/sync-accounts-response.json#/oneOf/0/properties/accounts/items/properties/billing_entity
+    ("Bank details are omitted (write-only)"); core/account.json#/properties/billing_entity
+    ("When this account appears in a response, bank details MUST be omitted").
+    """
+    acct = _wire_account(ctx)
+    entity = acct.get("billing_entity")
+    assert isinstance(entity, dict), (
+        f"sync wire result carries no billing_entity object (got {entity!r}); account={acct!r}"
+    )
+    assert field not in entity, f"billing_entity echoed write-only {field!r}: {entity!r}"
+
+
+@then(parsers.parse('the listed account for brand domain "{domain}" echoes billing_entity legal_name "{legal_name}"'))
+def then_listed_billing_entity_legal_name(ctx: dict, domain: str, legal_name: str) -> None:
+    """Assert billing_entity was PERSISTED, not merely echoed from the request.
+
+    The list read-back is the leg that separates "stored" from "reflected": a
+    handler that echoed the submitted object without a column would pass the sync
+    assertion and fail here.
+
+    Spec: core/account.json#/properties/billing_entity.
+    """
+    acct = _listed_account(ctx, domain)
+    entity = getattr(acct, "billing_entity", None)
+    assert entity is not None, (
+        f"listed account {domain!r} carries no billing_entity -- the field was accepted on the wire and never persisted"
+    )
+    actual = entity.get("legal_name") if isinstance(entity, dict) else getattr(entity, "legal_name", None)
+    assert actual == legal_name, f"Expected persisted billing_entity.legal_name '{legal_name}', got {actual!r}"
+    ctx["listed_billing_entity"] = entity
+
+
+@then(parsers.parse('the listed billing_entity omits "{field}"'))
+def then_listed_billing_entity_omits(ctx: dict, field: str) -> None:
+    """Assert the list_accounts echo also strips the write-only bank block.
+
+    Spec: core/account.json#/properties/billing_entity ("When this account appears
+    in a response, bank details MUST be omitted (write-only)") -- "a response",
+    not "the sync response", so list_accounts is bound by the same rule.
+    """
+    entity = ctx.get("listed_billing_entity")
+    assert entity is not None, "No listed billing_entity referenced -- needs the legal_name Then first"
+    value = entity.get(field) if isinstance(entity, dict) else getattr(entity, field, None)
+    assert value is None, f"listed billing_entity echoed write-only {field!r}: {value!r}"
+
+
+@then("the per-account result carries no errors")
+def then_per_account_result_no_errors(ctx: dict) -> None:
+    """Assert a successfully-provisioned account carries an empty per-account errors[].
+
+    Spec: account/sync-accounts-response.json#/oneOf/0/properties/accounts/items/properties/errors
+    ("only present when action is 'failed'"). This is what makes an unhonored
+    advisory hint a DECLARED no-op rather than a silent rejection: there is no
+    channel to advise on a successful account, so acceptance is the contract.
+    """
+    acct = ctx.get("last_account") or _require_response(ctx).accounts[0]
+    errors = getattr(acct, "errors", None)
+    assert not errors, f"Expected no per-account errors on a successful account, got {errors!r}"

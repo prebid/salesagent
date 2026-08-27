@@ -97,7 +97,7 @@ class TestRequireAccountAccessFalsyPrincipal:
     """_require_account_access must fail CLOSED on a falsy principal_id (hl35).
 
     The helper is an access-authorization decision. It must reject a missing
-    principal (AUTH_REQUIRED) on its own, independent of any caller-side guard —
+    principal (AUTH_MISSING) on its own, independent of any caller-side guard —
     never fall through and grant access because the truthiness check short-circuits.
 
     This drives the helper DIRECTLY (not via resolve_account) so it grades the
@@ -106,7 +106,7 @@ class TestRequireAccountAccessFalsyPrincipal:
 
     @pytest.mark.parametrize("falsy_principal", ["", None], ids=["empty_string", "none"])
     def test_helper_rejects_falsy_principal_on_wire(self, integration_db, falsy_principal):
-        """_require_account_access('' / None) → AUTH_REQUIRED/correctable on the wire."""
+        """_require_account_access('' / None) → AUTH_MISSING/correctable on the wire."""
         from tests.factories import AgentAccountAccessFactory, PrincipalFactory, TenantFactory
 
         with _AccountResolutionEnv() as env:
@@ -130,7 +130,7 @@ class TestRequireAccountAccessFalsyPrincipal:
 
             assert_envelope_shape(
                 build_two_layer_error_envelope(exc_info.value),
-                "AUTH_REQUIRED",
+                "AUTH_MISSING",
                 recovery="correctable",
             )
 
@@ -141,12 +141,12 @@ class TestResolveAccountFalsyPrincipalEntryGuard:
     Grades the entry-level guard: with a falsy (esp. None) principal, the
     natural-key path must not run its scoped list/count query and disclose a
     tenant-wide match/ambiguity count before rejecting. resolve_account must fail
-    CLOSED with AUTH_REQUIRED/correctable up front.
+    CLOSED with AUTH_MISSING/correctable up front.
     """
 
     @pytest.mark.parametrize("falsy_principal", ["", None], ids=["empty_string", "none"])
     def test_resolve_account_rejects_falsy_principal_on_wire(self, integration_db, falsy_principal):
-        """resolve_account(natural_key, '' / None) → AUTH_REQUIRED/correctable on the wire."""
+        """resolve_account(natural_key, '' / None) → AUTH_MISSING/correctable on the wire."""
         from tests.factories import AccountFactory, AgentAccountAccessFactory, PrincipalFactory, TenantFactory
 
         with _AccountResolutionEnv() as env:
@@ -154,7 +154,7 @@ class TestResolveAccountFalsyPrincipalEntryGuard:
             # A real account that MATCHES the natural key below, with access for a
             # good principal. A None principal would otherwise skip the access join
             # and match this account tenant-wide (fail-open); '' would fail-closed
-            # to ACCOUNT_NOT_FOUND — neither is the AUTH_REQUIRED the buyer must see.
+            # to ACCOUNT_NOT_FOUND — neither is the AUTH_MISSING the buyer must see.
             account = AccountFactory(
                 tenant=tenant,
                 brand=BrandReference(domain="acme.example"),
@@ -177,7 +177,7 @@ class TestResolveAccountFalsyPrincipalEntryGuard:
 
             assert_envelope_shape(
                 build_two_layer_error_envelope(exc_info.value),
-                "AUTH_REQUIRED",
+                "AUTH_MISSING",
                 recovery="correctable",
             )
 

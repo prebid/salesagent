@@ -20,25 +20,11 @@ beads: beads-y9k
 from __future__ import annotations
 
 import ast
-from pathlib import Path
 
 import pytest
 
 from tests.unit._architecture_helpers import iter_call_expressions
-
-_BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
-
-
-def _is_then_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """Check if function is decorated with @then(...)."""
-    for dec in func.decorator_list:
-        if isinstance(dec, ast.Call):
-            func_node = dec.func
-            if isinstance(func_node, ast.Name) and func_node.id == "then":
-                return True
-        if isinstance(dec, ast.Name) and dec.id == "then":
-            return True
-    return False
+from tests.unit._bdd_guard_helpers import iter_bdd_steps
 
 
 def _assert_is_meaningful(assert_node: ast.Assert) -> bool:
@@ -121,24 +107,11 @@ def _has_meaningful_assertion_or_delegation(func: ast.FunctionDef | ast.AsyncFun
 
 def _scan_bdd_steps() -> list[str]:
     """Find Then steps with only trivial assertions."""
-    violations = []
-
-    for py_file in sorted(_BDD_STEPS_DIR.rglob("*.py")):
-        if py_file.name.startswith("_"):
-            continue
-        source = py_file.read_text()
-        tree = ast.parse(source, filename=str(py_file))
-        relative = py_file.relative_to(_BDD_STEPS_DIR.parent.parent)
-
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            if not _is_then_decorated(node):
-                continue
-            if not _has_meaningful_assertion_or_delegation(node):
-                violations.append(f"{relative}:{node.lineno} {node.name}")
-
-    return violations
+    return [
+        step.key
+        for step in iter_bdd_steps(step_names=("then",))
+        if not _has_meaningful_assertion_or_delegation(step.node)
+    ]
 
 
 class TestBddNoTrivialAssertions:

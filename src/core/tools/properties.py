@@ -24,6 +24,7 @@ from src.core.schemas import ListAuthorizedPropertiesRequest, ListAuthorizedProp
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
+from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 from src.core.validation_helpers import safe_parse_json_field
 
 logger = logging.getLogger(__name__)
@@ -212,6 +213,12 @@ async def list_authorized_properties(
     Returns:
         ToolResult with human-readable text and structured data.
     """
+    # FIXME(#1882): this wrapper constructs the request OUTSIDE
+    # adcp_validation_boundary, unlike its A2A and REST siblings which are already
+    # boundary-wrapped. So a malformed argument surfaces as a pydantic error shaped by
+    # FastMCP rather than as the AdCP envelope the boundary emits. Allowlisted in
+    # tests/unit/test_architecture_request_construction_boundary.py::ALLOWLIST_DEFERRED;
+    # remove both together.
     req = ListAuthorizedPropertiesRequest(
         publisher_domains=publisher_domains,
         property_tags=property_tags,
@@ -226,7 +233,7 @@ async def list_authorized_properties(
 def list_authorized_properties_raw(
     req: "ListAuthorizedPropertiesRequest" = None,
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ) -> "ListAuthorizedPropertiesResponse":
     """List all properties this agent is authorized to represent (raw function for A2A server use).
 
@@ -240,8 +247,5 @@ def list_authorized_properties_raw(
     Returns:
         ListAuthorizedPropertiesResponse with authorized properties
     """
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx, require_valid_token=False)
+    identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=False)
     return _list_authorized_properties_impl(req, identity)

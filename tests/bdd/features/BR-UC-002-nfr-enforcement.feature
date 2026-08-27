@@ -38,7 +38,7 @@ Feature: BR-UC-002 NFR Enforcement (restructured)
     # matching the 13 sibling UCs that already assert the suggestion on auth
     # errors. Routes through each transport's REAL auth gate (A2A
     # on_message_send no-token gate, REST _require_auth_dep, MCP boundary).
-    And the error code should be "AUTH_REQUIRED"
+    And the error code should be "AUTH_MISSING"
     And the suggestion should contain "credentials"
     And no adapter calls should have been made
 

@@ -14,12 +14,10 @@ beads: beads-m6r
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterator
-from pathlib import Path
 
 import pytest
 
-_BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
+from tests.unit._bdd_guard_helpers import iter_bdd_steps
 
 # Threshold: flag when N or more functions share the same body
 _DUPLICATE_THRESHOLD = 3
@@ -33,19 +31,6 @@ _DUPLICATE_THRESHOLD = 3
 # request contract (pinned 04f59d2d5), and the e2e-harness wiring implemented the
 # remaining steps. No pass-body stubs remain, so the allowlist is empty.
 _ALLOWED_DUPLICATES: set[str] = set()
-
-
-def _is_step_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """Check if function is decorated with @given, @when, or @then."""
-    step_names = {"given", "when", "then"}
-    for dec in func.decorator_list:
-        if isinstance(dec, ast.Call):
-            func_node = dec.func
-            if isinstance(func_node, ast.Name) and func_node.id in step_names:
-                return True
-        if isinstance(dec, ast.Name) and dec.id in step_names:
-            return True
-    return False
 
 
 def _normalize_body(func: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
@@ -71,18 +56,6 @@ def _normalize_body(func: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
     return ast.dump(ast.Module(body=stmts, type_ignores=[]))
 
 
-def _iter_step_functions() -> Iterator[tuple[ast.FunctionDef | ast.AsyncFunctionDef, str, int]]:
-    """Yield (step_func_node, repo_relative_path, lineno) for every @given/@when/@then under bdd/steps/."""
-    for py_file in sorted(_BDD_STEPS_DIR.rglob("*.py")):
-        if py_file.name.startswith("_"):
-            continue
-        tree = ast.parse(py_file.read_text(), filename=str(py_file))
-        relative = str(py_file.relative_to(_BDD_STEPS_DIR.parent.parent))
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_step_decorated(node):
-                yield node, relative, node.lineno
-
-
 def _scan_bdd_steps() -> list[tuple[str, list[str]]]:
     """Find groups of step functions with identical bodies.
 
@@ -91,12 +64,11 @@ def _scan_bdd_steps() -> list[tuple[str, list[str]]]:
     """
     body_to_funcs: dict[str, list[str]] = {}
 
-    for node, relative, lineno in _iter_step_functions():
-        if node.name in _ALLOWED_DUPLICATES:
+    for step in iter_bdd_steps():
+        if step.name in _ALLOWED_DUPLICATES:
             continue
-        body_key = _normalize_body(node)
-        loc = f"{relative}:{lineno} {node.name}"
-        body_to_funcs.setdefault(body_key, []).append(loc)
+        body_key = _normalize_body(step.node)
+        body_to_funcs.setdefault(body_key, []).append(step.key)
 
     return [(key[:80], funcs) for key, funcs in body_to_funcs.items() if len(funcs) >= _DUPLICATE_THRESHOLD]
 
@@ -134,7 +106,7 @@ class TestBddNoDuplicateSteps:
         load-bearing for the 3+ identical-body scan. Non-load-bearing audit:
         #1561.
         """
-        step_names = {node.name for node, _, _ in _iter_step_functions()}
+        step_names = {step.name for step in iter_bdd_steps()}
         missing = sorted(name for name in _ALLOWED_DUPLICATES if name not in step_names)
         assert not missing, (
             f"Stale _ALLOWED_DUPLICATES entries ({len(missing)}) — step removed/renamed, "

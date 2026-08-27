@@ -198,16 +198,17 @@ class TestMcpWireErrorEnvelope:
         assert "past" in msg_lower or "start" in msg_lower, past_or_start_msg
 
     def test_get_media_buy_delivery_missing_identity_emits_auth_envelope_on_wire(self, integration_db):
-        """Missing identity in get_media_buy_delivery surfaces AUTH_REQUIRED on the MCP wire.
+        """Missing identity in get_media_buy_delivery surfaces AUTH_MISSING on the MCP wire.
 
         Flow:
             Client(mcp).call_tool("get_media_buy_delivery", {...}) with identity=None
               → MCP wrapper resolve_identity returns None
               → _get_media_buy_delivery_impl raises AdCPAuthRequiredError("Authentication required...")
-              → AdCPAuthRequiredError carries error_code="AUTH_REQUIRED" (passthrough STANDARD code)
+              → AdCPAuthRequiredError carries error_code="AUTH_MISSING" per v3.1.1
+                error-code.json (absent credential, salesagent-mkso)
               → with_error_logging → _translate_to_tool_error → wire envelope
 
-        AUTH_REQUIRED is a STANDARD spec code — passes through unchanged.
+        AUTH_MISSING is a pinned-spec supplement code — passes through unchanged.
         """
         is_error, envelope = call_mcp_tool_capturing_envelope(
             "get_media_buy_delivery",
@@ -218,9 +219,9 @@ class TestMcpWireErrorEnvelope:
         assert is_error, "Missing identity must produce a tool error"
         assert envelope is not None, "Error must include content text carrying the envelope"
 
-        # AdCPAuthRequiredError -> AUTH_REQUIRED (AdCP 3.1 spec code, passed through unchanged).
-        # Recovery is correctable per the pinned error-code enum (#1417).
-        assert_envelope_shape(envelope, "AUTH_REQUIRED", recovery="correctable")
+        # AdCPAuthRequiredError -> AUTH_MISSING (AdCP 3.1.1 spec code, passed through unchanged).
+        # Recovery is correctable per the pinned error-code enum (#1417; salesagent-mkso).
+        assert_envelope_shape(envelope, "AUTH_MISSING", recovery="correctable")
         assert "identity" in envelope["adcp_error"]["message"].lower() or (
             "auth" in envelope["adcp_error"]["message"].lower()
         ), f"Envelope message must mention identity/auth, got: {envelope['adcp_error']['message']}"

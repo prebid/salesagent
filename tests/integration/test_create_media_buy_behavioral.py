@@ -418,12 +418,19 @@ class TestCreativeUploadFailure:
             env.setup_product_chain(tenant)
             # Creative exists, no platform_creative_id, with extractable url/dimensions
             # so _build_adapter_asset_from_creative succeeds and the upload runs.
+            # status is load-bearing: media_buy_create.py holds pending_review creatives
+            # back from the adapter upload (#1038), so the upload this test exercises only
+            # runs for a creative that is NOT pending_review. It used to run by accident —
+            # CreativeFactory defaulted to the non-spec "pending", which fell through to
+            # the upload branch. Now that the factory writes a real AdCP status, the state
+            # this test needs has to be stated (salesagent-zm5l).
             CreativeFactory(
                 tenant=tenant,
                 principal=principal,
                 creative_id="creative_no_platform",
                 format="display_300x250",
                 agent_url="https://creative.adcontextprotocol.org",
+                status="approved",
                 data={"url": "https://example.com/ad.jpg", "width": 300, "height": 250},
             )
 
@@ -894,7 +901,7 @@ class TestMainFlowObligations:
         with pytest.raises(AdCPAuthenticationError, match="Principal ID not found") as exc_info:
             await _create_media_buy_impl(req=req, identity=identity)
 
-        assert exc_info.value.error_code == "AUTH_REQUIRED"
+        assert exc_info.value.error_code == "AUTH_MISSING"
 
     @pytest.mark.asyncio
     async def test_tenant_setup_validation(self):
@@ -1081,7 +1088,7 @@ class TestPreconditionObligations:
         with pytest.raises(AdCPAuthenticationError, match="Authentication required") as exc_info:
             await _create_media_buy_impl(req=req, identity=None)
 
-        assert exc_info.value.error_code == "AUTH_REQUIRED"
+        assert exc_info.value.error_code == "AUTH_MISSING"
 
 
 class TestAsapStartTimingObligations:
@@ -1332,6 +1339,37 @@ class TestInlineCreativeObligations:
             )
 
         assert exc_info.value.error_code == "VALIDATION_ERROR"
+
+    @pytest.mark.asyncio
+    async def test_malformed_registered_agent_url_skipped_not_hard_failed(self, integration_db):
+        """A malformed PRE-EXISTING registered creative agent_url (admin-ingested
+        data the buyer never touched) is excluded from registration matching
+        with a log, rather than hard-failing every format_id in the request.
+
+        Covers #1291.
+        """
+        from src.core.tools.media_buy_create import _validate_and_convert_format_ids
+        from tests.factories import CreativeAgentFactory
+
+        with _env() as env:
+            tenant, _principal = env.setup_default_data()
+            # Well-formed registration the buyer's format_id should match.
+            CreativeAgentFactory(tenant=tenant, agent_url="https://creative.example.com", enabled=True)
+            # Malformed pre-existing registration -- bypasses admin-ingestion
+            # validation entirely by writing directly to the DB, which is
+            # exactly how such a row would already exist in production.
+            CreativeAgentFactory(tenant=tenant, agent_url="https://exämple.com", enabled=True)
+
+            # No get_format mocking needed: ADCP_TESTING=true (autouse fixture)
+            # makes CreativeAgentRegistry serve the checked-in reference formats
+            # for any agent_url, so this exercises the real registry lookup.
+            result = await _validate_and_convert_format_ids(
+                format_ids=[{"agent_url": "https://creative.example.com", "id": "display_300x250_image"}],
+                tenant_id=tenant.tenant_id,
+                package_idx=0,
+            )
+
+        assert result == [{"agent_url": "https://creative.example.com", "id": "display_300x250_image"}]
 
     @pytest.mark.asyncio
     async def test_unapproved_creatives_may_trigger_manual_approval(self):
@@ -1650,7 +1688,7 @@ class TestExtensionObligations:
                     )
 
                 assert "not registered" in str(exc_info.value).lower()
-                assert exc_info.value.error_code == "AUTH_REQUIRED"
+                assert exc_info.value.error_code == "PERMISSION_DENIED"
 
     @pytest.mark.asyncio
     async def test_format_not_found_on_agent(self):
@@ -1696,7 +1734,7 @@ class TestExtensionObligations:
         with pytest.raises(AdCPAuthenticationError, match="Authentication required") as exc_info:
             await _create_media_buy_impl(req=req, identity=None)
 
-        assert exc_info.value.error_code == "AUTH_REQUIRED"
+        assert exc_info.value.error_code == "AUTH_MISSING"
 
         # Identity with no principal_id -> requires authentication
 
@@ -1710,7 +1748,7 @@ class TestExtensionObligations:
         with pytest.raises(AdCPAuthenticationError, match="Principal ID not found") as exc_info:
             await _create_media_buy_impl(req=req, identity=identity_no_principal)
 
-        assert exc_info.value.error_code == "AUTH_REQUIRED"
+        assert exc_info.value.error_code == "AUTH_MISSING"
 
     def test_no_database_record_on_adapter_failure(self, integration_db):
         """When adapter fails, no database records are created.

@@ -131,6 +131,7 @@ class TestCreativeAgentRegistry:
         # Mock ADCPMultiAgentClient
         mock_client = Mock()
         mock_agent_client = Mock()
+        mock_agent_client.signing = None
 
         # Mock format data as dicts (as returned by adcp library)
         # Using spec-compliant renders array for dimensions (not top-level dimensions field)
@@ -183,6 +184,7 @@ class TestCreativeAgentRegistry:
         # Mock async submission response
         mock_client = Mock()
         mock_agent_client = Mock()
+        mock_agent_client.signing = None
 
         mock_result = Mock()
         mock_result.status = "submitted"
@@ -214,6 +216,7 @@ class TestCreativeAgentRegistry:
         # Mock authentication error
         mock_client = Mock()
         mock_agent_client = Mock()
+        mock_agent_client.signing = None
 
         auth_error = ADCPAuthenticationError("Invalid credentials")
         mock_agent_client.list_creative_formats = AsyncMock(side_effect=auth_error)
@@ -240,6 +243,7 @@ class TestCreativeAgentRegistry:
         # Mock timeout error
         mock_client = Mock()
         mock_agent_client = Mock()
+        mock_agent_client.signing = None
 
         timeout_error = ADCPTimeoutError(
             message="Request timed out",
@@ -271,6 +275,7 @@ class TestCreativeAgentRegistry:
         # Mock connection error
         mock_client = Mock()
         mock_agent_client = Mock()
+        mock_agent_client.signing = None
 
         conn_error = ADCPConnectionError("Connection refused")
         mock_agent_client.list_creative_formats = AsyncMock(side_effect=conn_error)
@@ -297,6 +302,7 @@ class TestCreativeAgentRegistry:
         # Use a real library Format object (as returned by adcp client)
         mock_client = Mock()
         mock_agent_client = Mock()
+        mock_agent_client.signing = None
 
         library_format = LibraryFormat(
             format_id={"agent_url": "https://test-agent.example.com/mcp", "id": "display_300x250"},

@@ -69,6 +69,7 @@ class TestFetchFormatsAnomalousStatusesMustRaise:
         mock_result.data = None
 
         mock_agent_proxy = MagicMock()
+        mock_agent_proxy.signing = None
         mock_agent_proxy.list_creative_formats = AsyncMock(return_value=mock_result)
         mock_client = MagicMock()
         mock_client.agent.return_value = mock_agent_proxy
@@ -84,6 +85,7 @@ class TestFetchFormatsAnomalousStatusesMustRaise:
         mock_result.submitted = None
 
         mock_agent_proxy = MagicMock()
+        mock_agent_proxy.signing = None
         mock_agent_proxy.list_creative_formats = AsyncMock(return_value=mock_result)
         mock_client = MagicMock()
         mock_client.agent.return_value = mock_agent_proxy
@@ -98,6 +100,7 @@ class TestFetchFormatsAnomalousStatusesMustRaise:
         mock_result.status = "working"
 
         mock_agent_proxy = MagicMock()
+        mock_agent_proxy.signing = None
         mock_agent_proxy.list_creative_formats = AsyncMock(return_value=mock_result)
         mock_client = MagicMock()
         mock_client.agent.return_value = mock_agent_proxy
@@ -151,6 +154,7 @@ class TestListAllFormatsErrorPropagation:
         mock_result.message = None
 
         mock_agent_proxy = MagicMock()
+        mock_agent_proxy.signing = None
         mock_agent_proxy.list_creative_formats = AsyncMock(return_value=mock_result)
         mock_client = MagicMock()
         mock_client.agent.return_value = mock_agent_proxy

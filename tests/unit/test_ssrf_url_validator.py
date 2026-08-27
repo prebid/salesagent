@@ -2,7 +2,6 @@
 
 Covers:
 - check_url_ssrf: core validator used across signals agents, webhooks, property lists
-- validate_agent_url: media_buy_create wrapper
 - BLOCKED_HOSTNAMES: Docker-internal and cloud metadata hostname coverage
 - Flask endpoint-level wiring for signals agents add/edit handlers
 """
@@ -148,52 +147,6 @@ class TestBlockedHostnames:
 
     def test_aws_metadata_ip_in_blocked_hostnames(self):
         assert "169.254.169.254" in BLOCKED_HOSTNAMES
-
-
-class TestValidateAgentUrl:
-    """validate_agent_url in media_buy_create validates format only (scheme + netloc).
-
-    This function is called during approval processing against URLs already stored
-    in the database, not against live user input. It validates structure, not
-    network safety. SSRF protection for user-supplied URLs is enforced at the
-    admin ingestion boundary in signals_agents.py via check_url_ssrf().
-    """
-
-    def test_none_rejected(self):
-        from src.core.tools.media_buy_create import validate_agent_url
-
-        assert validate_agent_url(None) is False
-
-    def test_empty_string_rejected(self):
-        from src.core.tools.media_buy_create import validate_agent_url
-
-        assert validate_agent_url("") is False
-
-    def test_public_https_url_accepted(self):
-        from src.core.tools.media_buy_create import validate_agent_url
-
-        assert validate_agent_url("https://creatives.example.com/agent") is True
-
-    def test_public_http_url_accepted(self):
-        from src.core.tools.media_buy_create import validate_agent_url
-
-        assert validate_agent_url("http://creatives.example.com/agent") is True
-
-    def test_non_http_scheme_rejected(self):
-        from src.core.tools.media_buy_create import validate_agent_url
-
-        assert validate_agent_url("ftp://creatives.example.com") is False
-
-    def test_missing_netloc_rejected(self):
-        from src.core.tools.media_buy_create import validate_agent_url
-
-        assert validate_agent_url("https://") is False
-
-    def test_unresolvable_hostname_accepted(self):
-        """Format validation does not do DNS resolution — offline services are structurally valid."""
-        from src.core.tools.media_buy_create import validate_agent_url
-
-        assert validate_agent_url("https://not-deployed-yet.internal.example.com/agent") is True
 
 
 def _make_signals_agent_client():

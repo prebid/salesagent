@@ -135,3 +135,26 @@ tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url
 tests/bdd/test_uc018_list_creatives.py::test_brrule034_inv1_counter__crossprincipal_creatives_never_visible[e2e_rest]
 tests/bdd/test_uc018_list_creatives.py::test_brrule034_inv1_holds__query_always_scoped_by_principal[e2e_rest]
 tests/bdd/test_uc018_list_creatives.py::test_list_creatives_filtered_by_concept_ids_returns_only_creatives_in_that_concept_carrying_concept_id_and_concept_name[e2e_rest]
+
+
+
+# UC-010 capability-degradation scenarios (eiww batches chbi/tmpd) — RESOLVED
+# 2026-07-24 (salesagent-689e). The 6 entries formerly here split per the
+# ledger's own header doctrine (mock-injection-only entries belong at the
+# env seam, not this ledger):
+#   - 3 adapter-state scenarios (adapter_fail, adapter_unavailable_defaults,
+#     nested_absent) now GRADUATE: CapabilitiesEnv.make_adapter_unavailable /
+#     set_targeting_capabilities persist AdapterConfig.config_json[
+#     "test_behavior"] over e2e (tests/harness/capabilities.py), read by
+#     get_adapter_class_for_tenant / get_targeting_capabilities_override
+#     (src/core/helpers/adapter_helpers.py) — a real production fault-
+#     injection surface, not a harness-only mock. They now pass on e2e_rest.
+#   - 3 DB-failure scenarios (schemavalid, adapter_and_db_fail, db_fail) move
+#     to an env-level E2EUnsupportedSetup declaration —
+#     CapabilitiesEnv.break_tenant_config_db (tests/harness/capabilities.py)
+#     — no production DB fault hook exists to inject a TenantConfigUoW read
+#     failure over real HTTP. Surfaced as xfail by the conftest report hook,
+#     pinned in EXPECTED_UNSUPPORTED_DECLARATIONS
+#     (test_architecture_e2e_rest_escape_hatches.py), not listed here.
+#   - set_adapter_channels stays in-process-only (e2e_unsupported): no
+#     production test_behavior channel overrides reported default_channels.

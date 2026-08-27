@@ -20,7 +20,11 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps._outcome_helpers import is_e2e
-from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal, seed_account_with_access
+from tests.bdd.steps.generic._account_resolution import (
+    ensure_tenant_principal,
+    seed_account_with_access,
+    seed_natural_key_matches,
+)
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.creative_asset import (
     assert_assets,
@@ -214,18 +218,17 @@ def _setup_account_by_natural_key(brand_domain: str, operator: str, tenant: obje
     access_denied_domains = {"other-agent.com"}
 
     if brand_domain == "multi.com":
-        # Ambiguous: create 3 accounts with same natural key, all accessible to the
-        # requesting agent so ambiguity is genuine FOR THIS AGENT — natural-key
-        # resolution is access-scoped (#1417).
-        for i in range(3):
-            seed_account_with_access(
-                tenant,
-                principal,
-                account_id=f"acc-multi-{i}",
-                status="active",
-                brand_domain=brand_domain,
-                operator=operator,
-            )
+        # Ambiguous: 3 accounts one brand+operator reference all resolve to, each
+        # accessible to the requesting agent so the ambiguity is genuine FOR THIS
+        # AGENT — natural-key resolution is access-scoped (#1417).
+        seed_natural_key_matches(
+            tenant,
+            count=3,
+            brand_domain=brand_domain,
+            operator=operator,
+            owner_for_index=lambda _i: principal,
+            account_id_prefix="acc-multi",
+        )
     elif brand_domain in ("unknown.com",):
         # Not found — don't create anything
         pass
@@ -275,10 +278,15 @@ def when_sync_creative(ctx: dict) -> None:
     Honors ``ctx["has_auth"] is False`` by passing ``identity=ctx["identity"]``
     (typically None or a principal-less identity) so the auth boundary check
     in _sync_creatives_impl fires.
+
+    ``ctx["signed"]`` asks for a REAL RFC 9421 signature on this dispatch
+    (salesagent-n78j0.1.3). It is forwarded rather than branched on: what a signature
+    IS on each transport belongs to the dispatcher, and defaulting to False keeps
+    every existing scenario byte-identical.
     """
     account_ref = ctx.get("account_ref")
     creatives = ctx.get("creatives", [])
-    kwargs: dict = {"account": account_ref, "creatives": creatives}
+    kwargs: dict = {"account": account_ref, "creatives": creatives, "signed": ctx.get("signed", False)}
     if "assignments" in ctx:
         kwargs["assignments"] = ctx["assignments"]
     if "validation_mode" in ctx:
@@ -1928,15 +1936,21 @@ def given_principal_no_associated_tenant(ctx: dict) -> None:
 def _assert_auth_rejection(ctx: dict, expected_code: str) -> None:
     """Assert the sync was rejected with the spec-named auth error code.
 
-    Production emits the standard AUTH_REQUIRED for authentication failures,
-    matching the spec.
+    Wire-first, reconstructed fallback (tests/CLAUDE.md Error Verification
+    Policy) — consolidated onto the same strategy as the canonical
+    ``then_error.py:340`` step. Production splits authentication failures
+    into AUTH_MISSING (absent credential, correctable) / AUTH_INVALID
+    (presented-but-rejected credential, terminal) per v3.1.1
+    error-code.json (salesagent-mkso).
     """
-    error = ctx.get("error")
-    assert error is not None, f"Expected {expected_code} error but got response: {ctx.get('response')}"
-    actual_code, _ = _extract_error_code_and_suggestion(error)
-    assert actual_code == expected_code, (
-        f"Expected error code '{expected_code}', got '{actual_code}' ({type(error).__name__}: {error})"
-    )
+    from tests.bdd.steps.generic.then_error import _wire_code
+
+    actual_code = _wire_code(ctx)
+    if actual_code is None:
+        error = ctx.get("error")
+        assert error is not None, f"Expected {expected_code} error but got response: {ctx.get('response')}"
+        actual_code, _ = _extract_error_code_and_suggestion(error)
+    assert actual_code == expected_code, f"Expected error code '{expected_code}', got '{actual_code}'"
 
 
 @then("the creative should be processed successfully")
@@ -1956,10 +1970,14 @@ def then_creative_processed_successfully(ctx: dict) -> None:
     )
 
 
-@then("the request should be rejected with AUTH_REQUIRED")
-def then_rejected_with_auth_required(ctx: dict) -> None:
-    """Assert the sync was rejected with error_code AUTH_REQUIRED."""
-    _assert_auth_rejection(ctx, "AUTH_REQUIRED")
+@then(parsers.parse("the request should be rejected with {expected_code}"))
+def then_rejected_with_auth_code(ctx: dict, expected_code: str) -> None:
+    """Assert the sync was rejected with the given auth error code.
+
+    Parametrized (was a fixed-text ``AUTH_REQUIRED`` step) to cover the
+    v3.1.1 AUTH_MISSING/AUTH_INVALID split (salesagent-mkso).
+    """
+    _assert_auth_rejection(ctx, expected_code)
 
 
 @then("the assignment should include placement targeting")
@@ -2419,8 +2437,12 @@ def then_assignment_processing_should_abort(ctx: dict) -> None:
     The scenario sets up a non-existent package assignment under strict
     validation_mode. Production must raise AdCPNotFoundError whose message
     references the missing package — not just any AdCPError subclass.
+
+    Error code is wire-first (real wire envelope preferred over the lossy
+    reconstructed exception), same strategy as then_error_code.
     """
     from src.core.exceptions import AdCPError, AdCPNotFoundError
+    from tests.bdd.steps.generic.then_error import _wire_code
 
     error = ctx.get("error")
     assert error is not None, (
@@ -2430,12 +2452,11 @@ def then_assignment_processing_should_abort(ctx: dict) -> None:
     assert isinstance(error, AdCPError), (
         f"Expected AdCPError for strict mode abort, got {type(error).__name__}: {error}"
     )
+    error_code = _wire_code(ctx) or getattr(error, "error_code", "") or ""
     # Verify the error is specifically a not-found error, not an incidental failure
     assert (
-        isinstance(error, AdCPNotFoundError)
-        or "not_found" in getattr(error, "error_code", "").lower()
-        or "not found" in str(error).lower()
-    ), f"Expected not-found error for missing package, got error_code={getattr(error, 'error_code', None)}: {error}"
+        isinstance(error, AdCPNotFoundError) or "not_found" in error_code.lower() or "not found" in str(error).lower()
+    ), f"Expected not-found error for missing package, got error_code={error_code!r}: {error}"
     # Verify the error references the bad package from the Given step
     bad_package = ctx.get("bad_package_id") or ctx.get("nonexistent_package_id", "")
     if bad_package:

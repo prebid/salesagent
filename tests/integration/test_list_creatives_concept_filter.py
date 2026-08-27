@@ -199,9 +199,11 @@ class TestNonScalarConceptValueDropped:
         assert "concept_id" not in creative
         assert "concept_name" not in creative
         # Observability (No Quiet Failures): the drop is surfaced via the patched module
-        # logger (see _list_single_creative_with_data on why not caplog), and each drop
-        # names its OWN field — the wrapper that emitted a shared "concept" label for both
-        # is retired, so a corrupt concept_id and concept_name are distinguishable (D1).
+        # logger (see _list_single_creative_with_data on why not caplog — patching the
+        # logger object is immune to level/handler/propagation/``logging.disable``, which
+        # a handler-attaching capture is not), and each drop names its OWN field — the
+        # wrapper that emitted a shared "concept" label for both is retired, so a corrupt
+        # concept_id and concept_name are distinguishable (D1).
         assert "Dropping non-scalar concept_id value" in warnings
         assert "Dropping non-scalar concept_name value" in warnings
 

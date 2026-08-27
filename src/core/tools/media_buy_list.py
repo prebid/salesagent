@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 from src.core.tools._media_buy_status import PERSISTED_STATUS_TO_CANONICAL, resolve_canonical_status
+from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,7 @@ from src.core.database.repositories.creative import CreativeRepository
 from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
     AdCPValidationError,
+    normalize_advisory_errors,
 )
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.schemas import (
@@ -110,24 +112,33 @@ def _get_media_buys_impl(
     testing_ctx = identity.testing_context
     principal_id = identity.principal_id
     if not principal_id:
+        # No principal_id resolved at all (absent credential) -> AUTH_MISSING
+        # per v3.1.1 error-code.json. Was a hardcoded "AUTH_REQUIRED" literal
+        # bypassing the exception hierarchy entirely (salesagent-mkso).
         return GetMediaBuysResponse(
             media_buys=[],
-            errors=[
-                Error(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
-                    code="AUTH_REQUIRED", message="Principal ID not found in context"
-                )
-            ],
+            errors=normalize_advisory_errors(
+                [
+                    Error(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
+                        code="AUTH_MISSING", message="Principal ID not found in context"
+                    )
+                ]
+            ),
         )
 
     principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
     if not principal:
+        # principal_id was presented but doesn't resolve -> AUTH_INVALID
+        # per v3.1.1 error-code.json.
         return GetMediaBuysResponse(
             media_buys=[],
-            errors=[
-                Error(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
-                    code="AUTH_REQUIRED", message=f"Principal {principal_id} not found"
-                )
-            ],
+            errors=normalize_advisory_errors(
+                [
+                    Error(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
+                        code="AUTH_INVALID", message=f"Principal {principal_id} not found"
+                    )
+                ]
+            ),
         )
 
     # require_tenant raises the canonical auth envelope instead of a raw TypeError
@@ -145,7 +156,6 @@ def _get_media_buys_impl(
 
         # Resolve creative approvals for all packages in one batch query
         all_media_buy_ids = [buy.media_buy_id for buy in target_media_buys]
-        # FIXME(salesagent-9f2): _fetch_creative_approvals should use a repository method
         assert uow.session is not None
         creative_approvals_by_package = _fetch_creative_approvals(
             all_media_buy_ids, tenant_id, principal_id, uow.session
@@ -291,7 +301,7 @@ def _get_media_buys_impl(
     return GetMediaBuysResponse(
         media_buys=response_media_buys,
         context=req.context,
-        errors=hydration_errors or None,
+        errors=normalize_advisory_errors(hydration_errors) or None,
     )
 
 
@@ -356,7 +366,7 @@ def get_media_buys_raw(
     account: LibraryAccountReference | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ):
     """Get media buys (raw function for A2A server use).
 
@@ -372,10 +382,7 @@ def get_media_buys_raw(
     Returns:
         GetMediaBuysResponse
     """
-    if identity is None:
-        from src.core.transport_helpers import resolve_identity_from_context
-
-        identity = resolve_identity_from_context(ctx, require_valid_token=True, protocol="a2a")
+    identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=True, protocol="a2a")
 
     req = _build_get_media_buys_request(media_buy_ids, status_filter, account, context)
     return _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)

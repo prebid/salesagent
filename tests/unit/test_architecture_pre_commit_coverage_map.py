@@ -7,6 +7,7 @@ loudly instead of silently (Pattern 3, #1455).
 from __future__ import annotations
 
 import ast
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -426,4 +427,46 @@ def test_coverage_map_parser_catches_broken_entries(probe: _BrokenEntryProbe, tm
     )
     assert any(probe.expected_substr in e for e in errors), (
         f"expected error containing {probe.expected_substr!r}, got: {errors}"
+    )
+
+
+#: Hooks that carry a ratcheting baseline file. Derived, never hand-listed: a hook
+#: qualifies by naming a ``.*baseline*`` path in its own source, so a new ratchet is
+#: enrolled by existing rather than by someone remembering to edit a tuple here.
+_BASELINE_PATH_RE = re.compile(r"""["'](\.[\w-]*baseline[\w.-]*)["']""")
+
+
+def _baseline_carrying_hooks(root: Path | None = None) -> dict[str, str]:
+    """``{hook script name: baseline file it ratchets}`` for every such hook."""
+    hooks_dir = (root or repo_root()) / ".pre-commit-hooks"
+    found: dict[str, str] = {}
+    for script in sorted(hooks_dir.glob("check_*.py")):
+        match = _BASELINE_PATH_RE.search(script.read_text(encoding="utf-8"))
+        if match:
+            found[script.name] = match.group(1)
+    return found
+
+
+@pytest.mark.arch_guard
+def test_every_ratcheting_hook_is_invoked_by_quality_ci() -> None:
+    """A ratchet nobody runs is worse than no ratchet: it reads as enforced.
+
+    ``check_fixme_citation_count.py`` shipped with ``.fixme-citation-baseline`` and
+    was referenced by nothing — not ``quality-ci``, not ``.pre-commit-config.yaml``.
+    The dormancy was demonstrable rather than theoretical: its baseline recorded
+    ``tests_fixme_beads: 120`` while the tree held 119, so the auto-lower-on-decrease
+    it advertises had never once executed. Nothing could make it go red, so the count
+    it claimed to ratchet was free to grow.
+
+    Enrollment is the whole contract. Both halves of a ratchet — the counter and the
+    baseline — have to arrive with the line that runs them, or the baseline is a file
+    that only ever agrees with itself.
+    """
+    quality_ci = _makefile_quality_ci_body(repo_root() / MAKEFILE_PATH)
+    unenrolled = {name: baseline for name, baseline in _baseline_carrying_hooks().items() if name not in quality_ci}
+    assert not unenrolled, (
+        "these hooks ratchet a baseline but are never invoked by `make quality-ci`, so they "
+        f"cannot fail: {unenrolled}. Add `uv run python .pre-commit-hooks/<hook>` to the "
+        "quality-ci target beside its siblings, or delete the hook and its baseline — a gate "
+        "that cannot go red is worse than no gate, because it reads as enforced."
     )

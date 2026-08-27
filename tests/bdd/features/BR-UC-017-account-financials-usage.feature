@@ -137,6 +137,27 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     # POST-F2: Buyer knows error code UNSUPPORTED_FEATURE
     # POST-F3: Context echoed
 
+  @T-UC-017-ext-a-billing-advertiser @extension @ext-a @error @get-financials @post-f1 @post-f2 @post-f3
+  Scenario: Get account financials -- advertiser-billed account returns UNSUPPORTED_FEATURE
+    Given the seller declares account_financials capability as true
+    And an advertiser-billed account "acct_adv_001" exists
+    When the Buyer Agent invokes get_account_financials with account "acct_adv_001"
+    Then the operation should fail with the error variant
+    And the error code should be "UNSUPPORTED_FEATURE"
+    And the error should include "suggestion" field
+    # XFAIL-EXPECTED: production gap — #1722 (get_account_financials not implemented; feature dormant).
+    # Re-homed from #1592 to #1722 by KonstantinMirin's decision (2026-07-27): UC-017 account
+    # financials and usage reporting are out of the #1592 core slice and are tracked in #1722.
+    # The #1521 fixture blocker IS resolved (ck_accounts_billing now permits advertiser — models.py,
+    # guarded by tests/unit/test_billing_party_parity.py), so advertiser-billed accounts are seedable.
+    # What still blocks greening is not the fixture: `get_account_financials` has no production
+    # surface (0 hits in src/), and UC-017 has no binding module and no step module, so this scenario
+    # collects on no transport. Greening it requires the full UC-017 binding plus the greenfield tool.
+    # get_account_financials is operator-billed only: agent- and advertiser-billed accounts are
+    # invoiced outside the operator's billing relationship, so financials are UNSUPPORTED_FEATURE
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/get-account-financials-request.json pointer=/properties/account/description
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/billing-party.json pointer=/enum (advertiser is a valid billing-party the gate must handle)
+
   @T-UC-017-ext-b-fin @extension @ext-b @error @get-financials @post-f1 @post-f2 @post-f3
   Scenario: Get account financials -- unresolvable account returns ACCOUNT_NOT_FOUND
     Given the seller declares account_financials capability as true
@@ -834,6 +855,24 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Then the response contains accepted count of 1
     And the response does not contain an errors array
     # Per schema: media_buy_id links each usage record to the specific seller-assigned media buy that consumed the vendor service
+
+  @T-UC-017-main-usage-build-variant-link @main-flow @report-usage @happy-path @v3-1 @vendor-link
+  Scenario: Report usage -- record links to build_variant_id for variant-leaf billing audit
+    Given an operator-billed account "acct_001" exists
+    And a valid reporting period
+    When the Buyer Agent submits a usage record with creative_id "cr_88201", build_variant_id "bv_leaf_042", and pricing_option_id "po_video_cpm"
+    Then the response contains accepted count of 1
+    And the response does not contain an errors array
+    # XFAIL-EXPECTED: production gap — #1722 (report_usage tool not implemented; feature dormant —
+    # no tests/bdd/test_uc017_*.py binding module and no uc017 step module exist, so this scenario
+    # collects on no transport). Re-homed from #1592 to #1722 by KonstantinMirin's decision
+    # (2026-07-27): UC-017 account financials and usage reporting are tracked in #1722.
+    # NEW in 3.1.1: when the reported creative_id was promoted from a build_creative variant
+    # leaf and differs from the source build_variant_id, the record carries build_variant_id so
+    # billing reconciliation can link usage back to the exact produced leaf (pricing_option_id
+    # alone is not unique across leaves); omitted on the canonical path where creative_id IS the
+    # build_variant_id, and for creatives with no build-variant lineage
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/report-usage-request.json pointer=/properties/usage/items/properties/build_variant_id
 
   @T-UC-017-part-cap-gate @partition @cap-gate @get-financials
   Scenario Outline: Capability gate partition -- <partition>

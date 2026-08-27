@@ -13,7 +13,7 @@ from typing import Any
 from pytest_bdd import given, parsers, then
 
 from tests.bdd.steps._harness_db import db_session
-from tests.bdd.steps.domain.uc003_update_media_buy import _ensure_update_defaults
+from tests.bdd.steps.domain.uc003_update_media_buy import _ensure_update_defaults, _resolve_media_buy_id
 from tests.bdd.steps.generic._auth import authenticate_env_as
 
 
@@ -143,6 +143,14 @@ def given_media_buy_owned_by(ctx: dict, media_buy_id: str, owner_id: str) -> Non
     """Set the media buy's principal_id to a DIFFERENT principal than the authenticated one.
 
     Creates the owning principal if needed, then updates the media buy.
+
+    ``media_buy_id`` is a Gherkin LABEL, not necessarily the real persisted id
+    (the Background's ``the Buyer owns an existing media buy with media_buy_id
+    "mb_existing"`` step registers the label -> real-id mapping in
+    ``ctx["media_buy_labels"]`` — see uc003_update_media_buy._resolve_media_buy_id).
+    A literal-string comparison against ``mb.media_buy_id`` was a Given-side
+    wiring bug that failed this scenario before it ever reached the ownership
+    check it exists to grade (#1721 M4 dormancy tripwire).
     """
     from tests.factories import PrincipalFactory
 
@@ -150,7 +158,10 @@ def given_media_buy_owned_by(ctx: dict, media_buy_id: str, owner_id: str) -> Non
     tenant = ctx["tenant"]
     mb = ctx.get("existing_media_buy")
     assert mb is not None, "No existing_media_buy in ctx"
-    assert mb.media_buy_id == media_buy_id, f"Expected media buy '{media_buy_id}' but ctx has '{mb.media_buy_id}'"
+    real_id = _resolve_media_buy_id(ctx, media_buy_id)
+    assert mb.media_buy_id == real_id, (
+        f"Expected media buy '{media_buy_id}' (resolved '{real_id}') but ctx has '{mb.media_buy_id}'"
+    )
     # Create the owning principal in the DB
     owner_principal = PrincipalFactory(
         tenant=tenant,

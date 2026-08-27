@@ -161,11 +161,11 @@ Feature: BR-UC-030 Manage Governance Binding
     # PRE-B3
 
   @T-UC-030-sync-unauth @sync @auth @partition
-  Scenario: sync_governance without authentication returns AUTH_REQUIRED
+  Scenario: sync_governance without authentication returns AUTH_MISSING
     Given the Buyer Agent has an unauthenticated connection
     When the Buyer Agent sends a sync_governance request via MCP without an authentication token and one account "acct-social-001"
     Then the response variant is error
-    And the error code is "AUTH_REQUIRED"
+    And the error code is "AUTH_MISSING"
     # PRE-B8, POST-F1, POST-F2
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/account/sync-governance-request.json
 

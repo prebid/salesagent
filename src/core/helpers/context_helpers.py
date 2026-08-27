@@ -23,9 +23,10 @@ def ensure_tenant_context(identity: ResolvedIdentity | None = None) -> dict[str,
         Full tenant dict (always a dict, never a string)
 
     Raises:
-        AdCPAuthenticationError: If no tenant context can be resolved
+        AdCPAuthRequiredError: If no credential was presented at all
+        AdCPAuthenticationError: If a credential was presented but the tenant can't be resolved
     """
-    from src.core.exceptions import AdCPAuthenticationError
+    from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError
 
     # Determine the expected tenant_id from identity
     expected_tenant_id = None
@@ -67,4 +68,14 @@ def ensure_tenant_context(identity: ResolvedIdentity | None = None) -> dict[str,
             set_current_tenant(identity.tenant)
             return identity.tenant
 
+    # AUTH_MISSING/AUTH_INVALID split (salesagent-mkso), completed for the
+    # tenant-resolution axis (salesagent-otc5). The signal is whether a
+    # credential was PRESENTED (``identity.auth_token``), matching
+    # require_tenant() in src/core/auth.py: no token at all -> AUTH_MISSING
+    # (correctable); a token was presented but tenant still didn't resolve ->
+    # AUTH_INVALID (terminal). Full tenant-axis semantics beyond this
+    # credential-presence split remain tracked under TENANT_REQUIRED
+    # (salesagent-40kk).
+    if not identity or not identity.auth_token:
+        raise AdCPAuthRequiredError("No tenant context available")
     raise AdCPAuthenticationError("No tenant context available")

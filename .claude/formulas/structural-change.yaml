@@ -1,0 +1,395 @@
+name: structural-change
+description: >
+  Execute a step of a structural change: a change that removes the ability to
+  express a defect, rather than adding a check that detects it. Use this formula
+  when the step has no behavior delta — a type narrows, a constructor loses a
+  parameter, a hand-maintained table becomes a derived one — so no test can go
+  red before the code changes.
+
+  This formula exists because the TDD atoms in plan-lane-execute produce guards
+  when you point them at a step with no behavior delta. The test author has
+  nothing to assert, so it asserts a structural property, and the test reviewer
+  grades that assertion and asks for a mutation self-test. Both atoms work
+  correctly. The step is the wrong input for them.
+
+  Two atoms differ from plan-lane-execute. `predict` replaces `write-test`: you
+  declare a command, the number it prints now, and the number it prints after.
+  `verify-prediction` replaces `test-verify`: you run the command and compare.
+  A predicted number resists weakening in a way an assertion does not. If you
+  predict that mypy reports zero errors and it reports twelve, the step is not
+  done. If you predict wrong, that is a finding.
+
+  Each step also declares what it DELETES. The verify atom checks the deletion
+  happened. Formulas that check only additions produce diffs that only grow.
+
+  Chain per step: design -> solution-review -> predict -> implement ->
+  diff-review -> verify-prediction -> commit.
+
+  Do not use this formula for a step that changes behavior. Route those to
+  plan-lane-execute or bug-triage, which grade behavior with a BDD scenario
+  across all four transports.
+
+variables:
+  TASK_IDS:
+    description: "Space-separated step IDs in the parent epic's dependency order. Structural steps are sequential: each one narrows a type the next one depends on."
+    required: true
+  PLAN_EPIC:
+    description: "Beads epic ID that holds the step tasks and is the scope authority. The epic body states the architectural roots and what becomes inexpressible once every step lands; each child task states one step's change-set and deletion list. The baseline atom records the epic body's checksum and the child list. Required, because solution-review grades a design's fidelity to the epic, which means nothing when the referee reads only the task the design came from. An epic replaces the design-note file because .gitignore excludes .claude/notes/, so a note there cannot be the tracked authority this formula depends on."
+    required: true
+
+labels:
+  - "mol:structural-change"
+
+setup:
+  - id: "baseline"
+    title: "Record the baseline measurements"
+    description: |
+      Record the numbers every step in this epic predicts against. Take them
+      once, here, so no step measures against a moving reference.
+
+      Run the following commands and record their output as a note on
+      {PLAN_EPIC}:
+
+      ```bash
+      ./run_all_tests.sh                              # per-suite pass counts, xpassed node IDs
+      ls tests/unit/test_architecture_*.py tests/unit/test_guards*.py | wc -l
+      git rev-parse HEAD                              # base for the no-new-test check
+      bd show {PLAN_EPIC} --json | sha256sum          # the scope authority's identity
+      bd children {PLAN_EPIC} --json                  # every step, its formula label, and its status
+      ```
+
+      Record the guard file count, the total allowlist entry count, and the
+      full-suite pass counts. Later atoms compare against these values.
+
+      Confirm that every child task carries exactly one `formula:` label and
+      names that same formula in its first prose line. A step whose label reads
+      `formula:structural-change` while its first line names a different formula
+      runs the wrong chain, so stop and reconcile it before any step runs.
+    acceptance: "Baseline recorded as a note on {PLAN_EPIC}: suite pass counts, xpassed node IDs, guard file count, allowlist total, base commit SHA, epic checksum, child list; every child carries one formula: label matching its first prose line."
+    labels: ["atom:baseline"]
+
+iterate:
+  over: "TASK_IDS"
+  item_var: "TASK_ID"
+  all_var: "ALL_TASKS"
+  count_var: "N"
+  barrier_label: "atom:commit"
+  atoms:
+    # ── Atom 1: Design ───────────────────────────────────────────────────
+    - id: "design-{TASK_ID}"
+      title: "Transcribe the change-set and the deletion list for {TASK_ID}"
+      description: |
+        The plan did the analysis. Transcribe this step's specification into a
+        concrete change-set. Do not re-analyze or re-scan.
+
+        ## Read in this order
+
+        1. `bd show {TASK_ID}` — the step body and every correction note
+           appended to it. Later notes override earlier text.
+        2. `bd show {PLAN_EPIC}` — the architectural root this step serves, and
+           the sentence stating what becomes inexpressible once every step
+           lands. Read it before the task, so you transcribe a step of an
+           architecture rather than a list of edits.
+        3. `ast-grep` or `.agent-index/` to confirm the cited symbols still
+           match the tree. Reconcile a drifted line number; keep the intent.
+
+        If `ast-grep` is not installed — it is absent on this box, where
+        `/usr/bin/sg` is the setgid binary and not ast-grep — do not fall back to a
+        bare text sweep. Use Python's own `ast` module for the structural query, or
+        `grep` WITH A POSITIVE CONTROL: show the pattern matching a case you know is
+        present before reporting how many remain. An empty result and a broken
+        pattern are indistinguishable from the output alone.
+
+        ## Record in the design field
+
+        - Each file and the exact edit, traceable to a plan clause.
+        - **The deletion list.** Name every file, table, constant, and allowlist
+          entry this step removes. A structural step that deletes nothing is
+          either mis-scoped or is adding a check instead of removing a
+          possibility. Say which.
+        - The one sentence that states what becomes inexpressible after this
+          step.
+
+        ## Prohibitions
+
+        - Do not scan the codebase for other instances. The plan is that scan.
+        - Do not add an abstraction the plan does not name.
+        - Do not file tickets. Park an out-of-scope observation as one line
+          under `## Out of scope (noted, not acted)` and continue.
+        - Do not amend the plan. An under-specified plan is an ESCALATE for the
+          review gate, not something you fix yourself.
+      acceptance: "Change-set and deletion list recorded in {TASK_ID}'s design field; every edit traceable to a plan clause; the inexpressibility sentence written."
+      # Structural steps are sequential -- each narrows a type the next depends
+      # on -- so a step cannot be designed until the previous one has committed.
+      # Without this every step's design atom goes ready at once and the chain
+      # the TASK_IDS doc promises is not enforced.
+      depends_on_prev_barrier: true
+      labels: ["atom:design"]
+
+    # ── Atom 2: Solution review — gate, fresh context ────────────────────
+    - id: "solution-review-{TASK_ID}"
+      title: "Review the design for {TASK_ID} before any code changes"
+      description: |
+        Review the design, not code, in a fresh context, as the
+        `review-architecture` agent. A wrong shape costs least to catch here.
+
+        ## The rubric for this formula
+
+        Answer this question first, in one sentence:
+
+        > Does this step remove the ability to express the defect, or does it
+        > detect the defect?
+
+        If the answer is "detect", return **NARROW**. A step that adds a check
+        belongs in a different formula, or the design needs reshaping until the
+        defect becomes unexpressible. This verdict exists because adding a check
+        is always available and always looks reasonable, which is how a guard
+        corpus grows past the thing it guards.
+
+        Then grade the design against both failure modes:
+
+        - **Too local**: the step narrows one call site instead of the type that
+          made every call site possible.
+        - **Too broad**: the step reaches past the plan's boundary for this
+          epic.
+
+        ## Verdicts
+
+        | Verdict | Meaning |
+        |---------|---------|
+        | PROCEED | The design removes the possibility, within the plan's boundary. |
+        | DEEPEN | The design is correct but stops at a call site. Name the type or constructor it should change instead. |
+        | NARROW | The design detects rather than removes, or exceeds the plan's boundary. |
+        | ESCALATE | The plan is wrong or under-specifies. Stop and report to the owner. |
+
+        Record the verdict and its one-sentence reason in the bead. Do not write
+        code and do not close {TASK_ID}.
+      acceptance: "Verdict recorded with a reason; PROCEED required to continue; NARROW and DEEPEN route back to design; ESCALATE stops the chain."
+      depends_on: ["design-{TASK_ID}"]
+      labels: ["atom:solution-review", "atom:gate"]
+      delegate:
+        agent: review-architecture
+
+    # ── Atom 3: Predict — replaces write-test ────────────────────────────
+    - id: "predict-{TASK_ID}"
+      title: "Declare the measurement for {TASK_ID} before implementing"
+      description: |
+        Declare how this step gets verified, before any code changes. Write no
+        test file. This atom replaces the TDD red atom, which has nothing to
+        assert when a step changes no behavior.
+
+        ## Precondition (gate hard-check)
+
+        ```bash
+        bd show {TASK_ID} | grep -q "Overall: PROCEED" \
+          || { echo "GATE FAIL: the solution review has not returned PROCEED on {TASK_ID}"; exit 1; }
+        ```
+
+        The solution review names four verdicts and states that PROCEED is
+        required to continue. Until this check existed, no atom enforced that,
+        so a DEEPEN or NARROW verdict stopped nothing and the chain walked on.
+        A rule that only reads as binding is the defect this formula exists to
+        remove.
+
+        On DEEPEN or NARROW, return to design, revise, and re-run the review.
+        The later verdict is the one this gate reads, so a revised design needs
+        a fresh PROCEED rather than an argument that the finding is addressed.
+
+        ## Record four fields in the bead
+
+        Write them under a heading spelled exactly `## Prediction (predict
+        atom)`. The implement gate greps the LANE bead for that heading. A label
+        will not do: `atom:predict` lives on the ATOM bead and never appears on
+        the lane, and a gate grepping the lane for it either fails always or —
+        worse — passes because some atom's prose happened to contain the string.
+
+        | Field | Content |
+        |-------|---------|
+        | `measure_cmd` | A single command that prints one number or one list. It must be deterministic and runnable from a clean tree. |
+        | `before` | What that command prints before the change. Run it and paste the output. |
+        | `predicted` | What it prints after the step. A specific value, not a direction. |
+        | `deletes` | The files, tables, constants, and allowlist entries from the design's deletion list, as paths and names a command can check. |
+
+        ## Rules
+
+        - The prediction is a value. "Fewer errors" is not a prediction; "0
+          errors, down from 47" is.
+        - **Measure the number, then write it.** Never the other way round. A
+          count asserted from reading, and checked afterwards, is the most
+          common defect in these designs: one ticket carried four wrong counts,
+          each caught late by a reviewer. Run the command, paste its output,
+          and show the pattern matching a case you know is present before you
+          report how many remain — including, especially, when the number feels
+          obvious.
+        - Prefer a command that already exists over one you write. `mypy`,
+          `pytest --collect-only -q | wc -l`, `git diff --stat`, and `grep -c`
+          are all measurements. Authoring a script adds maintenance.
+        - If a step's only honest measurement is "the suite still passes", say
+          so and set `predicted` to the baseline pass counts. That is a valid
+          measurement for a pure addition.
+
+        ## Prohibitions
+
+        - Do not create a file under `tests/unit/` or `tests/integration/`.
+        - Do not write production code.
+
+        ## When the step does change behavior
+
+        If this step has `behavior-delta: yes`, it also needs a BDD scenario
+        through the shared cross-transport harness, executing on mcp, a2a, rest,
+        and e2e_rest, asserting on the wire envelope. Route that half through
+        the `author-bdd-steps` skill. A behavior change graded by a unit test is
+        not graded.
+      acceptance: "measure_cmd, before, predicted, and deletes recorded in {TASK_ID}; no file added under tests/unit/ or tests/integration/; BDD scenario authored if behavior-delta is yes."
+      depends_on: ["solution-review-{TASK_ID}"]
+      labels: ["atom:predict", "atom:gate"]
+
+    # ── Atom 4: Implement ────────────────────────────────────────────────
+    - id: "implement-{TASK_ID}"
+      title: "Implement {TASK_ID} as designed"
+      description: |
+        Apply the change-set from the design field, including its deletions.
+
+        ## Precondition
+
+        ```bash
+        bd show {TASK_ID} | grep -qE "^[[:space:]]*## Prediction \(predict atom\)" || { echo "GATE FAIL: the predict atom did not record a prediction on {TASK_ID}"; exit 1; }
+        ```
+
+        ## Rules
+
+        - Delete what the deletion list names, in this commit. A deletion
+          deferred to a follow-up does not happen.
+        - Write only the reviewed change-set. If implementing shows the design
+          was wrong, stop and return to design.
+        - Do not add a file under `tests/unit/` or `tests/integration/`.
+        - Park an out-of-scope discovery as one line under `## Out of scope
+          (noted)` and continue.
+
+        Record the diff, as files and net lines, in the bead under a heading
+        spelled exactly `## Implemented (implement atom)`.
+      acceptance: "Change-set implemented; every item on the deletion list removed in the same commit; no file added under tests/unit/ or tests/integration/."
+      depends_on: ["predict-{TASK_ID}"]
+      labels: ["atom:implement"]
+
+    # ── Atom 5: Diff review — gate, fresh context ────────────────────────
+    - id: "diff-review-{TASK_ID}"
+      title: "Review the {TASK_ID} diff for layer and duplication"
+      description: |
+        Review the diff in a fresh context as the
+        `dev-practices:review-layering` agent. Swap to
+        `dev-practices:review-dry` when the step's subject is duplication.
+
+        Check three things beyond the agent's native rubric:
+
+        1. The change landed on the type or constructor, not on the call sites
+           that the type made possible.
+        2. The deletion list is fully applied. A partial deletion leaves the
+           old path reachable, which means the step removed nothing.
+        3. No file was added under `tests/unit/` or `tests/integration/`.
+
+        ```bash
+        git diff --diff-filter=A --name-only $BASE..HEAD -- tests/unit/ tests/integration/
+        ```
+
+        That command must print nothing.
+      acceptance: "Diff reviewed; change lands on the type not the call sites; deletion list fully applied; the added-test-file command prints nothing."
+      depends_on: ["implement-{TASK_ID}"]
+      labels: ["atom:diff-review", "atom:gate"]
+      delegate:
+        agent: dev-practices:review-layering
+
+    # ── Atom 6: Verify prediction — replaces test-verify ─────────────────
+    - id: "verify-prediction-{TASK_ID}"
+      title: "Run the measurement for {TASK_ID} and compare it to the prediction"
+      description: |
+        Run `measure_cmd` from the bead and compare its output to `predicted`.
+
+        ## Three checks, all required
+
+        1. **The measurement matches.** If the output differs from `predicted`,
+           the step is incomplete, or the prediction was wrong. Both outcomes
+           are findings. Record which one, and route back to predict when the
+           prediction was wrong.
+        2. **The deletions happened.** Every path in `deletes` is gone; every
+           named constant and allowlist entry is absent.
+        3. **Nothing regressed.** Run the full suite and compare per-suite pass
+           counts and the xpassed node ID set against the epic baseline. A green
+           suite cannot detect a regression to xfail, so compare identity, not
+           colour.
+
+        ```bash
+        ./run_all_tests.sh
+        # then diff test-results/<latest>/*.json against the baseline run
+        ```
+
+        ## Prohibitions
+
+        - Do not weaken the prediction to match the output.
+        - Do not file follow-up tickets from this run.
+
+        Record all three results in the bead, under a heading spelled exactly
+        `## Measured (verify-prediction atom)`. The commit gate greps the LANE
+        bead for that heading; `atom:verify-prediction` is a label on the ATOM
+        bead and never appears on the lane. Do not close {TASK_ID}.
+      acceptance: "measure_cmd output equals predicted; every item in deletes confirmed absent; full-suite pass counts and xpassed identity match the baseline."
+      depends_on: ["diff-review-{TASK_ID}"]
+      labels: ["atom:verify-prediction", "atom:gate"]
+
+    # ── Atom 7: Commit — barrier ─────────────────────────────────────────
+    - id: "commit-{TASK_ID}"
+      title: "Commit {TASK_ID}"
+      description: |
+        Commit with a conventional-commit message that names the GH issue. Do
+        not put a beads ID in the message body. Do not push; the epic-level
+        verify decides that.
+
+        State the deletion in the message body. A commit that removes 1,116
+        lines of guard code says so.
+
+        ## Precondition
+
+        ```bash
+        bd show {TASK_ID} | grep -qE "^[[:space:]]*## Measured \(verify-prediction atom\)" || { echo "GATE FAIL: the verify-prediction atom did not record a measurement on {TASK_ID}"; exit 1; }
+        ```
+
+        Then close {TASK_ID}.
+      acceptance: "Step committed with a message stating what it removed; {TASK_ID} closed."
+      depends_on: ["verify-prediction-{TASK_ID}"]
+      labels: ["atom:commit"]
+
+finalize:
+  - id: "verify-epic"
+    title: "Compare the epic's totals against the baseline"
+    description: |
+      After every step commits, confirm the epic delivered what it predicted.
+
+      Compare against the setup baseline and record in the epic notes:
+
+      | Measure | Command |
+      |---------|---------|
+      | Guard file count | `ls tests/unit/test_architecture_*.py tests/unit/test_guards*.py \| wc -l` |
+      | Allowlist total | the per-guard allowlist entry sum |
+      | Net lines under `tests/` | `git diff --numstat <base>..HEAD -- tests/` |
+      | Suite pass counts and xpassed identity | `test-results/<latest>/*.json` |
+
+      The net line count under `tests/` must be <= 0, and STRICTLY NEGATIVE
+      unless every step in this molecule declared an empty deletion list with a
+      recorded reason. A structural epic that grows the test tree did not remove
+      a possibility; it added a check.
+
+      The conditional matters: the design atom explicitly allows a step that
+      deletes nothing provided it says which case it is (an enabling addition
+      that later steps delete against). An unconditional "must be negative" here
+      contradicts that, and makes any molecule cooked over such a step
+      unpassable however well it is executed. Cook the enabling step together
+      with the steps that delete against it and the aggregate goes negative as
+      intended.
+
+      ## Prohibition
+
+      Do not file follow-up tickets from this run. Record an out-of-scope
+      observation in the epic notes and let the owner decide.
+    acceptance: "Every deletion declared across this molecule's steps is confirmed absent; guard count and allowlist total decreased by the predicted amounts, or are unchanged only if every step declared an empty deletion list with a reason; net lines under tests/ is <= 0 and strictly negative unless that same all-empty case holds; suite comparison clean; results recorded in the epic notes."
+    depends_on_all_barriers: true
+    labels: ["atom:final-verify"]

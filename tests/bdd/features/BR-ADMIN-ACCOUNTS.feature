@@ -71,6 +71,57 @@ Feature: BR-ADMIN-ACCOUNTS Admin Account Management
     Then the admin is redirected to the account detail page
     And the database shows account "Acme Corp Updated" with billing "agent"
 
+  @T-ADMIN-ACCT-011 @edit @natural-key @edge-case
+  Scenario: The edit form does not offer to change a natural-key component
+    Given the tenant has an account "Acme Corp" with status "active"
+    When the admin navigates to the edit page for "Acme Corp"
+    Then the page returns status 200
+    And the "sandbox" control is not editable
+    And the "operator" control is not editable
+    # sandbox and operator are natural-key components (AccountRepository.get_by_natural_key).
+    # Editing either RE-KEYS the account, so the buyer's next sync_accounts call carrying the
+    # original key stops matching and provisions a DUPLICATE, stranding the account_id they
+    # hold (salesagent-8sfr). The repository refuses both outright; this scenario grades the
+    # AFFORDANCE -- that an operator is not invited to attempt it and then silently ignored.
+    # Enforcement (not affordance) is graded by
+    # tests/integration/test_account_natural_key_immutability.py.
+
+  @T-ADMIN-ACCT-012 @create @natural-key @edge-case
+  Scenario: Creating a second account on an occupied natural key is refused
+    Given the tenant has an account "Acme Corp" with brand domain "acme.com" and operator "example.com"
+    When the admin submits the create account form with:
+      | field        | value       |
+      | name         | Acme Copy   |
+      | brand_domain | acme.com    |
+      | operator     | example.com |
+      | billing      | operator    |
+    Then the admin is redirected back to the create page
+    And exactly 1 account matches brand domain "acme.com" and operator "example.com"
+    And the account matching brand domain "acme.com" and operator "example.com" is named "Acme Corp"
+    # The create-side sibling of T-ADMIN-ACCT-011. That one keeps the key from being MUTATED;
+    # this keeps a second account from being CREATED on a key that already resolves. Both end
+    # the same way for the buyer: get_by_natural_key().first() starts answering
+    # non-deterministically and list_by_natural_key reports the key unresolvable, and they
+    # cannot repair it -- they do not own the row the operator added (salesagent-0njj).
+    # The database-level invariant behind this refusal, and the NULL mechanics that make it
+    # cover sandbox and brand_id, are graded by
+    # tests/integration/test_account_natural_key_uniqueness.py.
+
+  @T-ADMIN-ACCT-013 @create @natural-key
+  Scenario: A different operator is a different natural key and is still creatable
+    Given the tenant has an account "Acme Corp" with brand domain "acme.com" and operator "example.com"
+    When the admin submits the create account form with:
+      | field        | value        |
+      | name         | Acme Reseller |
+      | brand_domain | acme.com     |
+      | operator     | reseller.com |
+      | billing      | operator     |
+    Then the admin is redirected to the accounts list
+    And exactly 1 account matches brand domain "acme.com" and operator "reseller.com"
+    # The refusal is scoped to a COLLIDING key. Without this, refusing every create would
+    # satisfy T-ADMIN-ACCT-012 while breaking the create form outright -- and one brand
+    # legitimately holds separate accounts per operator.
+
   @T-ADMIN-ACCT-005 @status @main-flow
   Scenario: Change account status via AJAX API
     Given the tenant has an account "Acme Corp" with status "active"

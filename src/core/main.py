@@ -7,7 +7,7 @@ from rich.console import Console
 from sqlalchemy import select
 
 from src.adapters.mock_creative_engine import MockCreativeEngine
-from src.core.exceptions import AdCPAuthenticationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError
 from src.core.transport_helpers import resolve_identity_from_context
 
 logger = logging.getLogger(__name__)
@@ -293,7 +293,17 @@ def get_strategy_manager(context: Context | None) -> StrategyManager:
     """Get strategy manager for current context."""
     identity = resolve_identity_from_context(context, require_valid_token=True, protocol="mcp")
 
+    # AUTH_MISSING/AUTH_INVALID split (salesagent-mkso), completed for the
+    # tenant-resolution axis (salesagent-otc5). The signal is whether a
+    # credential was PRESENTED (``identity.auth_token``), matching
+    # require_tenant() in src/core/auth.py: no token at all -> AUTH_MISSING
+    # (correctable); a token was presented but tenant still didn't resolve ->
+    # AUTH_INVALID (terminal). Full tenant-axis semantics beyond this
+    # credential-presence split remain tracked under TENANT_REQUIRED
+    # (salesagent-40kk).
     if not identity or not identity.tenant_id:
+        if not identity or not identity.auth_token:
+            raise AdCPAuthRequiredError("No tenant configuration found")
         raise AdCPAuthenticationError("No tenant configuration found")
 
     if identity.tenant and isinstance(identity.tenant, dict):
@@ -301,6 +311,8 @@ def get_strategy_manager(context: Context | None) -> StrategyManager:
     else:
         tenant_config = get_current_tenant()
         if not tenant_config:
+            if not identity.auth_token:
+                raise AdCPAuthRequiredError("No tenant configuration found")
             raise AdCPAuthenticationError("No tenant configuration found")
 
     return StrategyManager(tenant_id=identity.tenant_id, principal_id=identity.principal_id)
@@ -335,10 +347,20 @@ from src.core.tools.task_management import complete_task, get_task, list_tasks
 
 _sdk_tool_defs = {td["name"]: td for td in ADCP_TOOL_DEFINITIONS}
 
+#: The MCP wire tool names, accumulated BY the registration below rather than
+#: re-listed beside it. ``src/core/signing/operations.py`` reads this as one leg of
+#: the closed vocabulary that bounds the ``operation`` Prometheus label: a tool name
+#: arrives verbatim from an unauthenticated ``params.name``, so a name the label
+#: cannot recognize collapses to ``"other"``. Deriving the leg from the registration
+#: is what keeps a newly registered tool out of that bucket without anyone
+#: remembering to add it twice.
+MCP_TOOL_NAMES: set[str] = set()
+
 
 def _register_tool(fn: Any) -> None:
     """Register an MCP tool with SDK description and annotations when available."""
     tool_name = fn.__name__
+    MCP_TOOL_NAMES.add(tool_name)
     sdk_def = _sdk_tool_defs.get(tool_name)
     kwargs: dict[str, Any] = {}
     if sdk_def:

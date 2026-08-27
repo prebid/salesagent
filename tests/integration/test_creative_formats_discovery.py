@@ -148,8 +148,9 @@ class TestAuthOptionalForDiscovery:
         """UC-005-MAIN-MCP-02: missing tenant context IS an error, even though auth is optional.
 
         Authentication is optional for discovery, but tenant context is still
-        required to resolve which format catalog to return. When tenant=None,
-        the AUTH_REQUIRED error code is returned.
+        required to resolve which format catalog to return. No credential was
+        presented (auth_token=None) -> AUTH_MISSING (salesagent-otc5, completing
+        the salesagent-mkso split for the tenant-resolution axis).
         """
         formats = [_make_format("no_tenant_fmt", "Should Not Reach")]
 
@@ -167,7 +168,7 @@ class TestAuthOptionalForDiscovery:
             result = env.call_via(Transport.IMPL, identity=identity_no_tenant)
 
         assert result.is_error
-        assert result.error.error_code == "AUTH_REQUIRED"
+        assert result.error.error_code == "AUTH_MISSING"
 
     def test_authenticated_vs_unauthenticated_return_same_catalog(self, integration_db):
         """UC-005-MAIN-MCP-02: auth token does not affect the catalog returned.
@@ -220,7 +221,7 @@ class TestTenantResolutionFailure:
     """
 
     def test_no_tenant_no_auth_raises_auth_error(self, integration_db):
-        """UC-005-EXT-A-01: tenant=None + auth_token=None -> AUTH_REQUIRED error code."""
+        """UC-005-EXT-A-01: tenant=None + auth_token=None -> AUTH_MISSING error code (salesagent-otc5)."""
         with CreativeFormatsEnv() as env:
             TenantFactory(tenant_id="test_tenant")
             env.set_registry_formats([_make_format("unreachable", "Should Not Reach")])
@@ -235,7 +236,7 @@ class TestTenantResolutionFailure:
             result = env.call_via(Transport.IMPL, identity=identity)
 
         assert result.is_error
-        assert result.error.error_code == "AUTH_REQUIRED"
+        assert result.error.error_code == "AUTH_MISSING"
 
     def test_error_message_mentions_tenant(self, integration_db):
         """UC-005-EXT-A-01: error message indicates tenant context could not be determined."""
@@ -261,7 +262,7 @@ class TestTenantResolutionFailure:
 
         assert_envelope_shape(
             result.wire_error_envelope,
-            "AUTH_REQUIRED",
+            "AUTH_MISSING",
             recovery="correctable",
             message_substr="tenant",
         )

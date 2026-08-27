@@ -124,7 +124,7 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 
 ## AdCP Spec Version
 
-This project targets AdCP spec **3.1.0-beta.3** via the `adcp==5.7.0` Python SDK. See
+This project targets AdCP spec **3.1.1** via the `adcp==6.6.0` Python SDK. See
 [docs/adcp-spec-version.md](docs/adcp-spec-version.md) for the version mapping
 and bump procedure. The CI guard at `tests/unit/test_adcp_spec_version.py`
 fails on pin drift.
@@ -134,7 +134,7 @@ fails on pin drift.
 **Any change to AdCP/protocol BEHAVIOR** — a tool's request/response contract, error emission, idempotency, governance, or capabilities — **must cite, before code is written, the authoritative spec section + version that mandates it, plus the conformance storyboard step that grades it** (or note "ungraded"). Record the citation in the PR description and/or the planning note.
 
 - **Which version is authoritative:** the version the repo currently PINS — *unless* there is active work to comply with a different target version (a bump/migration in flight), in which case that TARGET version is the pin. Confirm which applies first.
-- **Where the spec lives** (`github.com/adcontextprotocol/adcp`): prose at `dist/docs/<version>/building/implementation/*.mdx`; the graded, executable contract at `dist/compliance/<version>/*.yaml`. The installed `adcp` SDK — codes, types, even reference implementations such as `adcp.server.idempotency` — is a CROSS-CHECK, **not** the authority; it can diverge from the spec.
+- **Where the spec lives** (`github.com/adcontextprotocol/adcp`): prose at `docs/**/*.mdx`, read at the pinned tag (there is no `dist/docs/<version>/` for the pinned version — `dist/docs/` stops at `3.1.0`); the graded, executable contract at `dist/compliance/<version>/*.yaml`. The installed `adcp` SDK — codes, types, even reference implementations such as `adcp.server.idempotency` — is a CROSS-CHECK, **not** the authority; it can diverge from the spec.
 - **Why:** grounding protocol behavior in downstream artifacts (an internal contract item, or the mere existence of an SDK error code) instead of the spec prose + storyboard has produced an entire feature built inverse to the spec. The spec is the contract; everything else is derived.
 - **Enforcement:** reviewers reject protocol-behavior changes that don't cite the spec; this complements the pin-drift guard above. Background: [docs/adcp-spec-version.md](docs/adcp-spec-version.md).
 

@@ -1,0 +1,466 @@
+name: plan-lane-execute
+description: >
+  Execute one or more lanes of an ALREADY-PLANNED epic, where an exhaustive
+  remediation plan already did the global/architectural analysis. It keeps the
+  generic task-execute's rigor — separate-author TDD-red test BEFORE code, fresh
+  review gates — but DROPS only its two discovery atoms (research + codebase-scan)
+  that re-derive the plan and globalize scope into a ticket-spawning swamp. Chain
+  per lane: design -> solution-review -> write-test(RED) -> implement ->
+  diff-review -> test-verify -> commit.
+
+  The PLAN is the frozen scope authority. No atom re-scans the codebase, invents
+  a new abstraction, amends the plan, or files a ticket. Three fresh-context
+  review gates grade the change against BOTH failure modes — too-local (patches
+  the symptom, leaves the architectural root the plan named) AND too-broad
+  (scope-creep beyond the plan's lane): solution-review before code,
+  diff-review + test-verify after. Use ONLY when a written plan with per-lane
+  file:line specifics exists; for genuine discovery work use the generic
+  task-execute formula.
+
+  Review-agent fitness (from reading ~/projects/pr-review-tooling/claude/agents;
+  the invokable copies are identical content):
+  - solution-review -> `review-intent`. Its model is "grade against the GOAL,
+    catch drift into patch-accumulation vs a sound shape, NOT a line-by-line
+    symptom scan" — with the plan-lane as the frozen goal that IS the pre-code
+    narrowness gate. NOT `review-architecture`: that one runs LAST over the other
+    reviewers' finding files as its symptom set, so on a bare change-set it
+    blind-rescans the whole tree — the exact swamp this formula exists to kill.
+  - diff-review -> `dev-practices:review-layering`, test-verify ->
+    `dev-practices:review-testing`. Both are DIFF-ANCHORED (changed-function
+    traversal, callees one level deep), so they self-scope to the lane's diff and
+    structurally cannot re-globalize. review-layering is the real anti-local-patch
+    check (did the fix hit the right layer/root, or leave the disease one frame
+    over) verified on actual code; swap it for `dev-practices:review-dry` on a
+    duplication-class lane (e.g. the advisory-lane / claim-vs-backed lanes).
+
+variables:
+  TASK_IDS:
+    description: "Space-separated lane task IDs (e.g. 'salesagent-prkv.4 salesagent-prkv.2'). Walk in the parent epic's dependency order."
+    required: true
+  PLAN_EPIC:
+    description: "Beads epic ID that holds the lane tasks and is the frozen scope authority (for example, salesagent-prkv). The epic body states the architectural roots and the boundary of the whole change; each child task states one lane's specification. Later CORRECTION or ALTERATIONS notes on a task win over its original body. Required, not optional: solution-review grades a design's fidelity to the epic, which is non-vacuous only when the referee reads the epic rather than the task the design was transcribed into. The baseline atom records the epic body's checksum and the child list, so 'frozen' is enforced rather than asserted. An epic replaces the plan file because a file under .claude/notes/ cannot be tracked — .gitignore excludes that directory — and beads carries the per-task history the file version had to promise."
+    required: true
+
+labels:
+  - "mol:plan-lane"
+
+setup:
+  - id: "baseline"
+    title: "Establish baseline — zero failures on the box"
+    description: |
+      Run the full suite on the CI box BEFORE any change and record per-suite
+      counts (passed / xfailed / xpassed / skipped / failed) from the JSON
+      reports, not the summary line.
+
+      ```bash
+      saci run    # detaches; poll with `saci status`
+      # when exit=0, read test-results/<latest>/ *.json — 0 failed/error in EVERY suite
+      ```
+
+      Record the run id, the per-suite table, and the scope authority's identity
+      as a note on {PLAN_EPIC}, so "frozen" is enforced rather than asserted:
+      ```bash
+      bd show {PLAN_EPIC} >/dev/null 2>&1 \
+        || { echo "GATE FAIL: {PLAN_EPIC} does not resolve — the scope authority must exist before any lane runs"; exit 1; }
+      bd show {PLAN_EPIC} --json | sha256sum   # record this checksum as a note on the epic
+      bd children {PLAN_EPIC} --json           # record the child list: every lane, its formula label, and its status
+      ```
+      Confirm that every child task carries exactly one `formula:` label and
+      names that same formula in its first prose line. A task whose label and
+      first line disagree routes to the wrong chain, so stop and reconcile it
+      before any lane runs.
+
+      This table is the layer-5 baseline the final verify compares against
+      (pass-count + xpass-IDENTITY, per the semantic-merge discipline).
+
+      ## Gate — HARD STOP
+      If ANY suite has failures or errors, stop. You cannot grade the lanes
+      against a red baseline. If {PLAN_EPIC} does not resolve, or a child task's
+      `formula:` label and first prose line disagree, stop and fix that first.
+    acceptance: "Green baseline (run id + per-suite table) recorded as a note on {PLAN_EPIC}; epic body checksum and child list recorded; every child carries one formula: label matching its first prose line."
+    labels: ["atom:baseline"]
+
+iterate:
+  over: "TASK_IDS"
+  item_var: "TASK_ID"
+  all_var: "ALL_TASKS"
+  count_var: "N"
+  barrier_label: "atom:commit"
+  atoms:
+    # ── Atom 1: Design — TRANSCRIBE the plan, do not re-derive it ──────────
+    - id: "design-{TASK_ID}"
+      title: "Design the bounded change-set for {TASK_ID} from the plan"
+      description: |
+        The plan already did the global and architectural analysis. This atom
+        TRANSCRIBES the plan's lane spec into a concrete change-set. It does NOT
+        re-analyze, re-scan, or re-discover.
+
+        ## Inputs (read in this order)
+        1. `bd show {TASK_ID}` — the lane's own body AND every CORRECTION /
+           ALTERATIONS note appended to it (those override the original text).
+        2. `bd show {PLAN_EPIC}` — the architectural root this lane serves and
+           the boundary of the whole change. The epic states which root the lane
+           dissolves; the task states the file:line steps and what grades them.
+           Read the epic first, so you transcribe a lane of an architecture
+           rather than a list of edits.
+        3. `.agent-index/` stubs for the symbols the plan names; `ast-grep` to
+           confirm the cited file:line still match the current tree (post-merge
+           drift is expected — reconcile the line, not the intent).
+
+        ## Output — a bounded change-set in the bead
+        `bd update {TASK_ID} --design "..."`, and append a note to {TASK_ID} headed
+        exactly `## Change-set (design atom)`. The next gate greps for that heading,
+        so a label on this atom does not satisfy it — atom labels never appear on the
+        lane bead. List, per the plan:
+        - Each file + the exact edit (delete X at :line / add reader Y / invert
+          meta-test Z), traceable to a plan clause.
+        - The Core Invariant this lane preserves (one sentence, from the plan).
+        - What grades each change (the specific scenario/test/guard from §5).
+
+        ## PROHIBITIONS (this is the anti-swamp contract)
+        - NO codebase-wide disease scan. The plan is the scan output.
+        - NO new abstraction, module, or helper beyond what the plan names.
+        - NO new tickets. An out-of-scope observation gets ONE line under a
+          "## Out of scope (noted, not acted)" heading in the bead, then you
+          move on — you do NOT file it, and you do NOT let it grow the change-set.
+        - NO plan amendment. If the plan is wrong or under-specifies, that is an
+          ESCALATE for the review gate, not a self-authored fix.
+      acceptance: "Change-set recorded in {TASK_ID}'s design field, every edit traceable to a plan clause; out-of-scope items parked in one-liners, none acted on."
+      labels: ["atom:design"]
+
+    # ── Atom 2: Solution review — GATE, fresh context, BOTH failure modes ──
+    - id: "solution-review-{TASK_ID}"
+      title: "Solution review of {TASK_ID}'s change-set (pre-implementation gate)"
+      description: |
+        Fresh-context review of the DESIGN (not code yet), run as the
+        `review-intent` agent. Your native model — "the source of truth is the
+        GOAL, not the diff; is this the correct shape or has it drifted into
+        patch-accumulation" — is exactly right here, with ONE substitution: the
+        GOAL is the plan-lane, not a GitHub issue. Runs BEFORE implementation
+        because a wrong shape is cheapest to catch here.
+
+        ## Precondition (gate hard-check)
+        ```bash
+        bd show {TASK_ID} | grep -qE "^[[:space:]]*## Change-set \(design atom\)" || { echo "GATE FAIL: the design atom did not record a change-set on {TASK_ID}"; exit 1; }
+        ```
+
+        ## Inputs
+        `bd show {TASK_ID}` (the change-set and the Core Invariant) and
+        `bd show {PLAN_EPIC}` (the architectural root this lane serves, and the
+        boundary of the whole change). The task, as corrected by its latest
+        notes, is your frozen GOAL; the epic tells you which root it must
+        dissolve. Read the epic from outside the task, because grading a
+        transcription against itself proves nothing.
+
+        ## What to grade — exactly two axes, no third
+        Grade the change-set ONLY on these, against the plan:
+        1. **ROOT vs LOCAL** (your patch-accumulation instinct, aimed at the
+           design). Does the change fix the architectural root the plan named, or
+           patch the motivating symptom and leave the global shit-code the plan
+           targeted? A change-set that greens the cited test while the disease
+           persists one call-frame over is a LOCAL_PATCH.
+        2. **SCOPE DISCIPLINE.** Does the change stay inside the plan's lane?
+           Any new abstraction, any file outside the plan's scope, any would-be
+           ticket, any whole-tree sweep, any plan amendment = SCOPE_CREEP.
+
+        ## Two hard constraints (this is NOT a normal intent review)
+        - **Do NOT re-litigate the plan.** The plan-lane is the frozen goal; the
+          owner already ratified it. You grade the change-set's FIDELITY to it —
+          you do not question whether the goal is correct, and you do not propose
+          a different goal. (This is the one place your usual "is this the right
+          problem?" reflex must be held.)
+        - **Do NOT blind-scan the tree.** No codebase-wide disposition table, no
+          tickets, no widening beyond the plan. Read the change-set, the plan
+          lane, and the specific code it touches — nothing more. Real out-of-plan
+          debt gets ONE line as context, not a discovery pass.
+
+        ## Verdict (routes the next atom — use exactly one)
+        ```bash
+        bd update {TASK_ID} --append-notes "## Solution Review
+        - [axis] finding: ...  fix: ...
+        Overall: [PROCEED | DEEPEN | NARROW | ESCALATE]"
+        ```
+        - PROCEED — fixes the plan's root, stays in scope. Implement as designed.
+        - DEEPEN — too local; the plan's root isn't addressed. Return to design,
+          widen to the root (still within the plan). Re-review.
+        - NARROW — scope-creep; pull the change-set back to the plan's lane.
+          Re-review.
+        - ESCALATE — the change-set cannot satisfy the plan without a decision
+          the plan doesn't cover. Block for the owner; do NOT self-author it.
+
+        Do NOT write code. Do NOT close this atom or {TASK_ID}.
+      acceptance: "Solution review + one-of-four verdict recorded; DEEPEN/NARROW loop back to design, ESCALATE blocks, only PROCEED advances."
+      depends_on: ["design-{TASK_ID}"]
+      labels: ["atom:solution-review", "atom:gate"]
+      delegate:
+        agent: review-intent
+      # review-intent's goal-vs-shape / anti-patch-accumulation stance IS the
+      # narrowness filter; the bead reframes GOAL := plan-lane and adds the two
+      # hard constraints (don't re-litigate the plan, don't blind-scan). The
+      # post-code diff-review (review-layering) verifies root-vs-local on real
+      # code, where a diff-anchored agent self-scopes and can't re-globalize.
+
+    # ── Atom 3: Write the failing grader — TDD RED, separate author ───────
+    - id: "write-test-{TASK_ID}"
+      title: "Author the RED grader for {TASK_ID} (before any production code)"
+      description: |
+        Author the test(s) that grade this lane's behavior, and confirm they FAIL
+        for the right reason, BEFORE the implement atom writes any production code.
+        You run as the `dev-practices:dp-test-author` agent, in a fresh context —
+        deliberately NOT the implementer — so the grader exercises the missing
+        behavior independently of how the code ends up shaped. This is the
+        project's core method ("wire the scenario red, implement to green") and
+        the counter to test-fits-code.
+
+        ## Precondition (gate hard-check)
+        ```bash
+        bd show {TASK_ID} | grep -q "Overall: PROCEED" || { echo "GATE FAIL: no PROCEED verdict"; exit 1; }
+        ```
+
+        ## What to author — the plan's named grader, as RED
+        The design field / plan §5 names WHAT grades each change (a specific
+        scenario / integration test / guard). Realize it:
+        - **New behavior** → author the grader RED. Run it, capture the FAILED
+          output, record it in the bead. No FAILED line = no gate.
+        - **Existing-but-dormant grader** → wire it and confirm it now reddens on
+          the current (unfixed) tree.
+        - **Existing-and-passing grader** the plan relies on → confirm it reddens
+          under a mutation of the target (reverse-TDD), so it genuinely grades.
+
+        ## Orient FIRST — you run fresh and load none of .claude/rules
+        Before writing anything, read the pre-computed symbol stubs (they save you
+        reading whole files, and knowing them is how you avoid re-inventing a
+        factory/env/helper that already exists):
+        ```
+        .agent-index/INDEX.md            .agent-index/factories.pyi
+        .agent-index/harness/base.pyi    .agent-index/harness/envs.pyi
+        .agent-index/harness/transport.pyi   .agent-index/errors.pyi
+        .agent-index/schemas/core.pyi    (+ schemas/{creative,delivery,product}.pyi as the lane needs)
+        ```
+        For every structural query — find an existing step/scenario/factory, a
+        call site, a signature — use **`ast-grep`** (matches code shape), NEVER a
+        text `grep` sweep. `grep` is only for plain strings (a citation, a reason
+        line). This is a hard project rule that a fresh agent does not otherwise
+        see.
+
+        ## Author via the project skill (NOT the generic one)
+        Use the **`author-bdd-steps`** skill — it is the wiring guide for this
+        repo's cross-transport harness. Its authority chain:
+        - `tests/CLAUDE.md` §"BDD authoring discipline (the five rules)" +
+          §"Error Verification Policy" — normative.
+        - `tests/bdd/CLAUDE.md` — the helper quick-reference table.
+        - The generated `tests/bdd/features/BR-UC-*.feature` (mirroring pinned
+          schema + storyboard) is the scenario authority; spec-cite via
+          `git -C ~/projects/adcp show v3.1.1:dist/schemas/3.1.1/...` before coding.
+        **Do NOT use the generic `qa-bdd:step-development` plugin skill** — its
+        When-template hand-stashes `except Exception as exc: ctx["error"]=exc`,
+        the exact antipattern the five rules forbid.
+
+        ## The five rules (non-negotiable, restated as gates)
+        - BDD/integration only — NO new unit tests (this project grounds in BDD;
+          write integration only when a scenario cannot reach the behavior).
+        - Transport-independent Gherkin; dispatch ONLY via `dispatch_request`
+          (all four transports); wire assertions ONLY via the canonical helpers
+          (`assert_wire_error` / `wire_field` / `wire_dict` / `wire_lookup` /
+          `wire_absent`) — never hand-rolled envelope parsing.
+        - Assert exact values, not existence; prove execution with `-rxX` (a
+          dormancy tell is a fail, not a pass).
+        - NEVER weaken or delete an assertion to make anything pass. Strengthen to
+          the exact obligation.
+        - Do NOT write production code here. Do NOT file tickets or scan the tree.
+
+        Record the RED evidence (test path + the FAILED/xfail line) as a note on
+        {TASK_ID} headed exactly `## RED evidence (write-test atom)`. The implement
+        gate greps for that heading on the LANE bead, not for a label on this atom.
+      acceptance: "The plan's grader for {TASK_ID} exists and is shown RED (captured FAILED/xfail output) before any production code; BDD-first, no new unit tests, no assertion weakened."
+      depends_on: ["solution-review-{TASK_ID}"]
+      labels: ["atom:write-test", "atom:gate"]
+      delegate:
+        agent: dev-practices:dp-test-author
+
+    # ── Atom 4: Implement — apply the reviewed change-set, nothing more ────
+    - id: "implement-{TASK_ID}"
+      title: "Implement {TASK_ID} exactly as designed, to green the RED grader"
+      description: |
+        Apply the change-set from the design field. It has passed solution-review
+        with PROCEED and has a RED grader from write-test — implement THAT change-
+        set, turning the RED grader green, not a new idea.
+
+        ## Precondition (gate hard-check)
+        ```bash
+        bd show {TASK_ID} | grep -qE "^[[:space:]]*## RED evidence \(write-test atom\)" || { echo "GATE FAIL: no RED evidence recorded on {TASK_ID}"; exit 1; }
+        ```
+
+        ## Rules
+        - Write ONLY the reviewed change-set. If implementation reveals the
+          design was wrong, STOP and return to design (re-review) — do not
+          improvise past the reviewed shape.
+        - NO new tickets. NO codebase scan. NO plan amendment. An out-of-scope
+          discovery gets ONE line under "## Out of scope (noted)" and you
+          continue.
+        - Run the lane's own graders locally as you go (`saci test <slice>` —
+          name FILES, never a dir).
+
+        Record the resulting diff (files + net lines) as a note on {TASK_ID} headed
+        exactly `## Implemented (implement atom)`. The diff-review gate greps for that
+        heading on the LANE bead, not for a label on this atom.
+      acceptance: "Change-set implemented verbatim; the RED grader from write-test is now green; out-of-scope items parked, none acted on."
+      depends_on: ["write-test-{TASK_ID}"]
+      labels: ["atom:implement"]
+
+    # ── Atom 5: Diff-review — GATE, fresh context, the anti-local-patch check ─
+    - id: "diff-review-{TASK_ID}"
+      title: "Diff-review {TASK_ID}: did the fix hit the root, or local-patch?"
+      description: |
+        Fresh-context review of the ACTUAL lane diff, run as the
+        `dev-practices:review-layering` agent (swap to `dev-practices:review-dry`
+        if this lane's disease is duplication — see the plan). This is the
+        post-code half of the too-local guard: solution-review caught a wrong
+        SHAPE; this catches a right-shape design that drifted local during
+        implementation.
+
+        Your native mode — "get the diff, for each added/modified function read
+        its callees one level deep, ask which layer each belongs in" — is already
+        diff-anchored, so it self-scopes to this lane. Keep it that way.
+
+        ## Project tooling (you run fresh, loading none of .claude/rules)
+        Read `.agent-index/INDEX.md` + the stubs for the layers you traverse
+        (`harness/*.pyi`, `schemas/*.pyi`, `errors.pyi`) to know the canonical
+        home of a symbol before judging a callee's placement. For every
+        structural query (a call site, a signature, "does a repo already own
+        this") use **`ast-grep`**, never a text `grep` sweep; `grep` only for
+        plain strings.
+
+        If `ast-grep` is not installed — it is absent on this box, where
+        `/usr/bin/sg` is the setgid binary and not ast-grep — do not fall back to a
+        bare text sweep. Use Python's own `ast` module for the structural query, or
+        `grep` WITH A POSITIVE CONTROL: show the pattern matching a case you know is
+        present before reporting how many remain. An empty result and a broken
+        pattern are indistinguishable from the output alone.
+
+        ## Precondition
+        ```bash
+        bd show {TASK_ID} | grep -qE "^[[:space:]]*## Implemented \(implement atom\)" || { echo "GATE FAIL: the implement atom did not record its diff on {TASK_ID}"; exit 1; }
+        ```
+
+        ## What to grade (the lane diff ONLY)
+        - Does the change put logic at the layer the plan's Core Invariant
+          requires, or did a helper land one layer off (business logic in a
+          repo method, a session opened in a tools helper, serialization in
+          `_impl`)?
+        - Does the disease the plan named actually disappear, or does it persist
+          one call-frame over from the edited site (the classic local-patch)?
+
+        ## Hard constraints
+        - Traverse ONLY the changed functions and their direct callees. Do NOT
+          catalog the whole tree, do NOT file tickets, do NOT propose work beyond
+          this lane. Out-of-diff debt = ONE context line.
+
+        ## Verdict
+        ```bash
+        bd update {TASK_ID} --append-notes "## Diff Review (layering)
+        - <changed fn> -> <layer verdict / disease-gone?>
+        Overall: [ROOT_FIXED | LOCAL_PATCH]"
+        ```
+        - ROOT_FIXED — logic is at the right layer and the disease is gone from
+          the diff. Advance to test-verify.
+        - LOCAL_PATCH — a callee leaked a layer, or the disease survives one frame
+          over. Return to implement (or design if the shape itself was wrong).
+
+        Do NOT close this atom or {TASK_ID}.
+      acceptance: "Lane diff traversed (changed fns + direct callees only); layer placement and disease-elimination graded; ROOT_FIXED — or LOCAL_PATCH routes back."
+      depends_on: ["implement-{TASK_ID}"]
+      labels: ["atom:diff-review", "atom:gate"]
+      delegate:
+        agent: dev-practices:review-layering
+
+    # ── Atom 6: Test-layer verify — GATE, fresh context, scoped to the lane ─
+    - id: "test-verify-{TASK_ID}"
+      title: "Verify the test layer for {TASK_ID} actually grades the fix"
+      description: |
+        Fresh-context verification that this lane's OWN tests grade the behavior
+        — not that the suite is green (a green suite proves nothing about a
+        vacuous test). Scoped to the lane's tests; this is NOT a suite audit and
+        NOT a discovery scan.
+
+        ## Project tooling (you run fresh, loading none of .claude/rules)
+        Read `.agent-index/harness/transport.pyi` + `errors.pyi` to know the
+        canonical wire-assertion helpers before judging whether a Then reads the
+        wire or the reconstructed exception. Use **`ast-grep`** for structural
+        queries (which helper a step calls, whether an assertion exists), never a
+        text `grep` sweep; `grep` only for plain strings. Run lane slices with
+        `saci test <files>` (name FILES, never a dir).
+
+        ## Precondition
+        ```bash
+        bd show {TASK_ID} | grep -q "Overall: ROOT_FIXED" || { echo "GATE FAIL: diff-review not ROOT_FIXED"; exit 1; }
+        ```
+
+        ## What to verify (only the lane's graders named in the design field)
+        1. **Mutation.** Revert the fix (or break it minimally); the lane's
+           grading test/scenario/guard must REDDEN. A test that survives the
+           mutation grades nothing — report it, do not pass it.
+        2. **Oracle locus.** Error-path scenarios assert on the WIRE envelope via
+           the sanctioned helpers, not the reconstructed exception; success paths
+           assert exact values, not existence. Strict-xfails cite a real, current
+           reason.
+        3. **No vacuous pass.** No assertion-free Then, no truthiness-only check,
+           no test that passes because a variable is merely named `result`.
+
+        ## Verdict
+        ```bash
+        bd update {TASK_ID} --append-notes "## Test-Layer Verify
+        - mutation: <what was mutated> -> <which grader reddened>
+        Overall: [GRADED | WEAK]"
+        ```
+        - GRADED — every change in the design has a grader that reddens under
+          mutation. Advance to commit.
+        - WEAK — a change has no reddening grader, or an oracle reads the wrong
+          layer. Return to implement/design to strengthen the test to the exact
+          obligation (NEVER delete an assertion to pass).
+
+        Do NOT close this atom or {TASK_ID}.
+      acceptance: "Each design-listed change shown to redden its grader under mutation; wire/value oracles confirmed; GRADED verdict — or WEAK routes back."
+      depends_on: ["diff-review-{TASK_ID}"]
+      labels: ["atom:test-verify", "atom:gate"]
+      delegate:
+        agent: dev-practices:review-testing
+
+    # ── Atom 7: Commit — barrier ──────────────────────────────────────────
+    - id: "commit-{TASK_ID}"
+      title: "Commit {TASK_ID}"
+      description: |
+        Commit the lane's diff with a conventional-commit message referencing the
+        plan lane and the GH issue (never a local beads id in the message body per
+        project rule). Do NOT push (the epic-level verify decides that).
+
+        ## Precondition
+        ```bash
+        bd show {TASK_ID} | grep -q "Overall: GRADED" || { echo "GATE FAIL: test layer not GRADED"; exit 1; }
+        ```
+        Then close {TASK_ID}.
+      acceptance: "Lane committed with a plan-referencing message; {TASK_ID} closed."
+      depends_on: ["test-verify-{TASK_ID}"]
+      labels: ["atom:commit"]
+
+finalize:
+  - id: "verify-no-regression"
+    title: "Full-suite verify vs baseline (layer-5: pass-count + xpass identity)"
+    description: |
+      After all lanes commit, run the full suite on the box and compare against
+      the setup baseline — NOT just 'green', but per-suite pass-count deltas and
+      xpassed-set IDENTITY (a green suite cannot detect regression-to-xfail).
+
+      ```bash
+      saci run   # detaches; poll saci status; read test-results/<latest>/*.json
+      ```
+
+      Every pass-count drop is guilty until individually explained; every new or
+      missing xpassed nodeid is investigated. Only when the comparison is clean
+      is the epic verify-closeable. Record the comparison in the epic notes.
+
+      ## PROHIBITION
+      Do NOT file follow-up tickets from this run. Out-of-scope observations go in
+      the epic notes as context; the owner decides whether they become work.
+    acceptance: "Full suite green AND layer-5 comparison vs baseline clean (every delta explained); recorded in epic notes."
+    labels: ["atom:final-verify"]

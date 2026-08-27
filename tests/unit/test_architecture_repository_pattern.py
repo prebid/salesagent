@@ -26,26 +26,37 @@ ROOT = Path(__file__).resolve().parents[2]
 # Invariant 1: No get_db_session() in _impl functions
 # ---------------------------------------------------------------------------
 
+# Directories scanned by discovery glob (not a hand-maintained file list) for
+# _impl-adjacent get_db_session() calls. The hand-maintained list this replaced
+# omitted accounts.py (the largest new tools module, R1-5/R1-6) entirely and
+# never scanned helpers/ at all -- making a session-opening helper one call
+# frame from _impl invisible to this guard (the guard even taught the
+# workaround: adapter_helpers.py's _read_mock_test_behavior docstring used to
+# describe the loophole as the sanctioned seam). #1721 M2.
+_IMPL_DISCOVERY_DIRS = ("src/core/tools", "src/core/helpers")
+
+# Two files outside the discovery dirs were already in the pre-glob list.
+# Kept explicit so widening scan scope never NARROWS it for these.
+_IMPL_LEGACY_EXTRA_FILES = frozenset({"src/core/context_manager.py", "src/admin/blueprints/creatives.py"})
+
+
+def _glob_python_files(root: Path, dirs: tuple[str, ...]) -> set[str]:
+    """``.py`` files under any of ``dirs`` (relative to ``root``), pycache excluded."""
+    return {
+        str(p.relative_to(root))
+        for scan_dir in dirs
+        for p in (root / scan_dir).rglob("*.py")
+        if "__pycache__" not in str(p)
+    }
+
+
+def _discover_impl_files() -> list[str]:
+    """_impl-adjacent files scanned for direct get_db_session() calls."""
+    return sorted(_glob_python_files(ROOT, _IMPL_DISCOVERY_DIRS) | _IMPL_LEGACY_EXTRA_FILES)
+
+
 # Production files that contain _impl functions to scan
-IMPL_FILES = [
-    "src/core/tools/media_buy_create.py",
-    "src/core/tools/media_buy_update.py",
-    "src/core/tools/media_buy_delivery.py",
-    "src/core/tools/media_buy_list.py",
-    "src/core/tools/products.py",
-    "src/core/tools/capabilities.py",
-    "src/core/tools/creative_formats.py",
-    "src/core/tools/properties.py",
-    "src/core/tools/creatives/listing.py",
-    "src/core/tools/creatives/_sync.py",
-    "src/core/tools/creatives/_assignments.py",
-    "src/core/tools/creatives/_workflow.py",
-    "src/core/tools/performance.py",
-    "src/core/tools/signals.py",
-    "src/core/tools/task_management.py",
-    "src/core/context_manager.py",
-    "src/admin/blueprints/creatives.py",
-]
+IMPL_FILES = _discover_impl_files()
 
 # Pre-existing violations: (file_path, function_name)
 # These existed before the guard was created. Allowlist shrinks as repositories are introduced.
@@ -613,6 +624,26 @@ class TestImplNoDirectDbSession:
             IMPL_SESSION_ALLOWLIST,
             fix_hint="Remove fixed entries from IMPL_SESSION_ALLOWLIST.",
         )
+
+    @pytest.mark.arch_guard
+    def test_discovery_glob_catches_a_synthetic_new_file(self, tmp_path):
+        """Guard self-test: the discovery glob picks up a file it has never seen
+        before, proving it is a LIVE glob (re-evaluated every run) and not a
+        frozen snapshot masquerading as one -- the exact failure mode of the
+        hand-maintained list this replaced (#1721 M2)."""
+        scan_dir = tmp_path / "src" / "core" / "tools"
+        scan_dir.mkdir(parents=True)
+        (scan_dir / "_never_seen_before.py").write_text("def f():\n    pass\n")
+        found = _glob_python_files(tmp_path, ("src/core/tools",))
+        assert "src/core/tools/_never_seen_before.py" in found
+
+    @pytest.mark.arch_guard
+    def test_discovery_glob_covers_the_files_the_old_list_missed(self):
+        """accounts.py and helpers/ were invisible to the hand-maintained
+        IMPL_FILES list (R1-5/R1-6) -- confirm the discovery glob now sees them."""
+        assert "src/core/tools/accounts.py" in IMPL_FILES
+        assert "src/core/helpers/adapter_helpers.py" in IMPL_FILES
+        assert "src/core/helpers/activity_helpers.py" in IMPL_FILES
 
 
 class TestIntegrationTestsNoInlineSessionAdd:
@@ -1366,4 +1397,258 @@ class TestIntegrationTestsNoGetDbSession:
             INTEGRATION_TEST_FILES,
             GET_DB_SESSION_IN_TESTS_ALLOWLIST,
             fix_hint="Remove fixed entries from GET_DB_SESSION_IN_TESTS_ALLOWLIST.",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Invariant 4: Repositories may not import SDK protocol/response types (reverse layer)
+# ---------------------------------------------------------------------------
+
+# The generated-response-shape family: types describing a WIRE response, not a
+# DB row. IdempotencyPosture/to_sdk_union() imported Idempotency/Idempotency3
+# from here while living in repositories/idempotency_attempt.py (D2, salesagent-
+# c0ia.11 M2) -- business/wire-shaping logic belongs above the repository,
+# never inside it. Scoped to this specific submodule (not bare `adcp.types`,
+# whose top-level re-exports like ContextObject/Error are generic shared types
+# used legitimately in a handful of repository method signatures today) so the
+# check is crisp with zero false positives.
+_FORBIDDEN_REPOSITORY_IMPORT_PREFIX = "adcp.types.generated_poc.protocol"
+
+REPOSITORIES_DIR = "src/core/database/repositories"
+
+
+def _scan_for_protocol_imports(tree: ast.Module) -> list[tuple[str, int]]:
+    """(imported_module, line) for every ``from adcp.types.generated_poc.protocol...
+    import ...`` in ``tree``."""
+    return [
+        (node.module, node.lineno)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module
+        and node.module.startswith(_FORBIDDEN_REPOSITORY_IMPORT_PREFIX)
+    ]
+
+
+def _find_repository_protocol_imports() -> list[tuple[str, str, int]]:
+    """(file_path, imported_module, line) for every repositories/*.py file."""
+    violations: list[tuple[str, str, int]] = []
+    for py_file in sorted((ROOT / REPOSITORIES_DIR).rglob("*.py")):
+        if "__pycache__" in str(py_file):
+            continue
+        rel_path = str(py_file.relative_to(ROOT))
+        tree = ast.parse(py_file.read_text())
+        violations.extend((rel_path, module, lineno) for module, lineno in _scan_for_protocol_imports(tree))
+    return violations
+
+
+class TestRepositoriesDoNotImportProtocolResponseTypes:
+    """The repository layer sits BELOW schemas/tools -- importing an SDK
+    protocol-response type here is the reverse-direction violation of the same
+    layering rule CLAUDE.md Pattern #3 enforces one direction of (business
+    logic must not reach INTO the repository's session; a repository must not
+    reach UP into wire-response typing). Allowlist is empty and stays empty:
+    after M2's IdempotencyPosture relocation there are zero legitimate cases.
+    """
+
+    @pytest.mark.arch_guard
+    def test_no_repository_imports_adcp_protocol_response_types(self):
+        violations = _find_repository_protocol_imports()
+        assert not violations, (
+            "repositories/*.py importing adcp.types.generated_poc.protocol.* "
+            "(a response-shaped SDK type) -- move the business/wire-shaping logic "
+            "that needs this type OUT of the repository layer (see "
+            "src/core/idempotency_policy.py for the pattern):\n"
+            + "\n".join(f"  {f}:{line} imports {mod}" for f, mod, line in violations)
+        )
+
+    @pytest.mark.arch_guard
+    def test_guard_catches_a_reintroduced_protocol_import(self):
+        """Positive meta-test: reproduces the exact pre-M2 idempotency_attempt.py shape."""
+        drifted = ast.parse(
+            "from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import Idempotency\n"
+        )
+        assert _scan_for_protocol_imports(drifted), "a reintroduced protocol-response import must be flagged"
+
+    @pytest.mark.arch_guard
+    def test_guard_ignores_generic_adcp_types_imports(self):
+        """Negative meta-test: bare `adcp.types` re-exports (ContextObject, Error, ...)
+        are generic shared types legitimately used in repository method signatures
+        today (e.g. src/core/database/repositories/media_buy.py) -- not a violation."""
+        generic = ast.parse("from adcp.types import ContextObject, Error\n")
+        assert _scan_for_protocol_imports(generic) == []
+
+
+# ---------------------------------------------------------------------------
+# Signed outbound work owns its connection — enforced by SHAPE, not by scan
+# ---------------------------------------------------------------------------
+#
+# These two grade the same fault from opposite ends: a POOLED DB CONNECTION HELD ACROSS
+# time.sleep() AND A POST TO A BUYER-SUPPLIED URL, so a hanging receiver consumes a
+# database connection.
+#
+# A LEXICAL GUARD FOR THAT WAS WRITTEN AND DISCARDED, and the reason belongs here so it
+# is not helpfully re-added. The obvious invariant — "a `with get_db_session()` block
+# must not enclose a sleep or an outbound POST" — was GREEN ON ITS OWN MOTIVATING
+# DEFECT: the session block called ``self._deliver_with_backoff(...)`` and the
+# ``time.sleep`` lived one call frame deeper, inside that method, so a body-subtree scan
+# saw nothing. Any such scan is defeated by ordinary helper extraction. Measured on the
+# tree at the time it found 2 violations, neither of them the defect it existed for.
+#
+# So the API SHAPE is the guard instead. Together these make the defect UNREPRESENTABLE
+# rather than detectable after the fact, and neither needs a call graph:
+#
+#   (i)  a caller cannot DONATE a session lifetime, because no parameter accepts one;
+#   (ii) the retry loop cannot REACH a session, because the only thing it can see is a
+#        frozen dataclass of primitives — true at any call depth.
+#
+# Both allowlists are EMPTY and stay empty (#1757, salesagent-n78j0.4).
+
+#: Parameter names by which a caller could hand its own connection lifetime to the
+#: delivery boundary. ``repo=`` was the real one; the siblings are named so the next
+#: shape of the same mistake is covered rather than only the one we removed.
+_DONATED_SESSION_PARAMS = frozenset({"repo", "session", "db", "db_session", "uow"})
+
+#: The connection-lifetime boundary: the functions a caller reaches to do signed outbound
+#: work. Named for the INVARIANT rather than for the webhook path, because the outbound
+#: client seam joined it and sends no webhook.
+_DELIVERY_BOUNDARY = (
+    ("src/core/signing/webhook_sender_factory.py", "deliver_adcp_webhook"),
+    ("src/core/signing/webhook_sender_factory.py", "deliver_adcp_webhook_sync"),
+    ("src/core/signing/webhook_sender_factory.py", "adcp_webhook_sender"),
+    ("src/core/signing/webhook_sender_factory.py", "signing_repo"),
+    ("src/core/helpers/adapter_helpers.py", "build_adcp_multi_agent_client"),
+)
+
+#: The queued-delivery entry, which the retry loop is the sole consumer of.
+_QUEUE_ENTRY = ("src/services/webhook_delivery_service.py", "QueuedWebhook")
+
+
+def _function_def(rel_path: str, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
+    """The named top-level function in *rel_path*, or fail loudly naming it.
+
+    Failing loudly matters: if a rename made this lookup return None and the test
+    silently passed, the guard would grade a function that no longer exists.
+    """
+    tree = ast.parse((ROOT / rel_path).read_text(encoding="utf-8"), rel_path)
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name:
+            return node
+    raise AssertionError(
+        f"{rel_path} defines no top-level function {name!r} — this guard grades the "
+        "connection-lifetime boundary and cannot silently stop grading it because something "
+        "was renamed."
+    )
+
+
+def _class_def(rel_path: str, name: str) -> ast.ClassDef:
+    """The named top-level class in *rel_path*, or fail loudly naming it."""
+    tree = ast.parse((ROOT / rel_path).read_text(encoding="utf-8"), rel_path)
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == name:
+            return node
+    raise AssertionError(f"{rel_path} defines no top-level class {name!r} — see {_QUEUE_ENTRY!r}.")
+
+
+class TestDeliveryBoundaryTakesNoDonatedSession:
+    """(i) No boundary entry point accepts a caller's session, repository or UoW.
+
+    ``deliver_adcp_webhook*`` used to take ``repo=``, and the webhook delivery service
+    passed one built on ITS OWN open session. That is how a pooled connection came to be
+    held across the retry loop's ``time.sleep`` and its POST to a buyer-supplied URL: the
+    connection's lifetime belonged to the caller, not to the work.
+
+    The parameter is gone, so the defect is unrepresentable at this boundary —
+    ``signing_repo`` always opens its own short session, and
+    ``build_adcp_multi_agent_client`` now enters it rather than taking one.
+
+    MUTATION: add ``repo: SigningKeyRepository | None = None`` back to any signature in
+    ``_DELIVERY_BOUNDARY`` and this goes RED.
+    """
+
+    @pytest.mark.arch_guard
+    def test_no_delivery_entry_point_accepts_a_session(self) -> None:
+        found: set[tuple[str, str]] = set()
+        for rel_path, name in _DELIVERY_BOUNDARY:
+            func = _function_def(rel_path, name)
+            args = func.args
+            for arg in [*args.posonlyargs, *args.args, *args.kwonlyargs]:
+                if arg.arg in _DONATED_SESSION_PARAMS:
+                    found.add((f"{rel_path}::{name}", arg.arg))
+        assert found == set(), (
+            "the connection-lifetime boundary must not accept a caller's connection "
+            f"lifetime; found {sorted(found)}. A donated session is held for the whole "
+            "retry loop — for a delivery, across time.sleep and a POST to a buyer-supplied "
+            "URL — so a hanging receiver consumes a database connection. The callee opens its own "
+            "short session instead (signing_repo)."
+        )
+
+
+class TestQueuedWebhookCarriesPrimitivesOnly:
+    """(ii) The queue entry is a frozen dataclass of primitives — no ORM, no session.
+
+    The retry loop's only input is this entry. If it can hold nothing but plain values,
+    it cannot lazy-load a relationship, cannot touch a session and cannot keep a
+    connection alive across a sleep — REGARDLESS of how many call frames deep the sleep
+    is, which is exactly what the discarded lexical scan could not express.
+
+    MUTATION: annotate any field with an ORM model (``PushNotificationConfig``), a
+    ``Mapped[...]``, or a repository/session type, or drop ``frozen=True``, and this
+    goes RED.
+    """
+
+    #: Annotations a queued entry may carry. Anything else — an ORM model, a
+    #: ``Mapped[...]``, a repository, a session — fails.
+    #: ``Any`` IS DELIBERATELY ABSENT. It was admitted for one revision, because the
+    #: payload is arbitrary JSON and ``Any`` is the ABSENCE of a type rather than an ORM
+    #: type — but that left the one hole this guard exists to close: an ``Any``-annotated
+    #: field can be handed an ORM row at runtime, which is precisely the shape that
+    #: occurred (a live ``PushNotificationConfig`` on the queue entry).
+    #:
+    #: ``pydantic.JsonValue`` closes it with no schema project: it is the recursive JSON
+    #: type (``str | int | float | bool | None | list[JsonValue] | dict[str, JsonValue]``),
+    #: so an ORM object in the payload is a TYPE ERROR at every producer, enforced by mypy,
+    #: rather than a runtime possibility this guard merely hopes against.
+    _PRIMITIVE_ROOTS = frozenset(
+        {"str", "int", "float", "bool", "bytes", "dict", "list", "tuple", "datetime", "None", "JsonValue"}
+    )
+
+    def _annotation_roots(self, node: ast.expr) -> set[str]:
+        """Every bare name appearing in an annotation, unions and subscripts included."""
+        return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)} | {
+            n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)
+        }
+
+    @pytest.mark.arch_guard
+    def test_every_field_is_a_primitive(self) -> None:
+        rel_path, name = _QUEUE_ENTRY
+        cls = _class_def(rel_path, name)
+
+        offenders: set[tuple[str, str]] = set()
+        for stmt in cls.body:
+            if not isinstance(stmt, ast.AnnAssign) or stmt.annotation is None:
+                continue
+            field = stmt.target.id if isinstance(stmt.target, ast.Name) else "<expr>"
+            for root in self._annotation_roots(stmt.annotation) - self._PRIMITIVE_ROOTS:
+                offenders.add((field, root))
+
+        assert offenders == set(), (
+            f"{name} must carry PRIMITIVES ONLY; found {sorted(offenders)}. The retry loop's "
+            "sole input is this entry — an ORM row or a repository on it can lazy-load or hold "
+            "a session open across the loop's sleep and its outbound POST. Project the values "
+            "you need off the ORM row while the session is open, and queue those."
+        )
+
+    @pytest.mark.arch_guard
+    def test_it_is_frozen(self) -> None:
+        rel_path, name = _QUEUE_ENTRY
+        cls = _class_def(rel_path, name)
+        frozen = any(
+            isinstance(d, ast.Call)
+            and any(kw.arg == "frozen" and getattr(kw.value, "value", False) is True for kw in d.keywords)
+            for d in cls.decorator_list
+        )
+        assert frozen, (
+            f"{name} must be @dataclass(frozen=True): a mutable queue entry can be handed a "
+            "session-bound object after enqueue, which reintroduces exactly what the primitive "
+            "field rule removes."
         )

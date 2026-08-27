@@ -27,6 +27,9 @@ ENV_FILE=".test-stack.env"
 #     publishes -p host:container) so a port already taken by another
 #     stack on 0.0.0.0 is detected,
 #   * wrap-around scan so the full range is still searched.
+# Emits THREE ports: postgres, the plaintext proxy, and the TLS listener
+# (salesagent-tgzb). The TLS port is allocated the same way as the other two
+# rather than pinned to 8443, because several stacks run concurrently on one box.
 find_ports() {
     uv run python -c "
 import os, socket
@@ -35,18 +38,20 @@ span = hi - lo
 origin = lo + (os.getpid() % span)
 for i in range(span - 1):
     p = lo + ((origin - lo + i) % span)
-    if p + 1 >= hi:
+    if p + 2 >= hi:
         continue
-    s1, s2 = socket.socket(), socket.socket()
-    s1.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
-    s2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+    socks = [socket.socket() for _ in range(3)]
+    for s in socks:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
     try:
-        s1.bind(('', p)); s2.bind(('', p + 1))
-        print(p, p + 1); break
+        for offset, s in enumerate(socks):
+            s.bind(('', p + offset))
+        print(p, p + 1, p + 2); break
     except OSError:
         pass
     finally:
-        s1.close(); s2.close()
+        for s in socks:
+            s.close()
 "
 }
 
@@ -103,6 +108,22 @@ cmd_up() {
     export GEMINI_API_KEY="${GEMINI_API_KEY:-test_key}"
     export ENCRYPTION_KEY="${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}"  # TEST ONLY — never use in production
 
+    # The tls-proxy service bind-mounts .test-tls/; without the material the
+    # mount materialises an empty directory and nginx refuses to start. Idempotent
+    # — a current certificate is left exactly as it is, so concurrent stacks
+    # already serving it are undisturbed.
+    scripts/dev/ensure-test-tls.sh
+
+    # Allocate this stack's network slice the same way its ports are allocated
+    # (salesagent-mp53.9). The e2e network is pinned to a NON-PRIVATE range so
+    # the server reaches its webhook receiver at an address production's SSRF
+    # gate accepts unpatched; a fixed value means the second concurrent stack
+    # fails with "Pool overlaps with other one on this address space".
+    if [ -z "${E2E_NETWORK_SUBNET:-}" ]; then
+        eval "export $(scripts/dev/alloc-e2e-subnet.sh)"
+        echo "  e2e network slice: $E2E_NETWORK_SUBNET"
+    fi
+
     # Bounded retry on port-collision: a sibling worktree can still grab a
     # probed port in the TOCTOU window before `docker up` publishes it.
     # Re-allocate (PID scatter keeps the next attempt diverging) instead of
@@ -110,12 +131,12 @@ cmd_up() {
     # blocked all e2e tests (salesagent-18h.12).
     local up_ok=false attempt
     for attempt in 1 2 3; do
-        read POSTGRES_PORT MCP_PORT <<< $(find_ports)
-        if [ -z "$POSTGRES_PORT" ] || [ -z "$MCP_PORT" ]; then
-            echo -e "${RED}No free port pair in 50000-60000 (attempt $attempt)${NC}"
+        read POSTGRES_PORT MCP_PORT TLS_PORT <<< $(find_ports)
+        if [ -z "$POSTGRES_PORT" ] || [ -z "$MCP_PORT" ] || [ -z "$TLS_PORT" ]; then
+            echo -e "${RED}No free port triple in 50000-60000 (attempt $attempt)${NC}"
             sleep 2; continue
         fi
-        export POSTGRES_PORT ADCP_SALES_PORT=$MCP_PORT
+        export POSTGRES_PORT ADCP_SALES_PORT=$MCP_PORT ADCP_TLS_PORT=$TLS_PORT
         export DATABASE_URL="postgresql://adcp_user:secure_password_change_me@127.0.0.1:${POSTGRES_PORT}/adcp_test"
         dc down -v 2>/dev/null || true
         dc build --progress=plain 2>&1 | grep -E "(Step|#|Building|exporting)" | tail -10
@@ -139,14 +160,24 @@ cmd_up() {
     # Docker image cache. 360s gives margin without making genuine hangs slow
     # to surface.
     local deadline=$(($(date +%s) + 360))
-    local pg=false srv=false
+    local pg=false srv=false tls=false
     while [ $(date +%s) -lt $deadline ]; do
         [ "$pg" = false ] && dc exec -T postgres pg_isready -U adcp_user >/dev/null 2>&1 && pg=true && echo -e "${GREEN}PostgreSQL ready${NC}"
         [ "$srv" = false ] && curl -sf "http://localhost:${MCP_PORT}/health" >/dev/null 2>&1 && srv=true && echo -e "${GREEN}Server ready${NC}"
-        [ "$pg" = true ] && [ "$srv" = true ] && break
+        # A REAL handshake against the dotted name, verified with the generated
+        # CA. Not "is the port open": the whole point of the TLS listener is that
+        # https at this host is true rather than advertised, and a half-started
+        # listener that is skipped past is the vacuity salesagent-tgzb removes.
+        [ "$tls" = false ] && curl -sf --cacert .test-tls/ca.pem "https://agent.localhost:${TLS_PORT}/health" >/dev/null 2>&1 && tls=true && echo -e "${GREEN}TLS listener ready (agent.localhost:${TLS_PORT})${NC}"
+        [ "$pg" = true ] && [ "$srv" = true ] && [ "$tls" = true ] && break
         sleep 2
     done
     [ "$pg" = false ] || [ "$srv" = false ] && { echo -e "${RED}Timeout waiting for services${NC}"; dc logs; exit 1; }
+    if [ "$tls" = false ]; then
+        echo -e "${RED}TLS listener never completed a verified handshake at https://agent.localhost:${TLS_PORT}/health${NC}"
+        echo -e "${RED}  (agent.localhost must resolve to loopback — RFC 6761 — and .test-tls/ must hold a current CA + leaf)${NC}"
+        dc logs tls-proxy; exit 1
+    fi
 
     dc exec -T postgres psql -U adcp_user -d postgres -c "CREATE DATABASE adcp_test" 2>/dev/null || true
 
@@ -159,12 +190,14 @@ cmd_up() {
     # file always match reality.
     _real_pg=$(dc port postgres 5432 2>/dev/null | sed -E 's/.*:([0-9]+)$/\1/')
     _real_srv=$(dc port proxy 8000 2>/dev/null | sed -E 's/.*:([0-9]+)$/\1/')
+    _real_tls=$(dc port tls-proxy 8443 2>/dev/null | sed -E 's/.*:([0-9]+)$/\1/')
     if [ -n "$_real_pg" ] && [ "$_real_pg" != "$POSTGRES_PORT" ]; then
         echo -e "${BLUE}Corrected POSTGRES_PORT $POSTGRES_PORT -> $_real_pg (actual Docker binding)${NC}"
         POSTGRES_PORT="$_real_pg"
     fi
     [ -n "$_real_srv" ] && MCP_PORT="$_real_srv"
-    export POSTGRES_PORT ADCP_SALES_PORT=$MCP_PORT
+    [ -n "$_real_tls" ] && TLS_PORT="$_real_tls"
+    export POSTGRES_PORT ADCP_SALES_PORT=$MCP_PORT ADCP_TLS_PORT=$TLS_PORT
     export DATABASE_URL="postgresql://adcp_user:secure_password_change_me@127.0.0.1:${POSTGRES_PORT}/adcp_test"
 
     # Write env file for tox to source
@@ -172,6 +205,9 @@ cmd_up() {
 export COMPOSE_PROJECT_NAME="$COMPOSE_PROJECT_NAME"
 export POSTGRES_PORT=$POSTGRES_PORT
 export ADCP_SALES_PORT=$MCP_PORT
+export ADCP_TLS_PORT=$TLS_PORT
+export E2E_TLS_BASE_URL="https://agent.localhost:$TLS_PORT"
+export E2E_CA_BUNDLE="$(pwd)/.test-tls/ca.pem"
 export DATABASE_URL="$DATABASE_URL"
 export ADCP_TESTING=true
 export CREATE_SAMPLE_DATA=true
@@ -180,7 +216,7 @@ export GEMINI_API_KEY="${GEMINI_API_KEY}"
 export ENCRYPTION_KEY="${ENCRYPTION_KEY}"
 EOF
 
-    echo -e "${GREEN}Stack ready (pg:$POSTGRES_PORT srv:$MCP_PORT)${NC}"
+    echo -e "${GREEN}Stack ready (pg:$POSTGRES_PORT srv:$MCP_PORT tls:$TLS_PORT)${NC}"
     echo -e "${BLUE}Env written to $ENV_FILE — source it before running tox${NC}"
     echo ""
     echo "Run tests with:"
@@ -206,6 +242,7 @@ cmd_status() {
         echo "Stack env: $ENV_FILE"
         echo "  POSTGRES_PORT=$POSTGRES_PORT"
         echo "  ADCP_SALES_PORT=$ADCP_SALES_PORT"
+        echo "  ADCP_TLS_PORT=${ADCP_TLS_PORT:-<unset>}"
         echo "  COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME"
         dc ps 2>/dev/null || echo "Stack not running"
     else

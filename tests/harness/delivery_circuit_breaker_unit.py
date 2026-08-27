@@ -1,7 +1,7 @@
 """CircuitBreakerEnv — unit test environment for WebhookDeliveryService and CircuitBreaker.
 
-Patches: httpx.Client, time.sleep, random.uniform, get_db_session
-         (all in src.services.webhook_delivery_service)
+Patches: the outbound webhook SOCKET, plus time.sleep, random.uniform and
+         get_db_session (all in src.services.webhook_delivery_service)
 
 Usage::
 
@@ -17,16 +17,17 @@ Usage::
         service.send_delivery_webhook(...)
 
 Available mocks via env.mock:
-    "client"    -- httpx.Client mock
     "sleep"     -- time.sleep mock
     "random"    -- random.uniform mock
     "db"        -- get_db_session mock
     "logger"    -- module-level logger mock
-    "post"      -- shortcut to httpx client.post mock
+    "post"      -- the outbound webhook socket; called (url, headers=, content=)
+    "ssrf"      -- send-time outbound SSRF gate (allows fixture hosts by default)
 """
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -41,7 +42,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
     Fluent API (from CircuitBreakerMixin):
         get_service()                    -- return a WebhookDeliveryService instance
         get_breaker(**kwargs)            -- return a fresh CircuitBreaker instance
-        set_http_response(status_code)   -- configure httpx Client mock response
+        set_http_response(status_code)   -- answer every outbound webhook with status_code
         call_send(...)                   -- call service.send_delivery_webhook
 
     Unit-only API:
@@ -51,7 +52,6 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
 
     MODULE = "src.services.webhook_delivery_service"
     EXTERNAL_PATCHES = {
-        "client": f"{MODULE}.httpx.Client",
         "sleep": f"{MODULE}.time.sleep",
         "random": f"{MODULE}.random.uniform",
         "db": "src.core.database.database_session.get_db_session",
@@ -63,6 +63,11 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
         super().__init__(**kwargs)
         self._service: WebhookDeliveryService | None = None
         self._db_session: MagicMock | None = None
+        self._wire: ExitStack | None = None
+
+    def __exit__(self, *exc: object) -> bool:
+        self.close_webhook_wire()
+        return super().__exit__(*exc)  # type: ignore[misc]
 
     def _configure_mocks(self) -> None:
         # random.uniform: return 0.0 for deterministic tests
@@ -70,11 +75,8 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
 
         self._configure_ssrf_default()
 
-        # httpx.Client: 200 OK by default (from mixin)
-        self.set_http_response(200)
-
-        # Expose inner httpx post as mock["post"] so BDD steps can inspect call_args
-        self.mock["post"] = self.mock["client"].return_value.__enter__.return_value.post
+        # Installs mock["post"] (the outbound socket) answering 200 by default.
+        self.install_webhook_wire()
 
         # DB session: return a mock session with one active webhook config
         # (BDD Given steps store config in ctx dict; the unit env provides a default
@@ -104,9 +106,9 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
         secret: str | None = None,
     ) -> MagicMock:
         """Create a mock webhook config object."""
+        auth_type, auth_token = self.webhook_auth_fields(auth_type, auth_token, secret)
         config = MagicMock()
         config.url = url
         config.authentication_type = auth_type
         config.authentication_token = auth_token
-        config.webhook_secret = secret
         return config

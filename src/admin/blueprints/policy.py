@@ -1,6 +1,5 @@
 """Policy management blueprint."""
 
-import json
 import logging
 
 from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
@@ -82,7 +81,7 @@ def index(tenant_id):
 
         recent_checks = []
         for log in audit_logs:
-            details = json.loads(log.details) if log.details else {}
+            details = log.details or {}
             recent_checks.append(
                 {
                     "timestamp": log.timestamp,
@@ -198,7 +197,7 @@ def update(tenant_id):
         with get_db_session() as db_session:
             tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
             if tenant:
-                tenant.policy_settings = json.dumps(policy_settings)
+                tenant.policy_settings = policy_settings
                 db_session.commit()
 
         return redirect(url_for("policy.index", tenant_id=tenant_id))

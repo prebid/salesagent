@@ -77,9 +77,16 @@ _DISPATCH_IN_THEN_ALLOWLIST: set[str] = {
     # (dispatch_request) so that, when these scenarios are wired, they exercise
     # the parametrized transport on the wire (#1417). Rate limiting and
     # payload size remain spec-production gaps (FIXME salesagent-9vgz.92).
-    "bdd/steps/domain/uc002_nfr.py:126 then_auth_before_business_logic",
-    "bdd/steps/domain/uc002_nfr.py:190 then_rate_limiting_enforced",
-    "bdd/steps/domain/uc002_nfr.py:237 then_payload_size_limits",
+    #
+    # RE-PINNED (salesagent-n78j0.1.5, +1 line each): uc002_nfr.py gained one import
+    # line when then_payload_size_limits stopped walking result.wire_error_envelope by
+    # hand and started reading it through the sanctioned _wire_error_object helper. No
+    # dispatch was added or removed — the SAME FOUR steps are listed, at their new
+    # coordinates. This allowlist is keyed by LINE NUMBER, so any edit above a violation
+    # re-reports it as new; re-keying it on (file, function) is filed as salesagent-y4g7e.
+    "bdd/steps/domain/uc002_nfr.py:127 then_auth_before_business_logic",
+    "bdd/steps/domain/uc002_nfr.py:194 then_rate_limiting_enforced",
+    "bdd/steps/domain/uc002_nfr.py:236 then_payload_size_limits",
     "bdd/steps/domain/uc002_nfr.py:413 then_budget_validated_against_min_order",
 }
 

@@ -52,9 +52,11 @@ def serialize_tenant_to_dict(tenant: Tenant) -> dict[str, Any]:
         "approval_mode": tenant.approval_mode,
         "account_approval_mode": tenant.account_approval_mode,
         "supported_billing": safe_json_loads(tenant.supported_billing, None),
+        "account_sandbox": tenant.account_sandbox,
         "gemini_api_key": tenant.gemini_api_key,
         "creative_review_criteria": tenant.creative_review_criteria,
         "brand_manifest_policy": tenant.brand_manifest_policy,
         "advertising_policy": safe_json_loads(tenant.advertising_policy, None),
         "product_ranking_prompt": tenant.product_ranking_prompt,
+        "capability_declarations": safe_json_loads(tenant.capability_declarations, None),
     }

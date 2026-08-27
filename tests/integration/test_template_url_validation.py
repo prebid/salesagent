@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from flask import url_for
+from werkzeug.routing.converters import NumberConverter
 from werkzeug.routing.exceptions import BuildError
 
 from src.admin.app import create_app
@@ -45,6 +46,36 @@ class TestTemplateUrlValidation:
 
         return url_for_calls
 
+    @staticmethod
+    def placeholder_params(endpoint: str, tenant_id: str = "test") -> dict[str, object]:
+        """Placeholder values for every argument *endpoint*'s rule declares.
+
+        Derived from Flask's own url_map rather than from a hand-maintained list of
+        parameter names. A hardcoded list silently stops covering the app the moment
+        a route introduces an argument nobody remembered to add: the url_for call is
+        then reported unresolvable even though the route is fine, so the failure says
+        nothing about the template it names.
+
+        Converter type is honoured because ``url_for`` rejects a string where the rule
+        declares ``<int:...>``.
+        """
+        rule = next((r for r in admin_app.url_map.iter_rules() if r.endpoint == endpoint), None)
+        if rule is None:
+            return {}  # unknown endpoint: let url_for raise the BuildError that says so
+
+        params: dict[str, object] = {}
+        for argument in rule.arguments:
+            converter = rule._converters.get(argument)
+            if isinstance(converter, NumberConverter):
+                params[argument] = 1
+            elif argument == "tenant_id":
+                params[argument] = tenant_id
+            elif argument == "filename":
+                params[argument] = "test.js"
+            else:
+                params[argument] = f"test_{argument}"
+        return params
+
     def test_all_template_url_for_calls_resolve(self, authenticated_admin_session, test_tenant_with_data):
         """Test that every url_for call in templates can be resolved."""
         url_for_calls = self.get_all_template_url_for_calls()
@@ -54,40 +85,7 @@ class TestTemplateUrlValidation:
             for template_file, calls in url_for_calls.items():
                 for endpoint, params in calls:
                     try:
-                        # Try to resolve with common parameters
-                        test_params = {}
-
-                        # Add tenant_id if likely needed
-                        if "tenant" in endpoint or params and "tenant_id" in params:
-                            test_params["tenant_id"] = test_tenant_with_data["tenant_id"]
-
-                        # Add other common IDs
-                        if "product_id" in params:
-                            test_params["product_id"] = "test_product"
-                        if "creative_id" in params:
-                            test_params["creative_id"] = "test_creative"
-                        if "principal_id" in params:
-                            test_params["principal_id"] = "test_principal"
-                        if "media_buy_id" in params:
-                            test_params["media_buy_id"] = "test_buy"
-                        if "task_id" in params:
-                            test_params["task_id"] = "test_task"
-                        if "property_id" in params:
-                            test_params["property_id"] = "test_property"
-                        if "config_id" in params:
-                            test_params["config_id"] = "test_config"
-                        if "agent_id" in params:
-                            test_params["agent_id"] = 1  # agent_id is an integer
-                        if "profile_id" in params:
-                            test_params["profile_id"] = 1  # profile_id is an integer
-                        if "filename" in params:
-                            test_params["filename"] = "test.js"
-                        if "user_id" in params:
-                            test_params["user_id"] = "test_user"
-                        if "account_id" in params:
-                            test_params["account_id"] = "test_account"
-                        if "provider_id" in params:
-                            test_params["provider_id"] = "test_provider"
+                        test_params = self.placeholder_params(endpoint, test_tenant_with_data["tenant_id"])
 
                         # Try to build the URL
                         url = url_for(endpoint, **test_params)
@@ -152,45 +150,7 @@ class TestTemplateUrlValidation:
                 with admin_app.test_request_context():
                     for endpoint in matches:
                         try:
-                            # Try to resolve the endpoint
-                            test_params = {}
-                            # Most product/tenant related endpoints need tenant_id
-                            # Check the endpoint name and template location for hints
-                            needs_tenant = (
-                                "product" in endpoint
-                                or "creative" in endpoint
-                                or "inventory" in endpoint
-                                or "bulk" in endpoint
-                                or "template" in endpoint
-                                or "analyze" in endpoint
-                                or "sync" in endpoint
-                                or "authorized_properties" in endpoint
-                                or endpoint not in ["login", "logout", "index", "settings", "auth.login", "auth.logout"]
-                            )
-                            if needs_tenant:
-                                test_params["tenant_id"] = "test"
-
-                            # Add property_id for authorized_properties endpoints
-                            if "authorized_properties" in endpoint and "property" in endpoint:
-                                test_params["property_id"] = "test_property"
-
-                            # Add principal_id and config_id for webhook endpoints
-                            if "webhook" in endpoint:
-                                test_params["principal_id"] = "test_principal"
-                                if "delete" in endpoint or "toggle" in endpoint:
-                                    test_params["config_id"] = "test_config"
-                                # Delivery webhook endpoints need media_buy_id
-                                if "delivery" in endpoint or "trigger" in endpoint:
-                                    test_params["media_buy_id"] = "test_buy"
-
-                            # Add media_buy_id for media buy endpoints
-                            if "media_buy" in endpoint:
-                                test_params["media_buy_id"] = "test_buy"
-
-                            # Add user_id for user endpoints
-                            if "user" in endpoint and "toggle" in endpoint:
-                                test_params["user_id"] = "test_user"
-
+                            test_params = self.placeholder_params(endpoint)
                             url_for(endpoint, **test_params)
                         except BuildError as e:
                             form_errors.append({"template": str(relative_path), "endpoint": endpoint, "error": str(e)})

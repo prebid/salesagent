@@ -26,7 +26,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from tests.harness._base import BaseTestEnv
-from tests.harness._mixins import WebhookMixin
+from tests.harness._mixins import WEBHOOK_VALIDATE_EXTERNAL_PATCH, WebhookMixin
 
 
 class WebhookEnv(WebhookMixin, BaseTestEnv):
@@ -43,7 +43,7 @@ class WebhookEnv(WebhookMixin, BaseTestEnv):
     MODULE = "src.core.webhook_delivery"
     EXTERNAL_PATCHES = {
         "post": f"{MODULE}.requests.post",
-        "validate": f"{MODULE}.WebhookURLValidator.validate_webhook_url",
+        **WEBHOOK_VALIDATE_EXTERNAL_PATCH,
         "sleep": f"{MODULE}.time.sleep",
         "db": f"{MODULE}.get_db_session",
     }

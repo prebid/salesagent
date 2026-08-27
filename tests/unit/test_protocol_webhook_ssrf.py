@@ -14,10 +14,11 @@ AdCP VALIDATION_ERROR envelope in ``data`` — pinned below.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
-import requests
 from a2a.types import (
     InvalidParamsError,
     Message,
@@ -37,13 +38,19 @@ from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.creatives._sync import _sync_creatives_impl
 from src.core.tools.media_buy_create import _create_media_buy_impl
-from src.core.webhook_validator import WEBHOOK_SSRF_SUGGESTION_DEV, reject_unsafe_webhook_registration_url
+from src.core.webhook_validator import (
+    WEBHOOK_SSRF_SUGGESTION_DEV,
+    WebhookURLValidator,
+    reject_unsafe_webhook_registration_url,
+)
 from src.services.protocol_webhook_service import ProtocolWebhookService
 from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape
 from tests.helpers.adcp_factories import create_test_media_buy_request_dict, valid_reporting_webhook
+from tests.helpers.webhook_wire import capture_outbound_webhooks, constructed_http_clients
 
 _METADATA_URL = "http://169.254.169.254/latest/meta-data/"
+_PUBLIC_URL = "https://buyer.example.com/hooks/adcp"
 
 
 def _config(url: str) -> PushNotificationConfig:
@@ -84,110 +91,113 @@ def _minimal_create_request(**overrides):
     return CreateMediaBuyRequest(**data)
 
 
+@asynccontextmanager
+async def _running_service() -> AsyncIterator[ProtocolWebhookService]:
+    """The service, constructed INSIDE the caller's wire capture and closed after.
+
+    Construction is what binds this service's long-lived ``httpx.AsyncClient`` —
+    the one the RFC 9421 signing boundary borrows (#1291 C1) — to the stubbed
+    socket. A service built outside the capture block would POST to the real
+    network and record nothing, which is how a "nothing was sent" assertion goes
+    silently vacuous.
+    """
+    service = ProtocolWebhookService()
+    try:
+        yield service
+    finally:
+        await service.close()
+
+
+async def _send(service: ProtocolWebhookService, url: str) -> bool:
+    return await service.send_notification(
+        _config(url),
+        payload={"task_id": "t1", "status": "completed"},
+        metadata={"task_type": "create_media_buy"},
+    )
+
+
 @pytest.mark.asyncio
 async def test_send_notification_rejects_metadata_url_without_post() -> None:
-    """Cloud metadata URL must fail closed before requests.Session.post."""
-    service = ProtocolWebhookService()
-    with patch.object(service._session, "post", autospec=True) as mock_post:
-        sent = await service.send_notification(
-            _config(_METADATA_URL),
-            payload={"task_id": "t1", "status": "completed"},
-            metadata={"task_type": "create_media_buy"},
-        )
+    """Cloud metadata URL must fail closed before any byte leaves the process.
+
+    Graded on the WIRE rather than on a client mock: delivery moved to
+    ``deliver_adcp_webhook`` (#1291 C1) and the SDK skips its OWN SSRF check on
+    the operator-supplied-client path (``WebhookSender._send_bytes``), so
+    ``reject_unsafe_outbound_webhook_url`` is the only gate standing between this
+    URL and the socket. Deleting it produces a real recorded POST here.
+    """
+    with capture_outbound_webhooks() as captured:
+        async with _running_service() as service:
+            sent = await _send(service, _METADATA_URL)
+
+    # Wire leg first: "no webhook was sent" is the obligation, and the return
+    # value is only its report.
+    assert captured == []
     assert sent is False
-    mock_post.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_send_notification_rejects_localhost_without_post(monkeypatch: pytest.MonkeyPatch) -> None:
     """Production send path must reject localhost (ADCP_TESTING off)."""
     monkeypatch.delenv("ADCP_TESTING", raising=False)
-    service = ProtocolWebhookService()
-    with patch.object(service._session, "post", autospec=True) as mock_post:
-        sent = await service.send_notification(
-            _config("http://localhost:9999/webhook"),
-            payload={"task_id": "t1", "status": "completed"},
-            metadata={"task_type": "create_media_buy"},
-        )
+
+    with capture_outbound_webhooks() as captured:
+        async with _running_service() as service:
+            sent = await _send(service, "http://localhost:9999/webhook")
+
+    assert captured == []
     assert sent is False
-    mock_post.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_send_notification_posts_when_url_is_public() -> None:
-    """Safe public URL proceeds to POST (validator + session both exercised)."""
-    service = ProtocolWebhookService()
-    response = MagicMock()
-    response.status_code = 200
-    response.raise_for_status = MagicMock()
+    """Safe public URL proceeds to a real POST — the gate is not a blanket refusal.
 
-    with (
-        patch(
-            "src.core.webhook_validator.WebhookURLValidator.validate_outbound_webhook_url",
-            return_value=(True, ""),
-        ),
-        patch.object(service._session, "post", return_value=response) as mock_post,
-        patch(
-            "src.services.protocol_webhook_service.extract_webhook_result_data",
-            return_value=None,
-        ),
-        patch(
-            "src.services.protocol_webhook_service.get_audit_logger",
-            return_value=MagicMock(),
-        ),
-    ):
-        sent = await service.send_notification(
-            _config("https://buyer.example.com/hooks/adcp"),
-            payload={"task_id": "t1", "status": "completed"},
-            metadata={"task_type": "create_media_buy", "tenant_id": "t1"},
-        )
+    The real ``validate_outbound_webhook_url`` runs (DNS answers a public address
+    via the capture's resolver stub), so this grades the ACCEPT arm of the same
+    gate the two tests above grade the reject arm of, and the bytes recorded are
+    the ones the receiving socket would have seen.
+    """
+    with capture_outbound_webhooks() as captured, constructed_http_clients() as clients:
+        async with _running_service() as service:
+            sent = await _send(service, _PUBLIC_URL)
 
     assert sent is True
-    mock_post.assert_called_once_with(
-        "https://buyer.example.com/hooks/adcp",
-        json={"task_id": "t1", "status": "completed"},
-        headers={"Content-Type": "application/json", "User-Agent": "AdCP-Sales-Agent/1.0"},
-        timeout=10.0,
-        allow_redirects=False,
-    )
+    assert len(captured) == 1
+    assert captured[0].url == _PUBLIC_URL
+    assert captured[0].headers["content-type"] == "application/json"
+    assert captured[0].headers["user-agent"] == "AdCP-Sales-Agent/1.0"
+    posted = captured[0].payload
+    assert posted["task_id"] == "t1"
+    assert posted["status"] == "completed"
+    # Timeout moved from a per-call kwarg onto the client the service owns (#1291 C1).
+    assert clients and all(client.timeout.connect == 10.0 for client in clients)
 
 
 @pytest.mark.asyncio
 async def test_send_notification_does_not_follow_redirect_to_metadata() -> None:
-    """302 to link-local metadata must not be followed (open-redirect SSRF)."""
-    service = ProtocolWebhookService()
-    redirect = MagicMock()
-    redirect.status_code = 302
-    redirect.headers = {"Location": _METADATA_URL}
-    redirect.raise_for_status.side_effect = requests.HTTPError("302 redirect")
+    """A 3xx must not be chased — a followed 302 to metadata bypasses the pre-POST gate.
 
+    The property now lives on the CLIENT (``httpx.AsyncClient(follow_redirects=False)``
+    in ``ProtocolWebhookService.__init__``), not on a per-call ``allow_redirects``
+    kwarg, because delivery POSTs through ``deliver_adcp_webhook``. It is therefore
+    asserted on every client the delivery path actually constructs — the shape
+    ``constructed_http_clients`` exists for — and flipping it to ``True`` in
+    production turns this red. The wire leg additionally pins that the redirect
+    status never produced a POST anywhere but the configured URL.
+    """
     with (
-        patch(
-            "src.core.webhook_validator.WebhookURLValidator.validate_outbound_webhook_url",
-            return_value=(True, ""),
-        ),
-        patch.object(service._session, "post", return_value=redirect) as mock_post,
-        patch(
-            "src.services.protocol_webhook_service.extract_webhook_result_data",
-            return_value=None,
-        ),
-        patch(
-            "src.services.protocol_webhook_service.get_audit_logger",
-            return_value=MagicMock(),
-        ),
+        capture_outbound_webhooks(status_codes=(302,)) as captured,
+        constructed_http_clients() as clients,
         patch("src.services.protocol_webhook_service.asyncio.sleep", return_value=None),
     ):
-        sent = await service.send_notification(
-            _config("https://buyer.example.com/hooks/adcp"),
-            payload={"task_id": "t1", "status": "completed"},
-            metadata={"task_type": "create_media_buy", "tenant_id": "t1"},
-        )
+        async with _running_service() as service:
+            sent = await _send(service, _PUBLIC_URL)
 
     assert sent is False
-    assert mock_post.call_count >= 1
-    for call in mock_post.call_args_list:
-        assert call.kwargs.get("allow_redirects") is False
-        assert call.args[0] == "https://buyer.example.com/hooks/adcp"
+    assert clients and all(client.follow_redirects is False for client in clients)
+    assert captured
+    assert {c.url for c in captured} == {_PUBLIC_URL}
 
 
 def test_reject_unsafe_webhook_registration_url_raises_validation_error() -> None:
@@ -342,3 +352,48 @@ async def test_a2a_set_push_handler_rejects_metadata_url() -> None:
 
     assert_envelope_shape(exc_info.value.data, "VALIDATION_ERROR", recovery="correctable")
     mock_uow.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_the_url_the_gate_judged_is_the_url_that_is_dialled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The destination must not be rewritten into something the gate refuses.
+
+    ``send_notification`` used to gate ``push_notification_config.url`` and then
+    rewrite ``localhost`` to ``host.docker.internal`` before dialling — a host that
+    is itself in ``BLOCKED_HOSTNAMES``, so the URL the gate approved and the URL
+    that reached the socket were different, and the second was one the gate exists
+    to refuse. A gate whose verdict does not describe the dialled destination is
+    advisory. The rewrite is gone; this pins that it stays gone.
+
+    Graded on the DIALLED url captured at the wire, not on the return value:
+    ``sent is True`` is equally true whether the destination was legitimate or
+    rewritten into a blocked one, so it cannot tell the two apart.
+
+    Runs under ADCP_TESTING because that is the only configuration in which a
+    ``localhost`` registration passes the gate at all; in production it is refused
+    outright. That is also why the original defect was a dev/e2e integrity problem
+    rather than a reachable production SSRF hole — but it was load-bearing for
+    signing, since the RFC 9421 ``@target-uri`` covers whatever URL is finally
+    dialled.
+    """
+    monkeypatch.setenv("ADCP_TESTING", "true")
+    configured = "http://localhost:9999/webhook"
+
+    with capture_outbound_webhooks() as captured:
+        async with _running_service() as service:
+            await _send(service, configured)
+
+    assert len(captured) == 1, "expected exactly one delivery to grade"
+    dialled = captured[0].url
+
+    assert dialled == configured, (
+        f"the gate judged {configured!r} but the process dialled {dialled!r} — a destination the gate never saw"
+    )
+
+    # And the dialled URL must satisfy the SAME gate that admitted the configured
+    # one. Deliberately not a bare check_url_ssrf: that is a DIFFERENT gate (no
+    # ADCP_TESTING localhost allowance), and asserting against it would fail an
+    # honest delivery while passing a rewrite into another allowed-but-unjudged
+    # host. The invariant is about the gate that actually ran.
+    is_safe, error = WebhookURLValidator.validate_outbound_webhook_url(dialled)
+    assert is_safe, f"the dialled URL {dialled!r} does not pass the gate that admitted it: {error}"

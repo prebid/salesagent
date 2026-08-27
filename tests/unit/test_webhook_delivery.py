@@ -308,8 +308,20 @@ class TestWebhookDelivery:
             assert "Invalid webhook URL" in result["error"]
             assert mock_post.call_count == 0  # Should not attempt to call
 
-    def test_localhost_webhook_url_rejected(self, mock_sleep):
-        """Test that localhost URLs are rejected for SSRF protection."""
+    def test_localhost_webhook_url_rejected(self, mock_sleep, monkeypatch):
+        """Localhost is rejected under PRODUCTION posture.
+
+        ADCP_TESTING is deleted rather than left to the autouse fixture: with it
+        set, the send-time gate deliberately admits a local capture receiver, so
+        this would assert the opposite of production. Grading real posture is the
+        counter-pattern salesagent-og9k.4 points at (see
+        test_protocol_webhook_ssrf.py's localhost test, which does the same).
+
+        Before salesagent-og9k.8 this passed with the hatch ON, because this path
+        used the REGISTRATION-time gate — which has no such allowance. It was
+        green for the wrong reason.
+        """
+        monkeypatch.delenv("ADCP_TESTING", raising=False)
         delivery = WebhookDelivery(
             webhook_url="http://localhost:8080/webhook",
             payload={"test": "data"},

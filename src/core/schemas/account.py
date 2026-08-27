@@ -19,10 +19,12 @@ from adcp.types import ContextObject as LibraryContextObject
 from adcp.types import Error as LibraryError
 from adcp.types import ListAccountsRequest as LibraryListAccountsRequest
 from adcp.types import ListAccountsResponse as LibraryListAccountsResponse
+from adcp.types import NotificationConfig as LibraryNotificationConfig
 from adcp.types import Setup as LibrarySetup
 from adcp.types import SyncAccountsRequest as LibrarySyncAccountsRequest
 from adcp.types.aliases import SyncAccountsSuccessResponse as LibrarySyncAccountsSuccess
 from adcp.types.generated_poc.core.brand_ref import BrandReference as LibraryBrandReference
+from adcp.types.generated_poc.core.business_entity import BusinessEntity as LibraryBusinessEntity
 from pydantic import ConfigDict
 
 from src.core.config import get_pydantic_extra_mode
@@ -65,10 +67,16 @@ class Account(LibraryAccountDomain):
 class ListAccountsRequest(LibraryListAccountsRequest):
     """Extends library ListAccountsRequest.
 
-    Library provides: status, pagination, sandbox, context, ext.
+    Library provides: account, status, pagination, sandbox, context, ext.
+    idempotency_key added locally -- the library type doesn't declare it
+    (unlike SyncAccountsRequest), but v3.1.1's read-tool-idempotency.yaml
+    compliance phase requires read tools to tolerate it (salesagent-tm97 F5;
+    previously rejected under Pattern #7 extra=forbid).
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    idempotency_key: str | None = None
 
 
 class SyncAccountsRequest(LibrarySyncAccountsRequest):
@@ -133,9 +141,23 @@ class SyncResponseAccount(SalesAgentBaseModel):
     account_id: str | None = None
     name: str | None = None
     billing: str | None = None
+    payment_terms: str | None = None
     sandbox: bool | None = None
     errors: list[LibraryError] | None = None
     setup: LibrarySetup | None = None
+    # #1592 T2: the applied notification subscriber set, echoed on created/updated/
+    # unchanged. None omits the field ("never configured"); [] is emitted as an
+    # empty array ("cleared") -- the two are different states to the buyer.
+    # authentication.credentials is write-only and is stripped before this is built
+    # (see _scrub_notification_credentials in src/core/tools/accounts.py).
+    notification_configs: list[LibraryNotificationConfig] | None = None
+    # "Echoed from the request. Sellers MAY add fields the agent omitted ... but
+    # MUST NOT return data from a different entity. Bank details are omitted
+    # (write-only)" (v3.1.1 sync-accounts-response.json, accounts.items.
+    # billing_entity). The bank strip happens in _build_sync_result via
+    # _scrub_business_entity, the single place a persisted entity becomes a
+    # response object.
+    billing_entity: LibraryBusinessEntity | None = None
 
 
 class SyncAccountsResponse(NestedModelSerializerMixin, LibrarySyncAccountsSuccess):  # type: ignore[misc]

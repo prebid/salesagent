@@ -39,7 +39,12 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools._mcp import mcp_result
-from src.core.transport_helpers import resolve_identity_from_context
+from src.core.transport_helpers import (
+    NOT_PROVIDED,
+    IdentityOrNotProvided,
+    resolve_identity_from_context,
+    resolve_identity_if_not_provided,
+)
 
 
 def _agent_signal_id(segment_id: str) -> SignalId:
@@ -344,7 +349,7 @@ async def activate_signal(
 async def get_signals_raw(
     req: GetSignalsRequest,
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ) -> GetSignalsResponse:
     """Optional endpoint for discovering available signals (raw function for A2A server use).
 
@@ -358,8 +363,7 @@ async def get_signals_raw(
     Returns:
         GetSignalsResponse containing matching signals
     """
-    if identity is None:
-        identity = resolve_identity_from_context(ctx, require_valid_token=False)
+    identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=False)
     return await _get_signals_impl(req, identity)
 
 
@@ -369,7 +373,7 @@ async def activate_signal_raw(
     media_buy_id: str = None,
     context: ContextObject | None = None,  # payload-level context
     ctx: Context | ToolContext | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: IdentityOrNotProvided = NOT_PROVIDED,
 ) -> ActivateSignalResponse:
     """Activate a signal for use in campaigns (raw function for A2A server use).
 
@@ -386,7 +390,6 @@ async def activate_signal_raw(
     Returns:
         ActivateSignalResponse with activation status
     """
-    if identity is None:
-        identity = resolve_identity_from_context(ctx)
+    identity = resolve_identity_if_not_provided(identity, ctx)
     req = _build_activate_signal_request(signal_agent_segment_id, campaign_id, media_buy_id, context)
     return await _activate_signal_impl(req=req, identity=identity)

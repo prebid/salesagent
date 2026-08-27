@@ -22,9 +22,18 @@ def base_url():
 
     Host path: localhost:<published-port>. In-network the server is reached by
     service name (ADCP_TEST_HOST=proxy) with no published host port.
+
+    This fixture is the BOUNDARY: unlike the e2e suite, tests/ui runs against an
+    externally started stack, so the port genuinely arrives from the environment
+    (scripts/test-stack.sh:174 -> tox passenv). Reading it here once and handing
+    tests a value is the intended shape; what is NOT intended is a default. A
+    fallback port silently aims the whole suite at whatever is listening on it
+    instead of reporting that the stack was never started.
     """
     host = e2e_host()
-    port = os.environ.get("ADCP_SALES_PORT", "8000")
+    port = os.environ.get("ADCP_SALES_PORT")
+    if not port:
+        pytest.fail("ADCP_SALES_PORT is not set — start the stack first (`make test-stack-up`)")
     return f"http://{host}:{port}"
 
 

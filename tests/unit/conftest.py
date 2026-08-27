@@ -28,12 +28,15 @@ def mock_all_external_dependencies():
     with patch("src.core.database.database_session.get_db_session") as mock_db:
         mock_db.return_value = mock_session
 
-        # Mock external services
-        with patch("requests.post") as mock_post:
-            mock_post.return_value.status_code = 200
-            mock_post.return_value.json.return_value = {}
-
-            yield
+        # NO blanket requests.post stub. It used to live here, returning a 200
+        # MagicMock that captured nothing — no URL, no headers, no bytes — so any
+        # test leaning on it graded against a stub that could not tell a signed
+        # POST from an unsigned one. Measured before removal: the whole unit suite
+        # passes without it (6618/6618, unchanged), i.e. nothing actually depended
+        # on it. Tests that need to control or observe an outbound POST say so at
+        # their own site — capture_outbound_webhooks (tests/helpers/webhook_wire)
+        # records the real wire bytes (salesagent-og9k.6).
+        yield
 
 
 @pytest.fixture

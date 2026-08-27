@@ -141,7 +141,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And a creative with a known format_id
     When the Buyer Agent syncs the creative
     Then the operation should fail
-    And the error code should be "AUTH_REQUIRED"
+    And the error code should be "AUTH_MISSING"
     And the error message should contain "authentication"
     And the error should include a "suggestion" field
     And the suggestion should contain "authentication credentials"
@@ -155,7 +155,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And a creative with a known format_id
     When the Buyer Agent syncs the creative
     Then the operation should fail
-    And the error code should be "AUTH_REQUIRED"
+    And the error code should be "AUTH_MISSING"
     And the error should include a "suggestion" field
 
   @T-UC-006-ext-webhook-ssrf @extension @ext-webhook-ssrf @webhook-ssrf @error @post-f1 @post-f2 @post-f3
@@ -948,8 +948,8 @@ Feature: BR-UC-006 Sync Creative Assets
     Examples:
       | partition | auth_state                                          | expected                                           |
       | typical   | the Buyer is authenticated with a valid principal_id | the creative should be processed successfully      |
-      | missing   | the Buyer has no authentication credentials             | the request should be rejected with AUTH_REQUIRED   |
-      | empty     | the request has an empty principal_id                | the request should be rejected with AUTH_REQUIRED   |
+      | missing   | the Buyer has no authentication credentials             | the request should be rejected with AUTH_MISSING    |
+      | empty     | the request has an empty principal_id                | the request should be rejected with AUTH_MISSING    |
 
   @T-UC-006-partition-account @partition @account
   Scenario Outline: Account resolution — <partition>
@@ -1134,8 +1134,8 @@ Feature: BR-UC-006 Sync Creative Assets
     Examples:
       | boundary_point        | auth_state                                          | expected                                             |
       | typical principal_id  | the Buyer is authenticated with a valid principal_id | the creative should be processed successfully       |
-      | missing (null)        | the Buyer has no authentication credentials             | the request should be rejected with AUTH_REQUIRED    |
-      | empty string          | the request has an empty principal_id                | the request should be rejected with AUTH_REQUIRED    |
+      | missing (null)        | the Buyer has no authentication credentials             | the request should be rejected with AUTH_MISSING     |
+      | empty string          | the request has an empty principal_id                | the request should be rejected with AUTH_MISSING     |
 
   @T-UC-006-boundary-provenance @boundary @provenance
   Scenario Outline: Provenance policy boundary — <boundary_point>

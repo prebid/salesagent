@@ -7,6 +7,7 @@ to help new users understand what they need to do before taking their first orde
 import logging
 import os
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select
@@ -22,8 +23,27 @@ from src.core.database.models import (
     Tenant,
     TenantAuthConfig,
 )
+from src.core.database.repositories.signing_key import SigningKeyRepository
+from src.core.signing import KeyBacking, signing_key_backed
 
 logger = logging.getLogger(__name__)
+
+
+def _mock_adapter_config_state() -> tuple[bool, str]:
+    """Whether the mock adapter counts as configured, and the operator-facing reason.
+
+    The mock adapter is not production-ready, so it only counts as configured
+    under ``ADCP_TESTING``. Extracted because this decision was byte-duplicated at
+    two call sites, local ``import os`` and both message strings included — the
+    kind of copy that lets one site's wording drift from the other's silently
+    (salesagent-og9k.10).
+
+    Note this gates ad-server CONFIGURATION state, not egress; it shares only the
+    environment variable with the SSRF hatch, not the policy.
+    """
+    if os.environ.get("ADCP_TESTING") == "true":
+        return True, "Mock adapter configured (test mode)"
+    return False, "Mock adapter - Configure a real ad server for production"
 
 
 def _is_multi_tenant_mode() -> bool:
@@ -117,6 +137,7 @@ class SetupChecklistService:
             return results
 
         # Fetch uncached tenants
+        now_utc = datetime.now(UTC)
 
         with get_db_session() as session:
             # Bulk fetch all uncached tenants
@@ -213,6 +234,11 @@ class SetupChecklistService:
                     gam_inventory_count=gam_inventory_counts.get(tenant_id, 0),
                     product_count=product_counts.get(tenant_id, 0),
                     principal_count=principal_counts.get(tenant_id, 0),
+                    # Through the repository, per tenant: the signing-key selectors
+                    # are tenant-scoped by construction and a hand-written grouped
+                    # select(SigningKey) here would be exactly the raw query the
+                    # repository layer exists to keep in one place.
+                    key_backing=signing_key_backed(SigningKeyRepository(session, tenant_id), now=now_utc),
                 )
 
                 # Cache the result
@@ -280,6 +306,7 @@ class SetupChecklistService:
         gam_inventory_count: int,
         product_count: int,
         principal_count: int,
+        key_backing: KeyBacking,
     ) -> dict[str, Any]:
         """Build setup status from pre-fetched data (used by bulk query).
 
@@ -292,6 +319,8 @@ class SetupChecklistService:
             gam_inventory_count: Number of GAM inventory items
             product_count: Number of products
             principal_count: Number of principals
+            key_backing: Whether this tenant's own signing keys back signing and
+                publication (``src.core.signing.posture.signing_key_backed``)
 
         Returns:
             Dict with same format as get_setup_status()
@@ -307,7 +336,7 @@ class SetupChecklistService:
             principal_count,
         )
         recommended_tasks = self._build_recommended_tasks(tenant, budget_limit_count, currency_count)
-        optional_tasks = self._build_optional_tasks(tenant, currency_count)
+        optional_tasks = self._build_optional_tasks(tenant, currency_count, key_backing)
 
         # Calculate progress
         all_tasks = critical_tasks + recommended_tasks + optional_tasks
@@ -353,16 +382,7 @@ class SetupChecklistService:
                 else:
                     config_details = "GAM selected but not authenticated - Complete OAuth flow and test connection"
             elif tenant.ad_server == "mock":
-                # Mock adapter is for testing only - not production ready
-                # But allow it in testing environments (ADCP_TESTING=true)
-                import os
-
-                if os.environ.get("ADCP_TESTING") == "true":
-                    ad_server_fully_configured = True
-                    config_details = "Mock adapter configured (test mode)"
-                else:
-                    ad_server_fully_configured = False
-                    config_details = "Mock adapter - Configure a real ad server for production"
+                ad_server_fully_configured, config_details = _mock_adapter_config_state()
             elif tenant.ad_server in ["kevel", "triton"]:
                 # Other adapters (Kevel, Triton) - assume configured once selected
                 ad_server_fully_configured = True
@@ -741,7 +761,14 @@ class SetupChecklistService:
             )
         )
 
-        # 3. Multiple Currencies
+        # 3. Message Signing Key
+        tasks.append(
+            self._signing_key_task(
+                signing_key_backed(SigningKeyRepository(session, self.tenant_id), now=datetime.now(UTC))
+            )
+        )
+
+        # 4. Multiple Currencies
         stmt = select(func.count()).select_from(CurrencyLimit).where(CurrencyLimit.tenant_id == self.tenant_id)
         currency_count = session.scalar(stmt) or 0
         multiple_currencies = currency_count > 1
@@ -783,16 +810,7 @@ class SetupChecklistService:
                 ad_server_fully_configured = True
                 config_details = "GAM configured - Test connection to verify"
             elif tenant.ad_server == "mock":
-                # Mock adapter is for testing only - not production ready
-                # But allow it in testing environments (ADCP_TESTING=true)
-                import os
-
-                if os.environ.get("ADCP_TESTING") == "true":
-                    ad_server_fully_configured = True
-                    config_details = "Mock adapter configured (test mode)"
-                else:
-                    ad_server_fully_configured = False
-                    config_details = "Mock adapter - Configure a real ad server for production"
+                ad_server_fully_configured, config_details = _mock_adapter_config_state()
             elif tenant.ad_server in ["kevel", "triton"]:
                 ad_server_fully_configured = True
                 config_details = f"{tenant.ad_server} adapter configured"
@@ -1071,7 +1089,7 @@ class SetupChecklistService:
 
         return tasks
 
-    def _build_optional_tasks(self, tenant: Tenant, currency_count: int) -> list[SetupTask]:
+    def _build_optional_tasks(self, tenant: Tenant, currency_count: int, key_backing: KeyBacking) -> list[SetupTask]:
         """Build optional tasks from pre-fetched data (no session queries)."""
         tasks = []
 
@@ -1127,7 +1145,10 @@ class SetupChecklistService:
             )
         )
 
-        # 3. Multiple Currencies
+        # 3. Message Signing Key
+        tasks.append(self._signing_key_task(key_backing))
+
+        # 4. Multiple Currencies
         multiple_currencies = currency_count > 1
         tasks.append(
             SetupTask(
@@ -1143,6 +1164,39 @@ class SetupChecklistService:
         )
 
         return tasks
+
+    def _signing_key_task(self, key_backing: KeyBacking) -> SetupTask:
+        """The signing-key entry, built from the ONE key-presence derivation.
+
+        Added by salesagent-7x8t: this enumeration is the canonical list of
+        provisionable per-tenant resources, and it omitted signing keys — which is
+        exactly why a whole family of RFC 9421 machinery could ship with no
+        provisioning path and stay invisible in the UI.
+
+        Done-ness is ``signs`` (``SigningKeyRepository.active_at``), not merely
+        ``publishes``: a tenant whose only key is inside its post-revocation grace
+        window still appears in the published JWKS but can no longer sign, and
+        telling an operator that is "configured" is the dishonest half of the
+        distinction the two selectors exist to keep apart.
+
+        One builder for both enumeration paths (per-tenant and bulk) so the two
+        cannot disagree about the task's key, name or done-ness.
+        """
+        if key_backing.signs:
+            details = "Signing key provisioned and published"
+        elif key_backing.publishes:
+            details = "Published key is revoked or not yet active — provision a replacement"
+        else:
+            details = "No signing key: this seller publishes an empty JWKS and cannot sign outbound webhooks"
+
+        return SetupTask(
+            key="signing_key",
+            name="Message Signing Key",
+            description="Provision the RFC 9421 key this seller signs with and publishes to counterparties",
+            is_complete=key_backing.signs,
+            action_url=f"/tenant/{self.tenant_id}/signing-keys",
+            details=details,
+        )
 
     def get_next_steps(self) -> list[dict[str, str]]:
         """Get prioritized next steps for incomplete tasks.

@@ -15,8 +15,11 @@ import pytest
 from sqlalchemy import select
 
 from src.admin.app import create_app
+from src.admin.blueprints import users as users_module
 from src.core.database.models import Tenant, TenantAuthConfig, User
+from src.core.database.repositories import uow as uow_module
 from tests.factories import TenantAuthConfigFactory, TenantFactory, UserFactory
+from tests.helpers import concurrent_commit_in_write_window, operator_answer
 
 app = create_app()
 
@@ -188,6 +191,65 @@ class TestAuthorizedDomains:
         assert response.status_code == 400
         assert "already exists" in response.get_json()["error"].lower()
 
+    def test_concurrent_adds_do_not_lose_a_domain(self, client, factory_session):
+        """A concurrent add landing inside the handler's window must not be
+        overwritten (salesagent-v8dt).
+
+        The old handler loaded the whole JSON list, appended in Python, and
+        wrote the whole list back — a rival add committing between its read
+        and its write was erased (reproduced red with the rival fired at the
+        ``commit`` instant). The fix collapses check and write into ONE
+        UPDATE, which takes the row lock at ``execute`` — so the rival now
+        fires at that instant (the write window moved; the assertion did not):
+        both domains must survive, whatever the interleaving.
+        """
+        tenant = TenantFactory(authorized_domains=["example.com"])
+        _auth_session(client, tenant.tenant_id)
+
+        def commit_rival_add():
+            rival_tenant = factory_session.get(Tenant, tenant.tenant_id)
+            rival_tenant.authorized_domains = [*rival_tenant.authorized_domains, "rival.example.com"]
+            factory_session.commit()
+
+        with concurrent_commit_in_write_window(uow_module, commit_rival_add, trigger="execute"):
+            response = client.post(
+                f"/tenant/{tenant.tenant_id}/users/domains",
+                json={"domain": "mine.example.com"},
+            )
+
+        assert response.status_code == 200
+        assert response.get_json()["success"] is True
+        factory_session.expire_all()
+        refreshed = factory_session.get(Tenant, tenant.tenant_id)
+        assert set(refreshed.authorized_domains) == {
+            "example.com",
+            "mine.example.com",
+            "rival.example.com",
+        }
+
+    def test_concurrent_remove_and_add_both_apply(self, client, factory_session):
+        """A rival add landing in the remove handler's write window survives
+        alongside the removal — neither whole-list write erases the other."""
+        tenant = TenantFactory(authorized_domains=["example.com", "old.example.com"])
+        _auth_session(client, tenant.tenant_id)
+
+        def commit_rival_add():
+            rival_tenant = factory_session.get(Tenant, tenant.tenant_id)
+            rival_tenant.authorized_domains = [*rival_tenant.authorized_domains, "rival.example.com"]
+            factory_session.commit()
+
+        with concurrent_commit_in_write_window(uow_module, commit_rival_add, trigger="execute"):
+            response = client.delete(
+                f"/tenant/{tenant.tenant_id}/users/domains",
+                json={"domain": "old.example.com"},
+            )
+
+        assert response.status_code == 200
+        assert response.get_json()["success"] is True
+        factory_session.expire_all()
+        refreshed = factory_session.get(Tenant, tenant.tenant_id)
+        assert set(refreshed.authorized_domains) == {"example.com", "rival.example.com"}
+
 
 class TestDisableSetupModeAuth:
     """POST /tenant/<id>/users/disable-setup-mode — requires SSO login.
@@ -281,3 +343,41 @@ class TestCrossBlueprintGuardrails:
         # Smoke check the factory-created client id is non-empty.
         assert refreshed.oidc_client_id
         assert cfg.oidc_client_id == refreshed.oidc_client_id
+
+
+class TestAddUserDuplicateEmail:
+    """POST /tenant/<id>/users/add — duplicate (tenant_id, email).
+
+    ``uq_users_tenant_email`` is the authority, and the pre-check cannot see a
+    concurrent transaction's uncommitted row. Winner and loser must therefore get
+    the SAME answer — the loser's used to be a 302 carrying raw psycopg2 text in
+    the flash, which a "not a 500" assertion would have called a pass.
+
+    The loser runs FIRST so its pre-check is genuinely clean; the winner then
+    re-posts against the row the race left behind, on the same tenant, so the two
+    answers are directly comparable.
+    """
+
+    FORM = {"email": "contested@example.com", "role": "viewer", "name": "Contested"}
+
+    def _post_add(self, client, tenant_id):
+        return client.post(f"/tenant/{tenant_id}/users/add", data=self.FORM, follow_redirects=False)
+
+    def test_winner_and_loser_get_the_same_answer(self, client, factory_session):
+        tenant = TenantFactory()
+        _auth_session(client, tenant.tenant_id)
+
+        def commit_conflicting_row():
+            UserFactory(tenant=tenant, email=self.FORM["email"])
+
+        with concurrent_commit_in_write_window(users_module, commit_conflicting_row):
+            loser = operator_answer(client, self._post_add(client, tenant.tenant_id))
+
+        winner = operator_answer(client, self._post_add(client, tenant.tenant_id))
+
+        assert winner == (
+            302,
+            f"/tenant/{tenant.tenant_id}/users",
+            [("error", f"User {self.FORM['email']} already exists")],
+        )
+        assert loser == winner

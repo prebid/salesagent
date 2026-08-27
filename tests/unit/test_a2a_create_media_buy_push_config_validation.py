@@ -15,6 +15,13 @@ WITHOUT push_notification_config and forward it as a separate argument. The A2A
 skill handler must behave identically.
 
 beads: salesagent-18h.3
+
+The webhook URLs here are PUBLIC (https://buyer.example.com/...) rather than
+loopback, deliberately. What these tests grade is credential length and the
+absence of an authentication block — the URL is scaffolding. A loopback URL
+would have passed only because the autouse ADCP_TESTING fixture puts the egress
+gate in its lenient arm, so the tests would have depended on a posture no
+deployment runs, for a reason unrelated to their subject (salesagent-og9k.4).
 """
 
 from unittest.mock import AsyncMock, patch
@@ -69,7 +76,7 @@ async def test_short_webhook_credentials_do_not_block_create_media_buy():
     # 18-char credential is shorter than the adcp MinLen(32) on the
     # CreateMediaBuyRequest.push_notification_config.authentication field.
     params["push_notification_config"] = {
-        "url": "http://localhost:9999/webhook",
+        "url": "https://buyer.example.com/webhook",
         "authentication": {
             "schemes": ["Bearer"],
             "credentials": "test-webhook-token",  # 18 chars (< 32)
@@ -103,7 +110,7 @@ async def test_short_webhook_credentials_do_not_block_create_media_buy():
 
     # push_notification_config must be forwarded to the tool, not validated away.
     assert captured.get("push_notification_config") == {
-        "url": "http://localhost:9999/webhook",
+        "url": "https://buyer.example.com/webhook",
         "authentication": {"schemes": ["Bearer"], "credentials": "test-webhook-token"},
     }, f"push_notification_config not forwarded to tool: {captured.get('push_notification_config')!r}"
 
@@ -133,7 +140,7 @@ async def test_no_auth_push_config_still_works():
     )
 
     params = _valid_packages_params()
-    params["push_notification_config"] = {"url": "http://localhost:9999/webhook"}
+    params["push_notification_config"] = {"url": "https://buyer.example.com/webhook"}
 
     submitted_result = CreateMediaBuyResult(
         response={"media_buy_id": "mb_test", "packages": []},
@@ -153,6 +160,6 @@ async def test_no_auth_push_config_still_works():
         result = await handler._handle_create_media_buy_skill(params, identity)
 
     assert captured, "core_create_media_buy_tool was never called for no-auth config"
-    assert captured.get("push_notification_config") == {"url": "http://localhost:9999/webhook"}
+    assert captured.get("push_notification_config") == {"url": "https://buyer.example.com/webhook"}
     status = result.get("status") if isinstance(result, dict) else result.status
     assert status == "submitted"

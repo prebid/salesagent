@@ -140,6 +140,32 @@ class TestWebhookURLValidator:
         is_valid, error = WebhookURLValidator.validate_for_testing("http://192.168.1.1/webhook", allow_localhost=True)
         assert not is_valid
 
+    def test_outbound_allows_configured_webhook_host_under_testing(self, monkeypatch):
+        """ADCP_WEBHOOK_HOST (e.g. a Docker Compose service name resolving to a
+        private IP, as set by docker-compose.e2e.yml for the e2e webhook capture
+        server) must be allowed at send time under ADCP_TESTING, even though DNS
+        resolution puts it in a blocked private range. Regression test for the
+        gap where only literal localhost/127.0.0.1/loopback were exempted, so
+        every outbound webhook in the e2e suite was silently SSRF-rejected."""
+        monkeypatch.setenv("ADCP_TESTING", "true")
+        monkeypatch.setenv("ADCP_WEBHOOK_HOST", "tests")
+        # "tests" isn't publicly resolvable in a unit-test process, so exercise
+        # the hostname-allowlist path directly rather than depending on the
+        # e2e Docker network's DNS.
+        assert WebhookURLValidator._is_trusted_test_host("http://tests:8080/webhook") is True
+
+    def test_outbound_still_blocks_unconfigured_hostname_under_testing(self, monkeypatch):
+        """A hostname that doesn't match ADCP_WEBHOOK_HOST is not exempted just
+        because ADCP_TESTING is set -- only the operator-configured test host is."""
+        monkeypatch.setenv("ADCP_TESTING", "true")
+        monkeypatch.setenv("ADCP_WEBHOOK_HOST", "tests")
+        assert WebhookURLValidator._is_trusted_test_host("http://some-other-service:8080/webhook") is False
+
+    def test_outbound_webhook_host_exemption_requires_env_var_set(self, monkeypatch):
+        """No ADCP_WEBHOOK_HOST configured -> no hostname exemption beyond localhost."""
+        monkeypatch.delenv("ADCP_WEBHOOK_HOST", raising=False)
+        assert WebhookURLValidator._is_trusted_test_host("http://tests:8080/webhook") is False
+
     def test_production_requires_https(self, monkeypatch):
         """Production registration/outbound must reject plain HTTP."""
         monkeypatch.setenv("ENVIRONMENT", "production")

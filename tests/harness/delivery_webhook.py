@@ -29,7 +29,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from tests.harness._base import IntegrationEnv
-from tests.harness._mixins import WebhookMixin
+from tests.harness._mixins import WEBHOOK_VALIDATE_EXTERNAL_PATCH, WebhookMixin
 
 
 class WebhookEnv(WebhookMixin, IntegrationEnv):
@@ -50,7 +50,7 @@ class WebhookEnv(WebhookMixin, IntegrationEnv):
 
     EXTERNAL_PATCHES = {
         "post": "src.core.webhook_delivery.requests.post",
-        "validate": "src.core.webhook_delivery.WebhookURLValidator.validate_webhook_url",
+        **WEBHOOK_VALIDATE_EXTERNAL_PATCH,
         "sleep": "src.core.webhook_delivery.time.sleep",
     }
 

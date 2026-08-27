@@ -98,14 +98,14 @@
                             <code>{{ webhook.url }}</code>
                         </td>
                         <td>
-                            {% if webhook.auth_type == 'hmac_sha256' %}
+                            {% if webhook.authentication_type == 'hmac_sha256' %}
                             <span class="badge badge-success">🔐 HMAC-SHA256</span>
                             {% else %}
                             <span class="badge badge-warning">⚠️ None</span>
                             {% endif %}
                         </td>
                         <td>
-                            <span class="status-indicator" id="status-{{ webhook.config_id }}">
+                            <span class="status-indicator" id="status-{{ webhook.id }}">
                                 {% if webhook.is_active %}
                                 <span class="badge badge-success">✓ Active</span>
                                 {% else %}
@@ -116,15 +116,15 @@
                         <td>{{ webhook.created_at.strftime('%Y-%m-%d %H:%M') if webhook.created_at else 'N/A' }}</td>
                         <td>
                             <button
-                                onclick="toggleWebhook('{{ webhook.config_id }}')"
+                                onclick="toggleWebhook('{{ webhook.id }}')"
                                 class="btn btn-sm btn-secondary"
-                                id="toggle-btn-{{ webhook.config_id }}"
+                                id="toggle-btn-{{ webhook.id }}"
                             >
                                 {% if webhook.is_active %}Disable{% else %}Enable{% endif %}
                             </button>
                             <form
                                 method="POST"
-                                action="{{ url_for('principals.delete_webhook', tenant_id=tenant_id, principal_id=principal.principal_id, config_id=webhook.config_id) }}"
+                                action="{{ url_for('principals.delete_webhook', tenant_id=tenant_id, principal_id=principal.principal_id, config_id=webhook.id) }}"
                                 style="display: inline;"
                                 onsubmit="return confirm('Are you sure you want to delete this webhook?')"
                             >

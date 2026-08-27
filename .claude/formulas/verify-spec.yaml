@@ -380,7 +380,6 @@ finalize:
 
       2. Sync beads:
          ```bash
-         bd sync
          ```
 
       3. Run full quality gate:

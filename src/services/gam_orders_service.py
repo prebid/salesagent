@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session, joinedload, scoped_session, sessionmaker
 
 from src.adapters.gam_orders_discovery import GAMOrdersDiscovery, LineItem, Order
 from src.core.database.db_config import DatabaseConfig
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import GAMLineItem, GAMOrder
 
 # Create database session factory
@@ -77,10 +78,45 @@ class GAMOrdersService:
     def _upsert_order(self, tenant_id: str, order: Order, sync_time: datetime):
         """Insert or update an order."""
         stmt = select(GAMOrder).filter_by(tenant_id=tenant_id, order_id=order.order_id)
-        existing = self.db.scalars(stmt).first()
+        new_order = GAMOrder(
+            tenant_id=tenant_id,
+            order_id=order.order_id,
+            name=order.name,
+            advertiser_id=order.advertiser_id,
+            advertiser_name=order.advertiser_name,
+            agency_id=order.agency_id,
+            agency_name=order.agency_name,
+            trafficker_id=order.trafficker_id,
+            trafficker_name=order.trafficker_name,
+            salesperson_id=order.salesperson_id,
+            salesperson_name=order.salesperson_name,
+            status=order.status.value,
+            start_date=order.start_date,
+            end_date=order.end_date,
+            unlimited_end_date=order.unlimited_end_date,
+            total_budget=order.total_budget,
+            currency_code=order.currency_code,
+            external_order_id=order.external_order_id,
+            po_number=order.po_number,
+            notes=order.notes,
+            last_modified_date=order.last_modified_date,
+            is_programmatic=order.is_programmatic,
+            applied_labels=order.applied_labels,
+            effective_applied_labels=order.effective_applied_labels,
+            custom_field_values=order.custom_field_values,
+            order_metadata=order.order_metadata,
+            last_synced=sync_time,
+        )
+        existing = resolve_or_write(
+            self.db,
+            conflict=lambda: self.db.scalars(stmt).first(),
+            write=lambda: self.db.add(new_order),
+            constraint="uq_gam_orders",
+        )
 
         if existing:
-            # Update existing order
+            # Update the order already there — reached both when the pre-check found
+            # it and when a concurrent sync won the insert race.
             existing.name = order.name
             existing.advertiser_id = order.advertiser_id
             existing.advertiser_name = order.advertiser_name
@@ -106,46 +142,70 @@ class GAMOrdersService:
             existing.custom_field_values = order.custom_field_values
             existing.order_metadata = order.order_metadata
             existing.last_synced = cast(Any, sync_time)
-        else:
-            # Create new order
-            new_order = GAMOrder(
-                tenant_id=tenant_id,
-                order_id=order.order_id,
-                name=order.name,
-                advertiser_id=order.advertiser_id,
-                advertiser_name=order.advertiser_name,
-                agency_id=order.agency_id,
-                agency_name=order.agency_name,
-                trafficker_id=order.trafficker_id,
-                trafficker_name=order.trafficker_name,
-                salesperson_id=order.salesperson_id,
-                salesperson_name=order.salesperson_name,
-                status=order.status.value,
-                start_date=order.start_date,
-                end_date=order.end_date,
-                unlimited_end_date=order.unlimited_end_date,
-                total_budget=order.total_budget,
-                currency_code=order.currency_code,
-                external_order_id=order.external_order_id,
-                po_number=order.po_number,
-                notes=order.notes,
-                last_modified_date=order.last_modified_date,
-                is_programmatic=order.is_programmatic,
-                applied_labels=order.applied_labels,
-                effective_applied_labels=order.effective_applied_labels,
-                custom_field_values=order.custom_field_values,
-                order_metadata=order.order_metadata,
-                last_synced=sync_time,
-            )
-            self.db.add(new_order)
 
     def _upsert_line_item(self, tenant_id: str, line_item: LineItem, sync_time: datetime):
         """Insert or update a line item."""
         stmt = select(GAMLineItem).filter_by(tenant_id=tenant_id, line_item_id=line_item.line_item_id)
-        existing = self.db.scalars(stmt).first()
+        new_line_item = GAMLineItem(
+            tenant_id=tenant_id,
+            line_item_id=line_item.line_item_id,
+            order_id=line_item.order_id,
+            name=line_item.name,
+            status=line_item.status.value,
+            line_item_type=line_item.line_item_type,
+            priority=line_item.priority,
+            start_date=line_item.start_date,
+            end_date=line_item.end_date,
+            unlimited_end_date=line_item.unlimited_end_date,
+            auto_extension_days=line_item.auto_extension_days,
+            cost_type=line_item.cost_type,
+            cost_per_unit=line_item.cost_per_unit,
+            discount_type=line_item.discount_type,
+            discount=line_item.discount,
+            contracted_units_bought=line_item.contracted_units_bought,
+            delivery_rate_type=line_item.delivery_rate_type,
+            goal_type=line_item.goal_type,
+            primary_goal_type=line_item.primary_goal_type,
+            primary_goal_units=line_item.primary_goal_units,
+            impression_limit=line_item.impression_limit,
+            click_limit=line_item.click_limit,
+            target_platform=line_item.target_platform,
+            environment_type=line_item.environment_type,
+            allow_overbook=line_item.allow_overbook,
+            skip_inventory_check=line_item.skip_inventory_check,
+            reserve_at_creation=line_item.reserve_at_creation,
+            stats_impressions=line_item.stats.get("impressions") if line_item.stats else None,
+            stats_clicks=line_item.stats.get("clicks") if line_item.stats else None,
+            stats_ctr=line_item.stats.get("ctr") if line_item.stats else None,
+            stats_video_completions=line_item.stats.get("video_completions") if line_item.stats else None,
+            stats_video_starts=line_item.stats.get("video_starts") if line_item.stats else None,
+            stats_viewable_impressions=line_item.stats.get("viewable_impressions") if line_item.stats else None,
+            delivery_indicator_type=line_item.delivery_indicator_type,
+            delivery_data=line_item.delivery_data,
+            targeting=line_item.targeting,
+            creative_placeholders=line_item.creative_placeholders,
+            frequency_caps=line_item.frequency_caps,
+            applied_labels=line_item.applied_labels,
+            effective_applied_labels=line_item.effective_applied_labels,
+            custom_field_values=line_item.custom_field_values,
+            third_party_measurement_settings=line_item.third_party_measurement_settings,
+            video_max_duration=line_item.video_max_duration,
+            line_item_metadata=line_item.line_item_metadata,
+            last_modified_date=line_item.last_modified_date,
+            creation_date=line_item.creation_date,
+            external_id=line_item.external_id,
+            last_synced=sync_time,
+        )
+        existing = resolve_or_write(
+            self.db,
+            conflict=lambda: self.db.scalars(stmt).first(),
+            write=lambda: self.db.add(new_line_item),
+            constraint="uq_gam_line_items",
+        )
 
         if existing:
-            # Update existing line item
+            # Update the line item already there — reached both when the pre-check
+            # found it and when a concurrent sync won the insert race.
             existing.order_id = line_item.order_id
             existing.name = line_item.name
             existing.status = line_item.status.value
@@ -196,59 +256,6 @@ class GAMOrdersService:
             existing.creation_date = cast(Any, line_item.creation_date)
             existing.external_id = line_item.external_id
             existing.last_synced = cast(Any, sync_time)
-        else:
-            # Create new line item
-            new_line_item = GAMLineItem(
-                tenant_id=tenant_id,
-                line_item_id=line_item.line_item_id,
-                order_id=line_item.order_id,
-                name=line_item.name,
-                status=line_item.status.value,
-                line_item_type=line_item.line_item_type,
-                priority=line_item.priority,
-                start_date=line_item.start_date,
-                end_date=line_item.end_date,
-                unlimited_end_date=line_item.unlimited_end_date,
-                auto_extension_days=line_item.auto_extension_days,
-                cost_type=line_item.cost_type,
-                cost_per_unit=line_item.cost_per_unit,
-                discount_type=line_item.discount_type,
-                discount=line_item.discount,
-                contracted_units_bought=line_item.contracted_units_bought,
-                delivery_rate_type=line_item.delivery_rate_type,
-                goal_type=line_item.goal_type,
-                primary_goal_type=line_item.primary_goal_type,
-                primary_goal_units=line_item.primary_goal_units,
-                impression_limit=line_item.impression_limit,
-                click_limit=line_item.click_limit,
-                target_platform=line_item.target_platform,
-                environment_type=line_item.environment_type,
-                allow_overbook=line_item.allow_overbook,
-                skip_inventory_check=line_item.skip_inventory_check,
-                reserve_at_creation=line_item.reserve_at_creation,
-                stats_impressions=line_item.stats.get("impressions") if line_item.stats else None,
-                stats_clicks=line_item.stats.get("clicks") if line_item.stats else None,
-                stats_ctr=line_item.stats.get("ctr") if line_item.stats else None,
-                stats_video_completions=line_item.stats.get("video_completions") if line_item.stats else None,
-                stats_video_starts=line_item.stats.get("video_starts") if line_item.stats else None,
-                stats_viewable_impressions=line_item.stats.get("viewable_impressions") if line_item.stats else None,
-                delivery_indicator_type=line_item.delivery_indicator_type,
-                delivery_data=line_item.delivery_data,
-                targeting=line_item.targeting,
-                creative_placeholders=line_item.creative_placeholders,
-                frequency_caps=line_item.frequency_caps,
-                applied_labels=line_item.applied_labels,
-                effective_applied_labels=line_item.effective_applied_labels,
-                custom_field_values=line_item.custom_field_values,
-                third_party_measurement_settings=line_item.third_party_measurement_settings,
-                video_max_duration=line_item.video_max_duration,
-                line_item_metadata=line_item.line_item_metadata,
-                last_modified_date=line_item.last_modified_date,
-                creation_date=line_item.creation_date,
-                external_id=line_item.external_id,
-                last_synced=sync_time,
-            )
-            self.db.add(new_line_item)
 
     def get_orders(self, tenant_id: str, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         """

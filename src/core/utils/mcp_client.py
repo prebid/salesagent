@@ -3,6 +3,32 @@
 This module provides a single, standardized way to create MCP clients for
 communicating with external agents (creative agents, signals agents, etc.).
 
+**This seam does NOT sign requests, and that is a spec conclusion, not an omission.**
+
+The tempting refactor is to make this the one place RFC 9421 signing is applied,
+since it is already the one place MCP clients are created. It would be wrong for
+the calls that reach it. An RFC 9421 signature attributes to a NAMED operation,
+and AdCP 3.1.1 (building/by-layer/L1/security.mdx:1043) is explicit about which
+names are legal:
+
+    "Operation names in `required_for` / `supported_for` are AdCP protocol
+     operation names (`create_media_buy`, `update_media_buy`, `acquire_rights`,
+     etc.) — not MCP tool names, A2A skill names, or any transport-specific
+     rename. Verifiers MUST NOT accept operation names that are not defined by
+     the AdCP protocol spec."
+
+The bespoke creative-agent tools that come through here (``preview_creative``,
+``build_creative``) are not AdCP protocol operations and have no entry in the
+``request_signing.supported_for`` enum. Signing them would mean emitting a
+signature attributed to a name a conformant verifier MUST reject — so widening
+this seam would not merely be unnecessary, it would put non-conformant
+signatures on the wire.
+
+Signing therefore stays where an operation NAME exists to attribute it to: the
+AdCP call sites. If these tools ever need signing, the prerequisite is upstream —
+an operation naming convention in the spec — not a change here (salesagent-z6nr.34,
+#1291).
+
 Key features:
 - Consistent URL handling (uses user's URL; if it fails after retries, does one
   final fallback attempt by appending "/mcp" when missing)

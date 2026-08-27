@@ -77,7 +77,8 @@
                     <div style="font-size: 0.875rem; color: #6b7280;">
                         {{ comment.user }} • {{ comment.timestamp }}
                     </div>
-                    <div>{{ comment.comment }}</div>
+                    {# Canonical CommentModel key is 'text'; 'comment' covers legacy rows #}
+                    <div>{{ comment.text or comment.comment }}</div>
                 </div>
                 {% endfor %}
             </div>

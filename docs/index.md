@@ -35,6 +35,12 @@ The Prebid Sales Agent is the Prebid.org reference implementation of an AdCP-com
 - **[Security](security.md)** - Authentication and security best practices
 - **[Encryption](encryption.md)** - API key encryption with Fernet
 
+## Message Signing (RFC 9421)
+
+- **[Signing posture and key discovery](signing/posture-and-discovery.md)** - For counterparties: what we advertise, the enforcement ladder, and the brand.json walk to our JWKS
+- **[Verifying our outbound webhooks](signing/verifying-our-webhooks.md)** - For counterparties: the profile tag, where to fetch the key, and the legacy HMAC removal
+- **[Signing key runbook](operations/signing-key-runbook.md)** - For operators: provisioning, rotation, revocation, rollout and rollback
+
 ## Development
 
 - **[Overview](development/)** - Contributing to the codebase

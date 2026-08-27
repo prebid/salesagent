@@ -40,6 +40,7 @@ def agent():
 def _mock_adcp_client(mock_result: MagicMock) -> MagicMock:
     """Build a mock ADCPMultiAgentClient that returns the given result."""
     mock_agent_proxy = MagicMock()
+    mock_agent_proxy.signing = None
     mock_agent_proxy.get_signals = AsyncMock(return_value=mock_result)
     mock_client = MagicMock()
     mock_client.agent.return_value = mock_agent_proxy

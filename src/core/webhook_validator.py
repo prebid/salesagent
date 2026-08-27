@@ -9,14 +9,18 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlparse
 
+import requests
 from adcp.types import ContextObject, TaskType
 
 from src.core.config import is_production
 from src.core.exceptions import AdCPValidationError
 from src.core.security.url_validator import check_url_ssrf
+
+logger = logging.getLogger(__name__)
 
 # Fallback used when an action label is not a member of the SDK's closed
 # TaskType enum. create_mcp_webhook_payload() restricts task_type to that
@@ -145,15 +149,80 @@ def reject_unsafe_outbound_webhook_url(
     return True, error_msg
 
 
+def deliver_json_to_allowed_destination(
+    url: str,
+    payload: Mapping[str, Any],
+    *,
+    kind: str,
+    timeout: float = 10.0,
+    log: logging.Logger | None = None,
+) -> bool:
+    """POST *payload* as JSON to *url*, but only after the gate accepts *url*.
+
+    For senders that dial a URL read back out of config or a DB row. Judging a
+    URL at WRITE time does not make it safe at SEND time: the row may predate the
+    gate, may have been edited directly in the database, or may resolve somewhere
+    new. This re-judges at the moment of the call.
+
+    One function rather than a gate bolted onto each sender, because they are one
+    act — three copies is how two of them end up on different policies (the defect
+    salesagent-og9k.8 catalogues on the four pre-existing send paths).
+
+    Returns whether the delivery happened. Deliberately a bool and not the
+    refusal reason: the detailed cause names our network topology, and AdCP 3.1.1
+    (building/by-layer/L1/security.mdx:104-119, step 6) treats echoing it back as
+    a side channel. The cause is logged, not returned.
+    """
+    logger_ = log or logger
+    rejected, _error = reject_unsafe_outbound_webhook_url(url, log=logger_, kind=kind)
+    if rejected:
+        return False
+    try:
+        response = requests.post(
+            url,
+            json=dict(payload),
+            timeout=timeout,
+            headers={"Content-Type": "application/json"},
+        )
+    except requests.RequestException:
+        logger_.warning("%s delivery to %s failed", kind, webhook_url_for_log(url), exc_info=True)
+        return False
+    if response.status_code >= 400:
+        logger_.warning("%s delivery to %s returned HTTP %s", kind, webhook_url_for_log(url), response.status_code)
+        return False
+    return True
+
+
 class WebhookURLValidator:
     """Validates webhook URLs to prevent SSRF attacks."""
 
     @staticmethod
-    def _maybe_allow_localhost(is_valid: bool, error: str, *, allow_localhost: bool) -> tuple[bool, str]:
-        """Override localhost/loopback SSRF failures when testing allows them."""
-        if not is_valid and allow_localhost:
-            if "localhost" in error.lower() or "127.0.0" in error or "loopback" in error.lower():
-                return True, ""
+    def _is_trusted_test_host(url: str) -> bool:
+        """True when ``url``'s hostname is an operator-configured test target.
+
+        Covers literal localhost/loopback (the common single-process case)
+        and the exact hostname set in ``ADCP_WEBHOOK_HOST`` -- the operator-
+        configured webhook receiver for multi-container test topologies
+        (e.g. the e2e Docker Compose stack, where the capture server is a
+        separate service reachable only by its compose service name, which
+        resolves to a private IP at send time; see docker-compose.e2e.yml's
+        ``ADCP_WEBHOOK_HOST: tests``). Never derived from request/buyer-
+        supplied data -- ``ADCP_WEBHOOK_HOST`` is CI/ops-set environment
+        config, not attacker-controllable. Any other private/internal
+        target (e.g. an arbitrary 192.168.x.x) is still rejected even
+        under testing -- see test_validate_for_testing_blocks_private_networks.
+        """
+        hostname = (urlparse(url).hostname or "").lower()
+        if hostname in {"localhost", "127.0.0.1"}:
+            return True
+        configured_host = os.environ.get("ADCP_WEBHOOK_HOST", "").lower()
+        return bool(configured_host) and hostname == configured_host
+
+    @staticmethod
+    def _maybe_allow_localhost(url: str, is_valid: bool, error: str, *, allow_localhost: bool) -> tuple[bool, str]:
+        """Override SSRF failures for a trusted test host when testing allows them."""
+        if not is_valid and allow_localhost and WebhookURLValidator._is_trusted_test_host(url):
+            return True, ""
         return is_valid, error
 
     @staticmethod
@@ -190,7 +259,7 @@ class WebhookURLValidator:
             resolve_dns=False,
             require_https=cls._require_https(),
         )
-        return cls._maybe_allow_localhost(is_valid, error, allow_localhost=allow_localhost)
+        return cls._maybe_allow_localhost(url, is_valid, error, allow_localhost=allow_localhost)
 
     @classmethod
     def validate_outbound_webhook_url(cls, url: str) -> tuple[bool, str]:
@@ -216,4 +285,4 @@ class WebhookURLValidator:
         """
         # Testing path always allows HTTP (capture servers, local harnesses).
         is_valid, error = check_url_ssrf(url, require_https=False)
-        return cls._maybe_allow_localhost(is_valid, error, allow_localhost=allow_localhost)
+        return cls._maybe_allow_localhost(url, is_valid, error, allow_localhost=allow_localhost)

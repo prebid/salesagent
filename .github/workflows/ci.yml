@@ -188,7 +188,14 @@ jobs:
     permissions:
       contents: read
       packages: read # pull adcp-creative-agent from ghcr.io (publish runs on main via publish-creative-agent.yml)
-    timeout-minutes: 15
+    # 15m was sized for five host-path groups. The `creative` group now runs the
+    # integration suite IN-NETWORK (see its step below), which costs a full stack
+    # bring-up plus the WHOLE suite rather than one marker slice: 13.8m of pytest
+    # measured in-network (test-results/innet_190826_1904/integration.json, 2705
+    # tests) on top of agent pull + compose build + migrations + TLS. That
+    # exceeds 15m on its own. A ceiling is not a wait — the four host-path groups
+    # still finish in minutes and are unaffected by the higher bound.
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -226,6 +233,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
       - uses: ./.github/actions/_postgres
+        if: matrix.group != 'creative'
         with:
           database-url: ${{ env.DATABASE_URL }}
       - name: Log in to GitHub Container Registry
@@ -235,21 +243,44 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Start pinned creative agent
-        if: matrix.group == 'creative'
-        env:
-          CREATIVE_AGENT_GHCR_IMAGE: ghcr.io/${{ github.repository }}/adcp-creative-agent
-        run: ./scripts/creative-agent-stack.sh up
+      # Four of the five groups need no service beyond the job's own Postgres,
+      # so they stay on the host path exactly as before.
       - uses: ./.github/actions/_pytest
+        if: matrix.group != 'creative'
         with:
           paths: tests/integration/
           disable_randomly: "true"
           extra_args: --timeout=60 -m "(${{ matrix.marker }}) and not skip_ci"
+      # `creative` is the one group that needs the reference agent, so it runs
+      # IN-NETWORK — the same hammer bdd-in-network already swings. The agent is
+      # reached by SERVICE NAME on the stack's own network
+      # (docker-compose.e2e.yml: CREATIVE_AGENT_URL=http://creative-agent:8080/...),
+      # which is the destination the armed fire-time SSRF gate at
+      # creative_agent_registry._fetch_formats_via_raw_mcp accepts on its own
+      # terms. The previous host path published the agent on loopback and handed
+      # the suite `http://localhost:9999/...`, which that gate must refuse and
+      # should refuse — 17 failures, none of them a policy defect
+      # (salesagent-2xnqw). Nothing is exposed on the runner; run_all_tests.sh
+      # publishes no host ports.
+      #
+      # This runs the WHOLE integration suite, not just the `creative` marker:
+      # run_all_tests.sh's argument contract sends `ci <target> [args]` to the
+      # HOST runner, so a marker-scoped run cannot stay in-network. See the
+      # wall-clock note on salesagent-2xnqw.
+      - name: Run integration suite in-network
+        if: matrix.group == 'creative'
+        run: ./run_all_tests.sh integration
         env:
-          CREATIVE_AGENT_URL: ${{ matrix.group == 'creative' && 'http://localhost:9999/api/creative-agent' || '' }}
-      - name: Cleanup pinned creative agent
+          DOCKER_BUILDKIT: 1
+          COMPOSE_DOCKER_CLI_BUILD: 1
+          # Prefer the pin-keyed ghcr pull (~5m faster) over a source build.
+          CREATIVE_AGENT_GHCR_IMAGE: ghcr.io/${{ github.repository }}/adcp-creative-agent
+          # The dedicated Security Audit check owns the uv-secure scan; letting
+          # it run here would fail this job on an unrelated gate.
+          RUN_ALL_SKIP_AUDIT: 1
+      - name: Cleanup Docker services
         if: always() && matrix.group == 'creative'
-        run: ./scripts/creative-agent-stack.sh down
+        run: docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
 
   e2e-tests:
     name: E2E Tests
@@ -288,41 +319,49 @@ jobs:
           docker volume prune -f 2>/dev/null || true
       # No coverage: the server under test runs inside Docker, so host-side
       # coverage would measure the client harness, not src/.
-      - uses: ./.github/actions/_pytest
-        with:
-          paths: tests/e2e/
-          # timeout_func_only: the 300s budget applies to TEST BODIES only.
-          # Since the pinned creative agent was un-gated, the first
-          # stack-needing test's session fixture does agent build/pull +
-          # compose up + migrations — >300s on a 4-core runner when the pin's
-          # ghcr tag isn't published yet (source-build fallback). With
-          # func_only=false that killed the fixture at exactly 300s and
-          # error-cascaded the remaining 40 tests. A genuinely hung bring-up
-          # now surfaces as the job timeout instead.
-          extra_args: --timeout=300 -o timeout_func_only=true
+      #
+      # IN-NETWORK, like bdd-in-network. The host path ran pytest on the runner
+      # against counterparty.adcp-e2e.dev — a COMPOSE-ONLY name with no public
+      # DNS (verified: `getent hosts counterparty.adcp-e2e.dev` returns
+      # nothing), so those tests could never resolve it from the host. That is
+      # the same disease as the creative group's loopback agent above: a
+      # host-path holdover that predates the in-network runner, not a policy or
+      # certificate defect (salesagent-2xnqw). The fix is to run where the name
+      # resolves. Do NOT publish a host port or add a host-reachable alias to
+      # make it resolvable from outside — "nothing exposed" is the invariant
+      # this stack is built on.
+      - name: Run E2E suite in-network
+        run: ./run_all_tests.sh e2e
         env:
-          # Override workflow env — conftest starts docker-compose.e2e.yml (legacy test.yml parity).
-          ADCP_TESTING: ""
-          DATABASE_URL: ""
-          ADCP_SALES_PORT: 8080
-          POSTGRES_PORT: 5435
           DOCKER_BUILDKIT: 1
           COMPOSE_DOCKER_CLI_BUILD: 1
-          # conftest builds the pinned creative agent host-side; prefer the
-          # pin-keyed ghcr pull (~5m faster) over building from source.
+          # run_all_tests.sh builds the pinned creative agent host-side; prefer
+          # the pin-keyed ghcr pull (~5m faster) over building from source.
           CREATIVE_AGENT_GHCR_IMAGE: ghcr.io/${{ github.repository }}/adcp-creative-agent
+          # No host uvx in this job; the dedicated Security Audit check owns the
+          # uv-secure scan.
+          RUN_ALL_SKIP_AUDIT: 1
       - name: Cleanup Docker services
         if: always()
         run: docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
 
   bdd-in-network:
-    # The 5th BDD transport (e2e_rest: real HTTP through nginx to the live
-    # server, serial, BDD_E2E_ENABLED=true from docker-compose.e2e.yml) — the
-    # only job that grades the e2e_rest known-failures ledger. Without it a
-    # ledger graduation (or regression) is invisible to CI: the sharded BDD
-    # job runs in-process transports only (PR #1430 review). This job runs
-    # ONLY the bdd_e2e tox env (-k e2e_rest): re-running the in-process bulk
-    # here would duplicate the sharded job serially for no added grading.
+    # The in-network BDD transports (real HTTP through nginx to the live server,
+    # serial, BDD_E2E_ENABLED=true from docker-compose.e2e.yml): e2e_rest for the
+    # AdCP tool surfaces and e2e_admin for the admin UI scenarios — the only job
+    # that grades either. Without it a ledger graduation (or regression) is
+    # invisible to CI: the sharded BDD job runs in-process transports only
+    # (PR #1430 review). This job runs ONLY the bdd_e2e tox env
+    # (-k "e2e_rest or e2e_admin"): re-running the in-process bulk here would
+    # duplicate the sharded job serially for no added grading. Adding a new
+    # in-network transport means adding its id to that -k, or it is collected by
+    # no env at all and dies dormant while CI stays green (salesagent-jckl).
+    #
+    # The job NAME is deliberately NOT updated to list e2e_admin: branch
+    # protection matches required checks by rendered name ("CI / BDD In-Network
+    # (e2e_rest)"), so renaming silently de-requires this job until someone with
+    # repo-admin rights updates the setting out of band. Frozen by
+    # tests/unit/test_architecture_required_ci_checks_frozen.py.
     name: BDD In-Network (e2e_rest)
     runs-on: ubuntu-latest
     permissions:

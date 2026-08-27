@@ -17,6 +17,8 @@ from src.core.database.models import (
     Tenant,
     TenantAuthConfig,
 )
+from src.core.database.repositories.uow import SigningKeyUoW
+from src.core.signing.keys import provision_signing_key
 from src.services.setup_checklist_service import (
     SetupChecklistService,
     SetupIncompleteError,
@@ -500,6 +502,21 @@ class TestSetupChecklistService:
             db_session.add(principal3)
 
             db_session.commit()
+
+        # A signing key, because the checklist now enumerates one (salesagent-7x8t)
+        # and tenant 3 is this test's "fully configured" tenant. Minted through
+        # production's ONE provisioning function, over the same unit of work the
+        # admin route and the ops script use, rather than assembled as ORM kwargs.
+        # The env: scheme needs no deployment KEK, which keeps this setup about the
+        # checklist and not about key storage.
+        with SigningKeyUoW(tenant_ids[2]) as uow:
+            provision_signing_key(
+                uow.signing_keys,
+                tenant_id=tenant_ids[2],
+                alg="ed25519",
+                ref_scheme="env",
+                env_var_name="ADCP_SIGNING_BULK_TEST_KEY",
+            )
 
         # Call bulk setup status method
         statuses = SetupChecklistService.get_bulk_setup_status(tenant_ids)

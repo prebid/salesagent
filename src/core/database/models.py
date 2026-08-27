@@ -5,11 +5,14 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from adcp.types import BrandReference
+from adcp.types import BrandReference, NotificationConfig
 from adcp.types.generated_poc.core.account import (
     CreditLimit,
     GovernanceAgent,
     Setup,
+)  # TODO: no stable alias in adcp.types
+from adcp.types.generated_poc.core.business_entity import (
+    BusinessEntity,
 )  # TODO: no stable alias in adcp.types
 from sqlalchemy import (
     DECIMAL,
@@ -23,17 +26,24 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
     text,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, backref, mapped_column, relationship
 from sqlalchemy.sql import func
 
+from src.core.billing_policy import BILLING_PARTY_VALUES
 from src.core.database.json_type import JSONType
 from src.core.exceptions import AdCPConfigurationError
 from src.core.json_validators import JSONValidatorMixin
+from src.core.signing_contract import (
+    REQUEST_SIGNING,
+    signing_alg_check_clause,
+    signing_purpose_check_clause,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +85,9 @@ class Tenant(Base, JSONValidatorMixin):
     human_review_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     policy_settings: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     supported_billing: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)  # BR-RULE-059
+    account_sandbox: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )  # #1592 C2/A2
     account_approval_mode: Mapped[str | None] = mapped_column(
         String(50), nullable=True
     )  # BR-RULE-060: auto|credit_review|legal_review
@@ -91,6 +104,21 @@ class Tenant(Base, JSONValidatorMixin):
         JSONType,
         nullable=True,
         comment="Advertising policy configuration with prohibited categories, tactics, and advertisers",
+    )
+
+    # Per-tenant AdCP capability declarations (#1592 T1a).
+    # STRICT policy: this store may carry only blocks the implementation BACKS --
+    # business facts the capabilities response echoes (trusted_match surfaces,
+    # measurement catalog, adapter-backed creative_specs, legacy axe_integrations).
+    # It deliberately has NO field for a behavioral posture we do not implement
+    # (request_signing / webhook_signing / identity signing / webhook or offline
+    # report delivery): declaring one would promise the buyer behavior production
+    # lacks. Those blocks land with RFC 9421 signing (#1291).
+    # NULL means "nothing declared" and reproduces the pre-#1592 wire exactly.
+    capability_declarations: Mapped[dict | None] = mapped_column(
+        JSONType,
+        nullable=True,
+        comment="Implementation-backed AdCP capability declaration blocks (#1592); NULL = nothing declared",
     )
 
     # Pydantic AI configuration for multi-model support
@@ -195,8 +223,13 @@ class Tenant(Base, JSONValidatorMixin):
 
     @property
     def primary_domain(self) -> str | None:
-        """Get primary domain for this tenant (virtual_host or subdomain-based)."""
-        return self.virtual_host or (f"{self.subdomain}.example.com" if self.subdomain else None)
+        """Get primary domain for this tenant (virtual_host), or None if unconfigured.
+
+        Never fabricates a <subdomain>.example.com placeholder (salesagent-piyo) --
+        callers (e.g. admin/blueprints/inventory_profiles.py) rely on None to signal
+        "no real domain configured" and refuse to proceed.
+        """
+        return self.virtual_host
 
     @property
     def is_gam_tenant(self) -> bool:
@@ -545,6 +578,13 @@ class Principal(Base, JSONValidatorMixin):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     platform_mappings: Mapped[dict] = mapped_column(JSONType, nullable=False)
     access_token: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    # RFC 9421 (#1291 B1): the counterparty's own AdCP agent URL, from onboarding.
+    # This is the ONLY legitimate source for it — security.mdx @ v3.1.1 :1212/:1216
+    # forbid taking the signer's agent URL from a header, a body field or any other
+    # self-assertion, because that would let the signer choose which brand.json (and
+    # therefore which key set) it is verified against. NULL means we cannot resolve a
+    # key for this counterparty, not that it is trusted.
+    agent_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -669,7 +709,12 @@ class Creative(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     agent_url: Mapped[str] = mapped_column(String(500), nullable=False)
     format: Mapped[str] = mapped_column(String(100), nullable=False)
-    status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
+    # AdCP CreativeStatus member: the buyer-facing reader (list_creatives) parses this
+    # column through the closed spec enum, so a non-member default (this was "pending")
+    # makes every row written with the field omitted unreadable. No CHECK constraint or
+    # PG enum backs it — the spec enum widens over time and DDL would turn a spec bump
+    # into a boot-blocking migration.
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending_review")
 
     # Data field stores creative content and metadata as JSON
     data: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
@@ -827,6 +872,23 @@ class Account(Base):
     governance_agents: Mapped[list[GovernanceAgent] | None] = mapped_column(
         JSONType(model=GovernanceAgent, is_list=True), nullable=True
     )
+    # Account-level notification subscribers (#1592 T2). Whole-array declarative
+    # replace (maxItems 16, always read and written entire), so a column rather
+    # than a table: there is no cross-account query and no per-entry lifecycle.
+    # NULL and [] are DIFFERENT states the wire must distinguish -- NULL means
+    # "never configured" (the field is omitted from the echo) and [] means
+    # "explicitly cleared" (the echo carries an empty array). JSONType uses
+    # JSONB(none_as_null=True), so that distinction survives the round trip; do
+    # not collapse it with a falsy check.
+    notification_configs: Mapped[list[NotificationConfig] | None] = mapped_column(
+        JSONType(model=NotificationConfig, is_list=True), nullable=True
+    )
+    # Legal/billing entity, permitted in BOTH sync_accounts entry modes and
+    # echoed back on the response ("echoed from the request ... Bank details are
+    # omitted (write-only)"). Whole-object declarative replace, so a column
+    # rather than a table. `bank` IS persisted (the seller needs it to bill) and
+    # stripped only on the way out -- see _scrub_business_entity.
+    billing_entity: Mapped[BusinessEntity | None] = mapped_column(JSONType(model=BusinessEntity), nullable=True)
     sandbox: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     ext: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
 
@@ -849,7 +911,7 @@ class Account(Base):
             name="ck_accounts_status",
         ),
         CheckConstraint(
-            "billing IS NULL OR billing IN ('operator', 'agent')",
+            "billing IS NULL OR billing IN ({})".format(", ".join(repr(v) for v in BILLING_PARTY_VALUES)),
             name="ck_accounts_billing",
         ),
         CheckConstraint(
@@ -863,6 +925,42 @@ class Account(Base):
         Index("idx_accounts_tenant", "tenant_id"),
         Index("idx_accounts_status", "status"),
         Index("idx_accounts_operator", "operator"),
+        # The natural key is IDENTITY, not a search convenience: every resolver
+        # reads this tuple (get_by_natural_key resolves a buyer's sync_accounts
+        # entry, list_by_natural_key detects ambiguity). salesagent-8sfr made the
+        # components immutable so an account cannot be re-keyed; without this
+        # index a second CREATE could still land on an occupied key, and then
+        # get_by_natural_key().first() answers non-deterministically while
+        # list_by_natural_key reports the key unresolvable. The repository's
+        # collision check is the good error message; this index is the invariant,
+        # and the only thing that closes the check-then-insert race.
+        #
+        # Two different NULL mechanics, each doing its own job:
+        # - COALESCE(sandbox, false) because NULL and false are the SAME key to
+        #   get_by_natural_key ("sandbox IS NULL OR sandbox = false"); NULLS NOT
+        #   DISTINCT would not merge them, since it equates NULLs to each other,
+        #   never to a non-NULL value.
+        # - NULLS NOT DISTINCT so a NULL `operator` or a NULL brand_id still
+        #   enforces uniqueness on the rest of the tuple, matching the sibling
+        #   idx_media_buys_idempotency_key / idx_idempotency_attempts_lookup.
+        #
+        # PARTIAL on brand.domain for the same reason that sibling is partial on
+        # idempotency_key: an account with no brand domain has no natural key at
+        # all. The admin form permits one (brand is None when the field is blank)
+        # and no resolver can ever reach it — every lookup supplies a domain — so
+        # constraining keyless rows would forbid a legitimate shape while
+        # preventing no ambiguity.
+        Index(
+            "uq_accounts_natural_key",
+            "tenant_id",
+            "operator",
+            text("(brand ->> 'domain')"),
+            text("(brand ->> 'brand_id')"),
+            text("COALESCE(sandbox, false)"),
+            unique=True,
+            postgresql_nulls_not_distinct=True,
+            postgresql_where=text("(brand ->> 'domain') IS NOT NULL"),
+        ),
     )
 
 
@@ -2264,3 +2362,153 @@ class WebhookDeliveryLog(Base):
         Index("idx_webhook_log_status", "status"),
         Index("idx_webhook_log_created_at", "created_at"),
     )
+
+
+class SigningKey(Base):
+    """An RFC 9421 signing key this tenant owns (#1291 A2, salesagent-z6nr.8).
+
+    Each tenant is a distinct seller identity with its own brand domain, so key
+    material is per-tenant. One row binds a unique ``kid`` to the public JWK we
+    publish AND to a reference the process resolves for the private half it never
+    stores — so the key we sign with, the key we publish, and the key material on
+    disk cannot silently disagree.
+
+    ``private_key_ref`` is a scheme-prefixed opaque reference (``db:<kid>``,
+    ``env:NAME``, ``file:/abs/path``), never key material. Which schemes resolve
+    is an agent-level posture (``SigningConfig.allowed_key_ref_schemes``), so a
+    deployment can forbid ``file:`` without touching tenant rows.
+
+    ``db:`` is the scheme this agent MINTS, and ``private_key_pem_encrypted`` is
+    where its private half lives: the PKCS#8 ``BEGIN ENCRYPTED PRIVATE KEY`` PEM
+    exactly as ``adcp.signing.generate_signing_keypair(passphrase=...)`` returned
+    it, encrypted under the deployment KEK
+    (``SigningConfig.key_passphrase_env``). No envelope format and no encryption
+    code of ours sits between the two — the ciphertext IS the PEM. The column is
+    nullable because ``env:``/``file:`` rows point at material this process did
+    not write and must not copy; provisioning refuses ``db:`` outright when no
+    KEK is configured, so a NULL here can never mean "plaintext key in the
+    database".
+
+    ``not_before`` / ``not_after`` are OURS, not the spec's — the published
+    ``agent-signing-key`` schema carries only ``revoked_at`` plus JWK members.
+    The window governs which key we SIGN with; PUBLICATION is governed by
+    ``revoked_at`` plus that schema's grace period. A publisher filtering the
+    JWKS by ``not_after`` would un-publish a key while signatures made under it
+    are still inside their verification window — the exact gap rotation overlap
+    exists to prevent.
+
+    ``not_after IS NULL`` means open-ended (+infinity). The current key is always
+    open-ended, so that is the common case, not an edge case.
+
+    N rows per ``(tenant, purpose)`` distinguished by ``kid`` serve BOTH rotation
+    overlap and the webhook blast-radius isolation security.mdx describes
+    ("isolation comes from the kid"). One mechanism, not two.
+    """
+
+    __tablename__ = "signing_keys"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    kid: Mapped[str] = mapped_column(String(255), nullable=False)
+    alg: Mapped[str] = mapped_column(String(50), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(50), nullable=False, default=REQUEST_SIGNING)
+    public_jwk: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    private_key_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    private_key_pem_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    not_before: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    not_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    # passive_deletes=True defers to the database's ON DELETE CASCADE below.
+    # Without it, deleting a Tenant through the ORM makes SQLAlchemy load the
+    # children and NULL their tenant_id instead — which the NOT NULL column
+    # rejects, so an ORM tenant delete fails outright once the tenant owns a key.
+    tenant = relationship("Tenant", backref=backref("signing_keys", passive_deletes=True))
+
+    __table_args__ = (
+        ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+        # security.mdx: "Unique within the JWKS. MUST NOT collide with any other
+        # entry's kid regardless of adcp_use." One JWKS is published per tenant.
+        UniqueConstraint("tenant_id", "kid", name="uq_signing_keys_tenant_kid"),
+        # Both CHECK bodies are TAKEN WHOLE from src.core.signing_contract, never
+        # composed here (#1521, salesagent-n78j0.3). Asking for the clause rather than
+        # for the value-set is what removes the choice of column name, operator and
+        # rendering from this call site — the freedom that let this constraint and the
+        # one in migration e7a2c40b91d5 be assembled independently. Pinned by
+        # tests/unit/test_signing_alg_parity.py.
+        CheckConstraint(
+            signing_alg_check_clause(),
+            name="ck_signing_keys_alg",
+        ),
+        CheckConstraint(
+            signing_purpose_check_clause(),
+            name="ck_signing_keys_purpose",
+        ),
+        Index("idx_signing_keys_tenant_purpose_active", "tenant_id", "purpose", "not_after"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<SigningKey("
+            f"id='{self.id}', "
+            f"tenant_id='{self.tenant_id}', "
+            f"kid='{self.kid}', "
+            f"alg='{self.alg}', "
+            f"purpose='{self.purpose}', "
+            f"private_key_ref='***', "
+            f"not_before={self.not_before}, "
+            f"not_after={self.not_after}, "
+            f"revoked_at={self.revoked_at}"
+            f")>"
+        )
+
+
+class ReplayNonce(Base):
+    """One live claim on an RFC 9421 ``(keyid, nonce)`` pair (#1291 A4, salesagent-z6nr.10).
+
+    A replay CACHE, not a permanent nonce ledger: every read filters
+    ``expires_at > now()``, so a dead row is indistinguishable from an absent one
+    and the table is safe to sweep at any time.
+
+    Schema translated from the DDL the SDK ships at
+    ``adcp/signing/pg/replay_store.sql``, table name included, so that file stays a
+    valid reference for this table and a future swap to the SDK's ``PgReplayStore``
+    needs no migration.
+
+    ``Text(collation="C")`` on both identifiers is security, not style: the SDK's
+    SQL header records that under some locales ``"Key-A"`` and ``"key-a"`` compare
+    equal, which would let an attacker collapse distinct kids or nonces into a
+    single slot and replay against it. ``"C"`` is byte-for-byte comparison. First
+    use of ``collation=`` in this file.
+
+    **No ``tenant_id``, no FK — a decision, not an oversight.** The RFC 9421
+    signature base covers ``@authority`` as a MANDATORY component (AdCP 3.1.1;
+    ``dist/compliance/3.1.1/test-vectors/request-signing/negative/006-missing-covered-component.json``
+    is literally "Covered components missing @authority"), so a nonce captured
+    against tenant A's virtual host cannot verify against tenant B's — cross-tenant
+    replay dies at verifier step 10, before this table is ever consulted. The
+    consequence is that the store is deployment-wide: it cannot use ``BaseUoW``
+    (which is ``(tenant_id)``-scoped) and its reaper is deployment-wide too.
+    """
+
+    __tablename__ = "adcp_replay"
+
+    keyid: Mapped[str] = mapped_column(Text(collation="C"), primary_key=True)
+    nonce: Mapped[str] = mapped_column(Text(collation="C"), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        # Sweep support (the SDK's index, same name).
+        Index("adcp_replay_expires_idx", "expires_at"),
+        # at_capacity's predicate — see the migration for why this composite is not
+        # optional and why a partial index on now() is impossible.
+        Index("adcp_replay_keyid_expires_idx", "keyid", "expires_at"),
+    )
+
+    def __repr__(self):
+        return f"<ReplayNonce(keyid='{self.keyid}', nonce='{self.nonce}', expires_at={self.expires_at})>"

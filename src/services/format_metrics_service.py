@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from src.adapters.gam_reporting_service import GAMReportingService
 from src.core.database.database_session import get_db_session
+from src.core.database.integrity import resolve_or_write
 from src.core.database.models import FormatPerformanceMetrics, Tenant
 
 logger = logging.getLogger(__name__)
@@ -189,6 +190,21 @@ class FormatMetricsAggregationService:
             p90_cpm = self._calculate_percentile(line_item_cpms, 90)
 
             # Upsert to database
+            metric = FormatPerformanceMetrics(
+                tenant_id=tenant_id,
+                country_code=country_code,
+                creative_size=creative_size,
+                period_start=start_date.date(),
+                period_end=end_date.date(),
+                total_impressions=total_impressions,
+                total_clicks=total_clicks,
+                total_revenue_micros=int(total_revenue_micros),
+                average_cpm=Decimal(str(average_cpm)) if average_cpm is not None else None,
+                median_cpm=Decimal(str(median_cpm)) if median_cpm is not None else None,
+                p75_cpm=Decimal(str(p75_cpm)) if p75_cpm is not None else None,
+                p90_cpm=Decimal(str(p90_cpm)) if p90_cpm is not None else None,
+                line_item_count=len(line_item_cpms),
+            )
             stmt = select(FormatPerformanceMetrics).where(
                 and_(
                     FormatPerformanceMetrics.tenant_id == tenant_id,
@@ -198,39 +214,32 @@ class FormatMetricsAggregationService:
                     FormatPerformanceMetrics.period_end == end_date.date(),
                 )
             )
-            existing = self.db.scalars(stmt).first()
 
-            if existing:
-                # Update existing record
-                existing.total_impressions = total_impressions
-                existing.total_clicks = total_clicks
-                existing.total_revenue_micros = int(total_revenue_micros)
-                existing.average_cpm = Decimal(str(average_cpm)) if average_cpm is not None else None
-                existing.median_cpm = Decimal(str(median_cpm)) if median_cpm is not None else None
-                existing.p75_cpm = Decimal(str(p75_cpm)) if p75_cpm is not None else None
-                existing.p90_cpm = Decimal(str(p90_cpm)) if p90_cpm is not None else None
-                existing.line_item_count = len(line_item_cpms)
-                existing.last_updated = datetime.now(UTC)
-                rows_updated += 1
-            else:
-                # Create new record
-                metric = FormatPerformanceMetrics(
-                    tenant_id=tenant_id,
-                    country_code=country_code,
-                    creative_size=creative_size,
-                    period_start=start_date.date(),
-                    period_end=end_date.date(),
-                    total_impressions=total_impressions,
-                    total_clicks=total_clicks,
-                    total_revenue_micros=int(total_revenue_micros),
-                    average_cpm=Decimal(str(average_cpm)) if average_cpm is not None else None,
-                    median_cpm=Decimal(str(median_cpm)) if median_cpm is not None else None,
-                    p75_cpm=Decimal(str(p75_cpm)) if p75_cpm is not None else None,
-                    p90_cpm=Decimal(str(p90_cpm)) if p90_cpm is not None else None,
-                    line_item_count=len(line_item_cpms),
-                )
-                self.db.add(metric)
+            # resolve_or_write invokes both callables before this iteration ends, so
+            # the late binding B023 warns about cannot happen here.
+            existing = resolve_or_write(
+                self.db,
+                conflict=lambda: self.db.scalars(stmt).first(),  # noqa: B023
+                write=lambda: self.db.add(metric),  # noqa: B023
+                constraint="uq_format_perf_metrics",
+            )
+
+            if existing is None:
                 rows_created += 1
+                continue
+
+            # Update the row already there — reached both when the pre-check found
+            # it and when a concurrent aggregation won the insert race.
+            existing.total_impressions = metric.total_impressions
+            existing.total_clicks = metric.total_clicks
+            existing.total_revenue_micros = metric.total_revenue_micros
+            existing.average_cpm = metric.average_cpm
+            existing.median_cpm = metric.median_cpm
+            existing.p75_cpm = metric.p75_cpm
+            existing.p90_cpm = metric.p90_cpm
+            existing.line_item_count = metric.line_item_count
+            existing.last_updated = datetime.now(UTC)
+            rows_updated += 1
 
         self.db.commit()
 
