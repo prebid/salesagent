@@ -396,6 +396,33 @@ def sample_principal(integration_db, sample_tenant):
 
 
 @pytest.fixture
+def seamed_a2a_handler(sample_tenant, sample_principal):
+    """A fresh ``AdCPRequestHandler`` with both auth seams patched for the A2A skill path.
+
+    Every A2A explicit-skill integration test needs the identical setup: a fresh
+    handler whose ``_get_auth_token`` and ``_resolve_a2a_identity`` are stubbed so
+    ``on_message_send`` resolves to the standard ``sample_tenant`` / ``sample_principal``
+    identity without a real auth round-trip. The identity build itself already routes
+    through ``make_a2a_identity`` (canonical ``tests.harness.make_identity``); this
+    fixture folds in the two seam mocks so the whole "seam an A2A handler" unit has a
+    single home instead of a byte-identical 4-line block copy-pasted across the suite.
+
+    Callers still own tenant-context setup (``set_current_tenant``) — that is a separate
+    concern from seaming the handler, so it stays in the test body.
+    """
+    from unittest.mock import MagicMock
+
+    from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+    from tests.utils.a2a_helpers import make_a2a_identity
+
+    handler = AdCPRequestHandler()
+    identity = make_a2a_identity(sample_tenant, sample_principal)
+    handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
+    handler._resolve_a2a_identity = MagicMock(return_value=identity)
+    return handler
+
+
+@pytest.fixture
 def sample_products(integration_db, sample_tenant):
     """Create sample products that comply with AdCP protocol."""
     from src.core.database.database_session import get_db_session

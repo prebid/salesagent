@@ -7,41 +7,22 @@ accepted; clients must use brief or brand (BrandReference with domain field).
 """
 
 import logging
-from unittest.mock import MagicMock
 
 import pytest
 from a2a.server.routes.common import ServerCallContext
-from a2a.types import SendMessageRequest, Task
+from a2a.types import SendMessageRequest, Task, TaskState
 
-from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.resolved_identity import ResolvedIdentity
-from tests.factories.principal import PrincipalFactory
-from tests.utils.a2a_helpers import create_a2a_message_with_skill
+from tests.helpers import assert_envelope_shape
+from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 logger = logging.getLogger(__name__)
 
 
-def _make_identity(sample_tenant, sample_principal) -> ResolvedIdentity:
-    """Build a ResolvedIdentity for A2A tests."""
-    return PrincipalFactory.make_identity(
-        principal_id=sample_principal["principal_id"],
-        tenant_id=sample_tenant["tenant_id"],
-        tenant=sample_tenant,
-        auth_token=sample_principal["access_token"],
-        protocol="a2a",
-    )
-
-
 @pytest.mark.asyncio
-async def test_get_products_with_brief_only(sample_tenant, sample_principal, sample_products):
+async def test_get_products_with_brief_only(seamed_a2a_handler, sample_tenant, sample_products):
     """Test get_products skill invocation with brief only (no brand)."""
-    handler = AdCPRequestHandler()
-    identity = _make_identity(sample_tenant, sample_principal)
-    handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-    handler._resolve_a2a_identity = MagicMock(return_value=identity)
-
     from src.core.config_loader import set_current_tenant
 
     set_current_tenant(sample_tenant)
@@ -53,7 +34,7 @@ async def test_get_products_with_brief_only(sample_tenant, sample_principal, sam
     params = SendMessageRequest(message=message)
 
     context = ServerCallContext()
-    result = await handler.on_message_send(params, context)
+    result = await seamed_a2a_handler.on_message_send(params, context)
 
     assert isinstance(result, Task)
     assert result.artifacts is not None
@@ -61,13 +42,8 @@ async def test_get_products_with_brief_only(sample_tenant, sample_principal, sam
 
 
 @pytest.mark.asyncio
-async def test_get_products_with_brand_domain(sample_tenant, sample_principal, sample_products):
+async def test_get_products_with_brand_domain(seamed_a2a_handler, sample_tenant, sample_products):
     """Test get_products skill invocation with brand.domain (adcp 3.6.0 format)."""
-    handler = AdCPRequestHandler()
-    identity = _make_identity(sample_tenant, sample_principal)
-    handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-    handler._resolve_a2a_identity = MagicMock(return_value=identity)
-
     from src.core.config_loader import set_current_tenant
 
     set_current_tenant(sample_tenant)
@@ -82,7 +58,7 @@ async def test_get_products_with_brand_domain(sample_tenant, sample_principal, s
     params = SendMessageRequest(message=message)
 
     context = ServerCallContext()
-    result = await handler.on_message_send(params, context)
+    result = await seamed_a2a_handler.on_message_send(params, context)
 
     assert isinstance(result, Task)
     assert result.artifacts is not None
@@ -90,18 +66,13 @@ async def test_get_products_with_brand_domain(sample_tenant, sample_principal, s
 
 
 @pytest.mark.asyncio
-async def test_get_products_brand_manifest_translated_to_brand(sample_tenant, sample_principal, sample_products):
+async def test_get_products_brand_manifest_translated_to_brand(seamed_a2a_handler, sample_tenant, sample_products):
     """Test that brand_manifest is translated to brand via request normalization.
 
     After the universal request normalization layer ,
     brand_manifest is translated to brand (BrandReference) before the
     handler sees it. So brand_manifest with a valid URL now succeeds.
     """
-    handler = AdCPRequestHandler()
-    identity = _make_identity(sample_tenant, sample_principal)
-    handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-    handler._resolve_a2a_identity = MagicMock(return_value=identity)
-
     from src.core.config_loader import set_current_tenant
 
     set_current_tenant(sample_tenant)
@@ -117,7 +88,7 @@ async def test_get_products_brand_manifest_translated_to_brand(sample_tenant, sa
 
     # brand_manifest is now translated to brand: {domain: "nike.com"}
     context = ServerCallContext()
-    result = await handler.on_message_send(params, context)
+    result = await seamed_a2a_handler.on_message_send(params, context)
 
     assert isinstance(result, Task)
     assert result.artifacts is not None
@@ -125,7 +96,7 @@ async def test_get_products_brand_manifest_translated_to_brand(sample_tenant, sa
 
 
 @pytest.mark.asyncio
-async def test_get_products_neither_brief_nor_brand_rejected(sample_tenant, sample_principal, sample_products):
+async def test_get_products_neither_brief_nor_brand_rejected(seamed_a2a_handler, sample_tenant, sample_products):
     """Test that requests with neither brief nor brand are rejected.
 
     The handler raises AdCPValidationError; the explicit-skill dispatcher
@@ -133,15 +104,6 @@ async def test_get_products_neither_brief_nor_brand_rejected(sample_tenant, samp
     the artifact DataPart — AdCP-domain errors are async-task failures, not
     JSON-RPC transport errors.
     """
-    from a2a.types import TaskState
-
-    from tests.utils.a2a_helpers import extract_data_from_artifact
-
-    handler = AdCPRequestHandler()
-    identity = _make_identity(sample_tenant, sample_principal)
-    handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-    handler._resolve_a2a_identity = MagicMock(return_value=identity)
-
     from src.core.config_loader import set_current_tenant
 
     set_current_tenant(sample_tenant)
@@ -153,7 +115,7 @@ async def test_get_products_neither_brief_nor_brand_rejected(sample_tenant, samp
     params = SendMessageRequest(message=message)
 
     context = ServerCallContext()
-    result = await handler.on_message_send(params, context)
+    result = await seamed_a2a_handler.on_message_send(params, context)
 
     # Empty params → AdCPValidationError → failed Task with envelope DataPart
     assert isinstance(result, Task)
@@ -161,6 +123,4 @@ async def test_get_products_neither_brief_nor_brand_rejected(sample_tenant, samp
     assert result.artifacts, "Failed task must carry an envelope artifact"
     envelope = extract_data_from_artifact(result.artifacts[0])
     # Two-layer envelope: adcp_error mirror + errors[] payload
-    from tests.helpers import assert_envelope_shape
-
     assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
