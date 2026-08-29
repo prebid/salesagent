@@ -270,7 +270,7 @@ class GetProductsRequest(LibraryGetProductsRequest):
     # Widen buying_mode from Literal['wholesale'] to str|None (we accept any mode or none)
     buying_mode: str | None = Field(  # type: ignore[assignment]
         None,
-        description="Buyer intent: 'brief' (publisher curates) or 'wholesale' (buyer applies own audiences)",
+        description="Buyer intent per adcp 3.1.1: 'brief' (publisher curates), 'wholesale' (raw catalog), or 'refine'",
     )
 
     # Internal-only fields (not in AdCP spec)

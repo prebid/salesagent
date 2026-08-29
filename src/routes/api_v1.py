@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
 
+from adcp import BuyingMode
 from adcp.types import BrandReference
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     AttributionWindow,
@@ -70,6 +71,30 @@ class GetProductsBody(SalesAgentBaseModel):
     # dict BrandReference or string domain/URL shorthand (#1324)
     brand: dict[str, Any] | str | None = None
     filters: dict[str, Any] | None = None
+    # PropertyListReference; coerced at the route via create_get_products_request. This
+    # genuinely filters the returned set (filter_products_by_property_list in
+    # src/core/tools/products.py), so omitting it here handed a REST buyer an UNFILTERED
+    # product list at HTTP 200 while MCP and A2A both forwarded it.
+    property_list: dict[str, Any] | None = None
+    # buying_mode is the sole entry in the required array of get-products-request at the
+    # pinned spec (3.1.1), so a spec-valid client always sends it. It must be declared on
+    # every transport that forbids unknown fields: under dev/CI extra="forbid" an undeclared
+    # buying_mode 400s here, and the MCP get_products tool now declares it too
+    # (the ``get_products`` signature in src/core/tools/products.py) so FastMCP's
+    # additionalProperties: false no longer rejects it. A2A accepts any unknown field, so
+    # its acceptance is not evidence of support.
+    #
+    # Typed to adcp.BuyingMode — the StrEnum of ["brief","wholesale","refine"] the SDK
+    # generates from the same get-products-request.json@3.1.1 — not a hand-written Literal.
+    # The SDK enum is the single source shared with the MCP boundary, so an adcp bump that
+    # adds a mode updates both transports at once instead of leaving two transcribed Literals
+    # to drift and 400 a now-spec-valid value. The UC-001 storyboard grades the out-of-enum
+    # case as an error (@T-UC-001-partition-buying-mode / @T-UC-001-boundary-buying-mode), so
+    # the boundary rejects a non-spec value instead of accepting "garbage" at 200. BuyingMode
+    # subclasses str, so a member still assigns cleanly into the internal GetProductsRequest
+    # (str|None) if it were ever threaded. Accept-and-ignore: no transport acts on it yet.
+    buying_mode: BuyingMode | None = None
+    context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
 
@@ -244,6 +269,8 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
             brief=body.brief,
             brand=body.brand,
             filters=body.filters,
+            property_list=body.property_list,
+            context=body.context,
         )
     response = await products_module._get_products_impl(req, identity)
     result = response.model_dump(mode="json")

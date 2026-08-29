@@ -10,7 +10,7 @@ import time
 from typing import Annotated, Any, cast
 
 # FIXME(#1388): FormatId, ProductFilters have local subclasses; import from src.core.schemas (Pattern #7/#4).
-from adcp import FormatId, ProductFilters
+from adcp import BuyingMode, FormatId, ProductFilters
 from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp import Product as LibraryProduct
 from adcp.types import BrandReference, ContextObject, PropertyListReference
@@ -787,7 +787,29 @@ async def get_products(
     ] = None,
     brief: Annotated[str, Field(description="Natural language description of campaign goals and requirements")] = "",
     filters: ProductFilters | None = None,
+    # Keyword-only from here on. buying_mode was inserted between property_list and
+    # context, so without this marker a positional caller of context would silently bind
+    # its value into a spec enum field. FastMCP builds the tool schema from the
+    # annotations, so the advertised parameters are unchanged.
+    *,
     property_list: PropertyListReference | None = None,
+    # buying_mode is the sole entry in the required array of get-products-request at the
+    # pinned spec (3.1.1), so a spec-valid client always sends it. It must be DECLARED on
+    # the MCP tool schema: FastMCP advertises additionalProperties: false, so an undeclared
+    # buying_mode 400s (VALIDATION_ERROR, "Unexpected keyword argument") in dev/CI — the same
+    # required field REST had to declare. Typed to adcp.BuyingMode — the StrEnum of
+    # ["brief","wholesale","refine"] the SDK generates from get-products-request.json@3.1.1 —
+    # the single source shared with the REST GetProductsBody.buying_mode field (src/routes/api_v1.py)
+    # so the two boundaries and the SDK can't drift; the boundary rejects a non-spec value
+    # instead of accepting it. Accept-and-ignore: declared so a conformant client isn't
+    # rejected, but not forwarded to _impl — no transport acts on the value yet. Wiring it
+    # across the transports and binding BR-UC-001 is deferred to #1730.
+    buying_mode: Annotated[
+        BuyingMode | None,
+        Field(
+            description="Buyer intent per adcp 3.1.1: 'brief' (publisher curates), 'wholesale' (raw catalog), or 'refine'"
+        ),
+    ] = None,
     context: ContextObject | None = None,  # payload-level context
     ctx: Context | ToolContext | None = None,
 ):
@@ -800,6 +822,9 @@ async def get_products(
         brief: Brief description of the advertising campaign or requirements (optional)
         filters: Structured filters for product discovery (optional)
         property_list: Property list reference for filtering by buyer's property list (optional)
+        buying_mode: Buyer intent per adcp 3.1.1 (brief/wholesale/refine). Declared for schema
+            conformance so a spec-valid client is not rejected by additionalProperties: false;
+            accept-and-ignore for now (no transport acts on it yet — see #1730).
         context: Application level context per adcp spec
         ctx: FastMCP context (automatically provided)
 

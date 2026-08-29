@@ -6,6 +6,9 @@ which ensures tools/list exposes full JSON schemas with $defs for nested types.
 
 import inspect
 
+from adcp import BuyingMode
+from fastmcp.tools.tool import Tool
+
 
 class TestMCPToolTypedSchemas:
     """Verify MCP tools expose typed schemas instead of untyped dicts."""
@@ -217,3 +220,55 @@ class TestMCPToolSchemaNotUntyped:
 
         # Should not contain plain dict
         assert "dict[str, Any]" not in annotation, "packages should use typed model, not list[dict[str, Any]]"
+
+
+class TestMCPProductsSchemaDeclaration:
+    """The MCP get_products tool must declare buying_mode, grounded on adcp.BuyingMode.
+
+    buying_mode is the sole required entry of get-products-request@3.1.1, so a
+    spec-valid client sends it on every transport. FastMCP advertises
+    additionalProperties: false over the get_products params, so an *undeclared*
+    buying_mode 400s (VALIDATION_ERROR, "Unexpected keyword argument") in dev/CI —
+    the same rejection REST's extra="forbid" produces. This pins the MCP-side
+    declaration in ``src.core.tools.products.get_products`` so that removing
+    buying_mode from the signature reddens here instead of silently shipping a tool
+    that rejects the required field.
+
+    It also pins the enum to adcp.BuyingMode: the REST ``GetProductsBody.buying_mode``
+    field and this MCP declaration share that one SDK enum rather than two
+    hand-transcribed Literals, so an adcp bump that adds a mode cannot leave one
+    boundary stale. The live 4-transport UC-001 acceptance that exercises the wire is
+    deferred to #1730; this unit test pins the declaration.
+    """
+
+    @staticmethod
+    def _buying_mode_enum(node: dict, root_schema: dict) -> set[str]:
+        """Resolve buying_mode's enum whether FastMCP inlines it or emits a $ref."""
+        defs = root_schema.get("$defs", {})
+        for branch in node.get("anyOf", [node]):
+            if "$ref" in branch:
+                branch = defs.get(branch["$ref"].split("/")[-1], {})
+            if "enum" in branch:
+                return set(branch["enum"])
+        return set()
+
+    def test_mcp_tool_declares_buying_mode_enum(self):
+        """MCP get_products declares buying_mode as the adcp.BuyingMode enum.
+
+        Deletion oracle: drop buying_mode from the get_products signature and the
+        presence assertion reddens; retype it to a hand-written Literal that drifts
+        from adcp.BuyingMode and the enum-equality assertion reddens.
+        """
+        from src.core.tools.products import get_products
+
+        schema = Tool.from_function(get_products).parameters
+        props = schema["properties"]
+
+        assert "buying_mode" in props, (
+            "MCP get_products must declare buying_mode; FastMCP's additionalProperties: false "
+            "otherwise 400s the sole required field of get-products-request@3.1.1"
+        )
+        assert self._buying_mode_enum(props["buying_mode"], schema) == {m.value for m in BuyingMode}, (
+            "MCP buying_mode enum drifted from adcp.BuyingMode; both REST and MCP must ground on "
+            "the SDK enum so an adcp bump updates them together"
+        )

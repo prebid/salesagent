@@ -27,9 +27,11 @@ from src.core.tools.media_buy_create import create_media_buy_raw
 from src.core.tools.media_buy_delivery import get_media_buy_delivery_raw
 from src.core.tools.media_buy_update import update_media_buy_raw
 from src.core.tools.performance import update_performance_index_raw
+from src.core.tools.products import get_products_raw
 from src.routes.api_v1 import (
     CreateMediaBuyBody,
     GetMediaBuyDeliveryBody,
+    GetProductsBody,
     ListCreativesBody,
     SyncCreativesBody,
     UpdateMediaBuyBody,
@@ -62,6 +64,7 @@ _ALLOWLIST: dict[str, dict[str, str]] = {
 
 # Each field-by-field REST Body paired with the raw wrapper its route forwards into.
 _PAIRS = [
+    (GetProductsBody, get_products_raw),
     (CreateMediaBuyBody, create_media_buy_raw),
     (UpdateMediaBuyBody, update_media_buy_raw),
     (GetMediaBuyDeliveryBody, get_media_buy_delivery_raw),
