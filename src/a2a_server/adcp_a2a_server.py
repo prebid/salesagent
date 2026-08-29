@@ -202,8 +202,13 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
 
     Use this helper at every non-skill ``InternalError(...)`` raise site that
     is NOT a deliberate protocol-level convention (see push-notif handlers
-    below). The canonical prefix is ``"{operation} failed: {exc}"`` so
-    storyboard runners can parse the failure uniformly.
+    below). The canonical message is the prefix ``"{operation} failed: "``
+    followed by ``normalize_to_adcp_error(exc).message`` — for an untyped
+    exception the generic wire message, never the raw ``exc``; for a typed
+    ``AdCPError`` (including the ``ValueError``/``PermissionError`` mappings)
+    that error's own message, forwarded unchanged. The shared prefix keeps the
+    five raise sites' operator-facing text uniform, and the untyped-exception
+    text this sink exists to contain never reaches the JSON-RPC wire.
 
     The four ``on_*_task_push_notification_config`` JSON-RPC protocol methods use
     this helper too — they have no async Task to carry a DataPart, so the two-layer
@@ -214,9 +219,21 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     ``except Exception`` branch and be flattened to a bare ``InternalError`` with no
     envelope.
     """
+    # Normalize ONCE and reuse the normalized message. Interpolating the raw
+    # ``exc`` here would put SQL fragments, table names, or filesystem paths on
+    # the JSON-RPC ``error.message`` even though ``error.data`` is correctly
+    # generic — the same disclosure this sink exists to prevent, at a path
+    # reachable without authentication (top-level ``on_message_send`` and the
+    # four push-notification-config methods). ``normalize_to_adcp_error``
+    # returns the wire-standard message for an untyped exception (raw detail is
+    # logged server-side) and the typed error's own message otherwise — a typed
+    # message is only as sanitized as its raise site, so what this helper closes
+    # is the untyped fallthrough, while keeping the parseable
+    # ``"{operation} failed: "`` prefix.
+    adcp_error = normalize_to_adcp_error(exc)
     return InternalError(
-        message=f"{operation} failed: {exc}",
-        data=build_two_layer_error_envelope(normalize_to_adcp_error(exc)),
+        message=f"{operation} failed: {adcp_error.message}",
+        data=build_two_layer_error_envelope(adcp_error),
     )
 
 

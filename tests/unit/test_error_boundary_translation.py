@@ -14,6 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from src.core.exceptions import (
+    GENERIC_INTERNAL_ERROR_MESSAGE,
     AdCPAdapterError,
     AdCPError,
     AdCPNotFoundError,
@@ -419,21 +420,30 @@ class TestA2ADispatcherFailedSkillResult:
         # Wire code is translated via ERROR_CODE_MAPPING
         assert env["adcp_error"]["code"] == "SERVICE_UNAVAILABLE"
         assert env["errors"][0]["code"] == "SERVICE_UNAVAILABLE"
-        # The original RuntimeError message is preserved verbatim
-        assert "unexpected boom" in env["errors"][0]["message"]
+        # The raw RuntimeError text must NOT reach the buyer (#1587): the wire
+        # carries the generic wire-standard message, never str(exc). Leak-freeness
+        # of the untyped path is pinned once, against the shared token set, in
+        # test_exception_normalization.py::test_untyped_exception_message_is_generic_not_raw
+        # (injects RAW_EXCEPTION_LEAK_SENTINEL, routes through assert_no_raw_exception_leak).
+        # Re-asserting ``"unexpected boom" not in ...`` here would be tautological after
+        # the == equality against a fixed generic constant that cannot contain it.
+        assert env["errors"][0]["message"] == GENERIC_INTERNAL_ERROR_MESSAGE
 
-    def test_exception_with_empty_message_falls_back_to_type_name(self):
-        """Untyped exceptions with no string content get the exception class name.
-
-        Avoids emitting an empty ``message`` field that violates the spec's
-        non-empty-message expectation on the wire envelope.
+    def test_exception_with_empty_message_uses_generic_wire_message(self):
+        """An untyped exception with no string content still yields a non-empty wire
+        message — the generic wire-standard message — rather than leaking the
+        exception class name (#1587). Preserves the spec's non-empty-message guarantee.
         """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
         result = AdCPRequestHandler._build_failed_skill_result("get_products", RuntimeError())
 
         env = result["error_envelope"]
-        assert env["errors"][0]["message"] == "RuntimeError"
+        # Non-emptiness of the wire message is pinned once, at the constant's
+        # definition (test_exception_normalization.py::test_generic_internal_error_
+        # message_is_non_empty). Re-asserting it here after the == equality would be
+        # tautological — the constant is a fixed non-empty value.
+        assert env["errors"][0]["message"] == GENERIC_INTERNAL_ERROR_MESSAGE
 
     def test_envelope_shape_matches_typed_branch(self):
         """Untyped fallthrough produces the SAME envelope shape as the typed branch.

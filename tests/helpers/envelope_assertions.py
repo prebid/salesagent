@@ -19,10 +19,71 @@ from __future__ import annotations
 from typing import Any
 
 
+def _assert_no_tokens(message: str, tokens: tuple[str, ...], label: str) -> None:
+    """Assert none of ``tokens`` survives into a buyer-facing ``message``.
+
+    Shared body for both leak oracles below: each owns a token tuple, the loop
+    and the failure text live here once, and adding a marker to either set is a
+    one-line edit beside that set.
+    """
+    for token in tokens:
+        assert token not in message, f"{label} leaked into buyer-facing message: {token!r} in {message!r}"
+
+
+# Raw Pydantic internals that must never survive validation-error sanitization
+# onto the buyer-facing wire: the echoed input value and the docs URL Pydantic
+# appends to its own error text.
+_RAW_VALIDATION_LEAK_TOKENS: tuple[str, ...] = (
+    "input_value",
+    "errors.pydantic.dev",
+)
+
+
 def assert_no_raw_validation_leak(message: str) -> None:
     """Assert a buyer-facing validation message omits raw Pydantic internals."""
-    assert "input_value" not in message, f"raw Pydantic input leaked into validation message: {message!r}"
-    assert "errors.pydantic.dev" not in message, f"Pydantic documentation URL leaked into message: {message!r}"
+    _assert_no_tokens(message, _RAW_VALIDATION_LEAK_TOKENS, "raw Pydantic detail")
+
+
+# Sensitive markers a raw untyped exception can carry — a SQL keyword, a table
+# name, and a filesystem path — that must never survive sanitization onto the
+# buyer-facing wire. RAW_EXCEPTION_LEAK_SENTINEL embeds all of them so every leak
+# test injects the same raw-exception input, and assert_no_raw_exception_leak
+# checks the same token set. Adding a new marker happens once, here.
+#
+# These three literals are a SAMPLE of what an untyped exception can disclose,
+# not a completeness oracle: a sink that leaks some other internal detail passes
+# this check. They exist to make the known disclosure shapes non-silent.
+_RAW_EXCEPTION_LEAK_TOKENS: tuple[str, ...] = (
+    "SELECT",
+    "secret_table",
+    "/var/secrets/db.key",
+)
+
+RAW_EXCEPTION_LEAK_SENTINEL = "SELECT token FROM secret_table -- /var/secrets/db.key"
+
+# The oracle is only as strong as its token tuple, and nothing downstream would
+# notice it being hollowed out: an empty tuple turns assert_no_raw_exception_leak
+# into a no-op at every call site, and a token that is absent from the sentinel
+# is never actually injected by the tests that call it, so it grades nothing.
+# Pin both at import so neutering the tuple fails loudly instead of going green.
+assert _RAW_EXCEPTION_LEAK_TOKENS, "_RAW_EXCEPTION_LEAK_TOKENS is empty — assert_no_raw_exception_leak grades nothing"
+assert all(token in RAW_EXCEPTION_LEAK_SENTINEL for token in _RAW_EXCEPTION_LEAK_TOKENS), (
+    "every _RAW_EXCEPTION_LEAK_TOKENS entry must appear in RAW_EXCEPTION_LEAK_SENTINEL, "
+    "otherwise the tests injecting the sentinel never exercise it: "
+    f"{[t for t in _RAW_EXCEPTION_LEAK_TOKENS if t not in RAW_EXCEPTION_LEAK_SENTINEL]!r}"
+)
+
+
+def assert_no_raw_exception_leak(message: str) -> None:
+    """Assert a buyer-facing message omits raw untyped-exception internals.
+
+    Mirrors ``assert_no_raw_validation_leak`` — both delegate to
+    ``_assert_no_tokens`` — so every sink (the untyped-normalization message, the
+    A2A ``_internal_error_for`` message, the A2A push-config endpoint) grades the
+    same markers and no site can silently drop one. Pair with
+    ``RAW_EXCEPTION_LEAK_SENTINEL`` as the injected raw exception text.
+    """
+    _assert_no_tokens(message, _RAW_EXCEPTION_LEAK_TOKENS, "raw exception detail")
 
 
 def assert_envelope_shape(
