@@ -172,12 +172,25 @@ def _require_error(ctx: dict) -> object:
     return error
 
 
+def _unwrap_response(resp: object) -> object:
+    """Return the domain response inside a protocol-status wrapper, else *resp*.
+
+    ``TaskResultEnvelope`` subclasses (CreateMediaBuyResult and friends) carry
+    the domain response on ``.response``; bare domain responses do not. The one
+    place that distinction is decided — callers that need the inner OBJECT (to
+    register it, or to read several fields off it) use this; callers that need a
+    single FIELD use :func:`_get_response_field`, which routes through here.
+    """
+    inner = getattr(resp, "response", None)
+    return resp if inner is None else inner
+
+
 def _get_response_field(resp: object, field: str) -> object:
     """Extract a field from a response, handling wrapper types."""
     if hasattr(resp, field):
         return getattr(resp, field)
-    inner = getattr(resp, "response", None)
-    if inner is not None and hasattr(inner, field):
+    inner = _unwrap_response(resp)
+    if hasattr(inner, field):
         return getattr(inner, field)
     if isinstance(resp, dict):
         return resp.get(field)

@@ -37,6 +37,9 @@ adds only the jsonschema-validation-specific pieces on top:
   ``$ref`` resolution wired, for validating a payload against a schema
   (``validate_against_pinned_schema`` is the convenience wrapper most
   callers want).
+- ``array_item_validator_for(ref, item_key)`` — the same, narrowed to ONE
+  array property's items, for callers that grade a response's payload
+  without its transport/protocol envelope.
 - ``load(ref)`` — re-exported from ``tests/helpers/adcp_pinned_schema`` — a
   single schema's raw dict, ``$ref``s left as-is, for callers that WALK the
   schema tree themselves (the alignment suite's synthetic-example
@@ -75,6 +78,7 @@ from tests.helpers.adcp_pinned_schema import (
 
 __all__ = [
     "PinnedSchemaError",
+    "array_item_validator_for",
     "load",
     "load_canonicalized",
     "normalize_ref",
@@ -134,6 +138,55 @@ def validator_for(ref: str) -> Draft7Validator:
     registry: referencing.Registry = referencing.Registry(retrieve=_retrieve)
     registry = registry.with_resource(schema["$id"], DRAFT7.create_resource(schema))
     return Draft7Validator(schema, registry=registry)
+
+
+def array_item_validator_for(
+    ref: str,
+    item_key: str,
+    *,
+    ignore_required: frozenset[str] = frozenset(),
+) -> Draft7Validator:
+    """A Draft7Validator for the ITEMS of *ref*'s ``item_key`` array property.
+
+    For payload-level grading: a response schema's top level composes the
+    protocol envelope (``core/protocol-envelope.json``, which REQUIRES
+    ``status``), so validating a bare AdCP payload against the whole document
+    fails on framing the payload legitimately does not carry. This narrows the
+    validator to the array the caller's scenario is actually about, while
+    keeping the parent document's ``$ref`` resolution: ``evolve`` carries the
+    parent validator's resolver — rooted at the parent's ``file://`` ``$id`` —
+    onto the narrowed schema, so the item's relative refs
+    (``../core/account.json``) resolve exactly as they do in place. That
+    inheritance is what makes the narrowing safe, so it is pinned by a test
+    (tests/unit/test_wire_schema_oracle.py::test_cross_file_ref_resolves)
+    rather than assumed.
+
+    ``ignore_required`` drops names from the item's ``required`` list, for a
+    KNOWN production gap the caller has named and accepted (expressed against
+    the SCHEMA rather than by pattern-matching jsonschema's error message,
+    which is presentation, not contract). Every other required field, and every
+    non-required constraint, still grades. A name that is NOT required by the
+    pinned schema raises: a tolerance that has silently become a no-op — the
+    spec dropped the field, or it was misspelled — must fail loud so it gets
+    deleted, never linger as dead permission.
+    """
+    schema = load(ref)
+    prop = schema.get("properties", {}).get(item_key)
+    if not isinstance(prop, dict) or not isinstance(prop.get("items"), dict):
+        raise PinnedSchemaError(f"{ref} has no array property {item_key!r} with an object ``items`` schema")
+
+    item_schema = dict(prop["items"])
+    required = list(item_schema.get("required", []))
+    if ignore_required:
+        stale = sorted(set(ignore_required) - set(required))
+        if stale:
+            raise PinnedSchemaError(
+                f"ignore_required names {stale} which {ref} does not mark required on "
+                f"{item_key} items — the tolerance is a no-op; delete it."
+            )
+        item_schema["required"] = [name for name in required if name not in ignore_required]
+
+    return validator_for(ref).evolve(schema=item_schema)
 
 
 def validate_against_pinned_schema(filename: str, data: Any) -> None:

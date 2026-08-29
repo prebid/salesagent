@@ -9,7 +9,7 @@ Then steps assert on GetMediaBuysResponse fields.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pytest_bdd import given, parsers, then, when
 
@@ -24,6 +24,9 @@ from tests.factories import (
     MediaBuyFactory,
     MediaPackageFactory,
 )
+
+if TYPE_CHECKING:
+    from src.core.schemas._base import GetMediaBuysMediaBuy
 
 # ═══════════════════════════════════════════════════════════════════════
 # Helpers
@@ -1347,20 +1350,33 @@ def _get_media_buys(ctx: dict) -> list:
     return buys or []
 
 
-@then(parsers.parse('the response should include media buy "{mb_id}" with status "{status}"'))
-def then_response_includes_mb_with_status(ctx: dict, mb_id: str, status: str) -> None:
-    """Assert response includes the media buy with expected status."""
+def _find_single_media_buy(ctx: dict, mb_id: str, expected_status: str | None = None) -> GetMediaBuysMediaBuy:
+    """Resolve a label and return the SINGLE matching media buy from the response.
+
+    Shared matcher for every step that locates one buy by label — one place to
+    fix if the matching logic ever changes. When ``expected_status`` is given,
+    also assert the buy's status (enum-normalized) equals it: the single home
+    for the status coerce+equality tail otherwise copied into every by-id step.
+    """
     real_id = _resolve_media_buy_id(ctx, mb_id)
     buys = _get_media_buys(ctx)
     matching = [b for b in buys if getattr(b, "media_buy_id", None) == real_id]
     assert len(matching) == 1, (
-        f"Expected media buy '{mb_id}' (real_id={real_id}) in response, "
+        f"Expected exactly one media buy '{mb_id}' (real_id={real_id}) in response, "
         f"got IDs: {[getattr(b, 'media_buy_id', None) for b in buys]}"
     )
-    actual_status = getattr(matching[0], "status", None)
-    # Status may be an enum — convert to string
-    actual_str = actual_status.value if hasattr(actual_status, "value") else str(actual_status)
-    assert actual_str == status, f"Expected status '{status}' for {mb_id}, got '{actual_str}'"
+    entry = matching[0]
+    if expected_status is not None:
+        actual = getattr(entry, "status", None)
+        actual_str = actual.value if hasattr(actual, "value") else str(actual)
+        assert actual_str == expected_status, f"Expected status '{expected_status}' for '{mb_id}', got '{actual_str}'"
+    return entry
+
+
+@then(parsers.parse('the response should include media buy "{mb_id}" with status "{status}"'))
+def then_response_includes_mb_with_status(ctx: dict, mb_id: str, status: str) -> None:
+    """Assert response includes the media buy with expected status."""
+    _find_single_media_buy(ctx, mb_id, expected_status=status)
 
 
 @then(
@@ -1750,16 +1766,7 @@ def then_suggestion_contains_any_of_three(ctx: dict, text1: str, text2: str, tex
 @then(parsers.parse('the media buy "{mb_id}" should have status "{expected_status}"'))
 def then_media_buy_has_status(ctx: dict, mb_id: str, expected_status: str) -> None:
     """Assert a specific media buy has the expected status in the response."""
-    real_id = _resolve_media_buy_id(ctx, mb_id)
-    buys = _get_media_buys(ctx)
-    matching = [b for b in buys if getattr(b, "media_buy_id", None) == real_id]
-    assert len(matching) == 1, (
-        f"Expected media buy '{mb_id}' (real_id={real_id}) in response, "
-        f"got IDs: {[getattr(b, 'media_buy_id', None) for b in buys]}"
-    )
-    actual = getattr(matching[0], "status", None)
-    actual_str = actual.value if hasattr(actual, "value") else str(actual)
-    assert actual_str == expected_status, f"Expected status '{expected_status}' for '{mb_id}', got '{actual_str}'"
+    _find_single_media_buy(ctx, mb_id, expected_status=expected_status)
 
 
 @then(parsers.parse("the error message should include field-level validation details"))
