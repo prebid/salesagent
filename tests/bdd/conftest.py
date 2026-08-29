@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, NamedTuple
 import pytest
 
 from scripts.audit import storyboard_spec
+from tests.bdd import xfail_taxonomy
 from tests.helpers.ledger import load_ledger_nodeids
 from tests.helpers.marker_names import derive_marker_names
 
@@ -109,17 +110,17 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Gener
 
         if call.excinfo.errisinstance(StepDefinitionNotFoundError):
             report.outcome = "skipped"
-            report.wasxfail = f"Step definition not found: {call.excinfo.value}"
+            report.wasxfail = xfail_taxonomy.step_definition_not_found(call.excinfo.value)
         elif call.excinfo.errisinstance(NotImplementedError):
             report.outcome = "skipped"
-            report.wasxfail = f"Not implemented: {call.excinfo.value}"
+            report.wasxfail = xfail_taxonomy.not_implemented(call.excinfo.value)
         elif call.excinfo.errisinstance(E2EUnsupportedSetup):
             # A mock-setup intent the live e2e stack has no surface for. The
             # reason is declared at the env method (not a nodeid ledger), so it
             # is visible in the report. Non-strict xfail — in-process transports
             # of the same scenario still run normally.
             report.outcome = "skipped"
-            report.wasxfail = f"impl-only setup declared in env: {call.excinfo.value}"
+            report.wasxfail = xfail_taxonomy.e2e_unsupported_setup(call.excinfo.value)
 
 
 # ---------------------------------------------------------------------------
@@ -3795,13 +3796,13 @@ ENV_ROUTES: list[EnvRoute] = [
         tag="uc002-inv-015-6",
         when=_uc("UC-002", lambda m: "T-UC-002-inv-015-6" in m),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
-        xfail_reason="T-UC-002-inv-015-6 create_media_buy harness wiring is tracked in #1652",
+        xfail_reason=xfail_taxonomy.not_yet_wired("T-UC-002-inv-015-6 create_media_buy", "(tracked in #1652)"),
     ),
     EnvRoute(
         tag="uc002-not-wired",
         when=_uc("UC-002", lambda m: True),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
-        xfail_reason="UC-002 harness not yet wired for non-extension scenarios",
+        xfail_reason=xfail_taxonomy.not_yet_wired("UC-002", "for non-extension scenarios"),
     ),
     # ── UC-003 ──────────────────────────────────────────────────────────────
     EnvRoute(
@@ -3829,8 +3830,8 @@ ENV_ROUTES: list[EnvRoute] = [
         tag="uc003-not-wired",
         when=_uc("UC-003", lambda m: True),
         env_builder=_env("tests.harness.media_buy_dual.MediaBuyDualEnv"),
-        xfail_reason=(
-            "UC-003 harness not yet wired for non-extension scenarios (full graduation pending, PR #1567 follow-up)"
+        xfail_reason=xfail_taxonomy.not_yet_wired(
+            "UC-003", "for non-extension scenarios (full graduation pending, PR #1567 follow-up)"
         ),
     ),
     # ── UC-006 ──────────────────────────────────────────────────────────────
@@ -3856,7 +3857,7 @@ ENV_ROUTES: list[EnvRoute] = [
         tag="uc006-not-wired",
         when=_uc("UC-006", lambda m: True),
         env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
-        xfail_reason="UC-006 harness not yet wired for non-account scenarios",
+        xfail_reason=xfail_taxonomy.not_yet_wired("UC-006", "for non-account scenarios"),
     ),
     # ── UC-018 ──────────────────────────────────────────────────────────────
     EnvRoute(
@@ -3868,7 +3869,7 @@ ENV_ROUTES: list[EnvRoute] = [
         tag="uc018-ext-c",
         when=_uc("UC-018", lambda m: "T-UC-018-ext-c" in m),
         env_builder=_env("tests.harness.creative_list.CreativeListEnv"),
-        xfail_reason="T-UC-018-ext-c list_creatives validation harness wiring is tracked in #1652",
+        xfail_reason=xfail_taxonomy.not_yet_wired("T-UC-018-ext-c list_creatives validation", "(tracked in #1652)"),
     ),
     # When the dormant all-fields boundary scenarios are wired, their Then must
     # assert value-when-present, not key-presence-of-13: list_creatives drops a
@@ -3879,9 +3880,9 @@ ENV_ROUTES: list[EnvRoute] = [
         tag="uc018-not-wired",
         when=_uc("UC-018", lambda m: True),
         env_builder=_env("tests.harness.creative_list.CreativeListEnv"),
-        xfail_reason=(
-            "UC-018 harness wired only for the @list-after-sync (#1405), @concept-id (#1407), "
-            "and @BR-RULE-034 isolation (#1503) scenarios"
+        xfail_reason=xfail_taxonomy.not_yet_wired(
+            "UC-018",
+            "outside the @list-after-sync (#1405), @concept-id (#1407), and @BR-RULE-034 isolation (#1503) scenarios",
         ),
     ),
     # ── UC-011 ──────────────────────────────────────────────────────────────
@@ -3899,7 +3900,7 @@ ENV_ROUTES: list[EnvRoute] = [
         tag="uc011-not-wired",
         when=_uc("UC-011", lambda m: True),
         env_builder=_env("tests.harness.account_sync.AccountSyncEnv"),
-        xfail_reason="UC-011 harness not yet wired for these markers",
+        xfail_reason=xfail_taxonomy.not_yet_wired("UC-011", "for these markers"),
     ),
     # ── UC-004 ──────────────────────────────────────────────────────────────
     EnvRoute(
@@ -3974,5 +3975,5 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         # NOT WIRED is a real answer, not an absence. Each branch UC keeps its own
         # catch-all row (below) carrying the reason it used to xfail with inline;
         # reaching here means no row claimed the scenario at all.
-        pytest.xfail(f"No harness wired for {uc} (markers: {sorted(marker_names)})")
+        pytest.xfail(f"{xfail_taxonomy.no_harness_wired(uc)} (markers: {sorted(marker_names)})")
     yield from _run_env_route(request, ctx, route, e2e_config)

@@ -20,6 +20,14 @@ from __future__ import annotations
 import json
 import sys
 from collections import defaultdict
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+# Shared with scripts/check_dormant_scenarios.py — one nodeid->scenario collapse.
+from tests.bdd.xfail_taxonomy import scenario_name
 
 TRANSPORTS = {"impl", "a2a", "mcp", "rest"}
 
@@ -62,21 +70,21 @@ def analyze(report_path: str) -> dict:
         if "[" not in nodeid:
             continue
 
-        scenario_name = nodeid.split("[")[0].split("::")[-1]
+        scenario = scenario_name(nodeid)
         param_part = nodeid.split("[")[-1].rstrip("]")
         transport, row = _parse_transport_and_row(param_part)
 
         if transport == "unknown":
             continue
 
-        results[(scenario_name, row)][transport] = outcome
+        results[(scenario, row)][transport] = outcome
 
         # Collect tags from keywords
         for kw in test.get("keywords", []):
             if kw.startswith("T-UC-") or kw == "pending":
-                if scenario_name not in test_tags:
-                    test_tags[scenario_name] = set()
-                test_tags[scenario_name].add(kw)
+                if scenario not in test_tags:
+                    test_tags[scenario] = set()
+                test_tags[scenario].add(kw)
 
     # Categorize
     graduate_all_transports = []  # (scenario, row) where all 4 xpass

@@ -23,6 +23,13 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+# Shared with scripts/check_dormant_scenarios.py — one nodeid->scenario collapse.
+from tests.bdd.xfail_taxonomy import scenario_name
+
 TRANSPORT_SPECIFIC_TAGS = {"rest", "mcp", "a2a"}
 ALL_TRANSPORTS = {"impl", "a2a", "mcp", "rest", "e2e_rest"}
 IN_PROCESS_TRANSPORTS = {"impl", "a2a", "mcp", "rest"}
@@ -73,9 +80,9 @@ def load_test_results(json_path: str | None) -> dict[str, dict]:
 
     for t in data["tests"]:
         nodeid = t["nodeid"]
+        # The intermediate binding stays: the param pull below reuses it.
         func_with_param = nodeid.split("::")[-1]
-        # Extract base function name (without parametrize suffix)
-        func_base = func_with_param.split("[")[0]
+        func_base = scenario_name(nodeid)
         # Extract transport from parametrize
         transport = None
         if "[" in func_with_param:
@@ -97,9 +104,9 @@ def load_test_results(json_path: str | None) -> dict[str, dict]:
     return dict(index)
 
 
-def scenario_to_test_name(scenario_name: str) -> str:
+def scenario_to_test_name(gherkin_name: str) -> str:
     """Convert Gherkin scenario name to pytest function name."""
-    return "test_" + re.sub(r"[^a-zA-Z0-9]+", "_", scenario_name).strip("_").lower()
+    return "test_" + re.sub(r"[^a-zA-Z0-9]+", "_", gherkin_name).strip("_").lower()
 
 
 def detect_issues(scenarios: list[dict], results: dict[str, dict]) -> dict[str, list]:
