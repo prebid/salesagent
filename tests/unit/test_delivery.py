@@ -52,6 +52,8 @@ from src.core.tools.media_buy_delivery import (
 )
 from src.services.webhook_delivery_service import CircuitBreaker, CircuitState, WebhookDeliveryService
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
+from tests.helpers.webhook_hmac import assert_hmac_over_transmitted_bytes
+from tests.helpers.webhook_mocks import make_webhook_config, mock_httpx_post, serve_webhook_configs
 
 # ---------------------------------------------------------------------------
 # Fixtures (shared across all test classes)
@@ -1816,30 +1818,47 @@ class TestDeliveryWebhookHappyPath:
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/reporting-webhook.json
         CONFIRMED: authentication.schemes supports ['HMAC-SHA256'] for signature verification.
-        Tests that WebhookDeliveryService._generate_hmac_signature produces a valid hex signature,
-        and that signing with the same inputs is deterministic.
+        Drives the PRODUCTION sender (send_delivery_webhook ->
+        _deliver_with_backoff), which signs via adcp.sign_legacy_webhook over
+        ``{unix_timestamp}.{body_bytes}`` and transmits those exact bytes
+        (byte-equality — #1441 removed the local signer that re-serialized the
+        payload differently from the transport). The oracle recomputes the
+        HMAC over the LITERAL bytes handed to httpx.
         Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
         """
         service = WebhookDeliveryService()
-
-        payload = {"media_buy_id": "mb_wh07", "impressions": 1000}
         secret = "a" * 32  # 32-char minimum secret
-        timestamp = "2025-06-15T12:00:00Z"
+        now = datetime.now(UTC)
 
-        sig1 = service._generate_hmac_signature(payload, secret, timestamp)
-        sig2 = service._generate_hmac_signature(payload, secret, timestamp)
+        with (
+            patch("src.services.webhook_delivery_service.httpx.Client") as mock_client,
+            patch("src.core.database.database_session.get_db_session") as mock_get_db,
+        ):
+            post_mock = mock_httpx_post(mock_client)
+            mock_get_db.return_value.__enter__.return_value = serve_webhook_configs(
+                MagicMock(), make_webhook_config(webhook_secret=secret)
+            )
 
-        # Signature is a hex string
-        assert isinstance(sig1, str)
-        assert len(sig1) == 64  # SHA-256 hex = 64 chars
+            service.send_delivery_webhook(
+                media_buy_id="mb_wh07",
+                tenant_id="t1",
+                principal_id="p1",
+                reporting_period_start=now,
+                reporting_period_end=now,
+                impressions=1000,
+                spend=50.0,
+                is_final=False,
+            )
 
-        # Deterministic
-        assert sig1 == sig2
+            assert post_mock.called
+            sent_headers = {k.lower(): v for k, v in post_mock.call_args.kwargs["headers"].items()}
+            sent_bytes = post_mock.call_args.kwargs["content"]
 
-        # Different payload produces different signature
-        different_payload = {"media_buy_id": "mb_wh07", "impressions": 2000}
-        sig3 = service._generate_hmac_signature(different_payload, secret, timestamp)
-        assert sig3 != sig1
+        # Byte-equality oracle, graded by the shared helper so every HMAC
+        # assertion in the suite checks the same things (sha256= prefix, unix
+        # seconds, 64-char digest, digest over the literal transmitted bytes).
+        # Transport is mocked here, so no receiver cross-check.
+        assert_hmac_over_transmitted_bytes(secret, sent_bytes, sent_headers, cross_check_receivers=False)
 
     def test_webhook_excludes_aggregated_totals(self):
         """UC-004-WH-09: webhook does NOT include aggregated_totals.

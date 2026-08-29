@@ -43,6 +43,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, BaseTestEnv):
         get_breaker(**kwargs)            -- return a fresh CircuitBreaker instance
         set_http_response(status_code)   -- configure httpx Client mock response
         call_send(...)                   -- call service.send_delivery_webhook
+        last_webhook_wire()              -- (body_bytes, headers) actually POSTed
 
     Unit-only API:
         set_db_webhooks(webhook_list)    -- configure mock DB results

@@ -44,6 +44,7 @@ class WebhookEnv(WebhookMixin, IntegrationEnv):
         set_http_error(exception)         -- make requests.post raise
         set_url_invalid(error_msg)        -- make URL validation fail
         call_deliver(...)                 -- call deliver_webhook_with_retry
+        last_webhook_wire()               -- (body_bytes, headers) actually POSTed
     """
 
     MODULE = "src.core.webhook_delivery"

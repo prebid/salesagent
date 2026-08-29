@@ -264,7 +264,46 @@ class DeliveryPollMixin:
         )
 
 
-class WebhookMixin:
+def raw_body_from_kwargs(kwargs: dict[str, Any]) -> bytes | str | None:
+    """The pre-serialized body a sender POSTed, whichever kwarg carried it.
+
+    ``requests`` spells it ``data=`` and ``httpx`` spells it ``content=``; both
+    senders pass transmitted bytes, so the signed bytes are the transmitted
+    bytes. One accessor so a third spelling is taught in one place.
+
+    Selection is on key PRESENCE, not truthiness: a legitimately-empty body is
+    present-but-falsy, and an ``or`` chain would silently fall through to the
+    other kwarg — the same presence-vs-truthiness confusion that made the
+    payload accessor reject a valid empty ``{}`` body.
+    """
+    if "data" in kwargs:
+        return kwargs["data"]
+    return kwargs.get("content")
+
+
+class WebhookWireMixin:
+    """One seam for reading the webhook request a sender actually transmitted.
+
+    BDD Then steps grade the transmitted webhook through this method rather
+    than indexing ``env.mock["post"]`` themselves, so the SOURCE of the wire
+    can vary by transport: the in-process envs answer from the patched sender,
+    and a transport that owns a real socket can override this to answer from
+    the request its receiver actually got. Both webhook-serving mixins expose
+    it, so a step need not know which env its scenario routed to.
+    """
+
+    def last_webhook_wire(self) -> tuple[bytes, dict[str, str]]:
+        """Return ``(body_bytes, headers)`` for the most recent webhook POST."""
+        post = self.mock["post"]  # type: ignore[attr-defined]
+        assert post.called, "No webhook POST was made"
+        call_kwargs = post.call_args_list[-1][1]
+        raw = raw_body_from_kwargs(call_kwargs)
+        assert raw is not None, f"Webhook POST had no body bytes: {call_kwargs}"
+        body = raw.encode("utf-8") if isinstance(raw, str) else bytes(raw)
+        return body, call_kwargs.get("headers", {})
+
+
+class WebhookMixin(WebhookWireMixin):
     """Shared fluent API for webhook delivery testing."""
 
     _seq_counter: dict[str, int]
@@ -365,7 +404,7 @@ class WebhookMixin:
         return self.call_deliver(**kwargs)
 
 
-class CircuitBreakerMixin:
+class CircuitBreakerMixin(WebhookWireMixin):
     """Shared fluent API for circuit breaker / webhook delivery service testing."""
 
     _service: WebhookDeliveryService | None

@@ -2,13 +2,14 @@
 
 import hashlib
 import hmac
-import json
 import time
 
 import pytest
+from adcp import sign_legacy_webhook
 from adcp.types import TaskType
 
 from src.core.webhook_authenticator import WebhookAuthenticator
+from src.core.webhook_body import compact_webhook_body
 from src.core.webhook_validator import (
     WEBHOOK_TASK_TYPE_FALLBACK,
     WebhookURLValidator,
@@ -203,42 +204,14 @@ class TestWebhookURLValidator:
 
 
 class TestWebhookAuthenticator:
-    """Test HMAC-SHA256 webhook authentication."""
+    """The receiver-side ``WebhookAuthenticator.verify_signature`` reference.
 
-    def test_sign_payload(self):
-        """Should generate signature with timestamp."""
-        payload = {"event": "test", "data": "value"}
-        secret = "test_secret_key"
-
-        headers = WebhookAuthenticator.sign_payload(payload, secret)
-
-        assert "X-Webhook-Signature" in headers
-        assert "X-Webhook-Timestamp" in headers
-        assert headers["X-Webhook-Signature"].startswith("sha256=")
-        assert headers["X-Webhook-Timestamp"].isdigit()
-
-    def test_sign_payload_deterministic(self):
-        """Same payload and secret should generate different signatures (due to timestamp)."""
-        payload = {"event": "test"}
-        secret = "secret"
-
-        headers1 = WebhookAuthenticator.sign_payload(payload, secret)
-        time.sleep(1.1)  # Delay to ensure different timestamp (at least 1 second)
-        headers2 = WebhookAuthenticator.sign_payload(payload, secret)
-
-        # Timestamps should be different
-        assert headers1["X-Webhook-Timestamp"] != headers2["X-Webhook-Timestamp"]
-        # Signatures should be different (timestamp is part of signed message)
-        assert headers1["X-Webhook-Signature"] != headers2["X-Webhook-Signature"]
-
-    def test_sign_payload_with_different_secrets(self):
-        """Different secrets should produce different signatures."""
-        payload = {"event": "test"}
-
-        headers1 = WebhookAuthenticator.sign_payload(payload, "secret1")
-        headers2 = WebhookAuthenticator.sign_payload(payload, "secret2")
-
-        assert headers1["X-Webhook-Signature"] != headers2["X-Webhook-Signature"]
+    Signing itself lives in the SDK (``sign_legacy_webhook``), which is the
+    SDK's to test. The signer's spec header format is graded with a production
+    sender in the path by ``test_delivery.py::test_hmac_sha256_signature_headers``,
+    and the SDK-to-local body equality by
+    ``test_webhook_body.py::test_compact_body_matches_sign_legacy_webhook``.
+    """
 
     def test_verify_signature_valid(self):
         """Should verify valid signature."""
@@ -246,7 +219,7 @@ class TestWebhookAuthenticator:
         secret = "test_secret"
 
         # Create signature
-        payload_str = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        payload_str = compact_webhook_body(payload).decode("utf-8")
         timestamp = str(int(time.time()))
         signed_payload = f"{timestamp}.{payload_str}"
         signature = (
@@ -260,7 +233,7 @@ class TestWebhookAuthenticator:
     def test_verify_signature_invalid_secret(self):
         """Should reject signature with wrong secret."""
         payload = {"event": "test"}
-        payload_str = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        payload_str = compact_webhook_body(payload).decode("utf-8")
         timestamp = str(int(time.time()))
 
         # Sign with one secret
@@ -274,7 +247,7 @@ class TestWebhookAuthenticator:
     def test_verify_signature_replay_protection(self):
         """Should reject old timestamps (replay attack prevention)."""
         payload = {"event": "test"}
-        payload_str = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        payload_str = compact_webhook_body(payload).decode("utf-8")
         secret = "test_secret"
 
         # Create signature with old timestamp (10 minutes ago)
@@ -291,7 +264,7 @@ class TestWebhookAuthenticator:
     def test_verify_signature_custom_tolerance(self):
         """Should accept old timestamps if tolerance allows."""
         payload = {"event": "test"}
-        payload_str = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        payload_str = compact_webhook_body(payload).decode("utf-8")
         secret = "test_secret"
 
         # Create signature with timestamp 10 minutes ago
@@ -308,24 +281,25 @@ class TestWebhookAuthenticator:
         assert is_valid
 
     def test_roundtrip_sign_and_verify(self):
-        """Should successfully sign and verify."""
+        """Sender (lib signer) and receiver (verify_signature) agree on RAW bytes.
+
+        The receiver verifies the exact bytes the sender transmits — no
+        re-serialization on either side.
+        """
         payload = {"event": "creative_approved", "creative_id": "cr_123", "status": "active"}
         secret = "super_secret_key_12345"
 
-        # Sign
-        headers = WebhookAuthenticator.sign_payload(payload, secret)
-        payload_str = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        headers, body_bytes = sign_legacy_webhook(secret, payload)
 
-        # Verify
         is_valid = WebhookAuthenticator.verify_signature(
-            payload_str, headers["X-Webhook-Signature"], headers["X-Webhook-Timestamp"], secret
+            body_bytes.decode("utf-8"), headers["X-AdCP-Signature"], headers["X-AdCP-Timestamp"], secret
         )
         assert is_valid
 
     def test_signature_without_sha256_prefix(self):
         """Should handle signatures without sha256= prefix."""
         payload = {"event": "test"}
-        payload_str = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        payload_str = compact_webhook_body(payload).decode("utf-8")
         secret = "test_secret"
         timestamp = str(int(time.time()))
 
@@ -338,19 +312,15 @@ class TestWebhookAuthenticator:
         assert is_valid
 
     def test_tampered_payload(self):
-        """Should reject tampered payload."""
+        """Should reject bytes that differ from the signed bytes."""
         payload = {"event": "test", "amount": 100}
         secret = "test_secret"
 
-        # Sign original payload
-        headers = WebhookAuthenticator.sign_payload(payload, secret)
+        headers, body_bytes = sign_legacy_webhook(secret, payload)
 
-        # Tamper with payload
-        tampered_payload = {"event": "test", "amount": 999999}
-        tampered_str = json.dumps(tampered_payload, separators=(",", ":"), sort_keys=True)
+        tampered = body_bytes.decode("utf-8").replace("100", "999999")
 
-        # Should reject
         is_valid = WebhookAuthenticator.verify_signature(
-            tampered_str, headers["X-Webhook-Signature"], headers["X-Webhook-Timestamp"], secret
+            tampered, headers["X-AdCP-Signature"], headers["X-AdCP-Timestamp"], secret
         )
         assert not is_valid

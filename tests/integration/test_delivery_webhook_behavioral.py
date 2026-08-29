@@ -9,6 +9,8 @@ Each test targets exactly one obligation ID and follows the 6 hard rules.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 # ---------------------------------------------------------------------------
@@ -52,45 +54,18 @@ class TestWebhookDeliveryHappyPath:
             call_args = env.mock["post"].call_args
             assert call_args.args[0] == "https://buyer.example.com/webhook"
 
-            # Verify HMAC signature headers were added
-            sent_headers = call_args.kwargs["headers"]
-            assert "X-Webhook-Signature" in sent_headers
-            assert "X-Webhook-Timestamp" in sent_headers
+            # Verify HMAC signature headers were added, graded through the one
+            # shared helper (presence + sha256=-prefix + unix-seconds) so this
+            # site can't stay green on a bare-hex sig or ISO timestamp that the
+            # helper-based suites reject.
+            from tests.helpers.webhook_hmac import assert_signature_headers_present
+
+            assert_signature_headers_present(call_args.kwargs["headers"])
 
             # Verify payload was sent
-            sent_payload = call_args.kwargs["json"]
+            sent_payload = json.loads(call_args.kwargs["data"])
             assert sent_payload["media_buy_id"] == "mb_001"
             assert sent_payload["notification_type"] == "scheduled"
-
-
-# ---------------------------------------------------------------------------
-# UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
-# ---------------------------------------------------------------------------
-
-
-class TestWebhookHmacSha256Signing:
-    """Webhook payload signed with HMAC-SHA256.
-
-    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
-    """
-
-    def test_sign_payload_produces_hmac_headers(self):
-        """WebhookAuthenticator.sign_payload produces HMAC-SHA256 signature headers.
-
-        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
-        """
-        from src.core.webhook_authenticator import WebhookAuthenticator
-
-        payload = {"media_buy_id": "mb_001", "impressions": 5000}
-        secret = "test-signing-secret"
-
-        headers = WebhookAuthenticator.sign_payload(payload, secret)
-
-        assert "X-Webhook-Signature" in headers
-        assert headers["X-Webhook-Signature"].startswith("sha256=")
-        assert len(headers["X-Webhook-Signature"]) > len("sha256=")
-        assert "X-Webhook-Timestamp" in headers
-        assert headers["X-Webhook-Timestamp"].isdigit()
 
 
 # ---------------------------------------------------------------------------
@@ -454,10 +429,11 @@ class TestEXT_G_06_HmacAuthRejection:
                 object_id="mb_001",
             )
 
-            sent_headers = env.mock["post"].call_args[1]["headers"]
-            assert "X-Webhook-Signature" in sent_headers
-            assert sent_headers["X-Webhook-Signature"].startswith("sha256=")
-            assert "X-Webhook-Timestamp" in sent_headers
+            # Full format contract via the one shared helper (this site had
+            # skipped the timestamp isdigit check).
+            from tests.helpers.webhook_hmac import assert_signature_headers_present
+
+            assert_signature_headers_present(env.mock["post"].call_args[1]["headers"])
 
     def test_auth_rejection_vs_server_error_retry_behavior(self, integration_db):
         """Contrast: 401 does NOT retry, but 500 DOES retry.

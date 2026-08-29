@@ -61,6 +61,7 @@ class CircuitBreakerEnv(CircuitBreakerMixin, IntegrationEnv):
         call_send(...)                   -- call service.send_delivery_webhook
         make_webhook_config(...)         -- create a PushNotificationConfig in DB
         set_db_webhooks(configs)         -- replace webhook configs in DB
+        last_webhook_wire()              -- (body_bytes, headers) actually POSTed
     """
 
     MODULE = "src.services.webhook_delivery_service"

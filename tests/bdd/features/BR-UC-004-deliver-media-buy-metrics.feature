@@ -254,11 +254,15 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the shared secret is a valid 32+ character string
     When the system delivers a webhook report for "mb-001"
     Then the request should include header "X-ADCP-Signature" with hex-encoded HMAC
-    And the request should include header "X-ADCP-Timestamp" with ISO timestamp
+    And the request should include header "X-ADCP-Timestamp" with unix timestamp
     And the HMAC should be computed over "timestamp.payload" concatenation
     # POST-S8: Buyer can verify report authenticity
     # BR-RULE-029 INV-1: monotonically increasing sequence (signing is precondition)
     # Webhook auth: traces to SR-NFR-005
+    # X-ADCP-Timestamp carries unix SECONDS, not ISO: the legacy HMAC-SHA256
+    # signed message is {unix_timestamp}.{raw_json_body}, normative since AdCP
+    # 3.0.0 (L3 webhooks.mdx; signing rules in L1/security.mdx). The scheme is
+    # marked deprecated and is removed in AdCP 4.0.
 
   @T-UC-004-webhook-bearer @alternative @webhook @invariant @BR-RULE-029
   Scenario: Bearer token webhook authentication

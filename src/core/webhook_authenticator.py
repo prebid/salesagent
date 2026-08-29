@@ -1,69 +1,54 @@
-"""Webhook authentication using HMAC signatures.
+"""Webhook signature verification (buyer/receiver reference).
 
-This module provides HMAC-SHA256 signing for webhook payloads to allow
-receivers to verify that webhooks are genuinely from this server.
+Verifies the AdCP legacy HMAC-SHA256 scheme: the signature covers
+``{unix_timestamp}.{raw_http_body}`` — the raw bytes exactly as received,
+never a re-serialization. Similar to GitHub, Stripe, and Slack webhook
+authentication.
 
-Similar to GitHub, Stripe, and Slack webhook authentication.
+SENDING side note: the signer that used to live here (``sign_payload``) was
+removed — it signed a sorted-compact re-serialization while the HTTP client
+re-serialized the body differently, so its signatures never matched the wire
+(#1441). Senders now use :func:`adcp.sign_legacy_webhook`, which returns the
+signed headers together with the exact ``body_bytes`` to transmit.
 """
 
 import hashlib
 import hmac
-import json
 import time
 
 
 class WebhookAuthenticator:
-    """Handles webhook payload signing with HMAC-SHA256."""
-
-    @staticmethod
-    def sign_payload(payload: dict, secret: str) -> dict[str, str]:
-        """
-        Sign webhook payload with HMAC-SHA256.
-
-        Creates a signature that receivers can verify to ensure the webhook
-        is authentic and hasn't been tampered with.
-
-        Args:
-            payload: The webhook payload dict to sign
-            secret: The shared secret key (from webhook config)
-
-        Returns:
-            Headers dict to include in webhook HTTP request
-        """
-        # Serialize payload consistently (sorted keys, no spaces)
-        payload_str = json.dumps(payload, separators=(",", ":"), sort_keys=True)
-
-        # Include timestamp to prevent replay attacks
-        timestamp = str(int(time.time()))
-
-        # Create signed message: timestamp.payload
-        signed_payload = f"{timestamp}.{payload_str}"
-
-        # Generate HMAC-SHA256 signature
-        signature = hmac.new(secret.encode("utf-8"), signed_payload.encode("utf-8"), hashlib.sha256).hexdigest()
-
-        return {
-            "X-Webhook-Signature": f"sha256={signature}",
-            "X-Webhook-Timestamp": timestamp,
-        }
+    """Verifies webhook payload signatures (HMAC-SHA256, raw-body)."""
 
     @staticmethod
     def verify_signature(
-        payload: str, signature: str, timestamp: str, secret: str, tolerance_seconds: int = 300
+        payload: str | bytes, signature: str, timestamp: str, secret: str, tolerance_seconds: int = 300
     ) -> bool:
         """
-        Verify webhook signature (for testing or customer reference).
+        Verify a webhook signature against the RAW request body.
+
+        ``payload`` must be the raw HTTP body exactly as received — re-parsing
+        and re-serializing the JSON before verification breaks the byte-equality
+        contract and rejects valid signatures. ``bytes`` (e.g. ``request.body``)
+        is accepted and decoded as UTF-8 internally, matching
+        ``WebhookVerifier._verify_signature`` so both receiver references take
+        the same input.
 
         Args:
-            payload: The raw payload string
-            signature: The signature from X-Webhook-Signature header (with "sha256=" prefix)
-            timestamp: The timestamp from X-Webhook-Timestamp header
+            payload: The raw payload (exact received bytes as ``bytes``, or the
+                already-decoded text)
+            signature: The signature from the X-AdCP-Signature header (with
+                "sha256=" prefix)
+            timestamp: The unix-seconds timestamp from X-AdCP-Timestamp
             secret: The shared secret key
             tolerance_seconds: Max age of webhook to accept (default 5 minutes)
 
         Returns:
             True if signature is valid, False otherwise
         """
+        if isinstance(payload, bytes):
+            payload = payload.decode("utf-8")
+
         # Check timestamp to prevent replay attacks
         try:
             webhook_time = int(timestamp)

@@ -21,6 +21,8 @@ from pytest_bdd import given, parsers, then, when
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
+from tests.harness._mixins import raw_body_from_kwargs
+from tests.helpers.webhook_hmac import assert_hmac_over_transmitted_bytes, assert_signature_headers_present
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -39,22 +41,68 @@ def _parse_json_list(text: str) -> list[str]:
     return json.loads(text)
 
 
+def _parse_call_payload(call: Any) -> dict[str, Any]:
+    """Parse one mocked POST call's payload from its wire bytes (or legacy json=)."""
+    kwargs = call[1]
+    payload = kwargs.get("json")
+    if payload is None:
+        raw = raw_body_from_kwargs(kwargs)
+        if raw is None:
+            return {}
+        payload = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+    return payload
+
+
+def _get_last_webhook_body_bytes(ctx: dict) -> bytes:
+    """The RAW body bytes of the most recent webhook POST, read via the env seam.
+
+    Senders POST pre-serialized bytes (``data=``/``content=``) so the signed
+    bytes are the transmitted bytes — these are what HMAC assertions must use.
+    Read through ``env.last_webhook_wire()`` rather than the POST mock so the
+    source can vary by transport (see ``WebhookWireMixin``).
+    """
+    body, _ = ctx["env"].last_webhook_wire()
+    return body
+
+
 def _get_last_webhook_payload(ctx: dict) -> dict[str, Any]:
-    """Extract the JSON payload from the most recent webhook POST call."""
+    """Extract the JSON payload (parsed) from the most recent webhook POST call."""
     mock_post = ctx["env"].mock["post"]
     assert mock_post.called, "No webhook POST was made"
-    call_kwargs = mock_post.call_args_list[-1][1]  # kwargs of last call
-    payload = call_kwargs.get("json") or call_kwargs.get("data") or {}
-    assert payload, f"Webhook POST had no JSON payload: {call_kwargs}"
+    last_call = mock_post.call_args_list[-1]
+    # Delegate to the one json-else-bytes parser (:_parse_call_payload) instead
+    # of re-rolling it: the hand-rolled copy ended in ``assert payload``
+    # (truthiness), which wrongly rejected a legitimately-empty ``{}`` body that
+    # test_harness_delivery_webhook.py::test_empty_payload_is_not_replaced_with_default
+    # proves is real. Guard on None so the empty dict is accepted.
+    payload = _parse_call_payload(last_call)
+    assert payload is not None, f"Webhook POST had no JSON payload: {last_call[1]}"
     return payload
 
 
 def _get_last_webhook_headers(ctx: dict) -> dict[str, str]:
-    """Extract headers from the most recent webhook POST call."""
-    mock_post = ctx["env"].mock["post"]
-    assert mock_post.called, "No webhook POST was made"
-    call_kwargs = mock_post.call_args_list[-1][1]
-    return call_kwargs.get("headers", {})
+    """The headers of the most recent webhook POST, read via the env seam.
+
+    Same seam as the body (``env.last_webhook_wire()``): the signature and the
+    bytes it covers must come from ONE read of ONE request, or a step could
+    grade a header against a different POST's body.
+    """
+    _, headers = ctx["env"].last_webhook_wire()
+    return headers
+
+
+def _ci_header(ctx: dict, header: str) -> str:
+    """Return the last webhook POST's value for *header*, matched case-insensitively.
+
+    ``requests``/``httpx``/``BaseHTTPRequestHandler`` each normalize header
+    casing differently, so the Gherkin-named header is resolved against a
+    lowered copy. Asserts the header is present (this preamble was previously
+    duplicated verbatim across the HMAC/timestamp Then steps).
+    """
+    all_headers = _get_last_webhook_headers(ctx)
+    value = {k.lower(): v for k, v in all_headers.items()}.get(header.lower())
+    assert value is not None, f"Expected header {header!r} but got: {list(all_headers)}"
+    return value
 
 
 def _collect_all_packages(resp: Any) -> list[Any]:
@@ -1624,7 +1672,7 @@ def then_sequence_ascending(ctx: dict) -> None:
     """Assert sequence numbers are strictly increasing across consecutive POST calls."""
     calls = ctx["env"].mock["post"].call_args_list
     assert len(calls) >= 2, f"Expected at least 2 webhook POSTs for sequence check, got {len(calls)}"
-    seq_nums = [call[1].get("json", {}).get("sequence_number") for call in calls]
+    seq_nums = [_parse_call_payload(call).get("sequence_number") for call in calls]
     for i in range(1, len(seq_nums)):
         assert seq_nums[i] is not None, f"POST call {i} payload missing sequence_number"
         assert seq_nums[i] > seq_nums[i - 1], (
@@ -1637,7 +1685,7 @@ def then_first_sequence(ctx: dict) -> None:
     """Assert first webhook POST has sequence_number >= 1."""
     calls = ctx["env"].mock["post"].call_args_list
     assert calls, "No webhook POSTs were made"
-    first_payload = calls[0][1].get("json", {})
+    first_payload = _parse_call_payload(calls[0])
     seq = first_payload.get("sequence_number")
     assert seq is not None, f"First webhook POST payload missing sequence_number: {list(first_payload.keys())}"
     assert seq >= 1, f"Expected sequence_number >= 1, got {seq}"
@@ -1938,48 +1986,53 @@ def then_config_accepted(ctx: dict) -> None:
 
 @then(parsers.parse('the request should include header "{header}" with hex-encoded HMAC'))
 def then_hmac_header(ctx: dict, header: str) -> None:
-    """Assert HMAC header is present and contains a hex-encoded signature."""
-    headers = _get_last_webhook_headers(ctx)
-    assert header in headers, f"Expected header {header!r} but got: {list(headers.keys())}"
-    value = headers[header]
-    # Value may be bare hex or prefixed with "sha256="
-    stripped = value.removeprefix("sha256=")
-    assert re.match(r"^[0-9a-f]{1,}$", stripped), f"Header {header!r} is not a hex-encoded HMAC: {value!r}"
+    """Assert the Gherkin-named header carries a spec-format hex HMAC signature.
+
+    The ``sha256=``-prefix / 64-hex format contract is graded through the shared
+    ``assert_signature_headers_present`` (tests/helpers/webhook_hmac.py) so the
+    BDD layer cannot fork it looser than the unit/integration suites; the local
+    ``_ci_header`` check ties the assertion to the header the scenario names.
+    """
+    value = _ci_header(ctx, header)
+    assert value.startswith("sha256="), f"header {header!r} is not a sha256=-prefixed HMAC: {value!r}"
+    assert_signature_headers_present(_get_last_webhook_headers(ctx))
 
 
-@then(parsers.parse('the request should include header "{header}" with ISO timestamp'))
+@then(parsers.parse('the request should include header "{header}" with unix timestamp'))
 def then_timestamp_header(ctx: dict, header: str) -> None:
-    """Assert timestamp header is present and contains a valid ISO 8601 datetime."""
-    from datetime import datetime as _dt
+    """Assert the Gherkin-named header carries a unix-seconds timestamp (AdCP spec).
 
-    headers = _get_last_webhook_headers(ctx)
-    assert header in headers, f"Expected header {header!r} but got: {list(headers.keys())}"
-    value = headers[header]
-    try:
-        _dt.fromisoformat(value)
-    except (ValueError, TypeError) as exc:
-        raise AssertionError(f"Header {header!r} is not a valid ISO 8601 timestamp: {value!r}") from exc
+    The legacy-HMAC signed message is ``{unix_timestamp}.{raw_body}``, so the
+    header carries unix seconds — the earlier ISO form never matched a
+    spec-compliant verifier (#1441). Graded through the shared
+    ``assert_signature_headers_present`` so the unix-seconds check cannot be
+    present in some copies and absent in others.
+    """
+    value = _ci_header(ctx, header)
+    assert value.isdigit(), f"header {header!r} is not a unix-seconds timestamp: {value!r}"
+    assert_signature_headers_present(_get_last_webhook_headers(ctx))
 
 
 @then('the HMAC should be computed over "timestamp.payload" concatenation')
 def then_hmac_computation(ctx: dict) -> None:
-    """Assert HMAC signature is reproduced by signing timestamp.payload with the secret."""
-    import hashlib
-    import hmac as hmac_lib
-    import json as json_lib
+    """Assert the HMAC reproduces over the RAW transmitted bytes.
 
-    headers = _get_last_webhook_headers(ctx)
-    payload = _get_last_webhook_payload(ctx)
-    timestamp = headers.get("X-ADCP-Timestamp") or headers.get("X-Webhook-Timestamp", "")
-    raw_sig = headers.get("X-ADCP-Signature") or headers.get("X-Webhook-Signature", "")
-    signature = raw_sig.removeprefix("sha256=")
-    assert signature, "Expected HMAC signature header to be present and non-empty"
+    Byte-equality is the AdCP contract: the signature covers
+    ``{timestamp}.{raw_http_body}``. Recomputing over a re-serialization of
+    the parsed payload (the old version of this step) only ever passed
+    because sender and step shared the same wrong re-serialization (#1441).
+    """
     signing_secret: str = ctx.get("webhook_secret", "")
     assert signing_secret, "Test setup must store webhook_secret in ctx['webhook_secret']"
-    payload_str = json_lib.dumps(payload, sort_keys=True, separators=(",", ":"))
-    message = f"{timestamp}.{payload_str}".encode()
-    expected = hmac_lib.new(signing_secret.encode(), message, hashlib.sha256).hexdigest()
-    assert signature == expected, f"HMAC signature mismatch: got {signature!r}, expected {expected!r}"
+    # Graded by the same helper the unit and integration suites use, so the BDD
+    # layer cannot drift looser than they are. Transport is mocked here, so the
+    # receiver cross-check has nothing real to read.
+    assert_hmac_over_transmitted_bytes(
+        signing_secret,
+        _get_last_webhook_body_bytes(ctx),
+        _get_last_webhook_headers(ctx),
+        cross_check_receivers=False,
+    )
 
 
 @then(parsers.parse('the request should include header "{header}" with the bearer token'))
@@ -2115,7 +2168,7 @@ def then_skip_no_webhook(ctx: dict, mb_id: str) -> None:
     post_mock = env.mock["post"]
     # Collect all media_buy_ids that received webhook POSTs
     posted_mb_ids = [
-        call[1].get("json", {}).get("media_buy_id") for call in post_mock.call_args_list if call[1].get("json")
+        payload.get("media_buy_id") for call in post_mock.call_args_list if (payload := _parse_call_payload(call))
     ]
     assert real_id not in posted_mb_ids, (
         f"Webhook POST was made for '{real_id}' but it should have been skipped "
@@ -3337,12 +3390,12 @@ def _call_webhook_service(
     return env.call_send(**kwargs)
 
 
-def _get_webhook_payload(ctx: dict) -> dict:
+def _get_webhook_payload(ctx: dict) -> dict[str, Any]:
     """Extract the JSON payload from the most recent webhook POST call."""
     env = ctx["env"]
     call_args = env.mock["post"].call_args
     assert call_args is not None, "No POST call recorded"
-    return call_args.kwargs.get("json") or call_args[1].get("json", {})
+    return _parse_call_payload(call_args)
 
 
 _DEFAULT_PLACEMENT_DATA: list[dict[str, Any]] = [

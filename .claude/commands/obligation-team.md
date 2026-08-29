@@ -214,7 +214,7 @@ FAIL if: Test only constructs a schema and calls model_dump().
 FAIL if: Test calls deliver_webhook_with_retry for an obligation about
          webhook SCHEDULING (the scheduler doesn't exist yet — wrong layer).
 PASS if: Test calls _get_media_buy_delivery_impl, _get_target_media_buys,
-         deliver_webhook_with_retry, WebhookAuthenticator.sign_payload,
+         deliver_webhook_with_retry, WebhookAuthenticator.verify_signature,
          or another function that contains actual business logic for
          the obligation's scenario.
 

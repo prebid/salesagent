@@ -115,7 +115,15 @@ async def test_send_notification_rejects_localhost_without_post(monkeypatch: pyt
 
 @pytest.mark.asyncio
 async def test_send_notification_posts_when_url_is_public() -> None:
-    """Safe public URL proceeds to POST (validator + session both exercised)."""
+    """Safe public URL proceeds to POST (validator + session both exercised).
+
+    The body is pinned as the exact ``data=`` bytes rather than a ``json=``
+    dict: the sender serializes once at the delivery boundary and POSTs those
+    bytes verbatim, so that the HMAC (when a secret is configured) covers the
+    bytes that actually go on the wire. Handing ``requests`` a dict to
+    re-serialize is the defect this pin exists to catch, so the expected value
+    is a literal — not a re-derivation of the production serializer.
+    """
     service = ProtocolWebhookService()
     response = MagicMock()
     response.status_code = 200
@@ -145,7 +153,9 @@ async def test_send_notification_posts_when_url_is_public() -> None:
     assert sent is True
     mock_post.assert_called_once_with(
         "https://buyer.example.com/hooks/adcp",
-        json={"task_id": "t1", "status": "completed"},
+        data=b'{"task_id":"t1","status":"completed"}',
+        # No signature headers: this config carries no HMAC secret, so the
+        # unsigned branch must add nothing beyond the base headers.
         headers={"Content-Type": "application/json", "User-Agent": "AdCP-Sales-Agent/1.0"},
         timeout=10.0,
         allow_redirects=False,
