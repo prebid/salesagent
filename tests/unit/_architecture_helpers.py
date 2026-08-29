@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import ast
 import functools
+import inspect
 import os
 import re
 import subprocess
@@ -465,6 +466,90 @@ def iter_architecture_guard_trees(
         if tree is None:
             continue
         yield tree, rel
+
+
+# ---------------------------------------------------------------------------
+# Transport-parity signature helpers
+# ---------------------------------------------------------------------------
+
+
+def raw_wrapper_param_names(fn: Callable, *, plumbing: set[str]) -> set[str]:
+    """Buyer-facing parameters of a ``*_raw`` wrapper, minus transport *plumbing*.
+
+    Single source for the transport-parity guards that compare a raw wrapper's
+    signature against what one transport actually forwards
+    (``test_architecture_rest_body_completeness`` for the REST ``*Body`` models,
+    ``test_architecture_a2a_list_creatives_forwarding`` for the A2A skill
+    handler). Only POSITIONAL_OR_KEYWORD and KEYWORD_ONLY params count —
+    ``*args``/``**kwargs`` are not named buyer-facing fields.
+
+    ``plumbing`` is caller-supplied on purpose: it names the params that
+    transport resolves or injects server-side and therefore never binds from the
+    wire, and the sets legitimately differ per transport (REST also injects
+    ``raw_wire_payload`` from its ``raw_json_body`` dependency; A2A has no such
+    param). Passing it explicitly keeps that divergence visible at each guard
+    instead of hiding it in a shared default.
+    """
+    return {
+        name
+        for name, p in inspect.signature(fn).parameters.items()
+        if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY) and name not in plumbing
+    }
+
+
+def forwarding_gaps(
+    *,
+    raw_fn: Callable,
+    declared: set[str],
+    plumbing: set[str],
+    allowlist: Iterable[str],
+) -> set[str]:
+    """Raw-wrapper params a transport surface neither declares nor allowlists.
+
+    The comparison every transport-parity guard runs: take the raw wrapper's
+    buyer-facing signature, subtract what this surface actually declares
+    (``*Body.model_fields`` for REST, the handler's forwarded kwargs for A2A),
+    subtract the justified omissions. A non-empty result means buyers on that
+    transport silently lose those params.
+
+    Returns the gap set rather than asserting, so each guard owns its own
+    failure text and can accumulate across several (surface, wrapper) pairs
+    before it fails.
+    """
+    return raw_wrapper_param_names(raw_fn, plumbing=plumbing) - declared - set(allowlist)
+
+
+def stale_forwarding_allowlist_entries(
+    *,
+    raw_fn: Callable,
+    declared: set[str],
+    plumbing: set[str],
+    allowlist: Iterable[str],
+    declared_desc: str,
+    entry_prefix: str = "",
+) -> list[str]:
+    """Allowlist entries that no longer name a real, still-missing wrapper param.
+
+    Keeps a transport-parity allowlist shrinking (guard allowlists may only
+    shrink): an entry is stale once the param leaves the raw wrapper's signature,
+    or once the surface starts declaring it.
+
+    ``declared_desc`` names what "declared" means for this surface (REST:
+    ``"declared on the Body"``; A2A: ``"forwarded by the handler"``) and
+    ``entry_prefix`` disambiguates entries when one guard covers several
+    surfaces (REST passes ``"<BodyName>."``).
+
+    Returns the stale lines rather than asserting, for the same reason as
+    :func:`forwarding_gaps`.
+    """
+    raw_params = raw_wrapper_param_names(raw_fn, plumbing=plumbing)
+    stale: list[str] = []
+    for param in allowlist:
+        if param not in raw_params:
+            stale.append(f"  {entry_prefix}{param}: not a parameter of {raw_fn.__name__}()")
+        elif param in declared:
+            stale.append(f"  {entry_prefix}{param}: now {declared_desc} — remove from allowlist")
+    return stale
 
 
 # ---------------------------------------------------------------------------

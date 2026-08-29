@@ -341,6 +341,7 @@ class TransportResult:
         recovery: str | None = None,
         require_suggestion: bool = False,
         message_substr: str | None = None,
+        field: str | None = None,
     ) -> None:
         """Assert this result carries the AdCP two-layer wire error ``code``.
 
@@ -351,6 +352,10 @@ class TransportResult:
         non-vacuous without per-scenario duplication. This is the single
         harness-provided way to verify an error on the wire — step definitions
         must not hand-roll envelope parsing.
+
+        ``field``, when given, pins the top-level request field on both envelope
+        layers (delegated to ``assert_envelope_shape``) so callers never have to
+        index ``errors[0].field`` / ``adcp_error.field`` by hand.
         """
         from tests.helpers import assert_envelope_shape
 
@@ -368,7 +373,7 @@ class TransportResult:
             f"(is_error={self.is_error}, payload={self.payload!r}). The operation either "
             "succeeded or errored before reaching a transport."
         )
-        assert_envelope_shape(envelope, code, recovery=expected_recovery, message_substr=message_substr)
+        assert_envelope_shape(envelope, code, recovery=expected_recovery, message_substr=message_substr, field=field)
         if require_suggestion:
             suggestion = extract_wire_suggestion(envelope)
             assert suggestion, f"Expected a non-empty suggestion in the {code} wire envelope: {envelope}"

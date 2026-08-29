@@ -19,8 +19,6 @@ they cannot exhibit this disease and are out of scope.
 
 from __future__ import annotations
 
-import inspect
-
 from src.core.tools.creatives.listing import list_creatives_raw
 from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
 from src.core.tools.media_buy_create import create_media_buy_raw
@@ -35,6 +33,7 @@ from src.routes.api_v1 import (
     UpdateMediaBuyBody,
     UpdatePerformanceIndexBody,
 )
+from tests.unit._architecture_helpers import forwarding_gaps, stale_forwarding_allowlist_entries
 
 # Raw-wrapper parameters that are transport plumbing, never buyer-facing body fields.
 # Server-injected plumbing, never buyer-supplied body fields: ctx/identity are
@@ -71,22 +70,21 @@ _PAIRS = [
 ]
 
 
-def _raw_param_names(fn) -> set[str]:
-    """Named keyword/positional parameters of a raw wrapper, minus transport plumbing."""
-    return {
-        name
-        for name, p in inspect.signature(fn).parameters.items()
-        if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY) and name not in _TRANSPORT_PARAMS
-    }
+def _body_declared_fields(body_cls) -> set[str]:
+    """Buyer-facing fields a REST ``*Body`` declares (minus body-only meta)."""
+    return set(body_cls.model_fields) - _BODY_META
 
 
 def test_rest_bodies_forward_all_raw_wrapper_params():
     """Every field-by-field REST Body must declare every param its raw wrapper accepts."""
     violations = []
     for body_cls, raw_fn in _PAIRS:
-        body_fields = set(body_cls.model_fields) - _BODY_META
-        allow = set(_ALLOWLIST.get(body_cls.__name__, {}))
-        missing = _raw_param_names(raw_fn) - body_fields - allow
+        missing = forwarding_gaps(
+            raw_fn=raw_fn,
+            declared=_body_declared_fields(body_cls),
+            plumbing=_TRANSPORT_PARAMS,
+            allowlist=_ALLOWLIST.get(body_cls.__name__, {}),
+        )
         if missing:
             violations.append(f"  {body_cls.__name__} drops {sorted(missing)} accepted by {raw_fn.__name__}()")
     assert not violations, (
@@ -106,11 +104,12 @@ def test_rest_body_allowlist_has_no_stale_entries():
     stale = []
     for body_name, entries in _ALLOWLIST.items():
         body_cls, raw_fn = pairs_by_name[body_name]
-        raw_params = _raw_param_names(raw_fn)
-        body_fields = set(body_cls.model_fields) - _BODY_META
-        for param in entries:
-            if param not in raw_params:
-                stale.append(f"  {body_name}.{param}: not a parameter of {raw_fn.__name__}()")
-            elif param in body_fields:
-                stale.append(f"  {body_name}.{param}: now declared on the Body — remove from allowlist")
+        stale += stale_forwarding_allowlist_entries(
+            raw_fn=raw_fn,
+            declared=_body_declared_fields(body_cls),
+            plumbing=_TRANSPORT_PARAMS,
+            allowlist=entries,
+            declared_desc="declared on the Body",
+            entry_prefix=f"{body_name}.",
+        )
     assert not stale, "Stale REST-body allowlist entries:\n" + "\n".join(stale)

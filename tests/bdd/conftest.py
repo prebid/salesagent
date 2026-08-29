@@ -3868,7 +3868,19 @@ ENV_ROUTES: list[EnvRoute] = [
         tag="uc018-ext-c",
         when=_uc("UC-018", lambda m: "T-UC-018-ext-c" in m),
         env_builder=_env("tests.harness.creative_list.CreativeListEnv"),
-        xfail_reason="T-UC-018-ext-c list_creatives validation harness wiring is tracked in #1652",
+        # Dropping this row's xfail_reason does NOT make the scenario run: no step
+        # definition matches the UC-018 "the Buyer Agent sends a list_creatives
+        # request with <invalid_param>" family (the only near-match is the
+        # 'authenticated as "<principal_id>"' variant in
+        # test_uc018_list_creatives.py), so every row would raise
+        # StepDefinitionNotFoundError and be auto-xfailed by
+        # pytest_runtest_makereport anyway — after spinning up a DB per row. Going
+        # live needs the When-step handler plus over-cap Examples rows for the
+        # newly-capped siblings (statuses, format_ids, concept_ids, tags, tags_any,
+        # media_buy_ids, accounts, assigned_to_packages — the outline currently
+        # carries only "creative_ids over max"), authored through the generated
+        # feature's merge source. Tracked in #1652.
+        xfail_reason="T-UC-018-ext-c list_creatives validation steps are not implemented — tracked in #1652",
     ),
     # When the dormant all-fields boundary scenarios are wired, their Then must
     # assert value-when-present, not key-presence-of-13: list_creatives drops a

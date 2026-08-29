@@ -69,7 +69,12 @@ from src.core.exceptions import (
     normalize_to_adcp_error,
 )
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import coerce_creative_filters, to_account_reference, to_brand_reference
+from src.core.schema_helpers import (
+    coerce_creative_filters,
+    to_account_reference,
+    to_brand_reference,
+    to_context_object,
+)
 from src.core.schemas import CreativeStatusEnum
 from src.core.tool_context import ToolContext
 from src.core.tool_error_logging import record_boundary_error
@@ -1739,18 +1744,38 @@ class AdCPRequestHandler(RequestHandler):
         # Call core function with optional parameters (fixing original validation bug)
         response = core_list_creatives_tool(
             media_buy_id=parameters.get("media_buy_id"),
+            media_buy_ids=parameters.get("media_buy_ids"),
             status=parameters.get("status"),
             format=parameters.get("format"),
-            tags=parameters.get("tags", []),
             created_after=parameters.get("created_after"),
             created_before=parameters.get("created_before"),
             search=parameters.get("search"),
             filters=filters,
+            fields=parameters.get("fields"),
+            # page/limit/include_* keep their .get() defaults deliberately. A Python
+            # default only applies when an argument is OMITTED, so dropping the default
+            # here would pass None explicitly and override the wrapper's — not defer to
+            # it. limit=None raises TypeError at min(limit, 1000) and page=None at
+            # (page - 1) * effective_limit; include_assignments=None lands on
+            # ListCreativesRequest as None where REST sends False, which would ADD a
+            # divergence. Removing these copies needs the wrapper to take `| None` and
+            # resolve its own defaults.
+            include_performance=parameters.get("include_performance", False),
+            include_assignments=parameters.get("include_assignments", False),
+            include_sub_assets=parameters.get("include_sub_assets", False),
             page=parameters.get("page", 1),
             limit=parameters.get("limit", 50),
-            sort_by=parameters.get("sort_by", "created_date"),
-            sort_order=parameters.get("sort_order", "desc"),
-            context=parameters.get("context"),
+            # tags/sort_by/sort_order carry no default: the wrapper owns them. Passing
+            # None is equivalent to the literals this used to restate (`if tags:`,
+            # field_mapping.get(sort_by, "created_date"), and the sort_order cast to
+            # "desc" for anything not "asc"/"desc"), and `tags` was in fact DIVERGENT —
+            # it sent [] where the wrapper's default is None.
+            sort_by=parameters.get("sort_by"),
+            sort_order=parameters.get("sort_order"),
+            tags=parameters.get("tags"),
+            # to_context_object mirrors the REST route; list_creatives_raw coerces again
+            # and the coercion is idempotent, so this is shape-parity, not behavior.
+            context=to_context_object(parameters.get("context")),
             identity=identity,
         )
 

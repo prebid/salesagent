@@ -11,10 +11,13 @@ import pytest
 from tests.unit._architecture_helpers import (
     assert_anchor_consistency,
     assert_violations_match_allowlist,
+    forwarding_gaps,
     iter_call_expressions,
     iter_git_tracked_files,
     postgres_image_ref,
     postgres_tag_pattern_map,
+    raw_wrapper_param_names,
+    stale_forwarding_allowlist_entries,
     uv_version_pattern_map,
 )
 
@@ -172,4 +175,115 @@ def test_git_available_never_engages_fallback(tmp_path: Path) -> None:
     names = {f.relative_to(tmp_path).as_posix() for f in files}
     assert names == {"tracked.py"}, (
         f"with working git the helper must yield exactly the tracked set (hermetic), got {sorted(names)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# raw_wrapper_param_names — shared by the REST/A2A transport-parity guards.
+# ---------------------------------------------------------------------------
+
+
+def _sample_raw_wrapper(media_buy_id, tags=None, *args, ctx=None, identity=None, fields=None, **kwargs):
+    """Stand-in for a ``*_raw`` wrapper covering every parameter kind."""
+
+
+@pytest.mark.arch_guard
+def test_raw_wrapper_param_names_drops_caller_supplied_plumbing() -> None:
+    names = raw_wrapper_param_names(_sample_raw_wrapper, plumbing={"ctx", "identity"})
+    assert names == {"media_buy_id", "tags", "fields"}, (
+        f"expected buyer-facing params only (plumbing + *args/**kwargs excluded), got {sorted(names)}"
+    )
+
+
+@pytest.mark.arch_guard
+def test_raw_wrapper_param_names_plumbing_set_is_per_caller() -> None:
+    """Each guard owns its plumbing set — a wider set must drop strictly more params."""
+    a2a_like = raw_wrapper_param_names(_sample_raw_wrapper, plumbing={"ctx", "identity"})
+    rest_like = raw_wrapper_param_names(_sample_raw_wrapper, plumbing={"ctx", "identity", "fields"})
+    assert a2a_like - rest_like == {"fields"}
+    assert not rest_like - a2a_like
+
+
+# ---------------------------------------------------------------------------
+# forwarding_gaps / stale_forwarding_allowlist_entries — the comparison the
+# REST *Body guard and the A2A skill-handler guard both run. Pinned here so the
+# shared comparison itself has an oracle, not just its two callers.
+# ---------------------------------------------------------------------------
+
+_SAMPLE_PLUMBING = {"ctx", "identity"}
+
+
+@pytest.mark.arch_guard
+def test_forwarding_gaps_reports_undeclared_params() -> None:
+    gaps = forwarding_gaps(
+        raw_fn=_sample_raw_wrapper,
+        declared={"media_buy_id"},
+        plumbing=_SAMPLE_PLUMBING,
+        allowlist={},
+    )
+    assert gaps == {"tags", "fields"}, f"expected the two undeclared buyer-facing params, got {sorted(gaps)}"
+
+
+@pytest.mark.arch_guard
+def test_forwarding_gaps_suppresses_allowlisted_params_only() -> None:
+    """An allowlist entry hides exactly its own param — never widens the pass."""
+    gaps = forwarding_gaps(
+        raw_fn=_sample_raw_wrapper,
+        declared={"media_buy_id"},
+        plumbing=_SAMPLE_PLUMBING,
+        allowlist={"tags": "justified omission"},
+    )
+    assert gaps == {"fields"}, f"only the allowlisted param may be suppressed, got {sorted(gaps)}"
+
+
+@pytest.mark.arch_guard
+def test_forwarding_gaps_empty_when_surface_declares_everything() -> None:
+    """Negative control: a complete surface has no gaps (the guard is not always-red)."""
+    assert not forwarding_gaps(
+        raw_fn=_sample_raw_wrapper,
+        declared={"media_buy_id", "tags", "fields"},
+        plumbing=_SAMPLE_PLUMBING,
+        allowlist={},
+    )
+
+
+@pytest.mark.arch_guard
+def test_stale_allowlist_entry_flagged_when_not_a_wrapper_param() -> None:
+    stale = stale_forwarding_allowlist_entries(
+        raw_fn=_sample_raw_wrapper,
+        declared={"media_buy_id"},
+        plumbing=_SAMPLE_PLUMBING,
+        allowlist={"not_a_param": "obsolete"},
+        declared_desc="declared on the Body",
+        entry_prefix="SampleBody.",
+    )
+    assert len(stale) == 1, f"expected exactly one stale line, got {stale}"
+    assert "SampleBody.not_a_param" in stale[0]
+    assert "not a parameter of _sample_raw_wrapper()" in stale[0]
+
+
+@pytest.mark.arch_guard
+def test_stale_allowlist_entry_flagged_once_surface_declares_it() -> None:
+    """The shrink ratchet: a param the surface now declares must leave the allowlist."""
+    stale = stale_forwarding_allowlist_entries(
+        raw_fn=_sample_raw_wrapper,
+        declared={"media_buy_id", "tags"},
+        plumbing=_SAMPLE_PLUMBING,
+        allowlist={"tags": "was missing"},
+        declared_desc="forwarded by the handler",
+    )
+    assert len(stale) == 1, f"expected exactly one stale line, got {stale}"
+    assert "tags: now forwarded by the handler" in stale[0]
+    assert not stale[0].startswith("  SampleBody"), "entry_prefix defaults to empty for single-surface guards"
+
+
+@pytest.mark.arch_guard
+def test_stale_allowlist_entries_empty_for_a_live_justified_omission() -> None:
+    """Negative control: a real, still-missing param is NOT stale."""
+    assert not stale_forwarding_allowlist_entries(
+        raw_fn=_sample_raw_wrapper,
+        declared={"media_buy_id"},
+        plumbing=_SAMPLE_PLUMBING,
+        allowlist={"tags": "justified omission"},
+        declared_desc="declared on the Body",
     )

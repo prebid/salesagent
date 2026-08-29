@@ -85,6 +85,27 @@ def _coerce_blob_scalar(value: Any, field_label: str, *, log_context: str = "") 
     return None
 
 
+# Defense-in-depth cap on the length of list-valued filters. On the pinned adcp
+# schema only creative_ids is bounded (MaxLen 100); its sibling list filters
+# (statuses, format_ids, concept_ids, ...) are not, so an over-long filter would
+# expand into a very large SQL IN (...) clause. We reject past the same bound the
+# SDK already enforces for creative_ids, turning it into a clean VALIDATION_ERROR.
+_MAX_FILTER_LIST_LEN = 100
+
+# List-valued fields on CreativeFilters that expand into IN (...) predicates.
+_CAPPED_FILTER_FIELDS = (
+    "statuses",
+    "format_ids",
+    "concept_ids",
+    "creative_ids",
+    "tags",
+    "tags_any",
+    "media_buy_ids",
+    "accounts",
+    "assigned_to_packages",
+)
+
+
 def _coerce_blob_dict(value: Any, field_label: str, *, log_context: str = "") -> dict[str, Any] | None:
     """Coerce an untyped JSON-blob value to a spec object (dict) field.
 
@@ -181,6 +202,27 @@ def _merge_structured_filters(filters: "CreativeFilters | None", flat_params: di
     return flat_params
 
 
+def _enforce_filter_list_caps(structured_filters: "CreativeFilters | None") -> None:
+    """Reject any list-valued filter longer than ``_MAX_FILTER_LIST_LEN``.
+
+    Runs on the MERGED filters (the object the query actually runs off) — checking
+    the pre-merge ``filters`` argument alone would let the flat params (tags,
+    media_buy_ids) bypass the cap entirely. Rejects with a clean VALIDATION_ERROR
+    (``correctable``) rather than expanding into a very large SQL IN (...) query;
+    unlike the effective_limit clamp, this REJECTS rather than truncates.
+    """
+    if structured_filters is None:
+        return
+    for field in _CAPPED_FILTER_FIELDS:
+        values = getattr(structured_filters, field, None)
+        if values is not None and len(values) > _MAX_FILTER_LIST_LEN:
+            raise AdCPValidationError(
+                f"The {field} filter has {len(values)} entries; the maximum is {_MAX_FILTER_LIST_LEN}.",
+                field=field,
+                suggestion=f"Send at most {_MAX_FILTER_LIST_LEN} values in {field}, or narrow the query.",
+            )
+
+
 def _build_list_creatives_request(
     media_buy_id: str | None = None,
     media_buy_ids: list[str] | None = None,
@@ -193,8 +235,8 @@ def _build_list_creatives_request(
     fields: list[str] | None = None,
     include_assignments: bool = False,
     limit: int = 50,
-    sort_by: str = "created_date",
-    sort_order: str = "desc",
+    sort_by: str | None = "created_date",
+    sort_order: str | None = "desc",
     context: ContextObject | None = None,
 ) -> "ListCreativesRequest":
     """Build a ListCreativesRequest from individual wire params.
@@ -241,6 +283,11 @@ def _build_list_creatives_request(
     valid_sort_order: Literal["asc", "desc"] = cast(
         Literal["asc", "desc"], sort_order if sort_order in ["asc", "desc"] else "desc"
     )
+    # sort_by/sort_order are `| None`: a transport that omits them forwards None
+    # rather than restating the literal, and this function — the single owner of
+    # the sort defaults — resolves it. (sort_order is resolved by the cast above.)
+    if sort_by is None:
+        sort_by = "created_date"
 
     # Enforce max limit
     effective_limit = min(limit, 1000)
@@ -274,6 +321,10 @@ def _build_list_creatives_request(
 
     # Build structured objects
     structured_filters = LibraryCreativeFilters(**filters_dict) if filters_dict else None
+
+    # Defense-in-depth: reject over-long list filters before they expand into a
+    # very large SQL IN (...) query (see _enforce_filter_list_caps).
+    _enforce_filter_list_caps(structured_filters)
 
     # Build pagination
     # 3.6.0: PaginationRequest is cursor-based (max_results, cursor). DB query uses offset/limit internally.
@@ -697,8 +748,8 @@ def list_creatives_raw(
     include_sub_assets: bool = False,
     page: int = 1,
     limit: int = 50,
-    sort_by: str = "created_date",
-    sort_order: str = "desc",
+    sort_by: str | None = "created_date",
+    sort_order: str | None = "desc",
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,

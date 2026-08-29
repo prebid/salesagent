@@ -31,6 +31,7 @@ def assert_envelope_shape(
     *,
     recovery: str,
     message_substr: str | None = None,
+    field: str | None = None,
     check_mcp_tool_error: bool = False,
 ) -> None:
     """Assert the AdCP spec two-layer error envelope shape.
@@ -52,6 +53,11 @@ def assert_envelope_shape(
         message_substr: If provided, must appear in ``errors[0].message``.
                 ``adcp_error.message`` is allowed to differ (it carries the
                 envelope-level summary).
+        field: If provided, both ``errors[0].field`` and ``adcp_error.field``
+                must equal it. This is the top-level request field the client
+                sent (``AdCPError(field=...)``), not a nested pydantic path —
+                pinning it here rather than hand-indexing the envelope keeps the
+                two-layer label in one guarded place.
         check_mcp_tool_error: If ``True``, additionally assert that ``target``
                 is an ``AdCPToolError`` instance before reading its envelope.
                 MCP-boundary call sites use this to pin the exception type as
@@ -84,3 +90,11 @@ def assert_envelope_shape(
     if message_substr is not None:
         actual = body["errors"][0].get("message", "")
         assert message_substr in actual, f"errors[0].message={actual!r} does not contain {message_substr!r}"
+
+    if field is not None:
+        assert body["errors"][0].get("field") == field, (
+            f"errors[0].field={body['errors'][0].get('field')!r}, expected {field!r}"
+        )
+        assert body["adcp_error"].get("field") == field, (
+            f"adcp_error.field={body['adcp_error'].get('field')!r}, expected {field!r}"
+        )
