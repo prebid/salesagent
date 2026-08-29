@@ -18,7 +18,7 @@ from adcp.types import CreativeAsset
 from adcp.types import Error as AdCPErrorDetail
 from pydantic import BaseModel
 
-from src.core.exceptions import AdCPConfigurationError
+from src.core.exceptions import AdCPConfigurationError, AdCPErrorCode, RecoveryHint, to_wire_error_code
 from src.core.helpers import _extract_format_info, _validate_creative_assets
 from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
 from src.core.validation_helpers import run_async_in_sync_context
@@ -32,26 +32,50 @@ logger = logging.getLogger(__name__)
 
 
 def _failed_sync_result(
-    creative_id: str, error_msg: str, *, recovery: str | None = None, code: str = "SERVICE_UNAVAILABLE"
+    creative_id: str,
+    error_msg: str,
+    *,
+    recovery: RecoveryHint | None = None,
+    code: AdCPErrorCode = "SERVICE_UNAVAILABLE",
 ) -> SyncCreativeResult:
     """Build a SyncCreativeResult for a failed creative sync operation.
 
     ``recovery`` distinguishes a transient failure (creative agent down — a retry
     may help) from a terminal one (server misconfiguration — retrying cannot fix
-    it). The wire code defaults to the standard ``SERVICE_UNAVAILABLE``
-    (``CONFIGURATION_ERROR`` is internal-only and would leak verbatim in an
-    advisory); ``recovery`` is the structured retry signal. Buyer-correctable
-    per-item failures pass the condition-specific code: ``CREATIVE_NOT_FOUND``
-    for an assignment referencing an unknown creative_id (matching the
-    strict-mode ``AdCPCreativeNotFoundError`` raise since 287c93099),
-    ``VALIDATION_ERROR`` for other correctable causes.
+    it). The wire code defaults to the standard ``SERVICE_UNAVAILABLE``;
+    ``recovery`` is the structured retry signal. Every call site passes the code
+    whose pinned-enum recovery matches the ``recovery`` it passes, so the pair
+    is coherent: ``CONFIGURATION_ERROR`` (terminal per the pinned enum) for a
+    server-side misconfiguration, ``CREATIVE_NOT_FOUND`` for an assignment
+    referencing an unknown creative_id (matching the strict-mode
+    ``AdCPCreativeNotFoundError`` raise since 287c93099), ``VALIDATION_ERROR``
+    for other correctable causes. ``SERVICE_UNAVAILABLE`` is transient, so it is
+    only correct for a genuinely retriable failure.
+
+    ``code`` is typed ``AdCPErrorCode`` (the Literal mirror of
+    ``WIRE_STANDARD_CODES``) rather than ``str`` because the normalization below
+    is total: a misspelled code collapses to ``SERVICE_UNAVAILABLE`` at runtime
+    with no error, so a typo would otherwise emit a transient code alongside a
+    ``correctable``/``terminal`` recovery — the retry-forever incoherence this
+    builder exists to avoid. Forwarding sites that hold an untyped code narrow
+    it through ``to_wire_error_code`` before the call.
+
+    ``code`` is normalized through ``to_wire_error_code`` here — the single choke
+    point for every call site. These advisory ``errors[]`` entries serialize
+    verbatim and never pass through the boundary translator that handles raised
+    ``AdCPError``s, so a caller forwarding a raw typed-exception code (e.g.
+    ``e.error_code`` on the ``except AdCPError`` path) would otherwise leak an
+    internal-only code (``FORMAT_NOT_FOUND`` → ``INVALID_REQUEST``,
+    ``INTERNAL_ERROR`` → ``SERVICE_UNAVAILABLE``) to the buyer. Already-standard
+    codes pass through unchanged. Mirrors the sibling advisory builder at
+    ``media_buy_delivery.py`` (``code=to_wire_error_code(e.code)``).
     """
     return SyncCreativeResult(
         creative_id=creative_id,
         action="failed",
         errors=[
             AdCPErrorDetail(  # structural-guard: advisory per-creative result in SyncCreativeResult.errors[]
-                code=code, message=error_msg, recovery=recovery
+                code=to_wire_error_code(code), message=error_msg, recovery=recovery
             )
         ],
         review_feedback=None,
@@ -427,12 +451,20 @@ def _update_existing_creative(
         except AdCPConfigurationError as config_error:
             # Server-side misconfiguration (e.g. GEMINI_API_KEY missing) is terminal
             # and admin-fixable — not a transient creative-agent outage. Surface it
-            # honestly so the buyer does not retry a misconfiguration.
+            # honestly so the buyer does not retry a misconfiguration: CONFIGURATION_ERROR
+            # is a wire code in the pinned 3.1 enum (via _SPEC_SUPPLEMENT_CODES) and its
+            # enum recovery IS terminal, so code and recovery agree. The default
+            # SERVICE_UNAVAILABLE is pinned transient and would contradict recovery here.
             error_msg = str(config_error)
             logger.error(
                 "[sync_creatives] %s for update of %s", error_msg, existing_creative.creative_id, exc_info=True
             )
-            return (_failed_sync_result(existing_creative.creative_id, error_msg, recovery="terminal"), False)
+            return (
+                _failed_sync_result(
+                    existing_creative.creative_id, error_msg, recovery="terminal", code="CONFIGURATION_ERROR"
+                ),
+                False,
+            )
         except Exception as validation_error:
             # Creative agent validation failed for update (network error, agent down, etc.)
             # Do NOT update the creative - it needs validation before acceptance
@@ -710,10 +742,16 @@ def _create_new_creative(
         except AdCPConfigurationError as config_error:
             # Server-side misconfiguration (e.g. GEMINI_API_KEY missing) is terminal
             # and admin-fixable — not a transient creative-agent outage. Surface it
-            # honestly so the buyer does not retry a misconfiguration.
+            # honestly so the buyer does not retry a misconfiguration: CONFIGURATION_ERROR
+            # is a wire code in the pinned 3.1 enum (via _SPEC_SUPPLEMENT_CODES) and its
+            # enum recovery IS terminal, so code and recovery agree. The default
+            # SERVICE_UNAVAILABLE is pinned transient and would contradict recovery here.
             error_msg = str(config_error)
             logger.error("[sync_creatives] %s - rejecting creative %s", error_msg, creative_id, exc_info=True)
-            return (_failed_sync_result(creative_id, error_msg, recovery="terminal"), False)
+            return (
+                _failed_sync_result(creative_id, error_msg, recovery="terminal", code="CONFIGURATION_ERROR"),
+                False,
+            )
         except Exception as validation_error:
             # Creative agent validation failed (network error, agent down, etc.)
             # Do NOT store the creative - it needs validation before acceptance

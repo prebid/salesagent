@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.exceptions import AdCPError
+from src.core.exceptions import AdCPError, to_wire_error_code
 from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
@@ -184,7 +184,11 @@ def _sync_creatives_impl(
                         error_msg = str(validation_error)
                     failed_creatives.append({"creative_id": creative_id, "error": error_msg})
                     failed_count += 1
-                    results.append(_failed_sync_result(creative_id, error_msg))
+                    # Input validation failure — buyer-correctable, not a transient
+                    # outage; keep the per-creative code out of SERVICE_UNAVAILABLE.
+                    results.append(
+                        _failed_sync_result(creative_id, error_msg, recovery="correctable", code="VALIDATION_ERROR")
+                    )
                     continue  # Skip to next creative
 
                 # Check provenance requirement (EU AI Act Article 50)
@@ -362,7 +366,18 @@ def _sync_creatives_impl(
                     {"creative_id": creative_id, "name": _get_field(raw_creative, "name"), "error": error_msg}
                 )
                 failed_count += 1
-                results.append(_failed_sync_result(creative_id, error_msg))
+                # Non-transient typed error (e.g. unknown-format VALIDATION_ERROR):
+                # carry its real code/recovery so a buyer-correctable failure is not
+                # mis-reported as a transient SERVICE_UNAVAILABLE (which a conforming
+                # buyer would retry forever).
+                # ``e.error_code`` is an untyped ``str`` and may be internal-only, so it
+                # narrows through ``to_wire_error_code`` here (idempotent — the builder
+                # normalizes again at its own choke point) to satisfy ``AdCPErrorCode``.
+                results.append(
+                    _failed_sync_result(
+                        creative_id, error_msg, recovery=e.recovery, code=to_wire_error_code(e.error_code)
+                    )
+                )
             except Exception as e:
                 # Savepoint automatically rolls back this creative only
                 creative_id = _get_field(raw_creative, "creative_id", "unknown")

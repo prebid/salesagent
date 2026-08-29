@@ -135,3 +135,43 @@ class TestErrorCodeCompliance:
         assert not violations, "AdCPError subclasses with non-compliant codes:\n" + "\n".join(
             f"  {v}" for v in violations
         )
+
+
+class TestAdvisoryCodeNormalization:
+    """Runtime companion to the AST scan above.
+
+    The scan proves no string-literal internal code is *constructed* in an
+    advisory. This proves the other half: a code arriving from a typed
+    exception at runtime is normalized before it reaches the buyer. Advisory
+    ``errors[]`` serialize verbatim and never pass through the boundary
+    translator that handles raised ``AdCPError``s, so an unnormalized code
+    would leak with nothing to catch it.
+    """
+
+    def test_non_wire_typed_error_code_normalized_not_leaked(self):
+        """``_failed_sync_result`` normalizes a non-wire typed code through
+        ``to_wire_error_code`` at the one choke point every call site shares.
+
+        Drives a real ``AdCPFormatNotFoundError`` (``FORMAT_NOT_FOUND``, recovery
+        correctable, non-transient) exactly as the ``except AdCPError`` path in
+        ``_sync_creatives_impl`` forwards it, and asserts the emitted code is the
+        normalized wire value ``INVALID_REQUEST`` with the retry signal preserved.
+
+        No DB and no transport — the choke-point check backing the in-process and
+        wire behavioral tests in test_creative_sync_behavioral.py.
+        """
+        from src.core.exceptions import AdCPFormatNotFoundError
+        from src.core.tools.creatives._processing import _failed_sync_result
+
+        err = AdCPFormatNotFoundError("format_does_not_exist_xyz")
+        assert err.error_code == "FORMAT_NOT_FOUND"  # a non-wire internal code
+
+        result = _failed_sync_result("c_leak", str(err), recovery=err.recovery, code=err.error_code)
+
+        emitted = result.errors[0]
+        assert emitted.code == "INVALID_REQUEST", (
+            f"non-wire typed code {err.error_code!r} must normalize to its wire value, got {emitted.code!r}"
+        )
+        assert emitted.code != "FORMAT_NOT_FOUND", "internal code leaked to the buyer verbatim"
+        # the code normalizes; the retry signal is preserved unchanged
+        assert emitted.recovery is not None and emitted.recovery.value == "correctable"

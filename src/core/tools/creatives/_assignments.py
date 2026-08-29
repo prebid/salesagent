@@ -8,6 +8,7 @@ from src.core.database.repositories.uow import CreativeUoW
 from src.core.exceptions import (
     AdCPCreativeNotFoundError,
     AdCPCreativeRejectedError,
+    AdCPErrorCode,
     AdCPPackageNotFoundError,
 )
 from src.core.logging_config import log_safe
@@ -339,7 +340,7 @@ def _process_assignments(
             # VALIDATION_ERROR — a known residual (strict package-not-found emits
             # PACKAGE_NOT_FOUND; per-condition parity is tracked in GH #1598).
             message = "; ".join(sorted(set(errors.values())))
-            code = "CREATIVE_NOT_FOUND" if creative_id in not_found_creative_ids else "VALIDATION_ERROR"
+            code: AdCPErrorCode = "CREATIVE_NOT_FOUND" if creative_id in not_found_creative_ids else "VALIDATION_ERROR"
             entry = _failed_sync_result(creative_id, message, recovery="correctable", code=code)
             entry.assignment_errors = errors
         results.append(entry)

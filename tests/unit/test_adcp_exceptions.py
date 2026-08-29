@@ -737,6 +737,39 @@ class TestErrorCodeWireTranslation:
             assert standard in STANDARD_ERROR_CODES
             assert to_wire_error_code(standard) == standard
 
+    def test_literal_mirrors_wire_standard_codes(self):
+        """``AdCPErrorCode`` enumerates exactly the ``WIRE_STANDARD_CODES`` keys.
+
+        The Literal is a hand-mirrored copy of a table whose baseline half comes
+        from the SDK (``STANDARD_ERROR_CODES``), so it desyncs silently on an
+        ``adcp`` bump that adds or removes a standard code. Two failure modes,
+        both graded here by asserting set EQUALITY rather than containment:
+
+        - Literal ⊄ table: a code that no longer exists on the wire would still
+          type-check at a call site and then collapse to SERVICE_UNAVAILABLE.
+        - table ⊄ Literal: a newly-standard code would be rejected by mypy at a
+          call site that is actually correct.
+
+        Also pins ``to_wire_error_code``'s ``cast`` to ``AdCPErrorCode``: the cast
+        is sound only while every ``WIRE_STANDARD_CODES`` key is a Literal member.
+        On failure, refresh the Literal from ``sorted(WIRE_STANDARD_CODES)``.
+        """
+        from typing import get_args
+
+        from src.core.exceptions import WIRE_STANDARD_CODES, AdCPErrorCode, to_wire_error_code
+
+        literal_codes = set(get_args(AdCPErrorCode))
+        assert literal_codes == set(WIRE_STANDARD_CODES), (
+            "AdCPErrorCode desynced from WIRE_STANDARD_CODES — "
+            f"missing from Literal: {sorted(set(WIRE_STANDARD_CODES) - literal_codes)}; "
+            f"stale in Literal: {sorted(literal_codes - set(WIRE_STANDARD_CODES))}"
+        )
+        # The cast's premise: normalization lands inside the Literal for every
+        # member, so a narrowed forward (``code=to_wire_error_code(e.error_code)``)
+        # can never produce a value outside the annotated type.
+        for code in sorted(literal_codes):
+            assert to_wire_error_code(code) in literal_codes
+
     def test_wire_error_code_property_translates(self):
         """``wire_error_code`` exposes the translated code on an instance."""
         from src.core.exceptions import AdCPError

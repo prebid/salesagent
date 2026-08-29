@@ -11,7 +11,7 @@ to help buyer agents decide whether to retry, fix, or abandon a request.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
 from pydantic import BaseModel, ValidationError
@@ -49,6 +49,61 @@ _SPEC_SUPPLEMENT_CODES: dict[str, dict[str, str]] = {
 
 # The authoritative wire-code table: SDK baseline + pinned-spec supplement.
 WIRE_STANDARD_CODES: dict[str, dict[str, str]] = {**STANDARD_ERROR_CODES, **_SPEC_SUPPLEMENT_CODES}
+
+# Static-checking mirror of ``WIRE_STANDARD_CODES``' keys. A ``Literal`` cannot
+# be built from a runtime dict, and the baseline half of that dict comes from
+# the SDK (``STANDARD_ERROR_CODES``), so this enumeration is a hand-mirrored
+# copy — kept here, beside the table it mirrors, rather than at a call site.
+# It exists so a hand-written wire code is a mypy error when misspelled: the
+# normalizer below collapses anything unrecognized to ``SERVICE_UNAVAILABLE``,
+# which means a typo like ``VALIDATON_ERROR`` would otherwise type-check clean
+# and silently emit a transient code (a conforming buyer retries it forever).
+# Pinned against the runtime table by
+# ``test_adcp_exceptions.py::TestErrorCodeWireTranslation::test_literal_mirrors_wire_standard_codes``,
+# which reddens on any SDK bump that adds or removes a standard code; refresh
+# this list from ``sorted(WIRE_STANDARD_CODES)`` when it does.
+AdCPErrorCode = Literal[
+    "ACCOUNT_AMBIGUOUS",
+    "ACCOUNT_NOT_FOUND",
+    "ACCOUNT_PAYMENT_REQUIRED",
+    "ACCOUNT_SETUP_REQUIRED",
+    "ACCOUNT_SUSPENDED",
+    "AUDIENCE_TOO_SMALL",
+    "AUTHORIZATION_REQUIRED",
+    "AUTH_REQUIRED",
+    "BUDGET_EXCEEDED",
+    "BUDGET_EXHAUSTED",
+    "BUDGET_TOO_LOW",
+    "COMPLIANCE_UNSATISFIED",
+    "CONFIGURATION_ERROR",
+    "CONFLICT",
+    "CREATIVE_DEADLINE_EXCEEDED",
+    "CREATIVE_NOT_FOUND",
+    "CREATIVE_REJECTED",
+    "IDEMPOTENCY_CONFLICT",
+    "IDEMPOTENCY_EXPIRED",
+    "INVALID_REQUEST",
+    "INVALID_STATE",
+    "IO_REQUIRED",
+    "MEDIA_BUY_NOT_FOUND",
+    "NOT_CANCELLABLE",
+    "NOT_SUPPORTED",
+    "PACKAGE_NOT_FOUND",
+    "POLICY_VIOLATION",
+    "PRODUCT_EXPIRED",
+    "PRODUCT_NOT_FOUND",
+    "PRODUCT_UNAVAILABLE",
+    "PROPOSAL_EXPIRED",
+    "PROPOSAL_NOT_COMMITTED",
+    "PROPOSAL_NOT_FOUND",
+    "RATE_LIMITED",
+    "SERVICE_UNAVAILABLE",
+    "SESSION_NOT_FOUND",
+    "SESSION_TERMINATED",
+    "SIGNAL_NOT_FOUND",
+    "UNSUPPORTED_FEATURE",
+    "VALIDATION_ERROR",
+]
 
 ERROR_CODE_MAPPING: dict[str, str] = {
     # Internal-only codes that occasionally leak to the wire when a raise site
@@ -151,7 +206,7 @@ def translate_error_code(code: str) -> str:
     return ERROR_CODE_MAPPING.get(code, code)
 
 
-def to_wire_error_code(code: str) -> str:
+def to_wire_error_code(code: str) -> AdCPErrorCode:
     """Normalize a hand-built advisory code to a guaranteed-standard wire code.
 
     Like ``translate_error_code`` but, unlike it, GUARANTEES the result is in
@@ -163,9 +218,17 @@ def to_wire_error_code(code: str) -> str:
     translator that handles raised ``AdCPError``s. Anything still non-standard
     after translation collapses to ``SERVICE_UNAVAILABLE`` (the generic
     server-side advisory), so no internal code can reach the buyer.
+
+    Returns ``AdCPErrorCode`` rather than ``str`` so a call site forwarding an
+    untyped code (``e.error_code``) into an ``AdCPErrorCode``-typed parameter
+    narrows here instead of casting. The cast is safe by construction — the
+    result is a ``WIRE_STANDARD_CODES`` key — and the key set is pinned to the
+    Literal by ``test_literal_mirrors_wire_standard_codes``.
     """
     translated = translate_error_code(code)
-    return translated if translated in WIRE_STANDARD_CODES else "SERVICE_UNAVAILABLE"
+    if translated in WIRE_STANDARD_CODES:
+        return cast("AdCPErrorCode", translated)
+    return "SERVICE_UNAVAILABLE"
 
 
 def _serialize_context(
