@@ -2529,6 +2529,12 @@ mappings:
       upstream_refs: ["BR-UC-003-main"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-003-storyboard-package-not-found-preempts-budget"
+      adcp_feature: "BR-UC-003-update-media-buy.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-003-main"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-003-storyboard-not-cancellable-on-recancel"
       adcp_feature: "BR-UC-003-update-media-buy.feature"
       obligation_id: null

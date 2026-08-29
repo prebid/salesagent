@@ -9,10 +9,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from pytest_bdd import given, parsers, then
+from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
-from tests.bdd.steps.domain.uc003_update_media_buy import _ensure_update_defaults
+from tests.bdd.steps.domain.uc003_update_media_buy import (
+    _ensure_update_defaults,
+    given_buyer_owns_media_buy,
+    when_send_update_request,
+)
 from tests.bdd.steps.generic._auth import authenticate_env_as
 
 
@@ -254,18 +258,21 @@ def given_package_update_no_id(ctx: dict) -> None:
 def given_package_not_in_media_buy(ctx: dict, package_id: str) -> None:
     """Ensure no package with the given package_id exists in the media buy.
 
-    Declarative guard — verifies the package is NOT present. The harness
-    setup creates pkg_001 by default, so this step is valid for any other ID.
+    Declarative guard — verifies the package is NOT present in EITHER store
+    ``package_exists_or_raise`` consults: the ``media_packages`` rows AND
+    ``MediaBuy.raw_request``. Asserting only the rows table would leave the
+    guard's second input (raw_request) unproven. The harness setup creates
+    pkg_001 by default, so this step is valid for any other ID.
     """
     mb = ctx.get("existing_media_buy")
     assert mb is not None, "No existing_media_buy in ctx"
     existing_pkg = ctx.get("existing_package")
     if existing_pkg and existing_pkg.package_id == package_id:
         raise AssertionError(f"Package '{package_id}' DOES exist in media buy — step claims it shouldn't")
-    # Verify via DB
+    # Verify via DB — against both stores package_exists_or_raise reads.
     from sqlalchemy import select
 
-    from src.core.database.models import MediaPackage
+    from src.core.database.models import MediaBuy, MediaPackage
 
     with db_session(ctx) as session:
         db_pkg = session.scalars(
@@ -276,6 +283,16 @@ def given_package_not_in_media_buy(ctx: dict, package_id: str) -> None:
         ).first()
         assert db_pkg is None, (
             f"Package '{package_id}' found in DB for media buy '{mb.media_buy_id}' — step claims it does not exist"
+        )
+        # The guard also consults MediaBuy.raw_request (pre-dual-write buys, or
+        # adapters that returned an empty response.packages) — prove the package
+        # is absent there too, not just from the rows table.
+        db_mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=mb.media_buy_id)).first()
+        raw_packages = (db_mb.raw_request or {}).get("packages", []) if db_mb is not None else []
+        raw_ids = [p.get("package_id") for p in raw_packages if isinstance(p, dict)]
+        assert package_id not in raw_ids, (
+            f"Package '{package_id}' found in MediaBuy.raw_request for media buy "
+            f"'{mb.media_buy_id}' — step claims it does not exist"
         )
 
 
@@ -918,3 +935,95 @@ def then_suggestion_contains_either(ctx: dict, text1: str, text2: str) -> None:
     assert text1.lower() in suggestion or text2.lower() in suggestion, (
         f"Expected suggestion to contain '{text1}' or '{text2}', got: {suggestion}"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Storyboard v3.1: structured lookup errors (invalid_transitions)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Scope: the Phase 3 (unknown_package) arms only. Phase 1
+# (T-UC-003-storyboard-media-buy-not-found) and Phase 4
+# (T-UC-003-storyboard-not-cancellable-on-recancel) are owned by
+# tests/bdd/steps/domain/uc003_storyboard_generic_client.py, which dispatches
+# them through AdCPTestClient on BareIntegrationEnv; their Given/When steps are
+# NOT redefined here (two modules binding one step string is ambiguous, and the
+# routing row for those tags is `uc003-storyboard-generic-client`).
+
+_STORYBOARD_CORRELATION_ID = "corr-uc003-invalid-transitions"
+
+
+@given("the media buy exists in the seller catalog")
+def given_media_buy_exists_in_catalog(ctx: dict) -> None:
+    """Storyboard phrasing for the existing-buy precondition.
+
+    Delegates to the canonical 'Buyer owns an existing media buy' step so
+    both phrasings verify ctx state AND database persistence identically.
+    """
+    given_buyer_owns_media_buy(ctx)
+
+
+@given("the buyer references a package_id that does not belong to the media buy")
+def given_unrelated_package_reference(ctx: dict) -> None:
+    """Target a package_id that is not attached to the (existing) media buy."""
+    mb = ctx.get("existing_media_buy")
+    assert mb is not None, "No existing_media_buy in ctx — conftest setup_update_data() failed"
+    unknown_pkg = "pkg_not_in_this_buy"
+    # Reuse the parametrized absence guard rather than re-inlining the DB check.
+    given_package_not_in_media_buy(ctx, unknown_pkg)
+    kwargs = _ensure_update_defaults(ctx)
+    kwargs["media_buy_id"] = mb.media_buy_id
+    kwargs["packages"] = [{"package_id": unknown_pkg, "paused": True}]
+
+
+def _send_storyboard_update(ctx: dict, extra: dict[str, Any] | None = None) -> None:
+    """Attach a correlation context, then dispatch via the canonical When step.
+
+    The request carries context.correlation_id so the Then step can assert
+    the seller echoes it unchanged in the error envelope. Contract: AdCP 3.1.1
+    (adcp==6.6.0, canonical per docs/adcp-spec-version.md) —
+    invalid_transitions.yaml (``path: context.correlation_id``, "returned
+    unchanged").
+
+    Stashes under the generic ``ctx["correlation_id"]`` key — the contract
+    ``then_response_echoes_correlation_id_unchanged``
+    (``uc003_storyboard_generic_client.py``) reads — so the shared correlation-echo
+    Then step grades these scenarios unmodified, whichever dispatch path they take.
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    if extra:
+        kwargs.update(extra)
+    kwargs["context"] = {"correlation_id": _STORYBOARD_CORRELATION_ID}
+    ctx["correlation_id"] = _STORYBOARD_CORRELATION_ID
+    when_send_update_request(ctx)
+
+
+@when("the Buyer Agent sends update_media_buy targeting the unknown package")
+def when_update_unknown_package(ctx: dict) -> None:
+    _send_storyboard_update(ctx)
+
+
+# Below the CurrencyLimit.min_package_budget floor TenantFactory seeds
+# (100.00), so this budget WOULD raise BUDGET_TOO_LOW if the package
+# resolved. Without that the preemption scenario would pass vacuously — it
+# would be indistinguishable from the plain unknown-package scenario.
+_BELOW_MIN_PACKAGE_BUDGET = 0.50
+
+
+@when("the Buyer Agent sends update_media_buy targeting the unknown package with a below-minimum budget")
+def when_update_unknown_package_below_min_budget(ctx: dict) -> None:
+    """Absent package AND an under-floor package budget in ONE request.
+
+    Grades the precedence that lives in the shared ``_impl`` (so every
+    transport inherits it): the bulk package-existence guard
+    (``packages_exist_or_raise``) runs before the per-package budget
+    validators, so the buyer gets PACKAGE_NOT_FOUND — fix the reference
+    first — rather than a field-level budget error against a package that
+    does not exist.
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    packages = kwargs.get("packages")
+    assert packages, (
+        "No packages in the pending update kwargs — the 'buyer references a package_id "
+        "that does not belong to the media buy' Given step must run first"
+    )
+    _send_storyboard_update(ctx, {"packages": [{**packages[0], "budget": _BELOW_MIN_PACKAGE_BUDGET}]})

@@ -345,6 +345,21 @@ assert_envelope_shape(
 )
 ```
 
+`TransportResult` wraps this in three graders so step definitions never hand-roll
+envelope parsing. Pick by what the caller actually has an expectation about:
+
+| You are grading | Grader | Notes |
+|---|---|---|
+| A specific error code (plus optional recovery / message) | `result.assert_wire_error(code, recovery=..., message_substr=...)` | `recovery` defaults to the pinned enum's classification for `code` |
+| The recovery hint alone | `result.assert_wire_recovery("correctable")` | Code-free |
+| "It is a spec-shaped AdCP envelope, not a 500" | `result.assert_wire_is_adcp_envelope()` | Code-free; recovery graded against the pinned enum |
+
+**Never satisfy `assert_wire_error`'s `code` argument by reading the code out of
+the envelope you are grading** (`assert_wire_error(_wire_code(ctx), ...)`). The
+code arm then compares the envelope against itself and can never fail. If you
+have no code expectation of your own, you want one of the code-free graders.
+Their non-vacuity is pinned by `tests/unit/test_harness_wire_graders.py`.
+
 ### What to assert
 
 `recovery` is a **required** keyword argument — every call pins the buyer-facing

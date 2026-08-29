@@ -2066,13 +2066,34 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends update_media_buy targeting the unknown package
     Then the operation should fail
     And the error code should be "PACKAGE_NOT_FOUND"
+    And the error recovery hint should indicate correctable
     And the response should echo the context.correlation_id unchanged
+    And the response should NOT be a 500 or non-AdCP error shape
     # invalid_transitions Phase 3 (unknown_package): media_buy_id resolves but the buyer
     # references a package_id that does not belong to it. Seller MUST return
     # PACKAGE_NOT_FOUND, distinguishing from MEDIA_BUY_NOT_FOUND so the buyer knows
     # whether to retry against the buy or fix the package reference.
     # invalid_transitions: distinct PACKAGE_NOT_FOUND error code separates buy-level from package-level lookup failure
     # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/scenarios/invalid_transitions.yaml phase=unknown_package step=update_unknown_package
+
+  @T-UC-003-storyboard-package-not-found-preempts-budget @storyboard-v3.1 @v3-1 @structured-errors @package-not-found
+  Scenario: update_media_buy with an unknown package carrying a below-minimum budget returns PACKAGE_NOT_FOUND, not BUDGET_TOO_LOW
+    Given the media buy exists in the seller catalog
+    And the buyer references a package_id that does not belong to the media buy
+    When the Buyer Agent sends update_media_buy targeting the unknown package with a below-minimum budget
+    Then the operation should fail
+    And the error code should be "PACKAGE_NOT_FOUND"
+    And the error recovery hint should indicate correctable
+    And the response should echo the context.correlation_id unchanged
+    And the response should NOT be a 500 or non-AdCP error shape
+    # invalid_transitions Phase 3 (unknown_package), precedence arm: the request is
+    # invalid two ways at once — the package_id does not belong to the buy AND its
+    # budget is below the seller minimum. The package-existence guard preempts the
+    # budget validators, so the buyer gets PACKAGE_NOT_FOUND and fixes the reference
+    # first; a budget error against a package that does not exist is not actionable.
+    # The ordering lives in the shared _impl, so this grades it on EVERY transport
+    # rather than on the A2A wire alone.
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/compliance/source/protocols/media-buy/scenarios/invalid_transitions.yaml
 
   @T-UC-003-storyboard-not-cancellable-on-recancel @storyboard-v3.1 @v3-1 @structured-errors @not-cancellable @terminal-state
   Scenario: Re-cancel of a canceled media buy returns NOT_CANCELLABLE, not silent success

@@ -12,10 +12,29 @@ from src.core.exceptions import AdCPCreativeRejectedError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
 from src.core.tools.media_buy_update import _update_media_buy_impl
+from tests.factories import MediaPackageFactory
 from tests.helpers.media_buy_write_seam import (
     assert_status_move_carried_bookkeeping,
     read_media_buy_state,
 )
+from tests.integration.conftest import bind_factory_session
+
+
+def _seed_package(session, media_buy, package_id: str = "pkg_default") -> None:
+    """Seed the canonical MediaPackage row for a media buy via the factory.
+
+    create_media_buy dual-writes MediaPackage rows alongside raw_request, and
+    the package-existence guard resolves against those rows — so tests seed
+    the canonical row through the one factory idiom (tests/CLAUDE.md Pattern
+    #8) instead of hand-rolled ``session.add`` blocks. This legacy module
+    seeds with raw ORM sessions rather than ``IntegrationEnv`` (which would
+    normally bind the factories), so ``bind_factory_session`` binds the factory
+    to the caller's open session (the FK to the not-yet-committed media buy then
+    resolves inside the same transaction) and restores the saved binding on
+    exit. ``package_config={}`` preserves these tests' seeded shape.
+    """
+    with bind_factory_session(MediaPackageFactory, session):
+        MediaPackageFactory(media_buy=media_buy, package_id=package_id, package_config={})
 
 
 @pytest.mark.requires_db
@@ -82,6 +101,7 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
             },
         )
         session.add(media_buy)
+        _seed_package(session, media_buy)
 
         # Create creatives (FK to principal now satisfied)
         creative1 = DBCreative(
@@ -240,6 +260,7 @@ def test_update_media_buy_replaces_creatives(integration_db):
             },
         )
         session.add(media_buy)
+        _seed_package(session, media_buy)
         session.flush()  # Ensure media_buy exists before creating assignments
 
         # Create creatives (FK to principal now satisfied)
@@ -415,6 +436,7 @@ def test_update_media_buy_rejects_missing_creatives(integration_db):
             },
         )
         session.add(media_buy)
+        _seed_package(session, media_buy)
         session.commit()
 
     # Create identity for the new _update_media_buy_impl signature
@@ -524,6 +546,7 @@ def test_creative_assignments_with_weights(integration_db):
             },
         )
         session.add(media_buy)
+        _seed_package(session, media_buy)
 
         # Create creatives (FK to principal now satisfied)
         creative1 = DBCreative(
@@ -669,6 +692,7 @@ def test_creative_assignments_replaces_all(integration_db):
             },
         )
         session.add(media_buy)
+        _seed_package(session, media_buy)
 
         # Create three creatives
         for cid in ["c1", "c2", "c3"]:

@@ -14,8 +14,9 @@ A. **No test-side error construction** (dispatch-side). A step must NOT
 B. **No reconstructed-only error assertion** (assertion-side). An error
    ``@then`` step must not assert purely on the lossy reconstructed ``ctx['error']`` via
    ``_get_error_code`` / ``_get_error_dict`` without reading the real wire envelope
-   (``_wire_code`` / ``_wire_suggestion`` / ``assert_wire_error`` / ``wire_error_envelope`` /
-   ``ctx['result']``). Reconstruction collapses distinct wire codes onto one exception class
+   (``_wire_code`` / ``_wire_suggestion`` / ``assert_wire_error`` / ``assert_wire_recovery`` /
+   ``assert_wire_is_adcp_envelope`` / ``wire_error_envelope`` / ``ctx['result']``).
+   Reconstruction collapses distinct wire codes onto one exception class
    (yields ``RuntimeError`` for an unmapped code); the wire envelope is the buyer-facing
    contract.
 
@@ -50,7 +51,10 @@ _WIRE_REFERENCES = (
     "_wire_code",
     "_wire_suggestion",
     "_wire_error_object",
+    "_wire_result",
     "assert_wire_error",
+    "assert_wire_recovery",
+    "assert_wire_is_adcp_envelope",
     "wire_error_envelope",
 )
 

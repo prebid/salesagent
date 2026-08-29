@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Collection
-from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from decimal import Decimal, InvalidOperation
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -27,6 +27,22 @@ from src.core.database.models import (
 
 if TYPE_CHECKING:
     from adcp.types import ContextObject
+
+
+def _to_decimal_or_none(value: Any) -> Decimal | None:
+    """Coerce a legacy raw_request numeric to ``Decimal``, tolerantly.
+
+    Rejects ``bool`` (an ``int`` subtype — a legacy ``True``/``False`` budget is
+    not ``1``/``0``) and returns ``None`` on a malformed value instead of raising
+    ``InvalidOperation`` (a 500) on exactly the untrusted pre-dual-write data
+    this path exists to rescue.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
 
 
 class MediaBuyRepository:
@@ -190,7 +206,16 @@ class MediaBuyRepository:
         )
 
     def get_package(self, media_buy_id: str, package_id: str) -> MediaPackage | None:
-        """Get a specific package, verified to belong to this tenant."""
+        """Get a specific package row, verified to belong to this tenant.
+
+        Pure read: returns the canonical ``media_packages`` row or ``None``.
+        Packages recorded only in ``MediaBuy.raw_request`` (media buys created
+        before the dual-write landed in 8367e0a1f — no backfill migration
+        exists — or adapters that return an empty ``response.packages``) have
+        no row and return ``None`` here. Callers that must tolerate those use
+        ``package_exists_or_raise`` (read-only guard), ``get_package_config``
+        (read-only config access), or ``materialize_package`` (write paths).
+        """
         return self._session.scalars(
             select(MediaPackage)
             .join(MediaBuy, MediaPackage.media_buy_id == MediaBuy.media_buy_id)
@@ -201,25 +226,224 @@ class MediaBuyRepository:
             )
         ).first()
 
+    def _raw_packages_by_id(self, media_buy_id: str) -> dict[str, dict[str, Any]]:
+        """Map ``package_id -> raw_request package dict`` for a buy, in ONE load.
+
+        Resolves ``MediaBuy.raw_request["packages"]`` with a single ``get_by_id``.
+        ``_find_raw_package`` (and thus ``get_package_config`` /
+        ``materialize_package``) and the bulk ``packages_exist_or_raise`` guard
+        all read through here, so a guard checking k packages is one buy load
+        plus O(1) membership per package rather than k full-buy reloads. First
+        occurrence wins on a duplicate ``package_id``, matching the prior
+        first-match lookup.
+        """
+        media_buy = self.get_by_id(media_buy_id)
+        raw_packages = (media_buy.raw_request or {}).get("packages") if media_buy is not None else None
+        result: dict[str, dict[str, Any]] = {}
+        for raw_pkg in raw_packages or []:
+            if isinstance(raw_pkg, dict):
+                pid = raw_pkg.get("package_id")
+                if pid is not None:
+                    result.setdefault(pid, raw_pkg)
+        return result
+
+    def _find_raw_package(self, media_buy_id: str, package_id: str) -> dict[str, Any] | None:
+        """Find a package dict in ``MediaBuy.raw_request`` (read-only)."""
+        return self._raw_packages_by_id(media_buy_id).get(package_id)
+
+    def get_package_config(self, media_buy_id: str, package_id: str) -> dict[str, Any] | None:
+        """Read a package's config without requiring a canonical row.
+
+        Returns the row's ``package_config`` when the row exists, else the
+        raw_request package dict for raw_request-only packages, else ``None``.
+        Read-only — safe on validation paths that run before the dry_run gate.
+        """
+        package = self.get_package(media_buy_id, package_id)
+        if package is not None:
+            return package.package_config
+        return self._find_raw_package(media_buy_id, package_id)
+
+    def package_exists_or_raise(
+        self, media_buy_id: str, package_id: str, *, context: ContextObject | dict[str, Any] | None = None
+    ) -> None:
+        """Existence guard tolerant of raw_request-only packages, or raise.
+
+        Read-only: unlike ``get_package_or_raise`` it never materializes a
+        row, so it is safe on guards that run before the dry_run early return
+        — a dry_run request must not write. The two helpers share the single
+        raise site in ``_raise_package_not_found``.
+        """
+        if self.get_package(media_buy_id, package_id) is not None:
+            return
+        if self._find_raw_package(media_buy_id, package_id) is not None:
+            return
+        self._raise_package_not_found(media_buy_id, package_id, context)
+
+    def packages_exist_or_raise(
+        self, media_buy_id: str, package_ids: list[str], *, context: ContextObject | dict[str, Any] | None = None
+    ) -> None:
+        """Bulk existence guard for many packages under one buy, in one raw load.
+
+        The pre-dry_run guard checks every referenced package. Looping the
+        singular ``package_exists_or_raise`` would re-load the owning
+        ``MediaBuy`` once per package (each ``_find_raw_package`` →
+        ``get_by_id``); here the ``raw_request`` map is resolved ONCE and each
+        package is an O(1) membership test on top of its indexed
+        ``media_packages`` lookup. Read-only (never materializes), order-
+        preserving (raises on the first missing package), and shares the single
+        ``_raise_package_not_found`` site — so raw_request-only packages on
+        legacy buys are tolerated identically to the singular guard.
+        """
+        if not package_ids:
+            return
+        raw_packages = self._raw_packages_by_id(media_buy_id)
+        for package_id in package_ids:
+            if self.get_package(media_buy_id, package_id) is not None:
+                continue
+            if package_id in raw_packages:
+                continue
+            self._raise_package_not_found(media_buy_id, package_id, context)
+
+    def materialize_package(self, media_buy_id: str, package_id: str) -> MediaPackage | None:
+        """Get the package row, materializing it from raw_request if absent.
+
+        Resolves the ``media_packages``/``raw_request`` duality for WRITE
+        paths: raw_request-only packages get a canonical row so row-needing
+        operations (targeting mutation) behave identically on legacy buys.
+        (Spec-Grounding: tolerating raw_request-only packages is a reasonable
+        reading but ungraded — no storyboard covers pre-dual-write data.)
+
+        WRITES on the raw_request-only path (``session.add`` + ``flush``; the
+        Unit of Work owns the commit) — only call past the dry_run gate. The
+        dedicated columns (budget/bid_price/pacing) are filled from the raw
+        package to match the create path's dual-write.
+        """
+        package = self.get_package(media_buy_id, package_id)
+        if package is not None:
+            return package
+
+        raw_pkg = self._find_raw_package(media_buy_id, package_id)
+        if raw_pkg is None:
+            return None
+
+        package = self._build_package_row(
+            media_buy_id,
+            package_id,
+            dict(raw_pkg),
+            budget=raw_pkg.get("budget"),
+            bid_price=raw_pkg.get("bid_price"),
+        )
+        self._session.add(package)
+        self._session.flush()
+        return package
+
+    def create_package_from_config(
+        self,
+        media_buy_id: str,
+        package_id: str,
+        package_config: dict[str, Any],
+        *,
+        budget: Any = None,
+        bid_price: Any = None,
+    ) -> MediaPackage:
+        """Persist a dual-write package row from a raw create-path config.
+
+        The public write seam for the create path (``media_buy_create.py``):
+        builds the row via the shared ``_build_package_row`` and owns the
+        ``session.add``, so persistence stays in the repository layer and the
+        private builder keeps zero cross-module callers.
+
+        Distinct from ``create_package``, which takes ALREADY-COERCED
+        ``Decimal`` budget/bid_price plus a separate ``pacing``. This method
+        takes the RAW values (a budget dict with ``total``/``pacing``, a bare
+        scalar, or ``None``) and routes them through the single coercion
+        authority — reusing ``create_package`` would re-open the budget-dict
+        split and the ``_to_decimal_or_none`` coercion that ``_build_package_row``
+        was extracted to centralize (#1736).
+
+        Deliberately does NOT flush: the create sites add packages in a loop
+        and flush ONCE after it (the create path needs the rows visible for the
+        line_item_id queries that follow), so a per-call flush would turn one
+        round trip into N. ``materialize_package`` flushes because its caller
+        needs the row back immediately.
+        """
+        package = self._build_package_row(
+            media_buy_id,
+            package_id,
+            package_config,
+            budget=budget,
+            bid_price=bid_price,
+        )
+        self._session.add(package)
+        return package
+
+    @staticmethod
+    def _build_package_row(
+        media_buy_id: str,
+        package_id: str,
+        package_config: dict[str, Any],
+        *,
+        budget: Any = None,
+        bid_price: Any = None,
+    ) -> MediaPackage:
+        """Build a ``MediaPackage`` row for the dual-write, in ONE place.
+
+        Single home for the dual-write construction shared by
+        ``materialize_package`` (legacy raw_request path) and the create-side
+        sites (``media_buy_create.py`` — resolves #1736): the budget dict →
+        total/pacing split, the bool-rejecting / non-500 ``_to_decimal_or_none``
+        coercion, and the row build. ``budget`` is the raw budget value (a dict
+        with ``total``/``pacing``, a bare scalar, or ``None``); ``bid_price`` is
+        the raw scalar bid price — sourced from ``pricing_info`` at the create
+        sites, from the raw package on the legacy path. A future coercion fix
+        lands here and reaches every caller instead of drifting past the copies.
+        """
+        budget_total = None
+        pacing_value = None
+        if isinstance(budget, dict):
+            budget_total = budget.get("total")
+            pacing_value = budget.get("pacing")
+        elif isinstance(budget, int | float):
+            # bool is an int subtype, but a True/False budget is not 1/0 —
+            # _to_decimal_or_none (the single coercion authority) rejects it.
+            budget_total = budget
+
+        return MediaPackage(
+            media_buy_id=media_buy_id,
+            package_id=package_id,
+            package_config=package_config,
+            budget=_to_decimal_or_none(budget_total),
+            bid_price=_to_decimal_or_none(bid_price),
+            pacing=pacing_value,
+        )
+
     def get_package_or_raise(
         self, media_buy_id: str, package_id: str, *, context: ContextObject | dict[str, Any] | None = None
     ) -> MediaPackage:
-        """Get a package or raise ``AdCPPackageNotFoundError``.
+        """Get (materializing if needed) a package or raise ``AdCPPackageNotFoundError``.
 
-        Collapses the package fetch-and-raise guard duplicated across the update
-        tool. ``context`` is echoed into the error envelope. Coexists with
-        ``get_package`` for callers that tolerate ``None``.
+        For write paths that need the canonical row: delegates to
+        ``materialize_package``, so raw_request-only packages are tolerated.
+        Guards that run before the dry_run gate use ``package_exists_or_raise``
+        instead — this helper writes. ``context`` is echoed into the error
+        envelope.
         """
-        package = self.get_package(media_buy_id, package_id)
+        package = self.materialize_package(media_buy_id, package_id)
         if package is None:
-            from src.core.exceptions import AdCPPackageNotFoundError
-
-            raise AdCPPackageNotFoundError(
-                f"Package '{package_id}' not found for media buy '{media_buy_id}'",
-                suggestion="Verify the package_id exists in this media buy; list the media buy's packages to find valid ids.",
-                context=context,
-            )
+            self._raise_package_not_found(media_buy_id, package_id, context)
         return package
+
+    def _raise_package_not_found(
+        self, media_buy_id: str, package_id: str, context: ContextObject | dict[str, Any] | None
+    ) -> NoReturn:
+        """Single raise site for the PACKAGE_NOT_FOUND guard family."""
+        from src.core.exceptions import AdCPPackageNotFoundError
+
+        raise AdCPPackageNotFoundError(
+            f"Package '{package_id}' not found for media buy '{media_buy_id}'",
+            suggestion="Verify the package_id exists in this media buy; list the media buy's packages to find valid ids.",
+            context=context,
+        )
 
     def get_packages_for_ids(self, media_buy_ids: list[str]) -> dict[str, list[MediaPackage]]:
         """Get packages for multiple media buys, grouped by media_buy_id.

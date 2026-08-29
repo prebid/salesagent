@@ -15,7 +15,7 @@ from pytest_bdd import given, then, when
 
 from tests.bdd.steps._outcome_helpers import wire_error_dict
 from tests.bdd.steps.generic._dispatch import dispatch_via_client
-from tests.bdd.steps.generic.then_error import then_error_recovery
+from tests.bdd.steps.generic.then_error import _wire_result
 from tests.harness.transport import DERIVED_STATUS_ADCP_ERROR, DERIVED_STATUS_TRANSPORT_FAULT
 
 
@@ -77,8 +77,17 @@ def when_update_media_buy_recancel(ctx: dict) -> None:
 
 @then("the error recovery hint should indicate correctable")
 def then_error_recovery_hint_correctable(ctx: dict) -> None:
-    """Delegate to then_error_recovery's existing wire-first logic — DRY, no duplication."""
-    then_error_recovery(ctx, "correctable")
+    """Grade the recovery hint alone, through the harness's code-free grader.
+
+    ``correctable`` is the only expectation crossing the boundary, so it is the
+    value actually under test; the scenario's separate ``the error code should
+    be "X"`` step pins the code on the wire. Deliberately NOT
+    ``then_error_recovery``: that generic step reaches the same assertion via
+    ``assert_wire_error(<code read out of the envelope>, recovery=...)``, whose
+    code arm is then graded against the envelope under test and cannot fail —
+    the exact pattern ``assert_wire_error``'s docstring forbids.
+    """
+    _wire_result(ctx).assert_wire_recovery("correctable")
 
 
 @then("the response should echo the context.correlation_id unchanged")
@@ -101,13 +110,13 @@ def then_response_not_500_or_non_adcp_shape(ctx: dict) -> None:
     """Assert the seller answered with a structured AdCP envelope, not a transport fault.
 
     Order matters, and is the whole point of this step's shape. The DERIVED
-    status is read and asserted FIRST, before ``wire_error_dict(ctx)``. Written
-    the other way round the check was structurally unreachable: ``wire_error_dict``
-    raises loudly when no wire envelope was captured, and "no wire envelope
-    captured" is precisely the condition ``derive_error_status`` reports as
-    ``transport_fault`` — so the fault could never be observed at the assertion
+    status is read and asserted FIRST, before the envelope grader runs. Written
+    the other way round the check was structurally unreachable: the guarded
+    envelope read raises loudly when no wire envelope was captured, and "no wire
+    envelope captured" is precisely the condition ``derive_error_status`` reports
+    as ``transport_fault`` — so the fault could never be observed at the assertion
     point, on any transport or dispatch path. Reading the status first makes the
-    fault observable, and makes THIS obligation (not the accessor's generic
+    fault observable, and makes THIS obligation (not the grader's generic
     missing-wire guard) the thing that reports it.
 
     The assertion is POSITIVE — ``status == adcp_error`` — not ``status !=
@@ -124,15 +133,16 @@ def then_response_not_500_or_non_adcp_shape(ctx: dict) -> None:
     real HTTP body, A2A's failed-Task artifact, MCP's ToolError. The REST
     ``status_code`` check is kept where it genuinely exists.
 
-    The envelope SHAPE half delegates to ``result.assert_wire_error``, the
-    harness's single shape authority (see its docstring), so a spec change to the
-    envelope shape only needs updating in one place. This step has no expected
-    code of its own (it is reused across scenarios with different codes), so it
-    reads the code the envelope itself reports and asserts against THAT — which
-    still exercises the real checks ``assert_wire_error`` performs: the two-layer
-    invariant (``adcp_error.code == errors[0].code``), that the code is canonical
-    (pinned ``error-code.json``), and that recovery matches the pinned
-    classification.
+    The envelope SHAPE half delegates to ``result.assert_wire_is_adcp_envelope``,
+    the harness's CODE-FREE shape grader, so a spec change to the envelope shape
+    only needs updating in one place. This step has no expected code of its own
+    (it is reused across scenarios with different codes), which is exactly why it
+    must NOT hand ``assert_wire_error`` a code read back out of the envelope
+    under test — that arm would compare the envelope against itself and could
+    never fail (``assert_wire_error``'s own docstring forbids it). The code-free
+    grader performs the same real checks: the two-layer invariant
+    (``adcp_error.code == errors[0].code``), that the code is canonical (pinned
+    ``error-code.json``), and that recovery matches the pinned classification.
     """
     result = ctx.get("result")
     assert result is not None, (
@@ -158,7 +168,4 @@ def then_response_not_500_or_non_adcp_shape(ctx: dict) -> None:
     if status_code is not None:
         assert status_code != 500, f"Expected a non-500 status, got {status_code}"
 
-    envelope = wire_error_dict(ctx)
-    code = (envelope.get("adcp_error") or {}).get("code")
-    assert code, f"Expected a non-empty adcp_error.code in the wire envelope, got {envelope}"
-    result.assert_wire_error(code)
+    result.assert_wire_is_adcp_envelope()

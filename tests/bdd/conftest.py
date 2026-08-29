@@ -3750,6 +3750,17 @@ _UC003_REVISION_TAGS = frozenset(
 _UC003_STORYBOARD_CLIENT_TAGS = frozenset(
     {"T-UC-003-storyboard-media-buy-not-found", "T-UC-003-storyboard-not-cancellable-on-recancel"}
 )
+# The invalid_transitions Phase 3 (unknown_package) storyboard scenarios. They
+# graduate on the SAME env + seed as the ext-/targeting-overlay row: the
+# package-existence guard they grade lives in the shared update `_impl`, so
+# `MediaBuyDualEnv` + `dispatch_request` grades it on every transport, and the
+# preempts-budget arm additionally needs the tenant's `CurrencyLimit` floor that
+# the update env seeds. They are NOT in `_UC003_STORYBOARD_CLIENT_TAGS`: the
+# generic-client row's seed builds a `BareIntegrationEnv` with a single minimal
+# `Product`, which has no package-budget floor to preempt.
+_UC003_STORYBOARD_PACKAGE_TAGS = frozenset(
+    {"T-UC-003-storyboard-package-not-found", "T-UC-003-storyboard-package-not-found-preempts-budget"}
+)
 
 ENV_ROUTES: list[EnvRoute] = [
     # ── UC-002 ──────────────────────────────────────────────────────────────
@@ -3808,7 +3819,11 @@ ENV_ROUTES: list[EnvRoute] = [
         tag="uc003-ext",
         when=_uc(
             "UC-003",
-            lambda m: any(t.startswith("T-UC-003-ext-") for t in m) or bool(m & _UC003_TARGETING_OVERLAY_TAGS),
+            lambda m: (
+                any(t.startswith("T-UC-003-ext-") for t in m)
+                or bool(m & _UC003_TARGETING_OVERLAY_TAGS)
+                or bool(m & _UC003_STORYBOARD_PACKAGE_TAGS)
+            ),
         ),
         env_builder=_env("tests.harness.media_buy_dual.MediaBuyDualEnv"),
         seed=_seed_update_with_existing_buy,
