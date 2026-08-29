@@ -62,10 +62,13 @@ from tests.harness.spec_models import spec_response_model
 from tests.harness.transport import (
     NO_IDENTITY_OVERRIDE,
     DeliverResult,
+    InvalidAuthHint,
     Transport,
     TransportResult,
+    _a2a_wire_envelope_is_synthesized,
     _envelope_from_adcp_error,
     _envelope_from_mcp_error,
+    _invalid_auth_headers,
     _wire_envelope_from_exception,
     derive_error_status,
     strip_a2a_protocol_fields,
@@ -257,7 +260,14 @@ def e2e_identity_headers(identity: Any) -> dict[str, str]:
     return headers
 
 
-def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> Any:
+def _deliver_e2e_rest(
+    env: BaseTestEnv,
+    address: ToolAddress,
+    wrapped: dict[str, Any],
+    identity: Any,
+    *,
+    invalid_auth: InvalidAuthHint | None = None,
+) -> Any:
     """E2E_REST DELIVER: real HTTP through nginx to the live Docker stack.
 
     The single implementation of e2e_rest delivery (the wire-grading work)
@@ -276,14 +286,32 @@ def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str,
     path (see that class's docstring for why the two UNWRAP paths are not
     unified: the e2e_rest envelope/non-JSON-error shape is the standing
     regression baseline and must not shift silently).
+
+    *invalid_auth* is the e2e realization of the transport-blind invalid-token
+    contract, mirroring the in-process REST leg (``_run_rest_request``): when
+    present it REPLACES the identity-derived auth headers with the bad token
+    plus the bare host-routed tenant id, DROPPING the injected identity. The
+    identity's tenant dict carries only the derived ``pub-<uuid>`` subdomain,
+    not the bare UUID under test; sending that instead resolves no tenant on the
+    live server, so ``reject_invalid_token`` runs with ``None``, the message
+    reads "...for tenant 'any'...", and the non-disclosure check passes whether
+    or not the redaction holds — a false floor. Sending the bare UUID as
+    ``x-adcp-tenant`` makes ``resolve_identity``'s direct-tenant-id fallback
+    detect it, so the leg reaches the raise with the real id and reddens on a
+    revert. Realized through ``_invalid_auth_headers`` — the one recipe both
+    REST legs share.
     """
     import httpx
 
     if not env.e2e_config:
         raise RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)")
 
-    resolved_identity = env.identity_for(Transport.E2E_REST) if identity is NO_IDENTITY_OVERRIDE else identity
-    headers = {"Content-Type": "application/json", **e2e_identity_headers(resolved_identity)}
+    if invalid_auth is not None:
+        auth_headers = _invalid_auth_headers(invalid_auth)
+    else:
+        resolved_identity = env.identity_for(Transport.E2E_REST) if identity is NO_IDENTITY_OVERRIDE else identity
+        auth_headers = e2e_identity_headers(resolved_identity)
+    headers = {"Content-Type": "application/json", **auth_headers}
     method = address.method or "post"
 
     with httpx.Client(base_url=env.e2e_config.base_url, timeout=30) as client:
@@ -790,6 +818,12 @@ def unwrap_a2a_error(exc: Exception, transport: Transport = Transport.A2A) -> Tr
         # a failed Task carried an AdCP envelope in its artifact DataPart.
         envelope={"transport": transport.value, "status": derive_error_status(wire)},
         wire_error_envelope=wire,
+        # A bare A2AError (no ``data``) reaches the buyer with NO AdCP envelope,
+        # and the fallback above synthesizes one that is indistinguishable from
+        # real wire bytes on ``wire_error_envelope``. Derived HERE, in the one
+        # A2A error unwrap, so both dispatch paths can refuse the masquerade via
+        # ``assert_wire_error(..., require_real_wire=True)``.
+        wire_error_envelope_is_synthesized=_a2a_wire_envelope_is_synthesized(exc),
     )
 
 

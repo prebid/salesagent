@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from tests.harness.transport import (
+    InvalidAuthHint,
     Transport,
     TransportResult,
     _envelope_from_adcp_error,
@@ -196,12 +197,20 @@ class RestE2EDispatcher:
         # gets — a bare ``None`` default here would force every omitted-
         # identity call unauthenticated instead.
         identity = kwargs.pop("identity", NO_IDENTITY_OVERRIDE)
+        # E2E REST's realization of the transport-blind invalid-token contract,
+        # mirroring the in-process REST leg (``_run_rest_request``): CONSUME the
+        # ``_invalid_auth`` hint — do not discard it — and hand it to
+        # ``_deliver_e2e_rest``, which sends the bad token plus the bare
+        # host-routed tenant id as headers and DROPS the injected identity. See
+        # that function for why the identity's ``pub-<uuid>`` subdomain would
+        # false-floor the non-disclosure grade.
+        invalid_auth: InvalidAuthHint | None = kwargs.pop("_invalid_auth", None)
         body = env.build_rest_body(**kwargs)
         endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]
         method = getattr(env, "REST_METHOD", "post")
         address = ToolAddress(Transport.E2E_REST, name=endpoint, method=method)
 
-        response = _deliver_e2e_rest(env, address, {"url": endpoint, "body": body}, identity)
+        response = _deliver_e2e_rest(env, address, {"url": endpoint, "body": body}, identity, invalid_auth=invalid_auth)
         return unwrap_rest_response(env, response, Transport.E2E_REST, env.parse_rest_response)
 
 
