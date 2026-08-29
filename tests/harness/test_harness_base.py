@@ -395,3 +395,91 @@ class TestIsE2EProperty:
 
         env = BaseTestEnv()
         assert env.is_e2e is False
+
+
+class _RecordingRestClient:
+    """Records the verb, endpoint and kwargs of the one REST call made.
+
+    Stands in for starlette's TestClient so the verb-derivation contract can be
+    graded without a database or a live app — the assertion is about which
+    method ``_run_rest_request`` reaches for, not about what the route returns.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, dict]] = []
+
+    def _record(self, verb: str):
+        def _call(endpoint: str, **kwargs):
+            self.calls.append((verb, endpoint, kwargs))
+            return f"{verb}-response"
+
+        return _call
+
+    def __getattr__(self, name: str):
+        if name in {"get", "post", "put", "delete", "head", "options", "patch"}:
+            return self._record(name)
+        raise AttributeError(name)
+
+
+class TestRestVerbDerivation:
+    """The base REST dispatch honors REST_METHOD and reads it AFTER the body.
+
+    Both halves are load-bearing and neither is graded elsewhere:
+
+    * honoring ``REST_METHOD`` is what lets a non-POST route (``GET
+      /api/v1/capabilities``) drop its own ``_run_rest_request`` override
+      instead of re-deriving the bodyless-verb rule a second time;
+    * reading it AFTER ``build_rest_body`` is what makes a request-derived verb
+      possible at all — ``CapabilitiesEnv._rest_has_body`` is set BY
+      ``build_rest_body``, so a verb read first would always see the previous
+      request's value (``False`` on a fresh env, i.e. GET for every request).
+    """
+
+    def _dispatch(self, env, **kwargs):
+        from unittest.mock import patch as _patch
+
+        client = _RecordingRestClient()
+        with _patch.object(type(env), "_prepare_rest_request", return_value=(client, None)):
+            env._run_rest_request("/api/v1/capabilities", **kwargs)
+        return client.calls
+
+    def test_parameterless_capabilities_request_gets(self):
+        """No request params -> empty body -> bodyless GET, with no json= kwarg."""
+        from tests.harness.capabilities import CapabilitiesEnv
+
+        calls = self._dispatch(CapabilitiesEnv(), req=None)
+
+        assert calls == [("get", "/api/v1/capabilities", {})], (
+            f"parameterless capabilities discovery must GET without a body, got {calls!r}"
+        )
+
+    def test_body_carrying_capabilities_request_posts(self):
+        """Request params -> non-empty body -> POST carrying that exact body.
+
+        Also pins the ordering: on a fresh env ``_rest_has_body`` is False, so a
+        verb read BEFORE ``build_rest_body`` would produce a GET here.
+        """
+        from adcp.types import GetAdcpCapabilitiesRequest
+
+        from tests.harness.capabilities import CapabilitiesEnv
+
+        calls = self._dispatch(CapabilitiesEnv(), req=GetAdcpCapabilitiesRequest(adcp_version="3.1"))
+
+        assert calls == [("post", "/api/v1/capabilities", {"json": {"adcp_version": "3.1"}})], (
+            f"a body-carrying capabilities request must POST the built body, got {calls!r}"
+        )
+
+    def test_default_env_without_rest_method_still_posts(self):
+        """An env that declares no REST_METHOD keeps the historical POST default."""
+        from tests.harness._base import IntegrationEnv
+
+        class _PostOnlyEnv(IntegrationEnv):
+            EXTERNAL_PATCHES: dict[str, str] = {}
+
+        env = _PostOnlyEnv()
+        assert not hasattr(env, "REST_METHOD")
+        calls = self._dispatch(env, req=None)
+
+        assert calls == [("post", "/api/v1/capabilities", {"json": {}})], (
+            f"an env with no REST_METHOD must default to POST, got {calls!r}"
+        )

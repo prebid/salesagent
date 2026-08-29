@@ -979,23 +979,38 @@ class BaseTestEnv:
         return response_cls(**tool_result.structured_content)
 
     def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
-        """Shared REST dispatch: configure auth → build body → POST → return Response.
+        """Shared REST dispatch: configure auth → build body → send → return Response.
 
         Symmetric with ``_run_mcp_wrapper``. Handles the full REST lifecycle:
         1. Pop ``identity`` from kwargs and configure dep override for this request
         2. Commit factory data
         3. Build request body from remaining kwargs
-        4. POST via TestClient
+        4. Send via TestClient using the env's ``REST_METHOD`` (default POST)
         5. Return raw httpx.Response
 
         Identity handling (mirrors production auth middleware):
         - identity is None → dep raises AUTH_REQUIRED (no token) with suggestion
         - identity is ResolvedIdentity → dep returns it (valid token)
         - identity absent → uses default self.identity_for(Transport.REST)
+
+        Verb: ``client.py``'s ``_rest_request_kwargs`` owns the one bodiless-verb
+        set that decides whether ``json=`` rides along — the same helper the
+        generic client's REST DELIVER and ``RestE2EDispatcher`` go through, so
+        the in-process and live paths cannot drift. Non-POST routes therefore
+        only declare ``REST_METHOD``; they never override this method to
+        re-derive the body decision by hand.
+
+        Ordering is LOAD-BEARING: ``build_rest_body`` runs BEFORE ``REST_METHOD``
+        is read, because subclasses derive the verb from the built body
+        (``CapabilitiesEnv._rest_has_body``, ``MediaBuyDualEnv._active_update``).
+        Reading the verb first would see the previous request's value.
         """
+        from tests.harness.client import _rest_request_kwargs
+
         client, identity = self._prepare_rest_request(kwargs)
         body = self.build_rest_body(**kwargs)
-        return client.post(endpoint, json=body)
+        method = getattr(self, "REST_METHOD", "post")
+        return getattr(client, method)(endpoint, **_rest_request_kwargs(method, body))
 
     def _prepare_rest_request(self, kwargs: dict[str, Any]) -> tuple[Any, Any]:
         """Resolve identity, commit factory data, get the client, and install auth.

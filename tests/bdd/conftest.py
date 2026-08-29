@@ -74,6 +74,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc005_format_id_shape",
     "tests.bdd.steps.domain.uc005_format_id_roundtrip",
     "tests.bdd.steps.domain.uc005_format_id_third_party",
+    "tests.bdd.steps.domain.uc010_capabilities",
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
@@ -1363,6 +1364,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         for tag, reason in _UC006_SPECGAP_XFAIL_TAGS.items():
             if tag in marker_names:
                 item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+
+        # Graduated (#1710, closed 2026-08-11 by #1868): MCP no longer serializes an
+        # explicit null for an absent supported_pricing_models. capabilities.py now
+        # returns through mcp_result(), whose model_dump(mode="json") omits the key,
+        # so the [mcp] node passes alongside [a2a]/[rest]. The xfail was strict
+        # precisely so the transport-level fix would surface here as an xpass.
 
         # UC-006: assignment_package_validation — PACKAGE_NOT_FOUND outcome not
         # wired in the Then step dispatch (raises ValueError). The production
@@ -3593,6 +3600,20 @@ def _seed_delivery_poll(ctx: dict, env: object) -> None:
     ctx[f"db_principal_{env._principal_id}"] = principal
 
 
+def _seed_uc010_capabilities(ctx: dict, env: object) -> None:
+    """UC-010 capabilities: stash the tenant/principal its steps read.
+
+    ``CapabilitiesEnv`` mocks nothing — the answer is derived from the tenant
+    row, its publisher partnerships and the bound ad-server adapter, all of
+    which are real here. The Given steps reach for ``ctx["tenant"]`` to attach
+    partnerships and to pin the resolved adapter's pricing surface via
+    ``env.set_adapter_pricing_models``; nothing else is seeded.
+    """
+    tenant, principal = env.setup_default_data()
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+
+
 def _env(factory_path: str, **kwargs: object) -> Callable[[object | None], AbstractContextManager]:
     """Build an env_builder that imports its harness lazily, as the branches did."""
 
@@ -3750,6 +3771,11 @@ _UC003_REVISION_TAGS = frozenset(
 _UC003_STORYBOARD_CLIENT_TAGS = frozenset(
     {"T-UC-003-storyboard-media-buy-not-found", "T-UC-003-storyboard-not-cancellable-on-recancel"}
 )
+# The three POST-S10 get_adcp_capabilities pricing scenarios that have step
+# definitions today. The other ~77 UC-010 scenarios take the not-wired row and
+# xfail at the fixture (mirrors UC-018) rather than spinning up a DB per
+# scenario only to auto-xfail at the first missing step.
+_UC010_PRICING_TAGS = frozenset({"T-UC-010-pricing", "T-UC-010-pricing-degrade", "T-UC-010-pricing-offenum"})
 
 ENV_ROUTES: list[EnvRoute] = [
     # ── UC-002 ──────────────────────────────────────────────────────────────
@@ -3882,6 +3908,21 @@ ENV_ROUTES: list[EnvRoute] = [
         xfail_reason=(
             "UC-018 harness wired only for the @list-after-sync (#1405), @concept-id (#1407), "
             "and @BR-RULE-034 isolation (#1503) scenarios"
+        ),
+    ),
+    # ── UC-010 ──────────────────────────────────────────────────────────────
+    EnvRoute(
+        tag="uc010-pricing",
+        when=_uc("UC-010", lambda m: bool(m & _UC010_PRICING_TAGS)),
+        env_builder=_env("tests.harness.capabilities.CapabilitiesEnv"),
+        seed=_seed_uc010_capabilities,
+    ),
+    EnvRoute(
+        tag="uc010-not-wired",
+        when=_uc("UC-010", lambda m: True),
+        env_builder=_env("tests.harness.capabilities.CapabilitiesEnv"),
+        xfail_reason=(
+            "UC-010 harness wired only for the @T-UC-010-pricing / -pricing-degrade / -pricing-offenum scenarios"
         ),
     ),
     # ── UC-011 ──────────────────────────────────────────────────────────────

@@ -185,7 +185,20 @@ class MockAdServer(AdServerAdapter):
         self._current_simulation_time = simulation_time
 
     def get_supported_pricing_models(self) -> set[str]:
-        """Mock adapter supports all pricing models (AdCP PR #88)."""
+        """Mock adapter supports all pricing models (AdCP PR #88).
+
+        A DB-seeded ``test_behavior["supported_pricing_models"]`` overrides the
+        default surface, so a degenerate (empty) or off-enum adapter can be
+        realized on the Docker-hosted mock exactly like the fault injection
+        ``_raise_injected_failure`` reads — no in-process patching required.
+
+        Membership is tested with ``is not None``, never truthiness: an explicit
+        empty list means "this adapter declares no pricing models", which is a
+        distinct, gradable state from "no override configured".
+        """
+        override = self._read_test_behavior().get("supported_pricing_models")
+        if override is not None:
+            return {str(model) for model in override}
         return {"cpm", "vcpm", "cpcv", "cpp", "cpc", "cpv", "flat_rate"}
 
     def get_targeting_capabilities(self) -> TargetingCapabilities:

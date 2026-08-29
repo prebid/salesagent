@@ -168,9 +168,11 @@ _CASES = [
         tool="get_adcp_capabilities",
         setup=_capabilities_env,
         schema="protocol/get-adcp-capabilities-response.json",
-        # capabilities.py builds MediaBuy(portfolio=..., features=..., execution=...),
-        # leaving supported_pricing_models unset — the exact field #1710 cited.
-        absent_paths=["media_buy.supported_pricing_models"],
+        # capabilities.py builds MediaBuy(portfolio=..., features=..., execution=...,
+        # supported_pricing_models=...) and leaves every other optional unset.
+        # supported_pricing_models — the field #1710 originally cited — is populated
+        # as of #1677, so the obligation rides on siblings that are still unset.
+        absent_paths=["media_buy.audience_targeting", "media_buy.conversion_tracking"],
     ),
     WireOmissionCase(
         tool="list_authorized_properties",
