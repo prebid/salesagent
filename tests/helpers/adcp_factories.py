@@ -701,6 +701,34 @@ def valid_reporting_webhook(url: str) -> dict[str, Any]:
     }
 
 
+def wire_push_notification_config(
+    *,
+    id: str | None = None,
+    credentials: str = "x" * 32,
+    url: str = "https://buyer.example/webhook",
+) -> dict[str, Any]:
+    """AdCP wire push-notification-config dict carrying a credential.
+
+    Shared by the unit redaction tests and the per-log-site integration tests, so
+    the ``url`` and the nested ``authentication.schemes=["Bearer"]`` scaffold live
+    in one place and a wire-shape change is one edit rather than two that can
+    drift apart. Same rationale as ``valid_reporting_webhook`` above.
+
+    ``credentials`` defaults to a value clearing the SDK's MinLen=32 floor, so the
+    result passes ``PushNotificationConfig.model_validate``. ``id`` is omitted
+    entirely when None: the SDK wire model has no ``id`` field, while the DB-backed
+    sites (admin creative-status, media_buy_create registration) read one off the
+    stored dict.
+    """
+    config: dict[str, Any] = {
+        "url": url,
+        "authentication": {"schemes": ["Bearer"], "credentials": credentials},
+    }
+    if id is not None:
+        config["id"] = id
+    return config
+
+
 def create_test_media_buy_dict(
     media_buy_id: str = "test_media_buy_001",
     status: str = "active",
