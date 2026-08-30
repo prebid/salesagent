@@ -17,11 +17,69 @@ from sqlalchemy import select
 from src.core.config import get_config
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PublisherPartner, Tenant
+from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.domain_config import get_tenant_url
+from src.core.tools.capabilities import InvalidChannelInput, canonicalize_supported_channels
 
 logger = logging.getLogger(__name__)
 
 publisher_partners_bp = Blueprint("publisher_partners", __name__)
+
+
+def _partner_json(partner: PublisherPartner, *, extra: dict | None = None) -> dict:
+    """Serialize a publisher partner for admin JSON responses."""
+    payload = {
+        "id": partner.id,
+        "publisher_domain": partner.publisher_domain,
+        "display_name": partner.display_name,
+        "is_verified": partner.is_verified,
+        "last_synced_at": partner.last_synced_at.isoformat() if partner.last_synced_at else None,
+        "sync_status": partner.sync_status,
+        "sync_error": partner.sync_error,
+        "created_at": partner.created_at.isoformat() if partner.created_at else None,
+        "supported_channels": partner.supported_channels,
+    }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+def _parse_supported_channels(data: dict) -> tuple[bool, list[str] | None]:
+    """Parse supported_channels from a JSON body.
+
+    Returns (False, None) when the key is absent. Empty list stores as None.
+    Malformed or unknown values raise InvalidChannelInput — callers must not write.
+    """
+    if "supported_channels" not in data:
+        return False, None
+    return True, canonicalize_supported_channels(data["supported_channels"]) or None
+
+
+def _normalize_publisher_domain(raw: str) -> str:
+    domain = raw.strip().lower().replace("https://", "").replace("http://", "")
+    return domain.rstrip("/")
+
+
+def _auto_verify_reasons(uow: TenantConfigUoW) -> tuple[bool, bool]:
+    """Return (is_dev, is_mock) used to auto-verify publisher partners."""
+    config = get_config()
+    is_dev = config.environment == "development"
+    assert uow.tenant_config is not None
+    adapter = uow.tenant_config.get_adapter_config()
+    is_mock = adapter is not None and adapter.adapter_type == "mock"
+    return is_dev, is_mock
+
+
+def _publisher_added_message(is_dev: bool, is_mock: bool) -> str:
+    message = "Publisher added successfully"
+    if not (is_dev or is_mock):
+        return message
+    reasons = []
+    if is_dev:
+        reasons.append("development environment")
+    if is_mock:
+        reasons.append("mock tenant")
+    return f"{message} (auto-verified for {' and '.join(reasons)})"
 
 
 @publisher_partners_bp.route("/<tenant_id>/publisher-partners", methods=["GET"])
@@ -57,17 +115,7 @@ def list_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
             partners_list = []
             for partner in partners:
                 partners_list.append(
-                    {
-                        "id": partner.id,
-                        "publisher_domain": partner.publisher_domain,
-                        "display_name": partner.display_name,
-                        "is_verified": partner.is_verified,
-                        "last_synced_at": partner.last_synced_at.isoformat() if partner.last_synced_at else None,
-                        "sync_status": partner.sync_status,
-                        "sync_error": partner.sync_error,
-                        "created_at": partner.created_at.isoformat(),
-                        "property_count": property_counts.get(partner.publisher_domain, 0),
-                    }
+                    _partner_json(partner, extra={"property_count": property_counts.get(partner.publisher_domain, 0)})
                 )
 
             return jsonify(
@@ -89,77 +137,84 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
     """Add a new publisher partner."""
     try:
         data = request.get_json()
-        publisher_domain = data.get("publisher_domain", "").strip().lower()
+        if not isinstance(data, dict):
+            return jsonify({"error": "JSON object required"}), 422
+
+        publisher_domain = _normalize_publisher_domain(data.get("publisher_domain", ""))
         display_name = data.get("display_name", "").strip()
 
         if not publisher_domain:
             return jsonify({"error": "Publisher domain is required"}), 400
 
-        # Remove http:// or https:// if present
-        publisher_domain = publisher_domain.replace("https://", "").replace("http://", "")
-        # Remove trailing slash
-        publisher_domain = publisher_domain.rstrip("/")
+        _present, supported_channels = _parse_supported_channels(data)
 
-        with get_db_session() as session:
-            # Check tenant adapter type
-            stmt_tenant = select(Tenant).filter_by(tenant_id=tenant_id)
-            tenant = session.scalars(stmt_tenant).first()
+        with TenantConfigUoW(tenant_id) as uow:
+            assert uow.tenant_config is not None
+            tenant = uow.tenant_config.get_tenant()
             if not tenant:
                 return jsonify({"error": "Tenant not found"}), 404
 
-            # For mock adapters OR development environment, auto-verify publishers (no adagents.json to check)
-            # Development: Local dev servers won't be in any publisher's adagents.json
-            # Mock: Testing tenants use fake domains
-            config = get_config()
-            is_dev = config.environment == "development"
-            is_mock = tenant.adapter_config and tenant.adapter_config.adapter_type == "mock"
+            is_dev, is_mock = _auto_verify_reasons(uow)
             should_auto_verify = is_dev or is_mock
 
-            # Check if already exists
-            stmt = select(PublisherPartner).filter_by(tenant_id=tenant_id, publisher_domain=publisher_domain)
-            existing = session.scalars(stmt).first()
+            existing = uow.tenant_config.get_publisher_partner_by_domain(publisher_domain)
             if existing:
                 return jsonify({"error": "Publisher already exists"}), 409
 
-            # Create new partner
-            # Auto-verify for dev environment or mock adapters (no real adagents.json to check)
-            partner = PublisherPartner(
-                tenant_id=tenant_id,
+            partner = uow.tenant_config.create_publisher_partner(
                 publisher_domain=publisher_domain,
                 display_name=display_name or publisher_domain,
+                supported_channels=supported_channels,
                 sync_status="success" if should_auto_verify else "pending",
                 is_verified=should_auto_verify,
                 last_synced_at=datetime.now(UTC) if should_auto_verify else None,
             )
-            session.add(partner)
-            session.commit()
+            payload = _partner_json(partner, extra={"message": _publisher_added_message(is_dev, is_mock)})
 
-            # Build message
-            message = "Publisher added successfully"
-            if should_auto_verify:
-                reasons = []
-                if is_dev:
-                    reasons.append("development environment")
-                if is_mock:
-                    reasons.append("mock tenant")
-                message += f" (auto-verified for {' and '.join(reasons)})"
+        return jsonify(payload), 201
 
-            return (
-                jsonify(
-                    {
-                        "id": partner.id,
-                        "publisher_domain": partner.publisher_domain,
-                        "display_name": partner.display_name,
-                        "sync_status": partner.sync_status,
-                        "is_verified": partner.is_verified,
-                        "message": message,
-                    }
-                ),
-                201,
-            )
-
+    except InvalidChannelInput as e:
+        return jsonify({"error": str(e)}), 422
     except Exception as e:
         logger.error(f"Error adding publisher partner: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@publisher_partners_bp.route("/<tenant_id>/publisher-partners/<int:partner_id>", methods=["PATCH"])
+def update_publisher_partner(tenant_id: str, partner_id: int) -> Response | tuple[Response, int]:
+    """Update display_name and/or supported_channels on a publisher partner."""
+    try:
+        data = request.get_json()
+        if not isinstance(data, dict):
+            return jsonify({"error": "JSON object required"}), 422
+
+        fields: dict[str, object] = {}
+        if "display_name" in data:
+            display_name = data["display_name"]
+            if not isinstance(display_name, str):
+                return jsonify({"error": "display_name must be a string"}), 422
+            fields["display_name"] = display_name.strip()
+
+        try:
+            present, channels = _parse_supported_channels(data)
+        except InvalidChannelInput as e:
+            return jsonify({"error": str(e)}), 422
+        if present:
+            fields["supported_channels"] = channels
+
+        with TenantConfigUoW(tenant_id) as uow:
+            assert uow.tenant_config is not None
+            partner = uow.tenant_config.update_publisher_partner(partner_id, **fields)
+            if partner is None:
+                return jsonify({"error": "Publisher not found"}), 404
+            payload = _partner_json(partner)
+
+        return jsonify(payload)
+
+    except InvalidChannelInput as e:
+        return jsonify({"error": str(e)}), 422
+    except Exception as e:
+        logger.error(f"Error updating publisher partner: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 

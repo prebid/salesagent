@@ -57,7 +57,7 @@ RESOLVED_IDENTITY_PER_FILE_CAP: dict[str, int] = {
     "tests/integration/test_get_products_policy_obligations.py": 1,
     "tests/integration/test_get_products_response_constraints.py": 3,
     "tests/integration/test_inventory_profile_media_buy.py": 1,
-    "tests/integration/test_list_authorized_properties_integration.py": 6,
+    "tests/integration/test_list_authorized_properties_integration.py": 0,
     "tests/integration/test_media_buy_v3.py": 1,
     "tests/integration/test_minimum_spend_validation.py": 7,
     "tests/integration/test_pricing_models_integration.py": 8,

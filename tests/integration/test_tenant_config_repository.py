@@ -111,3 +111,39 @@ class TestListPublisherDomains:
             domains = repo.list_publisher_domains()
 
         assert domains == ["alpha.com", "zebra.com"]
+
+
+class TestPublisherPartnerWrites:
+    """Tenant-scoped create/update for publisher partners."""
+
+    def test_create_and_update_supported_channels(self, integration_db):
+        with _RepoEnv() as env:
+            TenantFactory(tenant_id="tcr_write")
+            session = env.get_session()
+            repo = TenantConfigRepository(session, "tcr_write")
+            partner = repo.create_publisher_partner(
+                publisher_domain="news.example",
+                display_name="News",
+                supported_channels=["display"],
+            )
+            session.flush()
+            updated = repo.update_publisher_partner(partner.id, supported_channels=["ctv", "olv"])
+
+        assert updated is not None
+        assert updated.supported_channels == ["ctv", "olv"]
+        assert updated.display_name == "News"
+
+    def test_update_is_tenant_isolated(self, integration_db):
+        with _RepoEnv() as env:
+            t1 = TenantFactory(tenant_id="tcr_iso_a")
+            TenantFactory(tenant_id="tcr_iso_b")
+            partner = PublisherPartnerFactory(tenant=t1, publisher_domain="iso.com", supported_channels=["display"])
+            session = env.get_session()
+            other_repo = TenantConfigRepository(session, "tcr_iso_b")
+            result = other_repo.update_publisher_partner(partner.id, supported_channels=["ctv"])
+            own_repo = TenantConfigRepository(session, "tcr_iso_a")
+            stored = own_repo.get_publisher_partner(partner.id)
+
+        assert result is None
+        assert stored is not None
+        assert stored.supported_channels == ["display"]

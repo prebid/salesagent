@@ -22,6 +22,7 @@ from src.core.config_loader import is_single_tenant_mode
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal, Tenant
 from src.core.domain_config import get_sales_agent_domain
+from src.core.tools.capabilities import canonical_media_channel_values
 from src.core.validation import sanitize_form_data, validate_form_data
 from src.services.setup_checklist_service import SetupChecklistService
 
@@ -420,6 +421,7 @@ def tenant_settings(tenant_id, section=None):
                 custom_targeting_values_count=custom_targeting_values_count,
                 setup_status=setup_status,
                 available_currencies=available_currencies,  # Currency list from Babel
+                media_channels=canonical_media_channel_values(),
                 single_tenant_mode=is_single_tenant_mode(),
             )
 

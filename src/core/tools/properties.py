@@ -9,6 +9,7 @@ Handles property discovery including:
 
 import logging
 import time
+from collections.abc import Iterable
 from typing import Any
 
 from adcp.types import ContextObject
@@ -16,6 +17,7 @@ from fastmcp.server.context import Context
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_tenant
+from src.core.database.models import PublisherPartner
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.exceptions import AdCPAdapterError, AdCPError
 from src.core.helpers import log_tool_activity
@@ -27,6 +29,15 @@ from src.core.tools._mcp import mcp_result
 from src.core.validation_helpers import safe_parse_json_field
 
 logger = logging.getLogger(__name__)
+
+
+def _aggregate_primary_channels(publishers: Iterable[PublisherPartner]) -> list[str] | None:
+    """Union already-canonical supported_channels across publisher partners."""
+    seen: set[str] = set()
+    for partner in publishers:
+        if partner.supported_channels:
+            seen.update(partner.supported_channels)
+    return sorted(seen) or None
 
 
 def _list_authorized_properties_impl(
@@ -147,6 +158,10 @@ def _list_authorized_properties_impl(
             # Only add optional fields if they have actual values
             if advertising_policies_text:
                 response_data["advertising_policies"] = advertising_policies_text
+
+            primary_channels = _aggregate_primary_channels(all_publishers)
+            if primary_channels:
+                response_data["primary_channels"] = primary_channels
 
             response = ListAuthorizedPropertiesResponse(**response_data)
 

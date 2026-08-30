@@ -132,6 +132,7 @@ class PublisherPartnerFactory(factory.alchemy.SQLAlchemyModelFactory):
     display_name = LazyAttribute(lambda o: f"Publisher {o.publisher_domain}")
     is_verified = True
     sync_status = "success"
+    supported_channels = None
 
 
 class AuthorizedPropertyFactory(factory.alchemy.SQLAlchemyModelFactory):

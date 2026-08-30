@@ -69,7 +69,57 @@ CHANNEL_MAPPING: dict[str, MediaChannel] = {
     "influencer": MediaChannel.influencer,
     "affiliate": MediaChannel.affiliate,
     "product_placement": MediaChannel.product_placement,
+    "sponsored_intelligence": MediaChannel.sponsored_intelligence,
 }
+
+
+class InvalidChannelInput(ValueError):
+    """Raised when write-boundary channel input is malformed or unknown."""
+
+
+def canonical_media_channel_values() -> list[str]:
+    """Canonical MediaChannel values for enum-driven write UI."""
+    return sorted(member.value for member in MediaChannel)
+
+
+def canonicalize_supported_channels(raw: object) -> list[str]:
+    """Validate channel input at a write boundary.
+
+    Rejects non-lists, non-string members, and unknown values. Aliases resolve
+    through CHANNEL_MAPPING. Unlike normalize_channel_strings, unknown values
+    are never skipped — callers must not persist a partial list.
+    """
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        raise InvalidChannelInput("supported_channels must be a list of strings")
+    unknown = [item for item in raw if item.lower().strip() not in CHANNEL_MAPPING]
+    if unknown:
+        raise InvalidChannelInput(f"Unknown channel values: {unknown}")
+    return normalize_channel_strings(raw)
+
+
+def normalize_channel_strings(raw: list[str]) -> list[str]:
+    """Validate and normalize channel strings to canonical MediaChannel values.
+
+    Unknown values are logged and skipped. Aliases (e.g. video -> olv) resolve
+    via CHANNEL_MAPPING. Returns sorted deduplicated canonical enum values.
+    """
+    seen: set[str] = set()
+    normalized: list[str] = []
+
+    for channel in raw:
+        key = channel.lower().strip()
+        if key in CHANNEL_MAPPING:
+            value = CHANNEL_MAPPING[key].value
+        else:
+            logger.warning(f"Unknown channel value {channel!r}; skipping")
+            continue
+
+        if value not in seen:
+            seen.add(value)
+            normalized.append(value)
+
+    normalized.sort()
+    return normalized
 
 
 def _get_adcp_capabilities_impl(

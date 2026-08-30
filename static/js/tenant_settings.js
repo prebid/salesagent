@@ -2151,7 +2151,11 @@ function loadPublishers() {
             return;
         }
 
-        // Render publishers table
+        window._publisherPartnersById = {};
+        data.partners.forEach(partner => {
+            window._publisherPartnersById[partner.id] = partner;
+        });
+
         let html = `
             <div style="margin-bottom: 1rem; padding: 0.75rem; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px;">
                 <strong>${data.verified}</strong> verified, <strong>${data.pending}</strong> pending verification
@@ -2161,6 +2165,7 @@ function loadPublishers() {
                     <tr style="border-bottom: 2px solid #e5e7eb;">
                         <th style="text-align: left; padding: 0.75rem; font-weight: 600; color: #374151;">Publisher</th>
                         <th style="text-align: left; padding: 0.75rem; font-weight: 600; color: #374151;">Status</th>
+                        <th style="text-align: left; padding: 0.75rem; font-weight: 600; color: #374151;">Channels</th>
                         <th style="text-align: left; padding: 0.75rem; font-weight: 600; color: #374151;">Properties</th>
                         <th style="text-align: left; padding: 0.75rem; font-weight: 600; color: #374151;">Last Synced</th>
                         <th style="text-align: right; padding: 0.75rem; font-weight: 600; color: #374151;">Actions</th>
@@ -2179,6 +2184,9 @@ function loadPublishers() {
             const lastSynced = partner.last_synced_at
                 ? new Date(partner.last_synced_at).toLocaleDateString()
                 : 'Never';
+            const channelsLabel = (partner.supported_channels && partner.supported_channels.length)
+                ? partner.supported_channels.join(', ')
+                : '—';
 
             html += `
                 <tr style="border-bottom: 1px solid #f3f4f6;">
@@ -2190,9 +2198,14 @@ function loadPublishers() {
                         ${statusBadge}
                         ${partner.sync_error ? `<div style="font-size: 0.75rem; color: #dc2626; margin-top: 0.25rem;">${escapeHtml(partner.sync_error)}</div>` : ''}
                     </td>
+                    <td style="padding: 0.75rem; color: #6b7280; font-size: 0.8125rem;">${escapeHtml(channelsLabel)}</td>
                     <td style="padding: 0.75rem; color: #6b7280;">${partner.property_count || 0}</td>
                     <td style="padding: 0.75rem; color: #6b7280;">${lastSynced}</td>
                     <td style="padding: 0.75rem; text-align: right;">
+                        <button onclick="showEditPublisherModal(${partner.id})"
+                                class="btn btn-sm" style="background: #eff6ff; color: #1d4ed8; border: none; padding: 0.25rem 0.5rem; border-radius: 4px; cursor: pointer; margin-right: 0.25rem;">
+                            Edit
+                        </button>
                         <button onclick="deletePublisher(${partner.id}, '${escapeHtml(partner.publisher_domain)}')"
                                 class="btn btn-sm" style="background: #fee2e2; color: #991b1b; border: none; padding: 0.25rem 0.5rem; border-radius: 4px; cursor: pointer;">
                             Delete
@@ -2218,10 +2231,39 @@ function loadPublishers() {
 // Show add publisher modal
 function showAddPublisherModal() {
     const modal = document.getElementById('add-publisher-modal');
-    if (modal) {
-        modal.style.display = 'flex';
-        document.getElementById('publisher-domain').focus();
-    }
+    if (!modal) return;
+    document.getElementById('publisher-modal-title').textContent = 'Add Publisher Partner';
+    document.getElementById('publisher-partner-id').value = '';
+    document.getElementById('publisher-domain').readOnly = false;
+    document.getElementById('add-publisher-form').reset();
+    setPublisherChannelCheckboxes([]);
+    modal.style.display = 'flex';
+    document.getElementById('publisher-domain').focus();
+}
+
+function showEditPublisherModal(partnerId) {
+    const partner = (window._publisherPartnersById || {})[partnerId];
+    if (!partner) return;
+    const modal = document.getElementById('add-publisher-modal');
+    if (!modal) return;
+    document.getElementById('publisher-modal-title').textContent = 'Edit Publisher Partner';
+    document.getElementById('publisher-partner-id').value = String(partner.id);
+    document.getElementById('publisher-domain').value = partner.publisher_domain;
+    document.getElementById('publisher-domain').readOnly = true;
+    document.getElementById('publisher-display-name').value = partner.display_name || '';
+    setPublisherChannelCheckboxes(partner.supported_channels || []);
+    modal.style.display = 'flex';
+}
+
+function getPublisherChannelCheckboxes() {
+    return Array.from(document.querySelectorAll('.publisher-channel-checkbox:checked')).map(cb => cb.value);
+}
+
+function setPublisherChannelCheckboxes(channels) {
+    const selected = new Set(channels || []);
+    document.querySelectorAll('.publisher-channel-checkbox').forEach(cb => {
+        cb.checked = selected.has(cb.value);
+    });
 }
 
 // Hide add publisher modal
@@ -2230,6 +2272,9 @@ function hideAddPublisherModal() {
     if (modal) {
         modal.style.display = 'none';
         document.getElementById('add-publisher-form').reset();
+        document.getElementById('publisher-partner-id').value = '';
+        document.getElementById('publisher-domain').readOnly = false;
+        setPublisherChannelCheckboxes([]);
     }
 }
 
@@ -2241,47 +2286,53 @@ document.addEventListener('click', function(e) {
     }
 });
 
-// Add publisher
-function addPublisher(event) {
+// Create or update publisher
+function savePublisher(event) {
     event.preventDefault();
 
+    const partnerId = document.getElementById('publisher-partner-id').value;
     const domain = document.getElementById('publisher-domain').value.trim();
     const displayName = document.getElementById('publisher-display-name').value.trim();
+    const supportedChannels = getPublisherChannelCheckboxes();
     const submitBtn = document.getElementById('add-publisher-submit');
+    const isEdit = Boolean(partnerId);
 
-    if (!domain) {
+    if (!isEdit && !domain) {
         alert('Please enter a publisher domain');
         return;
     }
 
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Adding...';
+    submitBtn.textContent = isEdit ? 'Saving...' : 'Adding...';
 
-    fetch(`${config.scriptName}/tenant/${config.tenantId}/publisher-partners`, {
-        method: 'POST',
+    const url = isEdit
+        ? `${config.scriptName}/tenant/${config.tenantId}/publisher-partners/${partnerId}`
+        : `${config.scriptName}/tenant/${config.tenantId}/publisher-partners`;
+    const body = isEdit
+        ? { display_name: displayName || domain, supported_channels: supportedChannels }
+        : { publisher_domain: domain, display_name: displayName || domain, supported_channels: supportedChannels };
+
+    fetch(url, {
+        method: isEdit ? 'PATCH' : 'POST',
         credentials: 'same-origin',
         headers: {
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-            publisher_domain: domain,
-            display_name: displayName || domain
-        })
+        body: JSON.stringify(body)
     })
-    .then(response => response.json())
-    .then(data => {
+    .then(response => response.json().then(data => ({ ok: response.ok, status: response.status, data })))
+    .then(({ ok, data }) => {
         submitBtn.disabled = false;
         submitBtn.textContent = 'Add Publisher';
 
-        if (data.error) {
-            alert('Error: ' + data.error);
+        if (!ok || data.error) {
+            alert('Error: ' + (data.error || 'Request failed'));
             return;
         }
 
         hideAddPublisherModal();
         loadPublishers();
 
-        // Show success message
         if (data.message) {
             alert(data.message);
         }
