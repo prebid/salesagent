@@ -24,8 +24,8 @@ from enum import Enum
 from typing import Any
 
 import httpx
-from adcp import get_adcp_spec_version
 
+from src.core.version_compat import wire_adcp_version
 from src.core.webhook_validator import (
     reject_unsafe_outbound_webhook_url,
     webhook_url_for_log,
@@ -252,7 +252,9 @@ class WebhookDeliveryService:
 
             # Build AdCP compliant payload with new fields
             delivery_payload = {
-                "adcp_version": get_adcp_spec_version(),
+                # Release precision on the wire (the seller's implemented version), via the ONE
+                # wire-adcp_version accessor — not full semver (#1329).
+                "adcp_version": wire_adcp_version(),
                 "notification_type": notification_type,
                 "is_adjusted": is_adjusted,  # New field for late data
                 "sequence_number": sequence_number,

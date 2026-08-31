@@ -335,6 +335,39 @@ class _TestClock:
         return self._iso(datetime.now(UTC) - timedelta(days=days))
 
 
+# Verbs that carry no request body — a JSON body is omitted for these. HEAD/OPTIONS are
+# included: they reject ``json=`` by the identical mechanism GET/DELETE do, so omitting
+# them would reintroduce the round-8 blocker on those verbs.
+_BODYLESS_REST_VERBS: frozenset[str] = frozenset({"get", "delete", "head", "options"})
+_KNOWN_REST_VERBS: frozenset[str] = frozenset({"get", "post", "put", "patch", "delete", "head", "options"})
+
+
+def issue_rest_verb(
+    client: Any, method: str, endpoint: str, body: dict[str, Any], *, headers: dict[str, str] | None = None
+) -> Any:
+    """Issue ``method`` on ``client`` for ``endpoint``, omitting a JSON body for body-less verbs.
+
+    Dispatches via ``client.request(METHOD, ...)`` rather than ``getattr(client, method)``.
+    ``httpx.Client``/Starlette ``TestClient`` accept ``json=`` on ``.request`` for EVERY verb,
+    so the only question is "which verbs carry a body" (``_BODYLESS_REST_VERBS``), not "which
+    bound method rejects the kwarg" — this is what let the round-8 blocker recur on
+    ``head``/``options`` (``client.head(json=...)`` → ``TypeError``). An unknown/uppercase verb
+    raises loudly HERE rather than ``AttributeError``-ing into ``dispatchers.py``'s blanket
+    ``except`` (which would convert a verb bug into an ordinary ``TransportResult(error=...)``
+    a negative Then step could mistake for a legitimate rejection — loud in-network, quiet
+    in-process). This is the SINGLE place the harness dispatches a REST verb, shared by the
+    in-process ``_run_rest_request`` and the in-network ``RestE2EDispatcher`` so the two legs
+    cannot diverge on how a GET/DELETE discovery endpoint is called (#1329).
+    """
+    verb = method.lower()
+    if verb not in _KNOWN_REST_VERBS:
+        raise ValueError(f"Unknown REST verb {method!r}; expected one of {sorted(_KNOWN_REST_VERBS)}")
+    call_kwargs: dict[str, Any] = {} if headers is None else {"headers": headers}
+    if verb not in _BODYLESS_REST_VERBS:
+        call_kwargs["json"] = body
+    return client.request(method.upper(), endpoint, **call_kwargs)
+
+
 class BaseTestEnv:
     """Base test environment for _impl function testing.
 
@@ -377,10 +410,10 @@ class BaseTestEnv:
     ASYNC_PATCHES: set[str] = set()  # Names that need AsyncMock (for async functions)
     MODULE: str = ""  # Convenience for unit envs building patch paths
     REST_ENDPOINT: str = ""  # Override in subclass for REST dispatch
+    REST_METHOD: str = "post"  # HTTP verb for REST_ENDPOINT; override for GET/DELETE discovery
     # The tool/skill this env dispatches. Declaring these is what lets the base
     # own call_mcp/call_a2a instead of every env re-implementing the same
-    # one-line delegation. REST_METHOD's de-facto
-    # contract lives at dispatchers.py's getattr(env, "REST_METHOD", "post").
+    # one-line delegation.
     MCP_TOOL: str = ""
     A2A_SKILL: str = ""
     # The parser the base delegation feeds wire dicts to. Declared per env
@@ -979,23 +1012,29 @@ class BaseTestEnv:
         return response_cls(**tool_result.structured_content)
 
     def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
-        """Shared REST dispatch: configure auth → build body → POST → return Response.
+        """Shared REST dispatch: configure auth → build body → issue ``REST_METHOD`` → Response.
 
         Symmetric with ``_run_mcp_wrapper``. Handles the full REST lifecycle:
         1. Pop ``identity`` from kwargs and configure dep override for this request
         2. Commit factory data
         3. Build request body from remaining kwargs
-        4. POST via TestClient
+        4. Issue ``self.REST_METHOD`` (default POST) via TestClient — a GET/DELETE
+           discovery endpoint sends no body (``issue_rest_verb``)
         5. Return raw httpx.Response
 
         Identity handling (mirrors production auth middleware):
         - identity is None → dep raises AUTH_REQUIRED (no token) with suggestion
         - identity is ResolvedIdentity → dep returns it (valid token)
         - identity absent → uses default self.identity_for(Transport.REST)
+
+        ``REST_METHOD`` is the single source of truth for the verb: both this in-process
+        leg and the in-network ``RestE2EDispatcher`` read it, so an env need only declare
+        ``REST_METHOD = "get"`` (not override this method) to be dispatched correctly on
+        every REST transport (#1329).
         """
         client, identity = self._prepare_rest_request(kwargs)
         body = self.build_rest_body(**kwargs)
-        return client.post(endpoint, json=body)
+        return issue_rest_verb(client, self.REST_METHOD, endpoint, body)
 
     def _prepare_rest_request(self, kwargs: dict[str, Any]) -> tuple[Any, Any]:
         """Resolve identity, commit factory data, get the client, and install auth.

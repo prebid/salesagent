@@ -47,7 +47,9 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         "ADMIN",
         "COMPAT",
         "UC-005",
+        "UC-010",
         "UC-019",
+        "UC-030",
         "UC-GET-PRODUCTS",
         # literal ENV_ROUTES block
         "uc002-account",

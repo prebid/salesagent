@@ -1,6 +1,6 @@
 """Integration test: the background order-approval job, end to end against the DB.
 
-Replaces a mocked-session unit test (``test_start_approval_creates_sync_job``) that
+Replaces a mocked-session unit test (the 'test_start_approval_creates_sync_job' one) that
 asserted the SyncJob's fields off ``session.add.call_args`` — a MagicMock, never a
 persisted row — and, because it never let the worker body run under control, leaked a
 live daemon thread past the end of the test. That thread later reached the real

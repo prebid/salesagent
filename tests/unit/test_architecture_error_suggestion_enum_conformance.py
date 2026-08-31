@@ -16,12 +16,11 @@ between the constant and the spec — this oracle grounds it in the pinned enum.
 
 from __future__ import annotations
 
+import importlib
 import json
 from pathlib import Path
 
 import pytest
-
-from src.core import exceptions
 
 _PINNED_ENUM_PATH = Path(__file__).parent.parent / "fixtures" / "adcp_schemas_pinned" / "enums" / "error-code.json"
 
@@ -36,12 +35,16 @@ def _pinned_suggestion_by_code() -> dict[str, str]:
 
 _SUGGESTION_BY_CODE = _pinned_suggestion_by_code()
 
-# (module_constant_name, error_code) for every constant that exposes a code's
-# canonical buyer-facing suggestion. Add a row when a new canonical-suggestion
-# constant is introduced so it is pinned to the spec from birth.
+# (module_path, constant_name, error_code) for every module-level constant that exposes a
+# code's canonical buyer-facing suggestion. Module-qualified so a canonical constant born in
+# ANY module (not just src.core.exceptions) is pinned to the spec — a constant that resolved
+# only through ``getattr(exceptions, ...)`` silently escaped this oracle (#1329).
+# Add a row when a new canonical-suggestion constant is introduced so it is pinned from birth.
 _CANONICAL_SUGGESTION_CONSTANTS = [
-    ("INVALID_REQUEST_SUGGESTION", "INVALID_REQUEST"),
-    ("VALIDATION_ERROR_SUGGESTION", "VALIDATION_ERROR"),
+    ("src.core.exceptions", "INVALID_REQUEST_SUGGESTION", "INVALID_REQUEST"),
+    ("src.core.exceptions", "VALIDATION_ERROR_SUGGESTION", "VALIDATION_ERROR"),
+    ("src.core.exceptions", "CREDENTIAL_IN_ARGS_SUGGESTION", "CREDENTIAL_IN_ARGS"),
+    ("src.core.tools.governance", "_UNRESOLVED_ACCOUNT_SUGGESTION", "ACCOUNT_NOT_FOUND"),
 ]
 
 
@@ -54,20 +57,20 @@ def test_pinned_enum_suggestions_loaded() -> None:
 
 
 @pytest.mark.parametrize(
-    ("const_name", "code"),
+    ("module_path", "const_name", "code"),
     _CANONICAL_SUGGESTION_CONSTANTS,
-    ids=[name for name, _ in _CANONICAL_SUGGESTION_CONSTANTS],
+    ids=[f"{module.rsplit('.', 1)[-1]}.{name}" for module, name, _ in _CANONICAL_SUGGESTION_CONSTANTS],
 )
-def test_suggestion_constant_matches_pinned_enum(const_name: str, code: str) -> None:
+def test_suggestion_constant_matches_pinned_enum(module_path: str, const_name: str, code: str) -> None:
     """Each canonical-suggestion constant must equal the pinned enum's suggestion for its code."""
     assert code in _SUGGESTION_BY_CODE, (
         f"{code!r} carries no suggestion in the pinned error-code.json enumMetadata; "
         f"cannot ground {const_name}. Advance the pin or fix the mapping."
     )
-    actual = getattr(exceptions, const_name)
+    actual = getattr(importlib.import_module(module_path), const_name)
     expected = _SUGGESTION_BY_CODE[code]
     assert actual == expected, (
-        f"{const_name} = {actual!r} but the pinned error-code.json enumMetadata says the "
+        f"{module_path}.{const_name} = {actual!r} but the pinned error-code.json enumMetadata says the "
         f"{code} suggestion is {expected!r}. A code's canonical suggestion constant must carry "
         f"that code's text, not another code's: fix the constant, or advance the pin if the spec "
         f"changed the suggestion."

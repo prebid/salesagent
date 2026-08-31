@@ -7,10 +7,42 @@ is set at construction time and injected into all queries automatically.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+from adcp.types import CoreGovernanceAgent  # url-only SDK agent — the DB column + response record type
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import Account, AgentAccountAccess
+from src.core.exceptions import AdCPAccountNotFoundError
+
+if TYPE_CHECKING:
+    # Request-side agent (carries write-only authentication) — distinct from the
+    # url-only SDK type above; annotation-only, so no runtime import/cycle.
+    from adcp.types.generated_poc.account.sync_governance_request import (
+        GovernanceAgent as SyncGovernanceRequestAgent,
+    )
+
+
+def _serialize_governance_agents(agents: list[SyncGovernanceRequestAgent]) -> list[CoreGovernanceAgent]:
+    """Project request governance agents to the url-only ``accounts.governance_agents`` records.
+
+    Lives beside its sole consumer, ``AccountRepository.set_governance_binding`` — the single
+    write path for ``accounts.governance_agents`` — which uses it to strip credentials before
+    persisting. The SDK ``CoreGovernanceAgent`` is url-only BY DESIGN: credentials are write-only
+    and MUST NEVER be persisted or echoed (sync_governance.mdx; sync-governance-response.json
+    ``governance_agents.items`` = url only). The request-side ``GovernanceAgent`` carries
+    ``authentication`` (schemes + credentials); this reads only ``.url``, dropping it.
+
+    The input is the request model list ONLY (``list[SyncGovernanceRequestAgent]``): the pinned
+    request schema makes ``governance_agents`` required with ``minItems: 1``, so a ``None`` /
+    empty arm is unreachable, and the sole production caller passes parsed request models — no
+    dict arm (the earlier ``| list[dict] | None`` union advertised shapes nothing in production
+    produced, #1329). Constructing ``CoreGovernanceAgent(url=...)`` normalizes the ``AnyUrl`` and
+    drops the write-only ``authentication``; the ``JSONType(model=CoreGovernanceAgent)`` column
+    serializes each record on write and re-coerces on read, so persisted and returned shapes agree.
+    """
+    return [CoreGovernanceAgent(url=agent.url) for agent in agents]
 
 
 class AccountRepository:
@@ -28,6 +60,16 @@ class AccountRepository:
     """
 
     _IMMUTABLE_FIELDS: frozenset[str] = frozenset({"tenant_id", "account_id", "created_at"})
+
+    # Fields the repository OWNS: they carry an invariant a generic ``setattr`` would
+    # bypass, so the generic ``update_fields`` refuses them and a dedicated method is
+    # the only write path. ``governance_agents`` must be projected to url-only (the
+    # credential strip) — writing it raw through ``update_fields`` would persist the
+    # write-only ``authentication`` blob. ``set_governance_binding`` is that path;
+    # rejecting the field here makes the strip a structural guarantee, not call-site
+    # discipline, and any bypass (including a new caller) goes red immediately
+    # (#1329).
+    _REPO_OWNED_FIELDS: frozenset[str] = frozenset({"governance_agents"})
 
     def __init__(self, session: Session, tenant_id: str) -> None:
         self._session = session
@@ -231,18 +273,68 @@ class AccountRepository:
     def update_fields(self, account_id: str, **kwargs: object) -> Account | None:
         """Update mutable fields on an account. Returns None if not found.
 
-        Raises ValueError if any immutable field is in kwargs.
+        Raises ValueError if any immutable or repository-owned field is in kwargs.
+        Repository-owned fields (e.g. ``governance_agents``) carry a write invariant
+        and must go through their dedicated method (``set_governance_binding``).
         """
         bad = self._IMMUTABLE_FIELDS & set(kwargs)
         if bad:
             raise ValueError(f"Cannot update immutable fields: {bad}")
+        owned = self._REPO_OWNED_FIELDS & set(kwargs)
+        if owned:
+            raise ValueError(
+                f"Fields {owned} are repository-owned and must be written via their "
+                f"dedicated method (governance_agents -> set_governance_binding), not update_fields."
+            )
+        return self._apply_fields(account_id, kwargs)
+
+    def _apply_fields(self, account_id: str, fields: dict[str, object]) -> Account | None:
+        """Private setter — assign fields and flush, WITHOUT the update_fields guard.
+
+        The single place a repository-owned field is actually written. ``set_governance_binding``
+        routes here so it is not self-blocked by the ``update_fields`` guard, while every
+        external caller still hits the guard.
+        """
         account = self.get_by_id(account_id)
         if account is None:
             return None
-        for key, value in kwargs.items():
+        for key, value in fields.items():
             setattr(account, key, value)
         self._session.flush()
         return account
+
+    def set_governance_binding(
+        self, account_id: str, agents: list[SyncGovernanceRequestAgent]
+    ) -> list[CoreGovernanceAgent]:
+        """Replace an account's governance-agent binding; return the persisted url-only list.
+
+        The SINGLE write path for ``accounts.governance_agents``, and it OWNS the
+        credential strip. Request agents carry write-only ``authentication`` (schemes +
+        credentials) that MUST NEVER be persisted (sync_governance.mdx; the SDK
+        ``CoreGovernanceAgent`` column model is url-only by construction), so this method
+        projects each agent to the url-only SDK record via ``_serialize_governance_agents``
+        before writing through the private ``_apply_fields`` setter. Because generic
+        ``update_fields`` REFUSES ``governance_agents`` (``_REPO_OWNED_FIELDS``), this is the
+        only *update* path — the strip is a repository-layer guarantee for the mutation
+        surface, not scattered call-site discipline. (A raw ``create()`` of an
+        Account carrying a pre-populated ``governance_agents`` blob, or a raw ``setattr``,
+        would bypass this strip; no live caller does so, there is no admin surface for
+        governance, and reads are fail-closed — a strip at the persistence boundary is
+        tracked as a separate hardening, #1934.)
+
+        Returns the stored records so the caller echoes exactly what was persisted (the two can
+        NEVER disagree — the docstring invariant is now enforced): ``_apply_fields`` returns
+        ``None`` when no row matches ``account_id``, which would otherwise return a "synced" list
+        for an account that was never written. That path is unreachable in production (the caller
+        resolves ``account_id`` via ``resolve_account`` in the SAME unit of work), but a computed
+        failure signal must not be discarded — raise the same ``ACCOUNT_NOT_FOUND`` the tool
+        already renders as the per-account ``failed`` result, so "returned ⇒ persisted" holds by
+        construction (#1329). Replaces the prior binding (per-account replace semantics).
+        """
+        records = _serialize_governance_agents(agents)
+        if self._apply_fields(account_id, {"governance_agents": records}) is None:
+            raise AdCPAccountNotFoundError(f"Account {account_id!r} not found while binding governance agents.")
+        return records
 
     # ------------------------------------------------------------------
     # AgentAccountAccess methods

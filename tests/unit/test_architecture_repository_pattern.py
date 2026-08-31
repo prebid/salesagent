@@ -42,6 +42,8 @@ IMPL_FILES = [
     "src/core/tools/performance.py",
     "src/core/tools/signals.py",
     "src/core/tools/task_management.py",
+    "src/core/tools/accounts.py",
+    "src/core/tools/governance.py",
     "src/core/context_manager.py",
     "src/admin/blueprints/creatives.py",
 ]

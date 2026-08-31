@@ -34,6 +34,7 @@ from src.core.schemas import SalesAgentBaseModel
 from src.core.tools import accounts as accounts_module
 from src.core.tools import capabilities as capabilities_module
 from src.core.tools import creative_formats as creative_formats_module
+from src.core.tools import governance as governance_module
 from src.core.tools import media_buy_create as media_buy_create_module
 from src.core.tools import media_buy_delivery as media_buy_delivery_module
 from src.core.tools import media_buy_update as media_buy_update_module
@@ -225,6 +226,26 @@ class SyncAccountsBody(SalesAgentBaseModel):
     push_notification_config: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
+
+
+class SyncGovernanceBody(SalesAgentBaseModel):
+    # idempotency_key stays optional on the HTTP body so a missing key surfaces
+    # as an AdCP validation error inside adcp_validation_boundary (SyncGovernanceRequest
+    # requires it) rather than a raw FastAPI 422.
+    idempotency_key: str | None = None
+    accounts: list[dict[str, Any]] = []
+    context: dict[str, Any] | None = None
+    # SyncGovernanceRequest declares `ext` (protocol extension carrier); expose it on the
+    # HTTP body so a REST buyer can send it — the route forwards it to the shared builder
+    # (#1329). The A2A handler forwards it explicitly.
+    ext: dict[str, Any] | None = None
+    # Version-envelope fields (core/version-envelope.json, composed by sync-governance-request.json):
+    # ACCEPTED-AND-IGNORED so a conformant buyer sending adcp_version is not rejected on one transport
+    # while accepted on another. Forwarded to the shared builder (which forwards them to the SDK model,
+    # which carries both as optional); the seller echoes its OWN implemented version on the response
+    # (POST-S4). SalesAgentBaseModel forbids extras, so these must be declared to be accepted (#1329).
+    adcp_version: str | None = None
+    adcp_major_version: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -503,4 +524,26 @@ async def sync_accounts(body: SyncAccountsBody, identity: ResolvedIdentity = req
     with adcp_validation_boundary(context="sync_accounts request"):
         req = SyncAccountsRequest(**body.model_dump(exclude_none=True, exclude={"adcp_version"}))
     response = await accounts_module.sync_accounts_raw(req=req, identity=identity)
+    return response.model_dump(mode="json")
+
+
+@router.post("/accounts/governance/sync")
+async def sync_governance(body: SyncGovernanceBody, identity: ResolvedIdentity = require_auth):
+    """Bind a governance agent per account (auth required)."""
+    from src.core.tools.governance import build_sync_governance_request
+
+    # REST routes through the SAME builder as MCP/A2A (#1329) — the single constructor. It carries
+    # its own validation boundary (so no outer `with` is needed; the REST-request-boundary guard
+    # recognises self-bounding builders), omits an absent idempotency_key so a missing key renders
+    # identically on every transport, and forwards the version-envelope fields (accepted-and-ignored
+    # uniformly). The seller echoes its OWN implemented version on the response.
+    req = build_sync_governance_request(
+        accounts=body.accounts,
+        context=body.context,
+        ext=body.ext,
+        idempotency_key=body.idempotency_key,
+        adcp_version=body.adcp_version,
+        adcp_major_version=body.adcp_major_version,
+    )
+    response = await governance_module.sync_governance_raw(req=req, identity=identity)
     return response.model_dump(mode="json")

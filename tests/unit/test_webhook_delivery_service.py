@@ -128,12 +128,13 @@ def test_adcp_payload_structure(webhook_service, mock_db_session):
         assert mock_client.return_value.__enter__.return_value.post.called
         call_args = mock_client.return_value.__enter__.return_value.post.call_args
 
-        # Check new payload structure (PR #86 - no wrapper, direct payload)
-        # Version should match what's reported by the adcp library
-        from adcp import get_adcp_spec_version
+        # Check new payload structure (PR #86 - no wrapper, direct payload).
+        # adcp_version is emitted at RELEASE precision (major.minor) on the wire via the shared
+        # wire_adcp_version() accessor — the wire carries release precision, never full semver (#1329).
+        from src.core.version_compat import wire_adcp_version
 
         payload = call_args.kwargs["json"]
-        assert payload["adcp_version"] == get_adcp_spec_version()
+        assert payload["adcp_version"] == wire_adcp_version()
         assert payload["notification_type"] == "scheduled"
         assert payload["is_adjusted"] is False  # NEW in PR #86
         assert payload["sequence_number"] == 1

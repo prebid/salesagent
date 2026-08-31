@@ -1126,9 +1126,15 @@ WIRED_UCS = frozenset(
         "UC-004",
         "UC-005",
         "UC-006",
+        # UC-010 (test_uc010_discover_seller_capabilities.py) + UC-030
+        # (test_uc030_manage_governance.py) each ship a test_<uc>_*.py driver in this
+        # PR, so their bound scenarios must be preserved on a semantic merge (target-wins
+        # would revert the edited step texts and unbind them). #1329.
+        "UC-010",
         "UC-011",
         "UC-019",
         "UC-026",
+        "UC-030",
     }
 )
 

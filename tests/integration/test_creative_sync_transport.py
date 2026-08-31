@@ -1043,7 +1043,12 @@ class TestMissingFormatFails:
     Covers: UC-006-EXT-E-01
     """
 
-    @pytest.mark.parametrize("transport", A2A_LEDGERED_TRANSPORTS, ids=lambda t: t.value)
+    # Graduated off A2A_LEDGERED_TRANSPORTS: a missing REQUIRED field (format_id) is
+    # rejected on A2A with the same rich validation envelope MCP/REST emit
+    # ("Required field is missing"), which the is_error branch below grades. The GH
+    # #2011 ledger targets partial-creative rejection, not missing-required-field
+    # rejection, so the A2A leg grades here rather than xfailing.
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_no_format_action_failed(self, integration_db, transport):
         """Creative without format_id is rejected.
 
@@ -1069,8 +1074,11 @@ class TestMissingFormatFails:
             )
 
         if result.is_error:
-            # MCP: TypeAdapter rejected missing format_id — correct behavior
-            assert_rejected(result, field="format_id", reason="Field required")
+            # MCP: TypeAdapter rejected missing format_id — correct behavior.
+            # The MCP boundary renders the shared rich validation message ("Required
+            # field is missing"), identical to A2A/REST, not the leaf Pydantic
+            # "Field required" (#1329).
+            assert_rejected(result, field="format_id", reason="Required field is missing")
         else:
             # impl/a2a/rest: _impl handled it, returned action=failed
             assert_envelope(result, transport)
@@ -1086,7 +1094,12 @@ class TestStaticPreviewFailed:
     Covers: UC-006-EXT-H-01
     """
 
-    @pytest.mark.parametrize("transport", A2A_LEDGERED_TRANSPORTS, ids=lambda t: t.value)
+    # Graduated off A2A_LEDGERED_TRANSPORTS: a missing REQUIRED field (assets) is
+    # rejected on A2A with the same rich validation envelope MCP/REST emit
+    # ("Required field is missing"), graded by the is_error branch below. The GH
+    # #2011 ledger targets partial-creative rejection, not missing-required-field
+    # rejection.
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_no_preview_no_url_fails(self, integration_db, transport):
         """Static format with empty preview_creative result and no url → failed."""
         from adcp.types import FormatId as LibraryFormatId
@@ -1125,10 +1138,12 @@ class TestStaticPreviewFailed:
             )
 
         if result.is_error:
-            # MCP: TypeAdapter rejects missing assets field — correct schema rejection
+            # MCP: TypeAdapter rejects missing assets field — correct schema rejection.
+            # Shared rich validation message ("Required field is missing"), identical to
+            # A2A/REST, not the leaf Pydantic "Field required" (#1329).
             from tests.harness.assertions import assert_rejected
 
-            assert_rejected(result, field="assets", reason="Field required")
+            assert_rejected(result, field="assets", reason="Required field is missing")
         else:
             # impl/a2a/rest: _impl handles it, returns action=failed
             assert_envelope(result, transport)

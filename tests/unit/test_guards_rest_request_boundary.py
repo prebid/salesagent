@@ -47,6 +47,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_ROOTS = [REPO_ROOT / "src" / "routes", REPO_ROOT / "src" / "a2a_server"]
 SCHEMA_HELPERS = REPO_ROOT / "src" / "core" / "schema_helpers.py"
+# Request builders are defined here; those carrying an internal boundary are exempt call sites.
+BUILDER_DEF_ROOTS = [REPO_ROOT / "src" / "core" / "tools"]
 
 _VALIDATE_METHODS = {"model_validate", "model_validate_json", "parse_obj"}
 
@@ -108,6 +110,35 @@ def unguarded_coercion_helpers(schema_helpers_tree: ast.AST) -> frozenset[str]:
     )
 
 
+def _is_builder_name(name: str) -> bool:
+    return (name.startswith("create_") or name.startswith("build_")) and name.endswith("_request")
+
+
+def self_bounding_builders(roots: list[Path] | None = None) -> frozenset[str]:
+    """Builder functions (``build_*_request`` / ``create_*_request``) that carry their OWN
+    internal ``adcp_validation_boundary`` — so a caller need NOT re-wrap them (#1329 finding 2).
+
+    ``build_sync_governance_request`` runs its construction inside the boundary internally, so a
+    caller that wraps it in a second ``with adcp_validation_boundary`` is adding a no-op purely to
+    satisfy a lexical matcher. Teaching the matcher to recognise self-bounding builders removes
+    that redundant wrapper. Only builders whose DEFINITION carries the boundary are exempt —
+    ``create_get_products_request`` has no internal boundary and still needs the caller's ``with``,
+    so it is NOT in this set.
+    """
+    names: set[str] = set()
+    for root in roots if roots is not None else BUILDER_DEF_ROOTS:
+        for path in sorted(root.rglob("*.py")):
+            tree = ast.parse(path.read_text(), filename=str(path))
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+                    and _is_builder_name(node.name)
+                    and _has_boundary_with(node)
+                ):
+                    names.add(node.name)
+    return frozenset(names)
+
+
 def _boundary_with(node: ast.With) -> bool:
     return any(
         isinstance(item.context_expr, ast.Call)
@@ -126,6 +157,7 @@ def _request_construction_name(
     node: ast.Call,
     coercion_helpers: frozenset[str] = frozenset(),
     wire_models: frozenset[str] = frozenset(),
+    self_bounding: frozenset[str] = frozenset(),
 ) -> str | None:
     """Name of the strict-request construction this call performs, or None.
 
@@ -149,8 +181,10 @@ def _request_construction_name(
         name = fn.id
         if name.endswith("Request") and name != "Request":
             return name
-        if (name.startswith("create_") or name.startswith("build_")) and name.endswith("_request"):
-            return name
+        if _is_builder_name(name):
+            # A self-bounding builder carries its OWN internal boundary, so a call is safe at
+            # any call site (#1329 finding 2) — do not flag it.
+            return None if name in self_bounding else name
         if name in coercion_helpers:
             return name
         if name in wire_models and any(kw.arg is None for kw in node.keywords):
@@ -162,8 +196,8 @@ def _request_construction_name(
                 if base.id.endswith("Request") or base.id in wire_models:
                     return f"{base.id}.{fn.attr}"
         name = fn.attr
-        if (name.startswith("create_") or name.startswith("build_")) and name.endswith("_request"):
-            return name
+        if _is_builder_name(name):
+            return None if name in self_bounding else name
         if name in coercion_helpers:
             return name
     return None
@@ -174,10 +208,12 @@ class _UnboundedRequestFinder(ast.NodeVisitor):
         self,
         coercion_helpers: frozenset[str] = frozenset(),
         wire_models: frozenset[str] = frozenset(),
+        self_bounding: frozenset[str] = frozenset(),
     ) -> None:
         self.boundary_depth = 0
         self.coercion_helpers = coercion_helpers
         self.wire_models = wire_models
+        self.self_bounding = self_bounding
         self.offenders: list[tuple[int, str]] = []
 
     def visit_With(self, node: ast.With) -> None:
@@ -189,7 +225,7 @@ class _UnboundedRequestFinder(ast.NodeVisitor):
             self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
-        name = _request_construction_name(node, self.coercion_helpers, self.wire_models)
+        name = _request_construction_name(node, self.coercion_helpers, self.wire_models, self.self_bounding)
         if name and self.boundary_depth == 0:
             self.offenders.append((node.lineno, name))
         self.generic_visit(node)
@@ -199,19 +235,23 @@ def find_unbounded_request_constructions(
     tree: ast.AST,
     coercion_helpers: frozenset[str] = frozenset(),
     wire_models: frozenset[str] = frozenset(),
+    self_bounding: frozenset[str] = frozenset(),
 ) -> list[tuple[int, str]]:
-    finder = _UnboundedRequestFinder(coercion_helpers, wire_models)
+    finder = _UnboundedRequestFinder(coercion_helpers, wire_models, self_bounding)
     finder.visit(tree)
     return finder.offenders
 
 
 def test_no_unbounded_request_construction_at_transport_boundaries():
     coercion_helpers = unguarded_coercion_helpers(ast.parse(SCHEMA_HELPERS.read_text(), filename=str(SCHEMA_HELPERS)))
+    builders = self_bounding_builders()
     violations: list[str] = []
     for root in SCAN_ROOTS:
         for path in sorted(root.rglob("*.py")):
             tree = ast.parse(path.read_text(), filename=str(path))
-            for lineno, name in find_unbounded_request_constructions(tree, coercion_helpers, wire_model_imports(tree)):
+            for lineno, name in find_unbounded_request_constructions(
+                tree, coercion_helpers, wire_model_imports(tree), builders
+            ):
                 violations.append(f"{path.relative_to(REPO_ROOT)}:{lineno}: {name}")
     assert not violations, (
         "Strict request construction or raise-capable to_* coercion outside "
@@ -258,6 +298,32 @@ class TestGuardDetector:
             "with adcp_validation_boundary(context='get_products request'):\n"
             "    req = create_get_products_request(brief=brief)"
         )
+
+    def test_negative_self_bounding_builder_call_unwrapped(self):
+        # A builder carrying its OWN internal boundary is safe unwrapped (#1329 finding 2).
+        assert not find_unbounded_request_constructions(
+            ast.parse("req = build_sync_governance_request(accounts=a, context=c, ext=e, idempotency_key=k)"),
+            self_bounding=frozenset({"build_sync_governance_request"}),
+        )
+
+    def test_positive_non_self_bounding_builder_call_unwrapped(self):
+        # A builder NOT in the self-bounding set (no internal boundary) is still flagged unwrapped.
+        assert find_unbounded_request_constructions(
+            ast.parse("req = create_get_products_request(brief=brief)"),
+            self_bounding=frozenset({"build_sync_governance_request"}),
+        )
+
+    def test_self_bounding_builders_derives_only_boundary_carriers(self, tmp_path):
+        # Only a builder whose DEFINITION carries an internal boundary is exempt.
+        (tmp_path / "m.py").write_text(
+            "def build_x_request(**k):\n"
+            "    with adcp_validation_boundary(context='x request'):\n"
+            "        return XRequest(**k)\n\n\n"
+            "def create_y_request(**k):\n"
+            "    return YRequest(**k)\n"
+        )
+        derived = self_bounding_builders([tmp_path])
+        assert derived == frozenset({"build_x_request"})
 
     def test_negative_bare_framework_request_type(self):
         # FastAPI's `Request` class is a type hint / framework object, not a

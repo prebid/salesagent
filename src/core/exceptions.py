@@ -11,7 +11,7 @@ to help buyer agents decide whether to retry, fix, or abandon a request.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, NamedTuple
 
 from adcp.server.helpers import STANDARD_ERROR_CODES, adcp_error
 from pydantic import BaseModel, ValidationError
@@ -19,11 +19,21 @@ from pydantic import BaseModel, ValidationError
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
 
-    from adcp.types import ContextObject
+    from adcp.types import ContextObject, Error
 
 logger = logging.getLogger(__name__)
 
 RecoveryHint = Literal["transient", "correctable", "terminal"]
+
+
+class AdvisoryDefaults(NamedTuple):
+    """Named return of :meth:`AdCPError.advisory_defaults` — the pinned wire metadata a
+    per-item advisory ``Error`` needs as literals (it cannot raise to inherit them)."""
+
+    error_code: str
+    recovery: RecoveryHint
+    suggestion: str | None
+
 
 # ---------------------------------------------------------------------------
 # Error-code compliance: mapping non-standard codes to SDK equivalents
@@ -32,19 +42,27 @@ RecoveryHint = Literal["transient", "correctable", "terminal"]
 # WIRE_STANDARD_CODES.  Codes in ERROR_CODE_MAPPING are translated at the
 # transport boundary; codes in INTERNAL_CODES never leave the server.
 
-# Spec codes the SDK helper table has not caught up to. The pinned 3.1 enum
-# (enums/error-code.json @ adcp 04f59d2d5) defines these as real wire codes;
-# adcp 5.7's ``STANDARD_ERROR_CODES`` predates them, and the SDK is a
+# Spec codes the SDK helper table has not caught up to. The pinned enum
+# (@source enums/error-code.json @ v3.1.1, adcp==6.6.0) defines these as real wire
+# codes; the SDK's ``STANDARD_ERROR_CODES`` predates them, and the SDK is a
 # cross-check, not the authority. CREATIVE_NOT_FOUND per the enum: correctable,
 # and "Sellers MUST return this code uniformly for any creative_id not owned by
-# the calling account" (#1430 review). CONFIGURATION_ERROR per the enum:
-# terminal — "the buyer cannot resolve a seller-side deployment
-# misconfiguration and MUST NOT auto-retry" (#1430 review). The remaining
-# demoted spec code (BILLING_NOT_SUPPORTED) is tracked for the same treatment
-# in #1602.
+# the calling account". CONFIGURATION_ERROR per the enum: terminal — "the buyer
+# cannot resolve a seller-side deployment misconfiguration and MUST NOT
+# auto-retry". BILLING_NOT_SUPPORTED (correctable) and CREDENTIAL_IN_ARGS
+# (terminal) are likewise pinned wire codes absent from the SDK table; promoting
+# them here means the buyer sees the spec code untranslated. BILLING_NOT_SUPPORTED
+# was previously demoted to UNSUPPORTED_FEATURE via ERROR_CODE_MAPPING, but the
+# only emitter is the advisory ``errors[]`` path (build_advisory_error), which
+# serializes verbatim and never hit that mapping — so the wire code was already
+# BILLING_NOT_SUPPORTED; promoting it + dropping the mapping makes that honest
+# (resolves the #1602 demotion). CREDENTIAL_IN_ARGS is the code for a
+# buyer-principal credential detected in request args (authentication.mdx L2).
 _SPEC_SUPPLEMENT_CODES: dict[str, dict[str, str]] = {
     "CREATIVE_NOT_FOUND": {"recovery": "correctable", "message": "Creative not found"},
     "CONFIGURATION_ERROR": {"recovery": "terminal", "message": "Configuration error"},
+    "BILLING_NOT_SUPPORTED": {"recovery": "correctable", "message": "Billing model not supported"},
+    "CREDENTIAL_IN_ARGS": {"recovery": "terminal", "message": "Credential detected in request args"},
 }
 
 # The authoritative wire-code table: SDK baseline + pinned-spec supplement.
@@ -92,7 +110,9 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     "UNSUPPORTED_TARGETING": "UNSUPPORTED_FEATURE",
     "PLACEMENT_TARGETING_NOT_SUPPORTED": "UNSUPPORTED_FEATURE",
     "UNSUPPORTED_ACTION": "UNSUPPORTED_FEATURE",
-    "BILLING_NOT_SUPPORTED": "UNSUPPORTED_FEATURE",
+    # BILLING_NOT_SUPPORTED is no longer demoted here — it is a WIRE_STANDARD_CODES
+    # entry via _SPEC_SUPPLEMENT_CODES (pinned enum, correctable), so it reaches the
+    # buyer untranslated.
     # Resource lookup
     "NO_PACKAGES_FOUND": "PACKAGE_NOT_FOUND",
     # Resource state
@@ -279,6 +299,21 @@ class AdCPError(Exception):
         self.status_code = status_code if status_code is not None else type(self)._default_status_code
         self.recovery = recovery if recovery is not None else type(self)._default_recovery
 
+    @classmethod
+    def advisory_defaults(cls) -> AdvisoryDefaults:
+        """Public ``(error_code, recovery, suggestion)`` for building a per-item advisory.
+
+        A per-account/per-item advisory ``Error`` in a SUCCESS envelope's ``errors[]`` cannot
+        raise, so it needs this class's pinned wire metadata as literals. This is the SANCTIONED
+        public read of the class ``_default_*`` attributes — callers outside this module (the
+        ``build_advisory_error`` builder and the tool derivation constants) MUST use it rather
+        than reaching into the private ``_default_error_code`` / ``_default_recovery``, so a
+        codegen/refactor rename of those attributes breaks in one place. Returns a NAMED tuple
+        (``AdvisoryDefaults``) so callers read ``.error_code`` / ``.recovery`` / ``.suggestion``
+        by name rather than unpacking an anonymous 3-tuple positionally with a discard.
+        """
+        return AdvisoryDefaults(cls._default_error_code, cls._default_recovery, cls._default_suggestion)
+
     @property
     def wire_error_code(self) -> str:
         """Wire-safe error code (translated through ERROR_CODE_MAPPING).
@@ -436,6 +471,37 @@ class AdCPInvalidRequestError(AdCPValidationError):
     """
 
     _default_error_code: ClassVar[str] = "INVALID_REQUEST"
+
+
+# Canonical buyer-facing suggestion for CREDENTIAL_IN_ARGS, verbatim from the pinned
+# enums/error-code.json enumMetadata (@source enums/error-code.json @ v3.1.1, adcp==6.6.0);
+# pinned by test_architecture_error_suggestion_enum_conformance so it cannot drift from the spec.
+CREDENTIAL_IN_ARGS_SUGGESTION = (
+    "do NOT auto-retry — auto-retry re-logs the credential on each attempt. Move the credential "
+    "out of request args (top-level, `context`, `ext`, any nested location) onto the transport "
+    "authentication channel (Authorization: Bearer, RFC 9421 signature, MCP/A2A authentication "
+    "framing); rotate the leaked credential, then resubmit on the transport channel only"
+)
+
+
+class AdCPCredentialInArgsError(AdCPError):
+    """A buyer-principal credential was detected in request args (400, CREDENTIAL_IN_ARGS).
+
+    Per pinned AdCP 3.1.1 (@source dist/docs/3.1.1/building/by-layer/L2/authentication.mdx and
+    enums/error-code.json): a seller that detects a credential placed in the task payload
+    (top-level, ``context``, ``ext``, or any nested location — e.g. userinfo embedded in a url,
+    or a credential-bearing extra field) SHOULD reject with ``CREDENTIAL_IN_ARGS`` (upgrades to
+    MUST 90 days after 3.1 publication). Recovery is ``terminal`` — the agent MUST NOT auto-retry,
+    since auto-retry re-logs the credential on each attempt. The message MUST stay generic and the
+    ``field`` MUST be the detection PATH, never the credential value (enforced by the callers).
+    Distinct from ``AUTH_REQUIRED`` (transport-channel auth) and from the receiver-side
+    ``push_notification_config.authentication.credentials`` carve-out, which is a legitimate field.
+    """
+
+    _default_status_code: ClassVar[int] = 400
+    _default_error_code: ClassVar[str] = "CREDENTIAL_IN_ARGS"
+    _default_recovery: ClassVar[RecoveryHint] = "terminal"
+    _default_suggestion: ClassVar[str | None] = CREDENTIAL_IN_ARGS_SUGGESTION
 
 
 AUTH_REQUIRED_SUGGESTION = "Provide valid credentials (x-adcp-auth token)."
@@ -1057,6 +1123,36 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
     return envelope
 
 
+def build_advisory_error(
+    *,
+    code: str,
+    message: str,
+    recovery: RecoveryHint,
+    suggestion: str | None = None,
+    field: str | None = None,
+) -> Error:
+    """Build one per-item advisory ``Error`` for a SUCCESS envelope's ``errors[]`` entry.
+
+    The SINGLE construction site for an advisory per-item ``Error`` — the kind that lives in a
+    success envelope (``SyncGovernanceResponse.accounts[].errors[]``,
+    ``SyncAccountsResponse.errors[]``) rather than being raised at the boundary. Before this,
+    every tool hand-built the ``Error(code=...)`` and carried its own ``# structural-guard:``
+    marker; centralizing it here — beside ``build_two_layer_error_envelope`` at the error
+    boundary, OUTSIDE ``src/core/tools/`` — means the wire-shape decision has one home and the
+    per-tool markers disappear (#1329). Derive ``code`` / ``recovery`` / ``suggestion`` from a
+    typed class via :meth:`AdCPError.advisory_defaults` at the call site.
+
+    ``code`` is normalized through :func:`to_wire_error_code`, so an advisory can never leak an
+    internal-only code: unlike a raised ``AdCPError`` (whose code passes through the boundary
+    translator), an ``errors[]`` advisory serializes verbatim, so the normalization has to happen
+    here. Codes already in ``WIRE_STANDARD_CODES`` (e.g. ``BILLING_NOT_SUPPORTED``,
+    ``VALIDATION_ERROR``) pass through unchanged.
+    """
+    from adcp.types import Error
+
+    return Error(code=to_wire_error_code(code), message=message, suggestion=suggestion, recovery=recovery, field=field)
+
+
 # Canonical buyer-facing suggestions from error-code.json enumMetadata (AdCP 3.1.1):
 # each code carries its own default hint, so a VALIDATION_ERROR must not borrow
 # INVALID_REQUEST's text.
@@ -1064,35 +1160,102 @@ INVALID_REQUEST_SUGGESTION = "check request parameters and fix"
 VALIDATION_ERROR_SUGGESTION = "review error details and fix field values"
 
 
+def _is_generated_union_variant_segment(loc: str) -> bool:
+    """True if a Pydantic ``loc`` segment is a codegen union-variant CLASS name.
+
+    Pydantic inserts the matched union member's class name as a ``loc`` segment for
+    tagged / smart unions — e.g. ``AccountReference1``/``AccountReference2`` for the
+    ``AccountReference`` union, ``Accounts``/``Accounts3`` for ``SyncAccountsRequest``. That
+    name is NOT a path into the buyer's request (their payload has ``account.account_id``,
+    never ``account.AccountReference1.account_id``), so it must not reach the buyer-facing
+    ``field``. AdCP request field names are snake_case (lowercase, underscores), so a
+    segment beginning with an uppercase letter and containing no underscore is a generated
+    artifact, not a real field (#1329).
+    """
+    return bool(loc) and loc[0].isupper() and "_" not in loc
+
+
+def buyer_loc_segments(
+    loc: tuple[str | int, ...] | Sequence[str | int], *, error_type: str = ""
+) -> tuple[str | int, ...]:
+    """Project a Pydantic ``loc`` to the buyer's real request path — the SINGLE rule.
+
+    Every renderer that turns a Pydantic error into a buyer-facing field path
+    (``first_validation_error_field`` for ``field``, ``format_validation_error`` for the
+    message, ``suggest_validation_fix`` for the suggestion, ``build_validation_error_details``
+    for ``details.loc``) MUST route through here so one envelope cannot report two different
+    paths for one error (#1329). The projection needs the error TYPE, not only the
+    ``loc``, because the correct rule depends on it:
+
+    * ``extra_forbidden`` — the loc is kept VERBATIM. Its terminal segment is the buyer's OWN
+      rejected key (``Authorization``, ``X-Api-Key``, ``Token``) — arbitrary casing, and the
+      one place a PascalCase-looking segment is a real buyer pointer rather than a codegen tag.
+    * every other type — a codegen union-variant class segment (``AccountReference1``,
+      ``Accounts3``) is dropped at ANY position, INCLUDING the terminal. A ``model_type`` error's
+      loc ends in the variant name (``('accounts', 0, 'account', 'AccountReference1')``), which
+      is not a path into the buyer's payload, so the terminal must be dropped too (the "never
+      drop the terminal" rule this replaces leaked that name to the buyer).
+
+    Detection is a NAME-SHAPE heuristic (``_is_generated_union_variant_segment``), not a
+    structural SDK-class-name lookup: AdCP request fields are snake_case (lowercase +
+    underscores), so on any error other than ``extra_forbidden`` a first-upper, no-underscore
+    segment is a generated variant tag. A structural scan of the SDK generated namespace is
+    ~2.5s per call — far too slow for the rejection path — and the snake_case invariant plus
+    the ``extra_forbidden`` carve-out makes the heuristic safe.
+    """
+    if "extra_forbidden" in error_type:
+        return tuple(loc)
+    return tuple(seg for seg in loc if not (isinstance(seg, str) and _is_generated_union_variant_segment(seg)))
+
+
+def format_buyer_field_path(loc: tuple[str | int, ...] | Sequence[str | int], *, error_type: str = "") -> str:
+    """Render a Pydantic error's ``loc`` as the bracket-notation buyer field path.
+
+    List indices render as ``[i]`` so boundary-derived paths such as ``packages[0].budget``
+    align with the ``packages[].budget`` field strings the implementation layer raises. This is
+    the SINGLE renderer for ``field``, the message bullet, AND the suggestion, so all three
+    carry one identical string (#1329). Routes through :func:`buyer_loc_segments`,
+    forwarding ``error_type`` so the codegen union-variant strip and the ``extra_forbidden``
+    carve-out are applied consistently.
+    """
+    parts: list[str] = []
+    for seg in buyer_loc_segments(loc, error_type=error_type):
+        if isinstance(seg, int):
+            parts.append(f"[{seg}]")
+        elif parts:
+            parts.append(f".{seg}")
+        else:
+            parts.append(str(seg))
+    return "".join(parts)
+
+
 def first_validation_error_field(validation_error: ValidationError) -> str | None:
     """Return the bracket-notation path of the first Pydantic error, or ``None``.
 
     Lets a transport boundary attach a structured ``field`` to the
     ``AdCPValidationError`` it raises, so the wire envelope carries the offending
-    field path instead of only the rendered message. List indices render as
-    ``[i]`` so boundary-derived paths such as ``packages[0].budget`` align with
-    the ``packages[].budget`` field strings raised by the implementation layer.
+    field path instead of only the rendered message. Delegates the ``loc`` →
+    buyer-path projection to :func:`format_buyer_field_path`, forwarding the error type so the
+    codegen-variant strip / ``extra_forbidden`` carve-out apply (#1329).
     """
     errors = validation_error.errors()
     if not errors:
         return None
-    parts: list[str] = []
-    for loc in errors[0]["loc"]:
-        if isinstance(loc, int):
-            parts.append(f"[{loc}]")
-        elif parts:
-            parts.append(f".{loc}")
-        else:
-            parts.append(str(loc))
-    return "".join(parts)
+    first = errors[0]
+    return format_buyer_field_path(first["loc"], error_type=str(first.get("type", "")))
 
 
 def build_validation_error_details(errors: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Project Pydantic errors into the buyer-safe structured detail shape."""
+    """Project Pydantic errors into the buyer-safe structured detail shape.
+
+    ``loc`` is projected through :func:`buyer_loc_segments` (forwarding the error type) so the
+    structured detail reports the same buyer path as ``field``, the message, and the suggestion —
+    no codegen union tag leaks into one renderer while the others strip it (#1329).
+    """
     return {
         "validation_errors": [
             {
-                "loc": list(error.get("loc", ())),
+                "loc": list(buyer_loc_segments(error.get("loc", ()), error_type=str(error.get("type", "")))),
                 "msg": error.get("msg"),
                 "type": error.get("type"),
             }

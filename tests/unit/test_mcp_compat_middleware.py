@@ -209,7 +209,9 @@ class TestTypeAdapterValidationEnvelope:
                     "input": {},
                 },
                 "filters.format_ids[0].agent_url",
-                "Field required",
+                # MCP now carries the SAME rich format_validation_error message as
+                # A2A/REST (#1329 finding 5), not FastMCP's leaf "Field required".
+                "Required field is missing",
             ),
         ],
     )

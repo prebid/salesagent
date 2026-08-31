@@ -14,6 +14,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
+from src.core.exceptions import AdCPConfigurationError
+from src.core.helpers.account_helpers import resolve_supported_billing
 from src.core.tenant_context import TenantContext
 from src.core.tools.accounts import _build_setup_for_approval, _build_sync_result, _check_billing_policy
 from tests.factories import PrincipalFactory
@@ -31,61 +35,114 @@ def _identity_with_tenantcontext(**fields):
 
 
 class TestCheckBillingPolicy:
-    """BR-RULE-059: seller billing policy enforcement."""
+    """BR-RULE-059: seller billing policy enforcement.
+
+    ``_check_billing_policy`` is now a pure gate — the accepted ``supported`` set is
+    resolved once by the caller (see ``TestResolveSupportedBilling`` for the seller-
+    misconfiguration raise, which is now a precondition before any DB work — #1329
+    finding 10) and passed in. This function returns errors or None, never raises.
+    """
 
     def test_no_policy_configured_accepts_all(self):
-        identity = _identity_with()  # no supported_billing key
-        assert _check_billing_policy("operator", identity) is None
-        assert _check_billing_policy("agent", identity) is None
+        # None config -> resolver returns the default {operator, agent}; both accepted.
+        supported = [b.value for b in resolve_supported_billing(None)]
+        assert _check_billing_policy("operator", supported) is None
+        assert _check_billing_policy("agent", supported) is None
 
     def test_supported_value_accepted(self):
-        identity = _identity_with(supported_billing=["agent"])
-        assert _check_billing_policy("agent", identity) is None
+        assert _check_billing_policy("agent", ["agent"]) is None
 
     def test_unsupported_value_rejected(self):
-        identity = _identity_with(supported_billing=["agent"])
-        errors = _check_billing_policy("operator", identity)
+        errors = _check_billing_policy("operator", ["agent"])
         assert errors is not None
         assert len(errors) == 1
         assert errors[0].code == "BILLING_NOT_SUPPORTED"
 
     def test_error_message_includes_supported_list(self):
-        identity = _identity_with(supported_billing=["agent", "operator"])
-        errors = _check_billing_policy("prepaid", identity)
+        errors = _check_billing_policy("prepaid", ["agent", "operator"])
         assert errors is not None
         assert "agent" in errors[0].message
         assert "operator" in errors[0].message
 
     def test_error_includes_suggestion_field(self):
-        identity = _identity_with(supported_billing=["agent"])
-        errors = _check_billing_policy("operator", identity)
+        errors = _check_billing_policy("operator", ["agent"])
         assert errors is not None
         assert errors[0].suggestion is not None
         assert "agent" in errors[0].suggestion
 
-    def test_empty_supported_list_rejects_all(self):
-        identity = _identity_with(supported_billing=[])
-        errors = _check_billing_policy("agent", identity)
+    def test_pure_gate_never_raises_on_empty_supported(self):
+        # The empty-set seller misconfiguration is a PRECONDITION raise
+        # (resolve_supported_billing), not this gate's job. Given an empty accepted
+        # set, this pure gate simply rejects — it never raises (#1329 finding 10).
+        errors = _check_billing_policy("agent", [])
         assert errors is not None
         assert errors[0].code == "BILLING_NOT_SUPPORTED"
 
-    def test_tenant_none_accepts(self):
-        identity = PrincipalFactory.make_identity(tenant_id="t1", tenant=None)
-        assert _check_billing_policy("operator", identity) is None
+
+class TestResolveSupportedBilling:
+    """The accepted-billing resolver — the seller-config precondition (#1329 finding 10).
+
+    The raise moved here from ``_check_billing_policy`` so a misconfigured tenant fails
+    before the sync_accounts UoW opens, not per-entry mid-loop.
+    """
+
+    def test_empty_supported_list_is_seller_misconfiguration(self):
+        # An explicit empty supported_billing is not spec-expressible at the pin
+        # (account.supported_billing minItems:1) and names no account-billable party,
+        # so it is a SELLER misconfiguration: a TERMINAL CONFIGURATION_ERROR rather than
+        # returning [] and letting the gate emit a buyer-correctable code (#1329 R9-C2).
+        with pytest.raises(AdCPConfigurationError) as exc_info:
+            resolve_supported_billing({"supported_billing": []})
+        assert exc_info.value.recovery == "terminal"
+        # Buyer message must not disclose the tenant config or the internal constraint name.
+        assert "ck_accounts_billing" not in str(exc_info.value)
+
+    def test_non_account_billing_list_is_seller_misconfiguration(self):
+        # A NON-empty list naming only non-account-billable parties (advertiser is a valid
+        # media-buy party but not account-billable) yields no account-billable party →
+        # same TERMINAL CONFIGURATION_ERROR, buyer-safe message (#1329 R9-C1).
+        with pytest.raises(AdCPConfigurationError) as exc_info:
+            resolve_supported_billing({"supported_billing": ["advertiser"]})
+        assert exc_info.value.recovery == "terminal"
+        assert "advertiser" not in str(exc_info.value)
+        assert "ck_accounts_billing" not in str(exc_info.value)
+
+    def test_tenant_none_returns_default(self):
+        assert resolve_supported_billing(None)  # non-empty default set
 
     def test_tenantcontext_access_works(self):
-        """When identity.tenant is a TenantContext object, the same .get() contract applies."""
-        identity = _identity_with_tenantcontext(supported_billing=["agent"])
-        assert _check_billing_policy("agent", identity) is None
-        errors = _check_billing_policy("operator", identity)
+        """A TenantContext (not a dict) exposes .get() identically for the resolver."""
+        ctx = TenantContext(tenant_id="t1", name="T1", subdomain="t1", supported_billing=["agent"])
+        supported = [b.value for b in resolve_supported_billing(ctx.model_dump())]
+        assert supported == ["agent"]
+        errors = _check_billing_policy("operator", supported)
         assert errors is not None
         assert errors[0].code == "BILLING_NOT_SUPPORTED"
 
-    def test_dict_access_works(self):
-        """When identity.tenant is a raw dict (IMPL transport), same behavior."""
-        identity = _identity_with(supported_billing=["agent"])
-        assert isinstance(identity.tenant, dict)
-        assert _check_billing_policy("agent", identity) is None
+
+class TestAdvisoryErrorMetadataDerivation:
+    """Advisory per-account Error code/recovery cannot drift from the pin (#1329 finding 10).
+
+    VALIDATION_ERROR derives from ``AdCPValidationError`` class metadata; BILLING_NOT_SUPPORTED
+    is a demoted spec code with no typed subclass, so its literal recovery is pinned here
+    against the pinned error-code.json enumMetadata — the pin governance.py gets for free
+    from its exception class.
+    """
+
+    def test_validation_error_advisory_derives_from_class(self):
+        from src.core.exceptions import AdCPValidationError
+        from src.core.tools.accounts import _VALIDATION_ERROR_CODE, _VALIDATION_ERROR_RECOVERY
+
+        assert _VALIDATION_ERROR_CODE == AdCPValidationError._default_error_code == "VALIDATION_ERROR"
+        assert _VALIDATION_ERROR_RECOVERY == AdCPValidationError._default_recovery
+
+    def test_billing_not_supported_recovery_matches_pinned_enum(self):
+        from src.core.tools.accounts import _BILLING_NOT_SUPPORTED_CODE, _BILLING_NOT_SUPPORTED_RECOVERY
+        from tests.harness.transport import _pinned_error_metadata
+
+        meta = _pinned_error_metadata()
+        assert _BILLING_NOT_SUPPORTED_CODE in meta, "BILLING_NOT_SUPPORTED must exist in the pinned enumMetadata"
+        assert _BILLING_NOT_SUPPORTED_RECOVERY == meta[_BILLING_NOT_SUPPORTED_CODE]["recovery"]
 
 
 class TestBuildSetupForApproval:

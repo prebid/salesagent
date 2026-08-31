@@ -3,7 +3,6 @@
 import html
 import os
 
-from adcp import get_adcp_spec_version
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from src.core.domain_config import (
@@ -13,6 +12,7 @@ from src.core.domain_config import (
     is_sales_agent_domain,
 )
 from src.core.version import get_version
+from src.core.version_compat import wire_adcp_version
 
 
 def _get_jinja_env() -> Environment:
@@ -283,7 +283,8 @@ def generate_tenant_landing_page(tenant: dict, virtual_host: str | None = None) 
         # Additional context
         "page_title": f"{tenant.get('name', 'Publisher')} Sales Agent",
         "version": get_version(),
-        "adcp_version": get_adcp_spec_version(),
+        # Release precision, matching what the wire declares (the ONE accessor — #1329).
+        "adcp_version": wire_adcp_version(),
     }
 
     # Load and render template

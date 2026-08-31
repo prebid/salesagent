@@ -13,18 +13,19 @@ Handles account management per AdCP spec (UC-011):
 """
 
 import base64
-import logging
 import uuid
 from datetime import UTC
 from typing import Annotated, Any
 
 from adcp.types import ContextObject, PaginationRequest, PaginationResponse
+from adcp.types import Error as LibraryError
 from adcp.types.generated_poc.account.list_accounts_request import (
     Status as AccountStatus,
 )
 from adcp.types.generated_poc.account.sync_accounts_request import (
     Accounts as SyncAccountInput,  # SDK 5.7: Account → Accounts
 )
+from adcp.types.generated_poc.enums.billing_party import BillingParty
 from fastmcp.server.context import Context
 from pydantic import Field
 
@@ -32,8 +33,9 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.models import Account as DBAccount
 from src.core.database.repositories.uow import AccountUoW
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPValidationError, RecoveryHint, build_advisory_error
 from src.core.helpers import enum_value
+from src.core.helpers.account_helpers import resolve_supported_billing
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas.account import (
     Account,
@@ -46,8 +48,6 @@ from src.core.schemas.account import (
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
 from src.core.transport_helpers import resolve_identity_from_context
-
-logger = logging.getLogger(__name__)
 
 
 def _db_account_to_schema(db_account: DBAccount) -> Account:
@@ -251,28 +251,6 @@ def _enum_to_str(val: Any) -> str | None:
     return enum_value(val)
 
 
-def _serialize_governance_agents(agents: Any) -> list[dict[str, Any]] | None:
-    """Convert GovernanceAgent models to JSON-serializable dicts for DB storage.
-
-    Both dict and model inputs are normalized through model_dump(mode="json")
-    to ensure consistent comparison (e.g., AnyUrl → str).
-    """
-    from adcp.types.generated_poc.core.account import GovernanceAgent  # TODO: no stable alias in adcp.types
-
-    if agents is None:
-        return None
-    result: list[dict[str, Any]] = []
-    for g in agents:
-        if isinstance(g, dict):
-            # Validate through model to normalize types (AnyUrl → str, etc.)
-            result.append(GovernanceAgent.model_validate(g).model_dump(mode="json"))
-        elif hasattr(g, "model_dump"):
-            result.append(g.model_dump(mode="json"))
-        else:
-            result.append(dict(g))
-    return result
-
-
 def _account_fields_changed(db_account: DBAccount, entry: Any) -> dict[str, Any]:
     """Compare incoming sync entry fields against existing DB account.
 
@@ -295,13 +273,13 @@ def _account_fields_changed(db_account: DBAccount, entry: Any) -> dict[str, Any]
     if db_sandbox != sandbox_val:
         changes["sandbox"] = entry.sandbox
 
-    # Compare governance_agents (JSON field)
-    # Both sides must be serialized to dicts for comparison — db_account.governance_agents
-    # is hydrated to list[GovernanceAgent] by JSONType, while incoming is already serialized.
-    incoming_gov = _serialize_governance_agents(getattr(entry, "governance_agents", None))
-    db_gov = _serialize_governance_agents(db_account.governance_agents)
-    if db_gov != incoming_gov:
-        changes["governance_agents"] = incoming_gov
+    # NOTE: governance_agents is deliberately NOT compared/updated here. It is not
+    # part of the sync_accounts request contract (the generated SyncAccountsAccount
+    # declares no such field — it is only ever seen via extra="allow", hence always
+    # absent), and it is owned by sync_governance (UC-030). Reading an absent field
+    # off `entry` yielded None, which a metadata-only re-sync then wrote back as a
+    # change → NULLing an existing governance binding (confirmed data-loss,
+    # #1329). sync_accounts must not touch a field outside its contract.
 
     return changes
 
@@ -316,7 +294,7 @@ def _build_sync_result(
     name: str | None = None,
     billing: str | None = None,
     sandbox: bool | None = None,
-    errors: list[Any] | None = None,
+    errors: list[LibraryError] | None = None,
     setup: Any | None = None,
 ) -> SyncResponseAccount:
     """Build an AdCP sync response Account object.
@@ -362,24 +340,42 @@ def _build_setup_for_approval(mode: str, tenant_id: str) -> Any:
     return None
 
 
-def _check_domain_validity(brand_domain: str) -> list[Any] | None:
+# Advisory per-account Error code + recovery, DERIVED from the canonical exception class
+# metadata via the PUBLIC advisory_defaults() accessor (not the private _default_* attrs —
+# #1329) so a per-account advisory cannot drift from the code/recovery the rest of the codebase
+# raises for the same condition. VALIDATION_ERROR has a typed home (AdCPValidationError).
+# BILLING_NOT_SUPPORTED has no typed subclass (advisory-only), but it IS a WIRE_STANDARD_CODES
+# entry via _SPEC_SUPPLEMENT_CODES (pinned enum: correctable), so build_advisory_error routes it
+# through to_wire_error_code UNCHANGED — the buyer sees BILLING_NOT_SUPPORTED, not a translated
+# code (the earlier "maps to UNSUPPORTED_FEATURE via ERROR_CODE_MAPPING" was never true for an
+# advisory, which serializes verbatim). Its recovery literal is pinned against the pinned
+# error-code.json enumMetadata by test_billing_not_supported_recovery_matches_pinned_enum.
+_validation_error_defaults = AdCPValidationError.advisory_defaults()
+_VALIDATION_ERROR_CODE = _validation_error_defaults.error_code
+_VALIDATION_ERROR_RECOVERY = _validation_error_defaults.recovery
+_BILLING_NOT_SUPPORTED_CODE = "BILLING_NOT_SUPPORTED"
+_BILLING_NOT_SUPPORTED_RECOVERY: RecoveryHint = "correctable"
+
+
+def _check_domain_validity(brand_domain: str) -> list[LibraryError] | None:
     """Check if the brand domain is valid for account provisioning.
 
     Returns a list of Error objects if invalid, None if valid.
     Reserved TLDs (.test, .invalid, .example, .localhost) are rejected.
+    The advisory Error is built by the single shared ``build_advisory_error`` builder
+    at the error boundary (#1329).
     """
-    from adcp.types import Error
-
     reserved_tlds = {".test", ".invalid", ".example", ".localhost"}
     for tld in reserved_tlds:
         if brand_domain.endswith(tld):
             return [
-                Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
-                    code="VALIDATION_ERROR",
+                build_advisory_error(
+                    code=_VALIDATION_ERROR_CODE,
                     message=f"Domain '{brand_domain}' uses reserved TLD '{tld}' "
                     f"and cannot be used for account provisioning.",
                     suggestion="Use a real domain name for production accounts.",
                     field="brand.domain",
+                    recovery=_VALIDATION_ERROR_RECOVERY,
                 )
             ]
     return None
@@ -387,29 +383,30 @@ def _check_domain_validity(brand_domain: str) -> list[Any] | None:
 
 def _check_billing_policy(
     billing_val: str | None,
-    identity: ResolvedIdentity,
-) -> list[Any] | None:
-    """Check if the billing model is supported by the seller.
+    supported: list[BillingParty],
+) -> list[LibraryError] | None:
+    """Check a single account entry's billing model against the seller's accepted set.
 
     Returns a list of Error objects if rejected, None if accepted.
     Per BR-RULE-059: unsupported billing → BILLING_NOT_SUPPORTED.
+
+    ``supported`` is the accepted set resolved ONCE by the caller (before any DB work)
+    via ``resolve_supported_billing`` — the SAME resolver get_adcp_capabilities
+    advertises through, so what the buyer sees in ``account.supported_billing`` is
+    exactly what this gate accepts (#1329). It is passed in rather than resolved
+    per-entry because the value depends only on ``identity.tenant`` (never on the
+    entry), and a seller-misconfiguration raise must fire as a precondition before the
+    UoW opens, not up to 100 times mid-loop after earlier entries have persisted
+    (#1329). This function keeps its "returns errors, never raises" contract.
     """
-    from adcp.types import Error
-
-    # Read billing policy from tenant configuration (not identity).
-    # Both dict and TenantContext expose .get() identically, so no branching needed.
-    tenant = identity.tenant if identity else None
-    supported = tenant.get("supported_billing") if tenant else None
-    if supported is None:
-        return None  # No policy configured → accept all
-
     if billing_val not in supported:
         return [
-            Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
-                code="BILLING_NOT_SUPPORTED",
+            build_advisory_error(
+                code=_BILLING_NOT_SUPPORTED_CODE,
                 message=f"Billing model '{billing_val}' is not supported by this seller. "
                 f"Supported models: {', '.join(supported)}.",
                 suggestion=f"Use one of the supported billing models: {', '.join(supported)}.",
+                recovery=_BILLING_NOT_SUPPORTED_RECOVERY,
             )
         ]
     return None
@@ -473,11 +470,20 @@ async def _sync_accounts_impl(
 
     # BR-RULE-055: sync requires auth (consistent with list_accounts). require_principal_id
     # first so the canonical auth message surfaces for a missing/anonymous token; require_identity
-    # then narrows the type for _check_billing_policy below.
+    # then narrows the type for the tenant lookup + billing precondition below.
     principal_id = require_principal_id(identity, context=req.context)
     identity = require_identity(identity, context=req.context)
     tenant = require_tenant(identity, context=req.context)
     tenant_id = tenant["tenant_id"]
+
+    # Seller-config precondition, resolved ONCE before any DB work (#1329):
+    # the accepted billing set depends only on identity.tenant, and a misconfigured
+    # tenant must raise AdCPConfigurationError (TERMINAL) here — beside the auth/tenant
+    # preconditions — not per-entry inside the UoW where it could fire after earlier
+    # accounts have already persisted. The set stays typed as ``list[BillingParty]`` (a
+    # ``StrEnum``, so membership + join work unprojected) all the way to the gate, so a
+    # typo'd literal cannot type-check clean at the node that decides what is accepted.
+    supported_billing: list[BillingParty] = resolve_supported_billing(tenant)
 
     # Validate non-empty accounts array
     if not req.accounts:
@@ -513,8 +519,9 @@ async def _sync_accounts_impl(
                 )
                 continue
 
-            # BR-RULE-059: check billing policy before processing
-            billing_errors = _check_billing_policy(billing_val, identity)
+            # BR-RULE-059: check billing policy before processing (accepted set
+            # resolved once above, not per-entry — #1329).
+            billing_errors = _check_billing_policy(billing_val, supported_billing)
             if billing_errors is not None:
                 results.append(
                     _build_sync_result(
@@ -582,7 +589,9 @@ async def _sync_accounts_impl(
                 # Create new account
                 billing_val = _enum_to_str(entry.billing)
                 payment_terms_val = _enum_to_str(entry.payment_terms)
-                governance_agents_val = _serialize_governance_agents(getattr(entry, "governance_agents", None))
+                # governance_agents is not in the sync_accounts contract (owned by
+                # sync_governance, #1329) — a fresh account starts
+                # with no binding (column defaults to NULL); it is set via UC-030.
 
                 account_id = _generate_account_id()
                 account_name = _generate_account_name(brand_domain, operator, brand_id)
@@ -625,7 +634,6 @@ async def _sync_accounts_impl(
                     billing=billing_val,
                     payment_terms=payment_terms_val,
                     sandbox=sandbox,
-                    governance_agents=governance_agents_val,
                     principal_id=principal_id,
                 )
                 repo.create(new_account)

@@ -13,7 +13,6 @@ Usage::
 
 from __future__ import annotations
 
-import functools
 import json
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -21,26 +20,17 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from tests.helpers import pinned_schema
 
-
-@functools.lru_cache(maxsize=1)
 def _pinned_error_metadata() -> dict[str, dict[str, str]]:
-    """code -> {recovery, suggestion} from the installed SDK's error-code enum.
+    """code -> {recovery, suggestion} — delegates to the PUBLIC ``pinned_error_metadata``.
 
-    Only the ``recovery`` field is actually read by this module (assert_wire_error
-    below) — verified safe to source from the SDK tree: the SDK's enum is a
-    strict superset of the older vendored fixture (92 vs 64 codes, fixture-only
-    set empty) and its ``recovery`` classification is IDENTICAL across every one
-    of the 64 shared codes (0 divergences). ``suggestion`` DOES diverge on 4
-    codes between the two sources — but this module never reads that field
-    (extract_wire_suggestion below reads the WIRE's own suggestion text, not
-    this metadata), so that divergence has no effect here. Consumers that DO
-    grade ``suggestion`` content (test_architecture_error_suggestion_enum_conformance.py)
-    stay on the vendored fixture — see docs/adcp-spec-version.md "Pinned schema sources"
-    (which also cites the command to reproduce the 64-code fixture count).
+    The private module-local name is retained for the in-module methods and the existing
+    ``from tests.harness.transport import _pinned_error_metadata`` call sites; the loader and
+    its per-field source contract now live once in ``tests.helpers.error_metadata`` (#1329).
     """
-    return pinned_schema.load("error-code.json")["enumMetadata"]
+    from tests.helpers.error_metadata import pinned_error_metadata
+
+    return pinned_error_metadata()
 
 
 def extract_wire_suggestion(envelope: dict | None) -> str | None:
@@ -341,6 +331,9 @@ class TransportResult:
         recovery: str | None = None,
         require_suggestion: bool = False,
         message_substr: str | None = None,
+        field: str | None = None,
+        field_substr: str | None = None,
+        suggestion_substr: str | None = None,
     ) -> None:
         """Assert this result carries the AdCP two-layer wire error ``code``.
 
@@ -351,6 +344,12 @@ class TransportResult:
         non-vacuous without per-scenario duplication. This is the single
         harness-provided way to verify an error on the wire — step definitions
         must not hand-roll envelope parsing.
+
+        ``message_substr`` / ``suggestion_substr`` pin the buyer-facing message and
+        suggestion CONTENT (not merely their presence), so a transport-blind scenario
+        can assert the SAME strings on every transport — a per-transport message/
+        suggestion fork (e.g. MCP surfacing a different text than A2A/REST) then reddens
+        instead of passing because ``field`` alone matched (#1329).
         """
         from tests.helpers import assert_envelope_shape
 
@@ -368,7 +367,106 @@ class TransportResult:
             f"(is_error={self.is_error}, payload={self.payload!r}). The operation either "
             "succeeded or errored before reaching a transport."
         )
-        assert_envelope_shape(envelope, code, recovery=expected_recovery, message_substr=message_substr)
-        if require_suggestion:
+        assert_envelope_shape(
+            envelope,
+            code,
+            recovery=expected_recovery,
+            message_substr=message_substr,
+            field=field,
+            field_substr=field_substr,
+        )
+        if require_suggestion or suggestion_substr is not None:
             suggestion = extract_wire_suggestion(envelope)
             assert suggestion, f"Expected a non-empty suggestion in the {code} wire envelope: {envelope}"
+            if suggestion_substr is not None:
+                assert suggestion_substr in suggestion, (
+                    f"Expected suggestion to contain {suggestion_substr!r} in the {code} wire envelope, "
+                    f"got {suggestion!r}"
+                )
+
+    def assert_wire_error_shape(self) -> None:
+        """Assert a well-formed two-layer AdCP error envelope WITHOUT pinning the code.
+
+        Code-agnostic structural grade: both layers present, their codes non-empty AND
+        agreeing, and a recovery hint set. The SPECIFIC code is pinned separately (by
+        ``assert_wire_error`` or a following ``the error code is "X"`` step), so this is the
+        single home for "the envelope is a real two-layer error" that step definitions must
+        not re-hand-roll by digging ``adcp_error.code``/``errors[0].code``/``recovery`` out
+        of the dict themselves. A single-layer or code-less envelope ("flip the code to
+        garbage and this stays green" no longer holds) fails here (#1329).
+        """
+        envelope = self.wire_error_envelope
+        assert envelope is not None, (
+            f"expected a two-layer wire error envelope, but none was captured "
+            f"(is_error={self.is_error}, payload={self.payload!r})"
+        )
+        top = (envelope.get("adcp_error") or {}).get("code")
+        leaf = (envelope.get("errors") or [{}])[0].get("code")
+        assert top and leaf and top == leaf, f"malformed/disagreeing two-layer error codes: {envelope}"
+        assert (envelope.get("errors") or [{}])[0].get("recovery"), f"error missing recovery hint: {envelope}"
+
+    def assert_secret_absent(self, secret: str) -> None:
+        """Assert ``secret`` reaches NEITHER the success wire body NOR the error envelope.
+
+        Scans BOTH ``wire_response`` (success-path body) and ``wire_error_envelope`` (error
+        envelope) — a credential must never be echoed on either the accept OR the reject
+        path. Raises LOUDLY if NEITHER is populated: nothing was captured to scan, so a
+        green here would be vacuous (the dispatch neither succeeded with a body nor errored
+        with an envelope). Single home for the "credential absent on the wire" invariant so
+        the BDD leak steps + integration redaction tests stop each re-implementing a
+        ``secret not in str(envelope)`` scan (#1329).
+        """
+        haystacks: list[tuple[str, dict[str, Any]]] = []
+        if self.wire_response is not None:
+            haystacks.append(("wire_response", self.wire_response))
+        if self.wire_error_envelope is not None:
+            haystacks.append(("wire_error_envelope", self.wire_error_envelope))
+        assert haystacks, (
+            "assert_secret_absent captured no wire (neither wire_response nor wire_error_envelope "
+            f"populated) — nothing to scan (is_error={self.is_error}, payload={self.payload!r})"
+        )
+        for name, body in haystacks:
+            assert secret not in str(body), f"leaked secret reached the {name}: {body!r}"
+
+    def assert_account_error(self, account_id: str, code: str, *, recovery: str | None = None) -> None:
+        """Assert the per-account entry for ``account_id`` (SUCCESS envelope) carries ``code``.
+
+        A per-account failure lives under ``accounts[]`` (``status=failed`` + a per-account
+        ``errors[]``) of the partial-failure SUCCESS variant, NOT the top-level error
+        envelope (spec oneOf: accounts XOR adcp_error). Finds the entry by its echoed ref
+        (the ref-echo grade — raises if the requested id was not echoed), asserts it failed,
+        and pins ``code`` + recovery on its ``errors[]``. Recovery defaults to the PINNED
+        AdCP enum's classification for ``code`` (pin-wins) exactly as ``assert_wire_error``
+        does (reuses ``_pinned_error_metadata``), so a per-account recovery drift reddens
+        without a per-scenario literal (#1329). Single home for per-account wire
+        reads so the ``then_per_account_*`` steps stop hand-rolling the accounts[] scan.
+        """
+        meta = _pinned_error_metadata()
+        spec = meta.get(code)
+        assert spec is not None, (
+            f"{code!r} is not a canonical AdCP error code (pinned error-code.json). "
+            "Reconcile the feature to a canonical code."
+        )
+        expected_recovery = recovery if recovery is not None else spec["recovery"]
+
+        body = self.wire_response
+        assert body is not None, (
+            "assert_account_error needs the success-path wire (wire_response); none captured "
+            f"(is_error={self.is_error}). A per-account failure is the SUCCESS variant, not a "
+            "top-level error."
+        )
+        accounts = body.get("accounts") or []
+        matched = [a for a in accounts if (a.get("account") or {}).get("account_id") == account_id]
+        available = [(a.get("account") or {}).get("account_id") for a in accounts]
+        assert matched, f"no wire account {account_id!r}; available: {available}"
+        acct = matched[0]
+        assert acct.get("status") == "failed", (
+            f"account {account_id} expected per-account status 'failed', got {acct.get('status')!r}: {acct}"
+        )
+        errs = acct.get("errors") or []
+        codes = {e.get("code") for e in errs}
+        assert code in codes, f"account {account_id} per-account errors {codes} do not include {code!r}"
+        recoveries = {e.get("recovery") for e in errs if e.get("code") == code}
+        assert recoveries == {expected_recovery}, (
+            f"account {account_id} {code} recovery {recoveries} must equal the pinned enum {expected_recovery!r}"
+        )

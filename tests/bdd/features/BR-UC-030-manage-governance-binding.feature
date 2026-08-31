@@ -124,12 +124,32 @@ Feature: BR-UC-030 Manage Governance Binding
     # PRE-B7, BR-6
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
 
+  @T-UC-030-sync-secret-not-on-wire @sync @validation @security @credential-redaction @partition @post-s2
+  Scenario Outline: sync_governance rejects a governance agent that leaks a secret via <channel> without the secret reaching the wire
+    Given the Buyer Agent has an authenticated connection
+    When the Buyer Agent sends a sync_governance request with idempotency_key "uuid-v4-secret-000000000042" and account "acct-social-001" whose governance agent leaks a secret via <channel>
+    Then the response is a CREDENTIAL_IN_ARGS error on the wire naming the governance agent field
+    And the wire envelope does NOT contain the leaked secret
+
+    Examples:
+      | channel                  |
+      | url-userinfo             |
+      | extra-authentication-key |
+    # PRE-B7, BR-6 — credential channels: a credential placed in request args (embedded in the
+    # agent URL's userinfo, or a mistyped extra authentication key carrying a secret) is rejected
+    # with the pinned CREDENTIAL_IN_ARGS code (terminal — auto-retry re-logs the credential) AND
+    # must never be echoed on the buyer wire. Graded on ALL of a2a + mcp + rest: the MCP compat
+    # middleware routes a TypeAdapter rejection through the same adcp_validation_error_from path as
+    # A2A/REST, so the credential-in-args detection + redaction hold on the MCP wire for the right
+    # reason — no transport is xfailed.
+    # @source dist/docs/3.1.1/building/by-layer/L2/authentication.mdx @ v3.1.1 (adcp==6.6.0)
+
   @T-UC-030-sync-multiple-agents-rejected @sync @validation @partition @boundary @cardinality
   Scenario: sync_governance with more than one governance_agents entry per account is rejected (maxItems 1)
     Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_governance request via MCP with idempotency_key "uuid-v4-maxitems-0000000000009" and account "acct-social-001" bound to TWO governance agents "https://governance.pinnacle-media.com" and "https://governance.acme-buyer.com"
     Then the response variant is error
-    And the error references the governance_agents cardinality
+    And the error references the governance_agents maximum cardinality
     # PRE-B4, BR-2
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
 
@@ -138,7 +158,7 @@ Feature: BR-UC-030 Manage Governance Binding
     Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_governance request via MCP with idempotency_key "uuid-v4-minitems-0000000000010" and account "acct-social-001" with an empty governance_agents array
     Then the response variant is error
-    And the error references the governance_agents cardinality
+    And the error references the governance_agents minimum cardinality
     # PRE-B4, BR-2
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/sync-governance-request.json
 
@@ -176,7 +196,9 @@ Feature: BR-UC-030 Manage Governance Binding
     When the Buyer Agent sends a sync_governance request via MCP with idempotency_key "uuid-v4-noauthor-0000000000013" and one account "acct-not-mine" bound to governance agent "https://governance.pinnacle-media.com" with Bearer credentials of length 64
     Then the response variant is success
     And the account "acct-not-mine" has status "failed"
-    And the per-account errors include a SCOPE_INSUFFICIENT or ACCOUNT_NOT_FOUND code
+    And the per-account errors include an ACCOUNT_NOT_FOUND code
+    And each per-account error should include a "recovery" field guiding remediation
+    And the per-account error message does not reveal whether the account exists
     # PRE-B8, BR-7
 
   @T-UC-030-sync-partial @sync @partial-failure @ext-b

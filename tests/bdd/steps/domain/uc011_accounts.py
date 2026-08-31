@@ -193,8 +193,18 @@ def given_seller_internal_failure(ctx: dict) -> None:
 
 @given("the seller does not support any of the requested billing models")
 def given_seller_no_billing(ctx: dict) -> None:
-    """Configure seller to reject all billing models."""
-    _set_billing_policy(ctx, [])  # Empty list = reject everything
+    """Configure the seller to accept billing, but none the scenario requests.
+
+    The scenario requests ``operator`` billing, so seed a valid, non-empty
+    account-billable set that excludes it (``agent`` is the only other
+    account-billable party). Each account then fails the per-account
+    BILLING_NOT_SUPPORTED gate (action="failed") while the operation still
+    returns the success variant. An empty ``[]`` is NOT usable here: it is a
+    seller misconfiguration that resolve_supported_billing rejects with a
+    terminal operation-level CONFIGURATION_ERROR (3.1.1 account.supported_billing
+    is minItems: 1), which would fail the atomic-all-failed success contract.
+    """
+    _set_billing_policy(ctx, ["agent"])  # valid non-empty set excluding the requested "operator"
 
 
 def _set_billing_policy(ctx: dict, supported: list[str]) -> None:

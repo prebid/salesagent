@@ -53,9 +53,11 @@ def test_a2a_validation_boundary_preserves_contextual_error_format():
             raise error
 
     assert "Invalid parameters:" in exc_info.value.message
-    assert "packages.0.product_id: Required field is missing" in exc_info.value.message
+    # One bracket spelling everywhere: the message bullet, the field, AND the suggestion now
+    # all render the same buyer path via format_buyer_field_path (#1329 finding 3).
+    assert "packages[0].product_id: Required field is missing" in exc_info.value.message
     assert exc_info.value.field == "packages[0].product_id"
-    assert exc_info.value.suggestion == ("Provide the required 'packages.0.product_id' field and resend the request.")
+    assert exc_info.value.suggestion == ("Provide the required 'packages[0].product_id' field and resend the request.")
     assert exc_info.value.details == {
         "validation_errors": [
             {

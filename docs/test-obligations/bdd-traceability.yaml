@@ -15707,6 +15707,12 @@ mappings:
       upstream_refs: ["BR-UC-030"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-030-sync-secret-not-on-wire"
+      adcp_feature: "BR-UC-030-manage-governance-binding.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-030"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-030-sync-multiple-agents-rejected"
       adcp_feature: "BR-UC-030-manage-governance-binding.feature"
       obligation_id: null

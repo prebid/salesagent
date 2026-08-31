@@ -849,6 +849,11 @@ class Account(Base):
             "status IN ('active', 'pending_approval', 'rejected', 'payment_required', 'suspended', 'closed')",
             name="ck_accounts_status",
         ),
+        # Permits {operator, agent} only; `advertiser` is deliberately excluded —
+        # this seller has no direct advertiser-billing relationship. This set is the
+        # source of truth mirrored by account_helpers.SELLER_ACCOUNT_BILLING (read via
+        # resolve_supported_billing); the two are pinned together by
+        # test_get_adcp_capabilities.TestSupportedBillingParity.
         CheckConstraint(
             "billing IS NULL OR billing IN ('operator', 'agent')",
             name="ck_accounts_billing",

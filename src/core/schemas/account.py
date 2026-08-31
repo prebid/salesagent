@@ -11,17 +11,23 @@ SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
   Architectural; permanent.
 """
 
-from typing import ClassVar
+from typing import ClassVar, Literal, NoReturn
 
 from adcp.types import Account as LibraryAccountDomain
+from adcp.types import AccountReference as LibraryAccountReference
+from adcp.types import CoreGovernanceAgent as LibraryGovernanceAgent
 from adcp.types import Error as LibraryError
 from adcp.types import ListAccountsRequest as LibraryListAccountsRequest
 from adcp.types import ListAccountsResponse as LibraryListAccountsResponse
 from adcp.types import Setup as LibrarySetup
 from adcp.types import SyncAccountsRequest as LibrarySyncAccountsRequest
+from adcp.types import SyncGovernanceRequest as LibrarySyncGovernanceRequest
+from adcp.types import SyncGovernanceResponse as LibrarySyncGovernanceResponse
 from adcp.types.aliases import SyncAccountsSuccessResponse as LibrarySyncAccountsSuccess
 from adcp.types.generated_poc.core.brand_ref import BrandReference as LibraryBrandReference
-from pydantic import ConfigDict
+from pydantic import ConfigDict, model_validator
+from pydantic_core import InitErrorDetails, PydanticCustomError
+from pydantic_core import ValidationError as CoreValidationError
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import (
@@ -30,6 +36,7 @@ from src.core.schemas._base import (
     NestedModelSerializerMixin,
     SalesAgentBaseModel,
 )
+from src.core.webhook_validator import webhook_url_for_log
 
 # ---------------------------------------------------------------------------
 # Core domain Account (used in ListAccountsResponse.accounts)
@@ -190,11 +197,128 @@ class SyncAccountsResponse(
         return f"Synced {count} account{'s' if count != 1 else ''}{dry_run_note}."
 
 
+# ---------------------------------------------------------------------------
+# sync_governance — bind a governance agent per account (UC-030, #1329)
+# ---------------------------------------------------------------------------
+
+
+def _raise_governance_url_error(loc: tuple[str | int, ...], message: str, input_value: str) -> NoReturn:
+    """Raise a field-located ``ValidationError`` for a rejected governance agent url.
+
+    A ``model_validator(mode="after")`` that raises a bare ``ValueError`` produces
+    ``loc=()`` — the buyer wire then carries ``field=""`` on both envelope layers and an
+    empty bullet. Emitting an explicit ``loc`` via ``from_exception_data`` restores the
+    ``accounts[i].governance_agents[j].url`` field pointer so error consumers (and the
+    BR-UC-030 wire steps) can pin ``field=`` instead of a free-text message match
+    (#1329). The rendered message must be a literal (no ``{}`` placeholders) —
+    ``PydanticCustomError`` treats the second arg as a template.
+    """
+    raise CoreValidationError.from_exception_data(
+        "SyncGovernanceRequest",
+        [InitErrorDetails(type=PydanticCustomError("value_error", message), loc=loc, input=input_value)],
+    )
+
+
+class SyncGovernanceRequest(LibrarySyncGovernanceRequest):
+    """Extends library SyncGovernanceRequest.
+
+    Library provides: idempotency_key (required), accounts, context, ext.
+    Per the pinned 3.1.1 schema (account/sync-governance-request.json),
+    ``idempotency_key`` is REQUIRED (``x-mutates-state: true``) and each
+    ``accounts[]`` entry pairs an ``AccountReference`` with a ``governance_agents``
+    array of ``maxItems: 1``. Unlike SyncAccountsRequest, we do NOT relax
+    ``idempotency_key`` to optional: UC-030 grades rejection when it is absent,
+    so a missing key must surface as a validation error, not be auto-generated.
+    """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    @model_validator(mode="after")
+    def _validate_governance_agent_url_shape(self) -> "SyncGovernanceRequest":
+        """Enforce the ``^https://`` url SHAPE the SDK codegen drops (uniform across transports).
+
+        The pinned 3.1.1 request schema marks the agent ``url`` ``pattern: ^https://``, but the
+        generated ``AnyUrl`` field does not carry that constraint (SDK codegen gap), so an
+        ``http://`` url would slip through. This is a pure schema-SHAPE check — env-independent —
+        so it stays on the type as a field-located ``VALIDATION_ERROR`` at construction. The
+        rendered message shows only the sanitized url (``webhook_url_for_log`` strips userinfo +
+        query + fragment), so it can never echo a credential.
+
+        The credential-in-args (userinfo) and SSRF-host policies are NOT here: they raise typed
+        AdCPErrors — ``CREDENTIAL_IN_ARGS`` (terminal) for embedded userinfo, and the repo-owned
+        webhook-registration SSRF gate for disallowed hosts — so they live in
+        ``governance.build_sync_governance_request`` AFTER construction, off the type layer, as the
+        ONE host-policy home shared with webhook registration (no forked policy in the model,
+        #1329). The schema layer must not depend on ``src/core/security``.
+        """
+        for a_idx, account in enumerate(self.accounts):
+            for g_idx, agent in enumerate(account.governance_agents):
+                url_str = str(agent.url)
+                if not url_str.startswith("https://"):
+                    loc = ("accounts", a_idx, "governance_agents", g_idx, "url")
+                    safe_url = webhook_url_for_log(url_str)
+                    _raise_governance_url_error(
+                        loc, f"governance agent url must use https:// (got '{safe_url}')", safe_url
+                    )
+        return self
+
+
+class SyncGovernanceResponseAccount(SalesAgentBaseModel):
+    """Per-account result in a sync_governance response.
+
+    The SDK collapsed the response ``oneOf`` into a flat envelope with a bare
+    ``payload`` dict (no typed ``accounts``), so — mirroring SyncResponseAccount
+    — we own this model. Shape from the pinned 3.1.1 success variant
+    (sync-governance-response.json ``accounts.items``): ``account`` echoed,
+    ``status`` in {synced, failed}, ``governance_agents`` present on synced
+    entries (url only), per-account ``errors`` present on failed entries.
+    """
+
+    account: LibraryAccountReference
+    # Two-member enum per the pinned sync-governance-response.json (status.enum
+    # ["synced","failed"]); a Literal makes the constraint structural rather than
+    # call-site discipline.
+    status: Literal["synced", "failed"]
+    # The echoed agent is the SDK's url-only ``CoreGovernanceAgent`` (Pattern #1): the
+    # response MUST NOT echo credentials (sync-governance-response.json success
+    # ``governance_agents.items`` = url only), and the SDK ships exactly that url-only
+    # type — reusing it makes credential-strip a structural guarantee AND keeps the echo
+    # in lockstep with the pinned schema instead of a hand-maintained parallel type.
+    governance_agents: list[LibraryGovernanceAgent] | None = None
+    errors: list[LibraryError] | None = None
+
+
+class SyncGovernanceResponse(NestedModelSerializerMixin, LibrarySyncGovernanceResponse):
+    """Extends library SyncGovernanceResponse (success variant).
+
+    The library type is the flattened protocol envelope; ``accounts`` is
+    re-declared locally (Pattern #4 nested serialization) and is REQUIRED on
+    the success variant (sync-governance-response.json ``oneOf`` requires
+    ``accounts`` on success | ``errors`` on error). ``status`` defaults to
+    ``completed`` on the library base — the synchronous success path — so it is
+    not set here. ``context`` (inherited from the protocol envelope) is echoed
+    unchanged, which the specialism storyboards grade.
+    """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    accounts: list[SyncGovernanceResponseAccount]
+
+    def __str__(self) -> str:
+        """Return human-readable summary message for protocol envelope."""
+        synced = sum(1 for a in self.accounts if a.status == "synced")
+        total = len(self.accounts)
+        return f"Synced governance for {synced}/{total} account{'s' if total != 1 else ''}."
+
+
 __all__ = [
     "Account",
     "ListAccountsRequest",
     "ListAccountsResponse",
     "SyncAccountsRequest",
     "SyncAccountsResponse",
+    "SyncGovernanceRequest",
+    "SyncGovernanceResponse",
+    "SyncGovernanceResponseAccount",
     "SyncResponseAccount",
 ]

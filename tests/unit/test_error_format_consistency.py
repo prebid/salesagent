@@ -753,6 +753,7 @@ class TestErrorCodeVocabularyConsistency:
         "RATE_LIMITED",  # SDK standard: rate limiting
         "SERVICE_UNAVAILABLE",  # SDK standard: adapter/service failures
         "CONFIGURATION_ERROR",  # Spec supplement: passthrough wire code, pinned terminal
+        "CREDENTIAL_IN_ARGS",  # Spec supplement: AdCPCredentialInArgsError (credential-in-args, pinned terminal, #1329)
         # SDK standard codes added by the error-emission-architecture substrate.
         "MEDIA_BUY_NOT_FOUND",  # SDK standard: AdCPMediaBuyNotFoundError
         "PACKAGE_NOT_FOUND",  # SDK standard: AdCPPackageNotFoundError

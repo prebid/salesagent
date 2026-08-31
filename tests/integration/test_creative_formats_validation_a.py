@@ -292,7 +292,10 @@ class TestMalformedFormatIdObjects:
             TenantFactory(tenant_id="test_tenant")
 
             result = env.call_via(Transport.MCP, format_ids=[{"id": "no_agent_url"}])
-            assert_rejected(result, field="agent_url", reason="Field required")
+            # MCP renders the shared rich validation message ("Required field is
+            # missing"), identical to A2A/REST, not the leaf Pydantic "Field
+            # required" (#1329).
+            assert_rejected(result, field="agent_url", reason="Required field is missing")
 
     def test_valid_format_ids_accepted(self, integration_db):
         """UC-005-EXT-B-02 (positive counterpart): well-formed FormatId objects are accepted.

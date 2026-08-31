@@ -19,7 +19,11 @@ import pytest
 
 from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
 
-TOOLS_DIR = Path("src/core/tools")
+# Repo root anchored to THIS file, not the cwd: a cwd-relative path made the guard
+# vacuous when pytest ran from src/ (every module file "not found" → no call-arg sets →
+# green while scanning nothing). Mirrors test_architecture_repository_pattern (#1329).
+ROOT = Path(__file__).resolve().parents[2]
+TOOLS_DIR = ROOT / "src/core/tools"
 
 # All _impl functions and their modules
 IMPL_REGISTRY = [
@@ -36,6 +40,9 @@ IMPL_REGISTRY = [
     ("src.core.tools.media_buy_list", "_get_media_buys_impl"),
     ("src.core.tools.signals", "_get_signals_impl"),
     ("src.core.tools.signals", "_activate_signal_impl"),
+    ("src.core.tools.accounts", "_sync_accounts_impl"),
+    ("src.core.tools.accounts", "_list_accounts_impl"),
+    ("src.core.tools.governance", "_sync_governance_impl"),
 ]
 
 # Known violations: (module_path, impl_name, wrapper_kind, missing_param)
@@ -48,13 +55,13 @@ BOUNDARY_RESOLVED_PARAMS = {"identity"}
 
 
 def _module_to_filepath(module_path: str) -> Path:
-    """Convert dotted module path to filesystem path."""
+    """Convert dotted module path to a repo-root-anchored filesystem path."""
     parts = module_path.replace(".", "/")
-    path = Path(f"{parts}.py")
+    path = ROOT / f"{parts}.py"
     if path.exists():
         return path
     # Try as package __init__
-    pkg_path = Path(parts) / "__init__.py"
+    pkg_path = ROOT / parts / "__init__.py"
     if pkg_path.exists():
         return pkg_path
     return path
@@ -100,9 +107,14 @@ def _find_impl_call_args_in_function(file_path: Path, wrapper_name: str, impl_na
     """Find calls to impl_name within wrapper_name in a file using AST.
 
     Returns list of (keyword_arg_names, positional_arg_count) tuples.
+
+    Loud, not vacuous: this is only called for a REGISTERED wrapper, so a missing file or
+    an un-findable wrapper function is a real regression (moved/renamed/dynamically built),
+    not a reason to silently pass — mirror the loud assert in test_no_toolerror_in_impl
+    (#1329). The old ``return []`` here let a wrapper that stopped calling its
+    _impl by name pass with zero call-arg sets checked.
     """
-    if not file_path.exists():
-        return []
+    assert file_path.exists(), f"registered wrapper file not found (moved/renamed?): {file_path}"
 
     source = file_path.read_text()
     try:
@@ -118,8 +130,10 @@ def _find_impl_call_args_in_function(file_path: Path, wrapper_name: str, impl_na
                 wrapper_node = node
                 break
 
-    if wrapper_node is None:
-        return []
+    assert wrapper_node is not None, (
+        f"registered wrapper function '{wrapper_name}' not found in {file_path} — "
+        f"the boundary-completeness guard cannot check a wrapper it cannot locate (#1329)"
+    )
 
     # Find _impl calls within the wrapper function body
     results = []
@@ -149,8 +163,13 @@ def _check_wrapper_completeness(
     file_path = _module_to_filepath(wrapper_module)
     call_arg_sets = _find_impl_call_args_in_function(file_path, wrapper_name, impl_name)
 
-    if not call_arg_sets:
-        return []
+    # A REGISTERED wrapper that never calls its _impl by name is the exact vacuity this
+    # guard exists to prevent — the boundary would be checking nothing. Fail loud rather
+    # than the old silent ``return []`` (#1329).
+    assert call_arg_sets, (
+        f"{wrapper_kind.upper()} wrapper '{wrapper_name}' in {wrapper_module} does not call "
+        f"{impl_name} by name — the boundary-completeness check would be vacuous for it (#1329)"
+    )
 
     violations = []
     for kwargs, n_positional in call_arg_sets:

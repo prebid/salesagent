@@ -41,6 +41,7 @@ MCP_WRAPPERS = [
     ("src.core.tools.properties", "list_authorized_properties"),
     ("src.core.tools.accounts", "list_accounts"),
     ("src.core.tools.accounts", "sync_accounts"),
+    ("src.core.tools.governance", "sync_governance"),
     ("src.core.tools.capabilities", "get_adcp_capabilities"),
     ("src.core.tools.creative_formats", "list_creative_formats"),
 ]
@@ -57,6 +58,7 @@ A2A_RAW_WRAPPERS = [
     ("src.core.tools.properties", "list_authorized_properties_raw"),
     ("src.core.tools.accounts", "list_accounts_raw"),
     ("src.core.tools.accounts", "sync_accounts_raw"),
+    ("src.core.tools.governance", "sync_governance_raw"),
     ("src.core.tools.capabilities", "get_adcp_capabilities_raw"),
     ("src.core.tools.creative_formats", "list_creative_formats_raw"),
     ("src.core.tools.signals", "get_signals_raw"),

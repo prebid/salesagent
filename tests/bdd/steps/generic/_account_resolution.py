@@ -14,7 +14,12 @@ removed: they bypassed the wire and reconstructed errors the harness never saw.
 
 from __future__ import annotations
 
-from typing import Any
+# Canonical seeder now lives in tests/helpers/ so the integration suite can import it
+# without reaching into bdd/steps/generic; re-exported here for the BDD step files that
+# reference it via this module (uc004_delivery, uc006_sync_creatives) (#1329).
+from tests.helpers.accounts import seed_account_with_access
+
+__all__ = ["ensure_tenant_principal", "seed_account_with_access"]
 
 
 def ensure_tenant_principal(ctx: dict, env: object) -> None:
@@ -23,45 +28,3 @@ def ensure_tenant_principal(ctx: dict, env: object) -> None:
         tenant, principal = env.setup_default_data()
         ctx["tenant"] = tenant
         ctx["principal"] = principal
-
-
-def seed_account_with_access(
-    tenant: Any,
-    principal: Any,
-    *,
-    account_id: str,
-    status: str = "active",
-    brand_domain: str | None = None,
-    operator: str | None = None,
-    sandbox: bool | None = None,
-) -> Any:
-    """Seed one Account plus an AgentAccountAccess row granting ``principal`` access.
-
-    Single source of truth for BDD account seeding: an account the requesting
-    agent can resolve (by explicit id or natural key) requires both the Account
-    row AND the AgentAccountAccess join — resolution is access-scoped (#1417).
-    Callers seed ONLY the accounts a scenario asserts are valid; unseeded ids
-    keep erroring (ACCOUNT_NOT_FOUND) by construction.
-
-    Uses factory-boy factories (no inline ``session.add``); the harness binds the
-    session to the factories so the rows commit into the env's integration DB.
-    """
-    # Local import keeps the module import-light (matches the harness convention
-    # of importing factories at the point of use inside step definitions).
-    from tests.factories.account import AccountFactory, AgentAccountAccessFactory
-
-    account_kwargs: dict[str, Any] = {
-        "tenant": tenant,
-        "account_id": account_id,
-        "status": status,
-    }
-    if brand_domain is not None:
-        account_kwargs["brand"] = {"domain": brand_domain}
-    if operator is not None:
-        account_kwargs["operator"] = operator
-    if sandbox is not None:
-        account_kwargs["sandbox"] = sandbox
-
-    account = AccountFactory(**account_kwargs)
-    AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-    return account

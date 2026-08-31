@@ -282,9 +282,9 @@ class TestA2AErrorPropagation:
             "VALIDATION_ERROR",
             recovery="correctable",
             message_substr="Required field is missing",
+            field_substr="account",  # folded into the primitive (was a separate substring assert)
         )
         assert_no_raw_validation_leak(artifact_data["errors"][0]["message"])
-        assert "account" in (artifact_data["errors"][0].get("field") or "")
 
     async def test_create_media_buy_negative_budget_wire_envelope(self, handler, test_tenant, test_principal):
         """A negative package budget surfaces VALIDATION_ERROR on the A2A wire.
@@ -331,17 +331,17 @@ class TestA2AErrorPropagation:
         assert len(result.artifacts) > 0
 
         artifact_data = self.extract_data_from_artifact(result.artifacts[0])
+        # The structured field path is propagated from the Pydantic error (drift-proof
+        # vs the rendered message substring). Exact field= pins BOTH envelope layers via
+        # the primitive (was a separate one-layer substring assert).
         assert_envelope_shape(
             artifact_data,
             "VALIDATION_ERROR",
             message_substr="greater than or equal to 0",
             recovery="correctable",
+            field="packages[0].budget",
         )
         assert_no_raw_validation_leak(artifact_data["errors"][0]["message"])
-        # The structured field path is propagated from the Pydantic error (drift-proof
-        # vs the rendered message substring) — both envelope layers carry it.
-        wire_field = artifact_data["errors"][0].get("field") or ""
-        assert "budget" in wire_field, f"expected a budget field path on the wire, got {wire_field!r}"
 
     async def test_create_media_buy_success_has_no_errors_field(self, handler, test_tenant, test_principal):
         """Test that successful responses don't have errors field (or it's None/empty)."""

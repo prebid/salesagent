@@ -13,6 +13,7 @@ from src.core.schemas.account import SyncAccountsRequest
 from tests.harness import Transport
 from tests.harness.account_sync import AccountSyncEnv
 from tests.helpers import assert_envelope_shape
+from tests.helpers.governance import governance_agent, persisted_governance_urls
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -138,6 +139,88 @@ class TestSyncAccountsUpdate:
 
         assert len(response.accounts) == 1
         assert _action_value(response.accounts[0].action) == "unchanged"
+
+
+class TestSyncAccountsPreservesGovernanceBinding:
+    """Regression (#1329): a metadata-only sync_accounts re-sync
+    MUST NOT wipe a governance binding written by sync_governance.
+
+    governance_agents is not part of the sync_accounts request contract (it is owned
+    by sync_governance / UC-030). Before the fix, the change-detector read an absent
+    governance_agents off the entry as None and wrote it back, NULLing the binding on
+    every metadata update — reproduced end-to-end below.
+    """
+
+    @pytest.mark.asyncio
+    async def test_metadata_resync_preserves_governance_binding(self, integration_db):
+        from src.core.database.repositories.account import AccountRepository
+        from src.core.database.repositories.uow import AccountUoW
+
+        gov_url = "https://governance.acme-buyer.com/"
+        with AccountSyncEnv(tenant_id="sync_gov", principal_id="agent_sg") as env:
+            env.setup_default_data()
+
+            # 1. Create the account via sync_accounts (establishes the natural key).
+            created = await env.call_impl_async(
+                req=SyncAccountsRequest(
+                    accounts=[{"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"}]
+                )
+            )
+            account_id = created.accounts[0].account_id
+
+            # 2. Bind a governance agent via the single governance-write path
+            #    (update_fields now refuses governance_agents; set_governance_binding
+            #    owns the url-only projection — #1329).
+            with AccountUoW("sync_gov") as uow:
+                repo: AccountRepository = uow.accounts
+                # set_governance_binding takes parsed request models (not dicts) — build one via
+                # the shared helper so the pinned request shape has one home (#1329).
+                repo.set_governance_binding(account_id, [governance_agent(gov_url)])
+
+            # 3. Re-sync the SAME natural key with a metadata change (billing) and NO
+            #    governance_agents — this fires the update path (changes non-empty), the
+            #    exact condition that used to NULL the binding.
+            resync = await env.call_impl_async(
+                req=SyncAccountsRequest(
+                    accounts=[{"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "agent"}]
+                )
+            )
+            assert _action_value(resync.accounts[0].action) == "updated"
+
+        # 4. The governance binding MUST survive the metadata update (read back via the shared
+        #    session-safe reader — extracts urls before the session closes, #1329).
+        persisted = persisted_governance_urls("sync_gov", account_id)
+
+        assert persisted, "sync_accounts wiped the governance binding on a metadata re-sync (#1329)"
+        assert len(persisted) == 1
+        assert persisted[0] == gov_url
+
+    @pytest.mark.asyncio
+    async def test_update_fields_refuses_repository_owned_governance_agents(self, integration_db):
+        """update_fields REFUSES the repository-owned governance_agents field (#1329).
+
+        The refusal is what makes set_governance_binding's url-only strip a structural
+        guarantee rather than call-site discipline: a caller that tries to write the raw
+        (credential-bearing) blob through the generic setter is rejected before it reaches
+        the column. Emptying _REPO_OWNED_FIELDS silently reopens that bypass, so grade the
+        raise (no test exercised the refusal branch before).
+        """
+        from src.core.database.repositories.account import AccountRepository
+        from src.core.database.repositories.uow import AccountUoW
+
+        with AccountSyncEnv(tenant_id="ruf_gov", principal_id="agent_ruf") as env:
+            env.setup_default_data()
+            created = await env.call_impl_async(
+                req=SyncAccountsRequest(
+                    accounts=[{"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"}]
+                )
+            )
+            account_id = created.accounts[0].account_id
+
+            with AccountUoW("ruf_gov") as uow:
+                repo: AccountRepository = uow.accounts
+                with pytest.raises(ValueError, match="repository-owned"):
+                    repo.update_fields(account_id, governance_agents=[{"url": "https://x.example.com/"}])
 
 
 class TestSyncAccountsAuth:
@@ -485,8 +568,17 @@ class TestSyncAccountsBillingPolicyTransport:
         assert "agent" in err.suggestion
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
-    def test_unconfigured_billing_policy_accepts_all(self, integration_db, transport):
-        """When supported_billing is not configured, all billing values are accepted."""
+    def test_unconfigured_billing_defaults_to_permitted_set(self, integration_db, transport):
+        """With no supported_billing config, the seller's permitted set (operator, agent)
+        is enforced — NOT "accept everything".
+
+        The account billing gate resolves the accepted set through the SAME resolver
+        get_adcp_capabilities advertises through, so an unconfigured tenant accepts exactly
+        {operator, agent} and rejects a non-account-billable party (advertiser) — the
+        sync_accounts gate agrees with the account.supported_billing declaration. Reverting
+        the gate to a raw read (the old None → accept-all divergence) would accept advertiser
+        here and reopen the honesty gap (#1329).
+        """
         with AccountSyncEnv(
             tenant_id=f"bp_any_{transport.value}",
             principal_id=f"agent_bpa_{transport.value}",
@@ -497,13 +589,20 @@ class TestSyncAccountsBillingPolicyTransport:
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                     {"brand": {"domain": "beta.com"}, "operator": "example.com", "billing": "agent"},
+                    {"brand": {"domain": "gamma.com"}, "operator": "example.com", "billing": "advertiser"},
                 ],
             )
             result = env.call_via(transport, req=req)
 
         assert result.is_success
-        actions = {a.brand.domain: _action_value(a.action) for a in result.payload.accounts}
-        assert actions == {"acme.com": "created", "beta.com": "created"}
+        by_domain = {a.brand.domain: a for a in result.payload.accounts}
+        assert _action_value(by_domain["acme.com"].action) == "created"
+        assert _action_value(by_domain["beta.com"].action) == "created"
+        # advertiser is a media-buy party, not account-billable → rejected, matching the
+        # capabilities account.supported_billing declaration.
+        advertiser_acct = by_domain["gamma.com"]
+        assert _action_value(advertiser_acct.action) == "failed"
+        assert advertiser_acct.errors[0].code == "BILLING_NOT_SUPPORTED"
 
 
 class TestSyncAccountsApprovalTransport:

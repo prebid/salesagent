@@ -2,7 +2,7 @@
 """Refresh the pinned AdCP error-code enum vendored here.
 
 Source of truth: adcontextprotocol/adcp @ commit
-    04f59d2d56d3d77033162c310e99a1188e4eb419  (tag v3.1-04f59d2d5, 2026-05-13)
+    04f59d2d56d3d77033162c310e99a1188e4eb419  (2026-05-13)
 
 This commit is an INTENTIONAL, frozen reference point, DELIBERATELY independent
 of the installed adcp SDK's own pin (see docs/adcp-spec-version.md "Pinned

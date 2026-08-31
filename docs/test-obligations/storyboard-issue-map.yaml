@@ -351,6 +351,18 @@ storyboards:
   protocols/media-buy/scenarios/refine_products.yaml:
     coverage: none
     note: Product refinement round-trip is graded and untracked.
+  protocols/media-buy/scenarios/governance_approved.yaml:
+    coverage: none
+    note: >-
+      Grades a governance-gated buy the seller APPROVES. #1329 ships
+      sync_governance (binding a governance agent to an account), not the
+      per-buy governance enforcement this storyboard grades; untracked.
+  protocols/media-buy/scenarios/governance_conditions.yaml:
+    coverage: none
+    note: >-
+      Grades a governance-gated buy approved WITH CONDITIONS -- beyond #1329's
+      sync_governance (agent-binding) scope; the conditional-approval flow is
+      untracked.
 
   # ------------------------------------------------------------- specialisms
   specialisms/sales-non-guaranteed/index.yaml:
@@ -358,6 +370,19 @@ storyboards:
     note: >-
       Declared specialism with no scenario and no issue. Its index pulls in the
       non-guaranteed buy flows.
+  specialisms/governance-aware-seller/index.yaml:
+    coverage: none
+    note: >-
+      The governance-aware-seller specialism. #1329 declares specialism honesty
+      (get_adcp_capabilities) and binds governance agents via sync_governance,
+      but does not implement/test the full governed-seller flow this storyboard
+      grades; untracked.
+  specialisms/signal-marketplace/scenarios/governance_denied.yaml:
+    coverage: none
+    note: >-
+      Grades a signal-marketplace request DENIED by governance -- beyond #1329's
+      sync_governance (agent-binding) scope; the signal governance-denial flow
+      is untracked.
 
   # -------------------------------------------- storyboards WITH a scenario
   # The roadmap derives the scenario list itself; these rows exist so the
@@ -413,3 +438,66 @@ storyboards:
     note: >-
       Covered by two UC-004 scenarios. The sibling vendor_metric storyboards
       (catalog_precondition, optimization_flow) have no scenario at all.
+
+  # --------------------------------- on-path via #1329 capability declarations
+  # #1329 declares the seller's full specialism/protocol catalog (the honest
+  # capabilities surface: AdcpSpecialism.* / SupportedProtocol.* in
+  # src/core/tools/capabilities.py). declared_capabilities() reads those
+  # references, so each declared specialism/protocol pulls its storyboards
+  # on-path. The declaration is what #1329 grades on the wire (UC-010); the
+  # conformance STORYBOARDS below have no mapped scenario in this repo and
+  # nobody tracks them yet -- `coverage: none` states that plainly.
+  protocols/creative/index.yaml:
+    coverage: none
+    note: Creative protocol declared (SupportedProtocol.creative); no mapped storyboard conformance, untracked.
+  protocols/creative/scenarios/billing_out_of_band.yaml:
+    coverage: none
+    note: On-path via the declared creative protocol; no scenario maps it, untracked.
+  protocols/creative/scenarios/canonical_supported_formats.yaml:
+    coverage: none
+    note: On-path via the declared creative protocol; no scenario maps it, untracked.
+  protocols/creative/scenarios/creative_lifecycle_webhooks.yaml:
+    coverage: none
+    note: On-path via the declared creative protocol; no scenario maps it, untracked.
+  protocols/creative/scenarios/evaluator_auth.yaml:
+    coverage: none
+    note: On-path via the declared creative protocol; no scenario maps it, untracked.
+  protocols/creative/scenarios/native_in_feed.yaml:
+    coverage: none
+    note: On-path via the declared creative protocol; no scenario maps it, untracked.
+  protocols/signals/index.yaml:
+    coverage: none
+    note: Signals protocol declared (SupportedProtocol.signals); no mapped storyboard conformance, untracked.
+  protocols/signals/scenarios/get_signals_async.yaml:
+    coverage: none
+    note: On-path via the declared signals protocol; no scenario maps it, untracked.
+  specialisms/audience-sync/index.yaml:
+    coverage: none
+    note: Declared specialism (AdcpSpecialism.audience_sync); no mapped scenario, untracked.
+  specialisms/creative-generative/generative-seller.yaml:
+    coverage: none
+    note: Declared specialism (AdcpSpecialism.creative_generative); no mapped scenario, untracked.
+  specialisms/sales-broadcast-tv/index.yaml:
+    coverage: none
+    note: Declared specialism (AdcpSpecialism.sales_broadcast_tv); no mapped scenario, untracked.
+  specialisms/sales-catalog-driven/index.yaml:
+    coverage: none
+    note: Declared specialism (AdcpSpecialism.sales_catalog_driven); no mapped scenario, untracked.
+  specialisms/sales-guaranteed/index.yaml:
+    coverage: none
+    note: Declared specialism (AdcpSpecialism.sales_guaranteed); no mapped scenario, untracked.
+  specialisms/sales-proposal-mode/index.yaml:
+    coverage: none
+    note: Declared specialism (AdcpSpecialism.sales_proposal_mode); no mapped scenario, untracked.
+  specialisms/sales-social/index.yaml:
+    coverage: none
+    note: Declared specialism (AdcpSpecialism.sales_social); no mapped scenario, untracked.
+  specialisms/signal-marketplace/index.yaml:
+    coverage: none
+    note: Declared specialism (AdcpSpecialism.signal_marketplace); its governance_denied scenario is triaged above, untracked.
+  specialisms/signal-owned/index.yaml:
+    coverage: none
+    note: Declared specialism (AdcpSpecialism.signal_owned); no mapped scenario, untracked.
+  specialisms/sponsored-intelligence/index.yaml:
+    coverage: none
+    note: Declared specialism (AdcpSpecialism.sponsored_intelligence); no mapped scenario, untracked.

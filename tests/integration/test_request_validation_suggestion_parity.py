@@ -17,6 +17,7 @@ loses its suggestion. The sites covered (transports in parens):
 - ``get_media_buys`` — ``_handle_get_media_buys_skill`` / GetMediaBuysRequest (A2A)
 - ``list_accounts`` — ``_handle_list_accounts_skill`` + ``/api/v1/accounts`` / ListAccountsRequest (A2A, REST)
 - ``sync_accounts`` — ``_handle_sync_accounts_skill`` + ``/api/v1/accounts/sync`` / SyncAccountsRequest (A2A, REST)
+- ``sync_governance`` — ``_handle_sync_governance_skill`` + ``/api/v1/accounts/governance/sync`` / SyncGovernanceRequest (A2A, REST)
 - ``list_authorized_properties`` — ``_handle_list_authorized_properties_skill`` / ListAuthorizedPropertiesRequest (A2A)
 - ``list_creative_formats`` — ``_handle_list_creative_formats_skill`` + ``/api/v1/creative-formats`` / ListCreativeFormatsRequest (A2A, REST)
 - ``get_products`` — ``/api/v1/products`` / ``create_get_products_request`` ProductFilters (REST)
@@ -181,6 +182,46 @@ class TestSyncAccountsA2ASuggestionParity:
                 recovery="correctable",
                 require_suggestion=True,
                 message_substr="brand",
+            )
+
+
+@pytest.mark.requires_db
+class TestSyncGovernanceSuggestionParity:
+    """sync_governance request-validation must carry a top-level suggestion on A2A + REST.
+
+    Enrols the last sync-family tool absent from this suite (#1329): a missing
+    idempotency_key is rejected at the shared boundary and the two-layer VALIDATION_ERROR
+    envelope must carry error.json's top-level suggestion on both wires.
+    """
+
+    def _invalid_kwargs(self) -> dict:
+        # Well-formed account/agent; the ONLY defect is the missing idempotency_key,
+        # so the rejection is a request-validation error (not a per-account failure). Built via
+        # the shared request-element builders (#1329) rather than an inline account dict.
+        from tests.helpers.governance import GOV_URL, account_entry, governance_agent_dict
+
+        return {"accounts": [account_entry({"account_id": "acc_p"}, agents=[governance_agent_dict(GOV_URL)])]}
+
+    @pytest.mark.parametrize("transport", ["A2A", "MCP", "REST"])
+    def test_missing_idempotency_key_envelope_carries_suggestion(self, transport, integration_db):
+        from tests.harness.governance_sync import GovernanceSyncEnv
+        from tests.harness.transport import Transport
+
+        with GovernanceSyncEnv(tenant_id="gov_sugg", principal_id="gov_sugg_agent") as env:
+            env.setup_default_data()
+
+            result = env.call_via(Transport[transport], **self._invalid_kwargs())
+
+            assert result.is_error, f"{transport}: missing idempotency_key must be rejected, got {result.payload!r}"
+            # The buyer OMITTED the key, so the message is the same "Required field is missing"
+            # on all three transports — not "Expected string, got NoneType" (the pre-fix A2A/MCP
+            # rendering that passed an explicit None). message_substr pins that divergence (#1329).
+            result.assert_wire_error(
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                require_suggestion=True,
+                field="idempotency_key",
+                message_substr="Required field is missing",
             )
 
 

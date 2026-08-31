@@ -9,14 +9,14 @@ Runs after MCPAuthMiddleware.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, NoReturn
 
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.tools.tool import ToolResult
 from mcp.types import CallToolRequestParams
 from pydantic import ValidationError
+from typing_extensions import TypeIs
 
-from src.core.exceptions import normalize_to_adcp_error
 from src.core.request_compat import deep_strip_to_schema, normalize_request_params, strip_unknown_params
 from src.core.tool_error_logging import _translate_to_tool_error, record_boundary_error
 
@@ -118,28 +118,53 @@ class RequestCompatMiddleware(Middleware):
                                 raise
                             exc = retry_exc
 
-            # Normalize once for the audit record, then pass the raw exception to
-            # _translate_to_tool_error so the emitted AdCPToolError keeps it as
-            # __cause__. The translator intentionally normalizes it a second time.
-            typed = normalize_to_adcp_error(exc)
-            tenant_id = None
-            principal_id = None
-            if context.fastmcp_context is not None:
-                try:
-                    identity = await context.fastmcp_context.get_state("identity")
-                    if identity is not None:
-                        tenant_id = identity.tenant_id
-                        principal_id = identity.principal_id
-                except Exception:
-                    logger.debug("Could not read MCP identity for validation error logging", exc_info=True)
-            record_boundary_error(
-                "mcp",
-                tool_name,
-                typed,
-                tenant_id=tenant_id,
-                principal_id=principal_id,
-            )
-            _translate_to_tool_error(exc)
+            # ``exc`` is narrowed to ValidationError by the ``TypeIs`` guard above (the
+            # ``if not self._is_typeadapter_validation_error(exc): raise`` re-raised
+            # everything else), so it is always a FastMCP TypeAdapter ValidationError.
+            await self._reject_as_validation_envelope(context, tool_name, exc)
+
+    async def _reject_as_validation_envelope(
+        self,
+        context: MiddlewareContext,
+        tool_name: str,
+        exc: ValidationError,
+    ) -> NoReturn:
+        """Raise the rich AdCP validation envelope for a TypeAdapter rejection.
+
+        Builds the SAME envelope the A2A/REST request-body boundary produces
+        (format_validation_error message + suggest_validation_fix + buyer field
+        path), so MCP no longer forks off a leaf-only Pydantic message for a
+        TypeAdapter rejection (#1329 / R9-G1), records the boundary error, and
+        translates to the transport AdCPToolError.
+        """
+        from src.core.validation_helpers import adcp_validation_error_from, boundary_context
+
+        # Route the tool name through the shared ``boundary_context`` accessor so MCP
+        # renders the SAME ``Invalid <tool> request: …`` context A2A/REST produce
+        # (one accessor, no per-site literal — #1329).
+        typed = adcp_validation_error_from(exc, context=boundary_context(tool_name))
+        tenant_id = None
+        principal_id = None
+        if context.fastmcp_context is not None:
+            try:
+                identity = await context.fastmcp_context.get_state("identity")
+                if identity is not None:
+                    tenant_id = identity.tenant_id
+                    principal_id = identity.principal_id
+            except Exception:
+                logger.debug("Could not read MCP identity for validation error logging", exc_info=True)
+        record_boundary_error(
+            "mcp",
+            tool_name,
+            typed,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+        )
+        # Translate the TYPED error (not the raw ValidationError) so the emitted
+        # AdCPToolError envelope carries the rich message/field/suggestion built
+        # above; chain the original TypeAdapter error for traceback fidelity.
+        typed.__cause__ = exc
+        _translate_to_tool_error(typed)
 
     @staticmethod
     def _should_retry(exc: Exception) -> bool:
@@ -157,8 +182,14 @@ class RequestCompatMiddleware(Middleware):
         return is_production() and RequestCompatMiddleware._is_typeadapter_validation_error(exc)
 
     @staticmethod
-    def _is_typeadapter_validation_error(exc: Exception) -> bool:
-        """Return True for FastMCP TypeAdapter validation failures."""
+    def _is_typeadapter_validation_error(exc: Exception) -> TypeIs[ValidationError]:
+        """Return True for FastMCP TypeAdapter validation failures.
+
+        Typed ``TypeIs[ValidationError]`` so the caller's ``if not ...: raise`` guard narrows
+        ``exc`` to ``ValidationError`` for the type checker without an ``assert isinstance`` —
+        which ``python -O`` strips, leaving the following ``exc.errors()`` unguarded (#1329
+        finding 10).
+        """
         return isinstance(exc, ValidationError) and exc.title.startswith("call[")
 
     async def _get_tool_schema(

@@ -42,6 +42,8 @@ from src.core.schemas import (
     SyncAccountsResponse,
     SyncCreativesRequest,
     SyncCreativesResponse,
+    SyncGovernanceResponse,
+    SyncGovernanceResponseAccount,
     SyncResponseAccount,
     UpdateMediaBuyRequest,
     UpdateMediaBuySuccess,
@@ -135,7 +137,7 @@ class _CannotSynthesize(AssertionError):
     value is not neutral: fed to a required enum or formatted field it raises
     ``ValidationError``, and the alignment suite then reports the instrument's own gap
     as a conformance failure against production code. That is the story
-    ``_unsynthesized_guess`` tells about ``test_status_value``, and it is what bought
+    ``_unsynthesized_guess`` tells about the 'test_status_value' guess, and it is what bought
     the envelope's ``status`` its blanket exclusion from requiredness grading — the
     exclusion GH #1900 exists to undo.
     """
@@ -926,6 +928,11 @@ _RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = [
         model=SyncAccountsResponse,
     ),
     _RegistryRow(
+        schema_ref="account/sync-governance-response.json",
+        selector="accounts",
+        model=SyncGovernanceResponse,
+    ),
+    _RegistryRow(
         schema_ref="creative/sync-creatives-response.json",
         selector="creatives",
         model=SyncCreativesResponse,
@@ -1227,7 +1234,24 @@ _SUPPLEMENTAL_ALIGNMENTS: list[ResponseAlignment] = [
         selector="accounts",
         item_key="accounts",
         model=SyncResponseAccount,
+        # brand/operator/action/status are explicitly declared on the model AND required in
+        # the pinned schema; pin them so test_declared_fields_present_in_schema_and_model runs
+        # for this row too (an empty declared_fields skips it) — the still-skipped neighbour of
+        # the sync-governance row below (#1329).
+        declared_fields=frozenset({"brand", "operator", "action", "status"}),
         sample={"brand": {"domain": "acme.com"}, "operator": "create", "action": "created", "status": "active"},
+    ),
+    ResponseAlignment(
+        schema_ref="account/sync-governance-response.json",
+        selector="accounts",
+        item_key="accounts",
+        model=SyncGovernanceResponseAccount,
+        # account/status are explicitly declared on the model (schemas/account.py) and
+        # required in the pinned schema; pin them so test_declared_fields_present_in_schema_
+        # and_model actually runs for this row (an empty declared_fields skips it) — the check
+        # that catches a field surviving only via inherited extra='allow' (#1329 item 4).
+        declared_fields=frozenset({"account", "status"}),
+        sample={"account": {"account_id": "acc_1"}, "status": "synced"},
     ),
     ResponseAlignment(
         schema_ref="media-buy/get-products-response.json",

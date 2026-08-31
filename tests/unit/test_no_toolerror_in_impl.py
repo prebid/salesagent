@@ -9,9 +9,13 @@ This test scans source files to ensure no ToolError leaks into _impl functions.
 
 import ast
 import pathlib
-import re
 
 import pytest
+
+# Repo root, anchored to THIS file — not the cwd. A cwd-relative path made the
+# guard vacuous when pytest ran from src/ (every file "not found" → zero sites →
+# green while scanning nothing). Mirrors test_architecture_repository_pattern (#1329).
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 # Files that should have zero ToolError raises in _impl functions
 SIMPLE_MODULE_FILES = [
@@ -27,6 +31,8 @@ SIMPLE_MODULE_FILES = [
     "src/core/tools/properties.py",
     "src/core/tools/task_management.py",
     "src/core/tools/signals.py",
+    "src/core/tools/accounts.py",
+    "src/core/tools/governance.py",
 ]
 
 # Complex modules with many ToolError sites
@@ -43,9 +49,10 @@ def _find_toolerror_raises(filepath: str) -> list[tuple[int, str]]:
 
     Returns list of (line_number, code_snippet) tuples.
     """
-    path = pathlib.Path(filepath)
-    if not path.exists():
-        return []
+    path = ROOT / filepath
+    # Loud, not vacuous: a scanned file that has moved/renamed must redden the guard,
+    # not silently skip (the old cwd-relative `not exists -> return []` masked that).
+    assert path.exists(), f"scanned _impl file not found (moved/renamed?): {filepath}"
 
     source = path.read_text()
     try:
@@ -70,43 +77,6 @@ def _find_toolerror_raises(filepath: str) -> list[tuple[int, str]]:
                     results.append((node.lineno, line))
 
     return results
-
-
-def _find_error_dict_returns(filepath: str) -> list[tuple[int, str]]:
-    """Find dict returns with 'success': False pattern in A2A handler methods.
-
-    These should be replaced with proper exception raises.
-    Returns list of (line_number, code_snippet) tuples.
-    """
-    path = pathlib.Path(filepath)
-    if not path.exists():
-        return []
-
-    lines = path.read_text().splitlines()
-    results = []
-    for i, line in enumerate(lines, 1):
-        # Match return statements containing "success": False
-        if re.search(r"return\s*\{", line) or (
-            '"success": False' in line and "return" in lines[i - 2] if i > 1 else False
-        ):
-            # Look at context: is this a return { "success": False, ... } block?
-            # Check the surrounding lines for the pattern
-            context = "\n".join(lines[max(0, i - 3) : min(len(lines), i + 5)])
-            if '"success": False' in context and "return" in context:
-                # Find the actual return line
-                for j in range(max(0, i - 3), min(len(lines), i + 1)):
-                    if "return {" in lines[j] or "return{" in lines[j]:
-                        results.append((j + 1, lines[j].strip()))
-                        break
-
-    # Deduplicate by line number
-    seen = set()
-    unique = []
-    for line_no, code in results:
-        if line_no not in seen:
-            seen.add(line_no)
-            unique.append((line_no, code))
-    return unique
 
 
 class TestNoToolErrorInSimpleModules:

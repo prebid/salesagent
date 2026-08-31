@@ -103,6 +103,9 @@ from src.core.tools import (
     sync_creatives_raw as core_sync_creatives_tool,
 )
 from src.core.tools import (
+    sync_governance_raw as core_sync_governance_tool,
+)
+from src.core.tools import (
     update_media_buy_raw as core_update_media_buy_tool,
 )
 from src.core.tools import (
@@ -506,7 +509,13 @@ class AdCPRequestHandler(RequestHandler):
         Returns:
             Task object or Message response
         """
-        logger.info("Handling message/send request: %s", params)
+        # Log only the message id, never the raw params: a sync_governance DataPart
+        # carries write-only credentials (authentication.credentials) that must not
+        # reach the application log (#1329).
+        # Read the attributes directly (not getattr-with-default): :521 and :549 below already read
+        # ``params.message`` / ``.message_id`` directly, so an SDK rename must fail loudly HERE too
+        # rather than logging ``None`` forever while the sibling reads raise (#1329).
+        logger.info("Handling message/send request (message_id=%s)", params.message.message_id)
 
         # Parse message for both text and structured data parts
         message = params.message
@@ -623,7 +632,13 @@ class AdCPRequestHandler(RequestHandler):
                 for invocation in skill_invocations:
                     skill_name = invocation["skill"]
                     parameters = invocation["parameters"]
-                    logger.info("Processing explicit skill: %s with parameters: %s", skill_name, parameters)
+                    # Keys only, never values: parameters may carry write-only
+                    # credentials (sync_governance authentication.credentials). Same
+                    # ``list(parameters.keys())`` spelling as the keys-only siblings at
+                    # _handle_explicit_skill and the sync_creatives handler (#1329).
+                    logger.info(
+                        "Processing explicit skill: %s with parameters: %s", skill_name, list(parameters.keys())
+                    )
 
                     try:
                         result = await self._handle_explicit_skill(
@@ -1479,6 +1494,7 @@ class AdCPRequestHandler(RequestHandler):
             "list_creative_formats": self._handle_list_creative_formats_skill,
             "list_accounts": self._handle_list_accounts_skill,
             "sync_accounts": self._handle_sync_accounts_skill,
+            "sync_governance": self._handle_sync_governance_skill,
             "list_authorized_properties": self._handle_list_authorized_properties_skill,
             # ✅ NEW: Missing Media Buy Management Skills (CRITICAL for campaign lifecycle)
             "update_media_buy": self._handle_update_media_buy_skill,
@@ -1865,7 +1881,7 @@ class AdCPRequestHandler(RequestHandler):
         from src.core.tools.creative_formats import build_list_creative_formats_request
 
         # Same context string as the REST route's boundary so buyer-invalid
-        # input produces a byte-identical envelope on every transport (klkg).
+        # input produces a byte-identical envelope on every transport.
         with adcp_validation_boundary(context="list_creative_formats request"):
             req = build_list_creative_formats_request(
                 format_ids=parameters.get("format_ids"),
@@ -1895,7 +1911,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         from src.core.schemas.account import ListAccountsRequest
 
-        # Same context string as the REST route's boundary (klkg parity).
+        # Same context string as the REST route's boundary (A2A/REST parity).
         with adcp_validation_boundary(context="list_accounts request"):
             request = ListAccountsRequest(
                 status=parameters.get("status"),
@@ -1912,7 +1928,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         from src.core.schemas.account import SyncAccountsRequest
 
-        # Same context string as the REST route's boundary (klkg parity).
+        # Same context string as the REST route's boundary (A2A/REST parity).
         with adcp_validation_boundary(context="sync_accounts request"):
             request = SyncAccountsRequest(
                 accounts=parameters.get("accounts", []),
@@ -1921,6 +1937,32 @@ class AdCPRequestHandler(RequestHandler):
                 context=parameters.get("context"),
             )
         return await core_sync_accounts_tool(req=request, identity=identity)
+
+    async def _handle_sync_governance_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
+        """Handle explicit sync_governance skill invocation.
+
+        Authentication is REQUIRED. ``idempotency_key`` is spec-required; a
+        missing/invalid key surfaces as a validation error at this boundary.
+        """
+        from src.core.tools.governance import build_sync_governance_request
+
+        # The shared builder is the single constructor used by every transport (MCP, REST,
+        # A2A): it forwards ``ext``, OMITS an absent idempotency_key (so a missing key renders
+        # as "Required field is missing" on all three transports, not "Expected string, got
+        # NoneType"), and runs the same validation boundary — so this transport cannot drift.
+        # The builder carries its OWN internal ``adcp_validation_boundary``, and the
+        # request-boundary guard now recognises self-bounding builders (see
+        # ``self_bounding_builders``), so no redundant outer ``with`` is needed here (#1329
+        # finding 2).
+        request = build_sync_governance_request(
+            accounts=parameters.get("accounts", []),
+            context=parameters.get("context"),
+            ext=parameters.get("ext"),
+            idempotency_key=parameters.get("idempotency_key"),
+            adcp_version=parameters.get("adcp_version"),
+            adcp_major_version=parameters.get("adcp_major_version"),
+        )
+        return await core_sync_governance_tool(req=request, identity=identity)
 
     async def _handle_list_authorized_properties_skill(
         self, parameters: dict, identity: ResolvedIdentity | None
@@ -1945,7 +1987,7 @@ class AdCPRequestHandler(RequestHandler):
                 "This parameter was removed in AdCP 2.5 and will be ignored."
             )
 
-        # Same context string as the REST route's boundary (klkg parity).
+        # Same context string as the REST route's boundary (A2A/REST parity).
         with adcp_validation_boundary(context="list_authorized_properties request"):
             request = ListAuthorizedPropertiesRequest(context=parameters.get("context"))
 
@@ -2010,7 +2052,7 @@ class AdCPRequestHandler(RequestHandler):
         params = {**parameters}
         include_snapshot = params.pop("include_snapshot", False)
         # No REST route exists for get_media_buys; context string follows the
-        # same "<tool> request" convention as the sibling boundaries (klkg).
+        # same "<tool> request" convention as the sibling boundaries.
         with adcp_validation_boundary(context="get_media_buys request"):
             req = GetMediaBuysRequest.model_validate(params)
         response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
@@ -2265,6 +2307,12 @@ def create_agent_card() -> AgentCard:
                 name="sync_accounts",
                 description="Sync billing accounts by natural key (upsert, delete_missing, dry_run)",
                 tags=["accounts", "billing", "sync", "upsert", "adcp"],
+            ),
+            AgentSkill(
+                id="sync_governance",
+                name="sync_governance",
+                description="Bind a buyer-designated governance agent per account (replace semantics)",
+                tags=["accounts", "governance", "sync", "adcp"],
             ),
             # ✅ NEW: Media Buy Management Skills (CRITICAL for campaign lifecycle)
             AgentSkill(

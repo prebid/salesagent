@@ -259,3 +259,12 @@ class LazyTenantContext:
         if self._resolved is not None:
             return f"LazyTenantContext(tenant_id={self._tenant_id!r}, loaded=True)"
         return f"LazyTenantContext(tenant_id={self._tenant_id!r}, loaded=False)"
+
+
+# The tenant a resolved identity carries across the transport seam. The MCP/A2A bridge builds a
+# ``LazyTenantContext`` (a __slots__ proxy that is NOT a ``TenantContext`` subclass), so a union
+# that names only ``TenantContext | dict`` does not describe the type that actually flows in
+# production. ``LazyTenantContext`` quacks like BOTH — attribute access (delegated via
+# ``__getattr__``) AND dict-style ``.get`` / ``[]`` — so a reader handling ``dict`` via ``.get``
+# and ``TenantContext`` via the typed attribute covers all three (#1329).
+TenantLike = TenantContext | LazyTenantContext | dict[str, Any]

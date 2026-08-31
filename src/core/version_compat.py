@@ -8,7 +8,21 @@ Transforms are registered per-tool and only applied for pre-3.0 clients.
 
 from typing import Any
 
+from adcp import get_adcp_spec_version
+
 from src.core.product_conversion import dump_products_v2_compat, needs_v2_compat
+
+
+def wire_adcp_version() -> str:
+    """The seller's implemented AdCP version for the wire, at RELEASE precision (major.minor).
+
+    The wire carries release precision (e.g. ``"3.1"``), never patch: patch-precise strings are
+    accepted on input but normalized to release precision on the wire. Derived from the pinned spec
+    version so a bump tracks automatically instead of a literal drifting. ONE accessor so every wire
+    ``adcp_version`` emitter (sync_governance response, webhook payloads, …) renders the same string
+    rather than some emitting full semver (``3.1.1``) and one emitting release precision (#1329).
+    """
+    return ".".join(get_adcp_spec_version().split(".")[:2])
 
 
 def apply_version_compat(
