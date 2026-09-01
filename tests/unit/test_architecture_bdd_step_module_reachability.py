@@ -53,6 +53,12 @@ _ALLOWED_UNREGISTERED: set[str] = {
     # (B) intentionally-local (live via test_uc019_query_media_buys.py `import *`;
     # kept out of pytest_plugins so its 8 generic-step overrides stay UC-019-scoped):
     "tests.bdd.steps.domain.uc019_query_media_buys",
+    # (B) intentionally-local (live via test_uc018_list_creatives.py `import *`; kept out
+    # of pytest_plugins so its `the Buyer is authenticated as principal "…"` step (shared
+    # text with uc003_ext_error_scenarios) and its parameterized `the response should be
+    # schema-valid against …` step (overlaps uc005_format_id_roundtrip's literal for a
+    # different file) stay UC-018-scoped instead of shadowing those UCs by plugin order):
+    "tests.bdd.steps.domain.uc018_list_creatives",
 }
 
 

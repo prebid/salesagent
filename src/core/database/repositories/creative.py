@@ -99,7 +99,7 @@ class CreativeRepository:
         self,
         principal_id: str,
         *,
-        status: str | None = None,
+        statuses: list[str] | None = None,
         format: str | None = None,
         tags: list[str] | None = None,
         created_after: datetime | None = None,
@@ -132,8 +132,32 @@ class CreativeRepository:
                 Creative.creative_id == CreativeAssignment.creative_id,
             ).where(CreativeAssignment.media_buy_id.in_(media_buy_ids))
 
-        if status:
-            stmt = stmt.where(Creative.status == status)
+        # statuses filter (CreativeFilters.statuses, AdCP 3.1.1 core/creative-filters.json).
+        # THE canonical statement of statuses match-any semantics — this is the enforcement
+        # site; the _list_creatives_impl caller and the #1502 tests reference this comment
+        # rather than re-deriving the grounding, so a correction lands in one place.
+        #
+        # Match-any: a creative matches if its status is ANY ONE of the requested statuses
+        # (union), NOT match-all. The "array + minItems:1" shape alone does NOT entail this —
+        # the same schema declares `tags` as a minItems:1 array with match-ALL semantics (plus
+        # a separate `tags_any` for match-any). What does entail match-any here:
+        #   (1) core/creative-filters.json (top-level description) — "include 'archived' in the
+        #       statuses array" (to include archived) presupposes each element ADDS to the
+        #       result set, which is a union;
+        #   (2) `statuses.items` is a single-valued enum, so a conjunctive multi-element read
+        #       (status == A AND status == B) is unsatisfiable — it would make every
+        #       multi-status filter return nothing, so only the disjunctive read is coherent.
+        #
+        # Applied inside the already tenant+principal-scoped statement, so it can only narrow,
+        # never widen. Mirrors MediaBuyRepository.get_by_principal (same list[str] param, same
+        # `is not None` gate): None skips the filter. The `is not None` gate deliberately
+        # diverges from the truthy-gate siblings below (concept_ids/tags/created_*): it holds
+        # the MediaBuyRepository parity, and is behaviorally identical on the reachable domain
+        # anyway — the list_creatives caller passes None (not []) for "unfiltered", and an
+        # empty statuses array is a minItems:1 validation error upstream, so [] never
+        # legitimately reaches here.
+        if statuses is not None:
+            stmt = stmt.where(Creative.status.in_(statuses))
 
         if format:
             stmt = stmt.where(Creative.format == format)

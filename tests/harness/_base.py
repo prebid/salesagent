@@ -23,6 +23,7 @@ Multi-transport support (subclasses may also override):
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -549,7 +550,12 @@ class BaseTestEnv:
         kwargs.setdefault("identity", self.identity_for(transport))
 
         dispatcher = DISPATCHERS[transport]
-        return dispatcher.dispatch(self, **kwargs)
+        result = dispatcher.dispatch(self, **kwargs)
+        # Stamp the transport once, at the single dispatch funnel, so every result
+        # carries it — including the error-path results whose dispatcher passed no
+        # envelope. require_wire()/assert_wire_error() read result.transport for
+        # their transport-named diagnostics.
+        return replace(result, transport=transport)
 
     # -- Per-transport hooks (override in subclass) -------------------------
 

@@ -145,8 +145,9 @@ def assert_wire_omits_unset(
             pass), so a typo'd path can't silently no-op.
     """
     assert result.is_success, f"{transport}: expected success but got error: {result.error}"
-    wire = result.wire_response
-    assert wire is not None, f"{transport}: harness captured no wire response"
+    # Single guarded wire accessor: require_wire() narrows wire_response and raises
+    # transport-named if absent (replaces the hand-rolled `assert wire is not None`).
+    wire = result.require_wire()
 
     if schema is not None:
         from tests.helpers.pinned_schema import validate_against_pinned_schema

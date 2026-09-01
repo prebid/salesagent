@@ -344,6 +344,7 @@ Feature: BR-UC-018 List Creatives
     When the Buyer Agent sends a list_creatives request with statuses filter ["approved", "rejected"]
     Then the response contains 3 creatives
     And none of the returned creatives have status "archived"
+    And filters_applied reports statuses "approved,rejected"
 
   @T-UC-018-inv-147-1-holds @invariant @BR-RULE-147
   Scenario: BR-RULE-147 INV-1 holds -- no pagination uses default page size 50

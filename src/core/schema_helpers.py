@@ -202,6 +202,13 @@ def coerce_creative_filters(filters: dict[str, Any] | CreativeFilters | None) ->
     surfaces a raw pydantic ``ValidationError`` that ``normalize_to_adcp_error``
     flattens into a suggestion-less envelope.
 
+    ``field_prefix="filters"`` reports the failing field as the request-relative
+    ``filters.<subfield>`` (e.g. ``filters.statuses``), because this boundary validates
+    only the ``CreativeFilters`` sub-model — whose pydantic ``loc`` omits the enclosing
+    ``filters`` key. MCP validates the whole ``list_creatives`` signature and already
+    emits ``filters.statuses``; this makes REST and A2A agree, so the AdCP 3.1.1
+    ``core/error.json`` ``field`` pointer names the same location on every transport.
+
     Args:
         filters: Filters as a wire dict, an already-typed CreativeFilters, or None.
 
@@ -213,7 +220,7 @@ def coerce_creative_filters(filters: dict[str, Any] | CreativeFilters | None) ->
     """
     if filters is None or isinstance(filters, CreativeFilters):
         return filters
-    with adcp_validation_boundary(context="list_creatives filters"):
+    with adcp_validation_boundary(context="list_creatives filters", field_prefix="filters"):
         return CreativeFilters.model_validate(filters)
 
 

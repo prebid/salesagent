@@ -8,7 +8,9 @@ so the harness red-flags every emitter that buries (or omits) the suggestion
 instead of masking the drift (#1417).
 """
 
-from tests.harness.transport import extract_wire_suggestion
+import pytest
+
+from tests.harness.transport import Transport, TransportResult, extract_wire_suggestion
 
 
 class TestExtractWireSuggestionStrict:
@@ -47,3 +49,32 @@ class TestExtractWireSuggestionStrict:
             }
         }
         assert extract_wire_suggestion(envelope) is None
+
+
+class TestRequireWireGuardsWireAbsence:
+    """TransportResult.require_wire() narrows the optional wire and names the transport.
+
+    The raising branch is the success-path analogue of assert_wire_error's
+    no-envelope check. It fires on exactly the paths whose dispatcher passes no
+    ``envelope`` (the error branches), so it reads the ``transport`` field that
+    ``call_via`` stamps on every result — not ``envelope["transport"]``, which is
+    absent there and used to print "unknown transport". Constructed directly (no
+    dispatch) to exercise the branch in isolation.
+    """
+
+    def test_wire_absent_raises_naming_the_transport(self):
+        result = TransportResult(transport=Transport.A2A, error=RuntimeError("boom"))
+        with pytest.raises(AssertionError, match="^a2a:"):
+            result.require_wire()
+
+    def test_wire_absent_without_stamp_falls_back_to_unknown(self):
+        # A TransportResult built directly (never through call_via) has no transport
+        # stamp and no envelope — the fallback keeps the message non-crashing.
+        result = TransportResult(wire_response=None)
+        with pytest.raises(AssertionError, match="unknown transport"):
+            result.require_wire()
+
+    def test_wire_present_returns_the_wire_dict(self):
+        wire = {"creatives": []}
+        result = TransportResult(transport=Transport.REST, wire_response=wire)
+        assert result.require_wire() is wire

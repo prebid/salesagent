@@ -1,20 +1,83 @@
 """Shared creative test helpers.
 
-DRY extraction for creative sync and serialization test utilities shared across:
-- test_creative_coverage_gaps
-- test_sync_creatives_format_validation
-- test_creative_response_serialization
-- test_list_creatives_serialization
+DRY extraction for creative test utilities — sync/serialization builders, a
+status-varying DB seeder, and a shared empty-array-filter wire-rejection assertion —
+reused across the creative unit, integration, and BDD suites. Consumers are not
+enumerated here; a grep of the exported names finds them.
 """
 
 from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, Literal
 from unittest.mock import MagicMock, Mock, patch
 
 from tests.factories.creative_asset import AssetSpec, assert_assets, build_assets, image_spec
 from tests.harness import make_mock_uow
+
+if TYPE_CHECKING:
+    from src.core.database.models import Principal, Tenant
+    from src.core.schemas import Creative  # src.core.schemas.Creative — distinct from the models import above
+    from tests.harness._base import BaseTestEnv
+    from tests.harness.transport import Transport
+
+
+def seed_creative_in_status(
+    tenant: Tenant,
+    principal: Principal,
+    status: str = "approved",
+    *,
+    creative_id: str | None = None,
+) -> str:
+    """Create one creative owned by *principal* in *status*; return its creative_id.
+
+    The single seeder for the #1502 statuses-filter tests (and available to any test that
+    needs one status-varying creative). ``status`` varies per call; pass ``creative_id``
+    when the test asserts on a literal id (the repository tests) — otherwise CreativeFactory
+    generates one. The remaining fields (format, data with real assets) come from
+    CreativeFactory defaults, which already satisfy the repository's
+    ``data["assets"] IS NOT NULL`` guard.
+    """
+    from tests.factories import CreativeFactory
+
+    extra: dict[str, Any] = {"creative_id": creative_id} if creative_id is not None else {}
+    return CreativeFactory(tenant=tenant, principal=principal, status=status, **extra).creative_id
+
+
+def assert_empty_array_filter_rejected(
+    env: BaseTestEnv, transport: Transport, field: Literal["concept_ids", "statuses"]
+) -> None:
+    """Assert ``filters={field: []}`` (a minItems:1 violation) is rejected with a two-layer
+    VALIDATION_ERROR envelope that NAMES the rejected field and carries a recovery suggestion,
+    on the given wire transport.
+
+    Shared by the concept_ids and statuses empty-array validation tests: structurally the
+    same operation with only the filter field substituted, so it lives here once rather than
+    copy-pasted per filter (DRY). POST-F3 requires the buyer be told how to recover.
+
+    Routes through the harness ``TransportResult.assert_wire_error`` (the single wire-error
+    oracle), which returns the validated envelope and runs the no-raw-Pydantic-leak check
+    itself — no re-fetch, no hand-rolled re-narrowing. ``recovery`` defaults to the pinned
+    AdCP enum's VALIDATION_ERROR classification (pin-wins — no hardcoded ``"correctable"`` to
+    drift if the pin reclassifies), and ``require_suggestion`` owns the POST-F3 check.
+
+    PRIMARY cross-transport signal — ``errors[0]["field"] == f"filters.{field}"``: since
+    ``coerce_creative_filters`` now reports the request-relative pointer (``filters.statuses`` /
+    ``filters.concept_ids``) on REST/A2A to match what MCP already emits (AdCP 3.1.1
+    ``core/error.json`` field pointer), the field pins WHICH filter was rejected — swap the
+    ``field`` argument and the oracle moves. ``message_substr="List should have"`` is now a
+    SECONDARY check that the violated constraint is minItems; it pins Pydantic's
+    framework-internal phrasing (a reword reddens all wire arms at once), tracked for removal
+    in #2066 now that ``field`` carries the cross-transport WHICH-field signal it was once the
+    only source of.
+    """
+    result = env.call_via(transport, filters={field: []})
+    envelope = result.assert_wire_error("VALIDATION_ERROR", require_suggestion=True, message_substr="List should have")
+    assert envelope["errors"][0].get("field") == f"filters.{field}", (
+        f"{transport}: VALIDATION_ERROR must name the rejected filter field 'filters.{field}', "
+        f"got {envelope['errors'][0].get('field')!r}"
+    )
 
 
 def make_creative_dict(creative_id: str = "c1", name: str = "Test Banner") -> dict:
@@ -141,7 +204,7 @@ def make_test_creative(
     status: str = "approved",
     tags: list[str] | None = None,
     assets: dict | None = None,
-) -> Creative:  # type: ignore[name-defined]
+) -> Creative:
     """Build a Creative model with standard fields for serialization tests.
 
     Shared between test_creative_response_serialization and test_list_creatives_serialization.

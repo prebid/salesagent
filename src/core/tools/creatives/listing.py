@@ -330,7 +330,17 @@ def _list_creatives_impl(
 
     # Derive flat DB-query params from the structured request.
     req_filters = req.filters
-    status = enum_value(req_filters.statuses[0]) if req_filters and req_filters.statuses else None
+    # statuses filter (CreativeFilters.statuses). Thread the FULL structured list into the
+    # DB query, not just the first status — otherwise a buyer's multi-status filter is
+    # silently narrowed to its first element and the buyer receives FEWER creatives than
+    # filters_applied claims. (The match-any semantics and their spec grounding are stated
+    # once at the enforcement site — CreativeRepository.get_by_principal's
+    # Creative.status.in_(...); this call just feeds it the merged list.) The flat `status`
+    # param is already folded into req_filters.statuses (flat wins) by
+    # _build_list_creatives_request, so this merged list is the single source of truth —
+    # filters_applied reports it verbatim below. CreativeStatus enums -> string values to
+    # match the String status column (mirrors MediaBuyRepository.get_by_principal's list[str]).
+    effective_statuses = [enum_value(s) for s in req_filters.statuses] if req_filters and req_filters.statuses else None
     tags = req_filters.tags if req_filters else None
     created_after_dt = req_filters.created_after if req_filters else None
     created_before_dt = req_filters.created_before if req_filters else None
@@ -370,7 +380,7 @@ def _list_creatives_impl(
         assert uow.creatives is not None
         result = uow.creatives.get_by_principal(
             principal_id,
-            status=status,
+            statuses=effective_statuses,
             format=format,
             tags=tags,
             created_after=created_after_dt,
@@ -515,8 +525,11 @@ def _list_creatives_impl(
     if req.filters:
         if req.filters.media_buy_ids:
             filters_applied.append(f"media_buy_ids={','.join(req.filters.media_buy_ids)}")
-        if req.filters.statuses:
-            filters_applied.append(f"statuses={','.join(str(s) for s in req.filters.statuses)}")
+        if effective_statuses:
+            # Report the value actually applied to the query (see above) so filters_applied
+            # can't drift from what scoped the result set: the same enum_value-coerced list
+            # the .in_(...) clause used.
+            filters_applied.append(f"statuses={','.join(effective_statuses)}")
         if req.filters.format_ids:
             filters_applied.append(f"format_ids={','.join(str(f) for f in req.filters.format_ids)}")
         if req.filters.tags:

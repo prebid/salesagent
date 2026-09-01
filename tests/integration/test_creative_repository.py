@@ -26,6 +26,7 @@ from tests.factories import (
 )
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness._base import IntegrationEnv
+from tests.helpers.creative_test_helpers import seed_creative_in_status
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -162,20 +163,82 @@ class TestCreativeRepoGetByPrincipal:
         p2_ids = {c.creative_id for c in page2.creatives}
         assert p1_ids.isdisjoint(p2_ids)
 
-    def test_status_filter(self, integration_db):
-        """Covers: UC-006-CREATIVE-APPROVAL-WORKFLOW-01 — status filter narrows results."""
+    def test_statuses_filter_single_value(self, integration_db):
+        """Covers: UC-006-CREATIVE-APPROVAL-WORKFLOW-01 — statuses filter narrows results."""
         with _RepoEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            CreativeFactory(tenant=tenant, principal=principal, creative_id="c_approved", status="approved")
-            CreativeFactory(tenant=tenant, principal=principal, creative_id="c_pending", status="pending_review")
+            seed_creative_in_status(tenant, principal, "approved", creative_id="c_approved")
+            seed_creative_in_status(tenant, principal, "pending_review", creative_id="c_pending")
 
             session = env.get_session()
             repo = CreativeRepository(session, "test_tenant")
-            result = repo.get_by_principal("p1", status="approved")
+            result = repo.get_by_principal("p1", statuses=["approved"])
 
-        assert result.total_count == 1
-        assert result.creatives[0].creative_id == "c_approved"
+            assert result.total_count == 1
+            assert result.creatives[0].creative_id == "c_approved"
+
+    def test_statuses_filter_matches_any(self, integration_db):
+        """Covers: UC-006-CREATIVE-APPROVAL-WORKFLOW-01 — statuses (plural) filter matches
+        any of the given statuses and excludes others (mirrors MediaBuyRepository). #1502."""
+        with _RepoEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            seed_creative_in_status(tenant, principal, "approved", creative_id="c_approved")
+            seed_creative_in_status(tenant, principal, "rejected", creative_id="c_rejected")
+            seed_creative_in_status(tenant, principal, "pending_review", creative_id="c_pending")
+
+            session = env.get_session()
+            repo = CreativeRepository(session, "test_tenant")
+            result = repo.get_by_principal("p1", statuses=["approved", "rejected"])
+
+            # Only the two requested statuses; the pending_review creative is excluded.
+            assert result.total_count == 2
+            assert {c.creative_id for c in result.creatives} == {"c_approved", "c_rejected"}
+
+    def test_statuses_none_returns_all_statuses(self, integration_db):
+        """#1502: statuses=None skips the filter — every status returns, not just one.
+
+        Guards the ``if statuses is not None`` gate over a MIXED set. The count test above
+        (test_returns_creative_list_result) seeds a single uniform status, so it cannot
+        catch a gate that accidentally narrowed the no-filter path. The three seeded statuses
+        are all non-archived on purpose: archived-by-default exclusion is a separate,
+        unimplemented feature (#1738), so pinning an archived creative as returned here would
+        make this test a false regression when #1738 lands in get_by_principal.
+        """
+        with _RepoEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            seed_creative_in_status(tenant, principal, "approved", creative_id="c_approved")
+            seed_creative_in_status(tenant, principal, "rejected", creative_id="c_rejected")
+            seed_creative_in_status(tenant, principal, "processing", creative_id="c_processing")
+
+            session = env.get_session()
+            repo = CreativeRepository(session, "test_tenant")
+            result = repo.get_by_principal("p1")
+
+            assert {c.creative_id for c in result.creatives} == {"c_approved", "c_rejected", "c_processing"}
+
+    def test_cross_tenant_isolation(self, integration_db):
+        """#1502: get_by_principal is tenant-scoped — the same principal_id in another tenant
+        never leaks. The composite PK is (creative_id, tenant_id, principal_id), so principal_id
+        alone is not tenant-unique; dropping the ``tenant_id=self._tenant_id`` scope clause
+        would return t1's creative from a repo pinned to t2. This is the tenant-half oracle for
+        the narrow-only guarantee (get_by_id has its own cross-tenant guard above).
+        """
+        with _RepoEnv() as env:
+            t1 = TenantFactory(tenant_id="t1")
+            t2 = TenantFactory(tenant_id="t2")
+            p1 = PrincipalFactory(tenant=t1, principal_id="p_shared")
+            PrincipalFactory(tenant=t2, principal_id="p_shared")
+            seed_creative_in_status(t1, p1, "approved", creative_id="c_t1")
+
+            session = env.get_session()
+            repo_t2 = CreativeRepository(session, "t2")
+            result = repo_t2.get_by_principal("p_shared")
+
+            assert result.total_count == 0
+            assert result.creatives == []
 
 
 class TestCreativeRepoListByPrincipal:

@@ -3859,9 +3859,33 @@ ENV_ROUTES: list[EnvRoute] = [
         xfail_reason="UC-006 harness not yet wired for non-account scenarios",
     ),
     # ── UC-018 ──────────────────────────────────────────────────────────────
+    # The @BR-RULE-146 explicit-statuses success invariants (#1502, statuses
+    # match-any) are admitted by EXACT scenario id, not the shared @BR-RULE-146
+    # tag, because the tag also covers rows that are still dormant. The dormant
+    # statuses siblings fall through to uc018-not-wired below:
+    #   Genuinely blocked (need unimplemented work): inv-146-1-holds + the
+    #     @default-query `empty_request`/`filters_no_status` rows (no-filter
+    #     archival-DEFAULT exclusion is unimplemented — #1738; inv-146-1-holds has
+    #     its own named xfail row) and the validation-error rows (`[]`/`["unknown"]`/
+    #     `["deleted"]`) needing dict-passthrough validation wiring (#1652).
+    #   Implementable but not yet split out of their generated outlines (#2067):
+    #     the `processing`/`archived`/multi-status and explicit-status default-query rows.
     EnvRoute(
         tag="uc018-list",
-        when=_uc("UC-018", lambda m: bool(m & {"list-after-sync", "concept-id", "BR-RULE-034"})),
+        when=_uc(
+            "UC-018",
+            lambda m: bool(
+                m
+                & {
+                    "list-after-sync",
+                    "concept-id",
+                    "BR-RULE-034",
+                    "T-UC-018-inv-146-2-holds",
+                    "T-UC-018-inv-146-2-violated",
+                    "T-UC-018-inv-146-3-holds",
+                }
+            ),
+        ),
         env_builder=_env("tests.harness.creative_list.CreativeListEnv"),
     ),
     EnvRoute(
@@ -3869,6 +3893,18 @@ ENV_ROUTES: list[EnvRoute] = [
         when=_uc("UC-018", lambda m: "T-UC-018-ext-c" in m),
         env_builder=_env("tests.harness.creative_list.CreativeListEnv"),
         xfail_reason="T-UC-018-ext-c list_creatives validation harness wiring is tracked in #1652",
+    ),
+    EnvRoute(
+        tag="uc018-inv-146-1",
+        when=_uc("UC-018", lambda m: "T-UC-018-inv-146-1-holds" in m),
+        env_builder=_env("tests.harness.creative_list.CreativeListEnv"),
+        xfail_reason=(
+            "BR-RULE-146 INV-1 (no-filter archival-DEFAULT exclusion) is dormant for two "
+            "reasons: (1) the archival-default exclusion is an unimplemented production "
+            "feature (#1738), and (2) its 'list_creatives request with no filters' When "
+            "phrasing has no UC-018 step binding yet. Both the #1738 implementation and the "
+            "When binding must land before this scenario can grade a real red."
+        ),
     ),
     # When the dormant all-fields boundary scenarios are wired, their Then must
     # assert value-when-present, not key-presence-of-13: list_creatives drops a
@@ -3881,7 +3917,7 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_env("tests.harness.creative_list.CreativeListEnv"),
         xfail_reason=(
             "UC-018 harness wired only for the @list-after-sync (#1405), @concept-id (#1407), "
-            "and @BR-RULE-034 isolation (#1503) scenarios"
+            "@BR-RULE-034 isolation (#1503), and @BR-RULE-146 statuses invariants (#1502) scenarios"
         ),
     ),
     # ── UC-011 ──────────────────────────────────────────────────────────────

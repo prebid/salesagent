@@ -97,3 +97,31 @@ class CreativeListEnv(IntegrationEnv):
     def parse_rest_response(self, data: dict[str, Any]) -> ListCreativesResponse:
         """Parse REST JSON into ListCreativesResponse."""
         return ListCreativesResponse(**data)
+
+    def seed_creatives_in_statuses(self, counts: dict[str, int]) -> list[str]:
+        """Seed ``{status: count}`` creatives owned by the env's current principal; return their ids.
+
+        The named seeding capability for the #1502 statuses tests. The in-process body loops
+        the shared ``seed_creative_in_status`` primitive, so the BDD statuses seeder and the
+        integration statuses tests seed through ONE surface — a CreativeFactory-default change
+        reaches both, closing the "two single seeders" split (the BDD path used a module-local
+        ``_seed_creative`` while the helper claimed to be the single seeder with no BDD consumer).
+        The tenant+principal come from the env's current identity via ``setup_default_data``
+        (idempotent get-or-create), so a step that switched to a fresh tenant seeds under it.
+        Returns the created creative_ids in ``counts`` iteration order.
+
+        e2e realization: CreativeListEnv binds factories to the session, which in the e2e_rest
+        lane IS the live server's Postgres (BaseTestEnv factory binding), so these writes reach
+        the separate HTTP server exactly as the @list-after-sync scenario's CreativeFactory
+        writes do — the same mechanism, not a live ``sync_creatives`` call, so there is no
+        ``@realize_e2e`` branch to add. The cross-tenant parallel-injection visibility gap the
+        UC-018 e2e_rest ledger records is a property of switching to a server-unprovisioned
+        tenant, orthogonal to this seeding primitive.
+        """
+        from tests.helpers.creative_test_helpers import seed_creative_in_status
+
+        tenant, principal = self.setup_default_data()
+        ids: list[str] = []
+        for status, count in counts.items():
+            ids.extend(seed_creative_in_status(tenant, principal, status) for _ in range(count))
+        return ids
