@@ -51,6 +51,7 @@ def serialize_tenant_to_dict(tenant: Tenant) -> dict[str, Any]:
         "supported_billing": safe_json_loads(tenant.supported_billing, None),
         "account_sandbox": tenant.account_sandbox,
         "gemini_api_key": tenant.gemini_api_key,
+        "ai_config": tenant.ai_config,
         "creative_review_criteria": tenant.creative_review_criteria,
         "brand_manifest_policy": tenant.brand_manifest_policy,
         "advertising_policy": safe_json_loads(tenant.advertising_policy, None),
