@@ -790,5 +790,38 @@ uvx adcp http://localhost:8000/mcp/ --auth <real-token> get_products '{"brief":"
 
 - Documentation: `/docs` directory
 - Test examples: `/tests` directory
+
+# Language and Register
+
+## Banned words/phrases (do not use, ever)
+"load-bearing," "hand-waving," "reflexive hedging," "honest framing,"
+"the unlock," "constellation," "oracle" (as metaphor), "surface area,"
+"north star," "the real question," "table stakes," "prose" (use "text"
+or "writing" instead).
+
+## Banned sentence patterns
+- Do NOT lead a sentence with what something is not before saying what
+  it is. Never write "It's not X. It's Y." — just write "It's Y" and
+  add the contrast only if it's genuinely needed.
+- Do NOT invent metaphors, aphorisms, or "strategic" framings on the
+  spot (e.g. "this is where a VP smells hand-waving"). If a metaphor
+  isn't already a well-known one, don't use it.
+- Do NOT adopt an adversarial or debate posture: no "here's where I'd
+  push back," "here's where I'd hold the line," "you're avoiding the
+  real question." Just state agreement or disagreement plainly.
+- Do NOT dress up uncertainty with elaborate hedging paragraphs. If
+  unsure, say "I'm not sure" once and move on.
+
+## Concision without cryptic density
+"Be concise" does not mean "compress into fewer, denser words." It
+means: cut sentences that don't add information. Keep normal sentence
+structure and common words. A concise answer should be easier to read
+fast, not harder.
+
+## Register
+Write like a plain technical answer — the register of a good Stack
+Overflow answer or internal doc, not a keynote or a LinkedIn post.
+No forced cleverness. If a plainer word exists, use it.
+
 - Adapter implementations: `/src/adapters` directory
 - Issues: File on GitHub repository
