@@ -358,7 +358,7 @@ jobs:
           sudo chmod +x /usr/local/bin/docker-compose
       # Image build + compose layers need headroom on ubuntu-latest.
       - name: Free disk space
-        uses: ./.github/actions/_free-disk
+        uses: $/.github/actions/_free-disk
       - name: Clean up lingering containers
         run: |
           docker ps -q | xargs -r docker kill || true
@@ -430,7 +430,7 @@ jobs:
       # Image build + /opt/venv + second full tox env under tox_data
       # overflowed ubuntu-latest (~14GB free) → ENOSPC on uv sync into /app/.tox.
       - name: Free disk space
-        uses: ./.github/actions/_free-disk
+        uses: $/.github/actions/_free-disk
       - name: Clean up lingering containers
         run: |
           docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
