@@ -61,9 +61,10 @@ _LOCAL_SUITE_TO_SUMMARY_GATE: dict[str, str] = {
 #
 # Ownership (not an unbounded park-list): ``test_local_suites_map_or_explicit_exclusion``
 # uses ``assert_violations_match_allowlist`` so growth is red and removal is
-# green when a suite is mapped — never grows without a new owned issue + anchor.
+# green when a suite is mapped — never grows without a new owned issue + per-entry
+# ``# see #<issue>`` anchor keyed from the registry below.
 #
-# see #1924 — removal recipe (when product wants Summary gating):
+# Removal recipe (when product wants Summary gating — tracked on #2161):
 # 1. Add CI job (suggested name ``ui-tests``) that runs Playwright against the
 #    E2E compose stack (mirror ``e2e-tests`` pre-start / ``ADCP_TESTING`` +
 #    ``playwright install chromium`` or image bake) — or map ``ui`` onto an
@@ -77,7 +78,10 @@ _LOCAL_SUITE_TO_SUMMARY_GATE: dict[str, str] = {
 #    below) once Summary gating lands.
 # 6. Until step 5: keep the one-line STATUS pointer in ``run_all_tests.sh`` at
 #    the ``ui`` suite row (local/in-network only — not ``admin-ui-tests``).
-UNGATED_LOCAL_SUITES = frozenset({"ui"})
+#
+# Registry is suite → owning GitHub issue (Path A live owner while ungated).
+# see #2161 — Path A ui-tests Summary gate (Path B docs: #1924 / #1966)
+UNGATED_LOCAL_SUITES: dict[str, int] = {"ui": 2161}
 
 # CI-only gates that are not ALL_SUITES entries but must still floor Summary.
 _EXTRA_SUMMARY_GATES = frozenset(
@@ -96,19 +100,18 @@ def _all_suites_from_runner() -> list[str]:
 
 
 def _required_summary_gates() -> frozenset[str]:
+    """Mapped Summary gates for ALL_SUITES that have CI jobs.
+
+    Unmapped / ungated growth is graded by
+    ``test_local_suites_map_or_explicit_exclusion`` (ratchet), not at import.
+    """
     suites = _all_suites_from_runner()
-    unknown = [s for s in suites if s not in _LOCAL_SUITE_TO_SUMMARY_GATE and s not in UNGATED_LOCAL_SUITES]
-    assert not unknown, (
-        f"ALL_SUITES entries {unknown} are neither mapped to a summary gate nor listed in "
-        f"UNGATED_LOCAL_SUITES — add a CI job map entry or an explicit exclusion."
-    )
     mapped = {_LOCAL_SUITE_TO_SUMMARY_GATE[s] for s in suites if s in _LOCAL_SUITE_TO_SUMMARY_GATE}
     return frozenset(mapped | _EXTRA_SUMMARY_GATES)
 
 
-# Back-compat name used by tests below (computed once at import).
+# Used by tests below (computed once at import; no import-time membership assert).
 REQUIRED_SUMMARY_GATES = _required_summary_gates()
-
 _FREE_DISK_USES = "./.github/actions/_free-disk"
 _FREE_DISK_ACTION = repo_root() / ".github" / "actions" / "_free-disk" / "action.yml"
 _E2E_COMPOSE = repo_root() / "docker-compose.e2e.yml"
@@ -185,10 +188,7 @@ def _find_free_disk_step(steps: list[dict[str, Any]]) -> tuple[int, dict[str, An
     found = find_step(steps, uses_contains="_free-disk")
     if found is None:
         raise AssertionError(f"job must include uses: {_FREE_DISK_USES} (single source for runner reclaim).")
-    try:
-        idx = next(i for i, step in enumerate(steps) if step is found)
-    except StopIteration as exc:
-        raise AssertionError("find_step returned a step not present in steps") from exc
+    idx = next(i for i, step in enumerate(steps) if step is found)
     return idx, found
 
 
@@ -427,9 +427,22 @@ class TestCISuiteCoverage:
             ),
         )
         module_src = (repo_root() / "tests/unit/test_architecture_ci_suite_coverage.py").read_text(encoding="utf-8")
-        for suite in UNGATED_LOCAL_SUITES:
-            assert re.search(r"# see #\d+", module_src), (
-                f"UNGATED suite {suite!r} requires a `# see #<issue>` anchor in this module."
+        runner_src = (repo_root() / "run_all_tests.sh").read_text(encoding="utf-8")
+        module_rel = "tests/unit/test_architecture_ci_suite_coverage.py"
+        for suite, issue in UNGATED_LOCAL_SUITES.items():
+            assert re.search(rf"# see #{issue}\b", module_src), (
+                f"UNGATED suite {suite!r} requires a `# see #{issue}` anchor in this module."
+            )
+            # STATUS pointer: suite row + this module path (rename-safe existence check)
+            assert re.search(
+                rf"(?m)^#\s+{re.escape(suite)}\s+",
+                runner_src,
+            ), f"run_all_tests.sh STATUS must document suite {suite!r}"
+            assert module_rel in runner_src, (
+                f"run_all_tests.sh STATUS must point at {module_rel} while {suite!r} stays ungated"
+            )
+            assert f"#{issue}" in runner_src, (
+                f"run_all_tests.sh STATUS must cite owning issue #{issue} for suite {suite!r}"
             )
 
     def test_summary_gates_every_required_job(self):

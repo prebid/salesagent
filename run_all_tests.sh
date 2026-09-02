@@ -26,7 +26,7 @@
 #   ui                -> SERVER DB (/adcp) + playwright chromium baked into
 #                        Dockerfile.test; browser drives proxy:8000
 #                        NOTE: local/in-network only until Summary gating — see
-#                        tests/unit/test_architecture_ci_suite_coverage.py (#1924).
+#                        tests/unit/test_architecture_ci_suite_coverage.py (#2161).
 #
 # Per-suite DB split: integration/bdd/admin use the runner's DATABASE_URL
 # (/adcp_test); e2e/ui override it to E2E_DATABASE_URL (/adcp) in their tox envs.
