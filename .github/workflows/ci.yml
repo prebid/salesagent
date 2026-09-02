@@ -317,12 +317,25 @@ jobs:
         run: docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
 
   e2e-tests:
+    # In-network, like bdd-in-network. run_all_tests.sh builds and starts the stack.
+    # _free-disk runs first: image build + compose layers need headroom on ubuntu-latest.
     name: E2E Tests
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read # pull adcp-creative-agent from ghcr.io (publish runs on main via publish-creative-agent.yml)
-    timeout-minutes: 25
+    # 40m: pre-start compose --wait + migrations + pytest bodies; 25m too tight.
+    timeout-minutes: 40
+    env:
+      # Native compose multi-file (colon-separated). Overlay sites inherit this;
+      # cascading single-file downs keep an explicit -f (intentional scopes).
+      COMPOSE_FILE: docker-compose.e2e.yml:docker-compose.e2e.ports.yml
+      POSTGRES_PORT: 5435
+      ADCP_SALES_PORT: 8080
+      ADCP_TLS_PORT: 8443
+      WEBHOOK_CAPTURE_PORT: 8090
+      DOCKER_BUILDKIT: 1
+      COMPOSE_DOCKER_CLI_BUILD: 1
     steps:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
@@ -343,16 +356,17 @@ jobs:
           echo '#!/bin/bash' | sudo tee /usr/local/bin/docker-compose
           echo 'exec docker compose "$@"' | sudo tee -a /usr/local/bin/docker-compose
           sudo chmod +x /usr/local/bin/docker-compose
+      # Image build + compose layers need headroom on ubuntu-latest.
+      - name: Free disk space
+        uses: ./.github/actions/_free-disk
       - name: Clean up lingering containers
         run: |
           docker ps -q | xargs -r docker kill || true
-          docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
           docker compose down -v 2>/dev/null || true
+          docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
           docker container prune -f 2>/dev/null || true
           docker network prune -f 2>/dev/null || true
           docker volume prune -f 2>/dev/null || true
-      # No coverage: the server under test runs inside Docker, so host-side
-      # coverage would measure the client harness, not src/.
       #
       # IN-NETWORK, like bdd-in-network. The host path ran pytest on the runner
       # against counterparty.adcp-e2e.dev — a COMPOSE-ONLY name with no public
@@ -374,10 +388,11 @@ jobs:
           CREATIVE_AGENT_GHCR_IMAGE: ghcr.io/${{ github.repository }}/adcp-creative-agent
           # No host uvx in this job; the dedicated Security Audit check owns the
           # uv-secure scan.
-          RUN_ALL_SKIP_AUDIT: 1
-      - name: Cleanup Docker services
+          RUN_ALL_SKIP_AUDIT: 1      - name: Cleanup Docker services
         if: always()
-        run: docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
+        run: |
+          docker compose down -v 2>/dev/null || true
+          docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
 
   bdd-in-network:
     # The in-network BDD transports (real HTTP through nginx to the live server,
@@ -412,6 +427,10 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
+      # Image build + /opt/venv + second full tox env under tox_data
+      # overflowed ubuntu-latest (~14GB free) → ENOSPC on uv sync into /app/.tox.
+      - name: Free disk space
+        uses: ./.github/actions/_free-disk
       - name: Clean up lingering containers
         run: |
           docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
@@ -435,6 +454,10 @@ jobs:
           # run_all_tests.sh builds the pinned creative agent host-side; prefer
           # the pin-keyed ghcr pull (~5m faster) over building from source.
           CREATIVE_AGENT_GHCR_IMAGE: ghcr.io/${{ github.repository }}/adcp-creative-agent
+          # Serial e2e_rest leg — no xdist fan-out; default 10g tmpfs wastes RAM
+          # on ubuntu-latest. Cap is a RAM ceiling (tmpfs size=), not host-disk
+          # headroom; ENOSPC on the runner is handled by _free-disk.
+          PGDATA_TMPFS_SIZE: 2g
           # No host uvx in this job (no _setup-env); the dedicated Security
           # Audit check owns the uv-secure scan.
           RUN_ALL_SKIP_AUDIT: 1

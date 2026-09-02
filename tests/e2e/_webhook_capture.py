@@ -5,7 +5,6 @@ dropped: deliveries land on the long-lived ``webhook-capture`` compose service
 (``tests/e2e/webhook_capture_service.py``) fronted by the shared ``tls-proxy``,
 and the test process reads them back over a PLAIN-HTTP control plane. This
 module is the only place that spells either address.
-
 Two traffic patterns, never conflated:
 
 * DELIVERY — the sales agent POSTs to ``https://webhooks.…:8443/webhook/<key>``.
@@ -50,8 +49,7 @@ service cannot serve: a HERMETIC test (no Docker stack) whose sender runs on the
 host and cannot resolve a Docker-embedded-DNS name at all. Anything that can
 reach the compose network belongs on this module instead — that is what the
 guard ``tests/unit/test_architecture_e2e_webhook_receivers_migrated.py`` keeps
-shrink-only.
-"""
+shrink-only."""
 
 from __future__ import annotations
 
@@ -100,7 +98,7 @@ class WebhookReadbackError(RuntimeError):
 def _readback_base_url() -> str:
     """The host-reachable readback origin for the ``.adcp.test`` flavor."""
     host = os.getenv("WEBHOOK_CAPTURE_HOST", "localhost")
-    port = os.getenv("WEBHOOK_CAPTURE_PORT", "8080")
+    port = os.getenv("WEBHOOK_CAPTURE_PORT", "8090")
     return f"http://{host}:{port}"
 
 

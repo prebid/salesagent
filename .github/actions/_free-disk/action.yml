@@ -1,0 +1,22 @@
+name: Free disk space
+description: >-
+  Reclaim ubuntu-latest headroom before heavy Docker/compose builds
+  (unused preinstalled toolchains + Docker builder cache).
+runs:
+  using: composite
+  steps:
+    - name: Free disk space
+      shell: bash
+      run: |
+        set -eux
+        df -h
+        sudo rm -rf \
+          /usr/share/dotnet \
+          /usr/local/lib/android \
+          /opt/ghc \
+          /opt/hostedtoolcache/CodeQL \
+          /usr/local/share/boost \
+          /usr/share/swift \
+          || true
+        docker builder prune -af 2>/dev/null || true
+        df -h
