@@ -1,1 +1,1 @@
-SEE_WORKSPACE_PRODUCTS_PY
+"""Get products tool implementation.\n\nThis module contains the get_products tool implementation following the MCP/A2A\nshared implementation pattern from CLAUDE.md.\n"""\n
