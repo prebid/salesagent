@@ -120,7 +120,12 @@ def main() -> int:
     read_baseline, write_baseline = json_baseline_io(SCOPES)
 
     print("Scanning for code duplication (pylint R0801)...")
-    current = {scope: count_duplications(f"{scope}/") for scope in SCOPES}
+    current = {
+        "src": count_duplications("src/"),
+        "tests": count_duplications("tests/"),
+        "scripts": count_duplications("scripts/"),
+        ".claude/scripts": count_duplications(".claude/scripts/"),
+    }
 
     return run_count_ratchet(
         keys=SCOPES,
@@ -138,7 +143,8 @@ def main() -> int:
             "Extract repeated logic into shared helper functions.",
             "",
             "To inspect violations:",
-            *(f"  uv run pylint --disable=all --enable=R0801 {scope}/" for scope in SCOPES),
+            "  uv run pylint --disable=all --enable=R0801 src/",
+            "  uv run pylint --disable=all --enable=R0801 tests/",
         ),
         format_key=lambda scope: f"{scope}/",
         unit="duplicate blocks",

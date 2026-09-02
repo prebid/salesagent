@@ -38,9 +38,6 @@ from typing import Any, Literal, NamedTuple, TypedDict
 # `[` anchor + `(?:-|])` tail delimiter recognizes full ids (including
 # `e2e_rest` / `e2e_mcp` / `e2e_a2a`); longer e2e_* alternatives come first.
 _TRANSPORT_RE = re.compile(r"\[(e2e_rest|e2e_mcp|e2e_a2a|impl|a2a|mcp|rest)(?:-|])")
-# Last bracket token — used when ``_TRANSPORT_RE`` misses an unknown id so the
-# row is not silently dropped from coverage (unknown ids block graduation).
-_ANY_PARAM_RE = re.compile(r"\[([^\]]+)\]")
 
 # ANSI CSI / OSC sequences — strip before salvage regex matching.
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\][^\x07]*\x07")
@@ -51,7 +48,7 @@ E2E_LEDGER_PATH = REPO_ROOT / "tests" / "bdd" / "e2e_rest_known_failures.txt"
 CONFTEST_PATH = REPO_ROOT / "tests" / "bdd" / "conftest.py"
 STEPS_DIR = REPO_ROOT / "tests" / "bdd" / "steps"
 
-GradeBucket = Literal["graduate", "confirm", "partial", "unparametrized"]
+GradeBucket = Literal["graduate", "confirm", "partial"]
 
 
 class TagReason(NamedTuple):
@@ -78,8 +75,7 @@ class StepRecord(TypedDict):
     source_text: str
 
 
-# Tuple (not frozenset): JSONL key order must be stable across PYTHONHASHSEED.
-STEP_RECORD_KEYS: tuple[str, ...] = tuple(StepRecord.__annotations__)
+STEP_RECORD_KEYS: frozenset[str] = frozenset(StepRecord.__annotations__)
 
 
 class GradeResult(NamedTuple):
@@ -89,8 +85,7 @@ class GradeResult(NamedTuple):
     do not re-derive it from ``graduates`` / ``needs_confirmation`` /
     ``passing`` / ``mixed_examples``. ``outcomes`` is the per-transport
     aggregated map already computed for the grade (do not hand-roll it).
-    ``bucket`` is ``\"unparametrized\"`` when the base has no transport rows
-    (admin / transport-specific scenarios that never call ``parametrize``).
+    ``bucket`` is ``None`` only for the degenerate empty-present case.
     """
 
     graduates: bool
@@ -99,7 +94,7 @@ class GradeResult(NamedTuple):
     present_count: int
     needs_confirmation: bool
     mixed_examples: bool
-    bucket: GradeBucket
+    bucket: GradeBucket | None
     outcomes: dict[str, str]
 
 
@@ -147,26 +142,6 @@ def extract_transport(nodeid: str) -> str | None:
     """
     m = _TRANSPORT_RE.search(nodeid)
     return m.group(1) if m else None
-
-
-def extract_coverage_transport(nodeid: str) -> str | None:
-    """Transport key for coverage maps — known id, else raw last param token.
-
-    Unknown parametrize ids (e.g. ``[newtransport]``) must still appear in
-    ``outcomes_by_transport_for_base`` so a failing unknown transport cannot
-    firm-graduate as if it were absent. Unparametrized nodeids return ``None``.
-    """
-    known = extract_transport(nodeid)
-    if known is not None:
-        return known
-    matches = _ANY_PARAM_RE.findall(nodeid)
-    if not matches:
-        return None
-    # Prefer the last bracket group (pytest stacks outline + transport).
-    raw = matches[-1]
-    # Outline rows look like ``ex1-a2a`` — known transport already handled above;
-    # for unknown ids keep the full token so it shows in missing/passing.
-    return raw
 
 
 def extract_scenario_base(nodeid: str) -> str:
@@ -267,7 +242,7 @@ def outcomes_by_transport_for_base(
     for nodeid, outcome in nodeid_outcomes:
         if extract_scenario_base(nodeid) != base:
             continue
-        transport = extract_coverage_transport(nodeid)
+        transport = extract_transport(nodeid)
         if transport:
             collected.setdefault(transport, []).append(outcome)
     return {t: _worst_transport_outcome(outs) for t, outs in collected.items()}
@@ -402,18 +377,13 @@ def grade_base(
     ):
         needs_confirmation = True
     mixed_examples = bool(present_count > 0 and not coverage.passing)
-    bucket: GradeBucket
-    if present_count == 0:
-        # Admin / transport-specific / impl-only: conftest returns before
-        # metafunc.parametrize — no wire-transport rows to grade.
-        bucket = "unparametrized"
-    elif coverage.graduates:
+    bucket: GradeBucket | None
+    if coverage.graduates:
         bucket = "confirm" if needs_confirmation else "graduate"
     elif coverage.passing or mixed_examples:
         bucket = "partial"
     else:
-        # Defensive: present rows but no pass and not mixed — treat as partial.
-        bucket = "partial"
+        bucket = None
     return GradeResult(
         graduates=coverage.graduates,
         passing=coverage.passing,

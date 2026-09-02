@@ -73,35 +73,6 @@ from bdd_audit_common import (  # noqa: E402
     short_base,
 )
 
-# Module-scope taxonomy — single owner for by-UC columns + stderr SUMMARY.
-# (Sibling ``bdd_full_audit.FIX_NOW`` is also module-scope for the same reason.)
-CATEGORY_DESC: dict[str, str] = {
-    "PRODUCTION_GAP": "Feature in Gherkin, not implemented in src/",
-    "TRANSPORT_GAP": "Works on some transports, param not forwarded",
-    "HARNESS_GAP": "Harness env not wired for this scenario",
-    "PARTIAL_IMPL": "Partition/boundary — some values pass, others fail",
-    "MISSING_STEP": "No step definition exists for a Gherkin step",
-    "PREMATURE_XFAIL": "Step calls pytest.xfail() before production code",
-    "STALE": "Passes all present transports — should graduate",
-    "STALE_CONFIRM": "All present pass, but single-/e2e_rest-only — needs confirmation",
-    "PARTIAL_PASS": "Passes some transports, not all",
-    "UNCLASSIFIED": "No matching pattern found",
-}
-XFAIL_CATEGORIES: tuple[str, ...] = tuple(CATEGORY_DESC.keys())
-# by-UC markdown columns: (category, header abbrev) derived from CATEGORY_DESC order
-# minus PARTIAL_PASS (xpassed-only; not an xfailed category column).
-BY_UC_COLUMNS: tuple[tuple[str, str], ...] = (
-    ("PRODUCTION_GAP", "PROD_GAP"),
-    ("TRANSPORT_GAP", "TRANSPORT"),
-    ("HARNESS_GAP", "HARNESS"),
-    ("PARTIAL_IMPL", "PARTIAL"),
-    ("MISSING_STEP", "MISSING"),
-    ("PREMATURE_XFAIL", "PREMATURE"),
-    ("STALE", "STALE"),
-    ("STALE_CONFIRM", "STALE_CONFIRM"),
-    ("UNCLASSIFIED", "UNCLASS"),
-)
-
 # ── Data classes ──────────────────────────────────────────────────────
 
 
@@ -436,12 +407,13 @@ def classify_xfail(
         entry.xfail_source = "conftest:auto"
         return entry
 
-    # Priority 2: harness not wired (live conftest wordings).
-    # Covers ``No harness wired for {uc}``, ``… harness not yet wired …``,
-    # ``UC harness not wired``, etc. Require both tokens so unrelated reasons
-    # mentioning only "harness" or only "wired" do not mis-route.
+    # Priority 2: No harness environment / harness not wired
     reason_lower = reason_text.lower()
-    if "harness" in reason_lower and "wired" in reason_lower:
+    if (
+        "No harness environment" in reason_text
+        or "harness not yet wired" in reason_lower
+        or "harness not wired" in reason_lower
+    ):
         entry.category = "HARNESS_GAP"
         entry.reason = reason_text
         entry.xfail_source = "conftest:auto"
@@ -683,9 +655,32 @@ def generate_report(report: AuditReport, output_path: Path | None = None) -> str
         "|----------|-------|---|-------------|",
     ]
 
-    category_desc = CATEGORY_DESC
-    xfail_categories = XFAIL_CATEGORIES
-    by_uc_columns = BY_UC_COLUMNS
+    category_desc = {
+        "PRODUCTION_GAP": "Feature in Gherkin, not implemented in src/",
+        "TRANSPORT_GAP": "Works on some transports, param not forwarded",
+        "HARNESS_GAP": "Harness env not wired for this scenario",
+        "PARTIAL_IMPL": "Partition/boundary — some values pass, others fail",
+        "MISSING_STEP": "No step definition exists for a Gherkin step",
+        "PREMATURE_XFAIL": "Step calls pytest.xfail() before production code",
+        "STALE": "Passes all present transports — should graduate",
+        "STALE_CONFIRM": "All present pass, but single-/e2e_rest-only — needs confirmation",
+        "PARTIAL_PASS": "Passes some transports, not all",
+        "UNCLASSIFIED": "No matching pattern found",
+    }
+    # Single owner for column / stderr category order (by_uc table + SUMMARY).
+    xfail_categories = tuple(category_desc.keys())
+    # Single owner for by-UC markdown columns (category + header abbrev).
+    by_uc_columns = (
+        ("PRODUCTION_GAP", "PROD_GAP"),
+        ("TRANSPORT_GAP", "TRANSPORT"),
+        ("HARNESS_GAP", "HARNESS"),
+        ("PARTIAL_IMPL", "PARTIAL"),
+        ("MISSING_STEP", "MISSING"),
+        ("PREMATURE_XFAIL", "PREMATURE"),
+        ("STALE", "STALE"),
+        ("STALE_CONFIRM", "STALE_CONFIRM"),
+        ("UNCLASSIFIED", "UNCLASS"),
+    )
 
     for cat in xfail_categories:
         desc = category_desc[cat]
@@ -914,7 +909,18 @@ def main() -> None:
     else:
         # Progress summary on stderr so stdout stays report-only when piped
         print("\n=== SUMMARY ===", file=sys.stderr)
-        for cat in XFAIL_CATEGORIES:
+        for cat in (
+            "PRODUCTION_GAP",
+            "TRANSPORT_GAP",
+            "HARNESS_GAP",
+            "PARTIAL_IMPL",
+            "MISSING_STEP",
+            "PREMATURE_XFAIL",
+            "STALE",
+            "STALE_CONFIRM",
+            "PARTIAL_PASS",
+            "UNCLASSIFIED",
+        ):
             count = len(report.by_category.get(cat, []))
             if count > 0:
                 print(f"  {cat}: {count}", file=sys.stderr)
