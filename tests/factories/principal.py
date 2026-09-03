@@ -12,7 +12,12 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.testing_hooks import AdCPTestContext
 from tests.factories.core import TenantFactory
 
-_UNSET = object()
+
+class _Unset:
+    """Sentinel type for omitted ``testing_context`` / ``tenant`` defaults."""
+
+
+_UNSET = _Unset()
 
 
 class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -32,12 +37,12 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
     def make_identity(
         cls,
         principal_id: str | None = "test_principal",
-        tenant_id: str = "test_tenant",
+        tenant_id: str | None = "test_tenant",
         protocol: str = "mcp",
         dry_run: bool = False,
         auth_token: str | None = None,
         tenant: Any = _UNSET,
-        testing_context: AdCPTestContext | None = None,
+        testing_context: AdCPTestContext | None | _Unset = _UNSET,
         **tenant_overrides: object,
     ) -> ResolvedIdentity:
         """Build a ResolvedIdentity without DB persistence.
@@ -48,15 +53,28 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         Pass testing_context to override the default (e.g. set
         test_session_id for harness routing).
 
+        ``testing_context`` meanings:
+        - omitted / sentinel (default): populated ``AdCPTestContext``
+        - ``testing_context=None``: explicit None (anonymous A2A discovery;
+          production ``AdCPTestContext.from_headers({})`` returns None)
+
         ``tenant`` is typed ``Any`` to match the underlying
         ``ResolvedIdentity.tenant`` field, which accepts plain dicts in
         most call sites and lazy proxies (``LazyTenantContext``) in tests
         that need deferred config resolution.
+
+        When ``tenant`` is omitted and ``tenant_id is None``, skip
+        ``make_tenant`` (would build a ``pub-None`` subdomain) and set
+        ``resolved_tenant=None``.
         """
-        resolved_tenant = (
-            TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides) if tenant is _UNSET else tenant
-        )
-        if testing_context is None:
+        if tenant is _UNSET:
+            if tenant_id is None:
+                resolved_tenant = None
+            else:
+                resolved_tenant = TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides)
+        else:
+            resolved_tenant = tenant
+        if testing_context is _UNSET:
             testing_context = AdCPTestContext(
                 dry_run=dry_run,
                 mock_time=None,
@@ -71,3 +89,23 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
             protocol=protocol,
             testing_context=testing_context,
         )
+
+    @classmethod
+    def make_anonymous_a2a_identity(cls, tenant_id: str | None = None, **kwargs: object) -> ResolvedIdentity:
+        """Anonymous A2A discovery identity — principal_id/tenant None, protocol a2a.
+
+        Production always returns ResolvedIdentity (never None) for discovery.
+        ``testing_context=None`` matches ``AdCPTestContext.from_headers({})``.
+        """
+        return cls.make_identity(
+            principal_id=None,
+            tenant_id=tenant_id,
+            tenant=None,
+            protocol="a2a",
+            testing_context=None,
+            **kwargs,
+        )
+
+
+# Public omit-arg sentinel (typed ``_Unset``), for wrappers that forward defaults.
+PrincipalFactory.UNSET = _UNSET

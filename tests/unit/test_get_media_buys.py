@@ -38,6 +38,7 @@ from src.core.tools.media_buy_list import (
     _map_creative_status,
     _resolve_status_filter,
 )
+from tests.factories import PrincipalFactory
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -48,11 +49,18 @@ def make_identity(
     tenant_id="tenant_1",
     principal_id="principal_1",
     tenant=None,
-    testing_context=None,
+    testing_context=PrincipalFactory.UNSET,
 ):
-    """Create a ResolvedIdentity for testing."""
-    from tests.factories import PrincipalFactory
+    """Create a ResolvedIdentity for testing.
 
+    Omitting ``testing_context`` keeps the factory default (populated
+    ``AdCPTestContext``). Pass ``testing_context=None`` explicitly for anonymous.
+
+    Defaults to ``PrincipalFactory.UNSET`` (rather than a second, locally
+    minted sentinel) so this wrapper's omitted-vs-explicit-``None`` handling
+    stays byte-identical to the factory's own — one spelling for "caller
+    didn't pass this" across both layers.
+    """
     if tenant is None:
         tenant = {"tenant_id": tenant_id, "adapter_type": "mock"}
     return PrincipalFactory.make_identity(

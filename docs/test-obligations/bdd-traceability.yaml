@@ -46,6 +46,105 @@ mappings:
       upstream_refs: ["BR-COMPAT-001"]
       business_rules: []
       status: new
+  # Locally-added, no upstream storyboard: the adcp-req storyboards never drive
+  # the A2A protocol methods tasks/get / tasks/cancel against another
+  # principal's task. Spec-grounded in A2A Protocol §3.3.2 + §13.1; this
+  # altitude is upstream-ungraded by design (AdCP task-lifecycle places
+  # transport-native tasks/* outside AdCP polling). AdCP analogue:
+  # get_products_async wrong-account steps → REFERENCE_NOT_FOUND.
+  # Retire these entries with the local feature once upstream grows equivalents.
+  # See tests/bdd/features/local-a2a-task-ownership.feature.
+  A2A-TASK-OWNERSHIP:
+    - adcp_scenario_id: "T-A2A-TASK-OWNERSHIP-owner-get"
+      adcp_feature: "local-a2a-task-ownership.feature"
+      obligation_id: null
+      upstream_refs:
+        - "a2a-spec:3.3.2"
+        - "a2a-spec:13.1"
+        - "adcp:get_products_async/get_products_task_status_wrong_account"
+        - "adcp:get_products_async/list_products_task_wrong_account"
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-A2A-TASK-OWNERSHIP-sibling-get"
+      adcp_feature: "local-a2a-task-ownership.feature"
+      obligation_id: null
+      upstream_refs:
+        - "a2a-spec:3.3.2"
+        - "a2a-spec:13.1"
+        - "adcp:get_products_async/get_products_task_status_wrong_account"
+        - "adcp:get_products_async/list_products_task_wrong_account"
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-A2A-TASK-OWNERSHIP-other-tenant-get"
+      adcp_feature: "local-a2a-task-ownership.feature"
+      obligation_id: null
+      upstream_refs:
+        - "a2a-spec:3.3.2"
+        - "a2a-spec:13.1"
+        - "adcp:get_products_async/get_products_task_status_wrong_account"
+        - "adcp:get_products_async/list_products_task_wrong_account"
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-A2A-TASK-OWNERSHIP-unknown-get"
+      adcp_feature: "local-a2a-task-ownership.feature"
+      obligation_id: null
+      upstream_refs:
+        - "a2a-spec:3.3.2"
+        - "a2a-spec:13.1"
+        - "adcp:get_products_async/get_products_task_status_wrong_account"
+        - "adcp:get_products_async/list_products_task_wrong_account"
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-A2A-TASK-OWNERSHIP-sibling-cancel"
+      adcp_feature: "local-a2a-task-ownership.feature"
+      obligation_id: null
+      upstream_refs:
+        - "a2a-spec:3.3.2"
+        - "a2a-spec:13.1"
+        - "adcp:get_products_async/get_products_task_status_wrong_account"
+        - "adcp:get_products_async/list_products_task_wrong_account"
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-A2A-TASK-OWNERSHIP-other-tenant-cancel"
+      adcp_feature: "local-a2a-task-ownership.feature"
+      obligation_id: null
+      upstream_refs:
+        - "a2a-spec:3.3.2"
+        - "a2a-spec:13.1"
+        - "adcp:get_products_async/get_products_task_status_wrong_account"
+        - "adcp:get_products_async/list_products_task_wrong_account"
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-A2A-TASK-OWNERSHIP-owner-cancel"
+      adcp_feature: "local-a2a-task-ownership.feature"
+      obligation_id: null
+      upstream_refs:
+        - "a2a-spec:3.3.2"
+        - "a2a-spec:13.1"
+        - "adcp:get_products_async/get_products_task_status_wrong_account"
+        - "adcp:get_products_async/list_products_task_wrong_account"
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-A2A-TASK-OWNERSHIP-no-owner-get"
+      adcp_feature: "local-a2a-task-ownership.feature"
+      obligation_id: null
+      upstream_refs:
+        - "a2a-spec:3.3.2"
+        - "a2a-spec:13.1"
+        - "adcp:get_products_async/get_products_task_status_wrong_account"
+        - "adcp:get_products_async/list_products_task_wrong_account"
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-A2A-TASK-OWNERSHIP-unauth-get"
+      adcp_feature: "local-a2a-task-ownership.feature"
+      obligation_id: null
+      upstream_refs:
+        - "a2a-spec:3.3.2"
+        - "a2a-spec:13.1"
+        - "adcp:get_products_async/get_products_task_status_wrong_account"
+        - "adcp:get_products_async/list_products_task_wrong_account"
+      business_rules: []
+      status: new
   UC-001:
     - adcp_scenario_id: "T-UC-001-main"
       adcp_feature: "BR-UC-001-discover-available-inventory.feature"

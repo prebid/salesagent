@@ -1,7 +1,7 @@
 """Structural guard: A2A test files must use PrincipalFactory.make_identity, not inline ResolvedIdentity.
 
 Inline ``ResolvedIdentity(...)`` constructions in A2A test files (``tests/unit/test_a2a*.py``,
-``tests/integration/test_a2a*.py``) bypass the single source of truth at
+``tests/integration/test_a2a*.py``, ``tests/e2e/test_a2a*.py``) bypass the single source of truth at
 ``tests.factories.principal.PrincipalFactory.make_identity``. Each inline construction is
 a future drift point — the factory's signature can evolve (e.g., new spec-mandated fields)
 without inline callers tracking the change.
@@ -25,8 +25,9 @@ from tests.unit._architecture_helpers import iter_call_expressions
 def _a2a_test_files() -> list[Path]:
     repo_root = Path(__file__).resolve().parents[2]
     paths: list[Path] = []
-    for pattern in ("tests/unit/test_a2a*.py", "tests/integration/test_a2a*.py"):
-        paths.extend(repo_root.glob(pattern))
+    for suite in ("unit", "integration", "e2e"):
+        # Recursive: depth ≥ 2 ``test_a2a*.py`` must not escape the guard.
+        paths.extend((repo_root / "tests" / suite).rglob("test_a2a*.py"))
     return paths
 
 
@@ -60,3 +61,22 @@ def test_a2a_test_files_use_principal_factory_make_identity():
         f"Found {len(violations)} inline ResolvedIdentity(...) construction(s) in "
         f"A2A test files. Replace with PrincipalFactory.make_identity(...):\n  " + "\n  ".join(violations)
     )
+
+
+@pytest.mark.arch_guard
+def test_find_resolved_identity_calls_self_test(tmp_path: Path) -> None:
+    """Matcher self-test for the A2A factory guard (R5-N5b)."""
+    positive = tmp_path / "test_a2a_probe.py"
+    positive.write_text(
+        "from src.core.resolved_identity import ResolvedIdentity\n"
+        "import src.core.resolved_identity as mod\n"
+        "ResolvedIdentity(principal_id='a')\n"
+        "mod.ResolvedIdentity(principal_id='b')\n"
+    )
+    assert _find_resolved_identity_calls(positive) == [3, 4]
+
+    negative = tmp_path / "test_a2a_factory.py"
+    negative.write_text(
+        "from tests.factories.principal import PrincipalFactory\nPrincipalFactory.make_identity(principal_id='a')\n"
+    )
+    assert _find_resolved_identity_calls(negative) == []

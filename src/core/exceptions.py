@@ -122,7 +122,7 @@ RECOVERY_BY_WIRE_CODE: dict[str, RecoveryHint] = _load_pinned_recovery()
 # here — this is a set of code NAMES; RECOVERY_BY_WIRE_CODE answers what they
 # mean. The remaining demoted spec code (BILLING_NOT_SUPPORTED) is tracked for
 # the same treatment in #1602.
-_SPEC_SUPPLEMENT_CODES: frozenset[str] = frozenset({"CREATIVE_NOT_FOUND", "CONFIGURATION_ERROR"})
+_SPEC_SUPPLEMENT_CODES: frozenset[str] = frozenset({"CREATIVE_NOT_FOUND", "CONFIGURATION_ERROR", "REFERENCE_NOT_FOUND"})
 
 # Codes the SDK helper ships that the PINNED spec does not define. The pin is the
 # authority and the helper is a cross-check (CLAUDE.md spec-grounding gate), so a
@@ -177,10 +177,13 @@ ERROR_CODE_MAPPING: dict[str, str] = {
     # Entity-specific not-found codes the pinned spec enum does NOT define
     # (unlike CREATIVE_NOT_FOUND, which the enum defines and therefore passes
     # through untranslated). The typed subclasses exist for
-    # recovery=correctable + guard-enforceability; the buyer-visible wire code
-    # is INVALID_REQUEST.
-    "FORMAT_NOT_FOUND": "INVALID_REQUEST",
-    "TASK_NOT_FOUND": "INVALID_REQUEST",
+    # recovery=correctable + guard-enforceability; both FORMAT_NOT_FOUND and
+    # TASK_NOT_FOUND map to REFERENCE_NOT_FOUND — a missing referenced id is
+    # AdCP 3.1.1's generic inaccessible-reference code, and MUST NOT mint a
+    # custom `*_NOT_FOUND` (not INVALID_REQUEST — that is for malformed
+    # requests).
+    "FORMAT_NOT_FOUND": "REFERENCE_NOT_FOUND",
+    "TASK_NOT_FOUND": "REFERENCE_NOT_FOUND",
     "INTERNAL_ERROR": "SERVICE_UNAVAILABLE",
     # Authentication / authorisation
     "AUTHORIZATION_ERROR": "AUTH_REQUIRED",
@@ -237,8 +240,8 @@ INTERNAL_CODES: frozenset[str] = frozenset(
     {
         "INTERNAL_ERROR",  # Base-class default; never instantiated for wire
         "NOT_FOUND",  # Base-class for entity-specific NotFound subclasses
-        "FORMAT_NOT_FOUND",  # AdCPFormatNotFoundError; wire → INVALID_REQUEST
-        "TASK_NOT_FOUND",  # AdCPTaskNotFoundError; wire → INVALID_REQUEST
+        "FORMAT_NOT_FOUND",  # AdCPFormatNotFoundError; wire → REFERENCE_NOT_FOUND
+        "TASK_NOT_FOUND",  # AdCPTaskNotFoundError; wire → REFERENCE_NOT_FOUND
         "API_ERROR",  # Raw adapter API failure detail
         "WORKFLOW_CREATION_FAILED",  # GAM workflow orchestration detail
         "LINE_ITEM_CREATION_FAILED",  # GAM line-item creation detail
@@ -1023,11 +1026,14 @@ class AdCPCreativeNotFoundError(AdCPNotFoundError):
 
 
 class AdCPFormatNotFoundError(AdCPNotFoundError):
-    """Requested creative format does not exist on the agent (404, wire → INVALID_REQUEST).
+    """Requested creative format does not exist on the agent (404, wire → REFERENCE_NOT_FOUND).
 
     No standard ``FORMAT_NOT_FOUND`` SDK code exists, so the raw code is internal
-    and translated to ``INVALID_REQUEST`` at the wire boundary. The gain over the
-    bare ``AdCPNotFoundError`` is recovery=correctable + a typed identity.
+    and translated to ``REFERENCE_NOT_FOUND`` at the wire boundary (AdCP 3.1.1
+    ``error-code.json``: referenced identifier that does not exist or is not
+    accessible — MUST not mint a custom ``*_NOT_FOUND``, the same rule
+    ``AdCPTaskNotFoundError`` follows below). The gain over the bare
+    ``AdCPNotFoundError`` is recovery=correctable + a typed identity.
 
     Recovery=correctable: the buyer can correct by supplying a valid format_id
     (discoverable via list_creative_formats).
@@ -1037,10 +1043,12 @@ class AdCPFormatNotFoundError(AdCPNotFoundError):
 
 
 class AdCPTaskNotFoundError(AdCPNotFoundError):
-    """Requested workflow task/step does not exist (404, wire → INVALID_REQUEST).
+    """Requested workflow task/step does not exist (404, wire → REFERENCE_NOT_FOUND).
 
     No standard ``TASK_NOT_FOUND`` SDK code exists, so the raw code is internal
-    and translated to ``INVALID_REQUEST`` at the wire boundary. The gain over the
+    and translated to ``REFERENCE_NOT_FOUND`` at the wire boundary (AdCP 3.1.1
+    ``error-code.json``: referenced identifier that does not exist or is not
+    accessible — MUST not mint a custom ``*_NOT_FOUND``). The gain over the
     bare ``AdCPNotFoundError`` is recovery=correctable + a typed identity.
 
     Recovery=correctable: the buyer can correct by supplying a valid task_id

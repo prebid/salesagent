@@ -38,12 +38,15 @@ os.environ.setdefault("ADCP_RUN_BACKGROUND_SCHEDULERS", "false")
 
 # Runtime import: DeliverResult is CONSTRUCTED here (the dispatch return contract),
 # not merely annotated, so it cannot live in the TYPE_CHECKING block below.
-from tests.harness.transport import DeliverResult, strip_a2a_protocol_fields
+from tests.harness.transport import NO_IDENTITY_OVERRIDE, DeliverResult, strip_a2a_protocol_fields
 
 if TYPE_CHECKING:
+    from a2a.server.routes.common import ServerCallContext
+    from a2a.types import Task, TaskState
     from pydantic import BaseModel
     from sqlalchemy.orm import Session
 
+    from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
     from src.core.resolved_identity import ResolvedIdentity
     from tests.harness.transport import E2EConfig, Transport, TransportResult
 
@@ -344,6 +347,25 @@ def _a2a_send_message_configuration(spec: dict[str, Any]) -> Any:
     return SendMessageConfiguration(task_push_notification_config=TaskPushNotificationConfig(**fields))
 
 
+def _clear_unit_mode_identity(handler: AdCPRequestHandler) -> None:
+    """Drop any unit-mode identity lambdas the handler outlives a dispatch with.
+
+    The handler instance is shared across dispatches within one scenario, so an
+    earlier unit-mode call (``_prepare_a2a_server_context``'s token-less branch)
+    may have left ``_resolve_a2a_identity`` / ``_get_auth_token`` lambdas bound
+    on the instance. A subsequent real-token or explicit-unauth dispatch must
+    clear them first, otherwise it silently reuses the previous caller's
+    identity — the exact denial-scenario bug this guards against.
+
+    Oracle: skipping either pop leaves a unit-mode lambda in place and a
+    subsequent dispatch is served (or denied) as the wrong caller.
+    """
+    handler.__dict__.pop("_resolve_a2a_identity", None)
+    handler.__dict__.pop("_get_auth_token", None)
+    assert "_resolve_a2a_identity" not in handler.__dict__
+    assert "_get_auth_token" not in handler.__dict__
+
+
 class _TestClock:
     """Minimal clock for BDD relative date-token resolution.
 
@@ -459,6 +481,13 @@ class BaseTestEnv:
         # with NO artifacts — and the synthesized submitted wire above cannot
         # prove artifact absence, so guards assert on this captured Task.
         self._last_a2a_task: Any = None
+        # JSON-RPC error body from the last ``_run_a2a_task_method`` dispatch,
+        # in the shape the v0.3 compat adapter puts on the wire. Task methods
+        # have no AdCP envelope — their failure IS the JSON-RPC error.
+        self._last_a2a_task_error: dict[str, Any] | None = None
+        # One AdCPRequestHandler per env: the handler owns the in-memory task
+        # store, so create → tasks/get / tasks/cancel must hit the same instance.
+        self._a2a_handler: AdCPRequestHandler | None = None
 
     # -- Transport mode -----------------------------------------------------
 
@@ -654,8 +683,8 @@ class BaseTestEnv:
         return self.deliver_a2a(**kwargs).payload
 
     @property
-    def last_a2a_task(self) -> Any:
-        """Raw A2A Task from the last ``_run_a2a_handler`` dispatch (or None).
+    def last_a2a_task(self) -> Task | None:
+        """Raw A2A Task from the last ``_run_a2a_handler`` / ``run_a2a_task_method``.
 
         Public accessor for Task-level contract assertions — e.g. the submitted
         (manual-approval) contract, where state=TASK_STATE_SUBMITTED with NO
@@ -663,6 +692,27 @@ class BaseTestEnv:
         that cannot prove artifact absence.
         """
         return self._last_a2a_task
+
+    @property
+    def a2a_handler(self) -> AdCPRequestHandler:
+        """The one ``AdCPRequestHandler`` this env dispatches A2A through.
+
+        In-memory task state (``tasks`` and the ``_task_owners`` recorded at
+        create, #1702) lives on the handler instance. Building a fresh handler
+        per dispatch would drop that state between a create and the subsequent
+        ``tasks/get`` / ``tasks/cancel``, so ownership could never be graded.
+
+        Side effect: every A2A skill dispatch on this env reuses the same
+        handler, so in-scenario multi-call paths can accumulate tasks. Clear
+        or replace the handler per scenario once any UC dispatches more than
+        one A2A skill call in one scenario (shared-handler reuse stops being
+        acceptable at that point).
+        """
+        if self._a2a_handler is None:
+            from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+            self._a2a_handler = AdCPRequestHandler()
+        return self._a2a_handler
 
     def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
         """Dispatch through the real FastMCP Client pipeline, returning payload AND wire.
@@ -751,10 +801,8 @@ class BaseTestEnv:
         """
         import asyncio
 
-        from a2a.server.routes.common import ServerCallContext
         from a2a.types import SendMessageRequest, Task
 
-        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
         from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
         from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
 
@@ -783,43 +831,8 @@ class BaseTestEnv:
         else:
             parameters = dict(kwargs)
 
-        handler = AdCPRequestHandler()
-
-        # Auth strategy mirrors _run_mcp_client. When the identity carries a real
-        # auth_token (integration mode), populate the AuthContext that the SDK
-        # call-context builder would have built from the wire and run the REAL
-        # _get_auth_token + _resolve_a2a_identity (header → token → DB lookup →
-        # ResolvedIdentity). Only the transport's state injection is supplied here
-        # (the in-process equivalent of MCP's get_http_headers seam) — the auth
-        # chain itself is real. When no real token exists (unit mode), inject the
-        # identity directly via the single mock point (unchanged behavior).
-        auth_token = a2a_identity.auth_token if a2a_identity else None
-
-        if auth_token:
-            from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
-
-            headers = {
-                "x-adcp-auth": auth_token,
-                "x-adcp-tenant": a2a_identity.tenant_id or "",
-            }
-            server_context = ServerCallContext(
-                state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=auth_token, headers=headers)}
-            )
-        else:
-            # _get_auth_token must return a non-None value when identity exists,
-            # otherwise the handler rejects the request before _resolve_a2a_identity
-            # is called. Use auth_token from identity, falling back to a sentinel.
-            handler._resolve_a2a_identity = lambda *args, **kw: a2a_identity  # type: ignore[assignment]
-            handler._get_auth_token = lambda *args, **kw: (  # type: ignore[assignment]
-                (a2a_identity.auth_token or "harness-test-token") if a2a_identity else None
-            )
-            server_context = ServerCallContext()
-
-        # Set tenant ContextVar so production code can read it
-        if a2a_identity and a2a_identity.tenant:
-            from src.core.config_loader import set_current_tenant
-
-            set_current_tenant(a2a_identity.tenant)
+        handler = self.a2a_handler
+        server_context = self._prepare_a2a_server_context(handler, a2a_identity)
 
         message = create_a2a_message_with_skill(skill_name=skill_name, parameters=parameters)
         if protocol_push_config is None:
@@ -889,6 +902,207 @@ class BaseTestEnv:
         return DeliverResult(
             payload=response_cls(**strip_a2a_protocol_fields(artifact_data)), wire_response=wire_response
         )
+
+    def _prepare_a2a_server_context(
+        self,
+        handler: AdCPRequestHandler,
+        a2a_identity: ResolvedIdentity | None,
+    ) -> ServerCallContext:
+        """Build the ``ServerCallContext`` for one in-process A2A dispatch.
+
+        Auth strategy mirrors _run_mcp_client. When the identity carries a real
+        auth_token (integration mode), populate the AuthContext that the SDK
+        call-context builder would have built from the wire and run the REAL
+        _get_auth_token + _resolve_a2a_identity (header → token → DB lookup →
+        ResolvedIdentity). Only the transport's state injection is supplied here
+        (the in-process equivalent of MCP's get_http_headers seam) — the auth
+        chain itself is real. When no real token exists (unit mode), inject the
+        identity directly via the single mock point (unchanged behavior).
+
+        Shared by ``_run_a2a_handler`` (skills) and ``run_a2a_task_method``
+        (``tasks/get`` / ``tasks/cancel``) so both dispatch styles authenticate
+        the same way against the same handler.
+        """
+        from a2a.server.routes.common import ServerCallContext
+
+        auth_token = a2a_identity.auth_token if a2a_identity else None
+
+        if auth_token:
+            from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
+            from tests.a2a_helpers import auth_headers_mapping
+
+            # A real token must resolve through the real auth chain, otherwise a
+            # denial scenario would silently reuse the previous caller's identity.
+            _clear_unit_mode_identity(handler)
+
+            headers = auth_headers_mapping(
+                {
+                    "x-adcp-auth": auth_token,
+                    "x-adcp-tenant": a2a_identity.tenant_id or "",
+                }
+            )
+            server_context = ServerCallContext(
+                state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=auth_token, headers=headers)}
+            )
+        else:
+            # Production ``_resolve_a2a_identity`` always returns ResolvedIdentity
+            # (principal_id may be None for unauthenticated discovery) — never
+            # None. Create+own co-location reads ``identity.tenant_id`` (#1702);
+            # mocking None made unauth A2A BDD paths AttributeError into
+            # SERVICE_UNAVAILABLE instead of AUTH_REQUIRED.
+            # Pin: @T-UC-011-list-unauth[a2a] and @T-UC-005-ext-a[a2a] — both
+            # invoke DISCOVERY_SKILLS, so execution passes the auth-required
+            # gate and reaches the create+own co-location (#1702 / R5-N5a).
+            # Use PrincipalFactory (not inline ResolvedIdentity) for the arch guard.
+            from tests.factories.principal import PrincipalFactory
+
+            resolved = a2a_identity or PrincipalFactory.make_anonymous_a2a_identity(
+                tenant_id=None,
+            )
+            # _get_auth_token must return a non-None value when identity exists,
+            # otherwise the handler rejects the request before _resolve_a2a_identity
+            # is called. Use auth_token from identity, falling back to a sentinel.
+            # Unauthenticated (a2a_identity is None) stays token-less.
+            handler._resolve_a2a_identity = lambda *args, **kw: resolved  # type: ignore[method-assign]
+            handler._get_auth_token = lambda *args, **kw: (  # type: ignore[method-assign]
+                (a2a_identity.auth_token or "harness-test-token") if a2a_identity else None
+            )
+            server_context = ServerCallContext()
+
+        # Set tenant ContextVar so production code can read it
+        if a2a_identity and a2a_identity.tenant:
+            from src.core.config_loader import set_current_tenant
+
+            set_current_tenant(a2a_identity.tenant)
+
+        return server_context
+
+    def run_a2a_task_method(
+        self,
+        method: str,
+        task_id: str,
+        *,
+        identity: ResolvedIdentity | None | Any = NO_IDENTITY_OVERRIDE,
+    ) -> Task | None:
+        """Dispatch ``tasks/get`` / ``tasks/cancel`` on the shared handler.
+
+        Runs against the SAME handler ``_run_a2a_handler`` uses, so the task a
+        skill dispatch created is the task this polls or cancels, and the owner
+        recorded at create (#1702) is the owner the gate authorizes against.
+
+        These are protocol methods, not AdCP skills: there is no artifact and no
+        two-layer envelope. Results land on the grading surface —
+        ``last_a2a_task`` for the served Task, ``last_a2a_task_error`` for a
+        JSON-RPC error (unknown id AND ownership denial collapse to not-found
+        identically; unauthenticated callers get an auth-failure body).
+
+        Denial altitude: POSTs through ``create_jsonrpc_routes(...,
+        enable_v0_3_compat=True)`` — the same call production makes — on the
+        shared handler, reusing ``_prepare_a2a_server_context`` for auth.
+        Captures the real buyer wire body (not a reconstructed mirror).
+
+        Explicit ``identity=None`` is unauthenticated: empty ServerCallContext,
+        no unit-mode identity lambdas, so the handler's real auth failure
+        surfaces on the wire (must not collapse to task-not-found).
+
+        Returns the served Task, or None when the call errored.
+        """
+        from a2a.server.routes.common import ServerCallContext, ServerCallContextBuilder
+        from starlette.requests import Request
+
+        from tests.a2a_helpers import post_a2a_task_method
+        from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
+
+        self._commit_factory_data()
+        a2a_identity = self.identity_for(Transport.A2A) if identity is NO_IDENTITY_OVERRIDE else identity
+        if self.use_real_db and a2a_identity and a2a_identity.tenant_id:
+            self._ensure_tenant_for_audit(a2a_identity.tenant_id)
+
+        handler = self.a2a_handler
+
+        if a2a_identity is None:
+            # Explicit unauthenticated dispatch — do not inject anonymous
+            # identity lambdas (skill-dispatch compensating path). Clear any
+            # leftover unit-mode mocks so the real auth chain denies.
+            _clear_unit_mode_identity(handler)
+            server_context = ServerCallContext()
+        else:
+            server_context = self._prepare_a2a_server_context(handler, a2a_identity)
+
+        class _PreparedContextBuilder(ServerCallContextBuilder):
+            def build(self, request: Request) -> ServerCallContext:
+                return server_context
+
+        self._last_a2a_task = None
+        self._last_a2a_task_error = None
+        body = post_a2a_task_method(
+            handler,
+            method=method,
+            task_id=task_id,
+            context_builder=_PreparedContextBuilder(),
+        )
+        if "error" in body:
+            self._last_a2a_task_error = body["error"]
+            return None
+
+        # Success: rebuild the Task from body["result"] — the actual buyer-facing
+        # wire payload — rather than trusting handler.tasks.get(task_id), the
+        # in-process object the gate just authorized. A v0.3-compat serializer
+        # regression that emits the wrong status.state on the wire must redden
+        # this, even while the in-process object stays correct (#1720 review).
+        from a2a.compat.v0_3 import conversions as v03_conversions
+        from a2a.compat.v0_3 import types as v03_types
+
+        result = body["result"]
+        task = v03_conversions.to_core_task(v03_types.Task.model_validate(result))
+        self._last_a2a_task = task
+        return task
+
+    def seed_a2a_task(
+        self,
+        task_id: str,
+        *,
+        identity: ResolvedIdentity | Any = NO_IDENTITY_OVERRIDE,
+        state: TaskState.ValueType | None = None,
+        record_owner: bool = True,
+    ) -> Task:
+        """Seed an in-memory task owned by *identity* on the shared handler.
+
+        Authz-gate altitude for ownership BDD (#1780): writes ``handler.tasks``
+        and (unless ``record_owner=False``) ``_task_owners`` directly so
+        get/cancel can grade the gate with real tokens. This is **not**
+        bind-on-create via ``on_message_send`` (that path is covered by #1720
+        unit tests). Do not use this seed to claim create→poll co-location in
+        UC-006 — that Then fails until sync create records owners.
+
+        Defaults to ``TASK_STATE_WORKING`` so a denied cancel has a state that
+        would visibly change if the ownership gate let it through.
+
+        ``record_owner=False`` grades the fail-closed path for a task present
+        in ``handler.tasks`` with no ownership record.
+        """
+        from a2a.types import Task, TaskState, TaskStatus
+
+        from tests.a2a_helpers import record_a2a_task_owner
+        from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
+
+        owner = self.identity_for(Transport.A2A) if identity is NO_IDENTITY_OVERRIDE else identity
+        if record_owner and owner is None:
+            raise ValueError("seed_a2a_task with record_owner=True requires a ResolvedIdentity")
+        handler = self.a2a_handler
+        task = Task(
+            id=task_id,
+            status=TaskStatus(state=state if state is not None else TaskState.TASK_STATE_WORKING),
+        )
+        handler.tasks[task_id] = task
+        if record_owner:
+            record_a2a_task_owner(
+                handler,
+                task_id,
+                tenant_id=owner.tenant_id,
+                principal_id=owner.principal_id,
+            )
+        return task
 
     def _run_mcp_client(
         self,

@@ -212,7 +212,7 @@ def test_internal_only_codes_are_documented() -> None:
 # The two spec codes the SDK helper table has not caught up to; the pinned enum
 # defines both (CREATIVE_NOT_FOUND correctable, CONFIGURATION_ERROR terminal),
 # so they are wire codes src can emit and must therefore be classified.
-_SUPPLEMENT_WIRE_CODES = frozenset({"CREATIVE_NOT_FOUND", "CONFIGURATION_ERROR"})
+_SUPPLEMENT_WIRE_CODES = frozenset({"CREATIVE_NOT_FOUND", "CONFIGURATION_ERROR", "REFERENCE_NOT_FOUND"})
 
 
 def _src_recovery_by_wire_code() -> dict[str, str]:
@@ -306,7 +306,7 @@ def test_wire_standard_codes_carry_no_classification() -> None:
         "define belongs in _SPEC_DEMOTED_CODES with a reason, not in the wire set."
     )
 
-    # The invariant the whole of salesagent-pldmk.4 exists to make definitional:
+    # The invariant graded in #1702 exists to make definitional:
     # every code that can reach the wire has a pinned recovery classification, so
     # no lookup falls back to an authored default (invariant I6, "recovery is
     # derived, never authored"). src enforces this at import with a raise; this
@@ -320,9 +320,9 @@ def test_wire_standard_codes_carry_no_classification() -> None:
         f"The recovery table must be TOTAL over the wire set."
     )
 
-    assert len(WIRE_STANDARD_CODES) == 39, (
-        f"WIRE_STANDARD_CODES has {len(WIRE_STANDARD_CODES)} entries, not 39 (38 SDK "
-        f"+ 2 supplement - 1 demoted). If the SDK pin moves, the demoted-set comment "
+    assert len(WIRE_STANDARD_CODES) == 40, (
+        f"WIRE_STANDARD_CODES has {len(WIRE_STANDARD_CODES)} entries, not 40 (38 SDK "
+        f"+ 3 supplement - 1 demoted). If the SDK pin moves, the demoted-set comment "
         f"in src/core/exceptions.py is where the reason lives; update it there."
     )
 
@@ -449,7 +449,7 @@ def test_assert_envelope_shape_keeps_the_caller_literal_for_unclassified_codes()
     expectation — the derivation adds a check, it does not replace the caller's.
 
     ``NOT_SUPPORTED`` is used here as a code the pin is SILENT on — which is
-    exactly why salesagent-pldmk.4 removed it from the wire surface, via
+    exactly why #1602 removed it from the wire surface, via
     ``_SPEC_DEMOTED_CODES``. It is no longer emittable, and
     ``wire_advisory`` now subscripts rather than falling back, because the wire
     set is total over the recovery table by construction. What survives, and what

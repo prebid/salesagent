@@ -82,6 +82,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc_brand_shorthand",
     "tests.bdd.steps.domain.compat_normalization",
     "tests.bdd.steps.domain.local_constraint_relaxations",
+    "tests.bdd.steps.domain.a2a_task_ownership",
 ]
 
 # ---------------------------------------------------------------------------
@@ -1370,6 +1371,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "SPEC-PRODUCTION GAP: sync_creatives does not set sandbox=true on "
                 "response for sandbox accounts (BR-RULE-209 INV-4)"
             ),
+            # NOTE: T-UC-006-main-async-submitted and T-UC-006-sandbox-submitted-no-flag
+            # are NOT wired here (see the UC-006 harness-selection branch below) — both
+            # fall through to the blanket "UC-006 harness not yet wired" xfail, same as
+            # before #1720's poll-step seam. Wiring them into CreativeSyncEnv only to
+            # strict-xfail on the still-open SPEC-PRODUCTION GAP (sync_creatives emits no
+            # `submitted` envelope) would grow the strict-xfail registry to park a gap
+            # instead of closing it (shrink-only rule). Re-wire once _sync_creatives_impl
+            # emits the `submitted` envelope, so both scenarios pass outright.
             # Sandbox: invalid format_id does not trigger validation error at _impl level
             "T-UC-006-sandbox-validation": (
                 "SPEC-PRODUCTION GAP: production does not validate format_id pattern "
@@ -3189,6 +3198,11 @@ _UC002_V31_SUCCESS_WIRED: set[str] = {
 # They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
 
+# Locally-added A2A protocol-method scenarios (tasks/get, tasks/cancel — #1780).
+# Tagged @a2a as well, so they are never parametrized across transports: the
+# methods exist only on the A2A wire.
+_A2A_TASK_OWNERSHIP_TAG_PREFIX = "T-A2A-TASK-OWNERSHIP-"
+
 # UCs whose tool has no REST route — parametrize across A2A + MCP only (a REST
 # variant would 404). get_media_buys (UC-019) is A2A/MCP-only.
 _NO_REST_UC_TAG_PREFIXES = ("T-UC-019-",)
@@ -3793,6 +3807,20 @@ def _run_env_route(
         yield
 
 
+def _build_a2a_task_ownership_env(e2e_config: object | None) -> AbstractContextManager:
+    """In-memory A2A tasks/get + tasks/cancel ownership gate (#1702 / #1959)."""
+    from tests.harness.a2a_task_ownership import A2ATaskOwnershipEnv
+
+    return A2ATaskOwnershipEnv(e2e_config=e2e_config)
+
+
+def _seed_a2a_task_ownership(ctx: dict, env: object) -> None:
+    """Seed owner + sibling + cross-tenant principals for ownership grading."""
+    tenant, principal = env.setup_principals()
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+
+
 _UC_BUCKET_ROUTES: dict[str, EnvRoute] = {
     "T-UC-003-storyboard-media-buy-not-found": EnvRoute(
         tag="T-UC-003-storyboard-media-buy-not-found",
@@ -3819,6 +3847,11 @@ _UC_BUCKET_ROUTES: dict[str, EnvRoute] = {
     "UC-GET-PRODUCTS": EnvRoute(tag="UC-GET-PRODUCTS", env_builder=_build_product_env),
     "UC-005": EnvRoute(tag="UC-005", env_builder=_build_creative_formats_env, seed=_seed_uc005),
     "UC-019": EnvRoute(tag="UC-019", env_builder=_build_media_buy_list_env, seed=_seed_uc019),
+    "A2A-TASK-OWNERSHIP": EnvRoute(
+        tag="A2A-TASK-OWNERSHIP",
+        env_builder=_build_a2a_task_ownership_env,
+        seed=_seed_a2a_task_ownership,
+    ),
 }
 
 # Tag sets the routing predicates below key on. They were inline `if` conditions

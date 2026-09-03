@@ -1,25 +1,38 @@
-"""Guard: error_code= must not bypass the typed AdCPError hierarchy.
+"""Guard: error_code=/recovery= must not bypass the typed AdCPError hierarchy.
 
 The wire error code is the identity of a typed AdCPError subclass. Passing
-``error_code=`` to an ``AdCP*Error(...)`` constructor bypasses that hierarchy and
-can leak a code that is neither standard nor mapped (the original A1 defect). The
-only sanctioned override is ``AdCPError.synthesize(error_code=...)``, used by the two
-boundary helpers that must construct a wire code the class hierarchy does not model.
+``error_code=`` or ``recovery=`` to an ``AdCP*Error(...)`` constructor bypasses
+that hierarchy (or redundantly restates the class default). The only sanctioned
+override is ``AdCPError.synthesize(error_code=..., recovery=...)``, used by the
+two boundary helpers that must construct a wire code the class hierarchy does
+not model.
 
-This guard scans ``src/core/`` and ``src/adapters/`` for any call that passes
-``error_code=`` to an ``AdCP*Error`` constructor OR to ``.synthesize()``. After the
-error-emission migration, the only such calls are the two ``synthesize()`` sites —
-pinned in the allowlist so a new bypass (or a new synthesize caller) fails the build.
+This guard scans ``src/core/``, ``src/adapters/``, and ``src/a2a_server/`` for any
+call that passes ``error_code=`` to an ``AdCP*Error`` constructor OR to
+``.synthesize()``. After the error-emission migration, the only such calls are
+the two ``synthesize()`` sites — pinned in the allowlist so a new bypass (or a
+new synthesize caller) fails the build.
+
+``recovery=`` on constructors is enforced for ``src/a2a_server/`` only (zero
+tolerance after dropping the redundant SSRF-site kwarg). Repo-wide ``recovery=``
+ratchet on ``src/core`` / ``src/adapters`` is out of scope for #1720 — tracked
+in #1676 (webhook scrub) and a future core/adapters guard widen; do not expand
+this PR into that sweep.
 """
 
 import ast
 from collections.abc import Iterator
 from pathlib import Path
 
-from tests.unit._architecture_helpers import assert_violations_match_allowlist, iter_call_expressions
+from tests.unit._architecture_helpers import (
+    assert_detector_catches_ast_snippets,
+    assert_violations_match_allowlist,
+    iter_call_expressions,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCAN_DIRS = [REPO_ROOT / "src" / "core", REPO_ROOT / "src" / "adapters"]
+SCAN_DIRS = [REPO_ROOT / "src" / "core", REPO_ROOT / "src" / "adapters", REPO_ROOT / "src" / "a2a_server"]
+A2A_SERVER_DIR = REPO_ROOT / "src" / "a2a_server"
 
 # The only sanctioned error_code= sites: the two boundary helpers that call
 # AdCPError.synthesize(). Keyed by (relative_path, enclosing_function_name) so the
@@ -39,6 +52,10 @@ def _func_targets_adcp_error_or_synthesize(func: ast.expr) -> bool:
             return True
         return func.attr.startswith("AdCP") and func.attr.endswith("Error")
     return False
+
+
+def _func_is_synthesize(func: ast.expr) -> bool:
+    return isinstance(func, ast.Attribute) and func.attr == "synthesize"
 
 
 def _call_has_error_code_in_details(call: ast.Call) -> bool:
@@ -84,6 +101,28 @@ def _find_error_code_kwargs() -> list[tuple[str, str, int]]:
     ]
 
 
+def _find_a2a_recovery_kwargs() -> list[tuple[str, str, int]]:
+    """Find recovery= on AdCP*Error constructors under a2a_server (synthesize exempt)."""
+    hits: list[tuple[str, str, int]] = []
+    for py_file in A2A_SERVER_DIR.rglob("*.py"):
+        try:
+            tree = ast.parse(py_file.read_text(), filename=str(py_file))
+        except SyntaxError:
+            continue
+        rel_path = str(py_file.relative_to(REPO_ROOT))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for child in iter_call_expressions(node):
+                if not _func_targets_adcp_error_or_synthesize(child.func):
+                    continue
+                if _func_is_synthesize(child.func):
+                    continue
+                if any(kw.arg == "recovery" for kw in child.keywords):
+                    hits.append((rel_path, node.name, child.lineno))
+    return hits
+
+
 def _find_error_code_in_details() -> list[tuple[str, str, int]]:
     """Find details={"error_code": ...} smuggling on AdCP*Error calls. (relative_path, function, lineno)."""
     return [
@@ -123,6 +162,42 @@ class TestNoErrorCodeKwargInImpl:
         all_sites = {(rel, func) for rel, func, _ in _find_error_code_kwargs()}
         msg = f"error_code= sites changed.\nFound: {sorted(all_sites)}\nAllowlist: {sorted(KNOWN_VIOLATIONS)}"
         assert all_sites == KNOWN_VIOLATIONS, msg
+
+    def test_no_recovery_kwargs_in_a2a_server_constructors(self):
+        """a2a_server AdCP*Error constructors must not hand-write recovery= (R5-F2)."""
+        sites = [f"  {rel}:{lineno} in {func}()" for rel, func, lineno in _find_a2a_recovery_kwargs()]
+        assert not sites, (
+            f"Found {len(sites)} recovery= site(s) on AdCP*Error constructors in a2a_server. "
+            "Use the class default; do not hand-write recovery=:\n" + "\n".join(sites)
+        )
+
+    def test_recovery_kwarg_detector_self_test(self) -> None:
+        """Guard must redden when recovery= appears on an AdCP*Error constructor."""
+
+        def _find_recovery_in_module(tree: ast.Module) -> list[int]:
+            hits: list[int] = []
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                for child in iter_call_expressions(node):
+                    if not _func_targets_adcp_error_or_synthesize(child.func):
+                        continue
+                    if _func_is_synthesize(child.func):
+                        continue
+                    if any(kw.arg == "recovery" for kw in child.keywords):
+                        hits.append(child.lineno)
+            return hits
+
+        assert_detector_catches_ast_snippets(
+            _find_recovery_in_module,
+            snippets={
+                "hand_written_recovery": (
+                    "def bad():\n"
+                    "    from src.core.exceptions import AdCPError\n"
+                    "    AdCPError(message='x', recovery='transient')\n"
+                ),
+            },
+        )
 
 
 class TestNoErrorCodeInDetails:
